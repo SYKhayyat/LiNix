@@ -11,7 +11,7 @@ def getFromFile(fileName):
                 continue  # Skip this line        
             apps  += line
         lines_list = apps.splitlines()
-     return lines_list
+    return lines_list
 
 def getDeletedApps(apps, installedApps):
     appsToInstallSet = set(apps)
