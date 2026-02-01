@@ -3,10 +3,15 @@ import sys
 from pathlib import Path
 
 def getFromFile(fileName):
-    with open(fileName, 'r') as file:
-        content = file.read()
-        lines_list = content.splitlines()
-    return lines_list
+    apps = ''
+    with open(filename, 'r') as file:
+        for line in file:
+            stripped_line = line.strip()
+            if not stripped_line or stripped_line.startswith('#'):
+                continue  # Skip this line        
+            apps  += line
+        lines_list = apps.splitlines()
+     return lines_list
 
 def getDeletedApps(apps, installedApps):
     appsToInstallSet = set(apps)
@@ -70,18 +75,20 @@ def writeToFile(apps):
         file.write('\n'.join(apps) + '\n') 
 
 installedAppsFile = Path("installedApps.txt")
+appsToInstallFile = Path("appsToInstall.txt")
 pkg_manager = sys.argv[1]
-apps = [
-
-]
-if not installedAppsFile.exists():
-    addedApps = apps
+if not appsToInstallFile.exists():
+    print("Please provide an appsToInstall.txt file")
 else:
-    installedApps = getFromFile("installedApps.txt")
-    deletedApps = getDeletedApps(apps, installedApps)
-    addedApps = getAddedApps(apps, installedApps) # These two could really have been the same method, but inverted.
-    uninstallApps(deletedApps)
-    deleteUnneededFiles()
-installApps(addedApps)
-writeToFile(apps)
+    apps = getFromFile("appsToInstall.txt")
+    if not installedAppsFile.exists():
+        addedApps = apps
+    else:
+        installedApps = getFromFile("installedApps.txt")
+        deletedApps = getDeletedApps(apps, installedApps)
+        addedApps = getAddedApps(apps, installedApps) # These two could really have been the same method, but inverted.
+        uninstallApps(deletedApps)
+        deleteUnneededFiles()
+    installApps(addedApps)
+    writeToFile(apps)
 
