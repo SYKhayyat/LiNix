@@ -4,7 +4,7 @@ from pathlib import Path
 
 def getFromFile(fileName):
     apps = ''
-    with open(filename, 'r') as file:
+    with open(fileName, 'r') as file:
         for line in file:
             stripped_line = line.strip()
             if not stripped_line or stripped_line.startswith('#'):
@@ -40,7 +40,7 @@ def uninstallApps(deletedApps):
 def deleteUnneededFiles():
     if pkg_manager == 'apt':
         commandToDelete = 'apt autoremove --purge -y;'
-        commandToDelete = 'apt autoclean'
+        commandToDelete += 'apt autoclean'
     elif pkg_manager == 'pacman':
         commandToDelete = 'pacman -Rns $(pacman -Qdtq)'
     else:
@@ -54,7 +54,7 @@ def update():
     elif pkg_manager == 'pacman':
         commandToUpdate = 'pacman -Syu'
     elif pkg_manager == 'zypper':
-        commandToUpdate = 'zypper ref -y'
+        commandToUpdate = 'zypper ref -y; '
         commandToUpdate += 'zypper up -y'
     else:
         commandToUpdate = pkg_manager + ' upgrade -y'
@@ -64,7 +64,7 @@ def installApps(addedApps):
     update()
     for app in addedApps:
         if pkg_manager == 'pacman':
-            commandToInstall = 'pacman -S app'
+            commandToInstall = 'pacman -S ' + app
         else:
             commandToInstall = pkg_manager + ' install -y ' + app
         subprocess.run(commandToInstall, shell=True)
@@ -81,14 +81,13 @@ if not appsToInstallFile.exists():
     print("Please provide an appsToInstall.txt file")
 else:
     apps = getFromFile("appsToInstall.txt")
-    if not installedAppsFile.exists():
-        addedApps = apps
-    else:
+    addedApps = apps
+    deletedApps = []
+    if installedAppsFile.exists():
         installedApps = getFromFile("installedApps.txt")
         deletedApps = getDeletedApps(apps, installedApps)
-        addedApps = getAddedApps(apps, installedApps) # These two could really have been the same method, but inverted.
-        uninstallApps(deletedApps)
+        addedApps = getAddedApps(apps, installedApps)
         deleteUnneededFiles()
+    uninstallApps(deletedApps)
     installApps(addedApps)
     writeToFile(apps)
-
