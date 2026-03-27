@@ -1,0 +1,92 @@
+# LiNix Configuration File
+# 
+# This is an example configuration file for LiNix.
+# Copy this to ~/.config/linix/config.toml and modify as needed.
+
+# Dry-run mode (don't make actual changes)
+dry_run = false
+
+# Skip confirmation prompts
+yes = false
+
+# Directory containing package group files
+groups_dir = "./examples/groups"
+
+# Enabled backends (empty = all available)
+# enabled_backends = ["apt", "flatpak", "cargo"]
+enabled_backends = []
+
+# Path to bloatware file (packages to remove)
+bloatware_file = "./examples/bloatware.txt"
+
+# Remove bloatware on sync
+remove_bloatware = false
+
+# Show progress indicators
+show_progress = true
+
+# Verbose output
+verbose = false
+
+# Cache TTL in seconds
+cache_ttl = 300
+
+# GitHub personal access token for higher rate limits
+# Uncomment and add your token for increased API limits
+# github_token = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Maximum parallel operations
+max_parallel = 4
+
+# Hostname-specific packages
+# Packages listed under your hostname will be installed only on that machine
+[hostname_packages]
+# my-desktop = ["steam", "discord", "nvidia-driver"]
+# my-laptop = ["powertop", "tlp", "brightness-controller"]
+# workstation = ["docker", "kubernetes-cli", "terraform"]
+
+# Hooks - Lua scripts that run before/after package operations
+# Available hooks: before_install, after_install, before_remove, after_remove
+[hooks.before_install]
+# Example: Prepare for Docker installation
+# docker = '''
+# print("Preparing for Docker installation...")
+# '''
+
+[hooks.after_install]
+# Example: Enable Docker service after installation
+# docker = '''
+# print("Enabling Docker service...")
+# os.execute("systemctl enable docker")
+# os.execute("systemctl start docker")
+# '''
+
+# Example: Add user to docker group
+# docker = '''
+# local user = os.getenv("USER")
+# print("Adding " .. user .. " to docker group...")
+# os.execute("usermod -aG docker " .. user)
+# '''
+
+[hooks.before_remove]
+# Example: Stop service before removal
+# docker = '''
+# print("Stopping Docker service...")
+# os.execute("systemctl stop docker")
+# '''
+
+[hooks.after_remove]
+# Example: Cleanup after removal
+# docker = '''
+# print("Cleaning up Docker data...")
+# '''
+
+# Backend-specific settings
+[backend_settings.github]
+# token = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+[backend_settings.npm]
+# registry = "https://registry.npmjs.org"
+
+[backend_settings.pip]
+# index_url = "https://pypi.org/simple"

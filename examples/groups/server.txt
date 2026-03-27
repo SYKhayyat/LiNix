@@ -1,0 +1,29 @@
+# Server packages
+# Services and tools for server deployments
+
+# Web servers
+nginx
+# apache2
+
+# Databases
+# postgresql
+# mysql-server
+# redis-server
+
+# Container runtime
+docker.io
+docker-compose
+
+# Monitoring
+prometheus
+grafana
+
+# Security
+fail2ban
+ufw
+
+# SSL
+certbot
+
+# Process management
+supervisor

@@ -1,0 +1,12 @@
+# Bloatware - packages to remove
+# These packages will be removed when running 'linix sync --remove-bloatware'
+
+# Example pre-installed packages you might want to remove:
+# gnome-games
+# aisleriot
+# gnome-mahjongg
+# gnome-mines
+# gnome-sudoku
+# thunderbird
+# libreoffice-draw
+# libreoffice-math

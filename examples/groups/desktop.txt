@@ -1,0 +1,25 @@
+# Desktop applications
+# GUI applications for desktop systems
+
+# Flatpak applications
+flatpak:com.spotify.Client
+flatpak:com.discordapp.Discord
+flatpak:com.slack.Slack
+flatpak:org.videolan.VLC
+flatpak:com.visualstudio.code
+flatpak:org.mozilla.firefox
+flatpak:org.chromium.Chromium
+flatpak:org.gimp.GIMP
+flatpak:org.inkscape.Inkscape
+
+# Snap applications (alternative to flatpak)
+# snap:spotify
+# snap:discord
+# snap:slack
+# snap:code
+
+# System packages for desktop
+firefox
+chromium-browser
+gimp
+inkscape

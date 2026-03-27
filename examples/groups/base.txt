@@ -1,0 +1,36 @@
+# Base system packages
+# These are essential packages installed on all systems
+
+# Editors
+vim
+nano
+
+# Network utilities
+curl
+wget
+net-tools
+
+# System monitoring
+htop
+iotop
+ncdu
+
+# File management
+tree
+unzip
+p7zip
+
+# Version control
+git
+
+# Terminal multiplexer
+tmux
+screen
+
+# Text processing
+jq
+ripgrep
+
+# Other essentials
+man-db
+bash-completion

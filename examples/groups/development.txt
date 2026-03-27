@@ -1,0 +1,45 @@
+# Development tools
+# Language runtimes, compilers, and development utilities
+
+# Build essentials (system package manager)
+build-essential
+cmake
+pkg-config
+autoconf
+automake
+
+# Rust tools (via cargo)
+cargo:ripgrep
+cargo:fd-find
+cargo:bat
+cargo:exa
+cargo:tokei
+cargo:hyperfine
+
+# Node.js tools (via npm)
+npm:typescript
+npm:eslint
+npm:prettier
+npm:yarn
+
+# Python tools (via pip)
+pip:black
+pip:flake8
+pip:mypy
+pip:pytest
+
+# Python applications (via pipx)
+pipx:poetry
+pipx:cookiecutter
+pipx:httpie
+
+# Go tools
+go:golang.org/x/tools/gopls@latest
+go:github.com/go-delve/delve/cmd/dlv@latest
+
+# GitHub releases
+github:sharkdp/bat
+github:BurntSushi/ripgrep
+github:sharkdp/fd
+github:ogham/exa
+github:junegunn/fzf
