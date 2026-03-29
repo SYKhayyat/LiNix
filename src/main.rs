@@ -3,7 +3,6 @@ use linix::app::App;
 use linix::cli::{Cli, Commands, Shell};
 use linix::config::Config;
 use linix::core::Package;
-use std::io::Write;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
