@@ -1,173 +1,62 @@
-use crate::core::{CommandExecutor, Package, PackageManager, Result};
+use crate::core::{CommandExecutor, Package, PackageManager, PackageSpec, Result};
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
-use tracing::{debug, info};
+use std::collections::HashMap;
 
-/// Cargo Rust package manager
 pub struct CargoManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
+    settings: Option<HashMap<String, String>>,
 }
 
 impl CargoManager {
-    pub fn new(executor: CommandExecutor) -> Self {
-        Self {
-            executor,
-            available: OnceCell::new(),
-        }
-    }
-
-    fn check_available(&self) -> bool {
-        std::process::Command::new("which")
-            .arg("cargo")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+    pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
+        Self { executor, available: OnceCell::new(), settings }
     }
 }
 
 #[async_trait]
 impl PackageManager for CargoManager {
-    fn name(&self) -> &str {
-        "cargo"
-    }
-
+    fn name(&self) -> &str { "cargo" }
     fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| self.check_available())
+        *self.available.get_or_init(|| std::process::Command::new("cargo").arg("--version").output().is_ok())
     }
 
-    async fn install(&self, packages: &[String], sudo: bool) -> Result<()> {
-        if packages.is_empty() {
-            return Ok(());
+    async fn install_with_options(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
+        let use_b = self.settings.as_ref().and_then(|s| s.get("binstall")).map(|v| v == "true").unwrap_or(false);
+        let cmd = if use_b && self.executor.command_exists("cargo-binstall").await { "cargo-binstall" } else { "cargo" };
+
+        for s in specs {
+            let mut args = if cmd == "cargo-binstall" { vec!["-y".to_string()] } else { vec!["install".to_string()] };
+            if let Some(f) = s.options.get("features") { args.extend(["--features".into(), f.clone()]); }
+            args.push(s.name.clone());
+            let refs: Vec<&str> = args.iter().map(|a| a.as_str()).collect();
+            self.executor.run(cmd, &refs, sudo).await?;
         }
-
-        info!("Installing {} packages via cargo", packages.len());
-        debug!("Packages: {:?}", packages);
-
-        for package in packages {
-            self.executor
-                .run("cargo", &["install", package], sudo)
-                .await?;
-        }
-
         Ok(())
     }
 
-    async fn remove(&self, packages: &[String], sudo: bool) -> Result<()> {
-        if packages.is_empty() {
-            return Ok(());
-        }
+    async fn install(&self, p: &[String], s: bool) -> Result<()> {
+        let specs: Vec<_> = p.iter().map(|n| PackageSpec { name: n.clone(), backend: "cargo".into(), options: HashMap::new() }).collect();
+        self.install_with_options(&specs, s).await
+    }
 
-        info!("Removing {} packages via cargo", packages.len());
-        debug!("Packages: {:?}", packages);
-
+    async fn remove(&self, p: &[String], s: bool) -> Result<()> {
         let mut args = vec!["uninstall"];
-        let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
-        args.extend(pkg_refs);
-
-        self.executor.run("cargo", &args, sudo).await?;
+        args.extend(p.iter().map(|s| s.as_str()));
+        self.executor.run("cargo", &args, s).await?;
         Ok(())
     }
 
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self
-            .executor
-            .run_output("cargo", &["install", "--list"], false)
-            .await?;
-
-        let mut packages = Vec::new();
-        let mut current_package: Option<(String, String)> = None;
-
-        for line in output.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-
-            if !line.starts_with('-') && !line.starts_with(' ') {
-                // New package line: "package_name v1.2.3:"
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 2 {
-                    let name = parts[0].to_string();
-                    let version = parts[1]
-                        .trim_start_matches('v')
-                        .trim_end_matches(':')
-                        .to_string();
-
-                    if let Some((pkg_name, pkg_version)) = current_package.take() {
-                        packages.push(Package {
-                            name: pkg_name,
-                            version: Some(pkg_version),
-                            backend: self.name().to_string(),
-                            description: None,
-                            repository: None,
-                            size: None,
-                        });
-                    }
-
-                    current_package = Some((name, version));
-                }
+        let out = self.executor.run_output("cargo", &["install", "--list"], false).await?;
+        let mut res = vec![];
+        for l in out.lines() {
+            if !l.starts_with(' ') && l.contains('v') && l.contains(':') {
+                let p: Vec<_> = l.split_whitespace().collect();
+                if p.len() >= 2 { res.push(Package { name: p[0].into(), version: Some(p[1].trim_end_matches(':').into()), backend: "cargo".into(), ..Package::new("", "") }); }
             }
         }
-
-        if let Some((pkg_name, pkg_version)) = current_package {
-            packages.push(Package {
-                name: pkg_name,
-                version: Some(pkg_version),
-                backend: self.name().to_string(),
-                description: None,
-                repository: None,
-                size: None,
-            });
-        }
-
-        Ok(packages)
-    }
-
-    async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let output = self
-            .executor
-            .run_output("cargo", &["search", query, "--limit", "20"], false)
-            .await?;
-
-        let packages = output
-            .lines()
-            .filter(|line| !line.starts_with('#') && !line.is_empty())
-            .filter_map(|line| {
-                // Format: name = "version"    # description
-                let parts: Vec<&str> = line.splitn(2, '#').collect();
-                let name_version: Vec<&str> = parts[0].splitn(2, '=').collect();
-
-                if !name_version.is_empty() {
-                    let name = name_version[0].trim().to_string();
-                    let version = name_version
-                        .get(1)
-                        .map(|v| v.trim().trim_matches('"').to_string());
-                    let description = parts.get(1).map(|d| d.trim().to_string());
-
-                    Some(Package {
-                        name,
-                        version,
-                        backend: self.name().to_string(),
-                        description,
-                        repository: None,
-                        size: None,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(packages)
-    }
-
-    fn supports_orphan_cleanup(&self) -> bool {
-        false
-    }
-
-    async fn info(&self, package: &str) -> Result<Option<Package>> {
-        let installed = self.list_installed().await?;
-        Ok(installed.into_iter().find(|p| p.name == package))
+        Ok(res)
     }
 }

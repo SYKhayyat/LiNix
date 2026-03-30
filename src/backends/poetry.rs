@@ -1,21 +1,23 @@
 use crate::core::{CommandExecutor, Package, PackageManager, Result};
+use crate::core::manager::HealthStatus;
+use crate::core::manager::HealthReport;
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
 use tracing::{debug, info};
+use std::collections::HashMap;
 
 /// Poetry Python package manager
 pub struct PoetryManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
+	    #[allow(dead_code)] 
+	    settings: Option<HashMap<String, String>>,
 }
 
 impl PoetryManager {
-    pub fn new(executor: CommandExecutor) -> Self {
-        Self {
-            executor,
-            available: OnceCell::new(),
-        }
-    }
+    pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
+    Self { executor, available: OnceCell::new(), settings }
+}
 
     fn check_available(&self) -> bool {
         std::process::Command::new("which")
@@ -149,6 +151,22 @@ impl PackageManager for PoetryManager {
                 }))
             }
             Err(_) => Ok(None),
+        }
+    }
+	async fn check_health(&self) -> Result<HealthReport> {
+        // USE SETTINGS: Allow user to override brew path for health check
+        let bin_name = self.settings.as_ref()
+            .and_then(|s| s.get("binary_path"))
+            .map(|s| s.as_str())
+            .unwrap_or("poetry");
+
+        if self.executor.command_exists(bin_name).await {
+            Ok(HealthReport { status: HealthStatus::Ok, message: None })
+        } else {
+            Ok(HealthReport { 
+                status: HealthStatus::Error, 
+                message: Some(format!("{} not found", bin_name)) 
+            })
         }
     }
 }

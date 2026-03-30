@@ -32,6 +32,12 @@ pub mod yarn;
 // GitHub releases
 pub mod github;
 
+// New backends
+pub mod uv;
+pub mod pnpm;
+pub mod vscode;
+pub mod mise;
+
 // Windows backends
 #[cfg(target_os = "windows")]
 pub mod windows;

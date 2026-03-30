@@ -11,7 +11,7 @@ pub use cache::{PackageCache, SmartCache};
 pub use error::{Error, Result};
 pub use executor::CommandExecutor;
 pub use manager::PackageManager;
-pub use package::Package;
+pub use package::{Package, PackageSpec};
 pub use ratelimiter::RateLimiter;
 pub use transaction::{Operation, Transaction};
 pub use validator::Validator;

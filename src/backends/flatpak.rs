@@ -1,205 +1,57 @@
-use crate::core::{CommandExecutor, Package, PackageManager, Result};
+use crate::core::{CommandExecutor, Package, PackageManager, PackageSpec, Result};
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
-use tracing::{debug, info};
+use std::collections::HashMap;
 
-/// Flatpak package manager
 pub struct FlatpakManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
+    settings: Option<HashMap<String, String>>,
 }
 
 impl FlatpakManager {
-    pub fn new(executor: CommandExecutor) -> Self {
-        Self {
-            executor,
-            available: OnceCell::new(),
-        }
+    pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
+        Self { executor, available: OnceCell::new(), settings }
     }
-
-    fn check_available(&self) -> bool {
-        std::process::Command::new("which")
-            .arg("flatpak")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+    fn is_user(&self) -> bool {
+        self.settings.as_ref().and_then(|s| s.get("user_installation")).map(|v| v == "true").unwrap_or(false)
     }
 }
 
 #[async_trait]
 impl PackageManager for FlatpakManager {
-    fn name(&self) -> &str {
-        "flatpak"
-    }
-
+    fn name(&self) -> &str { "flatpak" }
     fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| self.check_available())
+        *self.available.get_or_init(|| std::process::Command::new("flatpak").arg("--version").output().is_ok())
     }
 
-    async fn install(&self, packages: &[String], sudo: bool) -> Result<()> {
-        if packages.is_empty() {
-            return Ok(());
-        }
-
-        info!("Installing {} packages via flatpak", packages.len());
-        debug!("Packages: {:?}", packages);
-
-        for package in packages {
-            self.executor
-                .run("flatpak", &["install", "-y", package], sudo)
-                .await?;
-        }
-
+    async fn install_with_options(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
+        let mut args = if self.is_user() { vec!["--user"] } else { vec!["--system"] };
+        args.extend(["install", "-y"]);
+        let names: Vec<_> = specs.iter().map(|s| s.name.as_str()).collect();
+        args.extend(names);
+        self.executor.run("flatpak", &args, !self.is_user() && sudo).await?;
         Ok(())
     }
 
-    async fn remove(&self, packages: &[String], sudo: bool) -> Result<()> {
-        if packages.is_empty() {
-            return Ok(());
-        }
+    async fn install(&self, p: &[String], s: bool) -> Result<()> {
+        let specs: Vec<_> = p.iter().map(|n| PackageSpec { name: n.clone(), backend: "flatpak".into(), options: HashMap::new() }).collect();
+        self.install_with_options(&specs, s).await
+    }
 
-        info!("Removing {} packages via flatpak", packages.len());
-        debug!("Packages: {:?}", packages);
-
-        for package in packages {
-            self.executor
-                .run("flatpak", &["uninstall", "-y", package], sudo)
-                .await?;
-        }
-
+    async fn remove(&self, p: &[String], s: bool) -> Result<()> {
+        let mut args = vec!["uninstall", "-y"];
+        args.extend(p.iter().map(|s| s.as_str()));
+        self.executor.run("flatpak", &args, !self.is_user() && s).await?;
         Ok(())
     }
 
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self
-            .executor
-            .run_output(
-                "flatpak",
-                &["list", "--app", "--columns=application,version"],
-                false,
-            )
-            .await?;
-
-        let packages = output
-            .lines()
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.split('\t').collect();
-                if !parts.is_empty() {
-                    Some(Package {
-                        name: parts[0].trim().to_string(),
-                        version: parts.get(1).map(|s| s.trim().to_string()),
-                        backend: self.name().to_string(),
-                        description: None,
-                        repository: None,
-                        size: None,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(packages)
-    }
-
-    async fn update(&self, sudo: bool) -> Result<()> {
-        info!("Updating flatpak packages");
-        self.executor
-            .run("flatpak", &["update", "-y"], sudo)
-            .await?;
-        Ok(())
-    }
-
-    async fn upgrade(&self, sudo: bool) -> Result<()> {
-        info!("Upgrading all flatpak packages");
-        self.executor
-            .run("flatpak", &["update", "-y"], sudo)
-            .await?;
-        Ok(())
-    }
-
-    async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let output = self
-            .executor
-            .run_output("flatpak", &["search", query], false)
-            .await?;
-
-        let packages = output
-            .lines()
-            .skip(1) // Skip header if present
-            .filter_map(|line| {
-                let parts: Vec<&str> = line.split('\t').collect();
-                if !parts.is_empty() {
-                    Some(Package {
-                        name: parts.get(1).unwrap_or(&parts[0]).trim().to_string(),
-                        version: parts.get(2).map(|s| s.trim().to_string()),
-                        backend: self.name().to_string(),
-                        description: parts.first().map(|s| s.trim().to_string()),
-                        repository: None,
-                        size: None,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(packages)
-    }
-
-    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
-        info!("Cleaning unused flatpak data");
-        self.executor
-            .run("flatpak", &["uninstall", "--unused", "-y"], sudo)
-            .await?;
-        Ok(())
-    }
-
-    fn supports_orphan_cleanup(&self) -> bool {
-        true
-    }
-
-    async fn info(&self, package: &str) -> Result<Option<Package>> {
-        let output = self
-            .executor
-            .run_output("flatpak", &["info", package], false)
-            .await;
-
-        match output {
-            Ok(out) => {
-                let mut name = None;
-                let mut version = None;
-                let mut description = None;
-                let mut size = None;
-
-                for line in out.lines() {
-                    let line = line.trim();
-                    if let Some(value) = line.strip_prefix("ID:") {
-                        name = Some(value.trim().to_string());
-                    } else if let Some(value) = line.strip_prefix("Version:") {
-                        version = Some(value.trim().to_string());
-                    } else if let Some(value) = line.strip_prefix("Description:") {
-                        description = Some(value.trim().to_string());
-                    } else if let Some(value) = line.strip_prefix("Installed:") {
-                        let parts: Vec<&str> = value.trim().split_whitespace().collect();
-                        if let Some(num) = parts.first() {
-                            if let Ok(n) = num.parse::<u64>() {
-                                size = Some(n);
-                            }
-                        }
-                    }
-                }
-
-                Ok(name.map(|n| Package {
-                    name: n,
-                    version,
-                    backend: self.name().to_string(),
-                    description,
-                    repository: None,
-                    size,
-                }))
-            }
-            Err(_) => Ok(None),
-        }
+        let out = self.executor.run_output("flatpak", &["list", "--app", "--columns=application,version"], false).await?;
+        Ok(out.lines().filter_map(|l| {
+            let p: Vec<_> = l.split('\t').collect();
+            if p.len() >= 2 { Some(Package { name: p[0].into(), version: Some(p[1].into()), backend: "flatpak".into(), ..Package::new("", "") }) }
+            else { None }
+        }).collect())
     }
 }

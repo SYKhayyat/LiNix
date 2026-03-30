@@ -1,4 +1,5 @@
-use clap::{Parser, Subcommand, ValueEnum};
+// C:\Users\Administrator\Videos\Nexus\linix\src\cli\args.rs
+use clap::{Parser, Subcommand, ValueEnum, Args};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -6,124 +7,84 @@ use std::path::PathBuf;
 #[command(author = "LiNix Contributors")]
 #[command(version = "3.0.0")]
 #[command(about = "Universal package manager with multi-backend support")]
-#[command(long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
-    /// Show what would happen without making changes
     #[arg(short = 'n', long, global = true)]
     pub dry_run: bool,
-
-    /// Skip confirmation prompts
     #[arg(short, long, global = true)]
     pub yes: bool,
-
-    /// Operate only on a specific backend
     #[arg(short, long, global = true)]
     pub backend: Option<String>,
-
-    /// Config file path
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
-
-    /// Groups directory
     #[arg(short, long, global = true)]
     pub groups_dir: Option<PathBuf>,
-
-    /// Remove bloatware during sync
     #[arg(long, global = true)]
     pub remove_bloatware: bool,
-
-    /// Show progress indicators
     #[arg(long, global = true, default_value = "true")]
     pub progress: bool,
-
-    /// Verbose output
     #[arg(short, long, global = true)]
     pub verbose: bool,
-
-    /// Output in JSON format
     #[arg(long, global = true)]
     pub json: bool,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Sync packages according to configuration
-    Sync,
-
-    /// Remove packages not in configuration
+    Sync {
+        #[arg(long)]
+        locked: bool,
+    },
     Clean,
-
-    /// Show packages not in configuration
     Unmanaged,
-
-    /// Clean orphaned dependencies
     Orphans,
-
-    /// Search for packages across all backends
-    Search {
-        /// Search query
-        query: String,
-    },
-
-    /// Update package databases
+    Search { query: String },
     Update,
-
-    /// Upgrade all packages
     Upgrade,
-
-    /// List installed packages
-    List {
-        /// Filter by backend
-        #[arg(short, long)]
-        backend: Option<String>,
-    },
-
-    /// Show package information
-    Info {
-        /// Package name
-        package: String,
-    },
-
-    /// Install packages
-    Install {
-        /// Packages to install
-        packages: Vec<String>,
-    },
-
-    /// Remove packages
-    Remove {
-        /// Packages to remove
-        packages: Vec<String>,
-    },
-
-    /// Show available backends
+    List { #[arg(short, long)] backend: Option<String> },
+    Info { package: String },
+    Install { packages: Vec<String> },
+    Remove { packages: Vec<String> },
     Backends,
-
-    /// Generate shell completions
-    Completions {
-        /// Shell to generate completions for
-        #[arg(value_enum)]
-        shell: Shell,
+    Completions { #[arg(value_enum)] shell: Shell },
+    Repo(RepoArgs),
+    Doctor,
+    Rollback {
+        /// Timestamp or ID of the snapshot to rollback to. If omitted, lists available snapshots.
+        snapshot: Option<String>,
     },
 }
 
-impl Default for Commands {
-    fn default() -> Self {
-        Commands::Sync
-    }
+#[derive(Args, Debug)]
+pub struct RepoArgs {
+    #[clap(subcommand)]
+    pub command: RepoCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RepoCommand {
+    Add {
+        name: String,
+        url: String,
+        #[arg(short, long)]
+        backend: Option<String>,
+    },
+    Remove {
+        name: String,
+        #[arg(short, long)]
+        backend: Option<String>,
+    },
+    List {
+        #[arg(short, long)]
+        backend: Option<String>,
+    },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
 pub enum Shell {
-    Bash,
-    Zsh,
-    Fish,
-    #[value(name = "powershell")]
-    PowerShell,
-    Elvish,
+    Bash, Zsh, Fish, PowerShell, Elvish,
 }
 
 impl From<Shell> for clap_complete::Shell {

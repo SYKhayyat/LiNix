@@ -1,11 +1,12 @@
-pub mod app;
+// src/app/mod.rs
+pub mod context;
 pub mod hooks;
 pub mod metrics;
 pub mod search;
 pub mod sync;
 
-pub use app::App;
-pub use hooks::LuaHooks;
-pub use metrics::MetricsCollector;
-pub use search::UniversalSearch;
-pub use sync::SyncEngine;
+pub use self::context::App;
+pub use self::hooks::LuaHooks;
+pub use self::metrics::MetricsCollector;
+pub use self::search::UniversalSearch;
+pub use self::sync::SyncEngine;

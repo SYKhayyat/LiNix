@@ -1,11 +1,13 @@
+// src/app/context.rs
 use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::Config;
 use crate::core::{CommandExecutor, PackageCache, Result, Validator};
-use crate::app::{LuaHooks, MetricsCollector, SyncEngine, UniversalSearch};
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 use tracing::info;
 
-/// Main application struct
+// Pull siblings from the parent module (app/mod.rs)
+use super::{LuaHooks, MetricsCollector, SyncEngine, UniversalSearch};
+
 pub struct App {
     pub config: Config,
     pub cache: PackageCache,
@@ -18,10 +20,9 @@ pub struct App {
 }
 
 impl App {
-    /// Create a new App instance
     pub async fn new(config: Config) -> Result<Self> {
         let executor = CommandExecutor::new(config.dry_run, config.verbose);
-        let registry = create_default_registry(executor.clone()).await;
+        let registry = create_default_registry(executor.clone(), &config).await;
         let progress = create_progress_reporter(config.show_progress);
         let hooks = LuaHooks::new(&config)?;
 
@@ -37,11 +38,8 @@ impl App {
         })
     }
 
-    /// Run the sync operation
-    pub async fn sync(&mut self) -> Result<()> {
+    pub async fn sync(&self) -> Result<()> {
         info!("Starting sync operation");
-        self.metrics.start_operation("sync");
-
         let engine = SyncEngine::new(
             &self.config,
             &self.registry,
@@ -51,38 +49,23 @@ impl App {
             self.progress.as_ref(),
             &self.hooks,
         );
-
-        let result = engine.sync().await;
-
-        self.metrics.end_operation("sync");
-        result
+        engine.sync().await
     }
 
-    /// Show unmanaged packages
     pub async fn unmanaged(&self) -> Result<Vec<(String, Vec<String>)>> {
-        info!("Finding unmanaged packages");
-
-        // Create a temporary metrics collector for this operation
-        let temp_metrics = MetricsCollector::new();
-
         let engine = SyncEngine::new(
             &self.config,
             &self.registry,
             &self.executor,
             &self.cache,
-            &temp_metrics,
+            &self.metrics,
             self.progress.as_ref(),
             &self.hooks,
         );
-
         engine.find_unmanaged().await
     }
 
-    /// Clean unmanaged packages
-    pub async fn clean(&mut self) -> Result<()> {
-        info!("Starting clean operation");
-        self.metrics.start_operation("clean");
-
+    pub async fn clean(&self) -> Result<()> {
         let engine = SyncEngine::new(
             &self.config,
             &self.registry,
@@ -92,47 +75,28 @@ impl App {
             self.progress.as_ref(),
             &self.hooks,
         );
-
-        let result = engine.clean().await;
-
-        self.metrics.end_operation("clean");
-        result
+        engine.clean().await
     }
 
-    /// Clean orphan packages
     pub async fn orphans(&mut self) -> Result<()> {
-        info!("Starting orphan cleanup");
-        self.metrics.start_operation("orphans");
-
         let managers = self.registry.available();
-
         for manager in managers {
             if manager.supports_orphan_cleanup() {
-                info!("Cleaning orphans for {}", manager.name());
-                if let Err(e) = manager.clean_orphans(true).await {
-                    tracing::warn!("Failed to clean orphans for {}: {}", manager.name(), e);
-                }
+                let _ = manager.clean_orphans(true).await;
             }
         }
-
-        self.metrics.end_operation("orphans");
         Ok(())
     }
 
-    /// Search across all backends
     pub async fn search(&self, query: &str) -> Result<Vec<crate::core::Package>> {
-        info!("Searching for: {}", query);
-
         let searcher = UniversalSearch::new(&self.registry, &self.config);
         searcher.search(query).await
     }
 
-    /// Get metrics report
     pub fn get_metrics_report(&self) -> serde_json::Value {
         self.metrics.to_json()
     }
 
-    /// Get list of available backends
     pub fn available_backends(&self) -> Vec<String> {
         self.registry.available_names()
     }

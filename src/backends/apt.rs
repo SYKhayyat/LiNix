@@ -1,206 +1,62 @@
-use crate::core::{CommandExecutor, Package, PackageManager, Result};
+use crate::core::{CommandExecutor, Package, PackageManager, PackageSpec, Result};
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
-use tracing::{debug, info, warn};
+use std::collections::HashMap;
 
-/// APT package manager for Debian/Ubuntu systems
 pub struct AptManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
+    settings: Option<HashMap<String, String>>,
 }
 
 impl AptManager {
-    pub fn new(executor: CommandExecutor) -> Self {
-        Self {
-            executor,
-            available: OnceCell::new(),
-        }
-    }
-
-    fn check_available(&self) -> bool {
-        std::process::Command::new("which")
-            .arg("apt")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+    pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
+        Self { executor, available: OnceCell::new(), settings }
     }
 }
 
 #[async_trait]
 impl PackageManager for AptManager {
-    fn name(&self) -> &str {
-        "apt"
-    }
-
+    fn name(&self) -> &str { "apt" }
     fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| self.check_available())
+        *self.available.get_or_init(|| std::process::Command::new("apt").arg("--version").output().is_ok())
     }
 
-    async fn install(&self, packages: &[String], sudo: bool) -> Result<()> {
-        if packages.is_empty() {
-            return Ok(());
+    async fn install_with_options(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
+        let mut args = vec!["install".to_string(), "-y".to_string()];
+        if let Some(s) = &self.settings {
+            if s.get("no_install_recommends") == Some(&"true".to_string()) {
+                args.push("--no-install-recommends".to_string());
+            }
         }
-
-        info!("Installing {} packages via apt", packages.len());
-        debug!("Packages: {:?}", packages);
-
-        let mut args = vec!["install", "-y"];
-        let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
-        args.extend(pkg_refs);
-
-        self.executor.run("apt", &args, sudo).await?;
+        for s in specs {
+            if let Some(v) = s.options.get("version") { args.push(format!("{}={}", s.name, v)); }
+            else { args.push(s.name.clone()); }
+        }
+        let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        self.executor.run("apt", &refs, sudo).await?;
         Ok(())
     }
 
-    async fn remove(&self, packages: &[String], sudo: bool) -> Result<()> {
-        if packages.is_empty() {
-            return Ok(());
-        }
+    async fn install(&self, p: &[String], s: bool) -> Result<()> {
+        let specs: Vec<_> = p.iter().map(|n| PackageSpec { name: n.clone(), backend: "apt".into(), options: HashMap::new() }).collect();
+        self.install_with_options(&specs, s).await
+    }
 
-        info!("Removing {} packages via apt", packages.len());
-        debug!("Packages: {:?}", packages);
-
+    async fn remove(&self, p: &[String], s: bool) -> Result<()> {
         let mut args = vec!["remove", "-y"];
-        let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
-        args.extend(pkg_refs);
-
-        self.executor.run("apt", &args, sudo).await?;
+        args.extend(p.iter().map(|s| s.as_str()));
+        self.executor.run("apt", &args, s).await?;
         Ok(())
     }
 
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self
-            .executor
-            .run_output("apt", &["list", "--installed"], false)
-            .await?;
-
-        let packages = output
-            .lines()
-            .skip(1) // Skip "Listing..." header
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() {
-                    return None;
-                }
-
-                // Format: "package/release version arch [status]"
-                let slash_pos = line.find('/')?;
-                let name = line[..slash_pos].to_string();
-
-                // Extract version
-                let rest = &line[slash_pos + 1..];
-                let version = rest.split_whitespace().nth(1).map(|s| s.to_string());
-
-                Some(Package {
-                    name,
-                    version,
-                    backend: self.name().to_string(),
-                    description: None,
-                    repository: None,
-                    size: None,
-                })
-            })
-            .collect();
-
-        Ok(packages)
-    }
-
-    async fn update(&self, sudo: bool) -> Result<()> {
-        info!("Updating apt package cache");
-        self.executor.run("apt", &["update"], sudo).await?;
-        Ok(())
-    }
-
-    async fn upgrade(&self, sudo: bool) -> Result<()> {
-        info!("Upgrading all apt packages");
-        self.executor.run("apt", &["upgrade", "-y"], sudo).await?;
-        Ok(())
-    }
-
-    async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let output = self
-            .executor
-            .run_output("apt-cache", &["search", query], false)
-            .await?;
-
-        let packages = output
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() {
-                    return None;
-                }
-
-                // Format: "package - description"
-                let parts: Vec<&str> = line.splitn(2, " - ").collect();
-                if !parts.is_empty() {
-                    let name = parts[0].trim().to_string();
-                    let description = parts.get(1).map(|s| s.trim().to_string());
-
-                    Some(Package {
-                        name,
-                        version: None,
-                        backend: self.name().to_string(),
-                        description,
-                        repository: None,
-                        size: None,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(packages)
-    }
-
-    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
-        info!("Cleaning orphaned apt packages");
-        self.executor
-            .run("apt", &["autoremove", "-y"], sudo)
-            .await?;
-        Ok(())
-    }
-
-    fn supports_orphan_cleanup(&self) -> bool {
-        true
-    }
-
-    async fn info(&self, package: &str) -> Result<Option<Package>> {
-        let output = self
-            .executor
-            .run_output("apt-cache", &["show", package], false)
-            .await;
-
-        match output {
-            Ok(out) => {
-                let mut name = None;
-                let mut version = None;
-                let mut description = None;
-                let mut size = None;
-
-                for line in out.lines() {
-                    if let Some(value) = line.strip_prefix("Package: ") {
-                        name = Some(value.trim().to_string());
-                    } else if let Some(value) = line.strip_prefix("Version: ") {
-                        version = Some(value.trim().to_string());
-                    } else if let Some(value) = line.strip_prefix("Description: ") {
-                        description = Some(value.trim().to_string());
-                    } else if let Some(value) = line.strip_prefix("Installed-Size: ") {
-                        size = value.trim().parse::<u64>().ok().map(|s| s * 1024);
-                    }
-                }
-
-                Ok(name.map(|n| Package {
-                    name: n,
-                    version,
-                    backend: self.name().to_string(),
-                    description,
-                    repository: None,
-                    size,
-                }))
-            }
-            Err(_) => Ok(None),
-        }
+        let out = self.executor.run_output("apt", &["list", "--installed"], false).await?;
+        Ok(out.lines().skip(1).filter_map(|l| {
+            let parts: Vec<_> = l.split('/').collect();
+            if parts.len() < 2 { return None; }
+            let version = l.split_whitespace().nth(1).map(|s| s.to_string());
+            Some(Package { name: parts[0].to_string(), version, backend: "apt".into(), description: None, repository: None, size: None })
+        }).collect())
     }
 }

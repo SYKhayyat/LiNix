@@ -1,21 +1,24 @@
 use crate::core::{CommandExecutor, Package, PackageManager, Result};
+use crate::core::manager::HealthStatus;
+use crate::core::manager::HealthReport;
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
 use tracing::{debug, info};
+use std::collections::HashMap;
 
 /// RubyGems package manager
 pub struct GemManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
+	    #[allow(dead_code)] 
+
+	    settings: Option<HashMap<String, String>>,
 }
 
 impl GemManager {
-    pub fn new(executor: CommandExecutor) -> Self {
-        Self {
-            executor,
-            available: OnceCell::new(),
-        }
-    }
+    pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
+    Self { executor, available: OnceCell::new(), settings }
+}
 
     fn check_available(&self) -> bool {
         std::process::Command::new("which")
@@ -163,5 +166,21 @@ impl PackageManager for GemManager {
 
     fn supports_orphan_cleanup(&self) -> bool {
         true
+    }
+	async fn check_health(&self) -> Result<HealthReport> {
+        // USE SETTINGS: Allow user to override brew path for health check
+        let bin_name = self.settings.as_ref()
+            .and_then(|s| s.get("binary_path"))
+            .map(|s| s.as_str())
+            .unwrap_or("gem");
+
+        if self.executor.command_exists(bin_name).await {
+            Ok(HealthReport { status: HealthStatus::Ok, message: None })
+        } else {
+            Ok(HealthReport { 
+                status: HealthStatus::Error, 
+                message: Some(format!("{} not found", bin_name)) 
+            })
+        }
     }
 }

@@ -1,66 +1,53 @@
-use crate::core::{Package, Result};
+use crate::core::{Package, PackageSpec, Result};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
-/// Trait that all package managers must implement
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum HealthStatus { Ok, Warning, Error }
+
+pub struct HealthReport {
+    pub status: HealthStatus,
+    pub message: Option<String>,
+}
+
 #[async_trait]
 pub trait PackageManager: Send + Sync {
-    /// Get the name of this package manager
     fn name(&self) -> &str;
-
-    /// Check if this package manager is available on the system
     fn is_available(&self) -> bool;
-
-    /// Install packages
     async fn install(&self, packages: &[String], sudo: bool) -> Result<()>;
-
-    /// Remove/uninstall packages
     async fn remove(&self, packages: &[String], sudo: bool) -> Result<()>;
-
-    /// List all installed packages
     async fn list_installed(&self) -> Result<Vec<Package>>;
 
-    /// Update package database/cache
-    async fn update(&self, sudo: bool) -> Result<()> {
-        // Default implementation does nothing
-        let _ = sudo;
-        Ok(())
+    async fn update(&self, _sudo: bool) -> Result<()> { Ok(()) }
+    async fn upgrade(&self, _sudo: bool) -> Result<()> { Ok(()) }
+    async fn search(&self, _query: &str) -> Result<Vec<Package>> { Ok(vec![]) }
+    async fn clean_orphans(&self, _sudo: bool) -> Result<()> { Ok(()) }
+    fn supports_orphan_cleanup(&self) -> bool { false }
+    async fn info(&self, _package: &str) -> Result<Option<Package>> { Ok(None) }
+
+    async fn install_with_options(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
+        let packages: Vec<String> = specs.iter().map(|s| s.name.clone()).collect();
+        self.install(&packages, sudo).await
     }
 
-    /// Upgrade all packages
-    async fn upgrade(&self, sudo: bool) -> Result<()> {
-        // Default implementation does nothing
-        let _ = sudo;
-        Ok(())
+    async fn add_repo(&self, name: &str, url: &str, _sudo: bool) -> Result<()> {
+        Err(crate::core::Error::UnsupportedPlatform(format!("{} cannot add repos ({} -> {})", self.name(), name, url)))
     }
-
-    /// Search for packages
-    async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        // Default implementation returns empty list
-        let _ = query;
-        Ok(Vec::new())
+    async fn remove_repo(&self, name: &str, _sudo: bool) -> Result<()> {
+        Err(crate::core::Error::UnsupportedPlatform(format!("{} cannot remove repos ({})", self.name(), name)))
     }
-
-    /// Clean orphaned packages
-    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
-        // Default implementation does nothing
-        let _ = sudo;
-        Ok(())
+    async fn list_repos(&self) -> Result<Vec<(String, String)>> {
+        Err(crate::core::Error::UnsupportedPlatform(format!("{} cannot list repos", self.name())))
     }
-
-    /// Check if this manager supports orphan cleanup
-    fn supports_orphan_cleanup(&self) -> bool {
-        false
-    }
-
-    /// Get information about a specific package
-    async fn info(&self, package: &str) -> Result<Option<Package>> {
-        let _ = package;
-        Ok(None)
-    }
-
-    /// Check if a package is installed
-    async fn is_installed(&self, package: &str) -> Result<bool> {
-        let installed = self.list_installed().await?;
-        Ok(installed.iter().any(|p| p.name == package))
+    
+    async fn check_health(&self) -> Result<HealthReport> {
+        if self.is_available() {
+            Ok(HealthReport { status: HealthStatus::Ok, message: None })
+        } else {
+            Ok(HealthReport { 
+                status: HealthStatus::Error, 
+                message: Some(format!("The underlying CLI tool for '{}' is missing from PATH.", self.name())) 
+            })
+        }
     }
 }

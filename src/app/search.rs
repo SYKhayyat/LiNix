@@ -20,8 +20,9 @@ impl<'a> UniversalSearch<'a> {
     /// Search across all available backends
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
         info!("Searching for '{}' across all backends", query);
+		
 
-        let managers = if self.config.enabled_backends.is_empty() {
+        let managers: Vec<std::sync::Arc<dyn crate::core::PackageManager>> = if self.config.enabled_backends.is_empty() {
             self.registry.available()
         } else {
             self.registry.get_filtered(&self.config.enabled_backends)
