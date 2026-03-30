@@ -1,0 +1,102 @@
+This is a professional =README.org= for your matured project, highlighting its "Mission-Critical" engineering and superiority over standard wrappers.
+
+#+TITLE: LiNix
+#+SUBTITLE: The Universal, Mission-Critical Declarative Package Manager
+#+AUTHOR: LiNix Contributors
+#+OPTIONS: toc:2 num:nil
+
+    Introduction
+    LiNix is a cross-platform, multi-backend declarative package manager written in Rust. Unlike simple CLI wrappers, LiNix is a System State Engine designed for users who require Infrastructure-as-Code (IaC) reliability on their local machines.
+
+It ensures your system matches your defined configuration across Linux, macOS, and Windows, while providing transactional safety, recursive dependency logic, and cryptographically verified installations.
+
+    Key Features
+    ** 🛡️ Mission-Critical Reliability
+
+    Transactional Journaling: Every sync is recorded in a journal (=pending.json=). If a sync is interrupted by a power failure or crash, the =heal= command resumes exactly where it left off.
+
+    Atomic Snapshots: LiNix automatically creates a timestamped JSON backup of your declarative state before every operation, allowing for easy rollbacks.
+
+    On-Disk Conflict Detection: Scans your =$PATH= before installation to ensure LiNix doesn't accidentally shadow or overwrite binaries you've manually compiled or installed outside the manager.
+
+** 🚀 Advanced Logic
+
+    Recursive Group Expansion: Groups can contain other groups (e.g., a "work" group that includes "dev" and "security" groups). LiNix resolves these using a queue-based expansion with infinite depth and cycle detection.
+
+    Lockfile Support: Generates a =linix.lock= file capturing exact version strings. Use =linix sync --locked= to reproduce a system state down to the specific version on any machine.
+
+    Backend Aliases: Map custom nicknames (e.g., =sys= -> =pacman=) to allow portable group files that work across different distributions.
+
+** 🔐 Hardened Security
+
+    SHA256 Verification: Verify the integrity of GitHub binary downloads using the =@sha256= option.
+
+    Lua Hooks: Programmable hooks (before/after sync, before/after install) run in a sandboxed Lua environment for safe automation.
+
+    Post-Install Health Checks: Automatically verify that a package's binary is present in the system =$PATH= immediately after installation using the =@verify_binary= option.
+
+    Supported Backends
+    LiNix provides mature, native implementations for the following managers:
+
+Category	Backends
+System	=apt=, =dnf=, =pacman=, =apk=, =zypper=
+Universal	=flatpak=, =snap=, =brew=
+Language	=cargo= (w/ =binstall= support), =npm=, =pip=, =pnpm=, =yarn=
+Tools	=uv=, =mise=, =pipx=, =vscode=, =github=
+Windows	=winget=, =choco=, =scoop=
+
+    Installation
+    ** From Source
+    #+BEGIN_SRC bash
+    git clone https://github.com/youruser/linix.git
+    cd linix
+    cargo build --release
+    sudo cp target/release/linix /usr/local/bin/
+    #+END_SRC
+
+    Configuration
+    ** Main Config (/.config/linix/config.toml)
+    #+BEGIN_SRC toml
+    enabled_backends = ["apt", "flatpak", "cargo", "github"]
+    github_token = "ghp_your_token_here" # Higher rate limits
+
+[aliases]
+sys = "apt"
+
+[groups]
+base-dev = ["sys:git", "sys:curl", "sys:build-essential"]
+rust-stack = ["base-dev", "cargo:ripgrep@verify_binary=rg"]
+#+END_SRC
+
+** Group Files (/.config/linix/groups/local.txt)
+#+BEGIN_SRC text
+rust-stack
+github:neovim/neovim@sha256=a1b2c3d4...
+Host-specific files (e.g. host-desktop.txt) are merged automatically
+
+#+END_SRC
+
+    Usage
+    | Command | Description |
+    | :--- | :--- |
+    | =linix sync= | Sync system to match group files. |
+    | =linix sync --locked= | Sync using exact versions from =linix.lock=. |
+    | =linix heal= | Resume an interrupted or crashed sync session. |
+    | =linix doctor= | Check health and availability of all backends. |
+    | =linix rollback= | Restore group files from a previous snapshot. |
+    | =linix clean= | Interactively remove packages not defined in config. |
+    | =linix install <pkg>= | Install a package and save it to =local.txt=. |
+
+    LiNix vs. Metapac
+    While projects like Metapac provide an excellent CLI wrapper, LiNix is built for Mission-Critical stability:
+
+    Resilience: LiNix has a =heal= command and transactional journals; Metapac is stateless.
+
+    Security: LiNix supports native SHA256 checksums for GitHub downloads; Metapac relies on backend defaults.
+
+    Logic: LiNix supports recursive group expansion (groups within groups); Metapac uses flat lists.
+
+    Maturity: LiNix provides full support for =apk=, =choco=, and =pip=, which are currently on Metapac's wishlist.
+
+    License
+    MIT License. See =LICENSE= for details.
