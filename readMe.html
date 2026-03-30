@@ -3,7 +3,7 @@
 "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
 <head>
-<!-- 2026-03-30 Mon 15:22 -->
+<!-- 2026-03-30 Mon 15:29 -->
 <meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>LiNix</title>
@@ -204,82 +204,101 @@
 <h2>Table of Contents</h2>
 <div id="text-table-of-contents" role="doc-toc">
 <ul>
-<li><a href="#org61b0cd7">Introduction</a></li>
-<li><a href="#org32b01db">Key Features</a>
+<li><a href="#orgb97c17a">Introduction</a></li>
+<li><a href="#orgc3554f9">Key Features</a>
 <ul>
-<li><a href="#org52e8ba1">Mission‑Critical Reliability</a></li>
-<li><a href="#org27c5e7d">Advanced Logic</a></li>
-<li><a href="#org5c1285b">Hardened Security</a></li>
+<li><a href="#orgfc02a4d">Mission‑Critical Reliability</a></li>
+<li><a href="#org44b98d0">Advanced Logic &amp; Reproducibility</a></li>
+<li><a href="#org9f1b848">Hardened Security &amp; Safety</a></li>
+<li><a href="#orgc7fa924">Power‑User UX &amp; Extensibility</a></li>
 </ul>
 </li>
-<li><a href="#org1a6d704">Supported Backends</a></li>
-<li><a href="#orga0b3d46">Installation</a>
+<li><a href="#orge274dc9">Supported Backends</a></li>
+<li><a href="#org66054e8">Installation</a>
 <ul>
-<li><a href="#orgd519462">From source</a></li>
+<li><a href="#orgfef5c64">From source</a></li>
 </ul>
 </li>
-<li><a href="#org66d3a00">Configuration</a>
+<li><a href="#org76860fa">Configuration</a>
 <ul>
-<li><a href="#org7747cb6">Main config (<code>/.config/linix/config.toml</code>)</a></li>
-<li><a href="#org24e1665">Group files (<code>/.config/linix/groups/local.txt</code>)</a></li>
+<li><a href="#org840941e">Main config (<code>/.config/linix/config.toml</code>)</a></li>
+<li><a href="#org9b8be8d">Group files (<code>/.config/linix/groups/local.txt</code>)</a></li>
 </ul>
 </li>
-<li><a href="#org8d369e2">Usage</a></li>
-<li><a href="#org588c8b9">LiNix vs. Metapac</a></li>
-<li><a href="#org428df77">License</a></li>
+<li><a href="#org8e57f9f">Usage</a></li>
+<li><a href="#org91e7500">LiNix vs. The Competition</a>
+<ul>
+<li><a href="#org15453d4">vs. Metapac</a></li>
+<li><a href="#org7c0c1b9">vs. Shell Scripts</a></li>
+<li><a href="#org7f2c588">vs. Nix / Guix</a></li>
+</ul>
+</li>
+<li><a href="#org0c41afc">License</a></li>
 </ul>
 </div>
 </div>
-<div id="outline-container-org61b0cd7" class="outline-2">
-<h2 id="org61b0cd7">Introduction</h2>
-<div class="outline-text-2" id="text-org61b0cd7">
+<div id="outline-container-orgb97c17a" class="outline-2">
+<h2 id="orgb97c17a">Introduction</h2>
+<div class="outline-text-2" id="text-orgb97c17a">
 <p>
-LiNix is a cross‑platform, multi‑backend declarative package manager written in Rust. Unlike simple CLI wrappers, it functions as a *system state engine*—built for users who expect Infrastructure‑as‑Code (IaC) reliability on their local machines.
+LiNix is a cross‑platform, multi‑backend declarative package manager written in Rust. It is designed as a <b>system state engine</b>, treating your local machine like a production server: the state of your software must always match the defined configuration.
 </p>
 
 <p>
-It ensures your system matches a defined configuration across Linux, macOS, and Windows, providing transactional safety, recursive dependency resolution, and cryptographically verified installations.
+Unlike simple CLI wrappers or imperative scripts, LiNix is <b>bi‑directional</b>. Install a package manually from the command line, and it automatically updates your declarative configuration. Sync your configuration, and LiNix ensures your system reflects it exactly—with transactional safety, parallel execution, and cryptographic verification.
 </p>
 </div>
 </div>
-<div id="outline-container-org32b01db" class="outline-2">
-<h2 id="org32b01db">Key Features</h2>
-<div class="outline-text-2" id="text-org32b01db">
+<div id="outline-container-orgc3554f9" class="outline-2">
+<h2 id="orgc3554f9">Key Features</h2>
+<div class="outline-text-2" id="text-orgc3554f9">
 </div>
-<div id="outline-container-org52e8ba1" class="outline-3">
-<h3 id="org52e8ba1">Mission‑Critical Reliability</h3>
-<div class="outline-text-3" id="text-org52e8ba1">
+<div id="outline-container-orgfc02a4d" class="outline-3">
+<h3 id="orgfc02a4d">Mission‑Critical Reliability</h3>
+<div class="outline-text-3" id="text-orgfc02a4d">
 <ul class="org-ul">
-<li><b>Transactional journaling</b>: every <code>sync</code> is recorded in a journal (<code>pending.json</code>). If an operation is interrupted (power loss, crash), the <code>heal</code> command resumes exactly where it left off.</li>
-<li><b>Atomic snapshots</b>: before any change, LiNix creates a timestamped JSON backup of your declarative state, making rollbacks trivial.</li>
-<li><b>On‑disk conflict detection</b>: before installing, LiNix scans your <code>$PATH</code> to avoid accidentally shadowing or overwriting binaries you’ve placed outside the manager.</li>
+<li><b>Transactional journaling</b>: every <code>sync</code> operation writes to a real‑time journal (<code>pending.json</code>). If your computer crashes or loses power mid‑sync, LiNix knows exactly where it left off.</li>
+<li><b>Heal command</b>: a dedicated recovery tool that reads the transaction journal to resume and repair interrupted installations, leaving your system in a consistent state.</li>
+<li><b>Pre‑sync atomic snapshots</b>: before any change, LiNix creates a timestamped JSON backup of your entire package configuration, enabling instant rollbacks of the configuration state.</li>
+<li><b>Priority scheduling</b>: system‑level managers (e.g., <code>apt</code>, <code>dnf</code>) finish their work before language‑specific managers (e.g., <code>cargo</code>, <code>pip</code>) begin, preventing dependency race conditions.</li>
+<li><b>On‑disk conflict detection</b>: scans your <code>$PATH</code> before installing to avoid accidentally shadowing or overwriting binaries you’ve placed outside the manager.</li>
 </ul>
 </div>
 </div>
-<div id="outline-container-org27c5e7d" class="outline-3">
-<h3 id="org27c5e7d">Advanced Logic</h3>
-<div class="outline-text-3" id="text-org27c5e7d">
+<div id="outline-container-org44b98d0" class="outline-3">
+<h3 id="org44b98d0">Advanced Logic &amp; Reproducibility</h3>
+<div class="outline-text-3" id="text-org44b98d0">
 <ul class="org-ul">
 <li><b>Recursive group expansion</b>: groups can include other groups (e.g., a <code>work</code> group that includes <code>dev</code> and <code>security</code>). LiNix resolves these with queue‑based expansion, infinite depth, and cycle detection.</li>
-<li><b>Lockfile support</b>: generate a <code>linix.lock</code> with exact version strings. Use <code>linix sync --locked</code> to reproduce a system state down to the specific version on any machine.</li>
-<li><b>Backend aliases</b>: map custom nicknames (e.g., <code>sys</code> → <code>pacman</code>) to keep group files portable across distributions.</li>
+<li><b>Lockfile support</b>: generate a <code>linix.lock</code> with exact version strings across all backends—similar to <code>Cargo.lock</code> or <code>package-lock.json</code>. Use <code>linix sync --locked</code> to reproduce a system state down to the specific version on any machine.</li>
+<li><b>Backend aliases</b>: map custom nicknames (e.g., <code>sys</code> → <code>pacman</code> on Arch, <code>sys</code> → <code>apt</code> on Ubuntu) to keep group files portable across distributions.</li>
 </ul>
 </div>
 </div>
-<div id="outline-container-org5c1285b" class="outline-3">
-<h3 id="org5c1285b">Hardened Security</h3>
-<div class="outline-text-3" id="text-org5c1285b">
+<div id="outline-container-org9f1b848" class="outline-3">
+<h3 id="org9f1b848">Hardened Security &amp; Safety</h3>
+<div class="outline-text-3" id="text-org9f1b848">
 <ul class="org-ul">
-<li><b>SHA256 verification</b>: verify GitHub binary downloads with the <code>@sha256</code> option.</li>
+<li><b>SHA256 verification</b>: verify GitHub binary downloads with the <code>@sha256</code> option, pinning hashes to guard against tampering.</li>
 <li><b>Lua hooks</b>: programmable hooks (before/after sync, before/after install) run in a sandboxed Lua environment for safe automation.</li>
-<li><b>Post‑install health checks</b>: automatically verify that a package’s binary is in <code>$PATH</code> after installation using the <code>@verify_binary</code> option.</li>
+<li><b>Post‑install health checks</b>: automatically verify that a package’s binary is in <code>$PATH</code> immediately after installation using the <code>@verify_binary</code> option.</li>
+</ul>
+</div>
+</div>
+<div id="outline-container-orgc7fa924" class="outline-3">
+<h3 id="orgc7fa924">Power‑User UX &amp; Extensibility</h3>
+<div class="outline-text-3" id="text-orgc7fa924">
+<ul class="org-ul">
+<li><b>Interactive provider selection</b>: when a package exists in multiple backends (e.g., <code>ripgrep</code> in <code>apt</code>, <code>snap</code>, and <code>cargo</code>), LiNix presents an interactive TUI menu to let you choose your preferred source.</li>
+<li><b>Universal search</b>: a high‑performance, asynchronous search engine that queries all enabled backends in parallel and aggregates results into a single list.</li>
+<li><b>Hostname‑specific profiles</b>: automatically detects your machine’s hostname and merges <code>host-&lt;name&gt;.txt</code> files into your sync plan, allowing one configuration directory to manage a laptop, a desktop, and a server differently.</li>
 </ul>
 </div>
 </div>
 </div>
-<div id="outline-container-org1a6d704" class="outline-2">
-<h2 id="org1a6d704">Supported Backends</h2>
-<div class="outline-text-2" id="text-org1a6d704">
+<div id="outline-container-orge274dc9" class="outline-2">
+<h2 id="orge274dc9">Supported Backends</h2>
+<div class="outline-text-2" id="text-orge274dc9">
 <p>
 LiNix provides mature, native implementations for the following package managers:
 </p>
@@ -327,15 +346,15 @@ LiNix provides mature, native implementations for the following package managers
 </table>
 </div>
 </div>
-<div id="outline-container-orga0b3d46" class="outline-2">
-<h2 id="orga0b3d46">Installation</h2>
-<div class="outline-text-2" id="text-orga0b3d46">
+<div id="outline-container-org66054e8" class="outline-2">
+<h2 id="org66054e8">Installation</h2>
+<div class="outline-text-2" id="text-org66054e8">
 </div>
-<div id="outline-container-orgd519462" class="outline-3">
-<h3 id="orgd519462">From source</h3>
-<div class="outline-text-3" id="text-orgd519462">
+<div id="outline-container-orgfef5c64" class="outline-3">
+<h3 id="orgfef5c64">From source</h3>
+<div class="outline-text-3" id="text-orgfef5c64">
 <div class="org-src-container">
-<pre class="src src-bash">git clone https://github.com/youruser/linix.git
+<pre class="src src-bash"># Clone this repo.
 cd linix
 cargo build --release
 sudo cp target/release/linix /usr/local/bin/
@@ -344,13 +363,13 @@ sudo cp target/release/linix /usr/local/bin/
 </div>
 </div>
 </div>
-<div id="outline-container-org66d3a00" class="outline-2">
-<h2 id="org66d3a00">Configuration</h2>
-<div class="outline-text-2" id="text-org66d3a00">
+<div id="outline-container-org76860fa" class="outline-2">
+<h2 id="org76860fa">Configuration</h2>
+<div class="outline-text-2" id="text-org76860fa">
 </div>
-<div id="outline-container-org7747cb6" class="outline-3">
-<h3 id="org7747cb6">Main config (<code>/.config/linix/config.toml</code>)</h3>
-<div class="outline-text-3" id="text-org7747cb6">
+<div id="outline-container-org840941e" class="outline-3">
+<h3 id="org840941e">Main config (<code>/.config/linix/config.toml</code>)</h3>
+<div class="outline-text-3" id="text-org840941e">
 <div class="org-src-container">
 <pre class="src src-toml">enabled_backends = ["apt", "flatpak", "cargo", "github"]
 github_token = "ghp_your_token_here"  # higher rate limits
@@ -365,9 +384,9 @@ rust-stack = ["base-dev", "cargo:ripgrep@verify_binary=rg"]
 </div>
 </div>
 </div>
-<div id="outline-container-org24e1665" class="outline-3">
-<h3 id="org24e1665">Group files (<code>/.config/linix/groups/local.txt</code>)</h3>
-<div class="outline-text-3" id="text-org24e1665">
+<div id="outline-container-org9b8be8d" class="outline-3">
+<h3 id="org9b8be8d">Group files (<code>/.config/linix/groups/local.txt</code>)</h3>
+<div class="outline-text-3" id="text-org9b8be8d">
 <div class="org-src-container">
 <pre class="src src-text">rust-stack
 github:neovim/neovim@sha256=a1b2c3d4...
@@ -380,9 +399,9 @@ Host‑specific files (e.g., <code>host-desktop.txt</code>) are merged automatic
 </div>
 </div>
 </div>
-<div id="outline-container-org8d369e2" class="outline-2">
-<h2 id="org8d369e2">Usage</h2>
-<div class="outline-text-2" id="text-org8d369e2">
+<div id="outline-container-org8e57f9f" class="outline-2">
+<h2 id="org8e57f9f">Usage</h2>
+<div class="outline-text-2" id="text-org8e57f9f">
 <table border="2" cellspacing="0" cellpadding="6" rules="groups" frame="hsides">
 
 
@@ -436,9 +455,13 @@ Host‑specific files (e.g., <code>host-desktop.txt</code>) are merged automatic
 </table>
 </div>
 </div>
-<div id="outline-container-org588c8b9" class="outline-2">
-<h2 id="org588c8b9">LiNix vs. Metapac</h2>
-<div class="outline-text-2" id="text-org588c8b9">
+<div id="outline-container-org91e7500" class="outline-2">
+<h2 id="org91e7500">LiNix vs. The Competition</h2>
+<div class="outline-text-2" id="text-org91e7500">
+</div>
+<div id="outline-container-org15453d4" class="outline-3">
+<h3 id="org15453d4">vs. Metapac</h3>
+<div class="outline-text-3" id="text-org15453d4">
 <p>
 While projects like Metapac provide an excellent CLI wrapper, LiNix is built for mission‑critical stability:
 </p>
@@ -451,9 +474,29 @@ While projects like Metapac provide an excellent CLI wrapper, LiNix is built for
 </ul>
 </div>
 </div>
-<div id="outline-container-org428df77" class="outline-2">
-<h2 id="org428df77">License</h2>
-<div class="outline-text-2" id="text-org428df77">
+<div id="outline-container-org7c0c1b9" class="outline-3">
+<h3 id="org7c0c1b9">vs. Shell Scripts</h3>
+<div class="outline-text-3" id="text-org7c0c1b9">
+<ul class="org-ul">
+<li><b>Speed</b>: LiNix executes installations in parallel where possible.</li>
+<li><b>Safety</b>: atomic rollbacks and recovery commands ensure you never leave the system half‑configured.</li>
+<li><b>Completeness</b>: uninstalls and cleanup are handled automatically—shell scripts almost always ignore these.</li>
+</ul>
+</div>
+</div>
+<div id="outline-container-org7f2c588" class="outline-3">
+<h3 id="org7f2c588">vs. Nix / Guix</h3>
+<div class="outline-text-3" id="text-org7f2c588">
+<ul class="org-ul">
+<li><b>Familiarity</b>: LiNix works on top of your existing, native package managers (apt, brew, winget, etc.), avoiding a specialized filesystem or DSL.</li>
+<li><b>Integration</b>: manual installations update your declarative configuration automatically, preserving the bi‑directional workflow.</li>
+</ul>
+</div>
+</div>
+</div>
+<div id="outline-container-org0c41afc" class="outline-2">
+<h2 id="org0c41afc">License</h2>
+<div class="outline-text-2" id="text-org0c41afc">
 <p>
 MIT License. See the <code>LICENSE</code> file for details.
 </p>
@@ -462,7 +505,7 @@ MIT License. See the <code>LICENSE</code> file for details.
 </div>
 <div id="postamble" class="status">
 <p class="author">Author: LiNix Contributors</p>
-<p class="date">Created: 2026-03-30 Mon 15:22</p>
+<p class="date">Created: 2026-03-30 Mon 15:29</p>
 <p class="validation"><a href="https://validator.w3.org/check?uri=referer">Validate</a></p>
 </div>
 </body>
