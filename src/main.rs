@@ -26,12 +26,12 @@ async fn main() -> anyhow::Result<()> {
 
     if let Commands::Completions { shell } = &cli.command {
         let mut cmd = Cli::command();
-        // FIXED E0283: Explicitly type the generator
         let generator: clap_complete::Shell = (*shell).into();
         clap_complete::generate(generator, &mut cmd, "linix", &mut std::io::stdout());
         return Ok(());
     }
 
+    // App is now immutable here because sync methods are now &self
     let app = App::new(config.clone()).await?;
 
     match &cli.command {
@@ -39,6 +39,10 @@ async fn main() -> anyhow::Result<()> {
             let engine = linix::app::SyncEngine::new(&app.config, &app.registry, &app.executor, &app.cache, &app.metrics, app.progress.as_ref(), &app.hooks)
                 .with_lockfile(*locked);
             engine.sync().await?;
+        }
+        Commands::Heal => {
+            let engine = linix::app::SyncEngine::new(&app.config, &app.registry, &app.executor, &app.cache, &app.metrics, app.progress.as_ref(), &app.hooks);
+            engine.heal().await?;
         }
         Commands::Install { packages } => {
             for pkg in packages {

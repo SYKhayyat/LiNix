@@ -3,8 +3,9 @@ use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
 use crate::config::parser::load_all_packages;
-use crate::core::{CommandExecutor, PackageCache, PackageSpec, Result, Error};
+use crate::core::{CommandExecutor, PackageCache, Package, PackageSpec, Result, Error};
 use crate::utils::progress::ProgressReporter;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Write};
 use std::fs;
@@ -14,14 +15,14 @@ pub struct SyncEngine<'a> {
     config: &'a Config,
     registry: &'a BackendRegistry,
     executor: &'a CommandExecutor,
-    cache: &'a PackageCache, // Now used in get_installed_names
+    cache: &'a PackageCache,
     metrics: &'a MetricsCollector,
     progress: &'a dyn ProgressReporter,
     hooks: &'a LuaHooks,
     use_lockfile: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct SyncChanges {
     pub to_install: HashMap<String, Vec<PackageSpec>>,
     pub to_remove: HashMap<String, Vec<String>>,
@@ -31,7 +32,9 @@ impl SyncChanges {
     pub fn is_empty(&self) -> bool {
         self.to_install.is_empty() && self.to_remove.is_empty()
     }
-    pub fn total_install(&self) -> usize { self.to_install.values().map(|v| v.len()).sum() }
+    pub fn total_install(&self) -> usize {
+        self.to_install.values().map(|v| v.len()).sum()
+    }
 }
 
 impl<'a> SyncEngine<'a> {
@@ -44,27 +47,53 @@ impl<'a> SyncEngine<'a> {
         self
     }
 
+    /// Transactional Recovery: Resumes a crashed sync session
+    pub async fn heal(&self) -> Result<()> {
+        let path = dirs::data_dir().unwrap_or_default().join("linix").join("pending_sync.json");
+        if !path.exists() {
+            info!("No pending transactions found. System is healthy.");
+            return Ok(());
+        }
+        let data = fs::read_to_string(&path)?;
+        let pending: SyncChanges = serde_json::from_str(&data).map_err(|e| Error::Other(e.to_string()))?;
+        info!("Resuming interrupted transaction...");
+        self.execute_changes(&pending).await?;
+        let _ = fs::remove_file(path);
+        Ok(())
+    }
+
+    /// Main Sync Entry Point
     pub async fn sync(&self) -> Result<()> {
         let _ = self.hooks.run_before_sync().await;
         let desired = self.load_desired_packages()?;
-        let _ = self.create_snapshot(&desired);
-
-        let changes = self.calculate_changes().await?;
+        let changes: SyncChanges = self.calculate_changes().await?;
+        
         if changes.is_empty() {
-            info!("System is in sync.");
+            info!("System is in sync with configuration.");
             let _ = self.hooks.run_after_sync().await;
             return Ok(());
         }
 
+        self.check_binary_conflicts(&changes).await?;
         self.display_changes(&changes);
+
         if !self.config.yes && !self.confirm_changes()? { return Err(Error::Cancelled); }
 
+        // Start Transaction Journal
+        let journal_path = dirs::data_dir().unwrap_or_default().join("linix").join("pending_sync.json");
+        let _ = fs::create_dir_all(journal_path.parent().unwrap());
+        fs::write(&journal_path, serde_json::to_string(&changes).unwrap_or_default())?;
+
         self.execute_changes(&changes).await?;
+
+        // End Transaction
+        let _ = fs::remove_file(journal_path);
         let _ = self.save_lockfile(&desired).await;
         let _ = self.hooks.run_after_sync().await;
         Ok(())
     }
 
+    /// Recursive Group Expansion & Alias Resolution
     pub fn load_desired_packages(&self) -> Result<HashMap<String, Vec<PackageSpec>>> {
         let mut packages_by_backend: HashMap<String, Vec<PackageSpec>> = HashMap::new();
         let raw_lines = load_all_packages(&self.config.groups_dir)?;
@@ -83,61 +112,17 @@ impl<'a> SyncEngine<'a> {
             expanded_lines.push(line);
         }
 
-        let locked_versions = if self.use_lockfile { self.load_lockfile().unwrap_or_default() } else { HashMap::new() };
+        let locked = if self.use_lockfile { self.load_lockfile().unwrap_or_default() } else { HashMap::new() };
 
         for line in expanded_lines {
             let mut spec = self.parse_package_spec(&line);
             if let Some(real) = self.config.aliases.get(&spec.backend) { spec.backend = real.clone(); }
-            if self.use_lockfile {
-                if let Some(ver) = locked_versions.get(&spec.backend).and_then(|b| b.get(&spec.name)) {
-                    spec.options.insert("version".to_string(), ver.clone());
-                }
+            if let Some(ver) = locked.get(&spec.backend).and_then(|b| b.get(&spec.name)) {
+                spec.options.insert("version".to_string(), ver.clone());
             }
             packages_by_backend.entry(spec.backend.clone()).or_default().push(spec);
         }
         Ok(packages_by_backend)
-    }
-
-    pub async fn find_unmanaged(&self) -> Result<Vec<(String, Vec<String>)>> {
-        let desired = self.load_desired_packages()?;
-        let mut unmanaged = Vec::new();
-        for manager in self.registry.available() {
-            let backend = manager.name().to_string();
-            let desired_names: HashSet<String> = desired.get(&backend)
-                .map(|specs| specs.iter().map(|s| s.name.clone()).collect())
-                .unwrap_or_default();
-            
-            let installed = self.get_installed_names(manager.as_ref()).await?;
-            let unmanaged_pkgs: Vec<String> = installed.into_iter()
-                .filter(|name| !desired_names.contains(name))
-                .collect();
-            
-            if !unmanaged_pkgs.is_empty() { unmanaged.push((backend, unmanaged_pkgs)); }
-        }
-        Ok(unmanaged)
-    }
-
-    async fn get_installed_names(&self, manager: &dyn crate::core::PackageManager) -> Result<HashSet<String>> {
-        let name = manager.name();
-        // FIXED: Now using the cache field to resolve the warning
-        if let Some(cached) = self.cache.get_installed(name).await {
-            return Ok(cached.into_iter().collect());
-        }
-        let pkgs: Vec<String> = manager.list_installed().await?.into_iter().map(|p| p.name).collect();
-        self.cache.set_installed(name.to_string(), pkgs.clone()).await;
-        Ok(pkgs.into_iter().collect())
-    }
-
-    pub async fn clean(&self) -> Result<()> {
-        let unmanaged = self.find_unmanaged().await?;
-        if unmanaged.is_empty() { return Ok(()); }
-        for (backend, packages) in unmanaged {
-            if let Some(manager) = self.registry.get(&backend) {
-                manager.remove(&packages, true).await?;
-                self.metrics.record_remove(packages.len() as u64);
-            }
-        }
-        Ok(())
     }
 
     pub async fn calculate_changes(&self) -> Result<SyncChanges> {
@@ -157,6 +142,34 @@ impl<'a> SyncEngine<'a> {
         Ok(changes)
     }
 
+    pub async fn find_unmanaged(&self) -> Result<Vec<(String, Vec<String>)>> {
+        let desired = self.load_desired_packages()?;
+        let mut unmanaged = Vec::new();
+        for manager in self.registry.available() {
+            let backend = manager.name().to_string();
+            let desired_names: HashSet<String> = desired.get(&backend)
+                .map(|specs| specs.iter().map(|s| s.name.clone()).collect())
+                .unwrap_or_default();
+            
+            let installed = self.get_installed_names(manager.as_ref()).await?;
+            let list: Vec<String> = installed.into_iter().filter(|n| !desired_names.contains(n)).collect();
+            if !list.is_empty() { unmanaged.push((backend, list)); }
+        }
+        Ok(unmanaged)
+    }
+
+    pub async fn clean(&self) -> Result<()> {
+        let unmanaged = self.find_unmanaged().await?;
+        if unmanaged.is_empty() { return Ok(()); }
+        for (backend, packages) in unmanaged {
+            if let Some(manager) = self.registry.get(&backend) {
+                manager.remove(&packages, true).await?;
+                self.metrics.record_remove(packages.len() as u64);
+            }
+        }
+        Ok(())
+    }
+
     async fn execute_changes(&self, changes: &SyncChanges) -> Result<()> {
         for (backend, specs) in &changes.to_install {
             if let Some(manager) = self.registry.get(backend) {
@@ -164,9 +177,7 @@ impl<'a> SyncEngine<'a> {
                 manager.install_with_options(specs, true).await?;
                 for spec in specs {
                     if let Some(bin) = spec.options.get("verify_binary") {
-                        if !self.executor.command_exists(bin).await {
-                            warn!("Binary '{}' not found after installing {}", bin, spec.name);
-                        }
+                        if !self.executor.command_exists(bin).await { warn!("Post-install health check failed for {}", bin); }
                     }
                     handle.inc(1);
                 }
@@ -177,16 +188,40 @@ impl<'a> SyncEngine<'a> {
         Ok(())
     }
 
-    fn create_snapshot(&self, desired: &HashMap<String, Vec<PackageSpec>>) -> Result<()> {
-        let ts = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-        let dir = dirs::data_dir().unwrap_or_default().join("linix").join("snapshots");
-        let _ = fs::create_dir_all(&dir);
-        let _ = fs::write(dir.join(format!("snap_{}.json", ts)), serde_json::to_string_pretty(desired).unwrap_or_default());
+    async fn get_installed_names(&self, manager: &dyn crate::core::PackageManager) -> Result<HashSet<String>> {
+        if let Some(cached) = self.cache.get_installed(manager.name()).await { return Ok(cached.into_iter().collect()); }
+        let pkgs: Vec<Package> = manager.list_installed().await?;
+        let names: Vec<String> = pkgs.into_iter().map(|p| p.name).collect();
+        self.cache.set_installed(manager.name().to_string(), names.clone()).await;
+        Ok(names.into_iter().collect())
+    }
+
+    async fn check_binary_conflicts(&self, changes: &SyncChanges) -> Result<()> {
+        let mut map = HashMap::new();
+        for (b, specs) in &changes.to_install {
+            for s in specs {
+                let bin = s.options.get("verify_binary").unwrap_or(&s.name);
+                if let Some(other) = map.get(bin) { return Err(Error::Other(format!("Binary conflict: {} wanted by {} and {}", bin, b, other))); }
+                map.insert(bin.clone(), b.clone());
+            }
+        }
         Ok(())
     }
 
+    fn parse_package_spec(&self, line: &str) -> PackageSpec {
+        let (b_part, rest) = line.find(':').map(|i| (&line[..i], &line[i+1..])).unwrap_or(("", line));
+        let (n_part, o_part) = rest.find('@').map(|i| (&rest[..i], &rest[i+1..])).unwrap_or((rest, ""));
+        let backend = if b_part.is_empty() { self.detect_system_backend() } else { b_part.to_string() };
+        let mut options = HashMap::new();
+        for pair in o_part.split(',').filter(|s| !s.is_empty()) {
+            let (k, v) = pair.find('=').map(|i| (&pair[..i], &pair[i+1..])).unwrap_or((pair, "true"));
+            options.insert(k.to_string(), v.to_string());
+        }
+        PackageSpec { name: n_part.to_string(), backend, options }
+    }
+
     async fn save_lockfile(&self, desired: &HashMap<String, Vec<PackageSpec>>) -> Result<()> {
-        let mut locked: HashMap<String, HashMap<String, String>> = HashMap::new();
+        let mut locked = HashMap::new();
         for manager in self.registry.available() {
             if let Some(specs) = desired.get(manager.name()) {
                 if let Ok(installed) = manager.list_installed().await {
@@ -210,20 +245,6 @@ impl<'a> SyncEngine<'a> {
         Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
     }
 
-    fn parse_package_spec(&self, line: &str) -> PackageSpec {
-        let (b_part, rest) = line.find(':').map(|i| (&line[..i], &line[i+1..])).unwrap_or(("", line));
-        let (n_part, o_part) = rest.find('@').map(|i| (&rest[..i], &rest[i+1..])).unwrap_or((rest, ""));
-        let backend = if b_part.is_empty() { self.detect_system_backend() } else { b_part.to_string() };
-        let mut options = HashMap::new();
-        for pair in o_part.split(',').filter(|s| !s.is_empty()) {
-            let (k, v) = pair.find('=').map(|i| (&pair[..i], &pair[i+1..])).unwrap_or((pair, "true"));
-            options.insert(k.to_string(), v.to_string());
-        }
-        PackageSpec { name: n_part.to_string(), backend, options }
-    }
-
-    fn detect_system_backend(&self) -> String { "apt".to_string() }
-
     fn confirm_changes(&self) -> Result<bool> {
         print!("Proceed? [y/N] ");
         let _ = io::stdout().flush();
@@ -233,6 +254,8 @@ impl<'a> SyncEngine<'a> {
     }
 
     fn display_changes(&self, changes: &SyncChanges) {
-        println!("Sync Plan: {} to install.", changes.total_install());
+        println!("\nPlan: +{} packages", changes.total_install());
     }
+
+    fn detect_system_backend(&self) -> String { "apt".to_string() }
 }

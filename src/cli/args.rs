@@ -1,16 +1,12 @@
-// C:\Users\Administrator\Videos\Nexus\linix\src\cli\args.rs
+// src/cli/args.rs
 use clap::{Parser, Subcommand, ValueEnum, Args};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "linix")]
-#[command(author = "LiNix Contributors")]
-#[command(version = "3.0.0")]
-#[command(about = "Universal package manager with multi-backend support")]
+#[command(name = "linix", version = "3.0.0", about = "Universal Mission-Critical Package Manager")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
-
     #[arg(short = 'n', long, global = true)]
     pub dry_run: bool,
     #[arg(short, long, global = true)]
@@ -33,10 +29,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    Sync {
-        #[arg(long)]
-        locked: bool,
-    },
+    Sync { #[arg(long)] locked: bool },
+    Heal, // Resumes interrupted transactions
     Clean,
     Unmanaged,
     Orphans,
@@ -51,41 +45,21 @@ pub enum Commands {
     Completions { #[arg(value_enum)] shell: Shell },
     Repo(RepoArgs),
     Doctor,
-    Rollback {
-        /// Timestamp or ID of the snapshot to rollback to. If omitted, lists available snapshots.
-        snapshot: Option<String>,
-    },
+    Rollback { snapshot: Option<String> },
 }
 
 #[derive(Args, Debug)]
-pub struct RepoArgs {
-    #[clap(subcommand)]
-    pub command: RepoCommand,
-}
+pub struct RepoArgs { #[clap(subcommand)] pub command: RepoCommand }
 
 #[derive(Subcommand, Debug)]
 pub enum RepoCommand {
-    Add {
-        name: String,
-        url: String,
-        #[arg(short, long)]
-        backend: Option<String>,
-    },
-    Remove {
-        name: String,
-        #[arg(short, long)]
-        backend: Option<String>,
-    },
-    List {
-        #[arg(short, long)]
-        backend: Option<String>,
-    },
+    Add { name: String, url: String, #[arg(short, long)] backend: Option<String> },
+    Remove { name: String, #[arg(short, long)] backend: Option<String> },
+    List { #[arg(short, long)] backend: Option<String> },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
-pub enum Shell {
-    Bash, Zsh, Fish, PowerShell, Elvish,
-}
+pub enum Shell { Bash, Zsh, Fish, PowerShell, Elvish }
 
 impl From<Shell> for clap_complete::Shell {
     fn from(shell: Shell) -> Self {

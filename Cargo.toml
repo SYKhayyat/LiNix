@@ -64,6 +64,10 @@ chrono = "0.4"
 sha2 = "0.10"
 hex = "0.4"
 
+zip = "0.6"
+tar = "0.4"
+flate2 = "1.0"
+
 # Unix-specific
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
