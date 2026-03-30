@@ -1,7 +1,7 @@
 // src/main.rs
 use clap::{Parser, CommandFactory};
 use linix::app::App;
-use linix::cli::{Cli, Commands, RepoCommand}; // Removed Shell import as it is accessed via linix::cli
+use linix::cli::{Cli, Commands, RepoCommand};
 use linix::config::Config;
 use tracing_subscriber::EnvFilter;
 use dialoguer::{Select, theme::ColorfulTheme};
@@ -20,7 +20,6 @@ async fn main() -> anyhow::Result<()> {
     let mut config = Config::from_file(&config_path)?;
     if cli.dry_run { config.dry_run = true; }
     if cli.yes { config.yes = true; }
-    if cli.verbose { config.verbose = true; }
     if let Some(ref b) = cli.backend { config.enabled_backends = vec![b.clone()]; }
     config.show_progress = cli.progress;
 
@@ -31,13 +30,13 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // App is now immutable here because sync methods are now &self
     let app = App::new(config.clone()).await?;
 
     match &cli.command {
         Commands::Sync { locked } => {
             let engine = linix::app::SyncEngine::new(&app.config, &app.registry, &app.executor, &app.cache, &app.metrics, app.progress.as_ref(), &app.hooks)
                 .with_lockfile(*locked);
+            let _ = engine.heal().await;
             engine.sync().await?;
         }
         Commands::Heal => {
@@ -50,33 +49,30 @@ async fn main() -> anyhow::Result<()> {
                     let results = app.search(pkg).await?;
                     let mut providers: Vec<String> = results.into_iter().map(|p| p.backend).collect();
                     providers.sort(); providers.dedup();
-
                     if providers.is_empty() { detect_default_backend(&app, &config) }
                     else if providers.len() == 1 || cli.yes { providers[0].clone() }
                     else {
                         let idx = Select::with_theme(&ColorfulTheme::default())
-                            .with_prompt(format!("Multiple managers provide '{}'. Select one:", pkg))
+                            .with_prompt(format!("Choose manager for '{}':", pkg))
                             .items(&providers).default(0).interact()?;
                         providers[idx].clone()
                     }
                 };
                 if let Some(m) = app.registry.get(&backend_name) {
-                    println!("Installing '{}' via {}...", pkg, backend_name);
                     m.install(&[pkg.clone()], true).await?;
-                    let _ = update_user_group_file(&config, &backend_name, &[pkg.clone()], true);
+                    let _ = update_user_group_file(&app.config, &backend_name, &[pkg.clone()], true);
                 }
             }
         }
-        // FIXED: Implemented Repo logic to use RepoCommand import
         Commands::Repo(repo_args) => {
             let backends = app.registry.available();
             match &repo_args.command {
                 RepoCommand::List { backend } => {
                     let targets = backend.as_ref().map(|b| vec![app.registry.get(b).unwrap()]).unwrap_or(backends);
                     for t in targets {
-                        println!("--- {} ---", t.name());
-                        if let Ok(list) = t.list_repos().await {
-                            for (n, u) in list { println!("  {} -> {}", n, u); }
+                        println!("Repositories for {}:", t.name());
+                        if let Ok(repos) = t.list_repos().await {
+                            for (n, u) in repos { println!("  {} -> {}", n, u); }
                         }
                     }
                 }
@@ -91,31 +87,10 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Doctor => {
-            println!("LiNix Doctor Report:");
             for m in app.registry.all() {
                 let report = m.check_health().await?;
                 let status = if matches!(report.status, linix::core::manager::HealthStatus::Ok) { "[OK]" } else { "[ERR]" };
-                println!("  {} {}", status, m.name());
-                if let Some(msg) = report.message { println!("      -> {}", msg); }
-            }
-        }
-        Commands::Rollback { snapshot } => {
-            let dir = dirs::data_dir().unwrap_or_default().join("linix").join("snapshots");
-            if let Some(id) = snapshot {
-                let path = dir.join(format!("snap_{}.json", id));
-                if path.exists() {
-                    let data = std::fs::read_to_string(path)?;
-                    let map: std::collections::HashMap<String, Vec<linix::core::PackageSpec>> = serde_json::from_str(&data)?;
-                    let mut lines = vec![];
-                    for (b, specs) in map { for s in specs { lines.push(format!("{}:{}", b, s.name)); } }
-                    linix::config::parser::write_group_file(&linix::config::parser::get_user_group_file(&config.groups_dir), &lines)?;
-                    println!("Snapshot restored.");
-                }
-            } else {
-                println!("Available Snapshots:");
-                if let Ok(entries) = std::fs::read_dir(dir) {
-                    for e in entries.filter_map(|e| e.ok()) { println!("  - {}", e.file_name().to_string_lossy()); }
-                }
+                println!("{} {}", status, m.name());
             }
         }
         _ => {}

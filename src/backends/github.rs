@@ -6,8 +6,9 @@ use async_trait::async_trait;
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::info; // Removed warn/debug if unused
+use tracing::info;
 
 pub struct GithubManager {
     executor: CommandExecutor,
@@ -18,32 +19,28 @@ pub struct GithubManager {
     state_file: PathBuf,
     settings: Option<HashMap<String, String>>,
 }
-// ... [rest of implementation same as previous Turn] ...
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InstalledPkg { repo: String, version: String, install_path: String, bin_path: String }
 #[derive(Debug, Deserialize)]
-struct GithubAsset { name: String, browser_download_url: String }
+struct GithubAsset { name: String, #[serde(rename = "browser_download_url")] url: String }
 #[derive(Debug, Deserialize)]
 struct GithubRelease { tag_name: String, assets: Vec<GithubAsset> }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct InstalledPkg { owner: String, repo: String, version: String, bin_path: String }
 
 impl GithubManager {
     pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
         let base_dir = home.join(".local").join("share").join("linix");
+        let token = settings.as_ref().and_then(|s| s.get("token")).cloned();
         Self {
             executor,
             available: OnceCell::new(),
             client: reqwest::Client::new(),
-            rate_limiter: RateLimiter::github(),
+            rate_limiter: if token.is_some() { RateLimiter::github_authenticated() } else { RateLimiter::github() },
             install_dir: base_dir.join("github"),
             state_file: base_dir.join("github_installed.json"),
             settings,
         }
-    }
-
-    fn get_token(&self) -> Option<String> {
-        self.settings.as_ref().and_then(|s| s.get("token")).cloned()
     }
 
     fn select_best_asset<'a>(&self, assets: &'a [GithubAsset]) -> Option<&'a GithubAsset> {
@@ -63,58 +60,55 @@ impl PackageManager for GithubManager {
 
     async fn install_with_options(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         let mut state: HashMap<String, InstalledPkg> = if self.state_file.exists() {
-            serde_json::from_str(&std::fs::read_to_string(&self.state_file)?)?
+            serde_json::from_str(&fs::read_to_string(&self.state_file)?)?
         } else { HashMap::new() };
 
         for spec in specs {
             self.rate_limiter.wait().await?;
             let clean_name = spec.name.trim_start_matches("github:").trim_start_matches("https://github.com/");
+            let repo_name = clean_name.split('/').nth(1).unwrap_or("");
             let url = format!("https://api.github.com/repos/{}/releases/latest", clean_name);
             
             let mut req = self.client.get(&url).header("User-Agent", "linix");
-            if let Some(t) = self.get_token() {
+            if let Some(t) = self.settings.as_ref().and_then(|s| s.get("token")) {
                 req = req.header("Authorization", format!("token {}", t));
             }
             
             let resp = req.send().await?;
-            if !resp.status().is_success() {
-                return Err(Error::Other(format!("GitHub API error for {}: {}", spec.name, resp.status())));
-            }
             let release: GithubRelease = resp.json().await?;
-            
-            let asset = self.select_best_asset(&release.assets)
-                .ok_or_else(|| Error::Other(format!("No compatible asset found for {} on {}/{}", spec.name, std::env::consts::OS, std::env::consts::ARCH)))?;
+            let asset = self.select_best_asset(&release.assets).ok_or_else(|| Error::Other("No asset".into()))?;
 
             info!("Installing {} version {}...", spec.name, release.tag_name);
-
-            let tmp_dir = tempfile::tempdir()?;
-            let download_path = tmp_dir.path().join(&asset.name);
-            let bytes = self.client.get(&asset.browser_download_url).send().await?.bytes().await?;
-            std::fs::write(&download_path, bytes)?;
-
-            if let Some(expected_hash) = spec.options.get("sha256") {
-                verify_checksum(&download_path, expected_hash)?;
-            }
+            let tmp = tempfile::tempdir()?;
+            let download_path = tmp.path().join(&asset.name);
+            fs::write(&download_path, self.client.get(&asset.url).send().await?.bytes().await?)?;
+            if let Some(hash) = spec.options.get("sha256") { verify_checksum(&download_path, hash)?; }
 
             let pkg_dir = self.install_dir.join(clean_name.replace('/', "_"));
-            let _ = std::fs::create_dir_all(&pkg_dir);
             extract_archive(&download_path, &pkg_dir)?;
 
-            let bin_name = clean_name.split('/').nth(1).unwrap_or("");
-            let bin_dest = dirs::home_dir().unwrap_or_default().join(".local").join("bin").join(bin_name);
-            
-            // ACTUALLY USE EXECUTOR: Create symlink and set permissions
-            let _ = self.executor.run("ln", &["-sf", &pkg_dir.join(bin_name).to_string_lossy(), &bin_dest.to_string_lossy()], false).await;
-            let _ = self.executor.run("chmod", &["+x", &bin_dest.to_string_lossy()], false).await;
+            let bin_dest = dirs::home_dir().unwrap().join(".local").join("bin").join(repo_name);
+            let bin_src = pkg_dir.join(repo_name);
+
+            #[cfg(unix)]
+            {
+                // MATURE: Using executor respects Dry-Run and handles permissions
+                let _ = self.executor.run("chmod", &["+x", &bin_src.to_string_lossy()], false).await;
+                let _ = self.executor.run("ln", &["-sf", &bin_src.to_string_lossy(), &bin_dest.to_string_lossy()], false).await;
+            }
+            #[cfg(windows)]
+            {
+                // MATURE: Execute cross-platform copy
+                let _ = self.executor.run("cmd", &["/C", "copy", "/Y", &bin_src.to_string_lossy(), &bin_dest.to_string_lossy()], false).await;
+            }
 
             state.insert(spec.name.clone(), InstalledPkg {
-                owner: clean_name.split('/').next().unwrap_or("").to_string(),
-                repo: bin_name.to_string(),
-                version: release.tag_name,
-                bin_path: pkg_dir.to_string_lossy().to_string(),
+                repo: repo_name.to_string(), version: release.tag_name,
+                bin_path: bin_dest.to_string_lossy().to_string(), install_path: pkg_dir.to_string_lossy().to_string(),
             });
         }
-        std::fs::write(&self.state_file, serde_json::to_string_pretty(&state)?)?;
+        let _ = fs::create_dir_all(self.state_file.parent().unwrap());
+        fs::write(&self.state_file, serde_json::to_string_pretty(&state)?)?;
         Ok(())
     }
 
@@ -123,27 +117,22 @@ impl PackageManager for GithubManager {
         self.install_with_options(&specs, s).await
     }
 
-    async fn remove(&self, packages: &[String], _sudo: bool) -> Result<()> {
+    async fn remove(&self, p: &[String], _s: bool) -> Result<()> {
         if !self.state_file.exists() { return Ok(()); }
         let mut state: HashMap<String, InstalledPkg> = serde_json::from_str(&std::fs::read_to_string(&self.state_file)?)?;
-        for name in packages {
+        for name in p {
             if let Some(pkg) = state.remove(name) {
-                let bin_dest = dirs::home_dir().unwrap_or_default().join(".local").join("bin").join(&pkg.repo);
-                let _ = self.executor.run("rm", &[&bin_dest.to_string_lossy()], false).await;
-                let _ = std::fs::remove_dir_all(Path::new(&pkg.bin_path));
-                info!("Removed {}", name);
+                let _ = self.executor.run(if cfg!(windows) { "del" } else { "rm" }, &[&pkg.bin_path], false).await;
+                let _ = fs::remove_dir_all(Path::new(&pkg.install_path));
             }
         }
-        std::fs::write(&self.state_file, serde_json::to_string_pretty(&state)?)?;
+        fs::write(&self.state_file, serde_json::to_string_pretty(&state)?)?;
         Ok(())
     }
 
     async fn list_installed(&self) -> Result<Vec<Package>> {
         if !self.state_file.exists() { return Ok(vec![]); }
-        let data = std::fs::read_to_string(&self.state_file)?;
-        let state: HashMap<String, InstalledPkg> = serde_json::from_str(&data).unwrap_or_default();
-        Ok(state.into_iter().map(|(n, i)| Package {
-            name: n, version: Some(i.version), backend: "github".into(), ..Package::new("", "")
-        }).collect())
+        let state: HashMap<String, InstalledPkg> = serde_json::from_str(&std::fs::read_to_string(&self.state_file)?)?;
+        Ok(state.into_iter().map(|(n, i)| Package { name: n, version: Some(i.version), backend: "github".into(), ..Package::new("", "") }).collect())
     }
 }

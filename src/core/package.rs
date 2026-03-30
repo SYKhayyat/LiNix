@@ -30,6 +30,7 @@ impl Package {
             size: None,
         }
     }
+
     pub fn display_name(&self) -> String {
         if let Some(version) = &self.version {
             format!("{} ({})", self.name, version)
