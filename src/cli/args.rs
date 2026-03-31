@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum, Args};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "linix", version = "3.0.0", about = "Universal Mission-Critical Package Manager")]
+#[command(name = "linix", version = "3.1.0", about = "Universal Mission-Critical Package Manager")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -17,20 +17,19 @@ pub struct Cli {
     pub config: Option<PathBuf>,
     #[arg(short, long, global = true)]
     pub groups_dir: Option<PathBuf>,
-    #[arg(long, global = true)]
-    pub remove_bloatware: bool,
     #[arg(long, global = true, default_value = "true")]
     pub progress: bool,
     #[arg(short, long, global = true)]
     pub verbose: bool,
-    #[arg(long, global = true)]
-    pub json: bool,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     Sync { #[arg(long)] locked: bool },
-    Heal, // Resumes interrupted transactions
+    Run { #[arg(short, long)] packages: Vec<String>, command: String },
+    Teleport { package: String, #[arg(short, long)] to: String },
+    Shim { binary: String, #[arg(short, long)] source: String },
+    Heal,
     Clean,
     Unmanaged,
     Orphans,
@@ -45,11 +44,13 @@ pub enum Commands {
     Completions { #[arg(value_enum)] shell: Shell },
     Repo(RepoArgs),
     Doctor,
-    Rollback { snapshot: Option<String> },
 }
 
 #[derive(Args, Debug)]
-pub struct RepoArgs { #[clap(subcommand)] pub command: RepoCommand }
+pub struct RepoArgs { 
+    #[command(subcommand)]
+    pub command: RepoCommand 
+}
 
 #[derive(Subcommand, Debug)]
 pub enum RepoCommand {

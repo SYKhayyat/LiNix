@@ -1,48 +1,47 @@
-use crate::core::{CommandExecutor, Package, PackageManager, Result};
+$base = "src/backends"
+$last = @{
+    "apk" = 'use crate::core::{CommandExecutor, Package, PackageManager, Result};
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 
-pub struct PacmanManager {
+pub struct ApkManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
     _settings: Option<HashMap<String, String>>,
 }
 
-impl PacmanManager {
+impl ApkManager {
     pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
         Self { executor, available: OnceCell::new(), _settings: settings }
     }
 }
 
 #[async_trait]
-impl PackageManager for PacmanManager {
-    fn name(&self) -> &str { "pacman" }
+impl PackageManager for ApkManager {
+    fn name(&self) -> &str { "apk" }
     fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| std::process::Command::new("pacman").arg("--version").output().is_ok())
+        *self.available.get_or_init(|| std::process::Command::new("apk").arg("--version").output().is_ok())
     }
-
     async fn install(&self, p: &[String], sudo: bool) -> Result<()> {
-        let mut args = vec!["-S", "--noconfirm", "--needed"];
+        let mut args = vec!["add"];
         args.extend(p.iter().map(|s| s.as_str()));
-        self.executor.run("pacman", &args, sudo).await?;
+        self.executor.run("apk", &args, sudo).await?;
         Ok(())
     }
-
     async fn remove(&self, p: &[String], sudo: bool) -> Result<()> {
-        let mut args = vec!["-Rs", "--noconfirm"];
+        let mut args = vec!["del"];
         args.extend(p.iter().map(|s| s.as_str()));
-        self.executor.run("pacman", &args, sudo).await?;
+        self.executor.run("apk", &args, sudo).await?;
         Ok(())
     }
-
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let out = self.executor.run_output("pacman", &["-Q"], false).await?;
+        let out = self.executor.run_output("apk", &["info", "-v"], false).await?;
         Ok(out.lines().filter_map(|line| {
-            let (name, ver) = line.split_once(" ")?;
-            let mut p = Package::new(name, "pacman");
-            p.version = Some(ver.to_string());
-            Some(p)
+            let (name, _) = line.split_once("-")?;
+            Some(Package::new(name, "apk"))
         }).collect())
     }
+}';
 }
+foreach ($name in $last.Keys) { Set-Content -Path "$base/$name.rs" -Value $last[$name] }

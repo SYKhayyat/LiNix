@@ -21,7 +21,6 @@ impl PackageManager for DnfManager {
     fn is_available(&self) -> bool {
         *self.available.get_or_init(|| std::process::Command::new("dnf").arg("--version").output().is_ok())
     }
-
     async fn install_with_options(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         let mut args = vec!["install".to_string(), "-y".to_string()];
         if let Some(s) = &self.settings {
@@ -32,40 +31,24 @@ impl PackageManager for DnfManager {
         self.executor.run("dnf", &refs, sudo).await?;
         Ok(())
     }
-
     async fn install(&self, p: &[String], s: bool) -> Result<()> {
         let specs: Vec<_> = p.iter().map(|n| PackageSpec { name: n.clone(), backend: "dnf".into(), options: HashMap::new() }).collect();
         self.install_with_options(&specs, s).await
     }
-
     async fn remove(&self, p: &[String], s: bool) -> Result<()> {
         let mut args = vec!["remove", "-y"];
         args.extend(p.iter().map(|s| s.as_str()));
         self.executor.run("dnf", &args, s).await?;
         Ok(())
     }
-
     async fn list_installed(&self) -> Result<Vec<Package>> {
         let out = self.executor.run_output("dnf", &["list", "installed"], false).await?;
         Ok(out.lines().skip(1).filter_map(|line| {
             let parts: Vec<&str> = line.split_whitespace().collect();
             if parts.len() >= 2 {
-                let name = parts[0].split('.').next()?.to_string();
-                Some(Package { name, version: Some(parts[1].to_string()), backend: "dnf".into(), ..Package::new("", "") })
+                let (name, _) = parts[0].split_once(".")?;
+                Some(Package { name: name.to_string(), version: Some(parts[1].to_string()), backend: "dnf".into(), ..Package::new("", "") })
             } else { None }
-        }).collect())
-    }
-
-    async fn add_repo(&self, _name: &str, url: &str, sudo: bool) -> Result<()> {
-        self.executor.run("dnf", &["config-manager", "--add-repo", url], sudo).await?;
-        Ok(())
-    }
-
-    async fn list_repos(&self) -> Result<Vec<(String, String)>> {
-        let out = self.executor.run_output("dnf", &["repolist"], false).await?;
-        Ok(out.lines().skip(1).filter_map(|l| {
-            let p: Vec<&str> = l.split_whitespace().collect();
-            if p.len() >= 2 { Some((p[0].to_string(), p[1..].join(" "))) } else { None }
         }).collect())
     }
 }

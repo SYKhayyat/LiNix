@@ -1,186 +1,44 @@
 use crate::core::{CommandExecutor, Package, PackageManager, Result};
-use crate::core::manager::HealthStatus;
-use crate::core::manager::HealthReport;
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
-use tracing::{debug, info};
 use std::collections::HashMap;
 
-/// RubyGems package manager
 pub struct GemManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
-	    #[allow(dead_code)] 
-
-	    settings: Option<HashMap<String, String>>,
+    _settings: Option<HashMap<String, String>>,
 }
 
 impl GemManager {
     pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
-    Self { executor, available: OnceCell::new(), settings }
-}
-
-    fn check_available(&self) -> bool {
-        std::process::Command::new("which")
-            .arg("gem")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        Self { executor, available: OnceCell::new(), _settings: settings }
     }
 }
 
 #[async_trait]
 impl PackageManager for GemManager {
-    fn name(&self) -> &str {
-        "gem"
-    }
-
+    fn name(&self) -> &str { "gem" }
     fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| self.check_available())
+        *self.available.get_or_init(|| std::process::Command::new("gem").arg("--version").output().is_ok())
     }
-
-    async fn install(&self, packages: &[String], sudo: bool) -> Result<()> {
-        if packages.is_empty() {
-            return Ok(());
-        }
-
-        info!("Installing {} packages via gem", packages.len());
-        debug!("Packages: {:?}", packages);
-
+    async fn install(&self, p: &[String], s: bool) -> Result<()> {
         let mut args = vec!["install", "--no-document"];
-        let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
-        args.extend(pkg_refs);
-
-        self.executor.run("gem", &args, sudo).await?;
+        args.extend(p.iter().map(|x| x.as_str()));
+        self.executor.run("gem", &args, s).await?;
         Ok(())
     }
-
-    async fn remove(&self, packages: &[String], sudo: bool) -> Result<()> {
-        if packages.is_empty() {
-            return Ok(());
-        }
-
-        info!("Removing {} packages via gem", packages.len());
-        debug!("Packages: {:?}", packages);
-
+    async fn remove(&self, p: &[String], s: bool) -> Result<()> {
         let mut args = vec!["uninstall", "-x"];
-        let pkg_refs: Vec<&str> = packages.iter().map(|s| s.as_str()).collect();
-        args.extend(pkg_refs);
-
-        self.executor.run("gem", &args, sudo).await?;
+        args.extend(p.iter().map(|x| x.as_str()));
+        self.executor.run("gem", &args, s).await?;
         Ok(())
     }
-
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self
-            .executor
-            .run_output("gem", &["list", "--local"], false)
-            .await?;
-
-        let packages = output
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with("***") {
-                    return None;
-                }
-
-                // Format: "name (version, version2, ...)"
-                let parts: Vec<&str> = line.splitn(2, '(').collect();
-                if parts.len() >= 2 {
-                    let name = parts[0].trim().to_string();
-                    let version = parts[1]
-                        .trim_end_matches(')')
-                        .split(',')
-                        .next()
-                        .map(|v| v.trim().to_string());
-
-                    Some(Package {
-                        name,
-                        version,
-                        backend: self.name().to_string(),
-                        description: None,
-                        repository: None,
-                        size: None,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(packages)
-    }
-
-    async fn upgrade(&self, sudo: bool) -> Result<()> {
-        info!("Upgrading all gem packages");
-        self.executor.run("gem", &["update"], sudo).await?;
-        Ok(())
-    }
-
-    async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let output = self
-            .executor
-            .run_output("gem", &["search", query], false)
-            .await?;
-
-        let packages = output
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with("***") {
-                    return None;
-                }
-
-                let parts: Vec<&str> = line.splitn(2, '(').collect();
-                if parts.len() >= 2 {
-                    let name = parts[0].trim().to_string();
-                    let version = parts[1]
-                        .trim_end_matches(')')
-                        .split(',')
-                        .next()
-                        .map(|v| v.trim().to_string());
-
-                    Some(Package {
-                        name,
-                        version,
-                        backend: self.name().to_string(),
-                        description: None,
-                        repository: None,
-                        size: None,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(packages)
-    }
-
-    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
-        info!("Cleaning old gem versions");
-        self.executor.run("gem", &["cleanup"], sudo).await?;
-        Ok(())
-    }
-
-    fn supports_orphan_cleanup(&self) -> bool {
-        true
-    }
-	async fn check_health(&self) -> Result<HealthReport> {
-        // USE SETTINGS: Allow user to override brew path for health check
-        let bin_name = self.settings.as_ref()
-            .and_then(|s| s.get("binary_path"))
-            .map(|s| s.as_str())
-            .unwrap_or("gem");
-
-        if self.executor.command_exists(bin_name).await {
-            Ok(HealthReport { status: HealthStatus::Ok, message: None })
-        } else {
-            Ok(HealthReport { 
-                status: HealthStatus::Error, 
-                message: Some(format!("{} not found", bin_name)) 
-            })
-        }
+        let out = self.executor.run_output("gem", &["list", "--local"], false).await?;
+        Ok(out.lines().filter_map(|l| {
+            if l.starts_with("***") || l.is_empty() { return None; }
+            let (name, _) = l.split_once(" ")?;
+            Some(Package::new(name.trim(), "gem"))
+        }).collect())
     }
 }

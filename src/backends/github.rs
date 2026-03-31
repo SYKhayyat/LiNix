@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tokio::sync::Mutex;
 use tracing::info;
 
 pub struct GithubManager {
@@ -18,6 +19,8 @@ pub struct GithubManager {
     install_dir: PathBuf,
     state_file: PathBuf,
     settings: Option<HashMap<String, String>>,
+    // FIX 4: In-process lock
+    internal_lock: Mutex<()>, 
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +43,7 @@ impl GithubManager {
             install_dir: base_dir.join("github"),
             state_file: base_dir.join("github_installed.json"),
             settings,
+            internal_lock: Mutex::new(()),
         }
     }
 
@@ -59,6 +63,9 @@ impl PackageManager for GithubManager {
     fn is_available(&self) -> bool { *self.available.get_or_init(|| true) }
 
     async fn install_with_options(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
+        // FIX 4: Acquire lock to prevent concurrent write corruption
+        let _guard = self.internal_lock.lock().await;
+
         let mut state: HashMap<String, InstalledPkg> = if self.state_file.exists() {
             serde_json::from_str(&fs::read_to_string(&self.state_file)?)?
         } else { HashMap::new() };
@@ -92,13 +99,11 @@ impl PackageManager for GithubManager {
 
             #[cfg(unix)]
             {
-                // MATURE: Using executor respects Dry-Run and handles permissions
                 let _ = self.executor.run("chmod", &["+x", &bin_src.to_string_lossy()], false).await;
                 let _ = self.executor.run("ln", &["-sf", &bin_src.to_string_lossy(), &bin_dest.to_string_lossy()], false).await;
             }
             #[cfg(windows)]
             {
-                // MATURE: Execute cross-platform copy
                 let _ = self.executor.run("cmd", &["/C", "copy", "/Y", &bin_src.to_string_lossy(), &bin_dest.to_string_lossy()], false).await;
             }
 
@@ -118,6 +123,7 @@ impl PackageManager for GithubManager {
     }
 
     async fn remove(&self, p: &[String], _s: bool) -> Result<()> {
+        let _guard = self.internal_lock.lock().await;
         if !self.state_file.exists() { return Ok(()); }
         let mut state: HashMap<String, InstalledPkg> = serde_json::from_str(&std::fs::read_to_string(&self.state_file)?)?;
         for name in p {

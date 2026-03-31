@@ -1,154 +1,55 @@
 use crate::core::{CommandExecutor, Package, PackageManager, Result};
-use crate::core::manager::HealthStatus;
-use crate::core::manager::HealthReport;
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
-use std::path::PathBuf;
-use tracing::{debug, info};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
-/// Go package manager
 pub struct GoManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
-	    #[allow(dead_code)] 
-	    settings: Option<HashMap<String, String>>,
+    _settings: Option<HashMap<String, String>>,
 }
 
 impl GoManager {
     pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
-    Self { executor, available: OnceCell::new(), settings }
-}
-
-    fn check_available(&self) -> bool {
-        std::process::Command::new("which")
-            .arg("go")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        Self { executor, available: OnceCell::new(), _settings: settings }
     }
-
-    fn get_gobin_path() -> PathBuf {
-        if let Ok(gobin) = std::env::var("GOBIN") {
-            PathBuf::from(gobin)
-        } else if let Ok(gopath) = std::env::var("GOPATH") {
-            PathBuf::from(gopath).join("bin")
-        } else if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home).join("go").join("bin")
-        } else {
-            PathBuf::from("/usr/local/go/bin")
-        }
+    fn get_gobin() -> PathBuf {
+        std::env::var("GOBIN").map(PathBuf::from).unwrap_or_else(|_| {
+            dirs::home_dir().unwrap_or_default().join("go").join("bin")
+        })
     }
 }
 
 #[async_trait]
 impl PackageManager for GoManager {
-    fn name(&self) -> &str {
-        "go"
-    }
-
+    fn name(&self) -> &str { "go" }
     fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| self.check_available())
+        *self.available.get_or_init(|| std::process::Command::new("go").arg("version").output().is_ok())
     }
-
-    async fn install(&self, packages: &[String], sudo: bool) -> Result<()> {
-        if packages.is_empty() {
-            return Ok(());
+    async fn install(&self, p: &[String], sudo: bool) -> Result<()> {
+        for pkg in p {
+            let path = if pkg.contains("@") { pkg.clone() } else { format!("{}@latest", pkg) };
+            self.executor.run("go", &["install", &path], sudo).await?;
         }
-
-        info!("Installing {} packages via go", packages.len());
-        debug!("Packages: {:?}", packages);
-
-        for package in packages {
-            let pkg_with_version = if package.contains('@') {
-                package.clone()
-            } else {
-                format!("{}@latest", package)
-            };
-
-            self.executor
-                .run("go", &["install", &pkg_with_version], sudo)
-                .await?;
-        }
-
         Ok(())
     }
-
-    async fn remove(&self, packages: &[String], _sudo: bool) -> Result<()> {
-        if packages.is_empty() {
-            return Ok(());
+    async fn remove(&self, p: &[String], _s: bool) -> Result<()> {
+        let bin = Self::get_gobin();
+        for pkg in p {
+            let name = pkg.split("/").last().unwrap_or(pkg);
+            let _ = tokio::fs::remove_file(bin.join(name)).await;
         }
-
-        info!("Removing {} packages via go", packages.len());
-        debug!("Packages: {:?}", packages);
-
-        let gobin = Self::get_gobin_path();
-
-        for package in packages {
-            let binary_name = package.split('/').last().unwrap_or(package);
-            let binary_path = gobin.join(binary_name);
-
-            if binary_path.exists() {
-                std::fs::remove_file(&binary_path).ok();
-            }
-        }
-
         Ok(())
     }
-
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let gobin = Self::get_gobin_path();
-
-        if !gobin.exists() {
-            return Ok(Vec::new());
+        let bin = Self::get_gobin();
+        if !bin.exists() { return Ok(vec![]); }
+        let mut pkgs = vec![];
+        let mut entries = tokio::fs::read_dir(bin).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            pkgs.push(Package::new(entry.file_name().to_string_lossy(), "go"));
         }
-
-        let packages = std::fs::read_dir(&gobin)?
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-
-                if path.is_file() {
-                    let name = path.file_name()?.to_string_lossy().to_string();
-                    Some(Package {
-                        name,
-                        version: None,
-                        backend: self.name().to_string(),
-                        description: None,
-                        repository: None,
-                        size: None,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(packages)
-    }
-
-    async fn upgrade(&self, _sudo: bool) -> Result<()> {
-        info!("Go packages require reinstalling with @latest to upgrade");
-        Ok(())
-    }
-
-    fn supports_orphan_cleanup(&self) -> bool {
-        false
-    }
-	async fn check_health(&self) -> Result<HealthReport> {
-        // USE SETTINGS: Allow user to override brew path for health check
-        let bin_name = self.settings.as_ref()
-            .and_then(|s| s.get("binary_path"))
-            .map(|s| s.as_str())
-            .unwrap_or("go");
-
-        if self.executor.command_exists(bin_name).await {
-            Ok(HealthReport { status: HealthStatus::Ok, message: None })
-        } else {
-            Ok(HealthReport { 
-                status: HealthStatus::Error, 
-                message: Some(format!("{} not found", bin_name)) 
-            })
-        }
+        Ok(pkgs)
     }
 }

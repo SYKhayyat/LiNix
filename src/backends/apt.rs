@@ -24,11 +24,13 @@ impl PackageManager for AptManager {
 
     async fn install_with_options(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         let mut args = vec!["install".to_string(), "-y".to_string()];
+        
         if let Some(s) = &self.settings {
             if s.get("no_install_recommends") == Some(&"true".to_string()) {
                 args.push("--no-install-recommends".to_string());
             }
         }
+
         for s in specs {
             if let Some(v) = s.options.get("version") { args.push(format!("{}={}", s.name, v)); }
             else { args.push(s.name.clone()); }
@@ -53,10 +55,9 @@ impl PackageManager for AptManager {
     async fn list_installed(&self) -> Result<Vec<Package>> {
         let out = self.executor.run_output("apt", &["list", "--installed"], false).await?;
         Ok(out.lines().skip(1).filter_map(|l| {
-            let parts: Vec<_> = l.split('/').collect();
-            if parts.len() < 2 { return None; }
-            let version = l.split_whitespace().nth(1).map(|s| s.to_string());
-            Some(Package { name: parts[0].to_string(), version, backend: "apt".into(), description: None, repository: None, size: None })
+            let (name_part, rest) = l.split_once('/')?;
+            let version = rest.split_whitespace().next().map(|s| s.to_string());
+            Some(Package { name: name_part.to_string(), version, backend: "apt".into(), description: None, repository: None, size: None })
         }).collect())
     }
 }

@@ -6,12 +6,12 @@ use std::collections::HashMap;
 pub struct BrewManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
-    #[allow(dead_code)] settings: Option<HashMap<String, String>>,
+    _settings: Option<HashMap<String, String>>,
 }
 
 impl BrewManager {
     pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
-        Self { executor, available: OnceCell::new(), settings }
+        Self { executor, available: OnceCell::new(), _settings: settings }
     }
 }
 
@@ -39,9 +39,10 @@ impl PackageManager for BrewManager {
     async fn list_installed(&self) -> Result<Vec<Package>> {
         let out = self.executor.run_output("brew", &["list", "--versions"], false).await?;
         Ok(out.lines().filter_map(|l| {
-            let p: Vec<&str> = l.split_whitespace().collect();
-            if p.len() >= 2 { Some(Package { name: p[0].into(), version: Some(p[1].into()), backend: "brew".into(), ..Package::new("", "") }) }
-            else { None }
+            let (name, ver) = l.split_once(" ")?;
+            let mut p = Package::new(name, "brew");
+            p.version = Some(ver.to_string());
+            Some(p)
         }).collect())
     }
 }

@@ -6,12 +6,12 @@ use std::collections::HashMap;
 pub struct ApkManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
-    #[allow(dead_code)] settings: Option<HashMap<String, String>>,
+    _settings: Option<HashMap<String, String>>,
 }
 
 impl ApkManager {
     pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
-        Self { executor, available: OnceCell::new(), settings }
+        Self { executor, available: OnceCell::new(), _settings: settings }
     }
 }
 
@@ -21,25 +21,23 @@ impl PackageManager for ApkManager {
     fn is_available(&self) -> bool {
         *self.available.get_or_init(|| std::process::Command::new("apk").arg("--version").output().is_ok())
     }
-
     async fn install(&self, p: &[String], sudo: bool) -> Result<()> {
         let mut args = vec!["add"];
         args.extend(p.iter().map(|s| s.as_str()));
         self.executor.run("apk", &args, sudo).await?;
         Ok(())
     }
-
     async fn remove(&self, p: &[String], sudo: bool) -> Result<()> {
         let mut args = vec!["del"];
         args.extend(p.iter().map(|s| s.as_str()));
         self.executor.run("apk", &args, sudo).await?;
         Ok(())
     }
-
     async fn list_installed(&self) -> Result<Vec<Package>> {
         let out = self.executor.run_output("apk", &["info", "-v"], false).await?;
-        Ok(out.lines().map(|line| {
-            Package { name: line.to_string(), version: None, backend: "apk".into(), ..Package::new("", "") }
+        Ok(out.lines().filter_map(|line| {
+            let (name, _) = line.split_once("-")?;
+            Some(Package::new(name, "apk"))
         }).collect())
     }
 }
