@@ -27,3 +27,4 @@ pub mod link;
 pub mod emacs;
 #[cfg(target_os = "windows")] pub mod windows;
 pub use registry::{create_default_registry, BackendRegistry};
+pub mod mas; // Add this line

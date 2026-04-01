@@ -4,7 +4,8 @@ pub mod executor;
 pub mod manager;
 pub mod package;
 pub mod ratelimiter;
-pub mod security; // Add this
+pub mod security;
+pub mod state;
 pub mod transaction;
 pub mod validator;
 
@@ -14,6 +15,7 @@ pub use executor::CommandExecutor;
 pub use manager::{PackageManager, HealthStatus, HealthReport};
 pub use package::{Package, PackageSpec};
 pub use ratelimiter::RateLimiter;
-pub use security::verify_checksum; // Add this
+pub use security::verify_checksum;
+pub use state::StateRegistry;
 pub use transaction::{Operation, Transaction};
 pub use validator::Validator;

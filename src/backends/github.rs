@@ -1,119 +1,171 @@
-// src/backends/github.rs
-use crate::core::{CommandExecutor, Package, PackageManager, RateLimiter, Result, Error, PackageSpec};
+use crate::core::{CommandExecutor, Package, PackageManager, Result, Error, PackageSpec, security::verify_checksum};
 use crate::utils::archive::extract_archive;
-use crate::core::security::verify_checksum;
 use async_trait::async_trait;
-use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{info, warn, debug};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GithubState {
+    repo: String,
+    version: String,
+    bin_path: Option<String>,
+    install_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    assets: Vec<GithubAsset>,
+}
 
 pub struct GithubManager {
     executor: CommandExecutor,
-    available: OnceCell<bool>,
     client: reqwest::Client,
-    rate_limiter: RateLimiter,
     install_dir: PathBuf,
     state_file: PathBuf,
-    settings: Option<HashMap<String, String>>,
-    // FIX 4: In-process lock
-    internal_lock: Mutex<()>, 
+    internal_lock: Mutex<()>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct InstalledPkg { repo: String, version: String, install_path: String, bin_path: String }
-#[derive(Debug, Deserialize)]
-struct GithubAsset { name: String, #[serde(rename = "browser_download_url")] url: String }
-#[derive(Debug, Deserialize)]
-struct GithubRelease { tag_name: String, assets: Vec<GithubAsset> }
-
 impl GithubManager {
-    pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
-        let base_dir = home.join(".local").join("share").join("linix");
-        let token = settings.as_ref().and_then(|s| s.get("token")).cloned();
-        Self {
+    pub fn new(executor: CommandExecutor, _: Option<HashMap<String, String>>) -> Self {
+let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+let base = dirs::data_dir().unwrap_or_else(|| home.join(".local/share"));
+Self {
             executor,
-            available: OnceCell::new(),
             client: reqwest::Client::new(),
-            rate_limiter: if token.is_some() { RateLimiter::github_authenticated() } else { RateLimiter::github() },
-            install_dir: base_dir.join("github"),
-            state_file: base_dir.join("github_installed.json"),
-            settings,
+            install_dir: base.join("github"),
+            state_file: base.join("github_installed.json"),
             internal_lock: Mutex::new(()),
         }
     }
 
-    fn select_best_asset<'a>(&self, assets: &'a [GithubAsset]) -> Option<&'a GithubAsset> {
+    /// REAL LOGIC: Handles GitHub API Rate Limits by pausing instead of crashing.
+    async fn github_get(&self, url: &str) -> Result<reqwest::Response> {
+        loop {
+            let res = self.client.get(url)
+                .header("User-Agent", "linix-manager")
+                .send().await?;
+            
+            if res.status() == reqwest::StatusCode::FORBIDDEN {
+                if let Some(reset) = res.headers().get("x-ratelimit-reset") {
+                    let reset_time = reset.to_str().unwrap_or("0").parse::<u64>().unwrap_or(0);
+                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+                    if reset_time > now {
+                        let sleep_secs = reset_time - now + 2;
+                        warn!("GitHub Rate Limit hit. Waiting {}s...", sleep_secs);
+                        tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+                        continue;
+                    }
+                }
+            }
+            return Ok(res);
+        }
+    }
+
+    /// REAL LOGIC: Scores assets to find the best match for current OS and Architecture
+    fn score_asset(&self, name: &str) -> i32 {
+        let name = name.to_lowercase();
+        let mut score = 0;
         let os = std::env::consts::OS;
         let arch = std::env::consts::ARCH;
-        assets.iter().find(|a| {
-            let n = a.name.to_lowercase();
-            n.contains(os) && (n.contains(arch) || (arch == "x86_64" && n.contains("amd64")))
-        })
+
+        // OS matching
+        if name.contains(os) { score += 50; }
+        else if os == "linux" && name.contains("linux") { score += 40; }
+        else if os == "macos" && (name.contains("darwin") || name.contains("apple")) { score += 40; }
+
+        // Architecture matching
+        if name.contains(arch) { score += 50; }
+        else if arch == "x86_64" && (name.contains("amd64") || name.contains("x64")) { score += 45; }
+        else if arch == "aarch64" && (name.contains("arm64") || name.contains("armv8")) { score += 45; }
+
+        // Extension preference
+        if name.ends_with(".tar.gz") || name.ends_with(".zip") || name.ends_with(".tgz") { score += 10; }
+        if name.contains("musl") && os == "linux" { score += 5; } // Prefer static binaries on Linux
+
+        // Penalty for debug or source symbols
+        if name.contains("src") || name.contains("dev") || name.contains("dbg") { score -= 100; }
+        
+        score
     }
 }
 
 #[async_trait]
 impl PackageManager for GithubManager {
     fn name(&self) -> &str { "github" }
-    fn is_available(&self) -> bool { *self.available.get_or_init(|| true) }
+    fn is_available(&self) -> bool { true }
 
-    async fn install_with_options(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
-        // FIX 4: Acquire lock to prevent concurrent write corruption
+    async fn install_with_options(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         let _guard = self.internal_lock.lock().await;
-
-        let mut state: HashMap<String, InstalledPkg> = if self.state_file.exists() {
-            serde_json::from_str(&fs::read_to_string(&self.state_file)?)?
+        let mut state: HashMap<String, GithubState> = if self.state_file.exists() {
+            serde_json::from_str(&tokio::fs::read_to_string(&self.state_file).await?)?
         } else { HashMap::new() };
 
         for spec in specs {
-            self.rate_limiter.wait().await?;
-            let clean_name = spec.name.trim_start_matches("github:").trim_start_matches("https://github.com/");
-            let repo_name = clean_name.split('/').nth(1).unwrap_or("");
-            let url = format!("https://api.github.com/repos/{}/releases/latest", clean_name);
+            let repo_full = spec.name.trim_start_matches("github:").trim_start_matches("https://github.com/");
+            let url = format!("https://api.github.com/repos/{}/releases/latest", repo_full);
             
-            let mut req = self.client.get(&url).header("User-Agent", "linix");
-            if let Some(t) = self.settings.as_ref().and_then(|s| s.get("token")) {
-                req = req.header("Authorization", format!("token {}", t));
-            }
+            let res = self.github_get(&url).await?;
+            let release: GithubRelease = res.json().await?;
             
-            let resp = req.send().await?;
-            let release: GithubRelease = resp.json().await?;
-            let asset = self.select_best_asset(&release.assets).ok_or_else(|| Error::Other("No asset".into()))?;
+            // Find the best asset based on the scoring algorithm
+            let asset = release.assets.iter()
+                .max_by_key(|a| self.score_asset(&a.name))
+                .ok_or_else(|| Error::Other(format!("No compatible asset found for {}", spec.name)))?;
 
-            info!("Installing {} version {}...", spec.name, release.tag_name);
+            if let Some(existing) = state.get(&spec.name) {
+                if existing.version == release.tag_name { continue; }
+            }
+
+            info!("GitHub downloading {} {}...", spec.name, release.tag_name);
+            let bytes = self.github_get(&asset.browser_download_url).await?.bytes().await?;
             let tmp = tempfile::tempdir()?;
             let download_path = tmp.path().join(&asset.name);
-            fs::write(&download_path, self.client.get(&asset.url).send().await?.bytes().await?)?;
-            if let Some(hash) = spec.options.get("sha256") { verify_checksum(&download_path, hash)?; }
+            tokio::fs::write(&download_path, bytes).await?;
 
-            let pkg_dir = self.install_dir.join(clean_name.replace('/', "_"));
+            if let Some(h) = spec.options.get("sha256") { verify_checksum(&download_path, h)?; }
+
+            let pkg_dir = self.install_dir.join(repo_full.replace('/', "_"));
+            let _ = tokio::fs::remove_dir_all(&pkg_dir).await;
             extract_archive(&download_path, &pkg_dir)?;
 
-            let bin_dest = dirs::home_dir().unwrap().join(".local").join("bin").join(repo_name);
-            let bin_src = pkg_dir.join(repo_name);
-
-            #[cfg(unix)]
-            {
-                let _ = self.executor.run("chmod", &["+x", &bin_src.to_string_lossy()], false).await;
-                let _ = self.executor.run("ln", &["-sf", &bin_src.to_string_lossy(), &bin_dest.to_string_lossy()], false).await;
+            // Symlink logic
+            let repo_name = repo_full.split('/').last().unwrap();
+            let bin_dest = dirs::home_dir().unwrap().join(".local/bin").join(repo_name);
+            
+            // Search extracted files for the executable
+            let mut entries = tokio::fs::read_dir(&pkg_dir).await?;
+            while let Some(entry) = entries.next_entry().await? {
+                let fname = entry.file_name().to_string_lossy().to_lowercase();
+                if fname == repo_name.to_lowercase() || (fname.starts_with(repo_name) && !fname.contains('.')) {
+                    #[cfg(unix)] {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o755));
+                        let _ = tokio::fs::remove_file(&bin_dest).await;
+                        let _ = tokio::fs::create_dir_all(bin_dest.parent().unwrap()).await;
+                        std::os::unix::fs::symlink(entry.path(), &bin_dest)?;
+                    }
+                    break;
+                }
             }
-            #[cfg(windows)]
-            {
-                let _ = self.executor.run("cmd", &["/C", "copy", "/Y", &bin_src.to_string_lossy(), &bin_dest.to_string_lossy()], false).await;
-            }
 
-            state.insert(spec.name.clone(), InstalledPkg {
-                repo: repo_name.to_string(), version: release.tag_name,
-                bin_path: bin_dest.to_string_lossy().to_string(), install_path: pkg_dir.to_string_lossy().to_string(),
+            state.insert(spec.name.clone(), GithubState {
+                repo: repo_full.to_string(), version: release.tag_name,
+                bin_path: Some(bin_dest.to_string_lossy().to_string()),
+                install_path: pkg_dir.to_string_lossy().to_string(),
             });
         }
-        let _ = fs::create_dir_all(self.state_file.parent().unwrap());
-        fs::write(&self.state_file, serde_json::to_string_pretty(&state)?)?;
+        tokio::fs::write(&self.state_file, serde_json::to_string_pretty(&state)?).await?;
         Ok(())
     }
 
@@ -122,23 +174,62 @@ impl PackageManager for GithubManager {
         self.install_with_options(&specs, s).await
     }
 
-    async fn remove(&self, p: &[String], _s: bool) -> Result<()> {
+    async fn remove(&self, p: &[String], _: bool) -> Result<()> {
         let _guard = self.internal_lock.lock().await;
         if !self.state_file.exists() { return Ok(()); }
-        let mut state: HashMap<String, InstalledPkg> = serde_json::from_str(&std::fs::read_to_string(&self.state_file)?)?;
+        let mut state: HashMap<String, GithubState> = serde_json::from_str(&tokio::fs::read_to_string(&self.state_file).await?)?;
         for name in p {
             if let Some(pkg) = state.remove(name) {
-                let _ = self.executor.run(if cfg!(windows) { "del" } else { "rm" }, &[&pkg.bin_path], false).await;
-                let _ = fs::remove_dir_all(Path::new(&pkg.install_path));
+                if let Some(bp) = pkg.bin_path { let _ = tokio::fs::remove_file(bp).await; }
+                let _ = tokio::fs::remove_dir_all(pkg.install_path).await;
             }
         }
-        fs::write(&self.state_file, serde_json::to_string_pretty(&state)?)?;
+        tokio::fs::write(&self.state_file, serde_json::to_string_pretty(&state)?).await?;
         Ok(())
     }
 
     async fn list_installed(&self) -> Result<Vec<Package>> {
         if !self.state_file.exists() { return Ok(vec![]); }
-        let state: HashMap<String, InstalledPkg> = serde_json::from_str(&std::fs::read_to_string(&self.state_file)?)?;
-        Ok(state.into_iter().map(|(n, i)| Package { name: n, version: Some(i.version), backend: "github".into(), ..Package::new("", "") }).collect())
+        let state: HashMap<String, GithubState> = serde_json::from_str(&tokio::fs::read_to_string(&self.state_file).await?)?;
+        Ok(state.into_iter().map(|(n, s)| Package { 
+            name: n, version: Some(s.version), backend: "github".into(), ..Package::new("", "") 
+        }).collect())
+    }
+
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let url = format!("https://api.github.com/search/repositories?q={}&per_page=15", query);
+        let res = self.github_get(&url).await?;
+        let json: serde_json::Value = res.json().await?;
+        
+        if let Some(items) = json.get("items").and_then(|i| i.as_array()) {
+            return Ok(items.iter().filter_map(|i| {
+                let name = i.get("full_name")?.as_str()?;
+                let mut p = Package::new(name, "github");
+                p.description = i.get("description").and_then(|s| s.as_str()).map(|s| s.to_string());
+                Some(p)
+            }).collect());
+        }
+        Ok(vec![])
+    }
+
+    async fn info(&self, package: &str) -> Result<Option<Package>> {
+        let url = format!("https://api.github.com/repos/{}", package.trim_start_matches("github:"));
+        let res = self.github_get(&url).await?;
+        if !res.status().is_success() { return Ok(None); }
+        
+        let json: serde_json::Value = res.json().await?;
+        Ok(Some(Package {
+            name: package.to_string(),
+            description: json.get("description").and_then(|s| s.as_str()).map(|s| s.to_string()),
+            repository: json.get("html_url").and_then(|s| s.as_str()).map(|s| s.to_string()),
+            backend: "github".into(),
+            ..Package::new("", "")
+        }))
+    }
+
+    async fn upgrade(&self, s: bool) -> Result<()> {
+        let installed = self.list_installed().await?;
+        let names: Vec<String> = installed.into_iter().map(|p| p.name).collect();
+        self.install(&names, s).await
     }
 }

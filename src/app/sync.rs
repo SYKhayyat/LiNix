@@ -3,14 +3,14 @@ use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
 use crate::config::parser::{load_all_packages, parse_group_file};
-use crate::core::{CommandExecutor, PackageCache, Package, PackageSpec, Result, Error, PackageManager};
+use crate::core::{CommandExecutor, PackageCache, Package, PackageSpec, Result, Error, PackageManager, Transaction, StateRegistry};
+use crate::core::transaction::PackageOperation;
 use crate::utils::progress::ProgressReporter;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Write};
+use fs2::FileExt; 
 use std::sync::Arc;
-use tokio::sync::Semaphore;
-use tracing::{info, warn};
+use tracing::{info, warn, error};
 
 pub struct SyncEngine<'a> {
     config: &'a Config,
@@ -23,7 +23,7 @@ pub struct SyncEngine<'a> {
     use_lockfile: bool,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
 pub struct SyncChanges {
     pub to_install: HashMap<String, Vec<PackageSpec>>,
     pub to_remove: HashMap<String, Vec<String>>,
@@ -32,6 +32,7 @@ pub struct SyncChanges {
 impl SyncChanges {
     pub fn is_empty(&self) -> bool { self.to_install.is_empty() && self.to_remove.is_empty() }
     pub fn total_install(&self) -> usize { self.to_install.values().map(|v| v.len()).sum() }
+    pub fn total_remove(&self) -> usize { self.to_remove.values().map(|v| v.len()).sum() }
 }
 
 impl<'a> SyncEngine<'a> {
@@ -39,151 +40,169 @@ impl<'a> SyncEngine<'a> {
         Self { config, registry, executor, cache, metrics, progress, hooks, use_lockfile: false }
     }
 
-    pub fn with_lockfile(mut self, val: bool) -> Self {
-        self.use_lockfile = val;
-        self
+    pub fn with_lockfile(mut self, val: bool) -> Self { self.use_lockfile = val; self }
+
+    /// Normalize version strings to ignore vendor-specific metadata (1.1-build3 vs 1.1)
+    fn versions_match(&self, installed: &str, requested: &str) -> bool {
+        let normalize = |v: &str| v.split(|c| c == '-' || c == '+' || c == '~' || c == 'v').find(|s| !s.is_empty()).unwrap_or(v).trim();
+        normalize(installed) == normalize(requested)
+    }
+
+    /// Critical system packages that should never be removed by drift detection.
+    fn is_protected_package(&self, name: &str) -> bool {
+        let protected = ["linux-image", "kernel", "libc6", "sudo", "bash", "systemd", "winget", "grub", "coreutils", "filesystem", "apt", "pacman", "dnf"];
+        protected.iter().any(|&p| name.to_lowercase().contains(p))
     }
 
     pub async fn sync(&self) -> Result<()> {
+		#[cfg(unix)] {
+        use fs2::FileExt;
+        let stats = fs2::statvfs("/")
+            .map_err(|e| Error::Other(format!("Disk check failed: {}", e)))?;
+        
+        // 500 MB minimum required
+        if stats.available_space() < 524288000 { 
+            return Err(Error::Other("Sync aborted: Less than 500MB disk space available.".into()));
+        }
+    }
+        // Start Heartbeat to keep sudo authorized during long operations
+        let _heartbeat = self.executor.start_sudo_keepalive().await;
         let _ = self.hooks.run_before_sync().await;
         
-        if let Ok(drift) = self.detect_drift().await {
-            if !drift.is_empty() {
-                warn!("System Drift Detected! Manual installs found outside config:");
-                for (b, pkgs) in drift { warn!("[{}] {:?}", b, pkgs); }
-            }
-        }
-        
+        let mut state = StateRegistry::load()?;
         let desired = self.calculate_desired_state().await?;
-        let mut changes = self.calculate_changes(desired.clone()).await?;
+        let mut changes = self.calculate_changes_internal(&desired).await?;
 
-        if self.config.remove_bloatware && self.config.bloatware_file.exists() {
-            let bloat_list = parse_group_file(&self.config.bloatware_file)?;
-            let system_default = self.detect_system_backend().await;
-            for line in bloat_list {
-                let spec = self.parse_package_spec(&line);
-                let b = if spec.backend.is_empty() { system_default.clone() } else { spec.backend };
-                if let Some(mgr) = self.registry.get(&b) {
-                    let inst = self.get_installed_full(mgr.as_ref()).await?;
-                    if inst.iter().any(|p| p.name == spec.name) {
-                        changes.to_remove.entry(b).or_default().push(spec.name);
-                    }
-                }
+        // Ownership-Aware Drift Detection
+        for manager in self.registry.available() {
+            let b = manager.name();
+            if ["link", "service", "web", "emacs", "github"].contains(&b) { continue; }
+            
+            let owned_names: Vec<String> = state.packages.iter()
+                .filter(|p| p.backend == b)
+                .map(|p| p.name.clone())
+                .collect();
+
+            let desired_names: HashSet<String> = desired.get(b)
+                .map(|specs| specs.iter().map(|s| s.name.clone()).collect())
+                .unwrap_or_default();
+            
+            // Only suggest removing packages that LiNix "owns" but are no longer in config
+            let to_purge: Vec<String> = owned_names.into_iter()
+                .filter(|name| !desired_names.contains(name) && !self.is_protected_package(name))
+                .collect();
+            
+            if !to_purge.is_empty() {
+                changes.to_remove.entry(b.to_string()).or_default().extend(to_purge);
             }
         }
-        
+
         if changes.is_empty() {
-            info!("System is in sync.");
+            info!("System is in sync with configuration.");
             return Ok(());
         }
 
         self.check_binary_conflicts(&changes).await?;
+        self.display_changes(&changes);
 
+        if !self.config.yes && !self.confirm_changes()? { return Err(Error::Cancelled); }
+
+        // Journal changes for recovery
         let journal_path = dirs::data_dir().unwrap_or_default().join("linix").join("pending.json");
         if let Some(p) = journal_path.parent() { let _ = tokio::fs::create_dir_all(p).await; }
         tokio::fs::write(&journal_path, serde_json::to_string(&changes)?).await?;
 
-        self.display_changes(&changes);
-        if !self.config.yes && !self.confirm_changes()? { return Err(Error::Cancelled); }
-
-        self.execute_changes(&changes).await?;
+        self.execute_changes(&changes, &mut state).await?;
 
         let _ = tokio::fs::remove_file(journal_path).await;
         let _ = self.save_lockfile(&desired).await;
+        let _ = state.save()?;
         let _ = self.hooks.run_after_sync().await;
+        
+        self.metrics.print_summary();
         Ok(())
     }
 
-    async fn execute_changes(&self, changes: &SyncChanges) -> Result<()> {
-        let mut system_backends = Vec::new();
-        let mut parallel_backends = Vec::new();
+    async fn execute_changes(&self, changes: &SyncChanges, state: &mut StateRegistry) -> Result<()> {
+        let mut tx = Transaction::new();
 
-        for b in changes.to_install.keys() {
-            match b.as_str() {
-                "apt" | "pacman" | "dnf" | "zypper" | "apk" => system_backends.push(b),
-                _ => parallel_backends.push(b),
+        for (backend, pkgs) in &changes.to_remove {
+            if let Some(mgr) = self.registry.get(backend) {
+                tx.add(Box::new(PackageOperation {
+                    manager: mgr.clone(),
+                    packages: pkgs.clone(),
+                    is_install: false,
+                    sudo: true,
+                }));
+                for p in pkgs { state.remove(backend, p); }
             }
         }
 
-        for b_name in system_backends {
-            if let Some(mgr) = self.registry.get(b_name) {
-                let specs = &changes.to_install[b_name];
-                let pb = self.progress.start(specs.len() as u64, &format!("Syncing {}", b_name));
-                mgr.install_with_options(specs, true).await?;
-                pb.finish();
+        for (backend, specs) in &changes.to_install {
+            if let Some(mgr) = self.registry.get(backend) {
+                let names: Vec<String> = specs.iter().map(|s| s.name.clone()).collect();
+                tx.add(Box::new(PackageOperation {
+                    manager: mgr.clone(),
+                    packages: names.clone(),
+                    is_install: true,
+                    sudo: true,
+                }));
+                for n in names { state.add(backend, &n, None); }
             }
         }
 
-        let semaphore = Arc::new(Semaphore::new(self.config.max_parallel));
-        let mut tasks = tokio::task::JoinSet::new();
+        let pb = self.progress.spinner("Applying system changes...");
+        let result = tx.execute().await;
+        pb.finish();
+        
+        if result.is_ok() {
+            self.metrics.record_install(changes.total_install() as u64);
+            self.metrics.record_remove(changes.total_remove() as u64);
+        }
+        result
+    }
 
-        for b_name in parallel_backends {
-            let b_name = b_name.clone();
-            let manager = self.registry.get(&b_name).unwrap();
-            let specs = changes.to_install[&b_name].clone();
-            let sem = semaphore.clone();
-            let metrics = self.metrics.clone();
-            let executor = self.executor.clone();
-            let progress = self.progress.clone();
+    pub async fn calculate_changes_internal(&self, desired: &HashMap<String, Vec<PackageSpec>>) -> Result<SyncChanges> {
+        let mut changes = SyncChanges::default();
+        let lockfile_path = self.config.groups_dir.join("linix.lock");
+        let locked_data: HashMap<String, HashMap<String, String>> = if self.use_lockfile && lockfile_path.exists() {
+            serde_json::from_str(&tokio::fs::read_to_string(&lockfile_path).await.unwrap_or_default()).unwrap_or_default()
+        } else { HashMap::new() };
 
-            tasks.spawn(async move {
-                let _permit = sem.acquire().await;
-                let pb = progress.start(specs.len() as u64, &format!("Syncing {}", b_name));
-                manager.install_with_options(&specs, true).await?;
-                for spec in &specs {
-                    let bin = spec.options.get("verify_binary").unwrap_or(&spec.name);
-                    if !executor.command_exists(bin).await {
-                        warn!("Success reported by {}, but binary '{}' not found", b_name, bin);
+        for (backend, specs) in desired {
+            if let Some(manager) = self.registry.get(backend) {
+                let installed = self.get_installed_full(manager.as_ref()).await?;
+                let mut to_install = Vec::new();
+                
+                for mut spec in specs.clone() {
+                    if let Some(v) = locked_data.get(backend).and_then(|m| m.get(&spec.name)) {
+                        spec.options.insert("version".into(), v.clone());
                     }
-                    pb.inc(1);
+
+                    let current = installed.iter().find(|p| p.name == spec.name);
+                    match current {
+                        Some(p) => {
+                            if let Some(req_v) = spec.options.get("version") {
+                                if let Some(ref inst_v) = p.version {
+                                    if !self.versions_match(inst_v, req_v) { to_install.push(spec); }
+                                }
+                            }
+                        }
+                        None => to_install.push(spec),
+                    }
                 }
-                metrics.record_install(specs.len() as u64);
-                pb.finish();
-                Result::Ok(())
-            });
-        }
-        while let Some(res) = tasks.join_next().await { res.map_err(|e| Error::Other(e.to_string()))??; }
-        Ok(())
-    }
-
-    pub async fn detect_drift(&self) -> Result<Vec<(String, Vec<String>)>> {
-        let desired_map = self.calculate_desired_state().await?;
-        let mut drift = Vec::new();
-        for manager in self.registry.available() {
-            let backend = manager.name().to_string();
-            if ["link", "service", "web", "emacs"].contains(&backend.as_str()) { continue; }
-            let desired_names: HashSet<String> = desired_map.get(&backend)
-                .map(|specs| specs.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
-            let installed = manager.list_installed().await?;
-            let untracked: Vec<String> = installed.into_iter()
-                .filter(|p| !desired_names.contains(&p.name)).map(|p| p.name).collect();
-            if !untracked.is_empty() { drift.push((backend, untracked)); }
-        }
-        Ok(drift)
-    }
-
-    pub async fn find_unmanaged(&self) -> Result<Vec<(String, Vec<String>)>> {
-        self.detect_drift().await
-    }
-
-    pub async fn clean(&self) -> Result<()> {
-        let list = self.find_unmanaged().await?;
-        if list.is_empty() { return Ok(()); }
-        for (backend_name, packages) in list {
-            if let Some(manager) = self.registry.get(&backend_name) {
-                manager.remove(&packages, true).await?;
-                self.metrics.record_remove(packages.len() as u64);
+                if !to_install.is_empty() { changes.to_install.insert(backend.clone(), to_install); }
             }
         }
-        Ok(())
+        Ok(changes)
     }
 
     async fn calculate_desired_state(&self) -> Result<HashMap<String, Vec<PackageSpec>>> {
         let mut resolved: HashMap<String, Vec<PackageSpec>> = HashMap::new();
         let raw_lines = load_all_packages(&self.config.groups_dir)?;
         let mut queue: VecDeque<String> = raw_lines.into_iter().collect();
-        let mut expanded_specs = Vec::new();
         let mut visited_groups = HashSet::new();
+        let mut final_lines = Vec::new();
 
         while let Some(line) = queue.pop_front() {
             if let Some(group_name) = line.strip_prefix("group:") {
@@ -195,94 +214,25 @@ impl<'a> SyncEngine<'a> {
                 }
                 continue;
             }
-            expanded_specs.push(line);
+            final_lines.push(line);
         }
 
-        for line in expanded_specs {
-            let mut spec = self.parse_package_spec(&line);
-            if spec.backend.is_empty() {
-                if let Some(found) = self.discover_backend(&spec.name).await { spec.backend = found; }
-                else { continue; }
-            }
+        for line in final_lines {
+            let spec = self.parse_package_spec(&line);
             resolved.entry(spec.backend.clone()).or_default().push(spec);
         }
         Ok(resolved)
     }
 
-    async fn discover_backend(&self, name: &str) -> Option<String> {
-        for backend_name in &self.config.backend_priority {
-            if let Some(manager) = self.registry.get(backend_name) {
-                if !manager.is_available() { continue; }
-                if let Ok(results) = manager.search(name).await {
-                    if results.iter().any(|p| p.name == name) { return Some(backend_name.clone()); }
-                }
-            }
-        }
-        None
-    }
-
-    pub async fn calculate_changes(&self, desired: HashMap<String, Vec<PackageSpec>>) -> Result<SyncChanges> {
-        let mut changes = SyncChanges::default();
-        for (backend, specs) in desired {
-            if let Some(manager) = self.registry.get(&backend) {
-                let installed = self.get_installed_full(manager.as_ref()).await?;
-                let mut to_install = Vec::new();
-                for spec in specs {
-                    let current = installed.iter().find(|p| p.name == spec.name);
-                    match current {
-                        Some(p) => {
-                            if let Some(req_v) = spec.options.get("version") {
-                                if p.version.as_ref() != Some(req_v) { to_install.push(spec); }
-                            }
-                        }
-                        None => to_install.push(spec),
-                    }
-                }
-                if !to_install.is_empty() { changes.to_install.insert(backend, to_install); }
-            }
-        }
-        Ok(changes)
-    }
-
-    fn parse_package_spec(&self, line: &str) -> PackageSpec {
-        let (b_part, rest) = line.split_once(':').unwrap_or(("", line));
-        let (n_part, o_part) = rest.split_once('@').unwrap_or((rest, ""));
-        let mut options = HashMap::new();
-        for pair in o_part.split(',').filter(|s| !s.is_empty()) {
-            let (k, v) = pair.split_once('=').unwrap_or((pair, "true"));
-            options.insert(k.to_string(), v.to_string());
-        }
-        PackageSpec { name: n_part.to_string(), backend: b_part.to_string(), options }
-    }
-
-    async fn detect_system_backend(&self) -> String {
-        if cfg!(target_os = "windows") { return "winget".into(); }
-        if cfg!(target_os = "macos") { return "brew".into(); }
-        if self.executor.command_exists("apt").await { return "apt".into(); }
-        if self.executor.command_exists("pacman").await { return "pacman".into(); }
-        "apt".to_string()
-    }
-
-    async fn get_installed_full(&self, manager: &dyn PackageManager) -> Result<Vec<Package>> {
-        if let Some(cached) = self.cache.get_installed(manager.name()).await {
-            return Ok(cached.into_iter().map(|n| Package::new(n, manager.name())).collect());
-        }
-        let pkgs = manager.list_installed().await?;
-        let names: Vec<String> = pkgs.iter().map(|p| p.name.clone()).collect();
-        self.cache.set_installed(manager.name().to_string(), names).await;
-        Ok(pkgs)
-    }
-
     async fn check_binary_conflicts(&self, changes: &SyncChanges) -> Result<()> {
         for (backend, specs) in &changes.to_install {
-            if let Some(mgr) = self.registry.get(backend) {
-                for spec in specs {
-                    let bin_name = spec.options.get("verify_binary").unwrap_or(&spec.name);
-                    if self.executor.command_exists(bin_name).await {
-                        let inst = self.get_installed_full(mgr.as_ref()).await?;
-                        if !inst.iter().any(|p| p.name == spec.name) {
-                            warn!("Warning: Binary '{}' already exists and might be shadowed by {} install.", bin_name, backend);
-                        }
+            for spec in specs {
+                let bin = spec.options.get("verify_binary").unwrap_or(&spec.name);
+                for other in self.registry.available() {
+                    if other.name() == backend { continue; }
+                    let inst = self.get_installed_full(other.as_ref()).await?;
+                    if inst.iter().any(|p| p.name == *bin) {
+                        return Err(Error::Validation(format!("Conflict: '{}' is already in use by {}.", bin, other.name())));
                     }
                 }
             }
@@ -303,18 +253,48 @@ impl<'a> SyncEngine<'a> {
         Ok(output)
     }
 
-    async fn save_lockfile(&self, desired: &HashMap<String, Vec<PackageSpec>>) -> Result<()> {
-        let mut locked: HashMap<String, HashMap<String, String>> = HashMap::new();
+    pub async fn heal(&self) -> Result<()> {
+        let path = dirs::data_dir().unwrap_or_default().join("linix").join("pending.json");
+        if !path.exists() { return Ok(()); }
+        warn!("LiNix detected an interrupted transaction. Healing system state...");
+        let data = tokio::fs::read_to_string(&path).await?;
+        let pending: SyncChanges = serde_json::from_str(&data)?;
+        let mut state = StateRegistry::load()?;
+        self.execute_changes(&pending, &mut state).await?;
+        let _ = tokio::fs::remove_file(path).await;
+        state.save()
+    }
+
+    pub async fn clean(&self) -> Result<()> {
+        let desired = self.calculate_desired_state().await?;
+        let mut state = StateRegistry::load()?;
         for manager in self.registry.available() {
-            if let Some(specs) = desired.get(manager.name()) {
-                if let Ok(inst) = manager.list_installed().await {
+            let b = manager.name();
+            let owned_names: Vec<String> = state.packages.iter().filter(|p| p.backend == b).map(|p| p.name.clone()).collect();
+            let desired_names: HashSet<String> = desired.get(b).map(|s| s.iter().map(|x| x.name.clone()).collect()).unwrap_or_default();
+            let to_clean: Vec<String> = owned_names.into_iter().filter(|n| !desired_names.contains(n)).collect();
+            
+            if !to_clean.is_empty() {
+                info!("Cleaning untracked packages from {}: {:?}", b, to_clean);
+                manager.remove(&to_clean, true).await?;
+                for p in to_clean { state.remove(b, &p); }
+            }
+        }
+        state.save()
+    }
+
+    async fn save_lockfile(&self, desired: &HashMap<String, Vec<PackageSpec>>) -> Result<()> {
+        let mut locked = HashMap::new();
+        for (backend, specs) in desired {
+            if let Some(m) = self.registry.get(backend) {
+                if let Ok(inst) = m.list_installed().await {
                     let mut map = HashMap::new();
                     for s in specs {
                         if let Some(p) = inst.iter().find(|x| x.name == s.name) {
                             if let Some(v) = &p.version { map.insert(s.name.clone(), v.clone()); }
                         }
                     }
-                    locked.insert(manager.name().to_string(), map);
+                    locked.insert(backend.clone(), map);
                 }
             }
         }
@@ -322,18 +302,26 @@ impl<'a> SyncEngine<'a> {
         Ok(())
     }
 
-    pub async fn heal(&self) -> Result<()> {
-        let path = dirs::data_dir().unwrap_or_default().join("linix").join("pending.json");
-        if !path.exists() { return Ok(()); }
-        let data = tokio::fs::read_to_string(&path).await?;
-        let pending: SyncChanges = serde_json::from_str(&data).map_err(|e| Error::Other(e.to_string()))?;
-        self.execute_changes(&pending).await?;
-        let _ = tokio::fs::remove_file(path).await;
-        Ok(())
+    fn parse_package_spec(&self, line: &str) -> PackageSpec {
+        let (b_part, rest) = line.split_once(':').unwrap_or(("", line));
+        let (n_part, o_part) = rest.split_once('@').unwrap_or((rest, ""));
+        let mut options = HashMap::new();
+        for pair in o_part.split(',').filter(|s| !s.is_empty()) {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, "true"));
+            options.insert(k.to_string(), v.to_string());
+        }
+        let clean_name = n_part.trim_end_matches('/').to_string();
+        PackageSpec { name: clean_name, backend: b_part.to_string(), options }
+    }
+
+    async fn get_installed_full(&self, mgr: &dyn PackageManager) -> Result<Vec<Package>> {
+        let pkgs = mgr.list_installed().await?;
+        self.cache.set_installed(mgr.name().to_string(), pkgs.iter().map(|p| p.name.clone()).collect()).await;
+        Ok(pkgs)
     }
 
     fn confirm_changes(&self) -> Result<bool> {
-        print!("Proceed? [y/N] ");
+        print!("Proceed with changes? [y/N] ");
         let _ = io::stdout().flush();
         let mut input = String::new();
         let _ = io::stdin().read_line(&mut input).ok();
@@ -342,11 +330,11 @@ impl<'a> SyncEngine<'a> {
 
     fn display_changes(&self, changes: &SyncChanges) {
         if !changes.to_remove.is_empty() {
-            println!("\nRemoval Plan:");
-            for (b, names) in &changes.to_remove { println!("  - [{}] {:?}", b, names); }
+            println!("\nREMOVALS:");
+            for (b, names) in &changes.to_remove { for n in names { println!("  - [{}] {}", b, n); } }
         }
         if !changes.to_install.is_empty() {
-            println!("\nInstallation Plan:");
+            println!("\nINSTALLATIONS:");
             for (b, specs) in &changes.to_install { for s in specs { println!("  + [{}] {}", b, s.name); } }
         }
     }

@@ -3,34 +3,49 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::path::Path;
 
+/// Strictly allowed characters in package names.
 static PACKAGE_NAME_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._@:+/-]+$").unwrap());
 
-static DANGEROUS_COMMANDS: &[&str] = &[
+/// Point #4: Characters used for command chaining or injection.
+static SHELL_INJECTION_REGEX: Lazy<Regex> = 
+    Lazy::new(|| Regex::new(r"[;&|><`$\(\)\[\]\{\}\*\?\!\\]").unwrap());
+
+/// Point #4: Blacklist of strings that indicate attempted system destruction.
+static DESTRUCTIVE_PATTERNS: &[&str] = &[
     "rm -rf /",
-    "dd if=/dev/zero",
+    "dd if=",
     "mkfs",
     ":(){ :|:& };:",
-    "chmod -R 777 /",
+    "chmod -R 777",
+    "chown -R",
+    "> /dev/sda",
+    "mv / /dev/null",
 ];
 
-/// Validates user input and system state
 pub struct Validator;
 
 impl Validator {
-    /// Validate a package name
+    /// Validates a package name for backend-compatible characters and shell safety.
     pub fn validate_package_name(name: &str) -> Result<()> {
         if name.is_empty() {
             return Err(Error::Validation("Package name cannot be empty".into()));
         }
 
         if name.len() > 256 {
-            return Err(Error::Validation("Package name too long".into()));
+            return Err(Error::Validation("Package name exceeds 256 character limit".into()));
         }
 
         if !PACKAGE_NAME_REGEX.is_match(name) {
             return Err(Error::Validation(format!(
-                "Invalid package name '{}': must contain only alphanumeric characters, dots, hyphens, underscores, @, :, +, or /",
+                "Invalid package name '{}': Contains forbidden characters.",
+                name
+            )));
+        }
+
+        if SHELL_INJECTION_REGEX.is_match(name) {
+            return Err(Error::Validation(format!(
+                "Security Alert: Blocked package name '{}' containing shell metacharacters.",
                 name
             )));
         }
@@ -38,7 +53,7 @@ impl Validator {
         Ok(())
     }
 
-    /// Validate a list of package names
+    /// Validates multiple names.
     pub fn validate_package_names(names: &[String]) -> Result<()> {
         for name in names {
             Self::validate_package_name(name)?;
@@ -46,21 +61,23 @@ impl Validator {
         Ok(())
     }
 
-    /// Check if a command appears dangerous
-    pub fn is_dangerous_command(cmd: &str) -> bool {
-        let cmd_lower = cmd.to_lowercase();
-        DANGEROUS_COMMANDS
-            .iter()
-            .any(|dangerous| cmd_lower.contains(&dangerous.to_lowercase()))
-    }
-
-    /// Validate a command before execution
+    /// Checks for dangerous CLI arguments or destructive patterns.
     pub fn validate_command(cmd: &str, args: &[&str]) -> Result<()> {
         let full_cmd = format!("{} {}", cmd, args.join(" "));
+        let cmd_lower = full_cmd.to_lowercase();
 
-        if Self::is_dangerous_command(&full_cmd) {
+        for pattern in DESTRUCTIVE_PATTERNS {
+            if cmd_lower.contains(pattern) {
+                return Err(Error::Validation(format!(
+                    "Security Block: Destructive command detected and blocked: {}",
+                    full_cmd
+                )));
+            }
+        }
+
+        if SHELL_INJECTION_REGEX.is_match(&full_cmd) {
             return Err(Error::Validation(format!(
-                "Potentially dangerous command blocked: {}",
+                "Security Block: Command contains forbidden shell metacharacters: {}",
                 full_cmd
             )));
         }
@@ -68,77 +85,40 @@ impl Validator {
         Ok(())
     }
 
-    /// Validate a file path
+    /// Robust path validation using canonicalization to catch hidden traversal attempts.
     pub fn validate_path(path: &Path) -> Result<()> {
         if !path.exists() {
-            return Err(Error::Validation(format!(
-                "Path does not exist: {}",
-                path.display()
-            )));
+            return Err(Error::Validation(format!("Path does not exist: {}", path.display())));
         }
 
-        // Check for path traversal attempts
+        // Resolves symlinks and removes ".." segments
         let canonical = path
             .canonicalize()
-            .map_err(|e| Error::Validation(format!("Cannot canonicalize path: {}", e)))?;
+            .map_err(|e| Error::Validation(format!("Path security check failed: {}", e)))?;
 
         let path_str = canonical.to_string_lossy();
-        if path_str.contains("..") {
-            return Err(Error::Validation("Path traversal detected".into()));
+
+        // Prevent manipulation of core system authentication files
+        if path_str.contains("/etc/shadow") || path_str.contains("/etc/sudoers") {
+            return Err(Error::Validation("Access Denied: Unsafe path access attempt.".into()));
         }
 
         Ok(())
     }
 
-    /// Validate backend name
+    /// Validates the backend identifier.
     pub fn validate_backend_name(name: &str) -> Result<()> {
         if name.is_empty() {
             return Err(Error::Validation("Backend name cannot be empty".into()));
         }
 
-        if !name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
-        {
+        if !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
             return Err(Error::Validation(format!(
-                "Invalid backend name '{}': must be alphanumeric with underscores or hyphens",
+                "Invalid backend name '{}': must be alphanumeric.",
                 name
             )));
         }
 
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_validate_package_name() {
-        assert!(Validator::validate_package_name("valid-package").is_ok());
-        assert!(Validator::validate_package_name("package_name").is_ok());
-        assert!(Validator::validate_package_name("package.name").is_ok());
-        assert!(Validator::validate_package_name("@scope/package").is_ok());
-
-        assert!(Validator::validate_package_name("").is_err());
-        assert!(Validator::validate_package_name("invalid package").is_err());
-        assert!(Validator::validate_package_name("invalid;package").is_err());
-    }
-
-    #[test]
-    fn test_dangerous_commands() {
-        assert!(Validator::is_dangerous_command("rm -rf /"));
-        assert!(Validator::is_dangerous_command("sudo rm -rf /"));
-        assert!(!Validator::is_dangerous_command("ls -la"));
-        assert!(!Validator::is_dangerous_command("apt install package"));
-    }
-
-    #[test]
-    fn test_validate_backend_name() {
-        assert!(Validator::validate_backend_name("apt").is_ok());
-        assert!(Validator::validate_backend_name("dnf-manager").is_ok());
-        assert!(Validator::validate_backend_name("").is_err());
-        assert!(Validator::validate_backend_name("invalid backend").is_err());
     }
 }

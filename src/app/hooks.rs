@@ -39,16 +39,21 @@ impl LuaHooks {
     }
 
     pub fn render_template(&self, template: &str) -> String {
-        // Sync operation: We don't await inside here, so it's safe.
-        let mut rendered = template.replace("{{OS}}", std::env::consts::OS);
-        rendered = rendered.replace("{{ARCH}}", std::env::consts::ARCH);
-        
-        if let Ok(lua) = self.lua.lock() {
-            let _ = lua.globals().set("OS", std::env::consts::OS);
-            // Additional Lua logic could go here
-        }
-        rendered
-    }
+    let lua = self.lua.lock().unwrap();
+    let globals = lua.globals();
+    
+    // Inject system variables for the template to use
+    let _ = globals.set("OS", std::env::consts::OS);
+    let _ = globals.set("ARCH", std::env::consts::ARCH);
+    let _ = globals.set("USER", std::env::var("USER").unwrap_or_default());
+
+    // REAL LOGIC: If template contains {{...}}, treat it as a Lua expression
+    let re = regex::Regex::new(r"\{\{(.*?)\}\}").unwrap();
+    re.replace_all(template, |caps: &regex::Captures| {
+        let code = &caps[1];
+        lua.load(code).eval::<String>().unwrap_or_else(|_| caps[0].to_string())
+    }).to_string()
+}
 
     pub async fn run_hook(&self, hook_name: &str, package: &str) -> Result<()> {
         if let Some(h) = self.hooks.get(hook_name).and_then(|h| h.get(package)) {

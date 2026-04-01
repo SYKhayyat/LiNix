@@ -1,7 +1,6 @@
-# C:\Users\Administrator\Videos\Nexus\linix\Cargo.toml
 [package]
 name = "linix"
-version = "3.0.0"
+version = "3.1.0"
 edition = "2021"
 
 [dependencies]
@@ -33,7 +32,11 @@ hex = "0.4"
 tar = "0.4"
 flate2 = "1.0"
 zip = "0.6"
-xz2 = "0.1" # Added for .tar.xz
-bzip2 = "0.4" # Added for .tar.bz2
-which = "6.0" # Added for robust path scanning
+xz2 = "0.1"
+bzip2 = "0.4"
+which = "6.0"
 dialoguer = "0.11"
+fs2 = "0.4" # Added for Inter-process locking
+md5 = "0.7" # Added for Web storage IDs
+libc = "0.2"
+winapi = { version = "0.3", features = ["processthreadsapi", "securitybaseapi", "winnt", "handleapi"] }

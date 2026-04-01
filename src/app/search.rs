@@ -1,4 +1,3 @@
-// src/app/search.rs
 use crate::backends::BackendRegistry;
 use crate::config::Config;
 use crate::core::{Package, Result, PackageManager};
@@ -18,7 +17,7 @@ impl<'a> UniversalSearch<'a> {
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        info!("Searching for '{}'...", query);
+        info!("Universal search for '{}'...", query);
 
         let managers: Vec<Arc<dyn PackageManager>> = if self.config.enabled_backends.is_empty() {
             self.registry.available()
@@ -27,14 +26,14 @@ impl<'a> UniversalSearch<'a> {
         };
 
         let semaphore = Arc::new(Semaphore::new(self.config.max_parallel));
-        let mut handles = Vec::new();
+        let mut tasks = tokio::task::JoinSet::new();
 
         for manager in managers {
             let sem = semaphore.clone();
             let query_str = query.to_string();
-            let mgr: Arc<dyn PackageManager> = manager.clone();
+            let mgr = manager.clone();
 
-            let handle = tokio::spawn(async move {
+            tasks.spawn(async move {
                 let _permit = sem.acquire().await.unwrap();
                 match mgr.search(&query_str).await {
                     Ok(packages) => packages,
@@ -44,20 +43,19 @@ impl<'a> UniversalSearch<'a> {
                     }
                 }
             });
-            handles.push(handle);
         }
 
         let mut all_packages = Vec::new();
         let mut seen = HashSet::new();
-        for handle in handles {
-            if let Ok(packages) = handle.await {
+        while let Some(res) = tasks.join_next().await {
+            if let Ok(packages) = res {
                 for pkg in packages {
-                    if seen.insert(format!("{}:{}", pkg.backend, pkg.name)) {
-                        all_packages.push(pkg);
-                    }
+                    let key = format!("{}:{}", pkg.backend, pkg.name);
+                    if seen.insert(key) { all_packages.push(pkg); }
                 }
             }
         }
+        
         all_packages.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(all_packages)
     }

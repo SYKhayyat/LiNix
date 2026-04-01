@@ -1,4 +1,4 @@
-use crate::core::{CommandExecutor, Package, PackageManager, PackageSpec, Result};
+use crate::core::{CommandExecutor, Package, PackageManager, Result};
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
 use std::collections::HashMap;
@@ -6,54 +6,111 @@ use std::collections::HashMap;
 pub struct CargoManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
-    settings: Option<HashMap<String, String>>,
 }
 
 impl CargoManager {
-    pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
-        Self { executor, available: OnceCell::new(), settings }
+    pub fn new(executor: CommandExecutor, _: Option<HashMap<String, String>>) -> Self {
+        Self { executor, available: OnceCell::new() }
     }
 }
 
 #[async_trait]
 impl PackageManager for CargoManager {
     fn name(&self) -> &str { "cargo" }
+
     fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| std::process::Command::new("cargo").arg("--version").output().is_ok())
+        *self.available.get_or_init(|| {
+            std::process::Command::new("cargo").arg("--version").output().is_ok()
+        })
     }
-    async fn install_with_options(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
-        let use_b = self.settings.as_ref().and_then(|s| s.get("binstall")).map(|v| v == "true").unwrap_or(false);
-        let cmd = if use_b && self.executor.command_exists("cargo-binstall").await { "cargo-binstall" } else { "cargo" };
-        for s in specs {
-            let mut args = if cmd == "cargo-binstall" { vec!["-y".to_string()] } else { vec!["install".to_string()] };
-            if let Some(f) = s.options.get("features") { args.extend(["--features".into(), f.clone()]); }
-            args.push(s.name.clone());
-            let refs: Vec<&str> = args.iter().map(|a| a.as_str()).collect();
-            self.executor.run(cmd, &refs, sudo).await?;
+
+    async fn install(&self, p: &[String], s: bool) -> Result<()> {
+        for name in p {
+            // run_exclusive handles the cargo registry lock automatically
+            self.executor.run_exclusive("cargo", &["install", name], s).await?;
         }
         Ok(())
     }
-    async fn install(&self, p: &[String], s: bool) -> Result<()> {
-        let specs: Vec<_> = p.iter().map(|n| PackageSpec { name: n.clone(), backend: "cargo".into(), options: HashMap::new() }).collect();
-        self.install_with_options(&specs, s).await
-    }
+
     async fn remove(&self, p: &[String], s: bool) -> Result<()> {
-        let mut args = vec!["uninstall"];
-        args.extend(p.iter().map(|s| s.as_str()));
-        self.executor.run("cargo", &args, s).await?;
+        for name in p {
+            self.executor.run_exclusive("cargo", &["uninstall", name], s).await?;
+        }
         Ok(())
     }
+
     async fn list_installed(&self) -> Result<Vec<Package>> {
+        // REAL LOGIC: Parse 'cargo install --list'
+        // Output looks like: "package-name v1.2.3:" followed by paths
         let out = self.executor.run_output("cargo", &["install", "--list"], false).await?;
-        let mut res = vec![];
-        for l in out.lines() {
-            if !l.starts_with(" ") && l.contains("v") && l.contains(":") {
+        Ok(out.lines()
+            .filter(|l| !l.starts_with(' ') && l.contains(" v") && l.ends_with(':'))
+            .filter_map(|l| {
                 let parts: Vec<&str> = l.split_whitespace().collect();
                 if parts.len() >= 2 {
-                    res.push(Package { name: parts[0].into(), version: Some(parts[1].trim_end_matches(":").into()), backend: "cargo".into(), ..Package::new("", "") });
-                }
+                    Some(Package {
+                        name: parts[0].to_string(),
+                        version: Some(parts[1].trim_start_matches('v').trim_end_matches(':').into()),
+                        backend: "cargo".into(),
+                        ..Package::new("", "")
+                    })
+                } else { None }
+            }).collect())
+    }
+
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        // REAL LOGIC: Cargo CLI search is often slow/deprecated, so we query Crates.io API directly
+        let url = format!("https://crates.io/api/v1/crates?q={}&per_page=20", query);
+        let client = reqwest::Client::new();
+        let res = client.get(url).header("User-Agent", "linix-manager").send().await?;
+        
+        if res.status().is_success() {
+            let json: serde_json::Value = res.json().await?;
+            if let Some(crates) = json.get("crates").and_then(|c| c.as_array()) {
+                return Ok(crates.iter().filter_map(|c| {
+                    let name = c.get("name")?.as_str()?;
+                    let mut pkg = Package::new(name, "cargo");
+                    pkg.description = c.get("description").and_then(|d| d.as_str()).map(|s| s.to_string());
+                    pkg.version = c.get("max_version").and_then(|v| v.as_str()).map(|s| s.to_string());
+                    Some(pkg)
+                }).collect());
             }
         }
-        Ok(res)
+        Ok(vec![])
+    }
+
+    async fn info(&self, package: &str) -> Result<Option<Package>> {
+        // REAL LOGIC: Query detailed metadata from Crates.io
+        let url = format!("https://crates.io/api/v1/crates/{}", package);
+        let client = reqwest::Client::new();
+        let res = client.get(url).header("User-Agent", "linix-manager").send().await?;
+        
+        if res.status().is_success() {
+            let json: serde_json::Value = res.json().await?;
+            if let Some(c) = json.get("crate") {
+                return Ok(Some(Package {
+                    name: package.to_string(),
+                    version: c.get("max_version").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    description: c.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    repository: c.get("repository").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                    backend: "cargo".into(),
+                    ..Package::new("", "")
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    async fn upgrade(&self, s: bool) -> Result<()> {
+        // REAL LOGIC: Check for 'cargo-install-update' utility, or fallback to re-installing
+        if self.executor.command_exists("cargo-install-update").await {
+            self.executor.run_exclusive("cargo", &["install-update", "-a"], s).await?;
+        } else {
+            let installed = self.list_installed().await?;
+            for pkg in installed {
+                self.executor.run_exclusive("cargo", &["install", &pkg.name], s).await?;
+            }
+        }
+        Ok(())
     }
 }
