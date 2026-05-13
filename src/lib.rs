@@ -1,8 +1,7 @@
-//! LiNix - Universal Package Manager
-//!
-//! A unified interface for managing packages across multiple package managers
-//! and platforms with support for parallel operations, Lua hooks, and comprehensive
-//! backend support.
+//! LiNix - Universal Mission-Critical Package Manager
+//! 
+//! A high-performance, Directed Acyclic Graph (DAG) based orchestration engine 
+//! for managing packages across 33+ backends and multiple platforms.
 
 pub mod app;
 pub mod backends;
@@ -12,6 +11,11 @@ pub mod core;
 pub mod parsers;
 pub mod utils;
 
+// Primary entry points for library consumers
 pub use app::App;
 pub use config::Config;
 pub use core::error::{Error, Result};
+pub use core::manager::Backend;
+
+/// LiNix Version Identifier
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -1,89 +1,82 @@
-# LiNix Configuration File
+# LiNix Configuration File - Version 3.2.0 (High-Performance Engine)
 # 
-# This is an example configuration file for LiNix.
 # Copy this to ~/.config/linix/config.toml and modify as needed.
 
-# Dry-run mode (don't make actual changes)
+# Dry-run mode: Show what would happen without making actual system changes.
 dry_run = false
 
-# Skip confirmation prompts
+# Skip confirmation prompts for automated workflows.
 yes = false
 
-# Directory containing package group files
-groups_dir = "./examples/groups"
+# Directory containing your declarative package group files (.txt).
+groups_dir = "~/.config/linix/groups"
 
-# Enabled backends (empty = all available)
-# enabled_backends = ["apt", "flatpak", "cargo"]
-enabled_backends = []
+# Priority order for universal package discovery.
+# When a package name is ambiguous, LiNix checks these backends in order.
+backend_priority = ["apt", "pacman", "dnf", "winget", "brew", "flatpak", "snap", "cargo", "npm", "pip"]
 
-# Path to bloatware file (packages to remove)
-bloatware_file = "./examples/bloatware.txt"
+# Maximum number of parallel operations (Phase 2.3).
+# Adjust this based on your network bandwidth and CPU cores.
+max_parallel = 8
 
-# Remove bloatware on sync
-remove_bloatware = false
-
-# Show progress indicators
-show_progress = true
-
-# Verbose output
-verbose = false
-
-# Cache TTL in seconds
+# Cache TTL (Time-to-Live) in seconds for remote metadata lookups.
 cache_ttl = 300
 
-# GitHub personal access token for higher rate limits
-# Uncomment and add your token for increased API limits
-# github_token = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# Whitelist of enabled backends (empty = all available discovered binaries).
+enabled_backends = []
 
-# Maximum parallel operations
-max_parallel = 4
+# Source of truth for packages to remove (bloatware).
+bloatware_file = "~/.config/linix/bloatware.txt"
+remove_bloatware = false
+
+# Show professional progress indicators and spinners.
+show_progress = true
+
+# Enable verbose logging for debugging.
+verbose = false
+
+# Default backend to use when no prefix is provided (e.g. "curl" vs "apt:curl").
+default_backend = "apt"
+
+# Backend Aliases
+[aliases]
+sys = "apt"
+web = "web"
+ext = "vscode"
 
 # Hostname-specific packages
-# Packages listed under your hostname will be installed only on that machine
+# Packages listed here will only be installed on the machine with the matching hostname.
 [hostname_packages]
-# my-desktop = ["steam", "discord", "nvidia-driver"]
-# my-laptop = ["powertop", "tlp", "brightness-controller"]
 # workstation = ["docker", "kubernetes-cli", "terraform"]
+# gaming-pc = ["steam", "discord", "nvidia-settings"]
 
-# Hooks - Lua scripts that run before/after package operations
-# Available hooks: before_install, after_install, before_remove, after_remove
+# Scripting Hooks (Phase 4.1)
+# Supports Lua (default) and Rhai (start script with '#rhai').
 [hooks.before_install]
-# Example: Prepare for Docker installation
-# docker = '''
-# print("Preparing for Docker installation...")
-# '''
+# Catch-all hook for any package installation
+"*" = '''
+print("Starting installation of " .. PKG_NAME)
+'''
 
 [hooks.after_install]
-# Example: Enable Docker service after installation
-# docker = '''
-# print("Enabling Docker service...")
-# os.execute("systemctl enable docker")
-# os.execute("systemctl start docker")
-# '''
+# High-performance Rhai hook for Docker
+docker = '''
+#rhai
+print("Enabling Docker system service via Rhai...");
+exec("systemctl enable docker");
+exec("systemctl start docker");
+'''
 
-# Example: Add user to docker group
-# docker = '''
-# local user = os.getenv("USER")
-# print("Adding " .. user .. " to docker group...")
-# os.execute("usermod -aG docker " .. user)
-# '''
+[hooks.before_sync]
+# Custom logic before starting a DAG-based sync
+"*" = "print('LiNix is calculating system delta...')"
 
-[hooks.before_remove]
-# Example: Stop service before removal
-# docker = '''
-# print("Stopping Docker service...")
-# os.execute("systemctl stop docker")
-# '''
+# Backend-Specific Settings
+[backend_settings.flatpak]
+user = "true"  # Install Flatpaks in the user scope instead of system-wide
 
-[hooks.after_remove]
-# Example: Cleanup after removal
-# docker = '''
-# print("Cleaning up Docker data...")
-# '''
-
-# Backend-specific settings
 [backend_settings.github]
-# token = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# token = "ghp_your_personal_access_token_for_higher_limits"
 
 [backend_settings.npm]
 # registry = "https://registry.npmjs.org"

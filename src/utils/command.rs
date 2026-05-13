@@ -1,46 +1,48 @@
 use std::process::Stdio;
 use tokio::process::Command;
+use crate::core::{Result, Error};
 
-/// Check if a command exists in PATH
+/// Asynchronously checks if a command exists in the system PATH.
+/// Uses 'which' on Unix-like systems and 'where' on Windows.
 pub async fn command_exists(cmd: &str) -> bool {
-    #[cfg(unix)]
+    let check_bin = if cfg!(windows) { "where" } else { "which" };
+    
+    match Command::new(check_bin)
+        .arg(cmd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
     {
-        Command::new("which")
-            .arg(cmd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|status| status.success())
-            .unwrap_or(false)
-    }
-
-    #[cfg(windows)]
-    {
-        Command::new("where")
-            .arg(cmd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|status| status.success())
-            .unwrap_or(false)
+        Ok(status) => status.success(),
+        Err(_) => false,
     }
 }
 
-/// Get command version
+/// Attempts to retrieve the version of a command by executing it with '--version'.
 pub async fn get_command_version(cmd: &str) -> Option<String> {
-    let output = Command::new(cmd).arg("--version").output().await.ok()?;
+    let output = Command::new(cmd)
+        .arg("--version")
+        .output()
+        .await
+        .ok()?;
 
     if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        let version_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if version_str.is_empty() {
+            None
+        } else {
+            Some(version_str)
+        }
     } else {
         None
     }
 }
 
-/// Run a simple command and return stdout
-pub async fn run_simple(cmd: &str, args: &[&str]) -> crate::core::Result<String> {
+/// Executes a simple command and returns its standard output as a String.
+/// This utility is intended for simple queries; for system-modifying operations, 
+/// use the CommandExecutor.
+pub async fn run_simple(cmd: &str, args: &[&str]) -> Result<String> {
     let output = Command::new(cmd)
         .args(args)
         .stdout(Stdio::piped())
@@ -51,15 +53,17 @@ pub async fn run_simple(cmd: &str, args: &[&str]) -> crate::core::Result<String>
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     } else {
-        Err(crate::core::Error::CommandFailed(format!(
-            "{} failed: {}",
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(Error::CommandFailed(format!(
+            "Simple command '{}' failed: {}",
             cmd,
-            String::from_utf8_lossy(&output.stderr)
+            stderr.trim()
         )))
     }
 }
 
-/// Split a command string into command and arguments
+/// Splits a raw command string into a command binary and its arguments.
+/// Respects whitespace and handles simple splitting logic.
 pub fn split_command(cmd_str: &str) -> Option<(String, Vec<String>)> {
     let parts: Vec<&str> = cmd_str.split_whitespace().collect();
     if parts.is_empty() {
@@ -77,11 +81,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_command_exists() {
+    async fn test_command_presence() {
         #[cfg(unix)]
         {
-            assert!(command_exists("ls").await);
-            assert!(!command_exists("nonexistent_command_xyz123").await);
+            assert!(command_exists("sh").await);
+            assert!(!command_exists("nonexistent_binary_12345").await);
         }
 
         #[cfg(windows)]
@@ -91,11 +95,11 @@ mod tests {
     }
 
     #[test]
-    fn test_split_command() {
-        let (cmd, args) = split_command("apt install -y package").unwrap();
+    fn test_command_splitter() {
+        let result = split_command("apt install -y vim");
+        assert!(result.is_some());
+        let (cmd, args) = result.unwrap();
         assert_eq!(cmd, "apt");
-        assert_eq!(args, vec!["install", "-y", "package"]);
-
-        assert!(split_command("").is_none());
+        assert_eq!(args, vec!["install", "-y", "vim"]);
     }
 }

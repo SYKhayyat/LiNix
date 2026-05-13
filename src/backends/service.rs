@@ -1,92 +1,129 @@
-use crate::core::{CommandExecutor, Package, PackageManager, Result, PackageSpec};
+use crate::core::{
+    Backend, CommandExecutor, Installable, Package, PackageSpec, 
+    Queryable, Result
+};
 use async_trait::async_trait;
 use std::collections::HashMap;
-use tracing::info;
+use tracing::{info, warn, debug};
 
+/// Manages system services across Linux (systemd), macOS (launchctl), and Windows (sc.exe).
+/// In the LiNix declarative model, a 'service' is treated as a package type where 
+/// 'install' ensures the service is enabled/running, and 'remove' ensures it is stopped/disabled.
 pub struct ServiceManager {
     executor: CommandExecutor,
 }
 
 impl ServiceManager {
-    pub fn new(executor: CommandExecutor, _: Option<HashMap<String, String>>) -> Self {
+    pub fn new(executor: CommandExecutor) -> Self {
         Self { executor }
+    }
+
+    /// Determines the native service management command for the current platform.
+    fn get_init_command(&self) -> Option<&'static str> {
+        if cfg!(target_os = "linux") {
+            Some("systemctl")
+        } else if cfg!(target_os = "macos") {
+            Some("launchctl")
+        } else if cfg!(target_os = "windows") {
+            Some("sc")
+        } else {
+            None
+        }
     }
 }
 
-#[async_trait]
-impl PackageManager for ServiceManager {
+impl Backend for ServiceManager {
     fn name(&self) -> &str { "service" }
 
     fn is_available(&self) -> bool {
-        // Init systems are always present on modern OSs
-        true
+        if let Some(cmd) = self.get_init_command() {
+            self.executor.command_exists_sync(cmd)
+        } else {
+            false
+        }
     }
 
-    async fn install_with_options(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
+    fn as_installable(&self) -> Option<&dyn Installable> { Some(self) }
+    fn as_queryable(&self) -> Option<&dyn Queryable> { Some(self) }
+}
+
+#[async_trait]
+impl Installable for ServiceManager {
+    /// Aligns the system service state with the desired PackageSpec.
+    /// Supports options: 
+    /// - @status=running|stopped
+    /// - @enabled=true|false
+    async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         for spec in specs {
             let status = spec.options.get("status").map(|s| s.as_str()).unwrap_or("running");
             let enabled = spec.options.get("enabled").map(|s| s == "true").unwrap_or(true);
 
-            #[cfg(target_os = "linux")] {
-                // REAL LOGIC: Systemd Management
-                if enabled { self.executor.run("systemctl", &["enable", &spec.name], sudo).await?; }
-                else { self.executor.run("systemctl", &["disable", &spec.name], sudo).await?; }
+            #[cfg(target_os = "linux")]
+            {
+                // Manage boot persistence (enabled/disabled)
+                let action = if enabled { "enable" } else { "disable" };
+                self.executor.run("systemctl", &[action, &spec.name], sudo).await?;
 
-                let cmd = if status == "running" { "start" } else { "stop" };
-                self.executor.run("systemctl", &[cmd, &spec.name], sudo).await?;
+                // Manage current runtime state (started/stopped)
+                let state_cmd = if status == "running" { "start" } else { "stop" };
+                self.executor.run("systemctl", &[state_cmd, &spec.name], sudo).await?;
             }
 
-            #[cfg(target_os = "macos")] {
-                // REAL LOGIC: Launchctl Management
+            #[cfg(target_os = "macos")]
+            {
+                // launchctl uses load/unload -w to manage persistence and state simultaneously.
                 let cmd = if status == "running" { "load" } else { "unload" };
-                // On macOS, 'enabled' usually corresponds to the presence of the plist in LaunchAgents/Daemons
+                // Assumption: spec.name refers to a valid agent/daemon label or plist path.
                 self.executor.run("launchctl", &[cmd, "-w", &spec.name], sudo).await?;
             }
 
-            #[cfg(target_os = "windows")] {
-                // REAL LOGIC: Windows Service Control (sc.exe)
-                if enabled { self.executor.run("sc", &["config", &spec.name, "start=", "auto"], sudo).await?; }
-                else { self.executor.run("sc", &["config", &spec.name, "start=", "disabled"], sudo).await?; }
+            #[cfg(target_os = "windows")]
+            {
+                // sc.exe config manages the start type (auto/disabled)
+                let start_type = if enabled { "auto" } else { "disabled" };
+                self.executor.run("sc", &["config", &spec.name, "start=", start_type], sudo).await?;
 
-                let cmd = if status == "running" { "start" } else { "stop" };
-                self.executor.run("sc", &[cmd, &spec.name], sudo).await?;
+                // sc.exe start/stop manages the immediate runtime state
+                let state_cmd = if status == "running" { "start" } else { "stop" };
+                self.executor.run("sc", &[state_cmd, &spec.name], sudo).await?;
             }
 
-            info!("Service {} set to {} (enabled: {})", spec.name, status, enabled);
+            info!("Service {}: Set to {} (enabled={})", spec.name, status, enabled);
         }
         Ok(())
     }
 
-    async fn install(&self, p: &[String], s: bool) -> Result<()> {
-        // Fallback: Default to starting and enabling the service
-        let specs: Vec<_> = p.iter().map(|n| PackageSpec { 
-            name: n.clone(), 
-            backend: "service".into(), 
-            options: HashMap::from([("status".into(), "running".into()), ("enabled".into(), "true".into())])
-        }).collect();
-        self.install_with_options(&specs, s).await
-    }
-
-    async fn remove(&self, p: &[String], s: bool) -> Result<()> {
-        // REAL LOGIC: Removing a service in LiNix context means stopping and disabling it
-        for name in p {
-            #[cfg(target_os = "linux")] {
-                let _ = self.executor.run("systemctl", &["stop", name], s).await;
-                let _ = self.executor.run("systemctl", &["disable", name], s).await;
+    /// Ensures services are stopped and disabled on the host.
+    async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
+        for name in names {
+            info!("Ensuring service is stopped and disabled: {}", name);
+            #[cfg(target_os = "linux")]
+            {
+                let _ = self.executor.run("systemctl", &["stop", name], sudo).await;
+                let _ = self.executor.run("systemctl", &["disable", name], sudo).await;
             }
-            #[cfg(target_os = "windows")] {
-                let _ = self.executor.run("sc", &["stop", name], s).await;
-                let _ = self.executor.run("sc", &["config", name, "start=", "disabled"], s).await;
+            #[cfg(target_os = "macos")]
+            {
+                let _ = self.executor.run("launchctl", &["unload", "-w", name], sudo).await;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                let _ = self.executor.run("sc", &["stop", name], sudo).await;
+                let _ = self.executor.run("sc", &["config", name, "start=", "disabled"], sudo).await;
             }
         }
         Ok(())
     }
+}
 
+#[async_trait]
+impl Queryable for ServiceManager {
+    /// Discovers all services currently in an active/running state on the host.
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        // REAL LOGIC: Returns only services that are currently active/running
         let mut pkgs = Vec::new();
 
-        #[cfg(target_os = "linux")] {
+        #[cfg(target_os = "linux")]
+        {
             let out = self.executor.run_output("systemctl", &["list-units", "--type=service", "--state=running", "--no-legend"], false).await?;
             for line in out.lines() {
                 if let Some(name) = line.split_whitespace().next() {
@@ -95,7 +132,21 @@ impl PackageManager for ServiceManager {
             }
         }
 
-        #[cfg(target_os = "windows")] {
+        #[cfg(target_os = "macos")]
+        {
+            // launchctl list output format: "PID Status Label"
+            let out = self.executor.run_output("launchctl", &["list"], false).await?;
+            for line in out.lines().skip(1) {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(label) = parts.get(2) {
+                    pkgs.push(Package::new(*label, "service"));
+                }
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // sc query type= service state= active
             let out = self.executor.run_output("sc", &["query", "type=", "service", "state=", "active"], false).await?;
             for line in out.lines() {
                 if let Some(v) = line.strip_prefix("SERVICE_NAME: ") {
@@ -107,18 +158,27 @@ impl PackageManager for ServiceManager {
         Ok(pkgs)
     }
 
-    async fn info(&self, package: &str) -> Result<Option<Package>> {
-        // REAL LOGIC: Returns the current status of the service
-        let mut p = Package::new(package, "service");
+    async fn list_manual(&self) -> Result<Vec<Package>> {
+        // Active services are treated as managed state candidates.
+        self.list_installed().await
+    }
 
-        #[cfg(target_os = "linux")] {
-            let out = self.executor.run_output("systemctl", &["status", package], false).await?;
-            p.description = Some(out.lines().take(3).collect::<Vec<_>>().join(" "));
+    /// Fetches platform-specific status details for a specific service.
+    async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let mut p = Package::new(name, "service");
+
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(out) = self.executor.run_output("systemctl", &["status", name], false).await {
+                p.properties.insert("status_raw".into(), out);
+            }
         }
 
-        #[cfg(target_os = "windows")] {
-            let out = self.executor.run_output("sc", &["query", package], false).await?;
-            p.description = Some(out);
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(out) = self.executor.run_output("sc", &["qc", name], false).await {
+                p.properties.insert("config_raw".into(), out);
+            }
         }
 
         Ok(Some(p))

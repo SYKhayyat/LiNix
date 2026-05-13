@@ -1,23 +1,52 @@
-use crate::core::{CommandExecutor, Package, PackageManager, Result, PackageSpec, Error};
+use crate::core::{CommandExecutor, Package, Result, PackageSpec, Backend, Installable, Error};
 use crate::app::LuaHooks;
+use crate::config::Config;
 use async_trait::async_trait;
 use std::sync::Arc;
-use std::path::PathBuf;
-use tracing::{info, warn};
+use std::path::{Path, PathBuf};
+use tracing::{info, warn, debug};
+use tera::{Tera, Context};
 
+/// Manages filesystem links and configuration templating.
+/// Hardened for Version 3.5.0 with Content-Aware Idempotency.
+/// 
+/// Syntax: link:/path/to/source[@target=~/.config/app/conf,@template=true]
 pub struct LinkManager {
     executor: CommandExecutor,
-    hooks: Arc<LuaHooks>,
+    config: Arc<Config>,
 }
 
 impl LinkManager {
-    pub fn new(executor: CommandExecutor, hooks: Arc<LuaHooks>) -> Self {
-        Self { executor, hooks }
+    pub fn new(executor: CommandExecutor, config: Arc<Config>) -> Self {
+        Self { executor, config }
     }
 
-    /// Helper: Determines if two paths are on the same physical drive (Windows specific)
+    /// Renders a configuration file using the Tera engine.
+    /// Injects extensive system context and user-defined aliases/groups into the template.
+    fn render_template(&self, source_path: &Path) -> Result<String> {
+        let content = self.executor.read_file(source_path)?;
+        
+        let mut tera = Tera::default();
+        tera.add_raw_template("config", &content)
+            .map_err(|e| Error::Other(format!("Tera Parse Error in {:?}: {}", source_path, e)))?;
+
+        let mut context = Context::new();
+        // 1. System Context
+        context.insert("OS", std::env::consts::OS);
+        context.insert("ARCH", std::env::consts::ARCH);
+        context.insert("USER", &std::env::var("USER").unwrap_or_else(|_| "unknown".to_string()));
+        context.insert("HOSTNAME", &Config::get_hostname());
+
+        // 2. Global Config Context (Allows templates to react to LiNix settings)
+        context.insert("aliases", &self.config.aliases);
+        context.insert("groups", &self.config.groups);
+
+        tera.render("config", &context)
+            .map_err(|e| Error::Other(format!("Tera Render Error in {:?}: {}", source_path, e)))
+    }
+
     #[cfg(windows)]
-    fn is_same_drive(a: &std::path::Path, b: &std::path::Path) -> bool {
+    fn is_same_drive(a: &Path, b: &Path) -> bool {
         use std::path::Component;
         let drive_a = a.components().find(|c| matches!(c, Component::Prefix(_)));
         let drive_b = b.components().find(|c| matches!(c, Component::Prefix(_)));
@@ -25,84 +54,111 @@ impl LinkManager {
     }
 }
 
-#[async_trait]
-impl PackageManager for LinkManager {
+impl Backend for LinkManager {
     fn name(&self) -> &str { "link" }
     fn is_available(&self) -> bool { true }
+    fn as_installable(&self) -> Option<&dyn Installable> { Some(self) }
+}
 
-    async fn install_with_options(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
+#[async_trait]
+impl Installable for LinkManager {
+    /// Aligns the target file with the source (Link or Rendered Template).
+    /// Version 3.5.0 Hardening: Always checks content hash of templates to detect drift.
+    async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         for spec in specs {
             let source = PathBuf::from(&spec.name);
             let target_str = spec.options.get("target").ok_or_else(|| Error::Other("Link requires @target".into()))?;
-            let target = PathBuf::from(target_str);
+            
+            // Expand tilde manually if present
+            let target_path = if target_str.starts_with('~') {
+                dirs::home_dir().unwrap().join(&target_str[2..])
+            } else {
+                PathBuf::from(target_str)
+            };
 
-            // Ensure parent directory exists
-            if let Some(p) = target.parent() { tokio::fs::create_dir_all(p).await?; }
-
-            // 1. Handle Template Rendering
+            // 1. Template Rendering Path
             if spec.options.get("template") == Some(&"true".to_string()) {
-                info!("Rendering template: {:?} -> {:?}", source, target);
-                let content = tokio::fs::read_to_string(&source).await?;
-                let rendered = self.hooks.render_template(&content);
-                tokio::fs::write(&target, rendered).await?;
+                let rendered = self.render_template(&source)?;
+                
+                // Check if target already exists and has the same content
+                let needs_write = match self.executor.read_file(&target_path) {
+                    Ok(existing) if existing == rendered => false,
+                    _ => true,
+                };
+
+                if needs_write {
+                    info!("Link: Rendering template {:?} -> {:?}", source, target_path);
+                    self.executor.write_atomic(&target_path, &rendered)?;
+                } else {
+                    debug!("Link: Template {:?} is already up-to-date at {:?}", source, target_path);
+                }
                 continue;
             }
 
-            // 2. Clear existing target if it exists
-            if target.exists() || target.is_symlink() {
-                let _ = tokio::fs::remove_file(&target).await;
-                let _ = tokio::fs::remove_dir_all(&target).await;
-            }
-
-            // 3. Perform Linking (Platform Specific)
-            #[cfg(unix)] {
-                std::os::unix::fs::symlink(&source, &target)?;
-            }
-
-            #[cfg(windows)] {
-                // REAL LOGIC: Cross-drive symlinks are unreliable on Windows.
-                if !Self::is_same_drive(&source, &target) {
-                    warn!("Cross-drive link detected. Falling back to COPY for {:?}", source);
-                    if source.is_dir() {
-                        self.executor.run("cmd", &["/C", "xcopy", "/E", "/I", "/Y", &source.to_string_lossy(), &target.to_string_lossy()], false).await?;
-                    } else {
-                        tokio::fs::copy(&source, &target).await?;
+            // 2. Standard Symlinking Path
+            if target_path.exists() || target_path.is_symlink() {
+                // If it's already a link to the correct source, skip
+                if let Ok(existing_link) = std::fs::read_link(&target_path) {
+                    if existing_link == source {
+                        debug!("Link: Correct symlink already exists at {:?}", target_path);
+                        continue;
                     }
-                } else if source.is_dir() {
-                    // Try Symlink, fallback to Junction (Junctions don't require Admin/Dev Mode)
-                    if std::os::windows::fs::symlink_dir(&source, &target).is_err() {
-                        debug!("Symlink restricted. Using Directory Junction for {:?}", source);
-                        self.executor.run("cmd", &["/C", "mklink", "/J", &target.to_string_lossy(), &source.to_string_lossy()], false).await?;
-                    }
+                }
+
+                // If we are here, target exists but is wrong/different.
+                if self.executor.dry_run {
+                    info!("[DRY-RUN] Would remove existing file/link at {:?}", target_path);
                 } else {
-                    // Try Symlink, fallback to Hard Link (Hard Links don't require Admin)
-                    if std::os::windows::fs::symlink_file(&source, &target).is_err() {
-                        debug!("Symlink restricted. Using Hard Link for {:?}", source);
-                        tokio::fs::hard_link(&source, &target).await?;
+                    if target_path.is_dir() && !target_path.is_symlink() {
+                        std::fs::remove_dir_all(&target_path)?;
+                    } else {
+                        std::fs::remove_file(&target_path)?;
                     }
                 }
             }
-            info!("Linked: {:?} -> {:?}", source, target);
-        }
-        Ok(())
-    }
 
-    async fn install(&self, _: &[String], _: bool) -> Result<()> { Ok(()) }
+            info!("Link: Creating link {:?} -> {:?}", source, target_path);
+            if !self.executor.dry_run {
+                if let Some(p) = target_path.parent() {
+                    std::fs::create_dir_all(p)?;
+                }
 
-    async fn remove(&self, targets: &[String], _: bool) -> Result<()> {
-        for t in targets {
-            let p = PathBuf::from(t);
-            if p.exists() || p.is_symlink() {
-                if p.is_dir() { tokio::fs::remove_dir_all(p).await?; }
-                else { tokio::fs::remove_file(p).await?; }
+                #[cfg(unix)] {
+                    std::os::unix::fs::symlink(&source, &target_path)?;
+                }
+
+                #[cfg(windows)] {
+                    let source_abs = source.canonicalize().unwrap_or(source.clone());
+                    if !Self::is_same_drive(&source_abs, &target_path) {
+                        warn!("Link: Cross-drive link requested. Falling back to COPY for {:?}", source);
+                        std::fs::copy(&source, &target_path)?;
+                    } else if source.is_dir() {
+                        std::os::windows::fs::symlink_dir(&source, &target_path)?;
+                    } else {
+                        std::os::windows::fs::symlink_file(&source, &target_path)?;
+                    }
+                }
+            } else {
+                info!("[DRY-RUN] VFS: Staging link creation at {:?}", target_path);
             }
         }
         Ok(())
     }
 
-    async fn list_installed(&self) -> Result<Vec<Package>> {
-        // Link manager is state-driven; it doesn't "list" globally.
-        // Returning empty allows the SyncEngine to handle state comparison.
-        Ok(vec![])
+    async fn remove(&self, names: &[String], _: bool) -> Result<()> {
+        for name in names {
+            let path = Path::new(name);
+            if path.exists() || path.is_symlink() {
+                info!("Link: Removing link/rendered file {:?}", path);
+                if !self.executor.dry_run {
+                    if path.is_dir() && !path.is_symlink() {
+                        std::fs::remove_dir_all(path)?;
+                    } else {
+                        std::fs::remove_file(path)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }

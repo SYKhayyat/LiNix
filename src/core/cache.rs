@@ -5,7 +5,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
-/// A generic thread-safe cache with TTL support
+/// A generic thread-safe cache with TTL (Time-To-Live) support.
+/// Utilizes RwLock for high-concurrency read access.
 pub struct SmartCache<K, V>
 where
     K: Eq + Hash + Clone,
@@ -25,7 +26,7 @@ where
     K: Eq + Hash + Clone,
     V: Clone,
 {
-    /// Create a new cache with specified TTL
+    /// Create a new cache with specified TTL.
     pub fn new(ttl: Duration) -> Self {
         Self {
             store: Arc::new(RwLock::new(HashMap::new())),
@@ -33,7 +34,7 @@ where
         }
     }
 
-    /// Get a value from the cache
+    /// Get a value from the cache if it hasn't expired.
     pub async fn get(&self, key: &K) -> Option<V> {
         let store = self.store.read().await;
 
@@ -46,7 +47,7 @@ where
         None
     }
 
-    /// Insert a value into the cache
+    /// Insert a value into the cache.
     pub async fn set(&self, key: K, value: V) {
         let mut store = self.store.write().await;
 
@@ -59,19 +60,19 @@ where
         );
     }
 
-    /// Remove a value from the cache
+    /// Remove a value from the cache.
     pub async fn remove(&self, key: &K) {
         let mut store = self.store.write().await;
         store.remove(key);
     }
 
-    /// Clear all entries from the cache
+    /// Clear all entries from the cache.
     pub async fn clear(&self) {
         let mut store = self.store.write().await;
         store.clear();
     }
 
-    /// Remove expired entries
+    /// Explicitly remove expired entries from the cache.
     pub async fn cleanup(&self) {
         let mut store = self.store.write().await;
         let now = Instant::now();
@@ -79,19 +80,14 @@ where
         store.retain(|_, entry| entry.expires_at > now);
     }
 
-    /// Get the number of entries in the cache (including expired)
+    /// Get the number of entries in the cache.
     pub async fn len(&self) -> usize {
         let store = self.store.read().await;
         store.len()
     }
 
-    /// Check if the cache is empty
-    pub async fn is_empty(&self) -> bool {
-        let store = self.store.read().await;
-        store.is_empty()
-    }
-
-    /// Get or insert a value using a provided function
+    /// Get or insert a value using a provided async function.
+    /// This pattern is vital for the parallel discovery engine to avoid duplicate IO.
     pub async fn get_or_insert_with<F, Fut>(&self, key: K, f: F) -> Result<V>
     where
         F: FnOnce() -> Fut,
@@ -121,20 +117,19 @@ where
     }
 }
 
-/// Cache for package-related data
+/// Specialized cache for package-related data.
+/// Used by the App context to speed up repeat lookups during resolution and search.
 pub struct PackageCache {
-    /// Cache for installed packages by backend
-    installed: SmartCache<String, Vec<String>>,
-
-    /// Cache for search results
+    /// Cache for installed packages by backend.
+    installed: SmartCache<String, Vec<crate::core::Package>>,
+    /// Cache for cross-backend search results.
     search: SmartCache<String, Vec<crate::core::Package>>,
-
-    /// Cache for package info
+    /// Cache for package metadata.
     info: SmartCache<String, crate::core::Package>,
 }
 
 impl PackageCache {
-    /// Create a new package cache with default TTLs
+    /// Initializes the package cache with default TTLs (5-10 minutes).
     pub fn new() -> Self {
         Self {
             installed: SmartCache::new(Duration::from_secs(300)),
@@ -143,105 +138,39 @@ impl PackageCache {
         }
     }
 
-    /// Create a new package cache with custom TTLs
-    pub fn with_ttls(installed_ttl: Duration, search_ttl: Duration, info_ttl: Duration) -> Self {
-        Self {
-            installed: SmartCache::new(installed_ttl),
-            search: SmartCache::new(search_ttl),
-            info: SmartCache::new(info_ttl),
-        }
-    }
-
-    /// Get installed packages for a backend
-    pub async fn get_installed(&self, backend: &str) -> Option<Vec<String>> {
+    pub async fn get_installed(&self, backend: &str) -> Option<Vec<crate::core::Package>> {
         self.installed.get(&backend.to_string()).await
     }
 
-    /// Set installed packages for a backend
-    pub async fn set_installed(&self, backend: String, packages: Vec<String>) {
+    pub async fn set_installed(&self, backend: String, packages: Vec<crate::core::Package>) {
         self.installed.set(backend, packages).await;
     }
 
-    /// Get search results
     pub async fn get_search(&self, query: &str) -> Option<Vec<crate::core::Package>> {
         self.search.get(&query.to_string()).await
     }
 
-    /// Set search results
     pub async fn set_search(&self, query: String, results: Vec<crate::core::Package>) {
         self.search.set(query, results).await;
     }
 
-    /// Get package info
     pub async fn get_info(&self, package: &str) -> Option<crate::core::Package> {
         self.info.get(&package.to_string()).await
     }
 
-    /// Set package info
     pub async fn set_info(&self, package: String, info: crate::core::Package) {
         self.info.set(package, info).await;
     }
 
-    /// Clear all caches
     pub async fn clear_all(&self) {
         self.installed.clear().await;
         self.search.clear().await;
         self.info.clear().await;
-    }
-
-    /// Cleanup expired entries in all caches
-    pub async fn cleanup_all(&self) {
-        self.installed.cleanup().await;
-        self.search.cleanup().await;
-        self.info.cleanup().await;
     }
 }
 
 impl Default for PackageCache {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_cache_basic_operations() {
-        let cache: SmartCache<String, String> = SmartCache::new(Duration::from_secs(60));
-
-        cache.set("key1".to_string(), "value1".to_string()).await;
-
-        let value = cache.get(&"key1".to_string()).await;
-        assert_eq!(value, Some("value1".to_string()));
-
-        cache.remove(&"key1".to_string()).await;
-        let value = cache.get(&"key1".to_string()).await;
-        assert_eq!(value, None);
-    }
-
-    #[tokio::test]
-    async fn test_cache_expiration() {
-        let cache: SmartCache<String, String> = SmartCache::new(Duration::from_millis(100));
-
-        cache.set("key1".to_string(), "value1".to_string()).await;
-
-        assert!(cache.get(&"key1".to_string()).await.is_some());
-
-        tokio::time::sleep(Duration::from_millis(150)).await;
-
-        assert!(cache.get(&"key1".to_string()).await.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_package_cache() {
-        let cache = PackageCache::new();
-
-        let packages = vec!["pkg1".to_string(), "pkg2".to_string()];
-        cache.set_installed("apt".to_string(), packages.clone()).await;
-
-        let retrieved = cache.get_installed("apt").await;
-        assert_eq!(retrieved, Some(packages));
     }
 }

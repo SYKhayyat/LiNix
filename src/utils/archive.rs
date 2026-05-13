@@ -2,27 +2,54 @@ use std::fs;
 use std::path::Path;
 use crate::core::{Result, Error};
 
+/// A robust, cross-platform archive extraction utility.
+/// Supports .zip, .tar.gz, .tar.xz, and .tar.bz2 formats.
+/// Used primarily by GitHub, Web, and AppImage backends.
 pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<()> {
-    if !dest_dir.exists() { fs::create_dir_all(dest_dir)?; }
-    let file = fs::File::open(archive_path)?;
-    let name = archive_path.to_string_lossy().to_lowercase();
+    // Ensure destination exists
+    if !dest_dir.exists() { 
+        fs::create_dir_all(dest_dir)?; 
+    }
 
-    if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+    let file = fs::File::open(archive_path)?;
+    let name_lower = archive_path.to_string_lossy().to_lowercase();
+
+    debug!("Extracting archive: {:?} into {:?}", archive_path, dest_dir);
+
+    if name_lower.ends_with(".tar.gz") || name_lower.ends_with(".tgz") {
         let tar = flate2::read::GzDecoder::new(file);
-        tar::Archive::new(tar).unpack(dest_dir).map_err(Error::Io)?;
-    } else if name.ends_with(".tar.xz") {
+        let mut archive = tar::Archive::new(tar);
+        archive.unpack(dest_dir).map_err(Error::Io)?;
+    } 
+    else if name_lower.ends_with(".tar.xz") {
         let tar = xz2::read::XzDecoder::new(file);
-        tar::Archive::new(tar).unpack(dest_dir).map_err(Error::Io)?;
-    } else if name.ends_with(".tar.bz2") {
+        let mut archive = tar::Archive::new(tar);
+        archive.unpack(dest_dir).map_err(Error::Io)?;
+    } 
+    else if name_lower.ends_with(".tar.bz2") {
         let tar = bzip2::read::BzDecoder::new(file);
-        tar::Archive::new(tar).unpack(dest_dir).map_err(Error::Io)?;
-    } else if name.ends_with(".zip") {
-        let mut archive = zip::ZipArchive::new(file).map_err(|e| Error::Other(e.to_string()))?;
-        archive.extract(dest_dir).map_err(|e| Error::Other(e.to_string()))?;
-    } else {
-        // Assume direct binary
-        let target = dest_dir.join(archive_path.file_name().ok_or(Error::Parse("No filename".into()))?);
+        let mut archive = tar::Archive::new(tar);
+        archive.unpack(dest_dir).map_err(Error::Io)?;
+    } 
+    else if name_lower.ends_with(".zip") {
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| Error::Other(format!("Zip error: {}", e)))?;
+        archive.extract(dest_dir)
+            .map_err(|e| Error::Other(format!("Zip extraction failed: {}", e)))?;
+    } 
+    else {
+        // Fallback for direct binary downloads that aren't actually archives
+        let filename = archive_path.file_name()
+            .ok_or_else(|| Error::Other("Invalid archive filename".into()))?;
+        let target = dest_dir.join(filename);
         fs::copy(archive_path, target)?;
     }
+
     Ok(())
+}
+
+/// Helper to check if a file is a known archive format.
+pub fn is_archive(path: &Path) -> bool {
+    let name = path.to_string_lossy().to_lowercase();
+    [".zip", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2"].iter().any(|ext| name.ends_with(ext))
 }

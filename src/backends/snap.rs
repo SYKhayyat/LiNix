@@ -1,132 +1,138 @@
-use crate::core::{CommandExecutor, Package, PackageManager, Result, PackageSpec};
+use crate::core::{
+    Backend, CommandExecutor, Installable, Package, PackageSpec, 
+    Queryable, Result, Upgradable
+};
+use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
-use std::collections::HashMap;
+use tracing::{debug, info};
 
+/// Specialized manager for Ubuntu Snap packages.
+/// Snaps require exclusive access to the snapd socket, so all mutations
+/// use the "snap" lock key in the LockMap.
 pub struct SnapManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
 }
 
 impl SnapManager {
-    pub fn new(executor: CommandExecutor, _: Option<HashMap<String, String>>) -> Self {
-        Self { executor, available: OnceCell::new() }
+    pub fn new(executor: CommandExecutor) -> Self {
+        Self {
+            executor,
+            available: OnceCell::new(),
+        }
+    }
+}
+
+impl Backend for SnapManager {
+    fn name(&self) -> &str { "snap" }
+
+    fn is_available(&self) -> bool {
+        *self.available.get_or_init(|| self.executor.command_exists_sync("snap"))
+    }
+
+    fn as_installable(&self) -> Option<&dyn Installable> { Some(self) }
+    fn as_queryable(&self) -> Option<&dyn Queryable> { Some(self) }
+    fn as_upgradable(&self) -> Option<&dyn Upgradable> { Some(self) }
+}
+
+#[async_trait]
+impl Installable for SnapManager {
+    async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
+        for spec in specs {
+            let mut args = vec!["install".to_string()];
+            
+            // 1. Handle Classic Confinement (Security Override)
+            if spec.options.get("classic") == Some(&"true".to_string()) {
+                args.push("--classic".into());
+            }
+            
+            // 2. Handle Release Channels (e.g., beta, edge, candidate)
+            if let Some(channel) = spec.options.get("channel") {
+                args.push("--channel".into());
+                args.push(channel.clone());
+            }
+
+            args.push(spec.name.clone());
+            
+            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            info!("Snap: Installing {}...", spec.name);
+            
+            // snaps must be installed one-by-one or via the store, 
+            // and mutations are globally exclusive.
+            self.executor.run_exclusive("snap", "snap", &arg_refs, sudo).await?;
+        }
+        Ok(())
+    }
+
+    async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
+        for name in names {
+            info!("Snap: Removing {}...", name);
+            self.executor.run_exclusive("snap", "snap", &["remove", name], sudo).await?;
+        }
+        Ok(())
     }
 }
 
 #[async_trait]
-impl PackageManager for SnapManager {
-    fn name(&self) -> &str { "snap" }
-
-    fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| {
-            std::process::Command::new("snap").arg("--version").output().is_ok()
-        })
-    }
-
-    async fn install_with_options(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
-        for spec in specs {
-            let mut args = vec!["install"];
-            
-            // REAL LOGIC: Handle classic confinement if specified in config
-            // Many Snaps fail to install without this flag.
-            if spec.options.get("classic") == Some(&"true".to_string()) {
-                args.push("--classic");
-            }
-            
-            if let Some(channel) = spec.options.get("channel") {
-                args.extend(["--channel", channel]);
-            }
-
-            args.push(&spec.name);
-            self.executor.run_exclusive("snap", &args, sudo).await?;
-        }
-        Ok(())
-    }
-
-    async fn install(&self, p: &[String], sudo: bool) -> Result<()> {
-        if p.is_empty() { return Ok(()); }
-        for pkg in p {
-            self.executor.run_exclusive("snap", &["install", pkg], sudo).await?;
-        }
-        Ok(())
-    }
-
-    async fn remove(&self, p: &[String], sudo: bool) -> Result<()> {
-        if p.is_empty() { return Ok(()); }
-        for pkg in p {
-            self.executor.run_exclusive("snap", &["remove", pkg], sudo).await?;
-        }
-        Ok(())
-    }
-
+impl Queryable for SnapManager {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        // REAL LOGIC: Parse 'snap list' table
-        let out = self.executor.run_output("snap", &["list"], false).await?;
-        Ok(out.lines().skip(1).filter_map(|l| {
-            let parts: Vec<&str> = l.split_whitespace().collect();
-            if parts.len() >= 2 {
-                Some(Package {
-                    name: parts[0].to_string(),
-                    version: Some(parts[1].to_string()),
-                    backend: "snap".into(),
-                    ..Package::new("", "")
-                })
-            } else { None }
-        }).collect())
+        let output = self.executor.run_output("snap", &["list"], false).await?;
+        let mut packages = Vec::new();
+        
+        // Snap list format:
+        // Name               Version          Rev    Tracking       Publisher   Notes
+        // bare               1.0              5      latest/stable  canonical✓  base
+        // core22             20230531         766    latest/stable  canonical✓  base
+        for line in sanitize(&output).lines().skip(1) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if let (Some(name), Some(version)) = (parts.get(0), parts.get(1)) {
+                packages.push(Package::with_version(*name, *version, "snap"));
+            }
+        }
+        Ok(packages)
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
-        // NUCLEAR DELETE FIX: Filter out base system snaps.
-        // Snaps like 'core22' and 'snapd' are required for the system to function.
-        // If LiNix "drift detection" sees them, it must NOT try to uninstall them.
         let installed = self.list_installed().await?;
-        let system_snaps = ["core", "core18", "core20", "core22", "snapd", "bare", "gtk-common-themes", "gnome-3-38-2004"];
-        
+        // Filter out base runtime snaps that are system dependencies
+        let base_snaps = ["core", "core18", "core20", "core22", "snapd", "bare", "gtk-common-themes"];
         Ok(installed.into_iter()
-            .filter(|p| !system_snaps.contains(&p.name.as_str()))
+            .filter(|p| !base_snaps.contains(&p.name.as_str()))
             .collect())
     }
 
-    async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        // REAL LOGIC: Parse 'snap find' output
-        let out = self.executor.run_output("snap", &["find", query], false).await?;
-        Ok(out.lines().skip(1).filter_map(|l| {
-            let parts: Vec<&str> = l.split_whitespace().collect();
-            if parts.len() >= 3 {
-                let mut p = Package::new(parts[0], "snap");
-                p.version = Some(parts[1].to_string());
-                p.description = Some(parts[parts.len()-1].to_string());
-                Some(p)
-            } else { None }
-        }).collect())
-    }
+    async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let output = self.executor.run_output("snap", &["info", name], false).await?;
+        if output.is_empty() { return Ok(None); }
 
-    async fn info(&self, package: &str) -> Result<Option<Package>> {
-        // REAL LOGIC: Parse 'snap info' for detailed metadata
-        let out = self.executor.run_output("snap", &["info", package], false).await?;
-        if out.is_empty() { return Ok(None); }
-
-        let mut p = Package::new(package, "snap");
-        for line in out.lines() {
-            if let Some(v) = line.strip_prefix("summary:") { p.description = Some(v.trim().to_string()); }
+        let mut p = Package::new(name, "snap");
+        for line in output.lines() {
+            if let Some(v) = line.strip_prefix("summary:") { 
+                p.properties.insert("description".into(), v.trim().to_string()); 
+            }
             if let Some(v) = line.strip_prefix("installed:") { 
                 let ver = v.split_whitespace().next().unwrap_or(v);
                 p.version = Some(ver.trim().to_string()); 
             }
-            if let Some(v) = line.strip_prefix("website:") { p.repository = Some(v.trim().to_string()); }
+            if let Some(v) = line.strip_prefix("website:") { 
+                p.properties.insert("homepage".into(), v.trim().to_string()); 
+            }
         }
         Ok(Some(p))
     }
+}
 
+#[async_trait]
+impl Upgradable for SnapManager {
     async fn update(&self, sudo: bool) -> Result<()> {
-        // Snap handles its own updates, but 'refresh' forces it now
-        self.executor.run_exclusive("snap", &["refresh"], sudo).await?;
+        debug!("Snap: Refreshing all snaps...");
+        self.executor.run_exclusive("snap", "snap", &["refresh"], sudo).await?;
         Ok(())
     }
 
     async fn upgrade(&self, sudo: bool) -> Result<()> {
-        self.executor.run_exclusive("snap", &["refresh"], sudo).await?;
-        Ok(())
+        // Snap handles its own upgrade logic via refresh
+        self.update(sudo).await
     }
 }

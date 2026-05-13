@@ -1,151 +1,135 @@
-use crate::core::{CommandExecutor, Package, PackageManager, Result};
+use crate::core::{CommandExecutor, Package, Result, PackageSpec, Backend, Installable, Queryable, Upgradable};
+use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
 use std::collections::HashMap;
+use tracing::{debug, info};
 
+/// Specialized manager for Flatpak applications.
+/// Supports both --system (default) and --user scopes.
+/// Uses the LockMap key "flatpak" to serialize installation and updates.
 pub struct FlatpakManager {
     executor: CommandExecutor,
     available: OnceCell<bool>,
-    settings: Option<HashMap<String, String>>,
+    /// Backend-specific settings like default scope.
+    settings: HashMap<String, String>,
 }
 
 impl FlatpakManager {
-    pub fn new(executor: CommandExecutor, settings: Option<HashMap<String, String>>) -> Self {
-        Self { executor, available: OnceCell::new(), settings }
+    pub fn new(executor: CommandExecutor, settings: HashMap<String, String>) -> Self {
+        Self { 
+            executor, 
+            available: OnceCell::new(),
+            settings 
+        }
     }
 
-    /// Determines if we should use --user or --system (default)
-    fn is_user(&self) -> bool {
-        self.settings.as_ref()
-            .and_then(|s| s.get("user_installation"))
-            .map(|v| v == "true")
-            .unwrap_or(false)
-    }
-
+    /// Helper to determine if the manager should operate in --user or --system scope.
     fn scope_args(&self) -> Vec<&str> {
-        if self.is_user() { vec!["--user"] } else { vec!["--system"] }
+        if self.settings.get("user").map(|v| v == "true").unwrap_or(false) {
+            vec!["--user"]
+        } else {
+            vec!["--system"]
+        }
+    }
+}
+
+impl Backend for FlatpakManager {
+    fn name(&self) -> &str { "flatpak" }
+
+    fn is_available(&self) -> bool {
+        *self.available.get_or_init(|| self.executor.command_exists_sync("flatpak"))
+    }
+
+    fn as_installable(&self) -> Option<&dyn Installable> { Some(self) }
+    fn as_queryable(&self) -> Option<&dyn Queryable> { Some(self) }
+    fn as_upgradable(&self) -> Option<&dyn Upgradable> { Some(self) }
+}
+
+#[async_trait]
+impl Installable for FlatpakManager {
+    async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
+        if specs.is_empty() { return Ok(()); }
+
+        let mut args = self.scope_args();
+        // -y: assume yes, --noninteractive: don't prompt for auth if possible
+        args.extend(["install", "-y", "--noninteractive"]);
+        
+        let names: Vec<String> = specs.iter().map(|s| s.name.clone()).collect();
+        args.extend(names.iter().map(|s| s.as_str()));
+
+        info!("Flatpak: Installing {} package(s)...", specs.len());
+        // Flatpak mutations are serialized via the LockMap
+        self.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
+        Ok(())
+    }
+
+    async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
+        if names.is_empty() { return Ok(()); }
+
+        let mut args = self.scope_args();
+        args.extend(["uninstall", "-y", "--noninteractive"]);
+        args.extend(names.iter().map(|s| s.as_str()));
+
+        info!("Flatpak: Removing {} package(s)...", names.len());
+        self.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
+        Ok(())
     }
 }
 
 #[async_trait]
-impl PackageManager for FlatpakManager {
-    fn name(&self) -> &str { "flatpak" }
-
-    fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| {
-            std::process::Command::new("flatpak").arg("--version").output().is_ok()
-        })
-    }
-
-    async fn install(&self, p: &[String], s: bool) -> Result<()> {
-        if p.is_empty() { return Ok(()); }
-        let mut args = self.scope_args();
-        args.extend(["install", "-y", "--noninteractive"]);
-        args.extend(p.iter().map(|x| x.as_str()));
-        // Use sudo only if system-wide and s is true
-        self.executor.run("flatpak", &args, !self.is_user() && s).await?;
-        Ok(())
-    }
-
-    async fn remove(&self, p: &[String], s: bool) -> Result<()> {
-        if p.is_empty() { return Ok(()); }
-        let mut args = self.scope_args();
-        args.extend(["uninstall", "-y", "--noninteractive"]);
-        args.extend(p.iter().map(|x| x.as_str()));
-        self.executor.run("flatpak", &args, !self.is_user() && s).await?;
-        Ok(())
-    }
-
+impl Queryable for FlatpakManager {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        // Returns EVERYTHING (apps + runtimes/dependencies)
-        let out = self.executor.run_output("flatpak", &["list", "--columns=application,version"], false).await?;
-        Ok(out.lines().filter_map(|l| {
-            let (name, ver) = l.split_once('\t')?;
-            Some(Package { 
-                name: name.trim().to_string(), 
-                version: Some(ver.trim().to_string()), 
-                backend: "flatpak".into(), 
-                ..Package::new("", "") 
-            })
-        }).collect())
+        // We query specific columns to make parsing deterministic.
+        let out = self.executor.run_output("flatpak", &["list", "--app", "--columns=application,version"], false).await?;
+        let mut packages = Vec::new();
+
+        for line in sanitize(&out).lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                packages.push(Package::with_version(parts[0], parts[1], "flatpak"));
+            } else if !line.is_empty() {
+                packages.push(Package::new(line.trim(), "flatpak"));
+            }
+        }
+        Ok(packages)
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
-        // NUCLEAR DELETE FIX: Only returns actual applications. 
-        // Runtimes (drivers/libraries) are filtered out via --app.
-        let out = self.executor.run_output("flatpak", &["list", "--app", "--columns=application"], false).await?;
-        Ok(out.lines()
-            .filter(|l| !l.is_empty())
-            .map(|l| Package::new(l.trim(), "flatpak"))
-            .collect())
+        // Flatpak list --app essentially returns the user-installed applications.
+        self.list_installed().await
     }
 
-    async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let out = self.executor.run_output("flatpak", &["search", "--columns=application,description", query], false).await?;
-        Ok(out.lines().filter_map(|l| {
-            let (name, desc) = l.split_once('\t')?;
-            let mut p = Package::new(name.trim(), "flatpak");
-            p.description = Some(desc.trim().to_string());
-            Some(p)
-        }).collect())
+    async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let all = self.list_installed().await?;
+        Ok(all.into_iter().find(|p| p.name == name))
     }
+}
 
-    async fn info(&self, package: &str) -> Result<Option<Package>> {
-        let out = self.executor.run_output("flatpak", &["info", package], false).await?;
-        if out.is_empty() { return Ok(None); }
-        
-        let mut p = Package::new(package, "flatpak");
-        for line in out.lines() {
-            if let Some(v) = line.strip_prefix("Version: ") { p.version = Some(v.trim().to_string()); }
-            if let Some(v) = line.strip_prefix("Description: ") { p.description = Some(v.trim().to_string()); }
-        }
-        Ok(Some(p))
-    }
-
-    /// FIX: Implemented real 'remote' logic for repositories
-    async fn add_repo(&self, name: &str, url: &str, s: bool) -> Result<()> {
-        let mut args = self.scope_args();
-        args.extend(["remote-add", "--if-not-exists", name, url]);
-        self.executor.run("flatpak", &args, !self.is_user() && s).await?;
-        Ok(())
-    }
-
-    async fn remove_repo(&self, name: &str, s: bool) -> Result<()> {
-        let mut args = self.scope_args();
-        args.extend(["remote-delete", name]);
-        self.executor.run("flatpak", &args, !self.is_user() && s).await?;
-        Ok(())
-    }
-
-    async fn list_repos(&self) -> Result<Vec<(String, String)>> {
-        // Lists all remotes and their URLs
-        let out = self.executor.run_output("flatpak", &["remotes", "--columns=name,url"], false).await?;
-        Ok(out.lines().filter_map(|l| {
-            let (name, url) = l.split_once('\t')?;
-            Some((name.trim().to_string(), url.trim().to_string()))
-        }).collect())
-    }
-
-    async fn update(&self, _: bool) -> Result<()> {
-        // Flatpak update refreshes remotes and checks for metadata updates
+#[async_trait]
+impl Upgradable for FlatpakManager {
+    async fn update(&self, sudo: bool) -> Result<()> {
         let mut args = self.scope_args();
         args.push("update");
-        args.push("--appstream"); 
-        self.executor.run("flatpak", &args, false).await?;
+        // Update check
+        debug!("Flatpak: Refreshing remotes...");
+        self.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
         Ok(())
     }
 
-    async fn upgrade(&self, s: bool) -> Result<()> {
+    async fn upgrade(&self, sudo: bool) -> Result<()> {
         let mut args = self.scope_args();
         args.extend(["update", "-y", "--noninteractive"]);
-        self.executor.run("flatpak", &args, !self.is_user() && s).await?;
+        info!("Flatpak: Upgrading all applications...");
+        self.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
         Ok(())
     }
 
-    fn supports_orphan_cleanup(&self) -> bool { true }
-    async fn clean_orphans(&self, _: bool) -> Result<()> {
-        // Removes runtimes and extensions that are no longer used by any installed app
-        self.executor.run("flatpak", &["uninstall", "--unused", "-y"], false).await?;
+    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
+        let mut args = self.scope_args();
+        args.extend(["uninstall", "--unused", "-y", "--noninteractive"]);
+        info!("Flatpak: Removing unused runtimes and extensions...");
+        self.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
         Ok(())
     }
 }

@@ -1,11 +1,27 @@
 use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::Config;
-use crate::core::{CommandExecutor, PackageCache, Result, Error, manager::PackageManager, Package, StateRegistry};
+use crate::core::{
+    CommandExecutor, PackageCache, Result, Error, manager::Backend, 
+    Package, StateRegistry, PackageSpec, Validator, SnapshotManager, Journal
+};
+use crate::app::migrate::Migrator;
+use crate::app::teleport::Teleporter;
+use crate::app::shell::GhostShell;
+use crate::app::profile::ProfileManager;
+use crate::app::shim_manager::ShimManager;
+use crate::app::undo::UndoManager;
+use crate::app::bridge::DependencyBridge;
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
-use std::sync::Arc;
-use tracing::info;
-use super::{LuaHooks, MetricsCollector, SyncEngine, UniversalSearch};
 
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use std::collections::{HashMap, VecDeque, HashSet};
+use tracing::{info, debug, warn};
+use super::{LuaHooks, MetricsCollector, UniversalSearch};
+
+/// The unified Application Context for LiNix v3.3.0.
+/// This struct holds the shared state and orchestrators required for the 
+/// 20-point mission-critical roadmap.
 pub struct App {
     pub config: Config,
     pub cache: Arc<PackageCache>,
@@ -14,16 +30,24 @@ pub struct App {
     pub metrics: MetricsCollector,
     pub progress: Arc<dyn ProgressReporter>,
     pub hooks: Arc<LuaHooks>,
-    pub state: StateRegistry,
+    pub state: Arc<Mutex<StateRegistry>>,
+    pub snapshot_manager: Arc<SnapshotManager>,
+    pub journal: Arc<Mutex<Journal>>,
+    pub bridge: Arc<DependencyBridge>,
 }
 
 impl App {
+    /// Initializes the application kernel and all Phase 5/6 managers.
     pub async fn new(config: Config) -> Result<Self> {
         let executor = CommandExecutor::new(config.dry_run, config.verbose);
         let hooks = Arc::new(LuaHooks::new(&config)?);
         let registry = Arc::new(create_default_registry(executor.clone(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
-        let state = StateRegistry::load()?;
+        
+        let state = Arc::new(Mutex::new(StateRegistry::load()?));
+        let snapshot_manager = Arc::new(SnapshotManager::new(executor.clone()).await);
+        let journal = Arc::new(Mutex::new(Journal::new()?));
+        let bridge = Arc::new(DependencyBridge::new());
 
         Ok(Self {
             config,
@@ -34,44 +58,136 @@ impl App {
             progress,
             hooks,
             state,
+            snapshot_manager,
+            journal,
+            bridge,
         })
     }
 
+    /// Point 3: Accessor for the system migration engine.
+    pub fn migrator(&self) -> Migrator {
+        Migrator::new(self)
+    }
+
+    /// Point 5: Accessor for the cross-backend teleportation engine.
+    pub fn teleporter(&self) -> Teleporter {
+        Teleporter::new(self)
+    }
+
+    /// Point 19/20: Accessor for ephemeral environments and local directives.
+    pub fn shell(&self) -> GhostShell {
+        GhostShell::new(self)
+    }
+
+    /// Point 18: Accessor for contextual identity (profile) switching.
+    pub fn profile_manager(&self) -> ProfileManager {
+        ProfileManager::new(self)
+    }
+
+    /// Point 6: Accessor for high-performance Rust shim deployment.
+    pub fn shim_manager(&self) -> Result<ShimManager> {
+        ShimManager::new()
+    }
+
+    /// Point 12: Accessor for the Snapshot Gallery (Time Travel).
+    pub fn undo_manager(&self) -> UndoManager {
+        UndoManager::new(self)
+    }
+
+    /// Point 10: Logic for Priority-Based Probing and recursive resolution.
+    pub async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
+        let mut resolved = Vec::new();
+        let mut queue = VecDeque::new();
+        let mut seen = HashSet::new();
+
+        // Initialize the resolver
+        let resolver = crate::app::sync::resolver::StateResolver::new(&self.config, self.registry.clone());
+        queue.push_back(resolver.parse_and_probe_spec(spec_str).await?);
+
+        while let Some(spec) = queue.pop_front() {
+            let key = format!("{}:{}", spec.backend, spec.name);
+            if !seen.insert(key) {
+                continue;
+            }
+
+            Validator::validate_package_name(&spec.name)?;
+
+            for req in &spec.requires {
+                queue.push_back(resolver.parse_and_probe_spec(req).await?);
+            }
+
+            resolved.push(spec);
+        }
+
+        Ok(resolved)
+    }
+
+    /// Point 3.3: Performs a drift audit to identify unmanaged manual packages.
+    pub async fn get_unmanaged_packages(&self) -> Result<Vec<Package>> {
+        let mut unmanaged = Vec::new();
+        let state = self.state.lock().await;
+        
+        for backend in self.registry.available() {
+            if let Some(queryable) = backend.as_queryable() {
+                let installed = queryable.list_installed().await?;
+                for pkg in installed {
+                    if !state.is_managed(backend.name(), &pkg.name) {
+                        unmanaged.push(pkg);
+                    }
+                }
+            }
+        }
+        Ok(unmanaged)
+    }
+
+    /// Triggers repository metadata refreshes across all backends.
     pub async fn update(&self) -> Result<()> {
-        for manager in self.registry.available() {
-            info!("Refreshing {} repository...", manager.name());
-            manager.update(true).await?;
+        for backend in self.registry.available() {
+            if let Some(upgradable) = backend.as_upgradable() {
+                info!("Updating {} metadata...", backend.name());
+                upgradable.update(true).await?;
+            }
         }
         Ok(())
     }
 
+    /// Point 12: High-level upgrade with automatic safety snapshot.
     pub async fn upgrade(&self) -> Result<()> {
-        for manager in self.registry.available() {
-            info!("Upgrading packages via {}...", manager.name());
-            manager.upgrade(true).await?;
+        let _snapshot = self.snapshot_manager.auto_snapshot("pre_upgrade").await?;
+
+        for backend in self.registry.available() {
+            if let Some(upgradable) = backend.as_upgradable() {
+                info!("Upgrading {} packages...", backend.name());
+                upgradable.upgrade(true).await?;
+            }
         }
         self.metrics.print_summary();
         Ok(())
     }
 
-    pub async fn list(&self, backend: Option<&str>) -> Result<Vec<Package>> {
+    /// Aggregates installed packages for display.
+    pub async fn list(&self, backend_filter: Option<&str>) -> Result<Vec<Package>> {
         let mut all = Vec::new();
-        if let Some(b) = backend {
-            let mgr = self.registry.get(b).ok_or(Error::BackendNotFound(b.into()))?;
-            all.extend(mgr.list_installed().await?);
+        if let Some(name) = backend_filter {
+            let b = self.registry.get(name).ok_or_else(|| Error::BackendNotFound(name.into()))?;
+            if let Some(queryable) = b.as_queryable() {
+                all.extend(queryable.list_installed().await?);
+            }
         } else {
-            for mgr in self.registry.available() {
-                all.extend(mgr.list_installed().await?);
+            for b in self.registry.available() {
+                if let Some(queryable) = b.as_queryable() {
+                    all.extend(queryable.list_installed().await?);
+                }
             }
         }
         Ok(all)
     }
 
-    pub async fn orphans(&self) -> Result<()> {
-        for manager in self.registry.available() {
-            if manager.supports_orphan_cleanup() {
-                info!("Cleaning unused dependencies for {}...", manager.name());
-                manager.clean_orphans(true).await?;
+    pub async fn clean_orphans(&self) -> Result<()> {
+        for backend in self.registry.available() {
+            if let Some(upgradable) = backend.as_upgradable() {
+                info!("Cleaning orphans for {}...", backend.name());
+                upgradable.clean_orphans(true).await?;
             }
         }
         Ok(())
@@ -82,64 +198,19 @@ impl App {
         searcher.search(query).await
     }
 
-    pub async fn get_info(&self, package: &str) -> Result<Option<Package>> {
-        for mgr in self.registry.available() {
-            if let Ok(Some(pkg)) = mgr.info(package).await {
-                return Ok(Some(pkg));
+    pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
+        for backend in self.registry.available() {
+            if let Some(queryable) = backend.as_queryable() {
+                if let Ok(Some(pkg)) = queryable.info(package_name).await {
+                    return Ok(Some(pkg));
+                }
             }
         }
         Ok(None)
     }
 
-    pub async fn teleport(&self, package: &str, target_backend: &str) -> Result<()> {
-        info!("Teleporting {} to {}...", package, target_backend);
-        let mut source_backend = None;
-        for manager in self.registry.available() {
-            if let Ok(inst) = manager.list_installed().await {
-                if inst.iter().any(|p| p.name == package) {
-                    source_backend = Some(manager.name().to_string());
-                    break;
-                }
-            }
-        }
-        let src = source_backend.ok_or_else(|| Error::Other(format!("Package {} not found", package)))?;
-        let target_mgr = self.registry.get(target_backend).ok_or_else(|| Error::BackendNotFound(target_backend.into()))?;
-        self.registry.get(&src).unwrap().remove(&[package.to_string()], true).await?;
-        target_mgr.install(&[package.to_string()], true).await?;
-        Ok(())
-    }
-
-    pub async fn create_shim(&self, binary: &str, source_spec: &str) -> Result<()> {
-        let bin_dir = dirs::home_dir().unwrap_or_default().join(".local").join("bin");
-        let shim_path = bin_dir.join(binary);
-        let content = format!("#!/bin/sh\nlinix run --packages \"{}\" --command \"{} $@\"", source_spec, binary);
-        tokio::fs::create_dir_all(&bin_dir).await?;
-        tokio::fs::write(&shim_path, content).await?;
-        #[cfg(unix)] {
-            use std::os::unix::fs::PermissionsExt;
-            tokio::fs::set_permissions(&shim_path, std::fs::Permissions::from_mode(0o755)).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn run_ephemeral(&self, package_urls: Vec<String>, command: &str) -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let bin_dir = temp_dir.path().join("bin");
-        tokio::fs::create_dir_all(&bin_dir).await?;
-        let web_manager = crate::backends::web::WebManager::new(self.executor.clone(), None);
-        let specs: Vec<crate::core::PackageSpec> = package_urls.into_iter().map(|u| {
-            let mut options = std::collections::HashMap::new();
-            options.insert("type".to_string(), "program".to_string());
-            crate::core::PackageSpec { name: u, backend: "web".into(), options }
-        }).collect();
-        web_manager.install_with_options(&specs, false).await?;
-
-        let shell = if cfg!(windows) { "cmd" } else { "sh" };
-        let arg = if cfg!(windows) { "/C" } else { "-c" };
-        let mut child = tokio::process::Command::new(shell).arg(arg).arg(command)
-            .env("PATH", format!("{}:{}", bin_dir.to_string_lossy(), std::env::var("PATH").unwrap_or_default()))
-            .spawn().map_err(|e| Error::Other(e.to_string()))?;
-        child.wait().await?;
-        Ok(())
+    pub async fn create_shim(&self, binary_name: &str, source_spec: &str) -> Result<()> {
+        let manager = self.shim_manager()?;
+        manager.create_shim(binary_name, source_spec).await
     }
 }
