@@ -1,7 +1,9 @@
 use crate::core::{Backend, Package, PackageSpec, Result, Error, StateRegistry, GraphAction, ManagedPackage};
 use crate::backends::BackendRegistry;
+use crate::config::Config;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::path::Path;
 use tracing::{info, debug, warn};
 use version_compare::{Cmp, compare as loose_compare};
 use semver::{Version, VersionReq};
@@ -9,6 +11,9 @@ use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableDiGraph;
 use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::Direction;
+use sha2::{Sha256, Digest};
+use std::fs::File;
+use std::io::{BufReader, Read};
 
 /// A high-performance synchronization plan represented as a Directed Acyclic Graph (DAG).
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
@@ -33,15 +38,17 @@ impl SyncChanges {
 }
 
 /// The brain of the LiNix engine. Calculates the delta between current and desired state.
-/// Hardened for Version 3.5.0 with Global Dependency Tracking and Orphan Pruning.
+/// Hardened for Version 3.5.0 with Global Dependency Tracking, Orphan Pruning, and
+/// FIX #17: Complete implementations for template_needs_update, bloatware integration, and max_parallel.
 pub struct ChangePlanner<'a> {
     registry: Arc<BackendRegistry>,
     state: &'a StateRegistry,
+    config: &'a Config,
 }
 
 impl<'a> ChangePlanner<'a> {
-    pub fn new(registry: Arc<BackendRegistry>, state: &'a StateRegistry) -> Self {
-        Self { registry, state }
+    pub fn new(registry: Arc<BackendRegistry>, state: &'a StateRegistry, config: &'a Config) -> Self {
+        Self { registry, state, config }
     }
 
     /// Calculates exactly what needs to be changed and organizes it into a DAG.
@@ -52,7 +59,6 @@ impl<'a> ChangePlanner<'a> {
         let mut changes = SyncChanges::default();
         
         // 1. Build a Reachability Map for the entire desired state (Global GC)
-        // This ensures a package is not pruned if another backend "requires" it.
         let mut reachable_specs: HashMap<String, PackageSpec> = HashMap::new();
         let mut queue: VecDeque<PackageSpec> = desired.values().flatten().cloned().collect();
 
@@ -61,11 +67,9 @@ impl<'a> ChangePlanner<'a> {
             if reachable_specs.contains_key(&key) { continue; }
             reachable_specs.insert(key.clone(), spec.clone());
 
-            // Resolve meta-dependencies that might not be in the initial desired list
             for req in &spec.requires {
                 if !reachable_specs.contains_key(req) {
-                    // Logic to find spec for req would normally happen in StateResolver,
-                    // but here we assume desired state is already fully resolved.
+                    // Logic to find spec for req would normally happen in StateResolver
                 }
             }
         }
@@ -77,7 +81,25 @@ impl<'a> ChangePlanner<'a> {
             changes.graph.add_node(GraphAction::Remove { name, backend });
         }
 
-        // 3. Identify required installations and upgrades
+        // 3. FIX #17: Load bloatware packages and schedule for removal
+        if self.config.remove_bloatware {
+            let bloatware = self.load_bloatware().await?;
+            for pkg_str in bloatware {
+                let (backend, name) = if pkg_str.contains(':') {
+                    let parts: Vec<&str> = pkg_str.splitn(2, ':').collect();
+                    (parts[0].to_string(), parts[1].to_string())
+                } else {
+                    (self.config.default_backend.clone().unwrap_or_else(|| "apt".to_string()), pkg_str)
+                };
+                
+                if self.state.is_managed(&backend, &name) {
+                    info!("Planner: Bloatware '{}:{}' found in managed state. Scheduling removal.", backend, name);
+                    changes.graph.add_node(GraphAction::Remove { name: name.clone(), backend: backend.clone() });
+                }
+            }
+        }
+
+        // 4. Identify required installations and upgrades
         let mut target_specs = Vec::new();
         for spec in reachable_specs.values() {
             if let Some(backend) = self.registry.get(&spec.backend) {
@@ -90,14 +112,13 @@ impl<'a> ChangePlanner<'a> {
                 let current = installed.iter().find(|p| p.name == spec.name);
                 let needs_action = match current {
                     Some(p) => {
-                        // SemVer Constraint Matching
                         if let Some(req_str) = spec.options.get("version") {
                             if let Some(ref inst_v_str) = p.version {
                                 !self.satisfies_constraint(inst_v_str, req_str)
                             } else { true }
                         } else { 
-                            // Phase 5: Template Hash Check for LinkManager
                             if spec.backend == "link" && spec.options.get("template") == Some(&"true".to_string()) {
+                                // FIX #17: Proper template hash comparison
                                 self.template_needs_update(spec).await
                             } else {
                                 false 
@@ -113,14 +134,14 @@ impl<'a> ChangePlanner<'a> {
             }
         }
 
-        // 4. Build DAG Nodes for Installations
+        // 5. Build DAG Nodes for Installations
         for spec in &target_specs {
             let key = format!("{}:{}", spec.backend, spec.name);
             let idx = changes.graph.add_node(GraphAction::Install(spec.clone()));
             changes.node_map.insert(key, idx);
         }
 
-        // 5. Resolve DAG Edges (Meta-dependencies)
+        // 6. Resolve DAG Edges (Meta-dependencies)
         for spec in &target_specs {
             let child_key = format!("{}:{}", spec.backend, spec.name);
             let child_idx = *changes.node_map.get(&child_key).unwrap();
@@ -132,13 +153,12 @@ impl<'a> ChangePlanner<'a> {
             }
         }
 
-        // 6. Identify Global Drift (Managed packages no longer needed)
-        // Hardened for v3.5.0: Package is only an orphan if it's not in reachable_specs.
+        // 7. Identify Global Drift (Managed packages no longer needed)
         for managed in &self.state.packages {
             let key = format!("{}:{}", managed.backend, managed.name);
             
             if !reachable_specs.contains_key(&key) && !self.is_protected_package(&managed.name) {
-                // If it's not in the plan already (for removal via lease), add it.
+                // Skip if already scheduled for removal (e.g., via bloatware)
                 if !changes.node_map.contains_key(&key) {
                     debug!("Planner: Managed package '{}' has drifted from manifests. Scheduling removal.", key);
                     changes.graph.add_node(GraphAction::Remove { 
@@ -149,7 +169,7 @@ impl<'a> ChangePlanner<'a> {
             }
         }
 
-        // 7. Safety Check
+        // 8. Safety Check
         if is_cyclic_directed(&changes.graph) {
             return Err(Error::Transaction("Circular dependency detected in graph construction".into()));
         }
@@ -157,17 +177,96 @@ impl<'a> ChangePlanner<'a> {
         Ok(changes)
     }
 
-    /// Point 5: Checks if a rendered Tera template is stale by comparing hashes.
+    /// FIX #17: Properly checks if a rendered Tera template is stale by comparing hashes.
     async fn template_needs_update(&self, spec: &PackageSpec) -> bool {
-        let target_path = spec.options.get("target").map(std::path::Path::new);
-        if let Some(path) = target_path {
-            if !path.exists() { return true; }
-            
-            // Logic to compare against a stored hash in the properties would go here.
-            // For now, we assume if it's a template, we re-verify it.
+        let target_path = spec.options.get("target").map(Path::new);
+        let source_path = Path::new(&spec.name);
+        
+        let target_path = match target_path {
+            Some(p) => p,
+            None => {
+                warn!("Link template {} missing @target option", spec.name);
+                return true;
+            }
+        };
+        
+        // If target doesn't exist, definitely needs update
+        if !target_path.exists() {
+            debug!("Link template: target {:?} does not exist, needs update", target_path);
             return true;
         }
-        false
+        
+        // Read source template content
+        let source_content = match std::fs::read_to_string(source_path) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Link template: failed to read source {:?}: {}", source_path, e);
+                return true;
+            }
+        };
+        
+        // Read target rendered content
+        let target_content = match std::fs::read_to_string(target_path) {
+            Ok(c) => c,
+            Err(e) => {
+                debug!("Link template: failed to read target {:?}: {}", target_path, e);
+                return true;
+            }
+        };
+        
+        // Compare content directly (simple approach)
+        if source_content == target_content {
+            debug!("Link template: {:?} -> {:?} is up to date", source_path, target_path);
+            return false;
+        }
+        
+        // Also compare SHA256 hashes for confidence
+        let source_hash = self.compute_hash(source_path);
+        let target_hash = self.compute_hash(target_path);
+        
+        let needs_update = source_hash != target_hash;
+        if needs_update {
+            debug!("Link template: {:?} -> {:?} has changed, needs update", source_path, target_path);
+        } else {
+            debug!("Link template: {:?} -> {:?} is up to date (hash match)", source_path, target_path);
+        }
+        
+        needs_update
+    }
+    
+    /// Computes SHA256 hash of a file.
+    fn compute_hash(&self, path: &Path) -> Option<String> {
+        let file = File::open(path).ok()?;
+        let mut reader = BufReader::new(file);
+        let mut hasher = Sha256::new();
+        let mut buffer = [0; 8192];
+        
+        loop {
+            let bytes_read = reader.read(&mut buffer).ok()?;
+            if bytes_read == 0 { break; }
+            hasher.update(&buffer[..bytes_read]);
+        }
+        
+        Some(hex::encode(hasher.finalize()))
+    }
+
+    /// FIX #17: Loads bloatware packages from the configured bloatware file.
+    async fn load_bloatware(&self) -> Result<Vec<String>> {
+        let bloatware_path = &self.config.bloatware_file;
+        if !bloatware_path.exists() {
+            debug!("Bloatware file not found at {:?}", bloatware_path);
+            return Ok(Vec::new());
+        }
+        
+        let content = tokio::fs::read_to_string(bloatware_path).await?;
+        let packages: Vec<String> = content.lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(|l| l.to_string())
+            .collect();
+        
+        debug!("Loaded {} bloatware packages from {:?}", packages.len(), bloatware_path);
+        Ok(packages)
     }
 
     fn satisfies_constraint(&self, installed: &str, constraint: &str) -> bool {
@@ -193,11 +292,85 @@ impl<'a> ChangePlanner<'a> {
     }
 
     fn is_protected_package(&self, name: &str) -> bool {
-        let protected = [
-            "linux-image", "kernel", "libc6", "sudo", "bash", "systemd", 
-            "winget", "grub", "coreutils", "filesystem", "apt", "pacman", "dnf", "linix"
-        ];
-        let n_lower = name.to_lowercase();
-        protected.iter().any(|&p| n_lower.contains(p))
+        self.config.is_protected(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use tempfile::tempdir;
+    use std::fs;
+
+    #[tokio::test]
+    async fn test_template_needs_update() {
+        let config = Config::default();
+        let registry = Arc::new(BackendRegistry::new());
+        let state = StateRegistry::default();
+        let planner = ChangePlanner::new(registry, &state, &config);
+        
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("source.tpl");
+        let target_path = dir.path().join("target.txt");
+        
+        fs::write(&source_path, "hello world").unwrap();
+        
+        let mut options = HashMap::new();
+        options.insert("target".to_string(), target_path.to_string_lossy().to_string());
+        options.insert("template".to_string(), "true".to_string());
+        
+        let spec = PackageSpec {
+            name: source_path.to_string_lossy().to_string(),
+            backend: "link".to_string(),
+            options,
+            requires: vec![],
+        };
+        
+        // Target doesn't exist yet
+        assert!(planner.template_needs_update(&spec).await);
+        
+        // Create target with different content
+        fs::write(&target_path, "hello world!").unwrap();
+        assert!(planner.template_needs_update(&spec).await);
+        
+        // Create target with matching content
+        fs::write(&target_path, "hello world").unwrap();
+        assert!(!planner.template_needs_update(&spec).await);
+    }
+    
+    #[tokio::test]
+    async fn test_load_bloatware() {
+        let mut config = Config::default();
+        let dir = tempdir().unwrap();
+        let bloatware_path = dir.path().join("bloatware.txt");
+        config.bloatware_file = bloatware_path.clone();
+        config.remove_bloatware = true;
+        
+        fs::write(&bloatware_path, "# Comment\ntelemetry\nadware\n# Another comment\nspyware").unwrap();
+        
+        let registry = Arc::new(BackendRegistry::new());
+        let state = StateRegistry::default();
+        let planner = ChangePlanner::new(registry, &state, &config);
+        
+        let bloatware = planner.load_bloatware().await.unwrap();
+        assert_eq!(bloatware, vec!["telemetry", "adware", "spyware"]);
+    }
+    
+    #[test]
+    fn test_compute_hash() {
+        let config = Config::default();
+        let registry = Arc::new(BackendRegistry::new());
+        let state = StateRegistry::default();
+        let planner = ChangePlanner::new(registry, &state, &config);
+        
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.txt");
+        fs::write(&path, "hello world").unwrap();
+        
+        let hash = planner.compute_hash(&path);
+        assert!(hash.is_some());
+        // SHA256 of "hello world" (no newline)
+        assert_eq!(hash.unwrap(), "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9");
     }
 }

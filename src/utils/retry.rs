@@ -25,7 +25,6 @@ impl Default for RetryConfig {
 }
 
 impl RetryConfig {
-    /// Configuration for quick, high-frequency retries.
     pub fn quick() -> Self {
         Self {
             max_attempts: 3,
@@ -35,7 +34,6 @@ impl RetryConfig {
         }
     }
 
-    /// Configuration for persistent retries on unreliable connections.
     pub fn persistent() -> Self {
         Self {
             max_attempts: 5,
@@ -47,8 +45,6 @@ impl RetryConfig {
 }
 
 /// Retries a fallible async operation with exponential backoff.
-/// This is used by the high-performance engine to ensure that transient 
-/// IO errors don't crash long-running system transactions.
 pub async fn retry<F, Fut, T, E>(config: RetryConfig, mut operation: F) -> std::result::Result<T, E>
 where
     F: FnMut() -> Fut,
@@ -84,7 +80,6 @@ where
 
                 sleep(delay).await;
 
-                // Calculate next delay using multiplier, capped at max_delay
                 delay = Duration::from_secs_f64(
                     (delay.as_secs_f64() * config.backoff_multiplier)
                         .min(config.max_delay.as_secs_f64()),
@@ -122,7 +117,6 @@ where
         }
     }
 
-    // Safety: at least one attempt is made, so last_error will be Some if we get here.
     Err(last_error.expect("At least one retry attempt failed"))
 }
 
@@ -148,6 +142,23 @@ mod tests {
         })
         .await;
 
+        assert_eq!(result.unwrap(), 42);
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
+    }
+    
+    #[test]
+    fn test_retry_sync_eventual_success() {
+        let counter = AtomicU32::new(0);
+        
+        let result = retry_sync(3, || {
+            let attempt = counter.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt < 3 {
+                Err("temporary failure")
+            } else {
+                Ok(42)
+            }
+        });
+        
         assert_eq!(result.unwrap(), 42);
         assert_eq!(counter.load(Ordering::SeqCst), 3);
     }

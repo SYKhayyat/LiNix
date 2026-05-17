@@ -19,6 +19,18 @@ pub async fn command_exists(cmd: &str) -> bool {
     }
 }
 
+/// Synchronous version for use in non-async contexts.
+pub fn command_exists_sync(cmd: &str) -> bool {
+    let check_bin = if cfg!(windows) { "where" } else { "which" };
+    std::process::Command::new(check_bin)
+        .arg(cmd)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 /// Attempts to retrieve the version of a command by executing it with '--version'.
 pub async fn get_command_version(cmd: &str) -> Option<String> {
     let output = Command::new(cmd)
@@ -36,29 +48,6 @@ pub async fn get_command_version(cmd: &str) -> Option<String> {
         }
     } else {
         None
-    }
-}
-
-/// Executes a simple command and returns its standard output as a String.
-/// This utility is intended for simple queries; for system-modifying operations, 
-/// use the CommandExecutor.
-pub async fn run_simple(cmd: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new(cmd)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await?;
-
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(Error::CommandFailed(format!(
-            "Simple command '{}' failed: {}",
-            cmd,
-            stderr.trim()
-        )))
     }
 }
 

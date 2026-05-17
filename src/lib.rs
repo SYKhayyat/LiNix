@@ -15,7 +15,8 @@ pub mod utils;
 pub use app::App;
 pub use config::Config;
 pub use core::error::{Error, Result};
-pub use core::manager::Backend;
+pub use core::manager::BackendCore;
+pub use core::transaction::TransactionConfig;
 
 /// LiNix Version Identifier
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

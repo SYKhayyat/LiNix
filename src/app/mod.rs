@@ -13,6 +13,8 @@ pub mod shell;
 pub mod profile;
 pub mod ui;
 
+// Note: state.rs has been removed - use core::StateRegistry instead
+
 // Re-export the primary application kernel (The Dependency Injector)
 pub use self::context::App;
 

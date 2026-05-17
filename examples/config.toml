@@ -1,4 +1,4 @@
-# LiNix Configuration File - Version 3.2.0 (High-Performance Engine)
+# LiNix Configuration File - Version 3.5.0 (High-Performance Engine)
 # 
 # Copy this to ~/.config/linix/config.toml and modify as needed.
 
@@ -16,7 +16,6 @@ groups_dir = "~/.config/linix/groups"
 backend_priority = ["apt", "pacman", "dnf", "winget", "brew", "flatpak", "snap", "cargo", "npm", "pip"]
 
 # Maximum number of parallel operations (Phase 2.3).
-# Adjust this based on your network bandwidth and CPU cores.
 max_parallel = 8
 
 # Cache TTL (Time-to-Live) in seconds for remote metadata lookups.
@@ -38,6 +37,16 @@ verbose = false
 # Default backend to use when no prefix is provided (e.g. "curl" vs "apt:curl").
 default_backend = "apt"
 
+# FIX #12: Protected packages that LiNix will never remove.
+# These are critical system packages. Add or remove as needed for your distribution.
+protected_packages = [
+    "sudo", "bash", "linix",
+    "linux-image", "linux-headers", "kernel",
+    "systemd", "libc6", "glibc",
+    "grub", "coreutils", "filesystem",
+    "apt", "pacman", "dnf", "rpm"
+]
+
 # Backend Aliases
 [aliases]
 sys = "apt"
@@ -45,21 +54,17 @@ web = "web"
 ext = "vscode"
 
 # Hostname-specific packages
-# Packages listed here will only be installed on the machine with the matching hostname.
 [hostname_packages]
 # workstation = ["docker", "kubernetes-cli", "terraform"]
 # gaming-pc = ["steam", "discord", "nvidia-settings"]
 
 # Scripting Hooks (Phase 4.1)
-# Supports Lua (default) and Rhai (start script with '#rhai').
 [hooks.before_install]
-# Catch-all hook for any package installation
 "*" = '''
 print("Starting installation of " .. PKG_NAME)
 '''
 
 [hooks.after_install]
-# High-performance Rhai hook for Docker
 docker = '''
 #rhai
 print("Enabling Docker system service via Rhai...");
@@ -68,12 +73,11 @@ exec("systemctl start docker");
 '''
 
 [hooks.before_sync]
-# Custom logic before starting a DAG-based sync
 "*" = "print('LiNix is calculating system delta...')"
 
 # Backend-Specific Settings
 [backend_settings.flatpak]
-user = "true"  # Install Flatpaks in the user scope instead of system-wide
+user = "true"
 
 [backend_settings.github]
 # token = "ghp_your_personal_access_token_for_higher_limits"

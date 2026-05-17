@@ -32,6 +32,8 @@ pub struct TuiPreview<'a> {
     pub backend_overrides: HashMap<NodeIndex, String>,
     /// List of available backend candidates for specific nodes.
     pub alternatives: HashMap<NodeIndex, Vec<String>>,
+    /// Maps UI list positions to actual NodeIndex (fixes issue #3)
+    pub ui_index_to_node: Vec<NodeIndex>,
     list_state: ListState,
 }
 
@@ -39,13 +41,30 @@ impl<'a> TuiPreview<'a> {
     pub fn new(changes: &'a SyncChanges, alternatives: HashMap<NodeIndex, Vec<String>>) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
+        
+        // Build mapping from UI position (0..N) to actual NodeIndex
+        let ui_index_to_node: Vec<NodeIndex> = changes.graph.node_indices().collect();
+        
         Self {
             changes,
             disabled_nodes: HashSet::new(),
             backend_overrides: HashMap::new(),
             alternatives,
+            ui_index_to_node,
             list_state,
         }
+    }
+    
+    /// Helper to get NodeIndex from current UI selection
+    fn get_selected_node(&self) -> Option<NodeIndex> {
+        self.list_state
+            .selected()
+            .and_then(|i| self.ui_index_to_node.get(i).copied())
+    }
+    
+    /// Helper to get UI position from NodeIndex
+    fn get_ui_position(&self, node_idx: NodeIndex) -> Option<usize> {
+        self.ui_index_to_node.iter().position(|&idx| idx == node_idx)
     }
 
     /// Entry point to launch the TUI. 
@@ -108,13 +127,15 @@ impl<'a> TuiPreview<'a> {
             .block(Block::default().borders(Borders::ALL).title("Status"));
         f.render_widget(header, chunks[0]);
 
-        // 2. Action List
-        let items: Vec<ListItem> = self.changes.graph.node_indices()
-            .map(|idx| {
-                let action = &self.changes.graph[idx];
-                let is_disabled = self.disabled_nodes.contains(&idx);
-                let user_backend = self.backend_overrides.get(&idx);
-                let has_alternatives = self.alternatives.get(&idx);
+        // 2. Action List - Build items using the UI index mapping
+        let items: Vec<ListItem> = self.ui_index_to_node
+            .iter()
+            .enumerate()
+            .map(|(ui_idx, &node_idx)| {
+                let action = &self.changes.graph[node_idx];
+                let is_disabled = self.disabled_nodes.contains(&node_idx);
+                let user_backend = self.backend_overrides.get(&node_idx);
+                let has_alternatives = self.alternatives.get(&node_idx);
 
                 let (indicator, mut text, style) = match action {
                     GraphAction::Install(spec) => {
@@ -166,7 +187,10 @@ impl<'a> TuiPreview<'a> {
 
     fn next(&mut self) {
         let i = match self.list_state.selected() {
-            Some(i) => if i >= self.changes.graph.node_count() - 1 { 0 } else { i + 1 },
+            Some(i) => {
+                let total = self.ui_index_to_node.len();
+                if i >= total - 1 { 0 } else { i + 1 }
+            }
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -174,15 +198,17 @@ impl<'a> TuiPreview<'a> {
 
     fn previous(&mut self) {
         let i = match self.list_state.selected() {
-            Some(i) => if i == 0 { self.changes.graph.node_count() - 1 } else { i - 1 },
+            Some(i) => {
+                let total = self.ui_index_to_node.len();
+                if i == 0 { total - 1 } else { i - 1 }
+            }
             None => 0,
         };
         self.list_state.select(Some(i));
     }
 
     fn toggle_selected(&mut self) {
-        if let Some(i) = self.list_state.selected() {
-            let node_idx = NodeIndex::new(i);
+        if let Some(node_idx) = self.get_selected_node() {
             if self.disabled_nodes.contains(&node_idx) {
                 self.disabled_nodes.remove(&node_idx);
             } else {
@@ -193,8 +219,7 @@ impl<'a> TuiPreview<'a> {
 
     /// Point 7: Cycle through available backend candidates for a bare name.
     fn cycle_backend(&mut self) {
-        if let Some(i) = self.list_state.selected() {
-            let node_idx = NodeIndex::new(i);
+        if let Some(node_idx) = self.get_selected_node() {
             if let Some(alts) = self.alternatives.get(&node_idx) {
                 if alts.len() <= 1 { return; }
 
@@ -217,5 +242,147 @@ impl<'a> TuiPreview<'a> {
                 }
             }
         }
+    }
+    
+    /// Returns the filtered changes based on user selections.
+    pub fn get_filtered_changes(&self) -> SyncChanges {
+        let mut filtered = self.changes.clone();
+        for idx in &self.disabled_nodes {
+            filtered.graph.remove_node(*idx);
+        }
+        filtered
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use petgraph::stable_graph::StableDiGraph;
+    use std::collections::HashMap;
+
+    fn create_test_changes() -> SyncChanges {
+        let mut graph = StableDiGraph::new();
+        let spec = PackageSpec {
+            name: "test".to_string(),
+            backend: "apt".to_string(),
+            options: HashMap::new(),
+            requires: vec![],
+        };
+        graph.add_node(GraphAction::Install(spec));
+        SyncChanges {
+            graph,
+            node_map: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_ui_index_mapping() {
+        let changes = create_test_changes();
+        let alternatives = HashMap::new();
+        let preview = TuiPreview::new(&changes, alternatives);
+        
+        assert_eq!(preview.ui_index_to_node.len(), 1);
+        assert!(preview.get_ui_position(preview.ui_index_to_node[0]).is_some());
+        assert!(preview.get_selected_node().is_some());
+    }
+    
+    #[test]
+    fn test_toggle_selected() {
+        let changes = create_test_changes();
+        let alternatives = HashMap::new();
+        let mut preview = TuiPreview::new(&changes, alternatives);
+        
+        // Select the first item
+        preview.list_state.select(Some(0));
+        
+        let node_idx = preview.get_selected_node().unwrap();
+        assert!(!preview.disabled_nodes.contains(&node_idx));
+        
+        preview.toggle_selected();
+        assert!(preview.disabled_nodes.contains(&node_idx));
+        
+        preview.toggle_selected();
+        assert!(!preview.disabled_nodes.contains(&node_idx));
+    }
+    
+    #[test]
+    fn test_navigation_wrapping() {
+        let changes = create_test_changes();
+        let alternatives = HashMap::new();
+        let mut preview = TuiPreview::new(&changes, alternatives);
+        
+        // With only one item, next and previous should keep it at 0
+        preview.next();
+        assert_eq!(preview.list_state.selected(), Some(0));
+        
+        preview.previous();
+        assert_eq!(preview.list_state.selected(), Some(0));
+    }
+    
+    #[test]
+    fn test_cycle_backend() {
+        let mut graph = StableDiGraph::new();
+        let spec = PackageSpec {
+            name: "test".to_string(),
+            backend: "apt".to_string(),
+            options: HashMap::new(),
+            requires: vec![],
+        };
+        let node_idx = graph.add_node(GraphAction::Install(spec));
+        
+        let changes = SyncChanges {
+            graph,
+            node_map: HashMap::new(),
+        };
+        
+        let mut alternatives = HashMap::new();
+        alternatives.insert(node_idx, vec!["apt".to_string(), "brew".to_string(), "cargo".to_string()]);
+        
+        let mut preview = TuiPreview::new(&changes, alternatives);
+        preview.list_state.select(Some(0));
+        
+        // Should cycle through backends
+        preview.cycle_backend();
+        assert_eq!(preview.backend_overrides.get(&node_idx), Some(&"brew".to_string()));
+        
+        preview.cycle_backend();
+        assert_eq!(preview.backend_overrides.get(&node_idx), Some(&"cargo".to_string()));
+        
+        preview.cycle_backend();
+        assert_eq!(preview.backend_overrides.get(&node_idx), Some(&"apt".to_string()));
+    }
+    
+    #[test]
+    fn test_get_filtered_changes() {
+        let mut graph = StableDiGraph::new();
+        let spec1 = PackageSpec {
+            name: "pkg1".to_string(),
+            backend: "apt".to_string(),
+            options: HashMap::new(),
+            requires: vec![],
+        };
+        let spec2 = PackageSpec {
+            name: "pkg2".to_string(),
+            backend: "brew".to_string(),
+            options: HashMap::new(),
+            requires: vec![],
+        };
+        let idx1 = graph.add_node(GraphAction::Install(spec1));
+        let idx2 = graph.add_node(GraphAction::Install(spec2));
+        
+        let changes = SyncChanges {
+            graph,
+            node_map: HashMap::new(),
+        };
+        
+        let mut preview = TuiPreview::new(&changes, HashMap::new());
+        preview.disabled_nodes.insert(idx1);
+        
+        let filtered = preview.get_filtered_changes();
+        assert_eq!(filtered.graph.node_count(), 1);
+        
+        // The remaining node should be idx2
+        let remaining: Vec<_> = filtered.graph.node_indices().collect();
+        assert_eq!(remaining[0], idx2);
     }
 }

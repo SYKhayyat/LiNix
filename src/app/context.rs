@@ -2,7 +2,8 @@ use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::Config;
 use crate::core::{
     CommandExecutor, PackageCache, Result, Error, manager::Backend, 
-    Package, StateRegistry, PackageSpec, Validator, SnapshotManager, Journal
+    Package, StateRegistry, PackageSpec, Validator, SnapshotManager, Journal,
+    ManagedPackage, GhostMetadata
 };
 use crate::app::migrate::Migrator;
 use crate::app::teleport::Teleporter;
@@ -19,9 +20,11 @@ use std::collections::{HashMap, VecDeque, HashSet};
 use tracing::{info, debug, warn};
 use super::{LuaHooks, MetricsCollector, UniversalSearch};
 
-/// The unified Application Context for LiNix v3.3.0.
+/// The unified Application Context for LiNix v3.5.0.
 /// This struct holds the shared state and orchestrators required for the 
 /// 20-point mission-critical roadmap.
+/// 
+/// FIX #15: No Clone implementation - use Arc for shared ownership.
 pub struct App {
     pub config: Config,
     pub cache: Arc<PackageCache>,
@@ -100,7 +103,6 @@ impl App {
         let mut queue = VecDeque::new();
         let mut seen = HashSet::new();
 
-        // Initialize the resolver
         let resolver = crate::app::sync::resolver::StateResolver::new(&self.config, self.registry.clone());
         queue.push_back(resolver.parse_and_probe_spec(spec_str).await?);
 
@@ -131,7 +133,7 @@ impl App {
             if let Some(queryable) = backend.as_queryable() {
                 let installed = queryable.list_installed().await?;
                 for pkg in installed {
-                    if !state.is_managed(backend.name(), &pkg.name) {
+                    if !state.is_managed(backend.core().name(), &pkg.name) {
                         unmanaged.push(pkg);
                     }
                 }
@@ -144,7 +146,7 @@ impl App {
     pub async fn update(&self) -> Result<()> {
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
-                info!("Updating {} metadata...", backend.name());
+                info!("Updating {} metadata...", backend.core().name());
                 upgradable.update(true).await?;
             }
         }
@@ -157,7 +159,7 @@ impl App {
 
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
-                info!("Upgrading {} packages...", backend.name());
+                info!("Upgrading {} packages...", backend.core().name());
                 upgradable.upgrade(true).await?;
             }
         }
@@ -186,7 +188,7 @@ impl App {
     pub async fn clean_orphans(&self) -> Result<()> {
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
-                info!("Cleaning orphans for {}...", backend.name());
+                info!("Cleaning orphans for {}...", backend.core().name());
                 upgradable.clean_orphans(true).await?;
             }
         }
@@ -212,5 +214,10 @@ impl App {
     pub async fn create_shim(&self, binary_name: &str, source_spec: &str) -> Result<()> {
         let manager = self.shim_manager()?;
         manager.create_shim(binary_name, source_spec).await
+    }
+    
+    /// Returns available backends for debugging.
+    pub fn available_backends(&self) -> Vec<Arc<BackendCapabilities>> {
+        self.registry.available()
     }
 }

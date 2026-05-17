@@ -1,5 +1,5 @@
 use crate::App;
-use crate::core::{Result, Error, PackageSpec, GraphAction, Transaction};
+use crate::core::{Result, Error, PackageSpec, GraphAction, Transaction, GhostMetadata};
 use crate::config::manifest::ManifestEngine;
 use petgraph::stable_graph::StableDiGraph;
 use serde::{Deserialize, Serialize};
@@ -7,19 +7,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::{info, warn, debug};
 
-/// Represents preserved metadata for a package that has been removed or teleported.
-/// Fulfills Roadmap Point 14.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GhostMetadata {
-    pub backend: String,
-    pub options: HashMap<String, String>,
-    pub properties: HashMap<String, String>,
-    pub requires: Vec<String>,
-    pub teleported_to: Option<String>,
-}
-
 /// Orchestrates the movement of packages between different backends.
-/// Hardened for Version 3.4.0 with Surgical Teleportation (Point 7).
+/// Hardened for Version 3.5.0 with Surgical Teleportation (Point 7).
 /// 
 /// It utilizes the ManifestEngine to ensure that when a package is teleported 
 /// (e.g. from 'apt' to 'cargo'), its definition is removed from its original 
@@ -99,7 +88,7 @@ impl<'a> Teleporter<'a> {
         let mut tx = Transaction::new(graph, self.app.registry.clone(), self.app.journal.clone());
         tx.execute().await?;
 
-        // 5. Surgical Manifest Reflection (Version 3.4.0 Hardening)
+        // 5. Surgical Manifest Reflection (Version 3.5.0 Hardening)
         // We delete the package from its original source manifest (preserving comments)
         // and add the new specification to local.txt.
         debug!("Teleporter: Updating declarative manifests...");
@@ -129,6 +118,10 @@ impl<'a> Teleporter<'a> {
             options: HashMap::new(), 
             properties: props.clone(),
             requires: vec![],
+            removed_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
             teleported_to: Some(target.to_string()),
         });
 

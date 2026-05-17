@@ -1,8 +1,9 @@
-use crate::core::Result;
+use crate::core::{Result, Error};
 use governor::{Quota, RateLimiter as GovernorRateLimiter};
 use nonzero_ext::nonzero;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// A high-performance, thread-safe rate limiter for remote API calls.
 /// Utilizes the token-bucket algorithm via the 'governor' crate.
@@ -35,9 +36,18 @@ impl RateLimiter {
     pub fn github_authenticated() -> Self {
         Self::new(80)
     }
+    
+    /// Pre-configured rate limiter for VS Code Marketplace API.
+    pub fn vscode_marketplace() -> Self {
+        Self::new(30)
+    }
+    
+    /// Pre-configured rate limiter for Crates.io API.
+    pub fn crates_io() -> Self {
+        Self::new(10)
+    }
 
     /// Asynchronously waits until a rate-limit permit is available.
-    /// This is the preferred method for use in the tokio-based worker pool.
     pub async fn wait(&self) -> Result<()> {
         self.inner.until_ready().await;
         Ok(())
@@ -61,6 +71,26 @@ impl RateLimiter {
         self.wait().await?;
         f().await
     }
+    
+    /// Executes with retry on rate limit.
+    pub async fn execute_with_retry<F, Fut, T>(&self, max_retries: u32, f: F) -> Result<T>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let mut attempts = 0;
+        loop {
+            match self.try_request() {
+                Ok(_) => return f().await,
+                Err(Error::RateLimit) if attempts < max_retries => {
+                    attempts += 1;
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
 }
 
 impl Default for RateLimiter {
@@ -75,14 +105,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_blocking() {
-        // Limit to 2 per minute
         let limiter = RateLimiter::new(2);
 
-        // First two should succeed immediately
         assert!(limiter.try_request().is_ok());
         assert!(limiter.try_request().is_ok());
         
-        // Third should fail immediately
         assert!(limiter.try_request().is_err());
     }
 

@@ -1,6 +1,6 @@
 [package]
 name = "linix"
-version = "3.2.0"
+version = "3.5.0"  # Bump version for fixes
 edition = "2021"
 authors = ["LiNix Contributors"]
 description = "Universal Mission-Critical Package Manager with DAG-based parallel execution"
@@ -51,6 +51,7 @@ fs2 = "0.4"   # Process-level advisory file locking for package managers
 md5 = "0.7"
 which = "6.0"
 libc = "0.2"
+uuid = { version = "1.6", features = ["v4", "serde"] }  # FIX #5: Add UUID for journal entries
 
 # Archive Support (Recursive Extraction for Web/Github backends)
 tar = "0.4"
@@ -70,6 +71,10 @@ indicatif = "0.17" # Professional progress bars and spinners
 
 # UI & Interaction
 dialoguer = "0.11"
+ratatui = "0.24"  # Added for TUI support
+crossterm = "0.27"  # Added for TUI support
+
+tokio-util = { version = "0.7", features = ["rt"] }
 
 # Platform-Specific Dependencies
 [target.'cfg(windows)'.dependencies]
@@ -77,6 +82,7 @@ winapi = { version = "0.3", features = ["processthreadsapi", "securitybaseapi", 
 
 [dev-dependencies]
 tokio-test = "0.4"
+tempfile = "3.8"
 
 [profile.release]
 opt-level = 3

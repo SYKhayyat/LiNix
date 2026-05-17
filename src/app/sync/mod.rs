@@ -4,7 +4,8 @@ use crate::config::Config;
 use crate::config::manifest::ManifestEngine;
 use crate::core::{
     CommandExecutor, Result, Error, Transaction, StateRegistry, 
-    Journal, ActionStatus, GraphAction, SnapshotManager
+    Journal, ActionStatus, GraphAction, SnapshotManager, GhostMetadata,
+    TransactionConfig
 };
 use crate::utils::progress::ProgressReporter;
 use crate::core::security::generate_checksum;
@@ -19,7 +20,7 @@ pub use self::planner::{ChangePlanner, SyncChanges, PlanAction};
 pub use self::resolver::StateResolver;
 
 /// The primary orchestrator for system synchronization using DAG-based execution.
-/// Hardened for Version 3.4.0 with ManifestEngine integration and Sandbox Shim reconciliation.
+/// Hardened for Version 3.5.0 with ManifestEngine integration and Sandbox Shim reconciliation.
 pub struct SyncEngine<'a> {
     config: &'a Config,
     registry: Arc<BackendRegistry>,
@@ -44,8 +45,14 @@ impl<'a> SyncEngine<'a> {
         journal: Arc<Mutex<Journal>>
     ) -> Self {
         Self { 
-            config, registry, executor, metrics, 
-            progress, hooks, snapshot_manager, journal,
+            config, 
+            registry, 
+            executor, 
+            metrics, 
+            progress, 
+            hooks, 
+            snapshot_manager, 
+            journal,
             manifest_engine: ManifestEngine::new(&config.groups_dir),
         }
     }
@@ -57,12 +64,10 @@ impl<'a> SyncEngine<'a> {
         
         let mut state = StateRegistry::load()?;
         let resolver = StateResolver::new(self.config, self.registry.clone());
-        let planner = ChangePlanner::new(self.registry.clone(), &state);
+        let planner = ChangePlanner::new(self.registry.clone(), &state, self.config);
 
         // 1. Resolve & Plan
         let desired = resolver.resolve_desired_state().await?;
-        
-        // Point 9: Include cleanup policy in planning
         let mut changes = planner.plan(&desired).await?;
 
         if changes.is_empty() {
@@ -73,14 +78,13 @@ impl<'a> SyncEngine<'a> {
         // 2. TUI / Confirmation handled in main.rs, execute transaction here
         let _snapshot = self.snapshot_manager.auto_snapshot("pre_sync").await?;
 
-        // 3. Execution
+        // 3. Execution with max_parallel from config
         let result = self.execute_transaction(&changes, &mut state).await;
 
         if result.is_ok() {
             state.save()?;
             
             // Point 4: Declarative Shim Reconciliation
-            // After sync, ensure shims exist for all managed packages with @sandbox=true
             self.reconcile_all_shims(&state).await?;
 
             let _ = self.hooks.run_after_sync().await;
@@ -94,10 +98,19 @@ impl<'a> SyncEngine<'a> {
     }
 
     async fn execute_transaction(&self, changes: &SyncChanges, state: &mut StateRegistry) -> Result<()> {
-        let mut tx = Transaction::new(
+        // FIX #17: Use max_parallel from config to configure transaction
+        let tx_config = TransactionConfig {
+            max_concurrent: self.config.max_parallel,
+            node_timeout: std::time::Duration::from_secs(300),
+            total_timeout: std::time::Duration::from_secs(3600),
+            max_retries: 3,
+        };
+        
+        let mut tx = Transaction::with_config(
             changes.graph.clone(), 
             self.registry.clone(),
-            self.journal.clone()
+            self.journal.clone(),
+            tx_config
         );
 
         let pb = self.progress.spinner("Applying parallel system transformations...");
@@ -105,13 +118,11 @@ impl<'a> SyncEngine<'a> {
         pb.finish();
         
         if result.is_ok() {
-            // Update the local state registry to reflect success
             for idx in changes.graph.node_indices() {
                 match &changes.graph[idx] {
                     GraphAction::Install(spec) => {
                         state.add(&spec.backend, &spec.name, None, spec.options.clone());
                         
-                        // Point 1: Checksum Auto-Locking via ManifestEngine
                         if (spec.backend == "web" || spec.backend == "github") && !spec.options.contains_key("sha256") {
                             self.attempt_auto_lock(spec).await;
                         }
@@ -128,7 +139,6 @@ impl<'a> SyncEngine<'a> {
         result
     }
 
-    /// Point 1: Automatically calculates and locks checksums in the manifest.
     async fn attempt_auto_lock(&self, spec: &crate::core::PackageSpec) {
         if let Some(backend) = self.registry.get(&spec.backend) {
             if let Some(queryable) = backend.as_queryable() {
@@ -139,7 +149,6 @@ impl<'a> SyncEngine<'a> {
                         if let Ok(hash) = generate_checksum(path) {
                             info!("Auto-Lock: Generated SHA256 for {}: {}", spec.name, hash);
                             
-                            // Construct the new line with the locked hash
                             let mut new_options = spec.options.clone();
                             new_options.insert("sha256".into(), hash);
                             
@@ -149,7 +158,6 @@ impl<'a> SyncEngine<'a> {
                             }
                             let new_spec_str = format!("{}:{}@{}", spec.backend, spec.name, opt_parts.join(","));
                             
-                            // Surgical update preserving comments
                             let _ = self.manifest_engine.update_package(&spec.name, &new_spec_str);
                         }
                     }
@@ -158,7 +166,6 @@ impl<'a> SyncEngine<'a> {
         }
     }
 
-    /// Point 4: Ensures shims exist for sandboxed applications.
     async fn reconcile_all_shims(&self, state: &StateRegistry) -> Result<()> {
         let shim_mgr = ShimManager::new()?;
         for pkg in &state.packages {
@@ -170,7 +177,6 @@ impl<'a> SyncEngine<'a> {
         Ok(())
     }
 
-    /// Point 8: Hardened WAL Recovery.
     pub async fn heal(&self) -> Result<()> {
         let incomplete_actions = {
             let j = self.journal.lock().await;
@@ -190,7 +196,7 @@ impl<'a> SyncEngine<'a> {
                     if entry.is_install {
                         info!("Self-Healing: Cleaning and re-applying install for {}", entry.package);
                         let _ = handler.remove(&[entry.package.clone()], true).await;
-                        let spec = PackageSpec {
+                        let spec = crate::core::PackageSpec {
                             name: entry.package.clone(),
                             backend: entry.backend.clone(),
                             options: std::collections::HashMap::new(),

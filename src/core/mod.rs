@@ -4,7 +4,6 @@ pub mod executor;
 pub mod journal;
 pub mod manager;
 pub mod package;
-pub mod ratelimiter;
 pub mod security;
 pub mod snapshot;
 pub mod state;
@@ -17,29 +16,30 @@ pub use cache::{PackageCache, SmartCache};
 // Re-export error and result types
 pub use error::{Error, Result};
 
-// Re-export the high-performance execution pipeline (LockMap + Parallel Runner)
+// Re-export the high-performance execution pipeline
 pub use executor::{CommandExecutor, ExecutionLayer, RawExecutor};
-pub use transaction::{Transaction, GraphAction};
+pub use transaction::{Transaction, GraphAction, TransactionConfig};
 
-// Re-export system safety layers (Phase 3)
+// Re-export system safety layers
 pub use snapshot::{Snapshot, SnapshotManager, SnapshotProvider};
 pub use journal::{Journal, JournalEntry, ActionStatus};
 
 // Re-export the capability-based trait system
 pub use manager::{
-    Backend, Installable, Queryable, RepoManager, Searchable,
-    Upgradable,
+    BackendCore, Installable, Queryable, RepoManager, Searchable,
+    Upgradable, BackendCapabilities, BackendCapabilitiesBuilder,
 };
 
 // Re-export the core data models
 pub use package::{Package, PackageSpec};
 
-// Re-export security and rate-limiting utilities
-pub use ratelimiter::RateLimiter;
+// Re-export security utilities
 pub use security::verify_checksum;
 
 // Re-export state management
-pub use state::{ManagedPackage, StateRegistry};
+pub use state::{ManagedPackage, StateRegistry, GhostMetadata};
 
 // Re-export input and command validation
 pub use validator::Validator;
+
+// Note: ratelimiter module has been reintegrated - available in backends

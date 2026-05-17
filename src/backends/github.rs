@@ -1,13 +1,14 @@
 use crate::core::{
-    manager::{Backend, Installable, Queryable},
+    manager::{BackendCore, Installable, Queryable},
     security::verify_checksum,
-    CommandExecutor, Error, Package, PackageSpec, Result,
+    CommandExecutor, Error, Package, PackageSpec, Result, RateLimiter,
 };
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -35,29 +36,39 @@ struct GithubRelease {
     assets: Vec<GithubAsset>,
 }
 
-/// A specialized manager for installing binaries directly from GitHub Releases.
-/// Implements Roadmap Phase 2.1 (LockMap compatibility) and Phase 3.2 (Deterministic state).
-pub struct GithubManager {
-    executor: CommandExecutor,
-    client: reqwest::Client,
-    install_dir: PathBuf,
-    state_file: PathBuf,
-    /// Internal lock to prevent concurrent modification of the local github registry file.
+/// Core backend implementation for GitHub.
+pub struct GithubBackendCore {
+    pub executor: CommandExecutor,
+    pub name: String,
+    pub client: reqwest::Client,
+    pub install_dir: PathBuf,
+    pub state_file: PathBuf,
+    pub rate_limiter: RateLimiter,
+    pub github_token: Option<String>,
     internal_lock: Mutex<()>,
 }
 
-impl GithubManager {
-    pub fn new(executor: CommandExecutor) -> Self {
+impl GithubBackendCore {
+    pub fn new(executor: CommandExecutor, github_token: Option<String>) -> Self {
         let base = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("linix")
             .join("github");
         
+        let rate_limiter = if github_token.is_some() {
+            RateLimiter::github_authenticated()
+        } else {
+            RateLimiter::github()
+        };
+        
         Self {
             executor,
+            name: "github".to_string(),
             client: reqwest::Client::new(),
             install_dir: base.clone(),
             state_file: base.join("installed.json"),
+            rate_limiter,
+            github_token,
             internal_lock: Mutex::new(()),
         }
     }
@@ -80,28 +91,37 @@ impl GithubManager {
 
     /// Performs a GET request with GitHub Rate-Limit awareness and backoff.
     async fn github_get(&self, url: &str) -> Result<reqwest::Response> {
-        let mut attempts = 0;
-        loop {
-            let res = self.client.get(url)
-                .header("User-Agent", "linix-manager")
-                .send().await?;
+        self.rate_limiter.execute(|| async {
+            let mut attempts = 0;
+            let mut request_builder = self.client.get(url)
+                .header("User-Agent", "linix-manager");
             
-            if res.status() == 403 {
-                if let Some(reset) = res.headers().get("x-ratelimit-reset") {
-                    let reset_time = reset.to_str().unwrap_or("0").parse::<u64>().unwrap_or(0);
-                    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-                    if reset_time > now {
-                        let wait = reset_time - now + 1;
-                        warn!("GitHub Rate Limit reached. Pausing for {}s...", wait);
-                        tokio::time::sleep(Duration::from_secs(wait)).await;
-                        attempts += 1;
-                        if attempts > 3 { return Err(Error::RateLimit); }
-                        continue;
+            if let Some(token) = &self.github_token {
+                request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
+            }
+            
+            loop {
+                let res = request_builder.try_clone()
+                    .ok_or_else(|| Error::Other("Failed to clone request".into()))?
+                    .send().await?;
+                
+                if res.status() == 403 {
+                    if let Some(reset) = res.headers().get("x-ratelimit-reset") {
+                        let reset_time = reset.to_str().unwrap_or("0").parse::<u64>().unwrap_or(0);
+                        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+                        if reset_time > now {
+                            let wait = reset_time - now + 1;
+                            warn!("GitHub Rate Limit reached. Pausing for {}s...", wait);
+                            tokio::time::sleep(Duration::from_secs(wait)).await;
+                            attempts += 1;
+                            if attempts > 3 { return Err(Error::RateLimit); }
+                            continue;
+                        }
                     }
                 }
+                return Ok(res);
             }
-            return Ok(res);
-        }
+        }).await
     }
 
     /// Scores a release asset based on system compatibility (OS and Architecture).
@@ -111,59 +131,69 @@ impl GithubManager {
         let os = std::env::consts::OS;
         let arch = std::env::consts::ARCH;
 
-        // OS Matching
         if name.contains(os) { score += 50; }
         else if os == "linux" && name.contains("linux") { score += 40; }
         else if os == "macos" && (name.contains("darwin") || name.contains("apple")) { score += 40; }
 
-        // Architecture Matching
         if name.contains(arch) { score += 50; }
         else if arch == "x86_64" && (name.contains("amd64") || name.contains("x64")) { score += 45; }
         else if arch == "aarch64" && (name.contains("arm64") || name.contains("armv8")) { score += 45; }
 
-        // Preferred formats
         if name.ends_with(".tar.gz") || name.ends_with(".zip") || name.ends_with(".tgz") { score += 10; }
         if name.contains("musl") && os == "linux" { score += 5; }
         
-        // Penalize debug or source assets
         if name.contains("src") || name.contains("dev") || name.contains("dbg") { score -= 100; }
         
         score
     }
+    
+    async fn load_state(&self) -> HashMap<String, GithubState> {
+        let _guard = self.internal_lock.lock().await;
+        if !self.state_file.exists() {
+            return HashMap::new();
+        }
+        let data = tokio::fs::read_to_string(&self.state_file).await.unwrap_or_default();
+        serde_json::from_str(&data).unwrap_or_default()
+    }
+    
+    async fn save_state(&self, state: &HashMap<String, GithubState>) -> Result<()> {
+        let _guard = self.internal_lock.lock().await;
+        let data = serde_json::to_string_pretty(state).map_err(|e| Error::Other(e.to_string()))?;
+        crate::utils::file::atomic_write(&self.state_file, &data)
+    }
 }
 
-impl Backend for GithubManager {
-    fn name(&self) -> &str { "github" }
-    fn is_available(&self) -> bool { true }
-    fn as_installable(&self) -> Option<&dyn Installable> { Some(self) }
-    fn as_queryable(&self) -> Option<&dyn Queryable> { Some(self) }
+impl BackendCore for GithubBackendCore {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+}
+
+/// Installable capability for GitHub backend.
+pub struct GithubInstallable {
+    pub core: Arc<GithubBackendCore>,
 }
 
 #[async_trait]
-impl Installable for GithubManager {
+impl Installable for GithubInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
-        let _guard = self.internal_lock.lock().await;
-        
-        let mut state: HashMap<String, GithubState> = if self.state_file.exists() {
-            let data = tokio::fs::read_to_string(&self.state_file).await?;
-            serde_json::from_str(&data).unwrap_or_default()
-        } else {
-            HashMap::new()
-        };
+        let mut state = self.core.load_state().await;
 
         for spec in specs {
             let url = format!("https://api.github.com/repos/{}/releases/latest", spec.name);
-            let res = self.github_get(&url).await?;
+            let res = self.core.github_get(&url).await?;
             let release: GithubRelease = res.json().await?;
 
-            // 1. Asset Selection
             let filter = spec.options.get("asset_filter");
             let best_asset = release.assets.iter()
                 .filter(|a| filter.map_or(true, |f| a.name.contains(f)))
-                .max_by_key(|a| self.score_asset(&a.name))
-                .ok_or_else(|| Error::PackageNotFound(format!("No compatible asset found for {} (filter: {:?})", spec.name, filter)))?;
+                .max_by_key(|a| self.core.score_asset(&a.name))
+                .ok_or_else(|| Error::PackageNotFound(format!("No compatible asset found for {}", spec.name)))?;
 
-            // 2. Version Check (Roadmap 2.2)
             if let Some(existing) = state.get(&spec.name) {
                 if existing.version == release.version {
                     debug!("GitHub: {} is already at version {}", spec.name, release.version);
@@ -171,9 +201,8 @@ impl Installable for GithubManager {
                 }
             }
 
-            // 3. Atomic Download & Verification
             info!("Downloading GitHub release: {} ({})", spec.name, release.version);
-            let bytes = self.github_get(&best_asset.url).await?.bytes().await?;
+            let bytes = self.core.github_get(&best_asset.url).await?.bytes().await?;
             let tmp_dir = tempfile::tempdir()?;
             let dl_path = tmp_dir.path().join(&best_asset.name);
             tokio::fs::write(&dl_path, bytes).await?;
@@ -182,15 +211,13 @@ impl Installable for GithubManager {
                 verify_checksum(&dl_path, expected_sha)?;
             }
 
-            // 4. Extraction & Linkage
             let pkg_dir_name = spec.name.replace('/', "_");
-            let pkg_dir = self.install_dir.join(&pkg_dir_name);
+            let pkg_dir = self.core.install_dir.join(&pkg_dir_name);
             let _ = tokio::fs::remove_dir_all(&pkg_dir).await;
             tokio::fs::create_dir_all(&pkg_dir).await?;
 
             extract_archive(&dl_path, &pkg_dir)?;
 
-            // Binary Discovery Logic
             let repo_name = spec.name.split('/').last().unwrap_or(&spec.name);
             let bin_dest = dirs::home_dir().unwrap().join(".local").join("bin").join(repo_name);
             
@@ -199,7 +226,6 @@ impl Installable for GithubManager {
 
             while let Some(entry) = entries.next() {
                 let fname = entry.file_name().to_string_lossy().to_lowercase();
-                // Match exact name or name without extension (common in Go/Rust projects)
                 if fname == repo_name.to_lowercase() || (fname.starts_with(repo_name) && !fname.contains('.')) {
                     #[cfg(unix)] {
                         use std::os::unix::fs::PermissionsExt;
@@ -213,7 +239,6 @@ impl Installable for GithubManager {
                 }
             }
 
-            // 5. State Persistence
             state.insert(spec.name.clone(), GithubState {
                 repo: spec.name.clone(),
                 version: release.version,
@@ -222,15 +247,13 @@ impl Installable for GithubManager {
             });
         }
         
-        let _ = tokio::fs::create_dir_all(self.state_file.parent().unwrap()).await;
-        tokio::fs::write(&self.state_file, serde_json::to_string_pretty(&state)?).await?;
+        let _ = tokio::fs::create_dir_all(self.core.state_file.parent().unwrap()).await;
+        self.core.save_state(&state).await?;
         Ok(())
     }
 
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
-        let _guard = self.internal_lock.lock().await;
-        if !self.state_file.exists() { return Ok(()); }
-        let mut state: HashMap<String, GithubState> = serde_json::from_str(&tokio::fs::read_to_string(&self.state_file).await?)?;
+        let mut state = self.core.load_state().await;
         
         for name in names {
             if let Some(pkg) = state.remove(name) {
@@ -242,16 +265,20 @@ impl Installable for GithubManager {
             }
         }
         
-        tokio::fs::write(&self.state_file, serde_json::to_string_pretty(&state)?).await?;
+        self.core.save_state(&state).await?;
         Ok(())
     }
 }
 
+/// Queryable capability for GitHub backend.
+pub struct GithubQueryable {
+    pub core: Arc<GithubBackendCore>,
+}
+
 #[async_trait]
-impl Queryable for GithubManager {
+impl Queryable for GithubQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        if !self.state_file.exists() { return Ok(vec![]); }
-        let state: HashMap<String, GithubState> = serde_json::from_str(&tokio::fs::read_to_string(&self.state_file).await?)?;
+        let state = self.core.load_state().await;
         Ok(state.into_iter().map(|(n, s)| {
             Package::with_version(&n, &s.version, "github")
         }).collect())

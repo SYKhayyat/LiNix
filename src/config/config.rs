@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The primary configuration for LiNix Version 3.4.0 "Consistency & Integrity."
+/// The primary configuration for LiNix Version 3.5.0 "Consistency & Integrity."
 /// This struct acts as the central source of truth for execution parameters,
 /// backend behavior, and system identity.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -92,6 +92,11 @@ pub struct Config {
     /// The backend used if none is specified in a package string.
     #[serde(default)]
     pub default_backend: Option<String>,
+    
+    /// FIX #12: Configurable list of protected packages that should never be removed.
+    /// These are critical system packages that LiNix will not manage or remove.
+    #[serde(default = "default_protected_packages")]
+    pub protected_packages: Vec<String>,
 }
 
 fn default_groups_dir() -> PathBuf {
@@ -132,6 +137,55 @@ fn default_priority() -> Vec<String> {
     ]
 }
 
+/// FIX #12: Default protected packages - platform-appropriate critical system packages.
+fn default_protected_packages() -> Vec<String> {
+    let mut packages = vec![
+        "sudo".to_string(),
+        "bash".to_string(),
+        "linix".to_string(),
+    ];
+    
+    #[cfg(target_os = "linux")]
+    {
+        packages.extend(vec![
+            "linux-image".to_string(),
+            "linux-headers".to_string(),
+            "kernel".to_string(),
+            "systemd".to_string(),
+            "libc6".to_string(),
+            "libc".to_string(),
+            "glibc".to_string(),
+            "grub".to_string(),
+            "grub2".to_string(),
+            "coreutils".to_string(),
+            "filesystem".to_string(),
+            "apt".to_string(),
+            "pacman".to_string(),
+            "dnf".to_string(),
+            "rpm".to_string(),
+        ]);
+    }
+    
+    #[cfg(target_os = "windows")]
+    {
+        packages.extend(vec![
+            "windows".to_string(),
+            "win32".to_string(),
+            "kernel32".to_string(),
+        ]);
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        packages.extend(vec![
+            "darwin".to_string(),
+            "xnu".to_string(),
+        ]);
+    }
+    
+    packages
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -156,6 +210,7 @@ impl Default for Config {
             max_parallel: 4,
             backend_settings: HashMap::new(),
             default_backend: None,
+            protected_packages: default_protected_packages(),
         }
     }
 }
@@ -170,6 +225,12 @@ impl Config {
             .map_err(|e| Error::Config(format!("Failed to read config file: {}", e)))?;
         let mut config: Self = toml::from_str(&content)?;
         config.config_file = path.to_path_buf();
+        
+        // Ensure protected_packages is never empty
+        if config.protected_packages.is_empty() {
+            config.protected_packages = default_protected_packages();
+        }
+        
         Ok(config)
     }
 
@@ -214,5 +275,19 @@ impl Config {
             return Err(Error::Config("max_parallel must be greater than 0".into()));
         }
         Ok(())
+    }
+    
+    /// FIX #12: Returns the list of protected packages for the current platform.
+    pub fn get_protected_packages(&self) -> &[String] {
+        &self.protected_packages
+    }
+    
+    /// FIX #12: Checks if a package is protected from removal.
+    pub fn is_protected(&self, package_name: &str) -> bool {
+        let name_lower = package_name.to_lowercase();
+        self.protected_packages.iter().any(|p| {
+            let p_lower = p.to_lowercase();
+            name_lower == p_lower || name_lower.contains(&p_lower)
+        })
     }
 }
