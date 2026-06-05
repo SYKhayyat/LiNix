@@ -13,6 +13,7 @@ use std::collections::HashMap;
 #[tokio::main]
 async fn main() -> Result<()> {
     // 1. HIGH-PERFORMANCE RUST SHIM HIJACK
+    // Detect if we are being called via a symlink or a renamed binary (shim mode)
     let args_raw: Vec<String> = env::args().collect();
     let bin_path = env::current_exe().ok();
     let current_bin_name = bin_path
@@ -22,9 +23,13 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "linix".to_string());
 
     if current_bin_name != "linix" && !current_bin_name.starts_with("linix") {
-        let config = linix::config::Config::from_file(
-            &dirs::config_dir().unwrap_or_default().join("linix").join("config.toml")
-        ).unwrap_or_default();
+        // We are in shim mode. Load config and delegate to Runner.
+        // Config::from_file is sync; wrap in spawn_blocking for async integrity.
+        let config_path = dirs::config_dir().unwrap_or_default().join("linix").join("config.toml");
+        let config = tokio::task::spawn_blocking(move || {
+            linix::config::Config::from_file(&config_path)
+        }).await.map_err(|e| anyhow::anyhow!(e))?.unwrap_or_default();
+
         let app = App::new(config).await?;
         let runner = Runner::new(&app);
         return runner.exec_shim(&current_bin_name, &args_raw[1..].to_vec()).await.map_err(|e| e.into());
@@ -40,8 +45,11 @@ async fn main() -> Result<()> {
         dirs::config_dir().unwrap_or_default().join("linix").join("config.toml")
     });
 
-    let mut config = linix::config::Config::from_file(&config_path)
-        .context("CRITICAL: Failed to load LiNix configuration file.")?;
+    // Load config with blocking isolation
+    let mut config = tokio::task::spawn_blocking(move || {
+        linix::config::Config::from_file(&config_path)
+    }).await.map_err(|e| anyhow::anyhow!(e))?
+      .context("CRITICAL: Failed to load LiNix configuration file.")?;
     
     config.merge_cli_overrides(
         Some(cli.dry_run), Some(cli.yes), cli.backend.clone(), 
@@ -52,6 +60,7 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         Commands::Sync { locked: _ } => {
+            // Phase 3.2: SyncEngine::new is now async
             let engine = SyncEngine::new(
                 &app.config, 
                 app.registry.clone(), 
@@ -83,6 +92,7 @@ async fn main() -> Result<()> {
             }
 
             if !app.config.yes {
+                // TUI runs on main thread; it blocks, but since we are at a decision point, this is expected.
                 let mut preview = TuiPreview::new(&changes, HashMap::new());
                 if !preview.run()? {
                     info!("Sync cancelled by user.");
@@ -91,7 +101,6 @@ async fn main() -> Result<()> {
                 changes = preview.get_filtered_changes();
             }
 
-            // Fix unused_assignments: changes is now consumed here
             engine.sync(changes).await.map_err(|e| e.into())
         }
 
@@ -104,18 +113,24 @@ async fn main() -> Result<()> {
                     
                     if let Some(installer) = backend_cap.as_installable() {
                         info!("Installing {} via {}...", spec.name, spec.backend);
-                        installer.install(&[spec.clone()], true).await?;
+                        // Phase 2.2: Respect backend root requirements
+                        let sudo = backend_cap.needs_root();
+                        installer.install(&[spec.clone()], sudo).await?;
                         
                         let mut state_guard = app.state.lock().await;
                         state_guard.add_simple(&spec.backend, &spec.name, None);
                         
-                        if let Err(e) = add_package_to_local(&app.config.groups_dir, pkg_str) {
+                        // Phase 3.2: add_package_to_local is now async
+                        if let Err(e) = add_package_to_local(&app.config.groups_dir, pkg_str).await {
                             warn!("Auto-Commit failed for {}: {}", spec.name, e);
                         }
                     }
                 }
             }
-            app.state.lock().await.save().map_err(|e| e.into())
+            // Persistence is blocking; isolate
+            let state_final = app.state.lock().await.clone();
+            tokio::task::spawn_blocking(move || state_final.save()).await??;
+            Ok(())
         }
 
         Commands::Remove { packages } => {
@@ -126,11 +141,15 @@ async fn main() -> Result<()> {
                         if queryable.info(pkg_name).await?.is_some() {
                             if let Some(installer) = backend.as_installable() {
                                 info!("Removing {} from {}...", pkg_name, backend.name());
-                                installer.remove(&[pkg_name.clone()], true).await?;
+                                // Phase 2.2: Respect backend root requirements
+                                let sudo = backend.needs_root();
+                                installer.remove(&[pkg_name.clone()], sudo).await?;
                                 
                                 let mut state_guard = app.state.lock().await;
                                 state_guard.remove(backend.name(), pkg_name);
-                                let _ = remove_package_from_local(&app.config.groups_dir, pkg_name);
+                                
+                                // Phase 3.2: remove_package_from_local is now async
+                                let _ = remove_package_from_local(&app.config.groups_dir, pkg_name).await;
                                 found = true;
                                 break;
                             }
@@ -139,7 +158,9 @@ async fn main() -> Result<()> {
                 }
                 if !found { warn!("Target '{}' is not currently installed.", pkg_name); }
             }
-            app.state.lock().await.save().map_err(|e| e.into())
+            let state_final = app.state.lock().await.clone();
+            tokio::task::spawn_blocking(move || state_final.save()).await??;
+            Ok(())
         }
 
         Commands::Migrate => app.migrator().migrate().await.map_err(|e| e.into()),
@@ -165,7 +186,9 @@ async fn main() -> Result<()> {
                     let b_name = backend.as_deref().unwrap_or("apt");
                     let b = app.registry.get(b_name).context("Backend not found")?;
                     let manager = b.as_repo_manager().context("Backend does not support repositories.")?;
-                    manager.add_repo(name, url, true).await?;
+                    // Phase 2.2: Sudo precision
+                    let sudo = b.needs_root();
+                    manager.add_repo(name, url, sudo).await?;
                     info!("Successfully added repository: {}", name);
                     Ok(())
                 }
@@ -173,7 +196,8 @@ async fn main() -> Result<()> {
                     let b_name = backend.as_deref().unwrap_or("apt");
                     let b = app.registry.get(b_name).context("Backend not found")?;
                     let manager = b.as_repo_manager().context("Backend does not support repositories.")?;
-                    manager.remove_repo(name, true).await?;
+                    let sudo = b.needs_root();
+                    manager.remove_repo(name, sudo).await?;
                     info!("Successfully removed repository: {}", name);
                     Ok(())
                 }
@@ -235,7 +259,8 @@ async fn main() -> Result<()> {
         Commands::Doctor => {
             for backend in app.registry.all() {
                 let status = if backend.is_available() { "READY" } else { "OFFLINE" };
-                println!("[{}] {:<15}", status, backend.name());
+                let root_req = if backend.needs_root() { "ROOT" } else { "USER" };
+                println!("[{}] [{}] {:<15}", status, root_req, backend.name());
             }
             Ok(())
         }

@@ -1,6 +1,6 @@
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Upgradable
+    Queryable, Result, Upgradable, MetadataProvider
 };
 use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
@@ -28,6 +28,30 @@ impl BackendCore for SnapBackendCore {
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("snap")
+    }
+
+    fn needs_root(&self) -> bool {
+        // Snap operations almost always require administrative privileges.
+        true
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for SnapBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        let output = self.executor.run_output("snap", &["info", name], false).await?;
+        let mut deps = Vec::new();
+        
+        // Snap dependencies (base snaps like core22, or content interface connections)
+        // are usually identified in the 'notes' or 'connections' but snaps are
+        // largely self-contained. We look for 'base:' which is the most common requirement.
+        for line in output.lines() {
+            if let Some(base) = line.strip_prefix("base:") {
+                deps.push(base.trim().to_string());
+            }
+        }
+        
+        Ok(deps)
     }
 }
 
@@ -103,7 +127,7 @@ impl Queryable for SnapQueryable {
         let mut p = Package::new(name, "snap");
         for line in output.lines() {
             if let Some(v) = line.strip_prefix("summary:") { 
-                p.properties.insert("description".into(), v.trim().to_string()); 
+                p.properties.insert("summary".into(), v.trim().to_string()); 
             }
             if let Some(v) = line.strip_prefix("installed:") { 
                 let ver = v.split_whitespace().next().unwrap_or(v);

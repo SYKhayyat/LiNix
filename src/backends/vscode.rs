@@ -1,7 +1,7 @@
 use crate::core::{
     CommandExecutor, Package, Result, PackageSpec, 
     BackendCore, Installable, Queryable, Searchable, RateLimiter,
-    HealthReport, HealthStatus
+    HealthReport, HealthStatus, MetadataProvider
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -64,8 +64,31 @@ impl VscodeBackendCore {
 impl BackendCore for VscodeBackendCore {
     fn name(&self) -> &str { &self.name }
     fn is_available(&self) -> bool { self.executor.command_exists_sync("code") }
+    fn needs_root(&self) -> bool { false }
     async fn check_health(&self) -> Result<HealthReport> {
         Ok(HealthReport { status: HealthStatus::Ok, message: None })
+    }
+}
+
+/// Phase 1.1: MetadataProvider for VSCode.
+#[async_trait]
+impl MetadataProvider for VscodeBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        let json = self.query_marketplace(name).await?;
+        let mut deps = Vec::new();
+
+        if let Some(extensions) = json["results"][0]["extensions"].as_array() {
+            if let Some(ext) = extensions.first() {
+                if let Some(extension_deps) = ext["extensionDependencies"].as_array() {
+                    for dep in extension_deps {
+                        if let Some(dep_name) = dep.as_str() {
+                            deps.push(dep_name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(deps)
     }
 }
 

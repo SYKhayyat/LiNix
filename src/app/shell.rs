@@ -3,11 +3,10 @@ use crate::core::{Result, Error, PackageSpec};
 use crate::app::sandbox::{Sandbox, SandboxConfig};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tracing::{info, debug, warn};
 
 /// Orchestrates ephemeral environments (The Ghost Shell).
-/// Hardened for Version 3.5.0 with Namespace Provisioning.
+/// Hardened for Phase 3.2: Async I/O and non-blocking process execution.
 pub struct GhostShell<'a> {
     app: &'a App,
 }
@@ -36,7 +35,8 @@ impl<'a> GhostShell<'a> {
                         .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
                     
                     if let Some(installer) = backend.as_installable() {
-                        installer.install(&[spec.clone()], true).await?;
+                        let sudo = backend.needs_root();
+                        installer.install(&[spec.clone()], sudo).await?;
                         if let Some(path) = self.locate_package_root(&spec).await? {
                             store_paths.push((path.to_string_lossy().to_string(), spec.name.clone()));
                         }
@@ -52,7 +52,6 @@ impl<'a> GhostShell<'a> {
             mounts.push((path.clone(), target));
         }
 
-        // Fix E0593: Closure must take 1 argument for unwrap_or_else
         let shell = env::var("SHELL").unwrap_or_else(|_| {
             if cfg!(windows) { "cmd.exe".to_string() } else { "/bin/bash".to_string() }
         });
@@ -61,7 +60,6 @@ impl<'a> GhostShell<'a> {
         if cfg!(target_os = "linux") && Sandbox::is_supported() {
             info!("GhostShell: Launching Bubblewrap container for session.");
             
-            // Fix E0063: Include all mandatory SandboxConfig fields
             let config = SandboxConfig {
                 allow_network: true,
                 allow_home: true,
@@ -76,16 +74,22 @@ impl<'a> GhostShell<'a> {
                 internal_path = format!("{}:{}:{}/bin", internal_path, target, target);
             }
 
-            let mut bwrap = Sandbox::wrap(&shell, &[], &config)?;
-            bwrap.env("PATH", internal_path)
-                 .env("LINIX_GHOST", "true")
-                 .env("PROMPT_COMMAND", "echo -n '(linix-ghost) '");
+            // Sandbox logic involves building a Command and running it.
+            // Since Sandbox currently uses std::process, we wrap the execution in spawn_blocking.
+            let shell_cmd = shell.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut bwrap = Sandbox::wrap(&shell_cmd, &[], &config)?;
+                bwrap.env("PATH", internal_path)
+                     .env("LINIX_GHOST", "true")
+                     .env("PROMPT_COMMAND", "echo -n '(linix-ghost) '");
 
-            // Fix E0631: Use map_err(Error::from)
-            let status = bwrap.status().map_err(Error::from)?;
-            if !status.success() {
-                return Err(Error::CommandFailed(format!("Ghost shell exited with status: {}", status)));
-            }
+                let status = bwrap.status().map_err(Error::from)?;
+                if !status.success() {
+                    return Err(Error::CommandFailed(format!("Ghost shell exited with status: {}", status)));
+                }
+                Ok(())
+            }).await.map_err(|e| Error::Other(e.to_string()))??;
+
         } else {
             warn!("GhostShell: Platform fallback to PATH mutation.");
             self.spawn_fallback_shell(&shell, &store_paths).await?;
@@ -97,10 +101,10 @@ impl<'a> GhostShell<'a> {
     /// Project-local directive.
     pub async fn auto_shell(&self) -> Result<()> {
         let local_config = Path::new("linix.txt");
-        if local_config.exists() {
+        if tokio::fs::try_exists(local_config).await.unwrap_or(false) {
             info!("GhostShell: Found 'linix.txt'. Initializing environment...");
-            // Fix E0631: Use map_err(Error::from)
-            let content = std::fs::read_to_string(local_config).map_err(Error::from)?;
+            
+            let content = tokio::fs::read_to_string(local_config).await.map_err(Error::from)?;
             let packages: Vec<String> = content.lines()
                 .map(|l| l.trim().to_string())
                 .filter(|l| !l.is_empty() && !l.starts_with('#'))
@@ -124,7 +128,7 @@ impl<'a> GhostShell<'a> {
                 for key in keys {
                     if let Some(val) = pkg.properties.get(key) {
                         let path = PathBuf::from(val);
-                        if path.exists() {
+                        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
                             return Ok(Some(path));
                         }
                     }
@@ -142,7 +146,7 @@ impl<'a> GhostShell<'a> {
         for (path, _) in store_paths {
             new_path_parts.push(path.clone());
             let bin_sub = Path::new(path).join("bin");
-            if bin_sub.exists() {
+            if tokio::fs::try_exists(&bin_sub).await.unwrap_or(false) {
                 new_path_parts.push(bin_sub.to_string_lossy().to_string());
             }
         }
@@ -153,12 +157,14 @@ impl<'a> GhostShell<'a> {
         let new_path = env::join_paths(&new_path_parts)
             .map_err(|e| Error::Other(format!("Failed to build PATH: {}", e)))?;
 
-        // Fix E0631: Use map_err(Error::from)
-        let status = Command::new(shell)
-            .env("PATH", &new_path)
-            .env("LINIX_GHOST", "fallback")
-            .status()
-            .map_err(Error::from)?;
+        // Spawning interactive shells is better handled with tokio::process if we need async control,
+        // but since we usually wait for the shell to finish, status() is appropriate.
+        // We use tokio::process::Command to avoid blocking the thread.
+        let mut cmd = tokio::process::Command::new(shell);
+        cmd.env("PATH", &new_path)
+           .env("LINIX_GHOST", "fallback");
+
+        let status = cmd.status().await.map_err(Error::from)?;
 
         if !status.success() {
             return Err(Error::CommandFailed(format!("Shell exited with: {}", status)));

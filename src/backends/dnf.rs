@@ -1,6 +1,6 @@
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Upgradable
+    Queryable, Result, Upgradable, MetadataProvider
 };
 use crate::parsers::dnf;
 use async_trait::async_trait;
@@ -28,6 +28,23 @@ impl BackendCore for DnfBackendCore {
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("dnf")
+    }
+
+    fn needs_root(&self) -> bool {
+        // DNF system operations require root privileges.
+        true
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for DnfBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        // 'dnf repoquery --requires --resolve' identifies the actual packages needed.
+        let output = self.executor.run_output("dnf", &["repoquery", "--requires", "--resolve", "--queryformat", "%{name}", name], false).await?;
+        Ok(output.lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 }
 
@@ -70,7 +87,7 @@ pub struct DnfQueryable {
 #[async_trait]
 impl Queryable for DnfQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("rpm", &["-qa", "--queryformat", "%{NAME}|% {VERSION}\n"], false).await?;
+        let output = self.core.executor.run_output("rpm", &["-qa", "--queryformat", "%{NAME}|%{VERSION}\n"], false).await?;
         Ok(dnf::parse_rpm_qa(&output, "dnf"))
     }
 

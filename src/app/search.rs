@@ -1,6 +1,6 @@
 use crate::backends::BackendRegistry;
 use crate::config::Config;
-use crate::core::{Package, Result, manager::Backend};
+use crate::core::{Package, Result};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -54,6 +54,7 @@ impl<'a> UniversalSearch<'a> {
                 debug!("Searching backend: {}", b.name());
                 
                 // Re-acquire the searchable reference inside the task
+                // We use unwrap here safely because we filtered for is_some() above
                 match b.as_searchable().unwrap().search(&query_string).await {
                     Ok(results) => {
                         debug!("Backend '{}' returned {} results", b.name(), results.len());

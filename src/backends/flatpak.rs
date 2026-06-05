@@ -1,6 +1,6 @@
 use crate::core::{
     CommandExecutor, Package, Result, PackageSpec, 
-    BackendCore, Installable, Queryable, Upgradable
+    BackendCore, Installable, Queryable, Upgradable, MetadataProvider
 };
 use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
@@ -44,6 +44,33 @@ impl BackendCore for FlatpakBackendCore {
 
     fn is_available(&self) -> bool {
         *self.available.get_or_init(|| self.executor.command_exists_sync("flatpak"))
+    }
+
+    fn needs_root(&self) -> bool {
+        // If the 'user' setting is true, Flatpak does not need root privileges.
+        !self.settings.get("user").map(|v| v == "true").unwrap_or(false)
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for FlatpakBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        let args = self.scope_args();
+        let mut final_args = args.clone();
+        final_args.extend(["info", "--show-metadata", name]);
+
+        // Flatpak metadata contains a [Extension] or [Runtime] section.
+        // We look for 'runtime=' which is the primary transitive dependency.
+        let output = self.executor.run_output("flatpak", &final_args, false).await?;
+        let mut deps = Vec::new();
+
+        for line in output.lines() {
+            if let Some(runtime) = line.strip_prefix("runtime=") {
+                deps.push(runtime.trim().to_string());
+            }
+        }
+
+        Ok(deps)
     }
 }
 

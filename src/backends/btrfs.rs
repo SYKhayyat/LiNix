@@ -1,6 +1,6 @@
 use crate::core::{
     BackendCore, Installable, Package, PackageSpec, 
-    Queryable, Result, Error, CommandExecutor
+    Queryable, Result, Error, CommandExecutor, MetadataProvider
 };
 use async_trait::async_trait;
 use std::path::Path;
@@ -47,6 +47,7 @@ impl BtrfsBackendCore {
             return Err(Error::Other("/etc/fstab not found".into()));
         }
 
+        // fstab modification is synchronous and requires careful atomic handling
         let content = fs::read_to_string(fstab_path).map_err(Error::from)?;
         let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
         
@@ -71,6 +72,19 @@ impl BackendCore for BtrfsBackendCore {
 
     fn is_available(&self) -> bool {
         cfg!(target_os = "linux") && self.executor.command_exists_sync("btrfs")
+    }
+
+    fn needs_root(&self) -> bool {
+        // Filesystem level modifications (subvolumes, mounts) require root.
+        true
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for BtrfsBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // Subvolumes are standalone filesystem objects and do not have transitive package deps.
+        Ok(vec![])
     }
 }
 
@@ -102,7 +116,16 @@ impl Installable for BtrfsInstallable {
                 let uuid = self.core.get_fs_uuid(path).await?;
                 let custom_options = spec.options.get("options").map(|s| s.as_str()).unwrap_or("defaults");
                 
-                self.core.update_fstab(&uuid, path, mount_point, custom_options)?;
+                let core_ref = self.core.clone();
+                let uuid_str = uuid.clone();
+                let path_str = path.clone();
+                let mount_str = mount_point.clone();
+                let opt_str = custom_options.to_string();
+
+                tokio::task::spawn_blocking(move || {
+                    core_ref.update_fstab(&uuid_str, &path_str, &mount_str, &opt_str)
+                }).await.map_err(|e| Error::Other(e.to_string()))??;
+
                 self.core.executor.run("mount", &[mount_point], sudo).await?;
             }
         }

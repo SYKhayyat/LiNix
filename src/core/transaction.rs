@@ -1,5 +1,5 @@
 use crate::core::{Result, Error, PackageSpec, Journal};
-use crate::core::journal::{JournalAction, ActionStatus};
+use crate::core::journal::JournalAction;
 use crate::backends::BackendRegistry;
 use crate::app::bridge::DependencyBridge;
 use std::collections::{HashMap, HashSet};
@@ -59,6 +59,7 @@ struct TaskResult {
 }
 
 /// The High-Performance Mission-Critical Execution Engine.
+/// Hardened for Phase 2.2: Stabilized Journaling and Surgical Sudo.
 pub struct Transaction {
     pub graph: StableDiGraph<GraphAction, ()>,
     registry: Arc<BackendRegistry>,
@@ -138,7 +139,9 @@ impl Transaction {
                 .collect();
 
             for idx in ready_nodes {
-                let _permit = semaphore.clone().acquire_owned().await.unwrap();
+                let permit = semaphore.clone().acquire_owned().await
+                    .map_err(|e| Error::Transaction(format!("Semaphore error: {}", e)))?;
+                
                 in_progress.insert(idx);
                 
                 let action = self.graph[idx].clone();
@@ -148,6 +151,7 @@ impl Transaction {
                 let config = self.config.clone();
 
                 worker_pool.spawn(async move {
+                    let _permit = permit; // Move permit into the task to hold the slot
                     Self::execute_node_with_retry(
                         action, registry, journal, config, cancel_token, idx
                     ).await
@@ -163,14 +167,12 @@ impl Transaction {
                         self.completed_indices.insert(task_data.node_index);
                         self.history.push(task_data.node_index);
                         
-                        // WIRING: Use captured telemetry data in final logs
                         info!(
-                            "Node {}:{} completed in {:?} (Attempts: {}, Properties: {})", 
+                            "Node {}:{} completed in {:?} (Attempts: {})", 
                             task_data.backend_name, 
                             task_data.package_name,
                             task_data.duration,
-                            task_data.attempt,
-                            task_data.properties.len()
+                            task_data.attempt
                         );
                     }
                     Err(e) => {
@@ -205,6 +207,20 @@ impl Transaction {
             GraphAction::Remove { name, backend } => (name.clone(), backend.clone(), JournalAction::Remove { name: name.clone(), backend: backend.clone() }),
         };
 
+        // Pre-fetch backend to check sudo requirements
+        let backend_res = registry.get(&b_name).ok_or_else(|| Error::BackendNotFound(b_name.clone()));
+        let backend_cap = match backend_res {
+            Ok(cap) => cap,
+            Err(e) => return TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: HashMap::new(), attempt: 0, duration: Duration::ZERO, result: Err(e) },
+        };
+        let sudo_required = backend_cap.needs_root();
+
+        // Phase 2.1: Register start in Journal ONCE for this node
+        let journal_id = {
+            let mut j = journal.lock().await;
+            j.record_start(j_action.clone()).unwrap_or_else(|_| "transient_id".to_string())
+        };
+
         let mut attempt = 0;
         let mut last_error = None;
         let start = std::time::Instant::now();
@@ -219,31 +235,25 @@ impl Transaction {
             if attempt > 1 {
                 let backoff = std::cmp::min(config.initial_backoff * (1 << (attempt - 2)), config.max_backoff);
                 tokio::time::sleep(backoff).await;
+                debug!("Retrying Node {}:{} (Attempt {}) after {:?}", b_name, p_name, attempt, backoff);
             }
-            
-            let journal_id = {
-                let mut j = journal.lock().await;
-                j.record_start(j_action.clone()).unwrap()
-            };
 
             let result = tokio::time::timeout(config.node_timeout, async {
                 match &action {
                     GraphAction::Install(spec) => {
-                        let backend = registry.get(&spec.backend).ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
-                        if let Some(handler) = backend.as_installable() {
-                            handler.install(&[spec.clone()], true).await?;
-                            let props = if let Some(q) = backend.as_queryable() {
+                        if let Some(handler) = backend_cap.as_installable() {
+                            handler.install(&[spec.clone()], sudo_required).await?;
+                            let props = if let Some(q) = backend_cap.as_queryable() {
                                 q.info(&spec.name).await?.map(|p| p.properties).unwrap_or_default()
                             } else { HashMap::new() };
                             Ok(props)
-                        } else { Err(Error::Transaction("Backend not installable".into())) }
+                        } else { Err(Error::Transaction(format!("Backend '{}' is not installable", b_name))) }
                     }
-                    GraphAction::Remove { name, backend: b_name } => {
-                        let backend = registry.get(b_name).ok_or_else(|| Error::BackendNotFound(b_name.clone()))?;
-                        if let Some(handler) = backend.as_installable() {
-                            handler.remove(&[name.clone()], true).await?;
+                    GraphAction::Remove { name, backend: _ } => {
+                        if let Some(handler) = backend_cap.as_installable() {
+                            handler.remove(&[name.clone()], sudo_required).await?;
                             Ok(HashMap::new())
-                        } else { Err(Error::Transaction("Backend not removable".into())) }
+                        } else { Err(Error::Transaction(format!("Backend '{}' is not removable", b_name))) }
                     }
                 }
             }).await;
@@ -255,40 +265,57 @@ impl Transaction {
                     return TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: props, attempt, duration: start.elapsed(), result: Ok(()) };
                 }
                 Ok(Err(e)) => {
+                    warn!("Attempt {} for {}:{} failed: {}", attempt, b_name, p_name, e);
                     last_error = Some(e);
-                    let mut j = journal.lock().await;
-                    let _ = j.record_failure(&journal_id, &format!("{:?}", last_error));
+                    // We don't record failure in journal yet, as we might succeed on retry
                 }
                 Err(_) => {
+                    warn!("Attempt {} for {}:{} timed out after {:?}", attempt, b_name, p_name, config.node_timeout);
                     last_error = Some(Error::Transaction("Node timed out".into()));
-                    let mut j = journal.lock().await;
-                    let _ = j.record_failure(&journal_id, "Timeout");
                 }
             }
         }
         
-        TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: HashMap::new(), attempt, duration: start.elapsed(), result: Err(last_error.unwrap()) }
+        // If we get here, all retries failed
+        let final_err = last_error.unwrap_or(Error::Transaction("Unknown failure".into()));
+        let mut j = journal.lock().await;
+        let _ = j.record_failure(&journal_id, &format!("{}", final_err));
+
+        TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: HashMap::new(), attempt, duration: start.elapsed(), result: Err(final_err) }
     }
 
     async fn rollback(&mut self) {
-        info!("Transaction: Rolling back {} operations.", self.history.len());
+        info!("Transaction: Commencing rollback of {} successful operations.", self.history.len());
+        
+        // Rollback in reverse order of success
         for &idx in self.history.iter().rev() {
             let action = &self.graph[idx];
             match action {
                 GraphAction::Install(spec) => {
                     if let Some(b) = self.registry.get(&spec.backend) {
-                        if let Some(h) = b.as_installable() { let _ = h.remove(&[spec.name.clone()], true).await; }
+                        let sudo = b.needs_root();
+                        if let Some(h) = b.as_installable() {
+                            debug!("Rollback: Removing {}:{}", spec.backend, spec.name);
+                            if let Err(e) = h.remove(&[spec.name.clone()], sudo).await {
+                                warn!("Rollback failed for {}:{}: {}", spec.backend, spec.name, e);
+                            }
+                        }
                     }
                 }
                 GraphAction::Remove { name, backend } => {
                     if let Some(b) = self.registry.get(backend) {
+                        let sudo = b.needs_root();
                         if let Some(h) = b.as_installable() {
+                            debug!("Rollback: Re-installing {}:{}", backend, name);
                             let spec = PackageSpec { name: name.clone(), backend: backend.clone(), options: HashMap::new(), requires: vec![] };
-                            let _ = h.install(&[spec], true).await;
+                            if let Err(e) = h.install(&[spec], sudo).await {
+                                warn!("Rollback failed for {}:{}: {}", backend, name, e);
+                            }
                         }
                     }
                 }
             }
         }
+        info!("Transaction: Rollback procedure completed.");
     }
 }

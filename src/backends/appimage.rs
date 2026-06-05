@@ -1,6 +1,6 @@
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Error
+    Queryable, Result, Error, MetadataProvider
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -42,7 +42,7 @@ impl AppImageBackendCore {
 
     /// Prepares the filesystem structure for AppImage storage.
     async fn ensure_dirs(&self) -> Result<PathBuf> {
-        if !self.install_dir.exists() {
+        if !tokio::fs::try_exists(&self.install_dir).await.unwrap_or(false) {
             tokio::fs::create_dir_all(&self.install_dir).await?;
         }
         let bin_dir = dirs::home_dir()
@@ -50,14 +50,14 @@ impl AppImageBackendCore {
             .join(".local")
             .join("bin");
         
-        if !bin_dir.exists() {
+        if !tokio::fs::try_exists(&bin_dir).await.unwrap_or(false) {
             tokio::fs::create_dir_all(&bin_dir).await?;
         }
         Ok(bin_dir)
     }
 
     async fn load_state(&self) -> HashMap<String, AppImageState> {
-        if !self.state_file.exists() {
+        if !tokio::fs::try_exists(&self.state_file).await.unwrap_or(false) {
             return HashMap::new();
         }
         let data = tokio::fs::read_to_string(&self.state_file).await.unwrap_or_default();
@@ -66,7 +66,8 @@ impl AppImageBackendCore {
 
     async fn save_state(&self, state: &HashMap<String, AppImageState>) -> Result<()> {
         let data = serde_json::to_string_pretty(state).map_err(Error::from)?;
-        crate::utils::file::atomic_write(&self.state_file, &data)
+        // Phase 1: Using the high-level executor for atomic writes
+        self.executor.write_atomic(&self.state_file, &data).await
     }
 }
 
@@ -76,6 +77,19 @@ impl BackendCore for AppImageBackendCore {
 
     fn is_available(&self) -> bool {
         cfg!(target_os = "linux")
+    }
+
+    fn needs_root(&self) -> bool {
+        // AppImages are installed in user-owned data directories.
+        false
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for AppImageBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // AppImages are self-contained and do not expose a standard dependency manifest.
+        Ok(vec![])
     }
 }
 
@@ -108,7 +122,8 @@ impl Installable for AppImageInstallable {
 
             #[cfg(unix)] {
                 use std::os::unix::fs::PermissionsExt;
-                let mut perms = tokio::fs::metadata(&dest_path).await?.permissions();
+                let metadata = tokio::fs::metadata(&dest_path).await?;
+                let mut perms = metadata.permissions();
                 perms.set_mode(0o755);
                 tokio::fs::set_permissions(&dest_path, perms).await?;
             }
@@ -119,12 +134,12 @@ impl Installable for AppImageInstallable {
             
             let link_path = bin_dir.join(link_name);
             
-            if link_path.exists() || link_path.is_symlink() {
+            if tokio::fs::try_exists(&link_path).await.unwrap_or(false) || link_path.is_symlink() {
                 let _ = tokio::fs::remove_file(&link_path).await;
             }
 
             #[cfg(unix)] {
-                std::os::unix::fs::symlink(&dest_path, &link_path)?;
+                tokio::fs::os::unix::symlink(&dest_path, &link_path).await?;
             }
 
             state.insert(spec.name.clone(), AppImageState {

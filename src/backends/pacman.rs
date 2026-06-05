@@ -1,6 +1,6 @@
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Upgradable
+    Queryable, Result, Upgradable, MetadataProvider
 };
 use crate::parsers::pacman;
 use async_trait::async_trait;
@@ -28,6 +28,35 @@ impl BackendCore for PacmanBackendCore {
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("pacman")
+    }
+
+    fn needs_root(&self) -> bool {
+        // System-level package management on Arch requires root.
+        true
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for PacmanBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        // 'pacman -Si' provides information for repo packages.
+        // We look for the "Depends On" field.
+        let output = self.executor.run_output("pacman", &["-Si", name], false).await?;
+        let mut deps = Vec::new();
+
+        for line in output.lines() {
+            if let Some(dep_line) = line.strip_prefix("Depends On     :") {
+                let parts: Vec<&str> = dep_line.split_whitespace().collect();
+                for part in parts {
+                    if part != "None" {
+                        // Strip version constraints like >=1.2.3
+                        let clean_dep = part.split(['>', '<', '=']).next().unwrap_or(part);
+                        deps.push(clean_dep.to_string());
+                    }
+                }
+            }
+        }
+        Ok(deps)
     }
 }
 

@@ -28,6 +28,8 @@ pub trait Planner: Send + Sync {
     async fn plan(&self, desired: &std::collections::HashMap<String, Vec<PackageSpec>>) -> Result<SyncChanges>;
 }
 
+/// Primary entry point for system synchronization.
+/// Hardened for Phase 3.1 & 3.2: Async-compliant Manifest and Shim engines.
 pub struct SyncEngine<'a> {
     pub config: &'a Config,
     pub registry: Arc<BackendRegistry>,
@@ -71,7 +73,10 @@ impl<'a> SyncEngine<'a> {
         let _heartbeat = self.executor.start_sudo_keepalive().await;
         let _ = self.hooks.run_before_sync().await;
         
-        let mut state = StateRegistry::load()?;
+        // StateRegistry::load is blocking, wrap in spawn_blocking
+        let mut state = tokio::task::spawn_blocking(StateRegistry::load)
+            .await
+            .map_err(|e| crate::core::Error::Other(e.to_string()))??;
 
         if changes.is_empty() {
             info!("Success: System is consistent with declarative manifests.");
@@ -83,10 +88,20 @@ impl<'a> SyncEngine<'a> {
         let result = self.execute_transaction(&changes, &mut state).await;
 
         if result.is_ok() {
-            state.save()?;
-            self.reconcile_all_shims(&state).await?;
+            // StateRegistry::save is blocking, wrap in spawn_blocking
+            tokio::task::spawn_blocking(move || state.save())
+                .await
+                .map_err(|e| crate::core::Error::Other(e.to_string()))??;
+
+            // Phase 3.1: State is now persistent, re-load for shim reconciliation
+            let final_state = tokio::task::spawn_blocking(StateRegistry::load)
+                .await
+                .map_err(|e| crate::core::Error::Other(e.to_string()))??;
+
+            self.reconcile_all_shims(&final_state).await?;
             let _ = self.hooks.run_after_sync().await;
             self.metrics.print_summary();
+            
             let mut j = self.journal.lock().await;
             let _ = j.cleanup();
         }
@@ -120,6 +135,7 @@ impl<'a> SyncEngine<'a> {
                 match &changes.graph[idx] {
                     GraphAction::Install(spec) => {
                         state.add(&spec.backend, &spec.name, None, spec.options.clone());
+                        // Phase 3.1: Auto-lock checksums for remote resources
                         if (spec.backend == "web" || spec.backend == "github") && !spec.options.contains_key("sha256") {
                             self.attempt_auto_lock(spec).await;
                         }
@@ -142,13 +158,20 @@ impl<'a> SyncEngine<'a> {
                     let path_key = if spec.backend == "github" { "install_path" } else { "local_path" };
                     if let Some(local_path) = pkg.properties.get(path_key) {
                         let path = std::path::Path::new(local_path);
-                        if let Ok(hash) = generate_checksum(path) {
+                        
+                        // Checksum generation involves blocking file I/O
+                        let path_owned = path.to_path_buf();
+                        let hash_res = tokio::task::spawn_blocking(move || generate_checksum(&path_owned)).await;
+                        
+                        if let Ok(Ok(hash)) = hash_res {
                             info!("Auto-Lock: Generated SHA256 for {}: {}", spec.name, hash);
                             let mut new_options = spec.options.clone();
                             new_options.insert("sha256".into(), hash);
                             let opt_parts: Vec<String> = new_options.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
                             let new_spec_str = format!("{}:{}@{}", spec.backend, spec.name, opt_parts.join(","));
-                            let _ = self.manifest_engine.update_package(&spec.name, &new_spec_str);
+                            
+                            // Phase 3.1: ManifestEngine update is now async
+                            let _ = self.manifest_engine.update_package(&spec.name, &new_spec_str).await;
                         }
                     }
                 }
@@ -157,7 +180,8 @@ impl<'a> SyncEngine<'a> {
     }
 
     async fn reconcile_all_shims(&self, state: &StateRegistry) -> Result<()> {
-        let shim_mgr = ShimManager::new()?;
+        // Phase 3.2: ShimManager instantiation is now async
+        let shim_mgr = ShimManager::new().await?;
         for pkg in &state.packages {
             let needs_shim = pkg.options.get("sandbox") == Some(&"true".to_string())
                 || pkg.options.get("shim") == Some(&"true".to_string());
@@ -186,17 +210,18 @@ impl<'a> SyncEngine<'a> {
             
             if let Some(backend_cap) = self.registry.get(&backend) {
                 if let Some(handler) = backend_cap.as_installable() {
+                    let sudo = backend_cap.needs_root();
                     if is_install {
-                        let _ = handler.remove(&[package.clone()], true).await;
+                        let _ = handler.remove(&[package.clone()], sudo).await;
                         let spec = PackageSpec {
                             name: package.clone(),
                             backend: backend.clone(),
                             options: std::collections::HashMap::new(),
                             requires: vec![],
                         };
-                        let _ = handler.install(&[spec], true).await;
+                        let _ = handler.install(&[spec], sudo).await;
                     } else {
-                        let _ = handler.remove(&[package.clone()], true).await;
+                        let _ = handler.remove(&[package.clone()], sudo).await;
                     }
                 }
             }

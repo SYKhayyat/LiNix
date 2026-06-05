@@ -28,6 +28,7 @@ impl BridgeDb {
         ssl.insert("dnf".into(), "openssl-devel".into());
         ssl.insert("pacman".into(), "openssl".into());
         ssl.insert("brew".into(), "openssl@3".into());
+        ssl.insert("choco".into(), "openssl".into());
         
         mappings.push(BridgeMapping {
             pattern: Regex::new(r"openssl/ssl\.h|libssl|cannot find -lssl|crypto|SSL_library_init").unwrap(),
@@ -79,6 +80,7 @@ impl BridgeDb {
 }
 
 /// The Dependency Bridge orchestrator.
+/// Hardened for Phase 1.1: Asynchronous failure diagnosis and auto-remediation.
 pub struct DependencyBridge {
     db: BridgeDb,
 }
@@ -111,7 +113,6 @@ impl DependencyBridge {
         if suggestions.is_empty() { return Ok(()); }
         
         println!("\n💡 LiNix Insight: This build likely failed due to missing dependencies.");
-        // Fix E0308: unwrap_or expects owned String
         println!("Detected issue: {}", self.get_description(stderr).unwrap_or_else(|| "Unknown build failure".to_string()));
         
         println!("\nSuggested package(s) to install:");
@@ -122,11 +123,14 @@ impl DependencyBridge {
         if auto_install {
             self.auto_install_suggestions(&suggestions, app).await?;
         } else {
-            let should_install = Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt("Would you like to install these dependencies now?")
-                .default(false)
-                .interact()
-                .map_err(|e| Error::Other(e.to_string()))?;
+            // Confirm::interact() is blocking; wrap in spawn_blocking
+            let should_install = tokio::task::spawn_blocking(move || {
+                Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Would you like to install these dependencies now?")
+                    .default(false)
+                    .interact()
+            }).await.map_err(|e| Error::Other(e.to_string()))?
+              .map_err(|e| Error::Other(e.to_string()))?;
             
             if should_install {
                 self.auto_install_suggestions(&suggestions, app).await?;
@@ -142,14 +146,21 @@ impl DependencyBridge {
             let specs = app.resolve_spec(suggestion).await?;
             
             for spec in specs {
-                if let Some(backend) = app.registry.get(&spec.backend) {
-                    if let Some(installer) = backend.as_installable() {
-                        match installer.install(&[spec.clone()], true).await {
+                if let Some(backend_cap) = app.registry.get(&spec.backend) {
+                    if let Some(installer) = backend_cap.as_installable() {
+                        // Phase 2.2: Respect backend root requirements
+                        let sudo = backend_cap.needs_root();
+                        match installer.install(&[spec.clone()], sudo).await {
                             Ok(_) => {
                                 success_count += 1;
                                 let mut state = app.state.lock().await;
                                 state.add_simple(&spec.backend, &spec.name, None);
-                                state.save()?;
+                                
+                                // Registry save is blocking
+                                let state_clone = state.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    state_clone.save()
+                                }).await.map_err(|e| Error::Other(e.to_string()))??;
                             }
                             Err(e) => warn!("Failed to install {}: {}", suggestion, e),
                         }

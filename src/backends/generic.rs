@@ -1,6 +1,7 @@
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Searchable, Upgradable, RepoManager, Error, HealthStatus, HealthReport
+    Queryable, Result, Searchable, Upgradable, RepoManager, HealthStatus, 
+    HealthReport, MetadataProvider
 };
 use crate::parsers::OutputParser;
 use async_trait::async_trait;
@@ -23,6 +24,10 @@ pub struct ManagerConfig {
     pub repo_add_args: Option<Vec<String>>,
     pub repo_remove_args: Option<Vec<String>>,
     pub repo_list_args: Option<Vec<String>>,
+    /// Phase 1.1: Command to fetch backend-native dependencies (e.g., "apt-cache depends")
+    pub depends_args: Option<Vec<String>>,
+    /// Phase 2.2: Explicitly define if this backend requires root privileges.
+    pub needs_root: bool,
     pub is_exclusive: bool,
     pub flag_map: HashMap<String, String>,
 }
@@ -44,6 +49,10 @@ impl BackendCore for GenericBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync(&self.name)
     }
+
+    fn needs_root(&self) -> bool {
+        self.config.needs_root
+    }
     
     async fn check_health(&self) -> Result<HealthReport> {
         if !self.is_available() {
@@ -57,6 +66,32 @@ impl BackendCore for GenericBackendCore {
             status: HealthStatus::Ok,
             message: None,
         })
+    }
+}
+
+/// Phase 1.1: MetadataProvider for generic backends.
+#[async_trait]
+impl MetadataProvider for GenericBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        let base_args = match &self.config.depends_args {
+            Some(args) => args,
+            None => return Ok(vec![]),
+        };
+
+        let mut final_args = Vec::new();
+        for arg in base_args {
+            final_args.push(arg.replace("{name}", name));
+        }
+
+        let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
+        let output = self.executor.run_output(&self.name, &arg_refs, false).await?;
+        
+        // Simple line-based dependency parsing for generic backends.
+        // Specific backends like Apt will override this logic in specialized modules.
+        Ok(output.lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 }
 
@@ -173,7 +208,6 @@ impl Upgradable for GenericUpgradable {
     }
 
     async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        // Default implementation for generic managers.
         Ok(())
     }
 }
@@ -187,7 +221,7 @@ pub struct GenericRepoManager {
 impl RepoManager for GenericRepoManager {
     async fn add_repo(&self, name: &str, url: &str, sudo: bool) -> Result<()> {
         let base_args = self.core.config.repo_add_args.as_ref()
-            .ok_or_else(|| Error::Other("Repo adding not supported".into()))?;
+            .ok_or_else(|| crate::core::Error::Other("Repo adding not supported".into()))?;
         
         let mut final_args = Vec::new();
         for arg in base_args {
@@ -202,7 +236,7 @@ impl RepoManager for GenericRepoManager {
 
     async fn remove_repo(&self, name: &str, sudo: bool) -> Result<()> {
         let base_args = self.core.config.repo_remove_args.as_ref()
-            .ok_or_else(|| Error::Other("Repo removal not supported".into()))?;
+            .ok_or_else(|| crate::core::Error::Other("Repo removal not supported".into()))?;
             
         let final_args: Vec<String> = base_args.iter().map(|a| a.replace("{name}", name)).collect();
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
@@ -213,7 +247,7 @@ impl RepoManager for GenericRepoManager {
 
     async fn list_repos(&self) -> Result<Vec<(String, String)>> {
         let base_args = self.core.config.repo_list_args.as_ref()
-            .ok_or_else(|| Error::Other("Repo listing not supported".into()))?;
+            .ok_or_else(|| crate::core::Error::Other("Repo listing not supported".into()))?;
         let arg_refs: Vec<&str> = base_args.iter().map(|s| s.as_str()).collect();
         let output = self.core.executor.run_output(&self.core.name, &arg_refs, false).await?;
         

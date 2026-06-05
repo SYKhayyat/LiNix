@@ -1,16 +1,16 @@
 use crate::core::{
     BackendCore, Installable, Queryable, 
     security::verify_checksum,
-    CommandExecutor, Package, PackageSpec, Result, Error,
+    CommandExecutor, Package, PackageSpec, Result, Error, MetadataProvider
 };
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{PathBuf};
 use tokio::sync::Mutex;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Internal state metadata for resources managed via the 'web' backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ impl WebBackendCore {
 
     async fn load_state(&self) -> HashMap<String, WebState> {
         let _guard = self.internal_lock.lock().await;
-        if !self.state_file.exists() {
+        if !tokio::fs::try_exists(&self.state_file).await.unwrap_or(false) {
             return HashMap::new();
         }
         let data = tokio::fs::read_to_string(&self.state_file).await.unwrap_or_default();
@@ -66,6 +66,15 @@ impl WebBackendCore {
 impl BackendCore for WebBackendCore {
     fn name(&self) -> &str { &self.name }
     fn is_available(&self) -> bool { true }
+    fn needs_root(&self) -> bool { false }
+}
+
+#[async_trait]
+impl MetadataProvider for WebBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // Direct web downloads are self-contained; no native transitive deps.
+        Ok(vec![])
+    }
 }
 
 pub struct WebInstallable {
@@ -108,19 +117,25 @@ impl Installable for WebInstallable {
 
             let id = format!("{:x}", md5::compute(&spec.name));
             let dest_dir = self.core.install_dir.join(&id);
-            let _ = tokio::fs::remove_dir_all(&dest_dir).await;
+            if dest_dir.exists() {
+                tokio::fs::remove_dir_all(&dest_dir).await.map_err(Error::from)?;
+            }
             tokio::fs::create_dir_all(&dest_dir).await.map_err(Error::from)?;
 
             let filename = spec.name.split('/').last().unwrap_or("resource");
             let is_archive = [".zip", ".gz", ".tar", ".xz", ".bz2", ".tgz"].iter().any(|ext| filename.contains(ext));
             
             if is_archive {
-                extract_archive(&dl_path, &dest_dir)?;
+                let dl_path_archive = dl_path.clone();
+                let dest_dir_archive = dest_dir.clone();
+                tokio::task::spawn_blocking(move || {
+                    extract_archive(&dl_path_archive, &dest_dir_archive)
+                }).await.map_err(|e| Error::Other(e.to_string()))??;
             } else {
                 tokio::fs::copy(&dl_path, dest_dir.join(filename)).await.map_err(Error::from)?;
             }
 
-            // WIRING: Cross-platform binary discovery and linkage
+            // Cross-platform binary discovery and linkage
             let mut final_bin_link = None;
             if spec.options.get("type").map(|t| t == "program").unwrap_or(true) {
                 let bin_name = spec.options.get("bin").map(|s| s.as_str()).unwrap_or_else(|| {
@@ -131,29 +146,43 @@ impl Installable for WebInstallable {
                     .ok_or_else(|| Error::Other("Home directory not found".into()))?
                     .join(".local").join("bin").join(bin_name);
                 
-                let mut entries = walkdir::WalkDir::new(&dest_dir).into_iter().filter_map(|e| e.ok());
-                let bin_src = entries.find(|e| {
-                    let fname = e.file_name().to_string_lossy().to_lowercase();
-                    fname == bin_name.to_lowercase() || 
-                    fname == format!("{}.exe", bin_name.to_lowercase()) ||
-                    (fname.starts_with(bin_name) && !fname.contains('.'))
-                }).map(|e| e.into_path());
+                let dest_dir_discovery = dest_dir.clone();
+                let bin_name_str = bin_name.to_string();
 
-                if let Some(src_path) = bin_src {
+                let bin_src_result: Result<Option<PathBuf>> = tokio::task::spawn_blocking(move || {
+                    let mut entries = walkdir::WalkDir::new(&dest_dir_discovery).into_iter().filter_map(|e| e.ok());
+                    let found = entries.find(|e| {
+                        let fname = e.file_name().to_string_lossy().to_lowercase();
+                        fname == bin_name_str.to_lowercase() || 
+                        fname == format!("{}.exe", bin_name_str.to_lowercase()) ||
+                        (fname.starts_with(&bin_name_str) && !fname.contains('.'))
+                    }).map(|e| e.into_path());
+                    Ok(found)
+                }).await.map_err(|e| Error::Other(e.to_string()))?;
+
+                if let Some(src_path) = bin_src_result? {
                     let bin_dest = bin_dest_base.clone();
-                    let _ = std::fs::create_dir_all(bin_dest.parent().unwrap());
-                    let _ = std::fs::remove_file(&bin_dest);
+                    if let Some(parent) = bin_dest.parent() {
+                        tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
+                    }
+                    
+                    if bin_dest.exists() || bin_dest.is_symlink() {
+                        tokio::fs::remove_file(&bin_dest).await.map_err(Error::from)?;
+                    }
 
                     #[cfg(unix)] {
                         use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&src_path, std::fs::Permissions::from_mode(0o755));
-                        std::os::unix::fs::symlink(&src_path, &bin_dest).map_err(Error::from)?;
+                        let metadata = tokio::fs::metadata(&src_path).await?;
+                        let mut perms = metadata.permissions();
+                        perms.set_mode(0o755);
+                        tokio::fs::set_permissions(&src_path, perms).await.map_err(Error::from)?;
+                        tokio::fs::os::unix::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
                     }
 
                     #[cfg(windows)] {
                         let mut win_bin_dest = bin_dest.clone();
                         if win_bin_dest.extension().is_none() { win_bin_dest.set_extension("exe"); }
-                        std::fs::copy(&src_path, &win_bin_dest).map_err(Error::from)?;
+                        tokio::fs::copy(&src_path, &win_bin_dest).await.map_err(Error::from)?;
                     }
 
                     final_bin_link = Some(bin_dest.to_string_lossy().to_string());
@@ -178,7 +207,7 @@ impl Installable for WebInstallable {
         for url in urls {
             if let Some(entry) = state.remove(url) {
                 if let Some(ref l) = entry.bin_link {
-                    let _ = std::fs::remove_file(l);
+                    let _ = tokio::fs::remove_file(l).await;
                 }
                 let _ = tokio::fs::remove_dir_all(entry.local_path).await;
                 info!("Web: Removed resource: {}", url);

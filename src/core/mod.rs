@@ -9,7 +9,7 @@ pub mod snapshot;
 pub mod state;
 pub mod transaction;
 pub mod validator;
-pub mod ratelimiter;   // new
+pub mod ratelimiter;
 
 // Re-export performance and caching logic
 pub use cache::{PackageCache, SmartCache};
@@ -25,16 +25,12 @@ pub use transaction::{Transaction, GraphAction, TransactionConfig};
 pub use snapshot::{Snapshot, SnapshotManager, SnapshotProvider};
 pub use journal::{Journal, JournalEntry, ActionStatus};
 
-// Re-export the capability-based trait system (including Backend trait for compatibility)
+// Re-export the capability-based trait system
 pub use manager::{
     BackendCore, Installable, Queryable, RepoManager, Searchable,
     Upgradable, BackendCapabilities, BackendCapabilitiesBuilder,
-    HealthStatus, HealthReport,
+    HealthStatus, HealthReport, MetadataProvider,
 };
-// Also re-export the deprecated Backend trait to fix "unresolved import crate::core::Backend"
-pub use manager::Backend as BackendTrait;   // but the code uses `Backend`, not `BackendTrait`
-// Better: re-export `manager::Backend` directly as `Backend` (since it's deprecated but needed)
-pub use manager::Backend;   // <-- ADD THIS LINE
 
 // Re-export the core data models
 pub use package::{Package, PackageSpec};

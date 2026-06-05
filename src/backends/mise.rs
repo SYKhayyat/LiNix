@@ -1,6 +1,6 @@
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Upgradable, Error
+    Queryable, Result, Upgradable, Error, MetadataProvider
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -28,6 +28,21 @@ impl BackendCore for MiseBackendCore {
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("mise")
+    }
+
+    fn needs_root(&self) -> bool {
+        // Mise typically manages tools in the user's home directory (~/.local/share/mise)
+        false
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for MiseBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // Mise handles versioned runtimes which are generally leaf nodes or 
+        // handle their own internal versioning. We return empty to avoid
+        // over-complicating system-level orchestration with tool-specific runtimes.
+        Ok(vec![])
     }
 }
 

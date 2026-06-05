@@ -1,6 +1,6 @@
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Upgradable, Error
+    Queryable, Result, Upgradable, Error, MetadataProvider
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -28,6 +28,21 @@ impl BackendCore for NixBackendCore {
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("nix")
+    }
+
+    fn needs_root(&self) -> bool {
+        // Nix profiles are managed per-user in the nix store; usually doesn't require sudo.
+        false
+    }
+}
+
+/// Phase 1.1: MetadataProvider for Nix.
+#[async_trait]
+impl MetadataProvider for NixBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // Nix handles its own dependency tree internally during 'nix profile install'.
+        // We return an empty list as we don't need to manually orchestrate nix-native deps.
+        Ok(vec![])
     }
 }
 

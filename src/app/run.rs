@@ -2,11 +2,14 @@ use crate::App;
 use crate::core::{Result, Error};
 use crate::app::sandbox::{Sandbox, SandboxConfig};
 use crate::app::bridge::DependencyBridge;
-use std::process::Command;
+use tokio::process::Command;
 use tracing::{info, debug, error};
 
 /// Handles the execution of commands within specialized LiNix environments.
 /// Orchestrates sandboxing, ephemeral provisioning, and dependency bridging.
+/// 
+/// Hardened for Phase 2.2: Respects backend root requirements and utilizes
+/// asynchronous process spawning to prevent runtime freezes.
 pub struct Runner<'a> {
     app: &'a App,
 }
@@ -26,6 +29,7 @@ impl<'a> Runner<'a> {
 
         // 1. Resolve and check all required packages
         for pkg_str in packages {
+            // app.resolve_spec is async
             let specs = self.app.resolve_spec(pkg_str).await?;
             for spec in specs {
                 // Check if any package in the environment requires sandboxing
@@ -50,14 +54,16 @@ impl<'a> Runner<'a> {
             if !is_present {
                 if let Some(installer) = backend_caps.as_installable() {
                     info!("Runner: Provisioning missing dependency: {}:{}", spec.backend, spec.name);
-                    installer.install(&[spec.clone()], true).await?;
+                    // Phase 2.2: Pass sudo requirement from backend capability
+                    let sudo = backend_caps.needs_root();
+                    installer.install(&[spec.clone()], sudo).await?;
                 }
             }
         }
 
         // 3. Prepare Execution
         let status = if sandbox_requested {
-            // Point 17: Execute within a Bubblewrap sandbox
+            // Point 17: Execute within a Bubblewrap/MacOS sandbox
             let config = SandboxConfig {
                 allow_network: true,
                 allow_home: true,
@@ -66,30 +72,43 @@ impl<'a> Runner<'a> {
                 custom_read_only_mounts: vec![],
                 environment: vec![],
             };
-            Sandbox::run(command, args, &config)?
+            
+            // Sandbox::run is historically synchronous or uses std::process
+            // We wrap it in spawn_blocking to keep the async executor free
+            let cmd_str = command.to_string();
+            let args_vec = args.to_vec();
+            tokio::task::spawn_blocking(move || {
+                Sandbox::run(&cmd_str, &args_vec, &config)
+            }).await.map_err(|e| Error::Other(e.to_string()))??
         } else {
-            // Standard execution
+            // Standard asynchronous execution
             debug!("Runner: Spawning standard process: {} {:?}", command, args);
-            Command::new(command)
-                .args(args)
-                .status()
+            let mut child = Command::new(command);
+            child.args(args);
+            
+            child.spawn()
                 .map_err(|e| Error::CommandFailed(format!("Failed to spawn {}: {}", command, e)))?
+                .wait()
+                .await
+                .map_err(|e| Error::CommandFailed(format!("Error waiting for {}: {}", command, e)))?
         };
 
         // 4. Point 16: Failure Diagnosis (Dependency Bridging)
         if !status.success() {
             error!("Runner: Command '{}' failed with status: {}", command, status);
             
-            // Re-run with captured stderr to provide a diagnosis if it was a build/linking error
+            // Re-run with captured stderr to provide a diagnosis
             let diag_output = Command::new(command)
                 .args(args)
                 .output()
+                .await
                 .ok();
 
             if let Some(out) = diag_output {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 let bridge = DependencyBridge::new();
-                bridge.handle_failure(&stderr, &self.app.config.default_backend.clone().unwrap_or_else(|| "apt".into()), self.app, false).await?;
+                let default_backend = self.app.config.default_backend.clone().unwrap_or_else(|| "apt".into());
+                bridge.handle_failure(&stderr, &default_backend, self.app, false).await?;
             }
 
             return Err(Error::CommandFailed(format!("Execution of '{}' failed.", command)));

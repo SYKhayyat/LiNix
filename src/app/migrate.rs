@@ -1,12 +1,14 @@
 use crate::App;
-use crate::core::{Result, Package};
-use crate::config::parser::write_group_file;
+use crate::core::{Result, Package, Error};
 use chrono::Local;
 use tracing::{info, warn, debug};
 use std::collections::HashSet;
+use tokio::io::AsyncWriteExt;
 
 /// The Ingestion Engine (Roadmap Point 3).
 /// Responsible for moving a "dirty" system with existing manual installs into LiNix management.
+/// 
+/// Hardened for Phase 3: Implements full Async I/O for manifest generation and state persistence.
 pub struct Migrator<'a> {
     app: &'a App,
 }
@@ -23,15 +25,16 @@ impl<'a> Migrator<'a> {
         let mut discovered_packages = Vec::new();
         let mut seen = HashSet::new();
 
-        // Acquire lock once for the discovery phase
-        let state = self.app.state.lock().await;
-
         // 1. Discovery Phase: Crawl the registry
+        // We do this while holding an immutable reference to the registry through the App context.
         for backend in self.app.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
                 debug!("Migrator: Probing {}...", backend.name());
+                
+                // list_manual is an async trait method
                 match queryable.list_manual().await {
                     Ok(pkgs) => {
+                        let state = self.app.state.lock().await;
                         for pkg in pkgs {
                             let key = format!("{}:{}", pkg.backend, pkg.name);
                             
@@ -64,18 +67,32 @@ impl<'a> Migrator<'a> {
             .map(|p| format!("{}:{}", p.backend, p.name))
             .collect();
 
-        write_group_file(&path, &package_strings)?;
+        // Phase 3: Async manifest creation
+        if let Some(parent) = path.parent() {
+            if !tokio::fs::try_exists(parent).await.unwrap_or(false) {
+                tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
+            }
+        }
+
+        let mut file = tokio::fs::File::create(&path).await.map_err(Error::from)?;
+        file.write_all(package_strings.join("\n").as_bytes()).await.map_err(Error::from)?;
+        file.flush().await.map_err(Error::from)?;
+
         info!("Migrator: Declarative manifest generated: {:?}", path);
 
         // 3. Ownership Acquisition Phase
-        // Drop the immutable guard and get a mutable one for updating
-        drop(state);
-        let mut state_mut = self.app.state.lock().await;
-        
-        for pkg in &discovered_packages {
-            state_mut.add_simple(&pkg.backend, &pkg.name, pkg.version.clone());
+        {
+            let mut state_mut = self.app.state.lock().await;
+            for pkg in &discovered_packages {
+                state_mut.add_simple(&pkg.backend, &pkg.name, pkg.version.clone());
+            }
+            
+            // Phase 3: Wrap blocking StateRegistry::save in spawn_blocking
+            let state_clone = state_mut.clone();
+            tokio::task::spawn_blocking(move || {
+                state_clone.save()
+            }).await.map_err(|e| Error::Other(e.to_string()))??;
         }
-        state_mut.save()?;
 
         info!("Migrator: Ownership records updated.");
         
@@ -95,10 +112,16 @@ impl<'a> Migrator<'a> {
 
         for backend in self.app.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
-                let pkgs = queryable.list_manual().await?;
-                for pkg in pkgs {
-                    if !state.is_managed(backend.name(), &pkg.name) {
-                        unmanaged.push(pkg);
+                match queryable.list_manual().await {
+                    Ok(pkgs) => {
+                        for pkg in pkgs {
+                            if !state.is_managed(backend.name(), &pkg.name) {
+                                unmanaged.push(pkg);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Migrator Audit: Failed to query backend {}: {}", backend.name(), e);
                     }
                 }
             }

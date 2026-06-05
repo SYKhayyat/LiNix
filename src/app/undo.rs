@@ -3,10 +3,11 @@ use crate::core::{Result, Error, Snapshot, StateRegistry, ManagedPackage};
 use dialoguer::{theme::ColorfulTheme, Select};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
+use tokio::fs;
 
 /// Manages the Snapshot Gallery and System Time Travel (Point 12).
-/// Hardened for Version 3.5.0 to provide Snapshot Diffs.
+/// Hardened for Phase 3.2: Async-safe I/O and blocking task isolation.
 pub struct UndoManager<'a> {
     app: &'a App,
 }
@@ -58,12 +59,15 @@ impl<'a> UndoManager<'a> {
             .map(|s| format!("[{}] {} - {} ({})", s.backend, s.timestamp, s.description, s.id))
             .collect();
 
-        let selection = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("Select a system state to inspect/restore (ESC to cancel)")
-            .default(0)
-            .items(&items)
-            .interact_opt()
-            .map_err(|e| Error::Other(e.to_string()))?;
+        // Dialoguer is blocking. Wrap in spawn_blocking.
+        let selection = tokio::task::spawn_blocking(move || {
+            Select::with_theme(&ColorfulTheme::default())
+                .with_prompt("Select a system state to inspect/restore (ESC to cancel)")
+                .default(0)
+                .items(&items)
+                .interact_opt()
+        }).await.map_err(|e| Error::Other(e.to_string()))?
+          .map_err(|e| Error::Other(e.to_string()))?;
 
         if let Some(index) = selection {
             let selected = &snapshots[index];
@@ -74,9 +78,13 @@ impl<'a> UndoManager<'a> {
     }
 
     /// Validates that a path is safe to access.
-    fn validate_snapshot_path(&self, path: &Path, snapshot_backend: &str) -> Result<PathBuf> {
-        let canonical = path.canonicalize()
-            .map_err(|e| Error::Snapshot(format!("Failed to canonicalize path {:?}: {}", path, e)))?;
+    async fn validate_snapshot_path(&self, path: &Path, snapshot_backend: &str) -> Result<PathBuf> {
+        // canonicalize is blocking
+        let path_owned = path.to_path_buf();
+        let canonical = tokio::task::spawn_blocking(move || {
+            path_owned.canonicalize()
+        }).await.map_err(|e| Error::Other(e.to_string()))?
+          .map_err(|e| Error::Snapshot(format!("Failed to canonicalize path {:?}: {}", path, e)))?;
         
         let path_str = canonical.to_string_lossy();
         
@@ -97,7 +105,6 @@ impl<'a> UndoManager<'a> {
         };
         
         let mut is_allowed = false;
-        // Fix E0382: Iterate by reference to prevent moving the vector
         for prefix in &allowed_prefixes {
             if path_str.starts_with(prefix) {
                 is_allowed = true;
@@ -107,15 +114,15 @@ impl<'a> UndoManager<'a> {
         
         if !is_allowed {
             return Err(Error::Snapshot(format!(
-                "Security violation: Snapshot path '{}' is outside allowed directories. Allowed prefixes: {:?}",
-                path_str, allowed_prefixes
+                "Security violation: Snapshot path '{}' is outside allowed directories.",
+                path_str
             )));
         }
         
         Ok(canonical)
     }
 
-    fn find_registry_in_snapshot(&self, snapshot_root: &Path) -> Result<Option<PathBuf>> {
+    async fn find_registry_in_snapshot(&self, snapshot_root: &Path) -> Result<Option<PathBuf>> {
         let possible_paths = vec![
             snapshot_root.join("var/lib/linix/registry.json"),
             snapshot_root.join("root/.local/share/linix/registry.json"),
@@ -123,7 +130,7 @@ impl<'a> UndoManager<'a> {
         ];
         
         for path in possible_paths {
-            if path.exists() {
+            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
                 debug!("Found registry.json at {:?}", path);
                 return Ok(Some(path));
             }
@@ -141,20 +148,22 @@ impl<'a> UndoManager<'a> {
             _ => return Err(Error::Snapshot(format!("Unsupported snapshot backend: {}", snapshot.backend))),
         };
         
-        let validated_root = self.validate_snapshot_path(&snapshot_root, &snapshot.backend)?;
+        let validated_root = self.validate_snapshot_path(&snapshot_root, &snapshot.backend).await?;
         
-        let snapshot_registry_path = match self.find_registry_in_snapshot(&validated_root)? {
+        let snapshot_registry_path = match self.find_registry_in_snapshot(&validated_root).await? {
             Some(path) => path,
             None => {
                 return Err(Error::Snapshot("Could not find registry.json in snapshot".into()));
             }
         };
         
-        let data = std::fs::read_to_string(&snapshot_registry_path)
-            .map_err(Error::from)?;
+        let data = fs::read_to_string(&snapshot_registry_path).await.map_err(Error::from)?;
         
-        let snapshot_state: StateRegistry = serde_json::from_str(&data)
-            .map_err(Error::from)?;
+        // Serde parsing is CPU intensive, wrap in spawn_blocking
+        let snapshot_state: StateRegistry = tokio::task::spawn_blocking(move || {
+            serde_json::from_str(&data)
+        }).await.map_err(|e| Error::Other(e.to_string()))?
+          .map_err(Error::from)?;
         
         let current_state = self.app.state.lock().await;
         let diff = self.calculate_diff(&current_state, &snapshot_state);
@@ -171,15 +180,19 @@ impl<'a> UndoManager<'a> {
             println!("\nNo package changes detected.");
         }
 
-        warn!("\nCRITICAL: Reverting to this snapshot will overwrite your system root (/).");
-        print!("\nAre you absolutely sure? Type 'RESTORE' to proceed: ");
+        println!("\nCRITICAL: Reverting to this snapshot will overwrite your system root (/).");
+        print!("Are you absolutely sure? Type 'RESTORE' to proceed: ");
         
         use std::io::{self, Write};
         let _ = io::stdout().flush();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).map_err(Error::from)?;
+        
+        let confirm_res = tokio::task::spawn_blocking(|| {
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).map(|_| input)
+        }).await.map_err(|e| Error::Other(e.to_string()))?
+          .map_err(Error::from)?;
 
-        if input.trim() == "RESTORE" {
+        if confirm_res.trim() == "RESTORE" {
             self.execute_restore(snapshot).await
         } else {
             info!("Restore aborted by user.");

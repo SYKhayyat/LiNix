@@ -1,4 +1,4 @@
-use crate::core::{CommandExecutor, Result, PackageSpec, BackendCore, Installable, Error};
+use crate::core::{CommandExecutor, Result, PackageSpec, BackendCore, Installable, Error, MetadataProvider};
 use crate::config::Config;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -43,7 +43,7 @@ impl LinkBackendCore {
             .map_err(|e| Error::Other(format!("Tera Render Error in {:?}: {}", source_path, e)))
     }
 
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     fn is_same_drive(a: &Path, b: &Path) -> bool {
         use std::path::Component;
         let drive_a = a.components().find(|c| matches!(c, Component::Prefix(_)));
@@ -56,6 +56,15 @@ impl LinkBackendCore {
 impl BackendCore for LinkBackendCore {
     fn name(&self) -> &str { &self.name }
     fn is_available(&self) -> bool { true }
+    fn needs_root(&self) -> bool { false }
+}
+
+/// Phase 1.1: MetadataProvider for Link (Filesystem objects have no native transitive deps).
+#[async_trait]
+impl MetadataProvider for LinkBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
 }
 
 pub struct LinkInstallable {
@@ -97,8 +106,11 @@ impl Installable for LinkInstallable {
             }
 
             // 2. Standard Symlinking Path
-            if target_path.exists() || target_path.is_symlink() {
-                if let Ok(existing_link) = std::fs::read_link(&target_path) {
+            let exists = tokio::fs::try_exists(&target_path).await.unwrap_or(false);
+            let is_symlink = target_path.is_symlink();
+
+            if exists || is_symlink {
+                if let Ok(existing_link) = tokio::fs::read_link(&target_path).await {
                     if existing_link == source {
                         debug!("Link: Correct symlink already exists at {:?}", target_path);
                         continue;
@@ -108,10 +120,11 @@ impl Installable for LinkInstallable {
                 if self.core.executor.dry_run {
                     info!("[DRY-RUN] Would remove existing file/link at {:?}", target_path);
                 } else {
-                    if target_path.is_dir() && !target_path.is_symlink() {
-                        std::fs::remove_dir_all(&target_path)?;
+                    let metadata = tokio::fs::symlink_metadata(&target_path).await.map_err(Error::from)?;
+                    if metadata.is_dir() && !metadata.is_symlink() {
+                        tokio::fs::remove_dir_all(&target_path).await.map_err(Error::from)?;
                     } else {
-                        std::fs::remove_file(&target_path)?;
+                        tokio::fs::remove_file(&target_path).await.map_err(Error::from)?;
                     }
                 }
             }
@@ -119,22 +132,25 @@ impl Installable for LinkInstallable {
             info!("Link: Creating link {:?} -> {:?}", source, target_path);
             if !self.core.executor.dry_run {
                 if let Some(p) = target_path.parent() {
-                    std::fs::create_dir_all(p)?;
+                    tokio::fs::create_dir_all(p).await.map_err(Error::from)?;
                 }
 
                 #[cfg(unix)] {
-                    std::os::unix::fs::symlink(&source, &target_path)?;
+                    tokio::fs::symlink(&source, &target_path).await.map_err(Error::from)?;
                 }
 
-                #[cfg(windows)] {
+                #[cfg(target_os = "windows")] {
                     let source_abs = source.canonicalize().unwrap_or_else(|_| source.clone());
                     if !LinkBackendCore::is_same_drive(&source_abs, &target_path) {
                         warn!("Link: Cross-drive fallback to COPY for {:?}", source);
-                        std::fs::copy(&source, &target_path)?;
-                    } else if source.is_dir() {
-                        std::os::windows::fs::symlink_dir(&source, &target_path)?;
+                        tokio::fs::copy(&source, &target_path).await.map_err(Error::from)?;
                     } else {
-                        std::os::windows::fs::symlink_file(&source, &target_path)?;
+                        let is_dir = tokio::fs::metadata(&source).await.map(|m| m.is_dir()).unwrap_or(false);
+                        if is_dir {
+                            tokio::fs::symlink_dir(&source, &target_path).await.map_err(Error::from)?;
+                        } else {
+                            tokio::fs::symlink_file(&source, &target_path).await.map_err(Error::from)?;
+                        }
                     }
                 }
             }
@@ -145,13 +161,17 @@ impl Installable for LinkInstallable {
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
         for name in names {
             let path = Path::new(name);
-            if path.exists() || path.is_symlink() {
+            let exists = tokio::fs::try_exists(path).await.unwrap_or(false);
+            let is_symlink = path.is_symlink();
+
+            if exists || is_symlink {
                 info!("Link: Removing link/rendered file {:?}", path);
                 if !self.core.executor.dry_run {
-                    if path.is_dir() && !path.is_symlink() {
-                        std::fs::remove_dir_all(path)?;
+                    let metadata = tokio::fs::symlink_metadata(path).await.map_err(Error::from)?;
+                    if metadata.is_dir() && !metadata.is_symlink() {
+                        tokio::fs::remove_dir_all(path).await.map_err(Error::from)?;
                     } else {
-                        std::fs::remove_file(path)?;
+                        tokio::fs::remove_file(path).await.map_err(Error::from)?;
                     }
                 }
             }

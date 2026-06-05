@@ -1,6 +1,5 @@
 use crate::core::{Result, Error};
 use std::process::Command;
-use std::path::PathBuf;
 use tracing::warn;
 
 /// Configuration for the declarative sandbox environment.

@@ -1,6 +1,6 @@
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result
+    Queryable, Result, MetadataProvider
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -44,6 +44,21 @@ impl BackendCore for ServiceBackendCore {
         } else {
             false
         }
+    }
+
+    fn needs_root(&self) -> bool {
+        // System service management almost always requires root/administrative privileges.
+        true
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for ServiceBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // While services can have unit dependencies (e.g. 'After=' or 'Requires=' in systemd),
+        // LiNix treats the service backend as a state-manager for existing units rather
+        // than a package manager. We return empty to avoid recursing into OS init logic.
+        Ok(vec![])
     }
 }
 
@@ -158,7 +173,6 @@ impl Queryable for ServiceQueryable {
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let mut p = Package::new(name, "service");
         
-        // Fix unused_mut: Mutation is now encapsulated
         self.fill_platform_metadata(&mut p).await?;
 
         Ok(Some(p))

@@ -35,6 +35,11 @@ pub trait BackendCore: Send + Sync {
     /// Checks if the underlying tool is available on the system.
     fn is_available(&self) -> bool;
 
+    /// Phase 2.2: Returns true if the backend requires root privileges for modification.
+    /// System-level managers (apt, pacman, dnf) should return true.
+    /// User-level managers (cargo, npm, etc.) should return false.
+    fn needs_root(&self) -> bool;
+
     /// Diagnostic check used by the 'Doctor' command.
     async fn check_health(&self) -> Result<HealthReport> {
         if self.is_available() {
@@ -112,6 +117,13 @@ pub trait RepoManager: Send + Sync {
     fn can_manage_repos(&self) -> bool { true }
 }
 
+/// Phase 1.1: Capability trait for providing backend-native dependency metadata.
+#[async_trait]
+pub trait MetadataProvider: Send + Sync {
+    /// Returns a list of backend-native package names that are dependencies for the given package.
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>>;
+}
+
 // ============================================================================
 // Capability Aggregation
 // ============================================================================
@@ -124,6 +136,7 @@ pub struct BackendCapabilities {
     queryable: Option<Arc<dyn Queryable>>,
     upgradable: Option<Arc<dyn Upgradable>>,
     repo_manager: Option<Arc<dyn RepoManager>>,
+    metadata_provider: Option<Arc<dyn MetadataProvider>>,
 }
 
 impl BackendCapabilities {
@@ -134,6 +147,7 @@ impl BackendCapabilities {
     pub fn core(&self) -> &Arc<dyn BackendCore> { &self.core }
     pub fn name(&self) -> &str { self.core.name() }
     pub fn is_available(&self) -> bool { self.core.is_available() }
+    pub fn needs_root(&self) -> bool { self.core.needs_root() }
 
     pub fn is_installable(&self) -> bool { self.installable.is_some() }
     pub fn as_installable(&self) -> Option<&Arc<dyn Installable>> { self.installable.as_ref() }
@@ -149,6 +163,9 @@ impl BackendCapabilities {
 
     pub fn is_repo_manager(&self) -> bool { self.repo_manager.is_some() }
     pub fn as_repo_manager(&self) -> Option<&Arc<dyn RepoManager>> { self.repo_manager.as_ref() }
+
+    pub fn is_metadata_provider(&self) -> bool { self.metadata_provider.is_some() }
+    pub fn as_metadata_provider(&self) -> Option<&Arc<dyn MetadataProvider>> { self.metadata_provider.as_ref() }
 }
 
 pub struct BackendCapabilitiesBuilder {
@@ -158,6 +175,7 @@ pub struct BackendCapabilitiesBuilder {
     queryable: Option<Arc<dyn Queryable>>,
     upgradable: Option<Arc<dyn Upgradable>>,
     repo_manager: Option<Arc<dyn RepoManager>>,
+    metadata_provider: Option<Arc<dyn MetadataProvider>>,
 }
 
 impl BackendCapabilitiesBuilder {
@@ -169,6 +187,7 @@ impl BackendCapabilitiesBuilder {
             queryable: None,
             upgradable: None,
             repo_manager: None,
+            metadata_provider: None,
         }
     }
     
@@ -177,6 +196,7 @@ impl BackendCapabilitiesBuilder {
     pub fn with_queryable(mut self, q: Arc<dyn Queryable>) -> Self { self.queryable = Some(q); self }
     pub fn with_upgradable(mut self, u: Arc<dyn Upgradable>) -> Self { self.upgradable = Some(u); self }
     pub fn with_repo_manager(mut self, r: Arc<dyn RepoManager>) -> Self { self.repo_manager = Some(r); self }
+    pub fn with_metadata_provider(mut self, m: Arc<dyn MetadataProvider>) -> Self { self.metadata_provider = Some(m); self }
     
     pub fn build(self) -> BackendCapabilities {
         BackendCapabilities {
@@ -186,19 +206,7 @@ impl BackendCapabilitiesBuilder {
             queryable: self.queryable,
             upgradable: self.upgradable,
             repo_manager: self.repo_manager,
+            metadata_provider: self.metadata_provider,
         }
     }
-}
-
-/// Legacy Backend trait - kept for compatibility.
-#[async_trait]
-pub trait Backend: Send + Sync {
-    fn name(&self) -> &str;
-    fn is_available(&self) -> bool;
-    async fn check_health(&self) -> Result<HealthReport>;
-    fn as_installable(&self) -> Option<&dyn Installable>;
-    fn as_searchable(&self) -> Option<&dyn Searchable>;
-    fn as_queryable(&self) -> Option<&dyn Queryable>;
-    fn as_upgradable(&self) -> Option<&dyn Upgradable>;
-    fn as_repo_manager(&self) -> Option<&dyn RepoManager>;
 }

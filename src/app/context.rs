@@ -4,13 +4,13 @@ use crate::core::{
     CommandExecutor, PackageCache, Result, Error, 
     Package, StateRegistry, PackageSpec, Validator, SnapshotManager, Journal
 };
+use crate::app::bridge::DependencyBridge;
 use crate::app::migrate::Migrator;
 use crate::app::teleport::Teleporter;
 use crate::app::shell::GhostShell;
 use crate::app::profile::ProfileManager;
 use crate::app::shim_manager::ShimManager;
 use crate::app::undo::UndoManager;
-use crate::app::bridge::DependencyBridge;
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 
 use std::sync::Arc;
@@ -21,6 +21,8 @@ use super::{LuaHooks, MetricsCollector, UniversalSearch};
 
 /// The unified Application Context for LiNix v3.5.0.
 /// Coordinates state, configuration, and all high-level orchestrators.
+/// 
+/// Hardened for Phase 4.1: Functions as a Service Provider.
 pub struct App {
     pub config: Config,
     pub cache: Arc<PackageCache>,
@@ -44,7 +46,12 @@ impl App {
         let registry = Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
         
-        let state = Arc::new(Mutex::new(StateRegistry::load()?));
+        // StateRegistry::load() involves disk I/O; wrapped in spawn_blocking for async safety
+        let state_val = tokio::task::spawn_blocking(StateRegistry::load)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))??;
+        let state = Arc::new(Mutex::new(state_val));
+        
         let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate()).await);
         let journal = Arc::new(Mutex::new(Journal::new()?));
         let bridge = Arc::new(DependencyBridge::new());
@@ -64,15 +71,20 @@ impl App {
         })
     }
 
-    // WIRING: Explicit lifetimes to resolve elision warnings
+    // High-level service accessors
     pub fn migrator(&self) -> Migrator<'_> { Migrator::new(self) }
     pub fn teleporter(&self) -> Teleporter<'_> { Teleporter::new(self) }
     pub fn shell(&self) -> GhostShell<'_> { GhostShell::new(self) }
     pub fn profile_manager(&self) -> ProfileManager<'_> { ProfileManager::new(self) }
-    pub fn shim_manager(&self) -> Result<ShimManager> { ShimManager::new() }
     pub fn undo_manager(&self) -> UndoManager<'_> { UndoManager::new(self) }
+    
+    /// Phase 3.2: ShimManager instantiation is now asynchronous.
+    pub async fn shim_manager(&self) -> Result<ShimManager> { 
+        ShimManager::new().await 
+    }
 
     /// Priority-Based Probing and recursive meta-dependency resolution.
+    /// Note: Recursive Native dependencies are handled by the Planner.
     pub async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
         let mut resolved = Vec::new();
         let mut queue = VecDeque::new();
@@ -112,28 +124,33 @@ impl App {
         Ok(unmanaged)
     }
 
+    /// Refreshes metadata across all active backends.
     pub async fn update(&self) -> Result<()> {
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 info!("Updating {} metadata...", backend.name());
-                upgradable.update(true).await?;
+                let sudo = backend.needs_root();
+                upgradable.update(sudo).await?;
             }
         }
         Ok(())
     }
 
+    /// Upgrades all managed packages.
     pub async fn upgrade(&self) -> Result<()> {
         let _snapshot = self.snapshot_manager.auto_snapshot("pre_upgrade").await?;
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 info!("Upgrading {} packages...", backend.name());
-                upgradable.upgrade(true).await?;
+                let sudo = backend.needs_root();
+                upgradable.upgrade(sudo).await?;
             }
         }
         self.metrics.print_summary();
         Ok(())
     }
 
+    /// Lists installed packages, optionally filtered by backend.
     pub async fn list(&self, backend_filter: Option<&str>) -> Result<Vec<Package>> {
         let mut all = Vec::new();
         if let Some(name) = backend_filter {
@@ -151,21 +168,25 @@ impl App {
         Ok(all)
     }
 
+    /// Prunes unused dependencies from the system.
     pub async fn clean_orphans(&self) -> Result<()> {
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 info!("Cleaning orphans for {}...", backend.name());
-                upgradable.clean_orphans(true).await?;
+                let sudo = backend.needs_root();
+                upgradable.clean_orphans(sudo).await?;
             }
         }
         Ok(())
     }
 
+    /// Searches for packages across all searchable backends in parallel.
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
         let searcher = UniversalSearch::new(&self.registry, &self.config);
         searcher.search(query).await
     }
 
+    /// Retrieves detailed info for a package by name.
     pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
         for backend in self.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
@@ -177,8 +198,9 @@ impl App {
         Ok(None)
     }
 
+    /// Explicitly creates a shim for a binary.
     pub async fn create_shim(&self, binary_name: &str, _source_spec: &str) -> Result<()> {
-        let manager = self.shim_manager()?;
+        let manager = self.shim_manager().await?;
         manager.create_shim(binary_name).await
     }
 }

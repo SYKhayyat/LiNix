@@ -31,6 +31,8 @@ pub trait Planner: Send + Sync {
     async fn plan(&self, desired: &std::collections::HashMap<String, Vec<PackageSpec>>) -> Result<SyncChanges>;
 }
 
+/// Primary entry point for system synchronization.
+/// Hardened for Phase 3.1 & 3.2: Async-compliant Manifest and Shim engines.
 pub struct SyncEngine<'a> {
     pub config: &'a Config,
     pub registry: Arc<BackendRegistry>,
@@ -74,7 +76,10 @@ impl<'a> SyncEngine<'a> {
         let _heartbeat = self.executor.start_sudo_keepalive().await;
         let _ = self.hooks.run_before_sync().await;
         
-        let mut state = StateRegistry::load()?;
+        // StateRegistry::load is blocking, wrap in spawn_blocking
+        let mut state = tokio::task::spawn_blocking(StateRegistry::load)
+            .await
+            .map_err(|e| crate::core::Error::Other(e.to_string()))??;
 
         if changes.is_empty() {
             info!("Success: System is consistent with declarative manifests.");
@@ -86,10 +91,20 @@ impl<'a> SyncEngine<'a> {
         let result = self.execute_transaction(&changes, &mut state).await;
 
         if result.is_ok() {
-            state.save()?;
-            self.reconcile_all_shims(&state).await?;
+            // StateRegistry::save is blocking, wrap in spawn_blocking
+            tokio::task::spawn_blocking(move || state.save())
+                .await
+                .map_err(|e| crate::core::Error::Other(e.to_string()))??;
+
+            // Phase 3.1: State is now persistent, re-load for shim reconciliation
+            let final_state = tokio::task::spawn_blocking(StateRegistry::load)
+                .await
+                .map_err(|e| crate::core::Error::Other(e.to_string()))??;
+
+            self.reconcile_all_shims(&final_state).await?;
             let _ = self.hooks.run_after_sync().await;
             self.metrics.print_summary();
+            
             let mut j = self.journal.lock().await;
             let _ = j.cleanup();
         }
@@ -123,6 +138,7 @@ impl<'a> SyncEngine<'a> {
                 match &changes.graph[idx] {
                     GraphAction::Install(spec) => {
                         state.add(&spec.backend, &spec.name, None, spec.options.clone());
+                        // Phase 3.1: Auto-lock checksums for remote resources
                         if (spec.backend == "web" || spec.backend == "github") && !spec.options.contains_key("sha256") {
                             self.attempt_auto_lock(spec).await;
                         }
@@ -145,13 +161,20 @@ impl<'a> SyncEngine<'a> {
                     let path_key = if spec.backend == "github" { "install_path" } else { "local_path" };
                     if let Some(local_path) = pkg.properties.get(path_key) {
                         let path = std::path::Path::new(local_path);
-                        if let Ok(hash) = generate_checksum(path) {
+                        
+                        // Checksum generation involves blocking file I/O
+                        let path_owned = path.to_path_buf();
+                        let hash_res = tokio::task::spawn_blocking(move || generate_checksum(&path_owned)).await;
+                        
+                        if let Ok(Ok(hash)) = hash_res {
                             info!("Auto-Lock: Generated SHA256 for {}: {}", spec.name, hash);
                             let mut new_options = spec.options.clone();
                             new_options.insert("sha256".into(), hash);
                             let opt_parts: Vec<String> = new_options.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
                             let new_spec_str = format!("{}:{}@{}", spec.backend, spec.name, opt_parts.join(","));
-                            let _ = self.manifest_engine.update_package(&spec.name, &new_spec_str);
+                            
+                            // Phase 3.1: ManifestEngine update is now async
+                            let _ = self.manifest_engine.update_package(&spec.name, &new_spec_str).await;
                         }
                     }
                 }
@@ -160,7 +183,8 @@ impl<'a> SyncEngine<'a> {
     }
 
     async fn reconcile_all_shims(&self, state: &StateRegistry) -> Result<()> {
-        let shim_mgr = ShimManager::new()?;
+        // Phase 3.2: ShimManager instantiation is now async
+        let shim_mgr = ShimManager::new().await?;
         for pkg in &state.packages {
             let needs_shim = pkg.options.get("sandbox") == Some(&"true".to_string())
                 || pkg.options.get("shim") == Some(&"true".to_string());
@@ -189,17 +213,18 @@ impl<'a> SyncEngine<'a> {
             
             if let Some(backend_cap) = self.registry.get(&backend) {
                 if let Some(handler) = backend_cap.as_installable() {
+                    let sudo = backend_cap.needs_root();
                     if is_install {
-                        let _ = handler.remove(&[package.clone()], true).await;
+                        let _ = handler.remove(&[package.clone()], sudo).await;
                         let spec = PackageSpec {
                             name: package.clone(),
                             backend: backend.clone(),
                             options: std::collections::HashMap::new(),
                             requires: vec![],
                         };
-                        let _ = handler.install(&[spec], true).await;
+                        let _ = handler.install(&[spec], sudo).await;
                     } else {
-                        let _ = handler.remove(&[package.clone()], true).await;
+                        let _ = handler.remove(&[package.clone()], sudo).await;
                     }
                 }
             }
@@ -218,7 +243,7 @@ impl<'a> SyncEngine<'a> {
 use crate::core::{Result, Error, StateRegistry, GraphAction, PackageSpec};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque, HashSet};
 use std::sync::Arc;
 use std::path::Path;
 use tracing::{info, debug};
@@ -228,8 +253,8 @@ use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableDiGraph;
 use petgraph::algo::is_cyclic_directed;
 use sha2::{Sha256, Digest};
-use std::fs::File;
-use std::io::{BufReader, Read};
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, BufReader};
 
 /// A high-performance synchronization plan represented as a Directed Acyclic Graph (DAG).
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize, Clone)]
@@ -255,6 +280,7 @@ impl SyncChanges {
 }
 
 /// The brain of the LiNix engine. Calculates the delta between current and desired state.
+/// Hardened for Phase 1.1: Implements Recursive Native Dependency Resolution.
 pub struct ChangePlanner<'a> {
     registry: Arc<BackendRegistry>,
     state: &'a StateRegistry,
@@ -273,15 +299,9 @@ impl<'a> ChangePlanner<'a> {
     ) -> Result<SyncChanges> {
         let mut changes = SyncChanges::default();
         
-        // 1. Build a Reachability Map for the entire desired state
-        let mut reachable_specs: HashMap<String, PackageSpec> = HashMap::new();
-        let mut queue: VecDeque<PackageSpec> = desired.values().flatten().cloned().collect();
-
-        while let Some(spec) = queue.pop_front() {
-            let key = format!("{}:{}", spec.backend, spec.name);
-            if reachable_specs.contains_key(&key) { continue; }
-            reachable_specs.insert(key.clone(), spec.clone());
-        }
+        // 1. Recursive Transitive Dependency Expansion
+        // We expand the user's desired state to include backend-native dependencies.
+        let expanded_desired = self.expand_transitive_dependencies(desired).await?;
 
         // 2. Identify and schedule removal for Expired Leases
         let expired = self.state.get_expired_packages();
@@ -294,9 +314,8 @@ impl<'a> ChangePlanner<'a> {
         if self.config.remove_bloatware {
             let bloatware = self.load_bloatware().await?;
             for pkg_str in bloatware {
-                let (backend, name) = if pkg_str.contains(':') {
-                    let parts: Vec<&str> = pkg_str.splitn(2, ':').collect();
-                    (parts[0].to_string(), parts[1].to_string())
+                let (backend, name) = if let Some((b, n)) = pkg_str.split_once(':') {
+                    (b.to_string(), n.to_string())
                 } else {
                     (self.config.default_backend.clone().unwrap_or_else(|| "apt".to_string()), pkg_str)
                 };
@@ -310,35 +329,36 @@ impl<'a> ChangePlanner<'a> {
 
         // 4. Identify required installations and upgrades
         let mut target_specs = Vec::new();
-        for spec in reachable_specs.values() {
-            if let Some(backend_cap) = self.registry.get(&spec.backend) {
-                let installed = if let Some(q) = backend_cap.as_queryable() {
-                    q.list_installed().await?
-                } else {
-                    vec![]
-                };
+        for spec in expanded_desired.values() {
+            let backend_cap = self.registry.get(&spec.backend)
+                .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
 
-                let current = installed.iter().find(|p| p.name == spec.name);
-                let needs_action = match current {
-                    Some(p) => {
-                        if let Some(req_str) = spec.options.get("version") {
-                            if let Some(ref inst_v_str) = p.version {
-                                !self.satisfies_constraint(inst_v_str, req_str)
-                            } else { true }
-                        } else { 
-                            if spec.backend == "link" && spec.options.get("template") == Some(&"true".to_string()) {
-                                self.template_needs_update(spec).await
-                            } else {
-                                false 
-                            }
+            let installed = if let Some(q) = backend_cap.as_queryable() {
+                q.list_installed().await?
+            } else {
+                vec![]
+            };
+
+            let current = installed.iter().find(|p| p.name == spec.name);
+            let needs_action = match current {
+                Some(p) => {
+                    if let Some(req_str) = spec.options.get("version") {
+                        if let Some(ref inst_v_str) = p.version {
+                            !self.satisfies_constraint(inst_v_str, req_str)
+                        } else { true }
+                    } else { 
+                        if spec.backend == "link" && spec.options.get("template") == Some(&"true".to_string()) {
+                            self.template_needs_update(spec).await
+                        } else {
+                            false 
                         }
                     }
-                    None => true,
-                };
-
-                if needs_action {
-                    target_specs.push(spec.clone());
                 }
+                None => true,
+            };
+
+            if needs_action {
+                target_specs.push(spec.clone());
             }
         }
 
@@ -349,14 +369,30 @@ impl<'a> ChangePlanner<'a> {
             changes.node_map.insert(key, idx);
         }
 
-        // 6. Resolve DAG Edges (Meta-dependencies)
+        // 6. Resolve DAG Edges (Meta-dependencies and Native dependencies)
         for spec in &target_specs {
             let child_key = format!("{}:{}", spec.backend, spec.name);
-            let child_idx = *changes.node_map.get(&child_key).unwrap();
+            let child_idx = *changes.node_map.get(&child_key)
+                .ok_or_else(|| Error::Transaction(format!("Missing node in map: {}", child_key)))?;
 
+            // Edge from explicit 'requires' (Meta-Dependencies)
             for req_str in &spec.requires {
                 if let Some(&parent_idx) = changes.node_map.get(req_str) {
                     changes.graph.add_edge(parent_idx, child_idx, ());
+                }
+            }
+            
+            // Edge from expanded dependencies (Native to backend)
+            let backend_cap = self.registry.get(&spec.backend)
+                .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
+
+            if let Some(provider) = backend_cap.as_metadata_provider() {
+                let native_deps = provider.get_dependencies(&spec.name).await?;
+                for dep_name in native_deps {
+                    let dep_key = format!("{}:{}", spec.backend, dep_name);
+                    if let Some(&parent_idx) = changes.node_map.get(&dep_key) {
+                        changes.graph.add_edge(parent_idx, child_idx, ());
+                    }
                 }
             }
         }
@@ -364,7 +400,7 @@ impl<'a> ChangePlanner<'a> {
         // 7. Identify Global Drift (Managed packages no longer needed)
         for managed in &self.state.packages {
             let key = format!("{}:{}", managed.backend, managed.name);
-            if !reachable_specs.contains_key(&key) && !self.config.is_protected(&managed.name) {
+            if !expanded_desired.contains_key(&key) && !self.config.is_protected(&managed.name) {
                 if !changes.node_map.contains_key(&key) {
                     debug!("Planner: Managed package '{}' has drifted from manifests. Scheduling removal.", key);
                     changes.graph.add_node(GraphAction::Remove { 
@@ -383,31 +419,74 @@ impl<'a> ChangePlanner<'a> {
         Ok(changes)
     }
 
+    /// Phase 1.1: Recursively expands the requested package set to include backend-native dependencies.
+    async fn expand_transitive_dependencies(&self, desired: &HashMap<String, Vec<PackageSpec>>) -> Result<HashMap<String, PackageSpec>> {
+        let mut expanded = HashMap::new();
+        let mut queue = VecDeque::new();
+        let mut seen = HashSet::new();
+
+        // Initialize queue with user-requested specs
+        for specs in desired.values() {
+            for spec in specs {
+                queue.push_back(spec.clone());
+            }
+        }
+
+        while let Some(spec) = queue.pop_front() {
+            let key = format!("{}:{}", spec.backend, spec.name);
+            if !seen.insert(key.clone()) { continue; }
+
+            // Fetch native dependencies from the backend provider
+            if let Some(backend_cap) = self.registry.get(&spec.backend) {
+                if let Some(provider) = backend_cap.as_metadata_provider() {
+                    let deps = provider.get_dependencies(&spec.name).await?;
+                    for dep_name in deps {
+                        let dep_key = format!("{}:{}", spec.backend, dep_name);
+                        if !seen.contains(&dep_key) {
+                            // Create an implicit spec for the dependency
+                            let dep_spec = PackageSpec {
+                                name: dep_name,
+                                backend: spec.backend.clone(),
+                                options: HashMap::new(),
+                                requires: Vec::new(),
+                            };
+                            queue.push_back(dep_spec);
+                        }
+                    }
+                }
+            }
+
+            expanded.insert(key, spec);
+        }
+
+        Ok(expanded)
+    }
+
     async fn template_needs_update(&self, spec: &PackageSpec) -> bool {
-        let target_path = spec.options.get("target").map(Path::new);
-        let source_path = Path::new(&spec.name);
-        
-        let target_path = match target_path {
-            Some(p) => p,
+        let target_path_str = match spec.options.get("target") {
+            Some(s) => s,
             None => return true,
         };
         
-        if !target_path.exists() { return true; }
+        let target_path = Path::new(target_path_str);
+        let source_path = Path::new(&spec.name);
         
-        let source_hash = self.compute_hash(source_path);
-        let target_hash = self.compute_hash(target_path);
+        if !tokio::fs::try_exists(target_path).await.unwrap_or(false) { return true; }
+        
+        let source_hash = self.compute_hash(source_path).await;
+        let target_hash = self.compute_hash(target_path).await;
         
         source_hash != target_hash
     }
     
-    fn compute_hash(&self, path: &Path) -> Option<String> {
-        let file = File::open(path).ok()?;
+    async fn compute_hash(&self, path: &Path) -> Option<String> {
+        let file = File::open(path).await.ok()?;
         let mut reader = BufReader::new(file);
         let mut hasher = Sha256::new();
         let mut buffer = [0; 8192];
         
         loop {
-            let bytes_read = reader.read(&mut buffer).ok()?;
+            let bytes_read = reader.read(&mut buffer).await.ok()?;
             if bytes_read == 0 { break; }
             hasher.update(&buffer[..bytes_read]);
         }
@@ -417,7 +496,7 @@ impl<'a> ChangePlanner<'a> {
 
     async fn load_bloatware(&self) -> Result<Vec<String>> {
         let bloatware_path = &self.config.bloatware_file;
-        if !bloatware_path.exists() {
+        if !tokio::fs::try_exists(bloatware_path).await.unwrap_or(false) {
             return Ok(Vec::new());
         }
         
@@ -458,16 +537,19 @@ impl<'a> ChangePlanner<'a> {
 
 use crate::config::Config;
 use crate::config::parser::parse_group_file;
-use crate::core::{PackageSpec, Result, Validator};
+use crate::core::{PackageSpec, Result, Validator, Error};
 use crate::backends::BackendRegistry;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tracing::debug;
 use semver::{Version, VersionReq};
 use version_compare::{Cmp, compare as loose_compare};
+use tokio::fs;
 
 /// Responsible for calculating the "Desired State" of the system.
 /// Orchestrates group expansion, hostname matching, and recursive meta-dependency resolution.
+/// 
+/// Hardened for Phase 3.2: Full Async I/O for manifest discovery.
 pub struct StateResolver<'a> {
     config: &'a Config,
     registry: Arc<BackendRegistry>,
@@ -486,17 +568,21 @@ impl<'a> StateResolver<'a> {
         let hostname = Config::get_hostname();
         
         // 1. Load hostname-specific and directory-based .txt manifests
-        if self.config.groups_dir.exists() {
-            for entry in std::fs::read_dir(&self.config.groups_dir)? {
-                let entry = entry?;
+        if tokio::fs::try_exists(&self.config.groups_dir).await.unwrap_or(false) {
+            let mut entries = fs::read_dir(&self.config.groups_dir).await.map_err(Error::from)?;
+            
+            while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
                 let path = entry.path();
-                if path.is_file() {
+                let metadata = entry.metadata().await.map_err(Error::from)?;
+                
+                if metadata.is_file() {
                     let fname = path.file_name().unwrap_or_default().to_string_lossy();
                     if fname.starts_with("host-") && fname != format!("host-{}.txt", hostname) {
                         continue;
                     }
                     if fname.ends_with(".txt") {
-                        for pkg in parse_group_file(&path)? {
+                        // parse_group_file is now async
+                        for pkg in parse_group_file(&path).await? {
                             raw_packages.insert(pkg);
                         }
                     }
@@ -515,21 +601,22 @@ impl<'a> StateResolver<'a> {
         let mut queue: VecDeque<String> = raw_packages.into_iter().collect();
         let mut seen_keys = HashSet::new();
         let mut processed_specs = Vec::new();
-        const MAX_RECURSION_DEPTH: usize = 100;
+        const MAX_RECURSION_DEPTH: usize = 1000; // Increased for complex dependency trees
         let mut depth = 0;
 
         while let Some(line) = queue.pop_front() {
             depth += 1;
             if depth > MAX_RECURSION_DEPTH {
                 return Err(crate::core::Error::Transaction(
-                    "Maximum recursion depth exceeded in dependency resolution".into()
+                    "Maximum recursion depth exceeded in dependency resolution. Check for cycles in groups.".into()
                 ));
             }
             
+            // Handle group expansion
             if let Some(group_name) = line.strip_prefix("group:") {
                 let group_path = self.config.groups_dir.join(format!("{}.txt", group_name));
-                if group_path.exists() {
-                    for pkg in parse_group_file(&group_path)? {
+                if tokio::fs::try_exists(&group_path).await.unwrap_or(false) {
+                    for pkg in parse_group_file(&group_path).await? {
                         queue.push_back(pkg);
                     }
                 }
@@ -541,6 +628,7 @@ impl<'a> StateResolver<'a> {
 
             if seen_keys.insert(key) {
                 Validator::validate_package_name(&spec.name)?;
+                // Meta-dependencies declared via requires=... in the manifest string
                 for req in &spec.requires {
                     queue.push_back(req.clone());
                 }
@@ -632,7 +720,7 @@ impl<'a> StateResolver<'a> {
             }
         }
 
-        // Fallback to search
+        // Fallback to search if remote_has is not definitive or not implemented efficiently
         if let Some(searchable) = backend.as_searchable() {
             if let Ok(results) = searchable.search(package_name).await {
                 for pkg in results {
@@ -963,6 +1051,7 @@ impl BridgeDb {
         ssl.insert("dnf".into(), "openssl-devel".into());
         ssl.insert("pacman".into(), "openssl".into());
         ssl.insert("brew".into(), "openssl@3".into());
+        ssl.insert("choco".into(), "openssl".into());
         
         mappings.push(BridgeMapping {
             pattern: Regex::new(r"openssl/ssl\.h|libssl|cannot find -lssl|crypto|SSL_library_init").unwrap(),
@@ -1014,6 +1103,7 @@ impl BridgeDb {
 }
 
 /// The Dependency Bridge orchestrator.
+/// Hardened for Phase 1.1: Asynchronous failure diagnosis and auto-remediation.
 pub struct DependencyBridge {
     db: BridgeDb,
 }
@@ -1046,7 +1136,6 @@ impl DependencyBridge {
         if suggestions.is_empty() { return Ok(()); }
         
         println!("\n💡 LiNix Insight: This build likely failed due to missing dependencies.");
-        // Fix E0308: unwrap_or expects owned String
         println!("Detected issue: {}", self.get_description(stderr).unwrap_or_else(|| "Unknown build failure".to_string()));
         
         println!("\nSuggested package(s) to install:");
@@ -1057,11 +1146,14 @@ impl DependencyBridge {
         if auto_install {
             self.auto_install_suggestions(&suggestions, app).await?;
         } else {
-            let should_install = Confirm::with_theme(&ColorfulTheme::default())
-                .with_prompt("Would you like to install these dependencies now?")
-                .default(false)
-                .interact()
-                .map_err(|e| Error::Other(e.to_string()))?;
+            // Confirm::interact() is blocking; wrap in spawn_blocking
+            let should_install = tokio::task::spawn_blocking(move || {
+                Confirm::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Would you like to install these dependencies now?")
+                    .default(false)
+                    .interact()
+            }).await.map_err(|e| Error::Other(e.to_string()))?
+              .map_err(|e| Error::Other(e.to_string()))?;
             
             if should_install {
                 self.auto_install_suggestions(&suggestions, app).await?;
@@ -1077,14 +1169,21 @@ impl DependencyBridge {
             let specs = app.resolve_spec(suggestion).await?;
             
             for spec in specs {
-                if let Some(backend) = app.registry.get(&spec.backend) {
-                    if let Some(installer) = backend.as_installable() {
-                        match installer.install(&[spec.clone()], true).await {
+                if let Some(backend_cap) = app.registry.get(&spec.backend) {
+                    if let Some(installer) = backend_cap.as_installable() {
+                        // Phase 2.2: Respect backend root requirements
+                        let sudo = backend_cap.needs_root();
+                        match installer.install(&[spec.clone()], sudo).await {
                             Ok(_) => {
                                 success_count += 1;
                                 let mut state = app.state.lock().await;
                                 state.add_simple(&spec.backend, &spec.name, None);
-                                state.save()?;
+                                
+                                // Registry save is blocking
+                                let state_clone = state.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    state_clone.save()
+                                }).await.map_err(|e| Error::Other(e.to_string()))??;
                             }
                             Err(e) => warn!("Failed to install {}: {}", suggestion, e),
                         }
@@ -1193,13 +1292,13 @@ use crate::core::{
     CommandExecutor, PackageCache, Result, Error, 
     Package, StateRegistry, PackageSpec, Validator, SnapshotManager, Journal
 };
+use crate::app::bridge::DependencyBridge;
 use crate::app::migrate::Migrator;
 use crate::app::teleport::Teleporter;
 use crate::app::shell::GhostShell;
 use crate::app::profile::ProfileManager;
 use crate::app::shim_manager::ShimManager;
 use crate::app::undo::UndoManager;
-use crate::app::bridge::DependencyBridge;
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 
 use std::sync::Arc;
@@ -1210,6 +1309,8 @@ use super::{LuaHooks, MetricsCollector, UniversalSearch};
 
 /// The unified Application Context for LiNix v3.5.0.
 /// Coordinates state, configuration, and all high-level orchestrators.
+/// 
+/// Hardened for Phase 4.1: Functions as a Service Provider.
 pub struct App {
     pub config: Config,
     pub cache: Arc<PackageCache>,
@@ -1233,7 +1334,12 @@ impl App {
         let registry = Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
         
-        let state = Arc::new(Mutex::new(StateRegistry::load()?));
+        // StateRegistry::load() involves disk I/O; wrapped in spawn_blocking for async safety
+        let state_val = tokio::task::spawn_blocking(StateRegistry::load)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))??;
+        let state = Arc::new(Mutex::new(state_val));
+        
         let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate()).await);
         let journal = Arc::new(Mutex::new(Journal::new()?));
         let bridge = Arc::new(DependencyBridge::new());
@@ -1253,15 +1359,20 @@ impl App {
         })
     }
 
-    // WIRING: Explicit lifetimes to resolve elision warnings
+    // High-level service accessors
     pub fn migrator(&self) -> Migrator<'_> { Migrator::new(self) }
     pub fn teleporter(&self) -> Teleporter<'_> { Teleporter::new(self) }
     pub fn shell(&self) -> GhostShell<'_> { GhostShell::new(self) }
     pub fn profile_manager(&self) -> ProfileManager<'_> { ProfileManager::new(self) }
-    pub fn shim_manager(&self) -> Result<ShimManager> { ShimManager::new() }
     pub fn undo_manager(&self) -> UndoManager<'_> { UndoManager::new(self) }
+    
+    /// Phase 3.2: ShimManager instantiation is now asynchronous.
+    pub async fn shim_manager(&self) -> Result<ShimManager> { 
+        ShimManager::new().await 
+    }
 
     /// Priority-Based Probing and recursive meta-dependency resolution.
+    /// Note: Recursive Native dependencies are handled by the Planner.
     pub async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
         let mut resolved = Vec::new();
         let mut queue = VecDeque::new();
@@ -1301,28 +1412,33 @@ impl App {
         Ok(unmanaged)
     }
 
+    /// Refreshes metadata across all active backends.
     pub async fn update(&self) -> Result<()> {
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 info!("Updating {} metadata...", backend.name());
-                upgradable.update(true).await?;
+                let sudo = backend.needs_root();
+                upgradable.update(sudo).await?;
             }
         }
         Ok(())
     }
 
+    /// Upgrades all managed packages.
     pub async fn upgrade(&self) -> Result<()> {
         let _snapshot = self.snapshot_manager.auto_snapshot("pre_upgrade").await?;
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 info!("Upgrading {} packages...", backend.name());
-                upgradable.upgrade(true).await?;
+                let sudo = backend.needs_root();
+                upgradable.upgrade(sudo).await?;
             }
         }
         self.metrics.print_summary();
         Ok(())
     }
 
+    /// Lists installed packages, optionally filtered by backend.
     pub async fn list(&self, backend_filter: Option<&str>) -> Result<Vec<Package>> {
         let mut all = Vec::new();
         if let Some(name) = backend_filter {
@@ -1340,21 +1456,25 @@ impl App {
         Ok(all)
     }
 
+    /// Prunes unused dependencies from the system.
     pub async fn clean_orphans(&self) -> Result<()> {
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 info!("Cleaning orphans for {}...", backend.name());
-                upgradable.clean_orphans(true).await?;
+                let sudo = backend.needs_root();
+                upgradable.clean_orphans(sudo).await?;
             }
         }
         Ok(())
     }
 
+    /// Searches for packages across all searchable backends in parallel.
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
         let searcher = UniversalSearch::new(&self.registry, &self.config);
         searcher.search(query).await
     }
 
+    /// Retrieves detailed info for a package by name.
     pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
         for backend in self.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
@@ -1366,8 +1486,9 @@ impl App {
         Ok(None)
     }
 
+    /// Explicitly creates a shim for a binary.
     pub async fn create_shim(&self, binary_name: &str, _source_spec: &str) -> Result<()> {
-        let manager = self.shim_manager()?;
+        let manager = self.shim_manager().await?;
         manager.create_shim(binary_name).await
     }
 }
@@ -1648,14 +1769,16 @@ impl Default for MetricsCollector {
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\app\migrate.rs ---
 
 use crate::App;
-use crate::core::{Result, Package};
-use crate::config::parser::write_group_file;
+use crate::core::{Result, Package, Error};
 use chrono::Local;
 use tracing::{info, warn, debug};
 use std::collections::HashSet;
+use tokio::io::AsyncWriteExt;
 
 /// The Ingestion Engine (Roadmap Point 3).
 /// Responsible for moving a "dirty" system with existing manual installs into LiNix management.
+/// 
+/// Hardened for Phase 3: Implements full Async I/O for manifest generation and state persistence.
 pub struct Migrator<'a> {
     app: &'a App,
 }
@@ -1672,15 +1795,16 @@ impl<'a> Migrator<'a> {
         let mut discovered_packages = Vec::new();
         let mut seen = HashSet::new();
 
-        // Acquire lock once for the discovery phase
-        let state = self.app.state.lock().await;
-
         // 1. Discovery Phase: Crawl the registry
+        // We do this while holding an immutable reference to the registry through the App context.
         for backend in self.app.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
                 debug!("Migrator: Probing {}...", backend.name());
+                
+                // list_manual is an async trait method
                 match queryable.list_manual().await {
                     Ok(pkgs) => {
+                        let state = self.app.state.lock().await;
                         for pkg in pkgs {
                             let key = format!("{}:{}", pkg.backend, pkg.name);
                             
@@ -1713,18 +1837,32 @@ impl<'a> Migrator<'a> {
             .map(|p| format!("{}:{}", p.backend, p.name))
             .collect();
 
-        write_group_file(&path, &package_strings)?;
+        // Phase 3: Async manifest creation
+        if let Some(parent) = path.parent() {
+            if !tokio::fs::try_exists(parent).await.unwrap_or(false) {
+                tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
+            }
+        }
+
+        let mut file = tokio::fs::File::create(&path).await.map_err(Error::from)?;
+        file.write_all(package_strings.join("\n").as_bytes()).await.map_err(Error::from)?;
+        file.flush().await.map_err(Error::from)?;
+
         info!("Migrator: Declarative manifest generated: {:?}", path);
 
         // 3. Ownership Acquisition Phase
-        // Drop the immutable guard and get a mutable one for updating
-        drop(state);
-        let mut state_mut = self.app.state.lock().await;
-        
-        for pkg in &discovered_packages {
-            state_mut.add_simple(&pkg.backend, &pkg.name, pkg.version.clone());
+        {
+            let mut state_mut = self.app.state.lock().await;
+            for pkg in &discovered_packages {
+                state_mut.add_simple(&pkg.backend, &pkg.name, pkg.version.clone());
+            }
+            
+            // Phase 3: Wrap blocking StateRegistry::save in spawn_blocking
+            let state_clone = state_mut.clone();
+            tokio::task::spawn_blocking(move || {
+                state_clone.save()
+            }).await.map_err(|e| Error::Other(e.to_string()))??;
         }
-        state_mut.save()?;
 
         info!("Migrator: Ownership records updated.");
         
@@ -1744,10 +1882,16 @@ impl<'a> Migrator<'a> {
 
         for backend in self.app.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
-                let pkgs = queryable.list_manual().await?;
-                for pkg in pkgs {
-                    if !state.is_managed(backend.name(), &pkg.name) {
-                        unmanaged.push(pkg);
+                match queryable.list_manual().await {
+                    Ok(pkgs) => {
+                        for pkg in pkgs {
+                            if !state.is_managed(backend.name(), &pkg.name) {
+                                unmanaged.push(pkg);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Migrator Audit: Failed to query backend {}: {}", backend.name(), e);
                     }
                 }
             }
@@ -1970,11 +2114,14 @@ use crate::App;
 use crate::core::{Result, Error};
 use crate::app::sandbox::{Sandbox, SandboxConfig};
 use crate::app::bridge::DependencyBridge;
-use std::process::Command;
+use tokio::process::Command;
 use tracing::{info, debug, error};
 
 /// Handles the execution of commands within specialized LiNix environments.
 /// Orchestrates sandboxing, ephemeral provisioning, and dependency bridging.
+/// 
+/// Hardened for Phase 2.2: Respects backend root requirements and utilizes
+/// asynchronous process spawning to prevent runtime freezes.
 pub struct Runner<'a> {
     app: &'a App,
 }
@@ -1994,6 +2141,7 @@ impl<'a> Runner<'a> {
 
         // 1. Resolve and check all required packages
         for pkg_str in packages {
+            // app.resolve_spec is async
             let specs = self.app.resolve_spec(pkg_str).await?;
             for spec in specs {
                 // Check if any package in the environment requires sandboxing
@@ -2018,14 +2166,16 @@ impl<'a> Runner<'a> {
             if !is_present {
                 if let Some(installer) = backend_caps.as_installable() {
                     info!("Runner: Provisioning missing dependency: {}:{}", spec.backend, spec.name);
-                    installer.install(&[spec.clone()], true).await?;
+                    // Phase 2.2: Pass sudo requirement from backend capability
+                    let sudo = backend_caps.needs_root();
+                    installer.install(&[spec.clone()], sudo).await?;
                 }
             }
         }
 
         // 3. Prepare Execution
         let status = if sandbox_requested {
-            // Point 17: Execute within a Bubblewrap sandbox
+            // Point 17: Execute within a Bubblewrap/MacOS sandbox
             let config = SandboxConfig {
                 allow_network: true,
                 allow_home: true,
@@ -2034,30 +2184,43 @@ impl<'a> Runner<'a> {
                 custom_read_only_mounts: vec![],
                 environment: vec![],
             };
-            Sandbox::run(command, args, &config)?
+            
+            // Sandbox::run is historically synchronous or uses std::process
+            // We wrap it in spawn_blocking to keep the async executor free
+            let cmd_str = command.to_string();
+            let args_vec = args.to_vec();
+            tokio::task::spawn_blocking(move || {
+                Sandbox::run(&cmd_str, &args_vec, &config)
+            }).await.map_err(|e| Error::Other(e.to_string()))??
         } else {
-            // Standard execution
+            // Standard asynchronous execution
             debug!("Runner: Spawning standard process: {} {:?}", command, args);
-            Command::new(command)
-                .args(args)
-                .status()
+            let mut child = Command::new(command);
+            child.args(args);
+            
+            child.spawn()
                 .map_err(|e| Error::CommandFailed(format!("Failed to spawn {}: {}", command, e)))?
+                .wait()
+                .await
+                .map_err(|e| Error::CommandFailed(format!("Error waiting for {}: {}", command, e)))?
         };
 
         // 4. Point 16: Failure Diagnosis (Dependency Bridging)
         if !status.success() {
             error!("Runner: Command '{}' failed with status: {}", command, status);
             
-            // Re-run with captured stderr to provide a diagnosis if it was a build/linking error
+            // Re-run with captured stderr to provide a diagnosis
             let diag_output = Command::new(command)
                 .args(args)
                 .output()
+                .await
                 .ok();
 
             if let Some(out) = diag_output {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 let bridge = DependencyBridge::new();
-                bridge.handle_failure(&stderr, &self.app.config.default_backend.clone().unwrap_or_else(|| "apt".into()), self.app, false).await?;
+                let default_backend = self.app.config.default_backend.clone().unwrap_or_else(|| "apt".into());
+                bridge.handle_failure(&stderr, &default_backend, self.app, false).await?;
             }
 
             return Err(Error::CommandFailed(format!("Execution of '{}' failed.", command)));
@@ -2085,7 +2248,6 @@ impl<'a> Runner<'a> {
 
 use crate::core::{Result, Error};
 use std::process::Command;
-use std::path::PathBuf;
 use tracing::warn;
 
 /// Configuration for the declarative sandbox environment.
@@ -2276,7 +2438,7 @@ impl Sandbox {
 
 use crate::backends::BackendRegistry;
 use crate::config::Config;
-use crate::core::{Package, Result, manager::Backend};
+use crate::core::{Package, Result};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -2330,6 +2492,7 @@ impl<'a> UniversalSearch<'a> {
                 debug!("Searching backend: {}", b.name());
                 
                 // Re-acquire the searchable reference inside the task
+                // We use unwrap here safely because we filtered for is_some() above
                 match b.as_searchable().unwrap().search(&query_string).await {
                     Ok(results) => {
                         debug!("Backend '{}' returned {} results", b.name(), results.len());
@@ -2379,15 +2542,17 @@ use crate::app::{
     LuaHooks, MetricsCollector
 };
 use crate::config::Config;
-use crate::core::{CommandExecutor, PackageCache, StateRegistry, Journal, SnapshotManager};
-use crate::backends::BackendRegistry;
-use crate::utils::progress::ProgressReporter;
+use crate::core::{CommandExecutor, PackageCache, StateRegistry, Journal, SnapshotManager, Result, Error};
+use crate::backends::{create_default_registry, BackendRegistry};
+use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 use crate::app::bridge::DependencyBridge;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Core dependencies that are shared across all high-level services.
-/// Hardened for Version 3.5.0 with derived Clone support for the executor.
+/// 
+/// Hardened for Version 3.5.0: Functions as the primary dependency injection 
+/// container for the LiNix kernel.
 #[derive(Clone)]
 pub struct AppCore {
     pub config: Config,
@@ -2403,8 +2568,10 @@ pub struct AppCore {
     pub bridge: Arc<DependencyBridge>,
 }
 
-/// Container for all high-level application services.
-/// This decouples orchestrator lifetimes from the core application kernel.
+/// Container for all high-level application orchestrators.
+/// 
+/// Phase 4.1 Refactor: Decouples logic from the core state, allowing 
+/// for easier testing and specialized execution contexts.
 pub struct AppServices {
     pub migrator: Migrator<'static>,
     pub teleporter: Teleporter<'static>,
@@ -2415,32 +2582,44 @@ pub struct AppServices {
 }
 
 impl AppServices {
-    /// Creates a new service container.
-    /// This accepts a leaked static reference to the App context.
-    /// This is a safe pattern for the main application entry point to ensure
-    /// that services can always reference the core config and state.
-    pub fn new(app: &'static crate::App) -> Self {
-        Self {
+    /// Creates a new service container asynchronously.
+    /// 
+    /// This accepts a leaked static reference to the App context to satisfy 
+    /// lifetime requirements of various sub-orchestrators while ensuring 
+    /// zero-cost access to core components.
+    pub async fn new(app: &'static crate::App) -> Result<Self> {
+        // Phase 3.2: ShimManager initialization is now async and must be awaited.
+        let shim_manager = ShimManager::new().await?;
+
+        Ok(Self {
             migrator: Migrator::new(app),
             teleporter: Teleporter::new(app),
             shell: GhostShell::new(app),
-            shim_manager: ShimManager::new().expect("Failed to initialize ShimManager"),
+            shim_manager,
             undo_manager: UndoManager::new(app),
             profile_manager: ProfileManager::new(app),
-        }
+        })
     }
 }
 
 impl AppCore {
-    /// Initializer for the shared application state.
-    /// Uses duplicate() to ensure the executor is correctly shared.
-    pub async fn from_config(config: Config) -> crate::core::Result<Self> {
+    /// High-performance asynchronous initializer for the shared application state.
+    /// 
+    /// Wraps blocking filesystem operations (like loading the registry) in 
+    /// `spawn_blocking` to ensure the tokio executor remains responsive.
+    pub async fn from_config(config: Config) -> Result<Self> {
         let executor = CommandExecutor::new(config.dry_run, config.verbose);
         let hooks = Arc::new(LuaHooks::new(&config)?);
-        let registry = Arc::new(crate::backends::create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
-        let progress = crate::utils::progress::create_progress_reporter(config.show_progress);
         
-        let state = Arc::new(Mutex::new(StateRegistry::load()?));
+        let registry = Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
+        let progress = create_progress_reporter(config.show_progress);
+        
+        // Phase 3.2: Wrap synchronous StateRegistry load in blocking task
+        let state_val = tokio::task::spawn_blocking(StateRegistry::load)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))??;
+        
+        let state = Arc::new(Mutex::new(state_val));
         let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate()).await);
         let journal = Arc::new(Mutex::new(Journal::new()?));
         let bridge = Arc::new(DependencyBridge::new());
@@ -2470,11 +2649,10 @@ use crate::core::{Result, Error, PackageSpec};
 use crate::app::sandbox::{Sandbox, SandboxConfig};
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tracing::{info, debug, warn};
 
 /// Orchestrates ephemeral environments (The Ghost Shell).
-/// Hardened for Version 3.5.0 with Namespace Provisioning.
+/// Hardened for Phase 3.2: Async I/O and non-blocking process execution.
 pub struct GhostShell<'a> {
     app: &'a App,
 }
@@ -2503,7 +2681,8 @@ impl<'a> GhostShell<'a> {
                         .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
                     
                     if let Some(installer) = backend.as_installable() {
-                        installer.install(&[spec.clone()], true).await?;
+                        let sudo = backend.needs_root();
+                        installer.install(&[spec.clone()], sudo).await?;
                         if let Some(path) = self.locate_package_root(&spec).await? {
                             store_paths.push((path.to_string_lossy().to_string(), spec.name.clone()));
                         }
@@ -2519,7 +2698,6 @@ impl<'a> GhostShell<'a> {
             mounts.push((path.clone(), target));
         }
 
-        // Fix E0593: Closure must take 1 argument for unwrap_or_else
         let shell = env::var("SHELL").unwrap_or_else(|_| {
             if cfg!(windows) { "cmd.exe".to_string() } else { "/bin/bash".to_string() }
         });
@@ -2528,7 +2706,6 @@ impl<'a> GhostShell<'a> {
         if cfg!(target_os = "linux") && Sandbox::is_supported() {
             info!("GhostShell: Launching Bubblewrap container for session.");
             
-            // Fix E0063: Include all mandatory SandboxConfig fields
             let config = SandboxConfig {
                 allow_network: true,
                 allow_home: true,
@@ -2543,16 +2720,22 @@ impl<'a> GhostShell<'a> {
                 internal_path = format!("{}:{}:{}/bin", internal_path, target, target);
             }
 
-            let mut bwrap = Sandbox::wrap(&shell, &[], &config)?;
-            bwrap.env("PATH", internal_path)
-                 .env("LINIX_GHOST", "true")
-                 .env("PROMPT_COMMAND", "echo -n '(linix-ghost) '");
+            // Sandbox logic involves building a Command and running it.
+            // Since Sandbox currently uses std::process, we wrap the execution in spawn_blocking.
+            let shell_cmd = shell.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut bwrap = Sandbox::wrap(&shell_cmd, &[], &config)?;
+                bwrap.env("PATH", internal_path)
+                     .env("LINIX_GHOST", "true")
+                     .env("PROMPT_COMMAND", "echo -n '(linix-ghost) '");
 
-            // Fix E0631: Use map_err(Error::from)
-            let status = bwrap.status().map_err(Error::from)?;
-            if !status.success() {
-                return Err(Error::CommandFailed(format!("Ghost shell exited with status: {}", status)));
-            }
+                let status = bwrap.status().map_err(Error::from)?;
+                if !status.success() {
+                    return Err(Error::CommandFailed(format!("Ghost shell exited with status: {}", status)));
+                }
+                Ok(())
+            }).await.map_err(|e| Error::Other(e.to_string()))??;
+
         } else {
             warn!("GhostShell: Platform fallback to PATH mutation.");
             self.spawn_fallback_shell(&shell, &store_paths).await?;
@@ -2564,10 +2747,10 @@ impl<'a> GhostShell<'a> {
     /// Project-local directive.
     pub async fn auto_shell(&self) -> Result<()> {
         let local_config = Path::new("linix.txt");
-        if local_config.exists() {
+        if tokio::fs::try_exists(local_config).await.unwrap_or(false) {
             info!("GhostShell: Found 'linix.txt'. Initializing environment...");
-            // Fix E0631: Use map_err(Error::from)
-            let content = std::fs::read_to_string(local_config).map_err(Error::from)?;
+            
+            let content = tokio::fs::read_to_string(local_config).await.map_err(Error::from)?;
             let packages: Vec<String> = content.lines()
                 .map(|l| l.trim().to_string())
                 .filter(|l| !l.is_empty() && !l.starts_with('#'))
@@ -2591,7 +2774,7 @@ impl<'a> GhostShell<'a> {
                 for key in keys {
                     if let Some(val) = pkg.properties.get(key) {
                         let path = PathBuf::from(val);
-                        if path.exists() {
+                        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
                             return Ok(Some(path));
                         }
                     }
@@ -2609,7 +2792,7 @@ impl<'a> GhostShell<'a> {
         for (path, _) in store_paths {
             new_path_parts.push(path.clone());
             let bin_sub = Path::new(path).join("bin");
-            if bin_sub.exists() {
+            if tokio::fs::try_exists(&bin_sub).await.unwrap_or(false) {
                 new_path_parts.push(bin_sub.to_string_lossy().to_string());
             }
         }
@@ -2620,12 +2803,14 @@ impl<'a> GhostShell<'a> {
         let new_path = env::join_paths(&new_path_parts)
             .map_err(|e| Error::Other(format!("Failed to build PATH: {}", e)))?;
 
-        // Fix E0631: Use map_err(Error::from)
-        let status = Command::new(shell)
-            .env("PATH", &new_path)
-            .env("LINIX_GHOST", "fallback")
-            .status()
-            .map_err(Error::from)?;
+        // Spawning interactive shells is better handled with tokio::process if we need async control,
+        // but since we usually wait for the shell to finish, status() is appropriate.
+        // We use tokio::process::Command to avoid blocking the thread.
+        let mut cmd = tokio::process::Command::new(shell);
+        cmd.env("PATH", &new_path)
+           .env("LINIX_GHOST", "fallback");
+
+        let status = cmd.status().await.map_err(Error::from)?;
 
         if !status.success() {
             return Err(Error::CommandFailed(format!("Shell exited with: {}", status)));
@@ -2641,26 +2826,27 @@ impl<'a> GhostShell<'a> {
 
 use crate::core::{Result, Error};
 use std::path::{Path, PathBuf};
-use std::fs;
 use tracing::{info, debug};
+use tokio::fs;
 
 /// Manages the deployment of high-performance Rust shims (Point 4 & 6).
 /// Shims act as proxies that invoke 'linix run' with sandboxing.
+/// Hardened for Phase 3.2: Full Async I/O support.
 pub struct ShimManager {
     bin_dir: PathBuf,
 }
 
 impl ShimManager {
     /// Initializes the manager and ensures the local bin directory exists.
-    pub fn new() -> Result<Self> {
+    pub async fn new() -> Result<Self> {
         let bin_dir = dirs::home_dir()
             .ok_or_else(|| Error::Other("Could not locate home directory".into()))?
             .join(".local")
             .join("bin");
 
-        if !bin_dir.exists() {
+        if !tokio::fs::try_exists(&bin_dir).await.unwrap_or(false) {
             debug!("ShimManager: Creating shim directory at {:?}", bin_dir);
-            fs::create_dir_all(&bin_dir).map_err(Error::from)?;
+            fs::create_dir_all(&bin_dir).await.map_err(Error::from)?;
         }
 
         Ok(Self { bin_dir })
@@ -2668,20 +2854,29 @@ impl ShimManager {
 
     /// Deploys a high-performance binary shim.
     pub async fn create_shim(&self, binary_name: &str) -> Result<()> {
-        let target_path = self.bin_dir.join(binary_name);
+        let mut target_path = self.bin_dir.join(binary_name);
 
         // Ensure we don't accidentally overwrite the main 'linix' binary
         if binary_name == "linix" {
             return Ok(());
         }
 
-        // Fix E0308: Pass String to Error::Io instead of std::io::Error
-        let current_exe = std::env::current_exe()
+        #[cfg(windows)]
+        {
+            if target_path.extension().map_or(true, |ext| ext != "exe") {
+                target_path.set_extension("exe");
+            }
+        }
+
+        // std::env::current_exe() is blocking; wrap in spawn_blocking
+        let current_exe = tokio::task::spawn_blocking(std::env::current_exe)
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?
             .map_err(|e| Error::Io(format!("Failed to locate linix binary: {}", e)))?;
         
         // Clean up existing file/link
-        if target_path.exists() || target_path.is_symlink() {
-            fs::remove_file(&target_path).map_err(Error::from)?;
+        if tokio::fs::try_exists(&target_path).await.unwrap_or(false) || target_path.is_symlink() {
+            fs::remove_file(&target_path).await.map_err(Error::from)?;
         }
 
         info!("ShimManager: Deploying shim for '{}' -> {:?}", binary_name, target_path);
@@ -2689,19 +2884,15 @@ impl ShimManager {
         #[cfg(unix)]
         {
             // A hard link is the highest performance option. 
-            if let Err(e) = fs::hard_link(&current_exe, &target_path) {
+            if let Err(e) = fs::hard_link(&current_exe, &target_path).await {
                 debug!("ShimManager: Hard link failed ({}), falling back to copy...", e);
-                fs::copy(&current_exe, &target_path).map_err(Error::from)?;
+                fs::copy(&current_exe, &target_path).await.map_err(Error::from)?;
             }
         }
 
         #[cfg(windows)]
         {
-            let mut win_target = target_path.clone();
-            if win_target.extension().map_or(true, |ext| ext != "exe") {
-                win_target.set_extension("exe");
-            }
-            fs::copy(&current_exe, &win_target).map_err(Error::from)?;
+            fs::copy(&current_exe, &target_path).await.map_err(Error::from)?;
         }
 
         Ok(())
@@ -2718,37 +2909,51 @@ impl ShimManager {
 
     /// Removes a deployed shim.
     pub async fn remove_shim(&self, binary_name: &str) -> Result<()> {
-        let target_path = self.bin_dir.join(binary_name);
+        let mut target_path = self.bin_dir.join(binary_name);
         
         #[cfg(windows)]
-        let target_path = if target_path.extension().is_none() {
-            target_path.with_extension("exe")
-        } else {
-            target_path
-        };
+        {
+            if target_path.extension().is_none() {
+                target_path.set_extension("exe");
+            }
+        }
 
-        if target_path.exists() {
+        if tokio::fs::try_exists(&target_path).await.unwrap_or(false) || target_path.is_symlink() {
             debug!("ShimManager: Removing shim {:?}", target_path);
-            fs::remove_file(&target_path).map_err(Error::from)?;
+            fs::remove_file(&target_path).await.map_err(Error::from)?;
             info!("ShimManager: Successfully removed shim '{}'", binary_name);
         }
         Ok(())
     }
 
     /// Returns a list of all shims currently managed in the local bin directory.
-    pub fn list_shims(&self) -> Result<Vec<String>> {
+    pub async fn list_shims(&self) -> Result<Vec<String>> {
         let mut shims = Vec::new();
-        if !self.bin_dir.exists() {
+        if !tokio::fs::try_exists(&self.bin_dir).await.unwrap_or(false) {
             return Ok(shims);
         }
 
-        for entry in fs::read_dir(&self.bin_dir).map_err(Error::from)? {
-            let entry = entry.map_err(Error::from)?;
+        let mut entries = fs::read_dir(&self.bin_dir).await.map_err(Error::from)?;
+        
+        while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
             let path = entry.path();
-            if path.is_file() {
+            let metadata = entry.metadata().await.map_err(Error::from)?;
+            
+            if metadata.is_file() {
                 if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                    // Filter out the main binary and non-shims
                     if name != "linix" && name != "linix.exe" {
-                        shims.push(name.to_string());
+                        // On windows, remove the extension for the listing
+                        #[cfg(windows)]
+                        {
+                            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                                shims.push(stem.to_string());
+                            }
+                        }
+                        #[cfg(unix)]
+                        {
+                            shims.push(name.to_string());
+                        }
                     }
                 }
             }
@@ -2773,10 +2978,13 @@ use crate::utils::safe_data_dir;
 use petgraph::stable_graph::StableDiGraph;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tracing::{info, debug};
+use tracing::{info, debug, warn};
 
 /// The cross-backend transition engine.
 /// Responsible for moving a package between different management backends.
+/// 
+/// Hardened for Phase 2.3: Implements "Meta-Transaction" safety, ensuring that
+/// cross-backend moves update the StateRegistry and re-ghost on failure.
 pub struct Teleporter<'a> {
     app: &'a App,
     ghost_path: PathBuf,
@@ -2794,6 +3002,9 @@ impl<'a> Teleporter<'a> {
     }
 
     /// Primary entry point: Transports a package to a new backend.
+    /// 
+    /// This is an atomic operation: if the installation in the target backend
+    /// fails, the package state is preserved as a ghost to prevent data loss.
     pub async fn teleport(&self, package_name: &str, target_backend_name: &str) -> Result<()> {
         info!("Teleporter: Initiating transition of '{}' to backend '{}'...", package_name, target_backend_name);
 
@@ -2816,7 +3027,7 @@ impl<'a> Teleporter<'a> {
             return Ok(());
         }
 
-        // 1. Archive the existing state metadata
+        // 1. Archive the existing state metadata (Pre-emptive ghosting)
         self.save_ghost(package_name, src_backend_name, &src_pkg.properties, target_backend_name).await?;
 
         // 2. Build the Atomic Transition Graph
@@ -2825,6 +3036,7 @@ impl<'a> Teleporter<'a> {
             name: package_name.to_string(),
             backend: src_backend_name.to_string(),
         });
+        
         let target_spec = PackageSpec {
             name: package_name.to_string(),
             backend: target_backend_name.to_string(),
@@ -2836,21 +3048,41 @@ impl<'a> Teleporter<'a> {
 
         info!("Teleporter: Executing cross-backend transformation...");
         let mut tx = Transaction::new(graph, self.app.registry.clone(), self.app.journal.clone());
-        tx.execute().await?;
-
-        // 3. Declarative Manifest Alignment
-        debug!("Teleporter: Updating declarative manifests...");
-        let _ = self.manifest_engine.delete_package(package_name);
         
-        let new_spec_str = format!("{}:{}", target_backend_name, package_name);
-        self.manifest_engine.add_to_local(&new_spec_str)?;
+        let result = tx.execute().await;
 
-        info!("Teleporter: Successfully migrated '{}' from {} to {}.", package_name, src_backend_name, target_backend_name);
-        Ok(())
+        // 3. Phase 2.3: State Registry Synchronization
+        match result {
+            Ok(_) => {
+                let mut state = self.app.state.lock().await;
+                state.remove(src_backend_name, package_name);
+                state.add(target_backend_name, package_name, src_pkg.version.clone(), HashMap::new());
+                
+                // StateRegistry::save is blocking
+                let state_clone = state.clone();
+                tokio::task::spawn_blocking(move || state_clone.save())
+                    .await
+                    .map_err(|e| Error::Other(e.to_string()))??;
+
+                // 4. Declarative Manifest Alignment
+                debug!("Teleporter: Updating declarative manifests...");
+                let _ = self.manifest_engine.delete_package(package_name).await;
+                
+                let new_spec_str = format!("{}:{}", target_backend_name, package_name);
+                self.manifest_engine.add_to_local(&new_spec_str).await?;
+
+                info!("Teleporter: Successfully migrated '{}' from {} to {}.", package_name, src_backend_name, target_backend_name);
+                Ok(())
+            }
+            Err(e) => {
+                warn!("Teleporter: Cross-backend transition failed: {}. Package preserved as Ghost.", e);
+                Err(e)
+            }
+        }
     }
 
     async fn save_ghost(&self, name: &str, backend: &str, props: &HashMap<String, String>, target: &str) -> Result<()> {
-        let mut ghosts: HashMap<String, GhostMetadata> = if self.ghost_path.exists() {
+        let mut ghosts: HashMap<String, GhostMetadata> = if tokio::fs::try_exists(&self.ghost_path).await.unwrap_or(false) {
             let data = tokio::fs::read_to_string(&self.ghost_path).await.map_err(Error::from)?;
             serde_json::from_str(&data).unwrap_or_default()
         } else {
@@ -2870,13 +3102,18 @@ impl<'a> Teleporter<'a> {
         });
         
         let data = serde_json::to_string_pretty(&ghosts).map_err(Error::from)?;
-        crate::utils::file::atomic_write(&self.ghost_path, &data)?;
+        let path = self.ghost_path.clone();
+        
+        tokio::task::spawn_blocking(move || {
+            crate::utils::file::atomic_write(&path, &data)
+        }).await.map_err(|e| Error::Other(e.to_string()))??;
+        
         debug!("GhostTracker: Metadata archived for {}", name);
         Ok(())
     }
 
     pub async fn get_ghost(&self, name: &str) -> Result<Option<GhostMetadata>> {
-        if !self.ghost_path.exists() {
+        if !tokio::fs::try_exists(&self.ghost_path).await.unwrap_or(false) {
             return Ok(None);
         }
         let data = tokio::fs::read_to_string(&self.ghost_path).await.map_err(Error::from)?;
@@ -2885,7 +3122,7 @@ impl<'a> Teleporter<'a> {
     }
 
     pub async fn list_ghosts(&self) -> Result<Vec<(String, String)>> {
-        if !self.ghost_path.exists() {
+        if !tokio::fs::try_exists(&self.ghost_path).await.unwrap_or(false) {
             return Ok(vec![]);
         }
         let data = tokio::fs::read_to_string(&self.ghost_path).await.map_err(Error::from)?;
@@ -2909,10 +3146,17 @@ impl<'a> Teleporter<'a> {
             .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
             
         if let Some(installer) = backend_caps.as_installable() {
-            installer.install(&[spec], true).await?;
+            let sudo = backend_caps.needs_root();
+            installer.install(&[spec], sudo).await?;
+            
             let mut state = self.app.state.lock().await;
             state.add(&ghost.backend, name, None, ghost.options.clone());
-            state.save()?;
+            
+            let state_clone = state.clone();
+            tokio::task::spawn_blocking(move || state_clone.save())
+                .await
+                .map_err(|e| Error::Other(e.to_string()))??;
+
             self.remove_ghost(name).await?;
             info!("Teleporter: Successfully restored '{}'", name);
             Ok(())
@@ -2922,15 +3166,21 @@ impl<'a> Teleporter<'a> {
     }
 
     async fn remove_ghost(&self, name: &str) -> Result<()> {
-        let mut ghosts: HashMap<String, GhostMetadata> = if self.ghost_path.exists() {
+        let mut ghosts: HashMap<String, GhostMetadata> = if tokio::fs::try_exists(&self.ghost_path).await.unwrap_or(false) {
             let data = tokio::fs::read_to_string(&self.ghost_path).await.map_err(Error::from)?;
             serde_json::from_str(&data).unwrap_or_default()
         } else {
             return Ok(());
         };
+        
         ghosts.remove(name);
         let data = serde_json::to_string_pretty(&ghosts).map_err(Error::from)?;
-        crate::utils::file::atomic_write(&self.ghost_path, &data)?;
+        let path = self.ghost_path.clone();
+        
+        tokio::task::spawn_blocking(move || {
+            crate::utils::file::atomic_write(&path, &data)
+        }).await.map_err(|e| Error::Other(e.to_string()))??;
+        
         Ok(())
     }
 }
@@ -2944,10 +3194,11 @@ use crate::core::{Result, Error, Snapshot, StateRegistry, ManagedPackage};
 use dialoguer::{theme::ColorfulTheme, Select};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
+use tokio::fs;
 
 /// Manages the Snapshot Gallery and System Time Travel (Point 12).
-/// Hardened for Version 3.5.0 to provide Snapshot Diffs.
+/// Hardened for Phase 3.2: Async-safe I/O and blocking task isolation.
 pub struct UndoManager<'a> {
     app: &'a App,
 }
@@ -2999,12 +3250,15 @@ impl<'a> UndoManager<'a> {
             .map(|s| format!("[{}] {} - {} ({})", s.backend, s.timestamp, s.description, s.id))
             .collect();
 
-        let selection = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("Select a system state to inspect/restore (ESC to cancel)")
-            .default(0)
-            .items(&items)
-            .interact_opt()
-            .map_err(|e| Error::Other(e.to_string()))?;
+        // Dialoguer is blocking. Wrap in spawn_blocking.
+        let selection = tokio::task::spawn_blocking(move || {
+            Select::with_theme(&ColorfulTheme::default())
+                .with_prompt("Select a system state to inspect/restore (ESC to cancel)")
+                .default(0)
+                .items(&items)
+                .interact_opt()
+        }).await.map_err(|e| Error::Other(e.to_string()))?
+          .map_err(|e| Error::Other(e.to_string()))?;
 
         if let Some(index) = selection {
             let selected = &snapshots[index];
@@ -3015,9 +3269,13 @@ impl<'a> UndoManager<'a> {
     }
 
     /// Validates that a path is safe to access.
-    fn validate_snapshot_path(&self, path: &Path, snapshot_backend: &str) -> Result<PathBuf> {
-        let canonical = path.canonicalize()
-            .map_err(|e| Error::Snapshot(format!("Failed to canonicalize path {:?}: {}", path, e)))?;
+    async fn validate_snapshot_path(&self, path: &Path, snapshot_backend: &str) -> Result<PathBuf> {
+        // canonicalize is blocking
+        let path_owned = path.to_path_buf();
+        let canonical = tokio::task::spawn_blocking(move || {
+            path_owned.canonicalize()
+        }).await.map_err(|e| Error::Other(e.to_string()))?
+          .map_err(|e| Error::Snapshot(format!("Failed to canonicalize path {:?}: {}", path, e)))?;
         
         let path_str = canonical.to_string_lossy();
         
@@ -3038,7 +3296,6 @@ impl<'a> UndoManager<'a> {
         };
         
         let mut is_allowed = false;
-        // Fix E0382: Iterate by reference to prevent moving the vector
         for prefix in &allowed_prefixes {
             if path_str.starts_with(prefix) {
                 is_allowed = true;
@@ -3048,15 +3305,15 @@ impl<'a> UndoManager<'a> {
         
         if !is_allowed {
             return Err(Error::Snapshot(format!(
-                "Security violation: Snapshot path '{}' is outside allowed directories. Allowed prefixes: {:?}",
-                path_str, allowed_prefixes
+                "Security violation: Snapshot path '{}' is outside allowed directories.",
+                path_str
             )));
         }
         
         Ok(canonical)
     }
 
-    fn find_registry_in_snapshot(&self, snapshot_root: &Path) -> Result<Option<PathBuf>> {
+    async fn find_registry_in_snapshot(&self, snapshot_root: &Path) -> Result<Option<PathBuf>> {
         let possible_paths = vec![
             snapshot_root.join("var/lib/linix/registry.json"),
             snapshot_root.join("root/.local/share/linix/registry.json"),
@@ -3064,7 +3321,7 @@ impl<'a> UndoManager<'a> {
         ];
         
         for path in possible_paths {
-            if path.exists() {
+            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
                 debug!("Found registry.json at {:?}", path);
                 return Ok(Some(path));
             }
@@ -3082,20 +3339,22 @@ impl<'a> UndoManager<'a> {
             _ => return Err(Error::Snapshot(format!("Unsupported snapshot backend: {}", snapshot.backend))),
         };
         
-        let validated_root = self.validate_snapshot_path(&snapshot_root, &snapshot.backend)?;
+        let validated_root = self.validate_snapshot_path(&snapshot_root, &snapshot.backend).await?;
         
-        let snapshot_registry_path = match self.find_registry_in_snapshot(&validated_root)? {
+        let snapshot_registry_path = match self.find_registry_in_snapshot(&validated_root).await? {
             Some(path) => path,
             None => {
                 return Err(Error::Snapshot("Could not find registry.json in snapshot".into()));
             }
         };
         
-        let data = std::fs::read_to_string(&snapshot_registry_path)
-            .map_err(Error::from)?;
+        let data = fs::read_to_string(&snapshot_registry_path).await.map_err(Error::from)?;
         
-        let snapshot_state: StateRegistry = serde_json::from_str(&data)
-            .map_err(Error::from)?;
+        // Serde parsing is CPU intensive, wrap in spawn_blocking
+        let snapshot_state: StateRegistry = tokio::task::spawn_blocking(move || {
+            serde_json::from_str(&data)
+        }).await.map_err(|e| Error::Other(e.to_string()))?
+          .map_err(Error::from)?;
         
         let current_state = self.app.state.lock().await;
         let diff = self.calculate_diff(&current_state, &snapshot_state);
@@ -3112,15 +3371,19 @@ impl<'a> UndoManager<'a> {
             println!("\nNo package changes detected.");
         }
 
-        warn!("\nCRITICAL: Reverting to this snapshot will overwrite your system root (/).");
-        print!("\nAre you absolutely sure? Type 'RESTORE' to proceed: ");
+        println!("\nCRITICAL: Reverting to this snapshot will overwrite your system root (/).");
+        print!("Are you absolutely sure? Type 'RESTORE' to proceed: ");
         
         use std::io::{self, Write};
         let _ = io::stdout().flush();
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).map_err(Error::from)?;
+        
+        let confirm_res = tokio::task::spawn_blocking(|| {
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).map(|_| input)
+        }).await.map_err(|e| Error::Other(e.to_string()))?
+          .map_err(Error::from)?;
 
-        if input.trim() == "RESTORE" {
+        if confirm_res.trim() == "RESTORE" {
             self.execute_restore(snapshot).await
         } else {
             info!("Restore aborted by user.");
@@ -3181,7 +3444,7 @@ impl<'a> UndoManager<'a> {
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Error
+    Queryable, Result, Error, MetadataProvider
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -3223,7 +3486,7 @@ impl AppImageBackendCore {
 
     /// Prepares the filesystem structure for AppImage storage.
     async fn ensure_dirs(&self) -> Result<PathBuf> {
-        if !self.install_dir.exists() {
+        if !tokio::fs::try_exists(&self.install_dir).await.unwrap_or(false) {
             tokio::fs::create_dir_all(&self.install_dir).await?;
         }
         let bin_dir = dirs::home_dir()
@@ -3231,14 +3494,14 @@ impl AppImageBackendCore {
             .join(".local")
             .join("bin");
         
-        if !bin_dir.exists() {
+        if !tokio::fs::try_exists(&bin_dir).await.unwrap_or(false) {
             tokio::fs::create_dir_all(&bin_dir).await?;
         }
         Ok(bin_dir)
     }
 
     async fn load_state(&self) -> HashMap<String, AppImageState> {
-        if !self.state_file.exists() {
+        if !tokio::fs::try_exists(&self.state_file).await.unwrap_or(false) {
             return HashMap::new();
         }
         let data = tokio::fs::read_to_string(&self.state_file).await.unwrap_or_default();
@@ -3247,7 +3510,8 @@ impl AppImageBackendCore {
 
     async fn save_state(&self, state: &HashMap<String, AppImageState>) -> Result<()> {
         let data = serde_json::to_string_pretty(state).map_err(Error::from)?;
-        crate::utils::file::atomic_write(&self.state_file, &data)
+        // Phase 1: Using the high-level executor for atomic writes
+        self.executor.write_atomic(&self.state_file, &data).await
     }
 }
 
@@ -3257,6 +3521,19 @@ impl BackendCore for AppImageBackendCore {
 
     fn is_available(&self) -> bool {
         cfg!(target_os = "linux")
+    }
+
+    fn needs_root(&self) -> bool {
+        // AppImages are installed in user-owned data directories.
+        false
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for AppImageBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // AppImages are self-contained and do not expose a standard dependency manifest.
+        Ok(vec![])
     }
 }
 
@@ -3289,7 +3566,8 @@ impl Installable for AppImageInstallable {
 
             #[cfg(unix)] {
                 use std::os::unix::fs::PermissionsExt;
-                let mut perms = tokio::fs::metadata(&dest_path).await?.permissions();
+                let metadata = tokio::fs::metadata(&dest_path).await?;
+                let mut perms = metadata.permissions();
                 perms.set_mode(0o755);
                 tokio::fs::set_permissions(&dest_path, perms).await?;
             }
@@ -3300,12 +3578,12 @@ impl Installable for AppImageInstallable {
             
             let link_path = bin_dir.join(link_name);
             
-            if link_path.exists() || link_path.is_symlink() {
+            if tokio::fs::try_exists(&link_path).await.unwrap_or(false) || link_path.is_symlink() {
                 let _ = tokio::fs::remove_file(&link_path).await;
             }
 
             #[cfg(unix)] {
-                std::os::unix::fs::symlink(&dest_path, &link_path)?;
+                tokio::fs::os::unix::symlink(&dest_path, &link_path).await?;
             }
 
             state.insert(spec.name.clone(), AppImageState {
@@ -3369,7 +3647,7 @@ impl Queryable for AppImageQueryable {
 
 use crate::core::{
     BackendCore, Installable, Package, PackageSpec, 
-    Queryable, Result, Error, CommandExecutor
+    Queryable, Result, Error, CommandExecutor, MetadataProvider
 };
 use async_trait::async_trait;
 use std::path::Path;
@@ -3416,6 +3694,7 @@ impl BtrfsBackendCore {
             return Err(Error::Other("/etc/fstab not found".into()));
         }
 
+        // fstab modification is synchronous and requires careful atomic handling
         let content = fs::read_to_string(fstab_path).map_err(Error::from)?;
         let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
         
@@ -3440,6 +3719,19 @@ impl BackendCore for BtrfsBackendCore {
 
     fn is_available(&self) -> bool {
         cfg!(target_os = "linux") && self.executor.command_exists_sync("btrfs")
+    }
+
+    fn needs_root(&self) -> bool {
+        // Filesystem level modifications (subvolumes, mounts) require root.
+        true
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for BtrfsBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // Subvolumes are standalone filesystem objects and do not have transitive package deps.
+        Ok(vec![])
     }
 }
 
@@ -3471,7 +3763,16 @@ impl Installable for BtrfsInstallable {
                 let uuid = self.core.get_fs_uuid(path).await?;
                 let custom_options = spec.options.get("options").map(|s| s.as_str()).unwrap_or("defaults");
                 
-                self.core.update_fstab(&uuid, path, mount_point, custom_options)?;
+                let core_ref = self.core.clone();
+                let uuid_str = uuid.clone();
+                let path_str = path.clone();
+                let mount_str = mount_point.clone();
+                let opt_str = custom_options.to_string();
+
+                tokio::task::spawn_blocking(move || {
+                    core_ref.update_fstab(&uuid_str, &path_str, &mount_str, &opt_str)
+                }).await.map_err(|e| Error::Other(e.to_string()))??;
+
                 self.core.executor.run("mount", &[mount_point], sudo).await?;
             }
         }
@@ -3524,7 +3825,7 @@ impl Queryable for BtrfsQueryable {
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Upgradable
+    Queryable, Result, Upgradable, MetadataProvider
 };
 use crate::parsers::dnf;
 use async_trait::async_trait;
@@ -3552,6 +3853,23 @@ impl BackendCore for DnfBackendCore {
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("dnf")
+    }
+
+    fn needs_root(&self) -> bool {
+        // DNF system operations require root privileges.
+        true
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for DnfBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        // 'dnf repoquery --requires --resolve' identifies the actual packages needed.
+        let output = self.executor.run_output("dnf", &["repoquery", "--requires", "--resolve", "--queryformat", "%{name}", name], false).await?;
+        Ok(output.lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 }
 
@@ -3594,7 +3912,7 @@ pub struct DnfQueryable {
 #[async_trait]
 impl Queryable for DnfQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("rpm", &["-qa", "--queryformat", "%{NAME}|% {VERSION}\n"], false).await?;
+        let output = self.core.executor.run_output("rpm", &["-qa", "--queryformat", "%{NAME}|%{VERSION}\n"], false).await?;
         Ok(dnf::parse_rpm_qa(&output, "dnf"))
     }
 
@@ -3638,7 +3956,7 @@ impl Upgradable for DnfUpgradable {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\emacs.rs ---
 
-use crate::core::{CommandExecutor, Package, Result, PackageSpec, BackendCore, Installable, Queryable};
+use crate::core::{CommandExecutor, Package, Result, PackageSpec, BackendCore, Installable, Queryable, MetadataProvider};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
@@ -3669,6 +3987,19 @@ impl BackendCore for EmacsBackendCore {
 
     fn is_available(&self) -> bool { 
         self.executor.command_exists_sync("emacs") 
+    }
+
+    fn needs_root(&self) -> bool {
+        // Emacs packages are typically installed in user-owned ~/.emacs.d/elpa
+        false
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for EmacsBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // package.el handles its own dependencies internally.
+        Ok(vec![])
     }
 }
 
@@ -3764,7 +4095,7 @@ impl Queryable for EmacsQueryable {
 
 use crate::core::{
     CommandExecutor, Package, Result, PackageSpec, 
-    BackendCore, Installable, Queryable, Upgradable
+    BackendCore, Installable, Queryable, Upgradable, MetadataProvider
 };
 use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
@@ -3808,6 +4139,33 @@ impl BackendCore for FlatpakBackendCore {
 
     fn is_available(&self) -> bool {
         *self.available.get_or_init(|| self.executor.command_exists_sync("flatpak"))
+    }
+
+    fn needs_root(&self) -> bool {
+        // If the 'user' setting is true, Flatpak does not need root privileges.
+        !self.settings.get("user").map(|v| v == "true").unwrap_or(false)
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for FlatpakBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        let args = self.scope_args();
+        let mut final_args = args.clone();
+        final_args.extend(["info", "--show-metadata", name]);
+
+        // Flatpak metadata contains a [Extension] or [Runtime] section.
+        // We look for 'runtime=' which is the primary transitive dependency.
+        let output = self.executor.run_output("flatpak", &final_args, false).await?;
+        let mut deps = Vec::new();
+
+        for line in output.lines() {
+            if let Some(runtime) = line.strip_prefix("runtime=") {
+                deps.push(runtime.trim().to_string());
+            }
+        }
+
+        Ok(deps)
     }
 }
 
@@ -3914,7 +4272,8 @@ impl Upgradable for FlatpakUpgradable {
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Searchable, Upgradable, RepoManager, Error, HealthStatus, HealthReport
+    Queryable, Result, Searchable, Upgradable, RepoManager, HealthStatus, 
+    HealthReport, MetadataProvider
 };
 use crate::parsers::OutputParser;
 use async_trait::async_trait;
@@ -3937,6 +4296,10 @@ pub struct ManagerConfig {
     pub repo_add_args: Option<Vec<String>>,
     pub repo_remove_args: Option<Vec<String>>,
     pub repo_list_args: Option<Vec<String>>,
+    /// Phase 1.1: Command to fetch backend-native dependencies (e.g., "apt-cache depends")
+    pub depends_args: Option<Vec<String>>,
+    /// Phase 2.2: Explicitly define if this backend requires root privileges.
+    pub needs_root: bool,
     pub is_exclusive: bool,
     pub flag_map: HashMap<String, String>,
 }
@@ -3958,6 +4321,10 @@ impl BackendCore for GenericBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync(&self.name)
     }
+
+    fn needs_root(&self) -> bool {
+        self.config.needs_root
+    }
     
     async fn check_health(&self) -> Result<HealthReport> {
         if !self.is_available() {
@@ -3971,6 +4338,32 @@ impl BackendCore for GenericBackendCore {
             status: HealthStatus::Ok,
             message: None,
         })
+    }
+}
+
+/// Phase 1.1: MetadataProvider for generic backends.
+#[async_trait]
+impl MetadataProvider for GenericBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        let base_args = match &self.config.depends_args {
+            Some(args) => args,
+            None => return Ok(vec![]),
+        };
+
+        let mut final_args = Vec::new();
+        for arg in base_args {
+            final_args.push(arg.replace("{name}", name));
+        }
+
+        let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
+        let output = self.executor.run_output(&self.name, &arg_refs, false).await?;
+        
+        // Simple line-based dependency parsing for generic backends.
+        // Specific backends like Apt will override this logic in specialized modules.
+        Ok(output.lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 }
 
@@ -4087,7 +4480,6 @@ impl Upgradable for GenericUpgradable {
     }
 
     async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        // Default implementation for generic managers.
         Ok(())
     }
 }
@@ -4101,7 +4493,7 @@ pub struct GenericRepoManager {
 impl RepoManager for GenericRepoManager {
     async fn add_repo(&self, name: &str, url: &str, sudo: bool) -> Result<()> {
         let base_args = self.core.config.repo_add_args.as_ref()
-            .ok_or_else(|| Error::Other("Repo adding not supported".into()))?;
+            .ok_or_else(|| crate::core::Error::Other("Repo adding not supported".into()))?;
         
         let mut final_args = Vec::new();
         for arg in base_args {
@@ -4116,7 +4508,7 @@ impl RepoManager for GenericRepoManager {
 
     async fn remove_repo(&self, name: &str, sudo: bool) -> Result<()> {
         let base_args = self.core.config.repo_remove_args.as_ref()
-            .ok_or_else(|| Error::Other("Repo removal not supported".into()))?;
+            .ok_or_else(|| crate::core::Error::Other("Repo removal not supported".into()))?;
             
         let final_args: Vec<String> = base_args.iter().map(|a| a.replace("{name}", name)).collect();
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
@@ -4127,7 +4519,7 @@ impl RepoManager for GenericRepoManager {
 
     async fn list_repos(&self) -> Result<Vec<(String, String)>> {
         let base_args = self.core.config.repo_list_args.as_ref()
-            .ok_or_else(|| Error::Other("Repo listing not supported".into()))?;
+            .ok_or_else(|| crate::core::Error::Other("Repo listing not supported".into()))?;
         let arg_refs: Vec<&str> = base_args.iter().map(|s| s.as_str()).collect();
         let output = self.core.executor.run_output(&self.core.name, &arg_refs, false).await?;
         
@@ -4149,13 +4541,13 @@ impl RepoManager for GenericRepoManager {
 use crate::core::{
     BackendCore, Installable, Queryable,
     security::verify_checksum,
-    CommandExecutor, Error, Package, PackageSpec, Result, RateLimiter, HealthReport, HealthStatus
+    CommandExecutor, Error, Package, PackageSpec, Result, RateLimiter, HealthReport, HealthStatus, MetadataProvider
 };
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{PathBuf};
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -4270,10 +4662,10 @@ impl GithubBackendCore {
     
     async fn load_state_internal(&self) -> HashMap<String, GithubState> {
         let _guard = self.internal_lock.lock().await;
-        if !self.state_file.exists() {
+        if !tokio::fs::try_exists(&self.state_file).await.unwrap_or(false) {
             return HashMap::new();
         }
-        let data = std::fs::read_to_string(&self.state_file).unwrap_or_default();
+        let data = tokio::fs::read_to_string(&self.state_file).await.unwrap_or_default();
         serde_json::from_str(&data).unwrap_or_default()
     }
     
@@ -4288,8 +4680,16 @@ impl GithubBackendCore {
 impl BackendCore for GithubBackendCore {
     fn name(&self) -> &str { &self.name }
     fn is_available(&self) -> bool { true }
+    fn needs_root(&self) -> bool { false }
     async fn check_health(&self) -> Result<HealthReport> {
         Ok(HealthReport { status: HealthStatus::Ok, message: None })
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for GithubBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        Ok(vec![])
     }
 }
 
@@ -4322,7 +4722,7 @@ impl Installable for GithubInstallable {
             let bytes = self.core.github_get(&best_asset.url).await?.bytes().await.map_err(Error::from)?;
             let tmp_dir = tempfile::tempdir().map_err(Error::from)?;
             let dl_path = tmp_dir.path().join(&best_asset.name);
-            std::fs::write(&dl_path, bytes).map_err(Error::from)?;
+            tokio::fs::write(&dl_path, bytes).await.map_err(Error::from)?;
 
             if let Some(expected_sha) = spec.options.get("sha256") {
                 verify_checksum(&dl_path, expected_sha)?;
@@ -4330,10 +4730,16 @@ impl Installable for GithubInstallable {
 
             let pkg_dir_name = spec.name.replace('/', "_");
             let pkg_dir = self.core.install_dir.join(&pkg_dir_name);
-            let _ = std::fs::remove_dir_all(&pkg_dir);
-            std::fs::create_dir_all(&pkg_dir).map_err(Error::from)?;
+            if tokio::fs::try_exists(&pkg_dir).await.unwrap_or(false) {
+                tokio::fs::remove_dir_all(&pkg_dir).await.map_err(Error::from)?;
+            }
+            tokio::fs::create_dir_all(&pkg_dir).await.map_err(Error::from)?;
 
-            extract_archive(&dl_path, &pkg_dir)?;
+            let dl_path_archive = dl_path.clone();
+            let pkg_dir_archive = pkg_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                extract_archive(&dl_path_archive, &pkg_dir_archive)
+            }).await.map_err(|e| Error::Other(e.to_string()))??;
 
             let repo_name = spec.name.split('/').last().unwrap_or(&spec.name);
             let bin_dest_base = dirs::home_dir()
@@ -4341,33 +4747,48 @@ impl Installable for GithubInstallable {
                 .join(".local").join("bin").join(repo_name);
             
             let mut final_bin_path = None;
-            let walker = walkdir::WalkDir::new(&pkg_dir).into_iter().filter_map(|e| e.ok());
+            let core_pkg_dir = pkg_dir.clone();
+            let repo_name_str = repo_name.to_string();
             
-            for entry in walker {
-                let fname = entry.file_name().to_string_lossy().to_lowercase();
-                if fname == repo_name.to_lowercase() || 
-                   fname == format!("{}.exe", repo_name.to_lowercase()) ||
-                   (fname.starts_with(repo_name) && !fname.contains('.')) 
-                {
-                    let src_path = entry.path();
-                    let mut bin_dest = bin_dest_base.clone();
-                    
-                    #[cfg(windows)] {
-                        if bin_dest.extension().is_none() { bin_dest.set_extension("exe"); }
-                        std::fs::copy(src_path, &bin_dest).map_err(Error::from)?;
+            let discovery_result: Result<Option<PathBuf>> = tokio::task::spawn_blocking(move || {
+                let walker = walkdir::WalkDir::new(&core_pkg_dir).into_iter().filter_map(|e| e.ok());
+                for entry in walker {
+                    let fname = entry.file_name().to_string_lossy().to_lowercase();
+                    if fname == repo_name_str.to_lowercase() || 
+                       fname == format!("{}.exe", repo_name_str.to_lowercase()) ||
+                       (fname.starts_with(&repo_name_str) && !fname.contains('.')) 
+                    {
+                        return Ok(Some(entry.path().to_path_buf()));
                     }
-
-                    #[cfg(unix)] {
-                        use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(src_path, std::fs::Permissions::from_mode(0o755));
-                        let _ = std::fs::remove_file(&bin_dest);
-                        let _ = std::fs::create_dir_all(bin_dest.parent().unwrap());
-                        std::os::unix::fs::symlink(src_path, &bin_dest).map_err(Error::from)?;
-                    }
-
-                    final_bin_path = Some(bin_dest.to_string_lossy().to_string());
-                    break;
                 }
+                Ok(None)
+            }).await.map_err(|e| Error::Other(e.to_string()))?;
+
+            if let Some(src_path) = discovery_result? {
+                let mut bin_dest = bin_dest_base.clone();
+                
+                #[cfg(windows)] {
+                    if bin_dest.extension().is_none() { bin_dest.set_extension("exe"); }
+                    tokio::fs::copy(&src_path, &bin_dest).await.map_err(Error::from)?;
+                }
+
+                #[cfg(unix)] {
+                    use std::os::unix::fs::PermissionsExt;
+                    let metadata = tokio::fs::metadata(&src_path).await?;
+                    let mut perms = metadata.permissions();
+                    perms.set_mode(0o755);
+                    tokio::fs::set_permissions(&src_path, perms).await.map_err(Error::from)?;
+                    
+                    if tokio::fs::try_exists(&bin_dest).await.unwrap_or(false) || bin_dest.is_symlink() {
+                        tokio::fs::remove_file(&bin_dest).await.map_err(Error::from)?;
+                    }
+                    if let Some(parent) = bin_dest.parent() {
+                        tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
+                    }
+                    tokio::fs::os::unix::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
+                }
+
+                final_bin_path = Some(bin_dest.to_string_lossy().to_string());
             }
 
             state.insert(spec.name.clone(), GithubState {
@@ -4387,9 +4808,9 @@ impl Installable for GithubInstallable {
         for name in names {
             if let Some(pkg) = state.remove(name) {
                 if let Some(ref bp) = pkg.bin_path {
-                    let _ = std::fs::remove_file(bp);
+                    let _ = tokio::fs::remove_file(bp).await;
                 }
-                let _ = std::fs::remove_dir_all(pkg.install_path);
+                let _ = tokio::fs::remove_dir_all(pkg.install_path).await;
                 info!("Purged GitHub package: {}", name);
             }
         }
@@ -4425,7 +4846,7 @@ impl Queryable for GithubQueryable {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\link.rs ---
 
-use crate::core::{CommandExecutor, Result, PackageSpec, BackendCore, Installable, Error};
+use crate::core::{CommandExecutor, Result, PackageSpec, BackendCore, Installable, Error, MetadataProvider};
 use crate::config::Config;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -4470,7 +4891,7 @@ impl LinkBackendCore {
             .map_err(|e| Error::Other(format!("Tera Render Error in {:?}: {}", source_path, e)))
     }
 
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     fn is_same_drive(a: &Path, b: &Path) -> bool {
         use std::path::Component;
         let drive_a = a.components().find(|c| matches!(c, Component::Prefix(_)));
@@ -4483,6 +4904,15 @@ impl LinkBackendCore {
 impl BackendCore for LinkBackendCore {
     fn name(&self) -> &str { &self.name }
     fn is_available(&self) -> bool { true }
+    fn needs_root(&self) -> bool { false }
+}
+
+/// Phase 1.1: MetadataProvider for Link (Filesystem objects have no native transitive deps).
+#[async_trait]
+impl MetadataProvider for LinkBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
 }
 
 pub struct LinkInstallable {
@@ -4524,8 +4954,11 @@ impl Installable for LinkInstallable {
             }
 
             // 2. Standard Symlinking Path
-            if target_path.exists() || target_path.is_symlink() {
-                if let Ok(existing_link) = std::fs::read_link(&target_path) {
+            let exists = tokio::fs::try_exists(&target_path).await.unwrap_or(false);
+            let is_symlink = target_path.is_symlink();
+
+            if exists || is_symlink {
+                if let Ok(existing_link) = tokio::fs::read_link(&target_path).await {
                     if existing_link == source {
                         debug!("Link: Correct symlink already exists at {:?}", target_path);
                         continue;
@@ -4535,10 +4968,11 @@ impl Installable for LinkInstallable {
                 if self.core.executor.dry_run {
                     info!("[DRY-RUN] Would remove existing file/link at {:?}", target_path);
                 } else {
-                    if target_path.is_dir() && !target_path.is_symlink() {
-                        std::fs::remove_dir_all(&target_path)?;
+                    let metadata = tokio::fs::symlink_metadata(&target_path).await.map_err(Error::from)?;
+                    if metadata.is_dir() && !metadata.is_symlink() {
+                        tokio::fs::remove_dir_all(&target_path).await.map_err(Error::from)?;
                     } else {
-                        std::fs::remove_file(&target_path)?;
+                        tokio::fs::remove_file(&target_path).await.map_err(Error::from)?;
                     }
                 }
             }
@@ -4546,22 +4980,25 @@ impl Installable for LinkInstallable {
             info!("Link: Creating link {:?} -> {:?}", source, target_path);
             if !self.core.executor.dry_run {
                 if let Some(p) = target_path.parent() {
-                    std::fs::create_dir_all(p)?;
+                    tokio::fs::create_dir_all(p).await.map_err(Error::from)?;
                 }
 
                 #[cfg(unix)] {
-                    std::os::unix::fs::symlink(&source, &target_path)?;
+                    tokio::fs::symlink(&source, &target_path).await.map_err(Error::from)?;
                 }
 
-                #[cfg(windows)] {
+                #[cfg(target_os = "windows")] {
                     let source_abs = source.canonicalize().unwrap_or_else(|_| source.clone());
                     if !LinkBackendCore::is_same_drive(&source_abs, &target_path) {
                         warn!("Link: Cross-drive fallback to COPY for {:?}", source);
-                        std::fs::copy(&source, &target_path)?;
-                    } else if source.is_dir() {
-                        std::os::windows::fs::symlink_dir(&source, &target_path)?;
+                        tokio::fs::copy(&source, &target_path).await.map_err(Error::from)?;
                     } else {
-                        std::os::windows::fs::symlink_file(&source, &target_path)?;
+                        let is_dir = tokio::fs::metadata(&source).await.map(|m| m.is_dir()).unwrap_or(false);
+                        if is_dir {
+                            tokio::fs::symlink_dir(&source, &target_path).await.map_err(Error::from)?;
+                        } else {
+                            tokio::fs::symlink_file(&source, &target_path).await.map_err(Error::from)?;
+                        }
                     }
                 }
             }
@@ -4572,13 +5009,17 @@ impl Installable for LinkInstallable {
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
         for name in names {
             let path = Path::new(name);
-            if path.exists() || path.is_symlink() {
+            let exists = tokio::fs::try_exists(path).await.unwrap_or(false);
+            let is_symlink = path.is_symlink();
+
+            if exists || is_symlink {
                 info!("Link: Removing link/rendered file {:?}", path);
                 if !self.core.executor.dry_run {
-                    if path.is_dir() && !path.is_symlink() {
-                        std::fs::remove_dir_all(path)?;
+                    let metadata = tokio::fs::symlink_metadata(path).await.map_err(Error::from)?;
+                    if metadata.is_dir() && !metadata.is_symlink() {
+                        tokio::fs::remove_dir_all(path).await.map_err(Error::from)?;
                     } else {
-                        std::fs::remove_file(path)?;
+                        tokio::fs::remove_file(path).await.map_err(Error::from)?;
                     }
                 }
             }
@@ -4593,7 +5034,7 @@ impl Installable for LinkInstallable {
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Upgradable, Error
+    Queryable, Result, Upgradable, Error, MetadataProvider
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -4621,6 +5062,21 @@ impl BackendCore for MiseBackendCore {
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("mise")
+    }
+
+    fn needs_root(&self) -> bool {
+        // Mise typically manages tools in the user's home directory (~/.local/share/mise)
+        false
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for MiseBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // Mise handles versioned runtimes which are generally leaf nodes or 
+        // handle their own internal versioning. We return empty to avoid
+        // over-complicating system-level orchestration with tool-specific runtimes.
+        Ok(vec![])
     }
 }
 
@@ -4766,7 +5222,7 @@ pub use generic::{GenericBackendCore, ManagerConfig};
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Upgradable, Error
+    Queryable, Result, Upgradable, Error, MetadataProvider
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -4794,6 +5250,21 @@ impl BackendCore for NixBackendCore {
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("nix")
+    }
+
+    fn needs_root(&self) -> bool {
+        // Nix profiles are managed per-user in the nix store; usually doesn't require sudo.
+        false
+    }
+}
+
+/// Phase 1.1: MetadataProvider for Nix.
+#[async_trait]
+impl MetadataProvider for NixBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // Nix handles its own dependency tree internally during 'nix profile install'.
+        // We return an empty list as we don't need to manually orchestrate nix-native deps.
+        Ok(vec![])
     }
 }
 
@@ -4918,7 +5389,7 @@ impl NixBackendCore {
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Upgradable
+    Queryable, Result, Upgradable, MetadataProvider
 };
 use crate::parsers::pacman;
 use async_trait::async_trait;
@@ -4946,6 +5417,35 @@ impl BackendCore for PacmanBackendCore {
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("pacman")
+    }
+
+    fn needs_root(&self) -> bool {
+        // System-level package management on Arch requires root.
+        true
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for PacmanBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        // 'pacman -Si' provides information for repo packages.
+        // We look for the "Depends On" field.
+        let output = self.executor.run_output("pacman", &["-Si", name], false).await?;
+        let mut deps = Vec::new();
+
+        for line in output.lines() {
+            if let Some(dep_line) = line.strip_prefix("Depends On     :") {
+                let parts: Vec<&str> = dep_line.split_whitespace().collect();
+                for part in parts {
+                    if part != "None" {
+                        // Strip version constraints like >=1.2.3
+                        let clean_dep = part.split(['>', '<', '=']).next().unwrap_or(part);
+                        deps.push(clean_dep.to_string());
+                    }
+                }
+            }
+        }
+        Ok(deps)
     }
 }
 
@@ -5044,7 +5544,7 @@ impl Upgradable for PacmanUpgradable {
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\registry.rs ---
 
 use crate::core::{
-    BackendCapabilities, CommandExecutor, Package, PackageSpec, Result
+    BackendCapabilities, CommandExecutor, Package
 };
 use crate::config::Config;
 use crate::app::LuaHooks;
@@ -5052,7 +5552,7 @@ use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable,
     GenericUpgradable, GenericRepoManager, ManagerConfig
 };
-use crate::parsers::{brew, language, windows, LambdaParser};
+use crate::parsers::{brew, windows, LambdaParser};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -5094,6 +5594,8 @@ impl BackendRegistry {
 }
 
 /// The master wiring function for LiNix.
+/// 
+/// Hardened for Phase 6.1: Full OS coverage for Linux, macOS, and Windows.
 pub async fn create_default_registry(executor: CommandExecutor, config: &Config, _hooks: Arc<LuaHooks>) -> BackendRegistry {
     let mut reg = BackendRegistry::new();
 
@@ -5116,6 +5618,8 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
                 repo_add_args: Some(vec!["add-apt-repository".into(), "-y".into(), "{url}".into()]),
                 repo_remove_args: Some(vec!["add-apt-repository".into(), "--remove".into(), "-y".into(), "{name}".into()]),
                 repo_list_args: None, 
+                depends_args: Some(vec!["depends".into(), "--no-recommends".into(), "--no-suggests".into(), "{name}".into()]),
+                needs_root: true,
                 is_exclusive: true,
                 flag_map: HashMap::new(),
             },
@@ -5130,67 +5634,25 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
             .with_queryable(Arc::new(GenericQueryable { core: apt_core.clone() }))
             .with_upgradable(Arc::new(GenericUpgradable { core: apt_core.clone() }))
             .with_repo_manager(Arc::new(GenericRepoManager { core: apt_core.clone() }))
+            .with_metadata_provider(apt_core.clone())
             .build()));
 
         // Pacman
-        let pacman_core = Arc::new(GenericBackendCore {
-            name: "pacman".into(),
-            executor: executor.duplicate(),
-            config: ManagerConfig {
-                name: "pacman".into(),
-                install_args: vec!["-S".into(), "--noconfirm".into(), "--needed".into()],
-                remove_args: vec!["-Rs".into(), "--noconfirm".into()],
-                list_args: vec!["-Q".into()],
-                list_manual_args: Some(vec!["-Qe".into()]),
-                search_args: vec!["-Ss".into()],
-                upgrade_args: vec!["-Syu".into(), "--noconfirm".into()],
-                update_args: Some(vec!["-Sy".into()]),
-                repo_add_args: None, repo_remove_args: None, repo_list_args: None,
-                is_exclusive: true,
-                flag_map: HashMap::new(),
-            },
-            parser: Arc::new(LambdaParser { 
-                installed_fn: crate::parsers::pacman::parse_list, 
-                search_fn: crate::parsers::pacman::parse_search 
-            }),
-        });
-        
+        let pacman_core = Arc::new(crate::backends::pacman::PacmanBackendCore::new(executor.duplicate()));
         reg.register(Arc::new(BackendCapabilities::builder(pacman_core.clone())
-            .with_installable(Arc::new(GenericInstallable { core: pacman_core.clone() }))
-            .with_queryable(Arc::new(GenericQueryable { core: pacman_core.clone() }))
-            .with_upgradable(Arc::new(GenericUpgradable { core: pacman_core.clone() }))
+            .with_installable(Arc::new(crate::backends::pacman::PacmanInstallable { core: pacman_core.clone() }))
+            .with_queryable(Arc::new(crate::backends::pacman::PacmanQueryable { core: pacman_core.clone() }))
+            .with_upgradable(Arc::new(crate::backends::pacman::PacmanUpgradable { core: pacman_core.clone() }))
+            .with_metadata_provider(pacman_core.clone())
             .build()));
 
         // DNF
-        let dnf_core = Arc::new(GenericBackendCore {
-            name: "dnf".into(),
-            executor: executor.duplicate(),
-            config: ManagerConfig {
-                name: "dnf".into(),
-                install_args: vec!["install".into(), "-y".into()],
-                remove_args: vec!["remove".into(), "-y".into()],
-                list_args: vec!["list".into(), "installed".into()],
-                list_manual_args: Some(vec!["list".into(), "installed".into()]),
-                search_args: vec!["search".into()],
-                upgrade_args: vec!["upgrade".into(), "-y".into()],
-                update_args: Some(vec!["makecache".into()]),
-                repo_add_args: Some(vec!["config-manager".into(), "--add-repo".into(), "{url}".into()]),
-                repo_remove_args: Some(vec!["config-manager".into(), "--remove-repo".into(), "{name}".into()]),
-                repo_list_args: Some(vec!["repolist".into()]),
-                is_exclusive: true,
-                flag_map: HashMap::new(),
-            },
-            parser: Arc::new(LambdaParser { 
-                installed_fn: |o| crate::parsers::dnf::parse_rpm_qa(o, "dnf"), 
-                search_fn: crate::parsers::dnf::parse_dnf_search 
-            }),
-        });
-        
+        let dnf_core = Arc::new(crate::backends::dnf::DnfBackendCore::new(executor.duplicate()));
         reg.register(Arc::new(BackendCapabilities::builder(dnf_core.clone())
-            .with_installable(Arc::new(GenericInstallable { core: dnf_core.clone() }))
-            .with_queryable(Arc::new(GenericQueryable { core: dnf_core.clone() }))
-            .with_upgradable(Arc::new(GenericUpgradable { core: dnf_core.clone() }))
-            .with_repo_manager(Arc::new(GenericRepoManager { core: dnf_core.clone() }))
+            .with_installable(Arc::new(crate::backends::dnf::DnfInstallable { core: dnf_core.clone() }))
+            .with_queryable(Arc::new(crate::backends::dnf::DnfQueryable { core: dnf_core.clone() }))
+            .with_upgradable(Arc::new(crate::backends::dnf::DnfUpgradable { core: dnf_core.clone() }))
+            .with_metadata_provider(dnf_core.clone())
             .build()));
     }
 
@@ -5211,6 +5673,8 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
                 upgrade_args: vec!["upgrade".into(), "--all".into(), "--silent".into()],
                 update_args: Some(vec!["source".into(), "update".into()]),
                 repo_add_args: None, repo_remove_args: None, repo_list_args: None,
+                depends_args: None,
+                needs_root: false,
                 is_exclusive: false,
                 flag_map: HashMap::new(),
             },
@@ -5223,6 +5687,7 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
         reg.register(Arc::new(BackendCapabilities::builder(winget_core.clone())
             .with_installable(Arc::new(GenericInstallable { core: winget_core.clone() }))
             .with_queryable(Arc::new(GenericQueryable { core: winget_core.clone() }))
+            .with_metadata_provider(winget_core.clone())
             .build()));
 
         // Scoop
@@ -5241,6 +5706,8 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
                 repo_add_args: Some(vec!["bucket".into(), "add".into(), "{name}".into(), "{url}".into()]),
                 repo_remove_args: Some(vec!["bucket".into(), "rm".into(), "{name}".into()]),
                 repo_list_args: Some(vec!["bucket".into(), "list".into()]),
+                depends_args: None,
+                needs_root: false,
                 is_exclusive: false,
                 flag_map: HashMap::new(),
             },
@@ -5254,10 +5721,82 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
             .with_installable(Arc::new(GenericInstallable { core: scoop_core.clone() }))
             .with_queryable(Arc::new(GenericQueryable { core: scoop_core.clone() }))
             .with_repo_manager(Arc::new(GenericRepoManager { core: scoop_core.clone() }))
+            .with_metadata_provider(scoop_core.clone())
+            .build()));
+
+        // Chocolatey
+        let choco_core = Arc::new(GenericBackendCore {
+            name: "choco".into(),
+            executor: executor.duplicate(),
+            config: ManagerConfig {
+                name: "choco".into(),
+                install_args: vec!["install".into(), "-y".into()],
+                remove_args: vec!["uninstall".into(), "-y".into()],
+                list_args: vec!["list".into(), "-lo".into(), "-r".into()],
+                list_manual_args: None,
+                search_args: vec!["search".into()],
+                upgrade_args: vec!["upgrade".into(), "all".into(), "-y".into()],
+                update_args: None,
+                repo_add_args: Some(vec!["source".into(), "add".into(), "-n".into(), "{name}".into(), "-s".into(), "{url}".into()]),
+                repo_remove_args: Some(vec!["source".into(), "remove".into(), "-n".into(), "{name}".into()]),
+                repo_list_args: Some(vec!["source".into(), "list".into()]),
+                depends_args: None,
+                needs_root: true,
+                is_exclusive: true,
+                flag_map: HashMap::new(),
+            },
+            parser: Arc::new(LambdaParser { 
+                installed_fn: |o| windows::parse_installed("choco", o), 
+                search_fn: |o| windows::parse_search("choco", o) 
+            }),
+        });
+
+        reg.register(Arc::new(BackendCapabilities::builder(choco_core.clone())
+            .with_installable(Arc::new(GenericInstallable { core: choco_core.clone() }))
+            .with_queryable(Arc::new(GenericQueryable { core: choco_core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: choco_core.clone() }))
+            .with_repo_manager(Arc::new(GenericRepoManager { core: choco_core.clone() }))
+            .with_metadata_provider(choco_core.clone())
             .build()));
     }
 
-    // --- 3. CROSS-PLATFORM MANAGERS ---
+    // --- 3. MACOS PACKAGE MANAGERS ---
+    #[cfg(target_os = "macos")]
+    {
+        // Mas (App Store)
+        let mas_core = Arc::new(GenericBackendCore {
+            name: "mas".into(),
+            executor: executor.duplicate(),
+            config: ManagerConfig {
+                name: "mas".into(),
+                install_args: vec!["install".into()],
+                remove_args: vec!["uninstall".into()],
+                list_args: vec!["list".into()],
+                list_manual_args: None,
+                search_args: vec!["search".into()],
+                upgrade_args: vec!["upgrade".into()],
+                update_args: None,
+                repo_add_args: None, repo_remove_args: None, repo_list_args: None,
+                depends_args: None,
+                needs_root: false,
+                is_exclusive: false,
+                flag_map: HashMap::new(),
+            },
+            parser: Arc::new(LambdaParser { 
+                installed_fn: crate::parsers::macos::parse_mas_list, 
+                search_fn: crate::parsers::macos::parse_mas_search 
+            }),
+        });
+
+        reg.register(Arc::new(BackendCapabilities::builder(mas_core.clone())
+            .with_installable(Arc::new(GenericInstallable { core: mas_core.clone() }))
+            .with_queryable(Arc::new(GenericQueryable { core: mas_core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: mas_core.clone() }))
+            .with_metadata_provider(mas_core.clone())
+            .build()));
+    }
+
+    // --- 4. CROSS-PLATFORM MANAGERS ---
     // Homebrew
     let brew_core = Arc::new(GenericBackendCore {
         name: "brew".into(),
@@ -5274,6 +5813,8 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
             repo_add_args: Some(vec!["tap".into(), "{name}".into(), "{url}".into()]),
             repo_remove_args: Some(vec!["untap".into(), "{name}".into()]),
             repo_list_args: Some(vec!["tap".into()]),
+            depends_args: Some(vec!["deps".into(), "{name}".into()]),
+            needs_root: false,
             is_exclusive: false,
             flag_map: HashMap::new(),
         },
@@ -5285,31 +5826,35 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
         .with_queryable(Arc::new(GenericQueryable { core: brew_core.clone() }))
         .with_upgradable(Arc::new(GenericUpgradable { core: brew_core.clone() }))
         .with_repo_manager(Arc::new(GenericRepoManager { core: brew_core.clone() }))
+        .with_metadata_provider(brew_core.clone())
         .build()));
 
-    // --- 4. SPECIALIZED MANAGERS ---
-    // Fix E0422: Using specific Capability structs defined in backend files
+    // Specialized Modules
     let github_core = Arc::new(crate::backends::github::GithubBackendCore::new(executor.duplicate(), config.github_token.clone()));
     reg.register(Arc::new(BackendCapabilities::builder(github_core.clone())
         .with_installable(Arc::new(crate::backends::github::GithubInstallable { core: github_core.clone() }))
         .with_queryable(Arc::new(crate::backends::github::GithubQueryable { core: github_core.clone() }))
+        .with_metadata_provider(github_core.clone())
         .build()));
 
     let web_core = Arc::new(crate::backends::web::WebBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(web_core.clone())
         .with_installable(Arc::new(crate::backends::web::WebInstallable { core: web_core.clone() }))
         .with_queryable(Arc::new(crate::backends::web::WebQueryable { core: web_core.clone() }))
+        .with_metadata_provider(web_core.clone())
         .build()));
 
     let btrfs_core = Arc::new(crate::backends::btrfs::BtrfsBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(btrfs_core.clone())
         .with_installable(Arc::new(crate::backends::btrfs::BtrfsInstallable { core: btrfs_core.clone() }))
         .with_queryable(Arc::new(crate::backends::btrfs::BtrfsQueryable { core: btrfs_core.clone() }))
+        .with_metadata_provider(btrfs_core.clone())
         .build()));
 
     let link_core = Arc::new(crate::backends::link::LinkBackendCore::new(executor.duplicate(), Arc::new(config.clone())));
     reg.register(Arc::new(BackendCapabilities::builder(link_core.clone())
         .with_installable(Arc::new(crate::backends::link::LinkInstallable { core: link_core.clone() }))
+        .with_metadata_provider(link_core.clone())
         .build()));
 
     let nix_core = Arc::new(crate::backends::nix::NixBackendCore::new(executor.duplicate()));
@@ -5317,6 +5862,7 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
         .with_installable(Arc::new(crate::backends::nix::NixInstallable { core: nix_core.clone() }))
         .with_queryable(Arc::new(crate::backends::nix::NixQueryable { core: nix_core.clone() }))
         .with_upgradable(Arc::new(crate::backends::nix::NixUpgradable { core: nix_core.clone() }))
+        .with_metadata_provider(nix_core.clone())
         .build()));
 
     let mise_core = Arc::new(crate::backends::mise::MiseBackendCore::new(executor.duplicate()));
@@ -5324,6 +5870,7 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
         .with_installable(Arc::new(crate::backends::mise::MiseInstallable { core: mise_core.clone() }))
         .with_queryable(Arc::new(crate::backends::mise::MiseQueryable { core: mise_core.clone() }))
         .with_upgradable(Arc::new(crate::backends::mise::MiseUpgradable { core: mise_core.clone() }))
+        .with_metadata_provider(mise_core.clone())
         .build()));
 
     let vscode_core = Arc::new(crate::backends::vscode::VscodeBackendCore::new(executor.duplicate()));
@@ -5331,24 +5878,28 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
         .with_installable(Arc::new(crate::backends::vscode::VscodeInstallable { core: vscode_core.clone() }))
         .with_queryable(Arc::new(crate::backends::vscode::VscodeQueryable { core: vscode_core.clone() }))
         .with_searchable(Arc::new(crate::backends::vscode::VscodeSearchable { core: vscode_core.clone() }))
+        .with_metadata_provider(vscode_core.clone())
         .build()));
 
     let emacs_core = Arc::new(crate::backends::emacs::EmacsBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(emacs_core.clone())
         .with_installable(Arc::new(crate::backends::emacs::EmacsInstallable { core: emacs_core.clone() }))
         .with_queryable(Arc::new(crate::backends::emacs::EmacsQueryable { core: emacs_core.clone() }))
+        .with_metadata_provider(emacs_core.clone())
         .build()));
 
     let service_core = Arc::new(crate::backends::service::ServiceBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(service_core.clone())
         .with_installable(Arc::new(crate::backends::service::ServiceInstallable { core: service_core.clone() }))
         .with_queryable(Arc::new(crate::backends::service::ServiceQueryable { core: service_core.clone() }))
+        .with_metadata_provider(service_core.clone())
         .build()));
 
     let appimage_core = Arc::new(crate::backends::appimage::AppImageBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(appimage_core.clone())
         .with_installable(Arc::new(crate::backends::appimage::AppImageInstallable { core: appimage_core.clone() }))
         .with_queryable(Arc::new(crate::backends::appimage::AppImageQueryable { core: appimage_core.clone() }))
+        .with_metadata_provider(appimage_core.clone())
         .build()));
 
     let snap_core = Arc::new(crate::backends::snap::SnapBackendCore::new(executor.duplicate()));
@@ -5356,6 +5907,7 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
         .with_installable(Arc::new(crate::backends::snap::SnapInstallable { core: snap_core.clone() }))
         .with_queryable(Arc::new(crate::backends::snap::SnapQueryable { core: snap_core.clone() }))
         .with_upgradable(Arc::new(crate::backends::snap::SnapUpgradable { core: snap_core.clone() }))
+        .with_metadata_provider(snap_core.clone())
         .build()));
 
     let flatpak_settings = config.backend_settings.get("flatpak").cloned().unwrap_or_default();
@@ -5364,6 +5916,7 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
         .with_installable(Arc::new(crate::backends::flatpak::FlatpakInstallable { core: flatpak_core.clone() }))
         .with_queryable(Arc::new(crate::backends::flatpak::FlatpakQueryable { core: flatpak_core.clone() }))
         .with_upgradable(Arc::new(crate::backends::flatpak::FlatpakUpgradable { core: flatpak_core.clone() }))
+        .with_metadata_provider(flatpak_core.clone())
         .build()));
 
     // --- 5. LANGUAGE MANAGERS ---
@@ -5371,14 +5924,14 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
     for name in langs {
         let n_str = name.to_string();
         let parser_fn: fn(&str) -> Vec<Package> = match name {
-            "cargo" => |o| language::parse_installed("cargo", o),
-            "npm" => |o| language::parse_installed("npm", o),
-            "pip" => |o| language::parse_installed("pip", o),
-            "pipx" => |o| language::parse_installed("pipx", o),
-            "yarn" => |o| language::parse_installed("yarn", o),
-            "gem" => |o| language::parse_installed("gem", o),
-            "bun" => |o| language::parse_installed("bun", o),
-            "pnpm" => |o| language::parse_installed("pnpm", o),
+            "cargo" => |o| crate::parsers::language::parse_installed("cargo", o),
+            "npm" => |o| crate::parsers::language::parse_installed("npm", o),
+            "pip" => |o| crate::parsers::language::parse_installed("pip", o),
+            "pipx" => |o| crate::parsers::language::parse_installed("pipx", o),
+            "yarn" => |o| crate::parsers::language::parse_installed("yarn", o),
+            "gem" => |o| crate::parsers::language::parse_installed("gem", o),
+            "bun" => |o| crate::parsers::language::parse_installed("bun", o),
+            "pnpm" => |o| crate::parsers::language::parse_installed("pnpm", o),
             _ => |_| vec![],
         };
 
@@ -5387,14 +5940,31 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
             executor: executor.duplicate(),
             config: ManagerConfig {
                 name: n_str.clone(),
-                install_args: vec![if n_str == "bun" || n_str == "pnpm" { "add".into() } else { "install".into() }],
-                remove_args: vec!["uninstall".into()],
-                list_args: vec!["list".into()],
+                install_args: {
+                    let mut args = vec![match n_str.as_str() {
+                        "npm" | "pnpm" | "bun" => "add".to_string(),
+                        _ => "install".to_string()
+                    }];
+                    if n_str == "npm" { args.push("--global".to_string()); }
+                    args
+                },
+                remove_args: {
+                    let mut args = vec!["uninstall".to_string()];
+                    if n_str == "npm" { args.push("--global".to_string()); }
+                    args
+                },
+                list_args: {
+                    let mut args = vec!["list".to_string()];
+                    if n_str == "npm" { args.push("--global".to_string()); }
+                    args
+                },
                 list_manual_args: None,
                 search_args: vec!["search".into()],
                 upgrade_args: vec!["upgrade".into()],
                 update_args: None,
                 repo_add_args: None, repo_remove_args: None, repo_list_args: None,
+                depends_args: None,
+                needs_root: false,
                 is_exclusive: (n_str == "cargo" || n_str == "npm"),
                 flag_map: HashMap::new(),
             },
@@ -5404,6 +5974,7 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
         reg.register(Arc::new(BackendCapabilities::builder(lang_core.clone())
             .with_installable(Arc::new(GenericInstallable { core: lang_core.clone() }))
             .with_queryable(Arc::new(GenericQueryable { core: lang_core.clone() }))
+            .with_metadata_provider(lang_core.clone())
             .build()));
     }
 
@@ -5416,7 +5987,7 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result
+    Queryable, Result, MetadataProvider
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -5460,6 +6031,21 @@ impl BackendCore for ServiceBackendCore {
         } else {
             false
         }
+    }
+
+    fn needs_root(&self) -> bool {
+        // System service management almost always requires root/administrative privileges.
+        true
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for ServiceBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // While services can have unit dependencies (e.g. 'After=' or 'Requires=' in systemd),
+        // LiNix treats the service backend as a state-manager for existing units rather
+        // than a package manager. We return empty to avoid recursing into OS init logic.
+        Ok(vec![])
     }
 }
 
@@ -5574,7 +6160,6 @@ impl Queryable for ServiceQueryable {
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let mut p = Package::new(name, "service");
         
-        // Fix unused_mut: Mutation is now encapsulated
         self.fill_platform_metadata(&mut p).await?;
 
         Ok(Some(p))
@@ -5607,7 +6192,7 @@ impl ServiceQueryable {
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Upgradable
+    Queryable, Result, Upgradable, MetadataProvider
 };
 use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
@@ -5635,6 +6220,30 @@ impl BackendCore for SnapBackendCore {
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("snap")
+    }
+
+    fn needs_root(&self) -> bool {
+        // Snap operations almost always require administrative privileges.
+        true
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for SnapBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        let output = self.executor.run_output("snap", &["info", name], false).await?;
+        let mut deps = Vec::new();
+        
+        // Snap dependencies (base snaps like core22, or content interface connections)
+        // are usually identified in the 'notes' or 'connections' but snaps are
+        // largely self-contained. We look for 'base:' which is the most common requirement.
+        for line in output.lines() {
+            if let Some(base) = line.strip_prefix("base:") {
+                deps.push(base.trim().to_string());
+            }
+        }
+        
+        Ok(deps)
     }
 }
 
@@ -5710,7 +6319,7 @@ impl Queryable for SnapQueryable {
         let mut p = Package::new(name, "snap");
         for line in output.lines() {
             if let Some(v) = line.strip_prefix("summary:") { 
-                p.properties.insert("description".into(), v.trim().to_string()); 
+                p.properties.insert("summary".into(), v.trim().to_string()); 
             }
             if let Some(v) = line.strip_prefix("installed:") { 
                 let ver = v.split_whitespace().next().unwrap_or(v);
@@ -5750,7 +6359,7 @@ impl Upgradable for SnapUpgradable {
 use crate::core::{
     CommandExecutor, Package, Result, PackageSpec, 
     BackendCore, Installable, Queryable, Searchable, RateLimiter,
-    HealthReport, HealthStatus
+    HealthReport, HealthStatus, MetadataProvider
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -5813,8 +6422,31 @@ impl VscodeBackendCore {
 impl BackendCore for VscodeBackendCore {
     fn name(&self) -> &str { &self.name }
     fn is_available(&self) -> bool { self.executor.command_exists_sync("code") }
+    fn needs_root(&self) -> bool { false }
     async fn check_health(&self) -> Result<HealthReport> {
         Ok(HealthReport { status: HealthStatus::Ok, message: None })
+    }
+}
+
+/// Phase 1.1: MetadataProvider for VSCode.
+#[async_trait]
+impl MetadataProvider for VscodeBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        let json = self.query_marketplace(name).await?;
+        let mut deps = Vec::new();
+
+        if let Some(extensions) = json["results"][0]["extensions"].as_array() {
+            if let Some(ext) = extensions.first() {
+                if let Some(extension_deps) = ext["extensionDependencies"].as_array() {
+                    for dep in extension_deps {
+                        if let Some(dep_name) = dep.as_str() {
+                            deps.push(dep_name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(deps)
     }
 }
 
@@ -5919,16 +6551,16 @@ impl Searchable for VscodeSearchable {
 use crate::core::{
     BackendCore, Installable, Queryable, 
     security::verify_checksum,
-    CommandExecutor, Package, PackageSpec, Result, Error,
+    CommandExecutor, Package, PackageSpec, Result, Error, MetadataProvider
 };
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{PathBuf};
 use tokio::sync::Mutex;
 use std::sync::Arc;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Internal state metadata for resources managed via the 'web' backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5966,7 +6598,7 @@ impl WebBackendCore {
 
     async fn load_state(&self) -> HashMap<String, WebState> {
         let _guard = self.internal_lock.lock().await;
-        if !self.state_file.exists() {
+        if !tokio::fs::try_exists(&self.state_file).await.unwrap_or(false) {
             return HashMap::new();
         }
         let data = tokio::fs::read_to_string(&self.state_file).await.unwrap_or_default();
@@ -5984,6 +6616,15 @@ impl WebBackendCore {
 impl BackendCore for WebBackendCore {
     fn name(&self) -> &str { &self.name }
     fn is_available(&self) -> bool { true }
+    fn needs_root(&self) -> bool { false }
+}
+
+#[async_trait]
+impl MetadataProvider for WebBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // Direct web downloads are self-contained; no native transitive deps.
+        Ok(vec![])
+    }
 }
 
 pub struct WebInstallable {
@@ -6026,19 +6667,25 @@ impl Installable for WebInstallable {
 
             let id = format!("{:x}", md5::compute(&spec.name));
             let dest_dir = self.core.install_dir.join(&id);
-            let _ = tokio::fs::remove_dir_all(&dest_dir).await;
+            if dest_dir.exists() {
+                tokio::fs::remove_dir_all(&dest_dir).await.map_err(Error::from)?;
+            }
             tokio::fs::create_dir_all(&dest_dir).await.map_err(Error::from)?;
 
             let filename = spec.name.split('/').last().unwrap_or("resource");
             let is_archive = [".zip", ".gz", ".tar", ".xz", ".bz2", ".tgz"].iter().any(|ext| filename.contains(ext));
             
             if is_archive {
-                extract_archive(&dl_path, &dest_dir)?;
+                let dl_path_archive = dl_path.clone();
+                let dest_dir_archive = dest_dir.clone();
+                tokio::task::spawn_blocking(move || {
+                    extract_archive(&dl_path_archive, &dest_dir_archive)
+                }).await.map_err(|e| Error::Other(e.to_string()))??;
             } else {
                 tokio::fs::copy(&dl_path, dest_dir.join(filename)).await.map_err(Error::from)?;
             }
 
-            // WIRING: Cross-platform binary discovery and linkage
+            // Cross-platform binary discovery and linkage
             let mut final_bin_link = None;
             if spec.options.get("type").map(|t| t == "program").unwrap_or(true) {
                 let bin_name = spec.options.get("bin").map(|s| s.as_str()).unwrap_or_else(|| {
@@ -6049,29 +6696,43 @@ impl Installable for WebInstallable {
                     .ok_or_else(|| Error::Other("Home directory not found".into()))?
                     .join(".local").join("bin").join(bin_name);
                 
-                let mut entries = walkdir::WalkDir::new(&dest_dir).into_iter().filter_map(|e| e.ok());
-                let bin_src = entries.find(|e| {
-                    let fname = e.file_name().to_string_lossy().to_lowercase();
-                    fname == bin_name.to_lowercase() || 
-                    fname == format!("{}.exe", bin_name.to_lowercase()) ||
-                    (fname.starts_with(bin_name) && !fname.contains('.'))
-                }).map(|e| e.into_path());
+                let dest_dir_discovery = dest_dir.clone();
+                let bin_name_str = bin_name.to_string();
 
-                if let Some(src_path) = bin_src {
+                let bin_src_result: Result<Option<PathBuf>> = tokio::task::spawn_blocking(move || {
+                    let mut entries = walkdir::WalkDir::new(&dest_dir_discovery).into_iter().filter_map(|e| e.ok());
+                    let found = entries.find(|e| {
+                        let fname = e.file_name().to_string_lossy().to_lowercase();
+                        fname == bin_name_str.to_lowercase() || 
+                        fname == format!("{}.exe", bin_name_str.to_lowercase()) ||
+                        (fname.starts_with(&bin_name_str) && !fname.contains('.'))
+                    }).map(|e| e.into_path());
+                    Ok(found)
+                }).await.map_err(|e| Error::Other(e.to_string()))?;
+
+                if let Some(src_path) = bin_src_result? {
                     let bin_dest = bin_dest_base.clone();
-                    let _ = std::fs::create_dir_all(bin_dest.parent().unwrap());
-                    let _ = std::fs::remove_file(&bin_dest);
+                    if let Some(parent) = bin_dest.parent() {
+                        tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
+                    }
+                    
+                    if bin_dest.exists() || bin_dest.is_symlink() {
+                        tokio::fs::remove_file(&bin_dest).await.map_err(Error::from)?;
+                    }
 
                     #[cfg(unix)] {
                         use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&src_path, std::fs::Permissions::from_mode(0o755));
-                        std::os::unix::fs::symlink(&src_path, &bin_dest).map_err(Error::from)?;
+                        let metadata = tokio::fs::metadata(&src_path).await?;
+                        let mut perms = metadata.permissions();
+                        perms.set_mode(0o755);
+                        tokio::fs::set_permissions(&src_path, perms).await.map_err(Error::from)?;
+                        tokio::fs::os::unix::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
                     }
 
                     #[cfg(windows)] {
                         let mut win_bin_dest = bin_dest.clone();
                         if win_bin_dest.extension().is_none() { win_bin_dest.set_extension("exe"); }
-                        std::fs::copy(&src_path, &win_bin_dest).map_err(Error::from)?;
+                        tokio::fs::copy(&src_path, &win_bin_dest).await.map_err(Error::from)?;
                     }
 
                     final_bin_link = Some(bin_dest.to_string_lossy().to_string());
@@ -6096,7 +6757,7 @@ impl Installable for WebInstallable {
         for url in urls {
             if let Some(entry) = state.remove(url) {
                 if let Some(ref l) = entry.bin_link {
-                    let _ = std::fs::remove_file(l);
+                    let _ = tokio::fs::remove_file(l).await;
                 }
                 let _ = tokio::fs::remove_dir_all(entry.local_path).await;
                 info!("Web: Removed resource: {}", url);
@@ -6134,7 +6795,6 @@ impl Queryable for WebQueryable {
 
 use std::env;
 use std::process::{Command, exit};
-use std::os::unix::process::CommandExt;
 
 /// LiNix High-Performance Binary Shim (Phase 4.2)
 /// 
@@ -6156,8 +6816,6 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
 
     // 3. Construct the delegation command: linix run -p <binary_name> -- <binary_name> <args...>
-    // We use 'exec' (on Unix) to replace the current process image with LiNix,
-    // ensuring zero overhead for signal handling or process management.
     let mut cmd = Command::new("linix");
     
     cmd.arg("run")
@@ -6172,17 +6830,20 @@ fn main() {
     }
 
     // 4. Execute the orchestrator
-    // On Unix, this call does not return if successful.
+    
     #[cfg(unix)]
     {
+        // On Unix, use exec() to replace the current process image with LiNix,
+        // ensuring zero overhead for signal handling or process management.
+        use std::os::unix::process::CommandExt;
         let err = cmd.exec();
         eprintln!("LiNix Shim Error: Failed to execute 'linix run': {}", err);
         exit(1);
     }
 
-    // Fallback for Windows (where exec() is not available)
     #[cfg(windows)]
     {
+        // Fallback for Windows (where exec() is not available)
         match cmd.status() {
             Ok(status) => exit(status.code().unwrap_or(0)),
             Err(e) => {
@@ -6714,10 +7375,13 @@ impl Config {
 
 use crate::core::{Error, Result};
 use crate::utils::file::atomic_write;
-use std::fs;
 use std::path::{PathBuf};
 use walkdir::WalkDir;
+use tokio::fs;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
+/// Represents the physical location of a package declaration within a text manifest.
 #[derive(Debug, Clone)]
 pub struct PackageLocation {
     pub file_path: PathBuf,
@@ -6725,44 +7389,67 @@ pub struct PackageLocation {
     pub raw_line: String,
 }
 
+/// Phase 3.1: Machine-generated lock data to avoid race conditions and manifest corruption.
+/// This separates user-intent (.txt) from machine-verified state (locks.json).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ManifestLocks {
+    /// Maps "backend:package" to a map of verified options (like sha256).
+    pub locks: HashMap<String, HashMap<String, String>>,
+}
+
+/// The ManifestEngine coordinates reads and writes to declarative .txt files and the lock-staging area.
+/// Hardened for Phase 3.1: Implements non-blocking I/O and staging-aware updates.
 pub struct ManifestEngine {
     groups_dir: PathBuf,
+    locks_path: PathBuf,
 }
 
 impl ManifestEngine {
     pub fn new(groups_dir: impl Into<PathBuf>) -> Self {
+        let dir = groups_dir.into();
+        let locks_path = dir.join("locks.json");
         Self {
-            groups_dir: groups_dir.into(),
+            groups_dir: dir,
+            locks_path,
         }
     }
 
-    pub fn find_all_packages(&self, package_name: &str) -> Result<Vec<PackageLocation>> {
+    /// Recursively scans the groups directory for all declarations of a package.
+    pub async fn find_all_packages(&self, package_name: &str) -> Result<Vec<PackageLocation>> {
         let mut locations = Vec::new();
         if !self.groups_dir.exists() {
             return Ok(locations);
         }
 
-        for entry in WalkDir::new(&self.groups_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file() && e.path().extension().map_or(false, |ext| ext == "txt"))
-        {
-            let content = fs::read_to_string(entry.path())?;
+        let groups_dir = self.groups_dir.clone();
+        let entries: Vec<PathBuf> = tokio::task::spawn_blocking(move || {
+            WalkDir::new(&groups_dir)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file() && e.path().extension().map_or(false, |ext| ext == "txt"))
+                .map(|e| e.path().to_path_buf())
+                .collect()
+        }).await.map_err(|e| Error::Other(e.to_string()))?;
+
+        for path in entries {
+            let content = fs::read_to_string(&path).await?;
             for (idx, line) in content.lines().enumerate() {
                 let trimmed = line.trim();
                 if trimmed.is_empty() || trimmed.starts_with('#') {
                     continue;
                 }
+                
                 let spec_part = trimmed.split('@').next().unwrap_or(trimmed);
-                let is_match = if spec_part.contains(':') {
-                    let (_backend, name) = spec_part.split_once(':').unwrap();
-                    name == package_name || spec_part == package_name
+                
+                let is_match = if let Some((_backend, name)) = spec_part.split_once(':') {
+                    name.trim() == package_name || spec_part.trim() == package_name
                 } else {
-                    spec_part == package_name
+                    spec_part.trim() == package_name
                 };
+
                 if is_match {
                     locations.push(PackageLocation {
-                        file_path: entry.path().to_path_buf(),
+                        file_path: path.clone(),
                         line_index: idx,
                         raw_line: line.to_string(),
                     });
@@ -6772,63 +7459,98 @@ impl ManifestEngine {
         Ok(locations)
     }
 
-    pub fn find_package(&self, package_name: &str) -> Result<Option<PackageLocation>> {
-        Ok(self.find_all_packages(package_name)?.into_iter().next())
+    /// Phase 3.1: Loads machine-generated locks from the staging area.
+    pub async fn load_locks(&self) -> Result<ManifestLocks> {
+        if !tokio::fs::try_exists(&self.locks_path).await.unwrap_or(false) {
+            return Ok(ManifestLocks::default());
+        }
+        let data = fs::read_to_string(&self.locks_path).await?;
+        if data.trim().is_empty() {
+            return Ok(ManifestLocks::default());
+        }
+        serde_json::from_str(&data).map_err(Error::from)
     }
 
-    pub fn update_package(&self, package_name: &str, new_spec: &str) -> Result<()> {
-        let locations = self.find_all_packages(package_name)?;
-        let loc = locations.first().ok_or_else(|| Error::Config(format!("Package '{}' not found", package_name)))?;
-        self.update_package_at_location(loc, new_spec)
+    /// Phase 3.1: Atomically updates a lock in the staging area.
+    pub async fn update_lock(&self, backend: &str, package: &str, options: HashMap<String, String>) -> Result<()> {
+        let mut locks = self.load_locks().await?;
+        let key = format!("{}:{}", backend, package);
+        locks.locks.insert(key, options);
+        
+        let data = serde_json::to_string_pretty(&locks).map_err(Error::from)?;
+        let path = self.locks_path.clone();
+        
+        tokio::task::spawn_blocking(move || {
+            atomic_write(&path, &data)
+        }).await.map_err(|e| Error::Other(e.to_string()))??;
+        
+        Ok(())
     }
 
-    fn update_package_at_location(&self, location: &PackageLocation, new_spec: &str) -> Result<()> {
-        let content = fs::read_to_string(&location.file_path)?;
+    /// Updates a package declaration with a new specification string.
+    pub async fn update_package(&self, package_name: &str, new_spec: &str) -> Result<()> {
+        let locations = self.find_all_packages(package_name).await?;
+        let loc = locations.first().ok_or_else(|| Error::Config(format!("Package '{}' not found in manifests", package_name)))?;
+        self.update_package_at_location(loc, new_spec).await
+    }
+
+    async fn update_package_at_location(&self, location: &PackageLocation, new_spec: &str) -> Result<()> {
+        let content = fs::read_to_string(&location.file_path).await?;
         let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        
         if lines.len() > location.line_index {
             let leading_ws: String = location.raw_line.chars().take_while(|c| c.is_whitespace()).collect();
             lines[location.line_index] = format!("{}{}", leading_ws, new_spec);
-            // Fix E0369: Removed '&' to allow concatenation on owned String
+            
             let output = lines.join("\n") + "\n";
-            atomic_write(&location.file_path, &output)?;
+            let path = location.file_path.clone();
+            tokio::task::spawn_blocking(move || {
+                atomic_write(&path, &output)
+            }).await.map_err(|e| Error::Other(e.to_string()))??;
         }
         Ok(())
     }
 
-    pub fn delete_package(&self, package_name: &str) -> Result<usize> {
-        let locations = self.find_all_packages(package_name)?;
+    pub async fn delete_package(&self, package_name: &str) -> Result<usize> {
+        let locations = self.find_all_packages(package_name).await?;
         let count = locations.len();
         for loc in &locations {
-            self.delete_package_at_location(loc)?;
+            self.delete_package_at_location(loc).await?;
         }
         Ok(count)
     }
 
-    fn delete_package_at_location(&self, location: &PackageLocation) -> Result<()> {
-        let content = fs::read_to_string(&location.file_path)?;
+    async fn delete_package_at_location(&self, location: &PackageLocation) -> Result<()> {
+        let content = fs::read_to_string(&location.file_path).await?;
         let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        
         if lines.len() > location.line_index {
             lines.remove(location.line_index);
-            // Fix E0369: Removed '&' to allow concatenation on owned String
             let output = lines.join("\n").trim_end().to_string() + "\n";
-            atomic_write(&location.file_path, &output)?;
+            
+            let path = location.file_path.clone();
+            tokio::task::spawn_blocking(move || {
+                atomic_write(&path, &output)
+            }).await.map_err(|e| Error::Other(e.to_string()))??;
         }
         Ok(())
     }
 
-    pub fn add_to_local(&self, spec_str: &str) -> Result<()> {
+    pub async fn add_to_local(&self, spec_str: &str) -> Result<()> {
         let local_path = self.groups_dir.join("local.txt");
         let name_part = spec_str.split('@').next().unwrap_or(spec_str);
-        let clean_name = name_part.split_once(':').map(|(_, n)| n).unwrap_or(name_part);
+        let clean_name = name_part.split_once(':').map(|(_, n)| n).unwrap_or(name_part).trim();
         
-        if !self.find_all_packages(clean_name)?.is_empty() {
+        if !self.find_all_packages(clean_name).await?.is_empty() {
             return Ok(());
         }
+
         if !self.groups_dir.exists() {
-            fs::create_dir_all(&self.groups_dir)?;
+            fs::create_dir_all(&self.groups_dir).await?;
         }
-        let mut lines = if local_path.exists() {
-            fs::read_to_string(&local_path)?.lines().map(|s| s.to_string()).collect()
+
+        let mut lines = if tokio::fs::try_exists(&local_path).await.unwrap_or(false) {
+            fs::read_to_string(&local_path).await?.lines().map(|s| s.to_string()).collect()
         } else {
             vec![
                 "# LiNix Local Manifest".to_string(),
@@ -6836,24 +7558,35 @@ impl ManifestEngine {
                 "".to_string(),
             ]
         };
+
         lines.push(spec_str.to_string());
-        // Fix E0369: Removed '&' to allow concatenation on owned String
         let output = lines.join("\n") + "\n";
-        atomic_write(&local_path, &output)?;
+        
+        tokio::task::spawn_blocking(move || {
+            atomic_write(&local_path, &output)
+        }).await.map_err(|e| Error::Other(e.to_string()))??;
+        
         Ok(())
     }
 
-    pub fn list_all_specs(&self) -> Result<Vec<String>> {
+    pub async fn list_all_specs(&self) -> Result<Vec<String>> {
         let mut specs = Vec::new();
         if !self.groups_dir.exists() {
             return Ok(specs);
         }
-        for entry in WalkDir::new(&self.groups_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file() && e.path().extension().map_or(false, |ext| ext == "txt"))
-        {
-            let content = fs::read_to_string(entry.path())?;
+
+        let groups_dir = self.groups_dir.clone();
+        let entries: Vec<PathBuf> = tokio::task::spawn_blocking(move || {
+            WalkDir::new(&groups_dir)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file() && e.path().extension().map_or(false, |ext| ext == "txt"))
+                .map(|e| e.path().to_path_buf())
+                .collect()
+        }).await.map_err(|e| Error::Other(e.to_string()))?;
+
+        for path in entries {
+            let content = fs::read_to_string(path).await?;
             for line in content.lines() {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() && !trimmed.starts_with('#') {
@@ -6883,19 +7616,20 @@ pub const CONFIG_DIR: &str = ".config/linix";
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\config\parser.rs ---
 
-use crate::core::Result;
+use crate::core::{Result, Error};
 use crate::utils::file::atomic_write;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::collections::HashSet;
+use tokio::fs;
 
-/// Parses a package group file (.txt).
-pub fn parse_group_file(path: &Path) -> Result<Vec<String>> {
-    if !path.exists() {
+/// Parses a package group file (.txt) asynchronously.
+/// Hardened for Phase 3.2: Full non-blocking I/O support.
+pub async fn parse_group_file(path: &Path) -> Result<Vec<String>> {
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
         return Ok(Vec::new());
     }
 
-    let content = fs::read_to_string(path)?;
+    let content = fs::read_to_string(path).await.map_err(Error::from)?;
 
     let packages: Vec<String> = content
         .lines()
@@ -6908,15 +7642,15 @@ pub fn parse_group_file(path: &Path) -> Result<Vec<String>> {
 }
 
 /// Adds a package string to the local declarative configuration.
-pub fn add_package_to_local(groups_dir: &Path, package_str: &str) -> Result<()> {
+pub async fn add_package_to_local(groups_dir: &Path, package_str: &str) -> Result<()> {
     let local_file = groups_dir.join("local.txt");
     
-    if !groups_dir.exists() {
-        fs::create_dir_all(groups_dir)?;
+    if !tokio::fs::try_exists(groups_dir).await.unwrap_or(false) {
+        fs::create_dir_all(groups_dir).await.map_err(Error::from)?;
     }
 
-    let mut lines: Vec<String> = if local_file.exists() {
-        fs::read_to_string(&local_file)?
+    let mut lines: Vec<String> = if tokio::fs::try_exists(&local_file).await.unwrap_or(false) {
+        fs::read_to_string(&local_file).await.map_err(Error::from)?
             .lines()
             .map(|s| s.to_string())
             .collect()
@@ -6936,21 +7670,24 @@ pub fn add_package_to_local(groups_dir: &Path, package_str: &str) -> Result<()> 
     if !is_duplicate {
         lines.push(package_str.to_string());
         let new_content = lines.join("\n") + "\n";
-        atomic_write(&local_file, &new_content)?;
+        
+        let path_owned = local_file.clone();
+        tokio::task::spawn_blocking(move || {
+            atomic_write(&path_owned, &new_content)
+        }).await.map_err(|e| Error::Other(e.to_string()))??;
     }
 
     Ok(())
 }
 
 /// Removes a package string from the local declarative configuration.
-/// Hardened: Now correctly utilizes the backend identifier for precision.
-pub fn remove_package_from_local(groups_dir: &Path, package_name: &str) -> Result<()> {
+pub async fn remove_package_from_local(groups_dir: &Path, package_name: &str) -> Result<()> {
     let local_file = groups_dir.join("local.txt");
-    if !local_file.exists() {
+    if !tokio::fs::try_exists(&local_file).await.unwrap_or(false) {
         return Ok(());
     }
 
-    let content = fs::read_to_string(&local_file)?;
+    let content = fs::read_to_string(&local_file).await.map_err(Error::from)?;
     let mut lines: Vec<String> = Vec::new();
     let mut found = false;
 
@@ -6961,13 +7698,8 @@ pub fn remove_package_from_local(groups_dir: &Path, package_name: &str) -> Resul
             continue;
         }
         
-        // WIRING: Use the backend to ensure we don't remove the wrong package
         let is_match = if let Some((b, n)) = trimmed.split_once(':') {
             let name_only = n.split('@').next().unwrap_or(n).trim();
-            // Match if:
-            // 1. Full string match (e.g. "apt:vim" == "apt:vim")
-            // 2. Name match (e.g. "vim" == "vim") while ignoring the backend
-            // 3. Full match with options (e.g. "apt:vim" == "apt:vim@version=1")
             trimmed == package_name || name_only == package_name || b == package_name
         } else {
             trimmed == package_name
@@ -6982,57 +7714,67 @@ pub fn remove_package_from_local(groups_dir: &Path, package_name: &str) -> Resul
 
     if found {
         let new_content = lines.join("\n") + "\n";
-        atomic_write(&local_file, &new_content)?;
+        let path_owned = local_file.clone();
+        tokio::task::spawn_blocking(move || {
+            atomic_write(&path_owned, &new_content)
+        }).await.map_err(|e| Error::Other(e.to_string()))??;
     }
 
     Ok(())
 }
 
-pub fn get_user_group_file(groups_dir: &Path) -> PathBuf {
-    if !groups_dir.exists() {
-        let _ = fs::create_dir_all(groups_dir);
+pub async fn get_user_group_file(groups_dir: &Path) -> PathBuf {
+    if !tokio::fs::try_exists(groups_dir).await.unwrap_or(false) {
+        let _ = fs::create_dir_all(groups_dir).await;
     }
     groups_dir.join("local.txt")
 }
 
-pub fn write_group_file(path: &Path, packages: &[String]) -> Result<()> {
+pub async fn write_group_file(path: &Path, packages: &[String]) -> Result<()> {
     if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent)?;
+        if !tokio::fs::try_exists(parent).await.unwrap_or(false) {
+            fs::create_dir_all(parent).await.map_err(Error::from)?;
         }
     }
     let content = packages.join("\n");
-    atomic_write(path, &content)?;
+    let path_owned = path.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        atomic_write(&path_owned, &content)
+    }).await.map_err(|e| Error::Other(e.to_string()))??;
     Ok(())
 }
 
-pub fn load_all_packages(groups_dir: &Path) -> Result<HashSet<String>> {
+pub async fn load_all_packages(groups_dir: &Path) -> Result<HashSet<String>> {
     let mut all_packages = HashSet::new();
-    if !groups_dir.exists() {
+    if !tokio::fs::try_exists(groups_dir).await.unwrap_or(false) {
         return Ok(all_packages);
     }
     
     let current_hostname = crate::config::Config::get_hostname();
     let host_file_name = format!("host-{}.txt", current_hostname);
 
-    for entry in walkdir::WalkDir::new(groups_dir)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if path.is_file() {
-            let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if file_name.ends_with(".txt") {
-                if file_name.starts_with("host-") {
-                    if file_name == host_file_name {
-                        let packages = parse_group_file(path)?;
-                        all_packages.extend(packages);
-                    }
-                } else {
-                    let packages = parse_group_file(path)?;
+    let groups_dir_owned = groups_dir.to_path_buf();
+    let entries: Vec<PathBuf> = tokio::task::spawn_blocking(move || {
+        walkdir::WalkDir::new(groups_dir_owned)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .map(|e| e.path().to_path_buf())
+            .collect()
+    }).await.map_err(|e| Error::Other(e.to_string()))?;
+
+    for path in entries {
+        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if file_name.ends_with(".txt") {
+            if file_name.starts_with("host-") {
+                if file_name == host_file_name {
+                    let packages = parse_group_file(&path).await?;
                     all_packages.extend(packages);
                 }
+            } else {
+                let packages = parse_group_file(&path).await?;
+                all_packages.extend(packages);
             }
         }
     }
@@ -7596,7 +8338,6 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 use chrono::Utc;
 use uuid::Uuid;
-use tracing::{debug, warn};
 
 /// Represents the state of a journal entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -7605,6 +8346,7 @@ pub enum ActionStatus {
     InProgress,
     Completed,
     Failed,
+    Abandoned,
 }
 
 /// Represents the full intent of a system modification.
@@ -7630,6 +8372,7 @@ pub struct JournalEntry {
 
 /// The Mission-Critical Write-Ahead Log (WAL).
 /// Ensures LiNix can recover from power failures or crashes mid-transaction.
+/// Hardened for Phase 1.1: Async file I/O and improved cleanup.
 pub struct Journal {
     path: PathBuf,
     pub entries: HashMap<String, JournalEntry>,
@@ -7648,16 +8391,32 @@ impl Journal {
             entries: HashMap::new(),
         };
 
+        // We check existence synchronously in constructor as this is called during App init.
         if journal.path.exists() {
-            journal.load()?;
+            journal.load_sync()?;
         }
 
         Ok(journal)
     }
 
-    /// Loads journal state from disk.
-    fn load(&mut self) -> Result<()> {
-        let data = std::fs::read_to_string(&self.path)?;
+    /// Loads journal state from disk (Sync version for constructor).
+    fn load_sync(&mut self) -> Result<()> {
+        let data = std::fs::read_to_string(&self.path).map_err(Error::from)?;
+        if data.trim().is_empty() {
+            return Ok(());
+        }
+        self.entries = serde_json::from_str(&data).map_err(|e| {
+            Error::Other(format!("Corrupted WAL Journal: {}", e))
+        })?;
+        Ok(())
+    }
+
+    /// Loads journal state from disk asynchronously.
+    pub async fn load(&mut self) -> Result<()> {
+        if !tokio::fs::try_exists(&self.path).await.unwrap_or(false) {
+            return Ok(());
+        }
+        let data = tokio::fs::read_to_string(&self.path).await.map_err(Error::from)?;
         if data.trim().is_empty() {
             return Ok(());
         }
@@ -7741,8 +8500,25 @@ impl Journal {
     }
 
     /// Purges completed entries from the journal to keep it lean.
+    /// Phase 1.1 Update: Mark InProgress entries from previous sessions as Abandoned.
     pub fn cleanup(&mut self) -> Result<()> {
-        self.entries.retain(|_, e| e.status != ActionStatus::Completed);
+        let mut to_abandon = Vec::new();
+        for (id, entry) in &self.entries {
+            if entry.status == ActionStatus::InProgress {
+                to_abandon.push(id.clone());
+            }
+        }
+
+        for id in to_abandon {
+            if let Some(entry) = self.entries.get_mut(&id) {
+                entry.status = ActionStatus::Abandoned;
+            }
+        }
+
+        self.entries.retain(|_, e| {
+            e.status != ActionStatus::Completed && e.status != ActionStatus::Abandoned
+        });
+
         if self.entries.is_empty() {
             if self.path.exists() {
                 let _ = std::fs::remove_file(&self.path);
@@ -7794,6 +8570,11 @@ pub trait BackendCore: Send + Sync {
 
     /// Checks if the underlying tool is available on the system.
     fn is_available(&self) -> bool;
+
+    /// Phase 2.2: Returns true if the backend requires root privileges for modification.
+    /// System-level managers (apt, pacman, dnf) should return true.
+    /// User-level managers (cargo, npm, etc.) should return false.
+    fn needs_root(&self) -> bool;
 
     /// Diagnostic check used by the 'Doctor' command.
     async fn check_health(&self) -> Result<HealthReport> {
@@ -7872,6 +8653,13 @@ pub trait RepoManager: Send + Sync {
     fn can_manage_repos(&self) -> bool { true }
 }
 
+/// Phase 1.1: Capability trait for providing backend-native dependency metadata.
+#[async_trait]
+pub trait MetadataProvider: Send + Sync {
+    /// Returns a list of backend-native package names that are dependencies for the given package.
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>>;
+}
+
 // ============================================================================
 // Capability Aggregation
 // ============================================================================
@@ -7884,6 +8672,7 @@ pub struct BackendCapabilities {
     queryable: Option<Arc<dyn Queryable>>,
     upgradable: Option<Arc<dyn Upgradable>>,
     repo_manager: Option<Arc<dyn RepoManager>>,
+    metadata_provider: Option<Arc<dyn MetadataProvider>>,
 }
 
 impl BackendCapabilities {
@@ -7894,6 +8683,7 @@ impl BackendCapabilities {
     pub fn core(&self) -> &Arc<dyn BackendCore> { &self.core }
     pub fn name(&self) -> &str { self.core.name() }
     pub fn is_available(&self) -> bool { self.core.is_available() }
+    pub fn needs_root(&self) -> bool { self.core.needs_root() }
 
     pub fn is_installable(&self) -> bool { self.installable.is_some() }
     pub fn as_installable(&self) -> Option<&Arc<dyn Installable>> { self.installable.as_ref() }
@@ -7909,6 +8699,9 @@ impl BackendCapabilities {
 
     pub fn is_repo_manager(&self) -> bool { self.repo_manager.is_some() }
     pub fn as_repo_manager(&self) -> Option<&Arc<dyn RepoManager>> { self.repo_manager.as_ref() }
+
+    pub fn is_metadata_provider(&self) -> bool { self.metadata_provider.is_some() }
+    pub fn as_metadata_provider(&self) -> Option<&Arc<dyn MetadataProvider>> { self.metadata_provider.as_ref() }
 }
 
 pub struct BackendCapabilitiesBuilder {
@@ -7918,6 +8711,7 @@ pub struct BackendCapabilitiesBuilder {
     queryable: Option<Arc<dyn Queryable>>,
     upgradable: Option<Arc<dyn Upgradable>>,
     repo_manager: Option<Arc<dyn RepoManager>>,
+    metadata_provider: Option<Arc<dyn MetadataProvider>>,
 }
 
 impl BackendCapabilitiesBuilder {
@@ -7929,6 +8723,7 @@ impl BackendCapabilitiesBuilder {
             queryable: None,
             upgradable: None,
             repo_manager: None,
+            metadata_provider: None,
         }
     }
     
@@ -7937,6 +8732,7 @@ impl BackendCapabilitiesBuilder {
     pub fn with_queryable(mut self, q: Arc<dyn Queryable>) -> Self { self.queryable = Some(q); self }
     pub fn with_upgradable(mut self, u: Arc<dyn Upgradable>) -> Self { self.upgradable = Some(u); self }
     pub fn with_repo_manager(mut self, r: Arc<dyn RepoManager>) -> Self { self.repo_manager = Some(r); self }
+    pub fn with_metadata_provider(mut self, m: Arc<dyn MetadataProvider>) -> Self { self.metadata_provider = Some(m); self }
     
     pub fn build(self) -> BackendCapabilities {
         BackendCapabilities {
@@ -7946,21 +8742,9 @@ impl BackendCapabilitiesBuilder {
             queryable: self.queryable,
             upgradable: self.upgradable,
             repo_manager: self.repo_manager,
+            metadata_provider: self.metadata_provider,
         }
     }
-}
-
-/// Legacy Backend trait - kept for compatibility.
-#[async_trait]
-pub trait Backend: Send + Sync {
-    fn name(&self) -> &str;
-    fn is_available(&self) -> bool;
-    async fn check_health(&self) -> Result<HealthReport>;
-    fn as_installable(&self) -> Option<&dyn Installable>;
-    fn as_searchable(&self) -> Option<&dyn Searchable>;
-    fn as_queryable(&self) -> Option<&dyn Queryable>;
-    fn as_upgradable(&self) -> Option<&dyn Upgradable>;
-    fn as_repo_manager(&self) -> Option<&dyn RepoManager>;
 }
 
 ------------------------------
@@ -7978,7 +8762,7 @@ pub mod snapshot;
 pub mod state;
 pub mod transaction;
 pub mod validator;
-pub mod ratelimiter;   // new
+pub mod ratelimiter;
 
 // Re-export performance and caching logic
 pub use cache::{PackageCache, SmartCache};
@@ -7994,16 +8778,12 @@ pub use transaction::{Transaction, GraphAction, TransactionConfig};
 pub use snapshot::{Snapshot, SnapshotManager, SnapshotProvider};
 pub use journal::{Journal, JournalEntry, ActionStatus};
 
-// Re-export the capability-based trait system (including Backend trait for compatibility)
+// Re-export the capability-based trait system
 pub use manager::{
     BackendCore, Installable, Queryable, RepoManager, Searchable,
     Upgradable, BackendCapabilities, BackendCapabilitiesBuilder,
-    HealthStatus, HealthReport,
+    HealthStatus, HealthReport, MetadataProvider,
 };
-// Also re-export the deprecated Backend trait to fix "unresolved import crate::core::Backend"
-pub use manager::Backend as BackendTrait;   // but the code uses `Backend`, not `BackendTrait`
-// Better: re-export `manager::Backend` directly as `Backend` (since it's deprecated but needed)
-pub use manager::Backend;   // <-- ADD THIS LINE
 
 // Re-export the core data models
 pub use package::{Package, PackageSpec};
@@ -8111,45 +8891,113 @@ impl std::fmt::Display for Package {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\core\ratelimiter.rs ---
 
-use crate::core::Result;
+use crate::core::{Result, Error};
+use governor::{Quota, RateLimiter as GovRateLimiter, Jitter};
+use governor::state::{InMemoryState, NotKeyed};
+use governor::clock::DefaultClock;
+use std::num::NonZeroU32;
+use std::sync::Arc;
+use std::time::Duration;
+use tracing::{debug, warn};
 
-#[derive(Debug, Clone)]
+/// A thread-safe, high-performance rate limiter implementation using the governor crate.
+/// 
+/// This implementation provides true backpressure and asynchronous waiting, 
+/// ensuring LiNix respects API quotas for GitHub, VS Code Marketplace, and other 
+/// remote backends without wasting CPU cycles.
+/// 
+/// Hardened for Phase 1.3: Provides real backpressure for API-driven backends.
+#[derive(Clone)]
 pub struct RateLimiter {
-    _private: (),
+    inner: Arc<GovRateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
+    description: String,
 }
 
 impl RateLimiter {
-    pub fn new(_requests_per_minute: u32) -> Self {
-        Self { _private: () }
+    /// Creates a new rate limiter with a specific request-per-minute quota.
+    pub fn new(requests_per_minute: u32, description: &str) -> Self {
+        // Ensure we have at least 1 request per minute to avoid division by zero errors
+        let rpm = requests_per_minute.max(1);
+        let quota = Quota::per_minute(NonZeroU32::new(rpm).expect("RPM is guaranteed > 0"));
+        
+        Self {
+            inner: Arc::new(GovRateLimiter::direct(quota)),
+            description: description.to_string(),
+        }
     }
 
+    /// Optimized rate limiter for unauthenticated GitHub API access.
     pub fn github() -> Self {
-        Self::new(1)
+        // GitHub allows 60 requests per hour for unauthenticated IPs.
+        // We set a strict 1 request per minute limit here.
+        Self::new(1, "GitHub (Unauthenticated)")
     }
 
+    /// Optimized rate limiter for authenticated GitHub API access.
     pub fn github_authenticated() -> Self {
-        Self::new(80)
+        // GitHub allows 5,000 requests per hour for authenticated users.
+        // We set a limit of ~80 per minute to stay safely within the window.
+        Self::new(80, "GitHub (Authenticated)")
     }
 
+    /// Optimized rate limiter for Visual Studio Code Marketplace.
     pub fn vscode_marketplace() -> Self {
-        Self::new(30)
+        Self::new(30, "VS Code Marketplace")
     }
 
+    /// Asynchronously waits until a request permit is available.
     pub async fn wait(&self) -> Result<()> {
+        debug!("RateLimiter [{}]: Waiting for permit...", self.description);
+        self.inner.until_ready().await;
         Ok(())
     }
 
-    pub fn try_request(&self) -> Result<()> {
-        Ok(())
-    }
-
+    /// Executes an asynchronous operation while respecting the rate limit.
+    /// 
+    /// This method automatically handles:
+    /// 1. Asynchronous waiting for a permit.
+    /// 2. Applying randomized jitter to prevent "thundering herd" issues.
+    /// 3. Propagating results and errors from the inner task.
     pub async fn execute<F, Fut, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Result<T>>,
     {
-        self.wait().await?;
-        f().await
+        // 1. Wait for permit with a small jitter (up to 150ms) to desynchronize parallel workers
+        let jitter = Jitter::up_to(Duration::from_millis(150));
+        
+        // until_ready_with_jitter returns a future that resolves when the permit is acquired
+        self.inner.until_ready_with_jitter(jitter).await;
+
+        // 2. Execute the task
+        match f().await {
+            Ok(val) => Ok(val),
+            Err(e) => {
+                // If we encounter a 429-style error from the API even with our limiter, 
+                // we warn the user that the remote side is stricter than our local config.
+                let err_msg = format!("{:?}", e);
+                if err_msg.contains("429") || err_msg.contains("RateLimit") {
+                    warn!(
+                        "RateLimiter [{}]: Remote API returned 429 (Too Many Requests). Local limits may need tightening.",
+                        self.description
+                    );
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Returns a reference to the description of this limiter.
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+}
+
+impl std::fmt::Debug for RateLimiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RateLimiter")
+            .field("description", &self.description)
+            .finish()
     }
 }
 
@@ -8803,7 +9651,7 @@ mod tests {
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\core\transaction.rs ---
 
 use crate::core::{Result, Error, PackageSpec, Journal};
-use crate::core::journal::{JournalAction, ActionStatus};
+use crate::core::journal::JournalAction;
 use crate::backends::BackendRegistry;
 use crate::app::bridge::DependencyBridge;
 use std::collections::{HashMap, HashSet};
@@ -8863,6 +9711,7 @@ struct TaskResult {
 }
 
 /// The High-Performance Mission-Critical Execution Engine.
+/// Hardened for Phase 2.2: Stabilized Journaling and Surgical Sudo.
 pub struct Transaction {
     pub graph: StableDiGraph<GraphAction, ()>,
     registry: Arc<BackendRegistry>,
@@ -8942,7 +9791,9 @@ impl Transaction {
                 .collect();
 
             for idx in ready_nodes {
-                let _permit = semaphore.clone().acquire_owned().await.unwrap();
+                let permit = semaphore.clone().acquire_owned().await
+                    .map_err(|e| Error::Transaction(format!("Semaphore error: {}", e)))?;
+                
                 in_progress.insert(idx);
                 
                 let action = self.graph[idx].clone();
@@ -8952,6 +9803,7 @@ impl Transaction {
                 let config = self.config.clone();
 
                 worker_pool.spawn(async move {
+                    let _permit = permit; // Move permit into the task to hold the slot
                     Self::execute_node_with_retry(
                         action, registry, journal, config, cancel_token, idx
                     ).await
@@ -8967,14 +9819,12 @@ impl Transaction {
                         self.completed_indices.insert(task_data.node_index);
                         self.history.push(task_data.node_index);
                         
-                        // WIRING: Use captured telemetry data in final logs
                         info!(
-                            "Node {}:{} completed in {:?} (Attempts: {}, Properties: {})", 
+                            "Node {}:{} completed in {:?} (Attempts: {})", 
                             task_data.backend_name, 
                             task_data.package_name,
                             task_data.duration,
-                            task_data.attempt,
-                            task_data.properties.len()
+                            task_data.attempt
                         );
                     }
                     Err(e) => {
@@ -9009,6 +9859,20 @@ impl Transaction {
             GraphAction::Remove { name, backend } => (name.clone(), backend.clone(), JournalAction::Remove { name: name.clone(), backend: backend.clone() }),
         };
 
+        // Pre-fetch backend to check sudo requirements
+        let backend_res = registry.get(&b_name).ok_or_else(|| Error::BackendNotFound(b_name.clone()));
+        let backend_cap = match backend_res {
+            Ok(cap) => cap,
+            Err(e) => return TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: HashMap::new(), attempt: 0, duration: Duration::ZERO, result: Err(e) },
+        };
+        let sudo_required = backend_cap.needs_root();
+
+        // Phase 2.1: Register start in Journal ONCE for this node
+        let journal_id = {
+            let mut j = journal.lock().await;
+            j.record_start(j_action.clone()).unwrap_or_else(|_| "transient_id".to_string())
+        };
+
         let mut attempt = 0;
         let mut last_error = None;
         let start = std::time::Instant::now();
@@ -9023,31 +9887,25 @@ impl Transaction {
             if attempt > 1 {
                 let backoff = std::cmp::min(config.initial_backoff * (1 << (attempt - 2)), config.max_backoff);
                 tokio::time::sleep(backoff).await;
+                debug!("Retrying Node {}:{} (Attempt {}) after {:?}", b_name, p_name, attempt, backoff);
             }
-            
-            let journal_id = {
-                let mut j = journal.lock().await;
-                j.record_start(j_action.clone()).unwrap()
-            };
 
             let result = tokio::time::timeout(config.node_timeout, async {
                 match &action {
                     GraphAction::Install(spec) => {
-                        let backend = registry.get(&spec.backend).ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
-                        if let Some(handler) = backend.as_installable() {
-                            handler.install(&[spec.clone()], true).await?;
-                            let props = if let Some(q) = backend.as_queryable() {
+                        if let Some(handler) = backend_cap.as_installable() {
+                            handler.install(&[spec.clone()], sudo_required).await?;
+                            let props = if let Some(q) = backend_cap.as_queryable() {
                                 q.info(&spec.name).await?.map(|p| p.properties).unwrap_or_default()
                             } else { HashMap::new() };
                             Ok(props)
-                        } else { Err(Error::Transaction("Backend not installable".into())) }
+                        } else { Err(Error::Transaction(format!("Backend '{}' is not installable", b_name))) }
                     }
-                    GraphAction::Remove { name, backend: b_name } => {
-                        let backend = registry.get(b_name).ok_or_else(|| Error::BackendNotFound(b_name.clone()))?;
-                        if let Some(handler) = backend.as_installable() {
-                            handler.remove(&[name.clone()], true).await?;
+                    GraphAction::Remove { name, backend: _ } => {
+                        if let Some(handler) = backend_cap.as_installable() {
+                            handler.remove(&[name.clone()], sudo_required).await?;
                             Ok(HashMap::new())
-                        } else { Err(Error::Transaction("Backend not removable".into())) }
+                        } else { Err(Error::Transaction(format!("Backend '{}' is not removable", b_name))) }
                     }
                 }
             }).await;
@@ -9059,41 +9917,58 @@ impl Transaction {
                     return TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: props, attempt, duration: start.elapsed(), result: Ok(()) };
                 }
                 Ok(Err(e)) => {
+                    warn!("Attempt {} for {}:{} failed: {}", attempt, b_name, p_name, e);
                     last_error = Some(e);
-                    let mut j = journal.lock().await;
-                    let _ = j.record_failure(&journal_id, &format!("{:?}", last_error));
+                    // We don't record failure in journal yet, as we might succeed on retry
                 }
                 Err(_) => {
+                    warn!("Attempt {} for {}:{} timed out after {:?}", attempt, b_name, p_name, config.node_timeout);
                     last_error = Some(Error::Transaction("Node timed out".into()));
-                    let mut j = journal.lock().await;
-                    let _ = j.record_failure(&journal_id, "Timeout");
                 }
             }
         }
         
-        TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: HashMap::new(), attempt, duration: start.elapsed(), result: Err(last_error.unwrap()) }
+        // If we get here, all retries failed
+        let final_err = last_error.unwrap_or(Error::Transaction("Unknown failure".into()));
+        let mut j = journal.lock().await;
+        let _ = j.record_failure(&journal_id, &format!("{}", final_err));
+
+        TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: HashMap::new(), attempt, duration: start.elapsed(), result: Err(final_err) }
     }
 
     async fn rollback(&mut self) {
-        info!("Transaction: Rolling back {} operations.", self.history.len());
+        info!("Transaction: Commencing rollback of {} successful operations.", self.history.len());
+        
+        // Rollback in reverse order of success
         for &idx in self.history.iter().rev() {
             let action = &self.graph[idx];
             match action {
                 GraphAction::Install(spec) => {
                     if let Some(b) = self.registry.get(&spec.backend) {
-                        if let Some(h) = b.as_installable() { let _ = h.remove(&[spec.name.clone()], true).await; }
+                        let sudo = b.needs_root();
+                        if let Some(h) = b.as_installable() {
+                            debug!("Rollback: Removing {}:{}", spec.backend, spec.name);
+                            if let Err(e) = h.remove(&[spec.name.clone()], sudo).await {
+                                warn!("Rollback failed for {}:{}: {}", spec.backend, spec.name, e);
+                            }
+                        }
                     }
                 }
                 GraphAction::Remove { name, backend } => {
                     if let Some(b) = self.registry.get(backend) {
+                        let sudo = b.needs_root();
                         if let Some(h) = b.as_installable() {
+                            debug!("Rollback: Re-installing {}:{}", backend, name);
                             let spec = PackageSpec { name: name.clone(), backend: backend.clone(), options: HashMap::new(), requires: vec![] };
-                            let _ = h.install(&[spec], true).await;
+                            if let Err(e) = h.install(&[spec], sudo).await {
+                                warn!("Rollback failed for {}:{}: {}", backend, name, e);
+                            }
                         }
                     }
                 }
             }
         }
+        info!("Transaction: Rollback procedure completed.");
     }
 }
 
@@ -10811,6 +11686,7 @@ use std::collections::HashMap;
 #[tokio::main]
 async fn main() -> Result<()> {
     // 1. HIGH-PERFORMANCE RUST SHIM HIJACK
+    // Detect if we are being called via a symlink or a renamed binary (shim mode)
     let args_raw: Vec<String> = env::args().collect();
     let bin_path = env::current_exe().ok();
     let current_bin_name = bin_path
@@ -10820,9 +11696,13 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "linix".to_string());
 
     if current_bin_name != "linix" && !current_bin_name.starts_with("linix") {
-        let config = linix::config::Config::from_file(
-            &dirs::config_dir().unwrap_or_default().join("linix").join("config.toml")
-        ).unwrap_or_default();
+        // We are in shim mode. Load config and delegate to Runner.
+        // Config::from_file is sync; wrap in spawn_blocking for async integrity.
+        let config_path = dirs::config_dir().unwrap_or_default().join("linix").join("config.toml");
+        let config = tokio::task::spawn_blocking(move || {
+            linix::config::Config::from_file(&config_path)
+        }).await.map_err(|e| anyhow::anyhow!(e))?.unwrap_or_default();
+
         let app = App::new(config).await?;
         let runner = Runner::new(&app);
         return runner.exec_shim(&current_bin_name, &args_raw[1..].to_vec()).await.map_err(|e| e.into());
@@ -10838,8 +11718,11 @@ async fn main() -> Result<()> {
         dirs::config_dir().unwrap_or_default().join("linix").join("config.toml")
     });
 
-    let mut config = linix::config::Config::from_file(&config_path)
-        .context("CRITICAL: Failed to load LiNix configuration file.")?;
+    // Load config with blocking isolation
+    let mut config = tokio::task::spawn_blocking(move || {
+        linix::config::Config::from_file(&config_path)
+    }).await.map_err(|e| anyhow::anyhow!(e))?
+      .context("CRITICAL: Failed to load LiNix configuration file.")?;
     
     config.merge_cli_overrides(
         Some(cli.dry_run), Some(cli.yes), cli.backend.clone(), 
@@ -10850,6 +11733,7 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         Commands::Sync { locked: _ } => {
+            // Phase 3.2: SyncEngine::new is now async
             let engine = SyncEngine::new(
                 &app.config, 
                 app.registry.clone(), 
@@ -10881,6 +11765,7 @@ async fn main() -> Result<()> {
             }
 
             if !app.config.yes {
+                // TUI runs on main thread; it blocks, but since we are at a decision point, this is expected.
                 let mut preview = TuiPreview::new(&changes, HashMap::new());
                 if !preview.run()? {
                     info!("Sync cancelled by user.");
@@ -10889,7 +11774,6 @@ async fn main() -> Result<()> {
                 changes = preview.get_filtered_changes();
             }
 
-            // Fix unused_assignments: changes is now consumed here
             engine.sync(changes).await.map_err(|e| e.into())
         }
 
@@ -10902,18 +11786,24 @@ async fn main() -> Result<()> {
                     
                     if let Some(installer) = backend_cap.as_installable() {
                         info!("Installing {} via {}...", spec.name, spec.backend);
-                        installer.install(&[spec.clone()], true).await?;
+                        // Phase 2.2: Respect backend root requirements
+                        let sudo = backend_cap.needs_root();
+                        installer.install(&[spec.clone()], sudo).await?;
                         
                         let mut state_guard = app.state.lock().await;
                         state_guard.add_simple(&spec.backend, &spec.name, None);
                         
-                        if let Err(e) = add_package_to_local(&app.config.groups_dir, pkg_str) {
+                        // Phase 3.2: add_package_to_local is now async
+                        if let Err(e) = add_package_to_local(&app.config.groups_dir, pkg_str).await {
                             warn!("Auto-Commit failed for {}: {}", spec.name, e);
                         }
                     }
                 }
             }
-            app.state.lock().await.save().map_err(|e| e.into())
+            // Persistence is blocking; isolate
+            let state_final = app.state.lock().await.clone();
+            tokio::task::spawn_blocking(move || state_final.save()).await??;
+            Ok(())
         }
 
         Commands::Remove { packages } => {
@@ -10924,11 +11814,15 @@ async fn main() -> Result<()> {
                         if queryable.info(pkg_name).await?.is_some() {
                             if let Some(installer) = backend.as_installable() {
                                 info!("Removing {} from {}...", pkg_name, backend.name());
-                                installer.remove(&[pkg_name.clone()], true).await?;
+                                // Phase 2.2: Respect backend root requirements
+                                let sudo = backend.needs_root();
+                                installer.remove(&[pkg_name.clone()], sudo).await?;
                                 
                                 let mut state_guard = app.state.lock().await;
                                 state_guard.remove(backend.name(), pkg_name);
-                                let _ = remove_package_from_local(&app.config.groups_dir, pkg_name);
+                                
+                                // Phase 3.2: remove_package_from_local is now async
+                                let _ = remove_package_from_local(&app.config.groups_dir, pkg_name).await;
                                 found = true;
                                 break;
                             }
@@ -10937,7 +11831,9 @@ async fn main() -> Result<()> {
                 }
                 if !found { warn!("Target '{}' is not currently installed.", pkg_name); }
             }
-            app.state.lock().await.save().map_err(|e| e.into())
+            let state_final = app.state.lock().await.clone();
+            tokio::task::spawn_blocking(move || state_final.save()).await??;
+            Ok(())
         }
 
         Commands::Migrate => app.migrator().migrate().await.map_err(|e| e.into()),
@@ -10963,7 +11859,9 @@ async fn main() -> Result<()> {
                     let b_name = backend.as_deref().unwrap_or("apt");
                     let b = app.registry.get(b_name).context("Backend not found")?;
                     let manager = b.as_repo_manager().context("Backend does not support repositories.")?;
-                    manager.add_repo(name, url, true).await?;
+                    // Phase 2.2: Sudo precision
+                    let sudo = b.needs_root();
+                    manager.add_repo(name, url, sudo).await?;
                     info!("Successfully added repository: {}", name);
                     Ok(())
                 }
@@ -10971,7 +11869,8 @@ async fn main() -> Result<()> {
                     let b_name = backend.as_deref().unwrap_or("apt");
                     let b = app.registry.get(b_name).context("Backend not found")?;
                     let manager = b.as_repo_manager().context("Backend does not support repositories.")?;
-                    manager.remove_repo(name, true).await?;
+                    let sudo = b.needs_root();
+                    manager.remove_repo(name, sudo).await?;
                     info!("Successfully removed repository: {}", name);
                     Ok(())
                 }
@@ -11033,7 +11932,8 @@ async fn main() -> Result<()> {
         Commands::Doctor => {
             for backend in app.registry.all() {
                 let status = if backend.is_available() { "READY" } else { "OFFLINE" };
-                println!("[{}] {:<15}", status, backend.name());
+                let root_req = if backend.needs_root() { "ROOT" } else { "USER" };
+                println!("[{}] [{}] {:<15}", status, root_req, backend.name());
             }
             Ok(())
         }

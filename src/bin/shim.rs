@@ -1,6 +1,5 @@
 use std::env;
 use std::process::{Command, exit};
-use std::os::unix::process::CommandExt;
 
 /// LiNix High-Performance Binary Shim (Phase 4.2)
 /// 
@@ -22,8 +21,6 @@ fn main() {
         .unwrap_or_else(|| "unknown".to_string());
 
     // 3. Construct the delegation command: linix run -p <binary_name> -- <binary_name> <args...>
-    // We use 'exec' (on Unix) to replace the current process image with LiNix,
-    // ensuring zero overhead for signal handling or process management.
     let mut cmd = Command::new("linix");
     
     cmd.arg("run")
@@ -38,17 +35,20 @@ fn main() {
     }
 
     // 4. Execute the orchestrator
-    // On Unix, this call does not return if successful.
+    
     #[cfg(unix)]
     {
+        // On Unix, use exec() to replace the current process image with LiNix,
+        // ensuring zero overhead for signal handling or process management.
+        use std::os::unix::process::CommandExt;
         let err = cmd.exec();
         eprintln!("LiNix Shim Error: Failed to execute 'linix run': {}", err);
         exit(1);
     }
 
-    // Fallback for Windows (where exec() is not available)
     #[cfg(windows)]
     {
+        // Fallback for Windows (where exec() is not available)
         match cmd.status() {
             Ok(status) => exit(status.code().unwrap_or(0)),
             Err(e) => {

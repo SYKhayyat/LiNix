@@ -1,4 +1,4 @@
-use crate::core::{CommandExecutor, Package, Result, PackageSpec, BackendCore, Installable, Queryable};
+use crate::core::{CommandExecutor, Package, Result, PackageSpec, BackendCore, Installable, Queryable, MetadataProvider};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
@@ -29,6 +29,19 @@ impl BackendCore for EmacsBackendCore {
 
     fn is_available(&self) -> bool { 
         self.executor.command_exists_sync("emacs") 
+    }
+
+    fn needs_root(&self) -> bool {
+        // Emacs packages are typically installed in user-owned ~/.emacs.d/elpa
+        false
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for EmacsBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        // package.el handles its own dependencies internally.
+        Ok(vec![])
     }
 }
 

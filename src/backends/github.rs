@@ -1,13 +1,13 @@
 use crate::core::{
     BackendCore, Installable, Queryable,
     security::verify_checksum,
-    CommandExecutor, Error, Package, PackageSpec, Result, RateLimiter, HealthReport, HealthStatus
+    CommandExecutor, Error, Package, PackageSpec, Result, RateLimiter, HealthReport, HealthStatus, MetadataProvider
 };
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{PathBuf};
 use tokio::sync::Mutex;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -122,10 +122,10 @@ impl GithubBackendCore {
     
     async fn load_state_internal(&self) -> HashMap<String, GithubState> {
         let _guard = self.internal_lock.lock().await;
-        if !self.state_file.exists() {
+        if !tokio::fs::try_exists(&self.state_file).await.unwrap_or(false) {
             return HashMap::new();
         }
-        let data = std::fs::read_to_string(&self.state_file).unwrap_or_default();
+        let data = tokio::fs::read_to_string(&self.state_file).await.unwrap_or_default();
         serde_json::from_str(&data).unwrap_or_default()
     }
     
@@ -140,8 +140,16 @@ impl GithubBackendCore {
 impl BackendCore for GithubBackendCore {
     fn name(&self) -> &str { &self.name }
     fn is_available(&self) -> bool { true }
+    fn needs_root(&self) -> bool { false }
     async fn check_health(&self) -> Result<HealthReport> {
         Ok(HealthReport { status: HealthStatus::Ok, message: None })
+    }
+}
+
+#[async_trait]
+impl MetadataProvider for GithubBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        Ok(vec![])
     }
 }
 
@@ -174,7 +182,7 @@ impl Installable for GithubInstallable {
             let bytes = self.core.github_get(&best_asset.url).await?.bytes().await.map_err(Error::from)?;
             let tmp_dir = tempfile::tempdir().map_err(Error::from)?;
             let dl_path = tmp_dir.path().join(&best_asset.name);
-            std::fs::write(&dl_path, bytes).map_err(Error::from)?;
+            tokio::fs::write(&dl_path, bytes).await.map_err(Error::from)?;
 
             if let Some(expected_sha) = spec.options.get("sha256") {
                 verify_checksum(&dl_path, expected_sha)?;
@@ -182,10 +190,16 @@ impl Installable for GithubInstallable {
 
             let pkg_dir_name = spec.name.replace('/', "_");
             let pkg_dir = self.core.install_dir.join(&pkg_dir_name);
-            let _ = std::fs::remove_dir_all(&pkg_dir);
-            std::fs::create_dir_all(&pkg_dir).map_err(Error::from)?;
+            if tokio::fs::try_exists(&pkg_dir).await.unwrap_or(false) {
+                tokio::fs::remove_dir_all(&pkg_dir).await.map_err(Error::from)?;
+            }
+            tokio::fs::create_dir_all(&pkg_dir).await.map_err(Error::from)?;
 
-            extract_archive(&dl_path, &pkg_dir)?;
+            let dl_path_archive = dl_path.clone();
+            let pkg_dir_archive = pkg_dir.clone();
+            tokio::task::spawn_blocking(move || {
+                extract_archive(&dl_path_archive, &pkg_dir_archive)
+            }).await.map_err(|e| Error::Other(e.to_string()))??;
 
             let repo_name = spec.name.split('/').last().unwrap_or(&spec.name);
             let bin_dest_base = dirs::home_dir()
@@ -193,33 +207,48 @@ impl Installable for GithubInstallable {
                 .join(".local").join("bin").join(repo_name);
             
             let mut final_bin_path = None;
-            let walker = walkdir::WalkDir::new(&pkg_dir).into_iter().filter_map(|e| e.ok());
+            let core_pkg_dir = pkg_dir.clone();
+            let repo_name_str = repo_name.to_string();
             
-            for entry in walker {
-                let fname = entry.file_name().to_string_lossy().to_lowercase();
-                if fname == repo_name.to_lowercase() || 
-                   fname == format!("{}.exe", repo_name.to_lowercase()) ||
-                   (fname.starts_with(repo_name) && !fname.contains('.')) 
-                {
-                    let src_path = entry.path();
-                    let mut bin_dest = bin_dest_base.clone();
-                    
-                    #[cfg(windows)] {
-                        if bin_dest.extension().is_none() { bin_dest.set_extension("exe"); }
-                        std::fs::copy(src_path, &bin_dest).map_err(Error::from)?;
+            let discovery_result: Result<Option<PathBuf>> = tokio::task::spawn_blocking(move || {
+                let walker = walkdir::WalkDir::new(&core_pkg_dir).into_iter().filter_map(|e| e.ok());
+                for entry in walker {
+                    let fname = entry.file_name().to_string_lossy().to_lowercase();
+                    if fname == repo_name_str.to_lowercase() || 
+                       fname == format!("{}.exe", repo_name_str.to_lowercase()) ||
+                       (fname.starts_with(&repo_name_str) && !fname.contains('.')) 
+                    {
+                        return Ok(Some(entry.path().to_path_buf()));
                     }
-
-                    #[cfg(unix)] {
-                        use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(src_path, std::fs::Permissions::from_mode(0o755));
-                        let _ = std::fs::remove_file(&bin_dest);
-                        let _ = std::fs::create_dir_all(bin_dest.parent().unwrap());
-                        std::os::unix::fs::symlink(src_path, &bin_dest).map_err(Error::from)?;
-                    }
-
-                    final_bin_path = Some(bin_dest.to_string_lossy().to_string());
-                    break;
                 }
+                Ok(None)
+            }).await.map_err(|e| Error::Other(e.to_string()))?;
+
+            if let Some(src_path) = discovery_result? {
+                let mut bin_dest = bin_dest_base.clone();
+                
+                #[cfg(windows)] {
+                    if bin_dest.extension().is_none() { bin_dest.set_extension("exe"); }
+                    tokio::fs::copy(&src_path, &bin_dest).await.map_err(Error::from)?;
+                }
+
+                #[cfg(unix)] {
+                    use std::os::unix::fs::PermissionsExt;
+                    let metadata = tokio::fs::metadata(&src_path).await?;
+                    let mut perms = metadata.permissions();
+                    perms.set_mode(0o755);
+                    tokio::fs::set_permissions(&src_path, perms).await.map_err(Error::from)?;
+                    
+                    if tokio::fs::try_exists(&bin_dest).await.unwrap_or(false) || bin_dest.is_symlink() {
+                        tokio::fs::remove_file(&bin_dest).await.map_err(Error::from)?;
+                    }
+                    if let Some(parent) = bin_dest.parent() {
+                        tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
+                    }
+                    tokio::fs::os::unix::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
+                }
+
+                final_bin_path = Some(bin_dest.to_string_lossy().to_string());
             }
 
             state.insert(spec.name.clone(), GithubState {
@@ -239,9 +268,9 @@ impl Installable for GithubInstallable {
         for name in names {
             if let Some(pkg) = state.remove(name) {
                 if let Some(ref bp) = pkg.bin_path {
-                    let _ = std::fs::remove_file(bp);
+                    let _ = tokio::fs::remove_file(bp).await;
                 }
-                let _ = std::fs::remove_dir_all(pkg.install_path);
+                let _ = tokio::fs::remove_dir_all(pkg.install_path).await;
                 info!("Purged GitHub package: {}", name);
             }
         }

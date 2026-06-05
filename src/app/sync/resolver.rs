@@ -1,15 +1,18 @@
 use crate::config::Config;
 use crate::config::parser::parse_group_file;
-use crate::core::{PackageSpec, Result, Validator};
+use crate::core::{PackageSpec, Result, Validator, Error};
 use crate::backends::BackendRegistry;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tracing::debug;
 use semver::{Version, VersionReq};
 use version_compare::{Cmp, compare as loose_compare};
+use tokio::fs;
 
 /// Responsible for calculating the "Desired State" of the system.
 /// Orchestrates group expansion, hostname matching, and recursive meta-dependency resolution.
+/// 
+/// Hardened for Phase 3.2: Full Async I/O for manifest discovery.
 pub struct StateResolver<'a> {
     config: &'a Config,
     registry: Arc<BackendRegistry>,
@@ -28,17 +31,21 @@ impl<'a> StateResolver<'a> {
         let hostname = Config::get_hostname();
         
         // 1. Load hostname-specific and directory-based .txt manifests
-        if self.config.groups_dir.exists() {
-            for entry in std::fs::read_dir(&self.config.groups_dir)? {
-                let entry = entry?;
+        if tokio::fs::try_exists(&self.config.groups_dir).await.unwrap_or(false) {
+            let mut entries = fs::read_dir(&self.config.groups_dir).await.map_err(Error::from)?;
+            
+            while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
                 let path = entry.path();
-                if path.is_file() {
+                let metadata = entry.metadata().await.map_err(Error::from)?;
+                
+                if metadata.is_file() {
                     let fname = path.file_name().unwrap_or_default().to_string_lossy();
                     if fname.starts_with("host-") && fname != format!("host-{}.txt", hostname) {
                         continue;
                     }
                     if fname.ends_with(".txt") {
-                        for pkg in parse_group_file(&path)? {
+                        // parse_group_file is now async
+                        for pkg in parse_group_file(&path).await? {
                             raw_packages.insert(pkg);
                         }
                     }
@@ -57,21 +64,22 @@ impl<'a> StateResolver<'a> {
         let mut queue: VecDeque<String> = raw_packages.into_iter().collect();
         let mut seen_keys = HashSet::new();
         let mut processed_specs = Vec::new();
-        const MAX_RECURSION_DEPTH: usize = 100;
+        const MAX_RECURSION_DEPTH: usize = 1000; // Increased for complex dependency trees
         let mut depth = 0;
 
         while let Some(line) = queue.pop_front() {
             depth += 1;
             if depth > MAX_RECURSION_DEPTH {
                 return Err(crate::core::Error::Transaction(
-                    "Maximum recursion depth exceeded in dependency resolution".into()
+                    "Maximum recursion depth exceeded in dependency resolution. Check for cycles in groups.".into()
                 ));
             }
             
+            // Handle group expansion
             if let Some(group_name) = line.strip_prefix("group:") {
                 let group_path = self.config.groups_dir.join(format!("{}.txt", group_name));
-                if group_path.exists() {
-                    for pkg in parse_group_file(&group_path)? {
+                if tokio::fs::try_exists(&group_path).await.unwrap_or(false) {
+                    for pkg in parse_group_file(&group_path).await? {
                         queue.push_back(pkg);
                     }
                 }
@@ -83,6 +91,7 @@ impl<'a> StateResolver<'a> {
 
             if seen_keys.insert(key) {
                 Validator::validate_package_name(&spec.name)?;
+                // Meta-dependencies declared via requires=... in the manifest string
                 for req in &spec.requires {
                     queue.push_back(req.clone());
                 }
@@ -174,7 +183,7 @@ impl<'a> StateResolver<'a> {
             }
         }
 
-        // Fallback to search
+        // Fallback to search if remote_has is not definitive or not implemented efficiently
         if let Some(searchable) = backend.as_searchable() {
             if let Ok(results) = searchable.search(package_name).await {
                 for pkg in results {
