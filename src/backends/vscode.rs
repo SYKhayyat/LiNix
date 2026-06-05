@@ -1,20 +1,18 @@
 use crate::core::{
     CommandExecutor, Package, Result, PackageSpec, 
     BackendCore, Installable, Queryable, Searchable, RateLimiter,
+    HealthReport, HealthStatus
 };
 use async_trait::async_trait;
-use once_cell::sync::OnceCell;
 use serde_json::json;
-use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::info;
 
 /// Core backend implementation for Visual Studio Code extensions.
 pub struct VscodeBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
     pub rate_limiter: RateLimiter,
-    available: OnceCell<bool>,
 }
 
 impl VscodeBackendCore {
@@ -23,16 +21,15 @@ impl VscodeBackendCore {
             executor,
             name: "vscode".to_string(),
             rate_limiter: RateLimiter::vscode_marketplace(),
-            available: OnceCell::new(),
         }
     }
 
-    /// Internal helper to query the official VS Code Marketplace API with rate limiting.
     pub async fn query_marketplace(&self, query: &str) -> Result<serde_json::Value> {
         self.rate_limiter.execute(|| async {
             let client = reqwest::Client::builder()
                 .user_agent("linix-manager")
-                .build()?;
+                .build()
+                .map_err(crate::core::Error::from)?;
 
             let body = json!({
                 "filters": [{
@@ -50,28 +47,28 @@ impl VscodeBackendCore {
                 .header("Accept", "application/json;api-version=3.0-preview.1")
                 .header("Content-Type", "application/json")
                 .json(&body)
-                .send().await?;
+                .send()
+                .await
+                .map_err(crate::core::Error::from)?;
 
             if !res.status().is_success() {
                 return Err(crate::core::Error::Other(format!("Marketplace API error: {}", res.status())));
             }
 
-            Ok(res.json().await?)
+            res.json().await.map_err(crate::core::Error::from)
         }).await
     }
 }
 
+#[async_trait]
 impl BackendCore for VscodeBackendCore {
-    fn name(&self) -> &str {
-        "vscode"
-    }
-    
-    fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| self.executor.command_exists_sync("code"))
+    fn name(&self) -> &str { &self.name }
+    fn is_available(&self) -> bool { self.executor.command_exists_sync("code") }
+    async fn check_health(&self) -> Result<HealthReport> {
+        Ok(HealthReport { status: HealthStatus::Ok, message: None })
     }
 }
 
-/// Installable capability for VSCode backend.
 pub struct VscodeInstallable {
     pub core: Arc<VscodeBackendCore>,
 }
@@ -95,7 +92,6 @@ impl Installable for VscodeInstallable {
     }
 }
 
-/// Queryable capability for VSCode backend.
 pub struct VscodeQueryable {
     pub core: Arc<VscodeBackendCore>,
 }
@@ -135,18 +131,12 @@ impl Queryable for VscodeQueryable {
             }
             
             p.properties.insert("publisher".into(), publisher.to_string());
-            p.properties.insert("url".into(), format!(
-                "https://marketplace.visualstudio.com/items?itemName={}.{}", 
-                publisher, ext_name
-            ));
-            
             return Ok(Some(p));
         }
         Ok(None)
     }
 }
 
-/// Searchable capability for VSCode backend.
 pub struct VscodeSearchable {
     pub core: Arc<VscodeBackendCore>,
 }

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod parser;
+pub mod manifest; // <-- added
 
 pub use config::Config;
 

@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 /// Represents an actual package discovered on the system or found in a repository.
-/// Used for listing, searching, and metadata inspection.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Identity is defined by its name, backend, and version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
     /// The unique name of the package within its backend (e.g. "ripgrep").
     pub name: String,
@@ -12,23 +13,38 @@ pub struct Package {
     /// The version string if known (e.g. "1.2.3").
     pub version: Option<String>,
     /// Production property map for extensible metadata.
-    /// This holds backend-specific info like "description", "index", "store_path", etc.
     pub properties: HashMap<String, String>,
 }
 
+/// Manual Hash implementation to bypass non-hashable HashMap.
+impl Hash for Package {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.backend.hash(state);
+        self.version.hash(state);
+    }
+}
+
 /// Represents the intent to have a package installed with specific metadata.
-/// This is the core data structure used by the StateResolver and ChangePlanner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageSpec {
     /// The name of the package.
     pub name: String,
     /// The targeted backend.
     pub backend: String,
-    /// Configuration options parsed from the '@' tag (e.g. {"version": "1.0", "classic": "true"}).
+    /// Configuration options parsed from the '@' tag.
     pub options: HashMap<String, String>,
     /// A list of other package identifiers this package depends on.
-    /// Format: "backend:name" (e.g. ["apt:gcc", "cargo:bindgen"]).
     pub requires: Vec<String>,
+}
+
+/// Manual Hash implementation to bypass non-hashable HashMap.
+impl Hash for PackageSpec {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.backend.hash(state);
+        self.requires.hash(state);
+    }
 }
 
 impl Package {

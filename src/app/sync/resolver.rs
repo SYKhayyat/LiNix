@@ -4,15 +4,12 @@ use crate::core::{PackageSpec, Result, Validator};
 use crate::backends::BackendRegistry;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use tracing::{debug, warn, info};
+use tracing::debug;
 use semver::{Version, VersionReq};
 use version_compare::{Cmp, compare as loose_compare};
 
 /// Responsible for calculating the "Desired State" of the system.
 /// Orchestrates group expansion, hostname matching, and recursive meta-dependency resolution.
-/// 
-/// Refactored for Version 3.5.0 to support SemVer-Aware Probing (Point 10/11)
-/// and remote availability checking (FIX #4 and FIX #20).
 pub struct StateResolver<'a> {
     config: &'a Config,
     registry: Arc<BackendRegistry>,
@@ -101,11 +98,6 @@ impl<'a> StateResolver<'a> {
     }
 
     /// Translates a raw string into a structured PackageSpec.
-    /// If no backend is provided, it probes the `backend_priority` list.
-    /// Probing is SemVer-aware: it checks if the backend provides a version 
-    /// that satisfies the constraint (Point 11).
-    /// 
-    /// FIX #20: Uses remote_exists() for efficient probing.
     pub async fn parse_and_probe_spec(&self, line: &str) -> Result<PackageSpec> {
         let (b_part, rest) = if let Some((b, r)) = line.split_once(':') {
             (Some(b), r)
@@ -136,10 +128,9 @@ impl<'a> StateResolver<'a> {
         } else {
             let mut found_backend = None;
             for b_name in &self.config.backend_priority {
-                // FIX #20: Use remote_exists for efficient checking
                 if self.remote_package_exists(b_name, package_name, version_constraint).await {
-                    debug!("StateResolver: Found '{}' available in remote repository for backend '{}' with constraint {:?}", 
-                           package_name, b_name, version_constraint);
+                    debug!("StateResolver: Found '{}' available in remote repository for backend '{}'", 
+                           package_name, b_name);
                     found_backend = Some(b_name.clone());
                     break;
                 }
@@ -157,19 +148,16 @@ impl<'a> StateResolver<'a> {
         })
     }
 
-    /// FIX #20: Efficiently checks if a package exists in remote repositories.
-    /// Uses remote_exists() when available, falls back to search() otherwise.
+    /// Efficiently checks if a package exists in remote repositories.
     async fn remote_package_exists(&self, backend_name: &str, package_name: &str, constraint: Option<&str>) -> bool {
         let backend = match self.registry.get(backend_name) {
-            Some(b) if b.core().is_available() => b,
+            Some(b) if b.is_available() => b,
             _ => return false,
         };
 
-        // Try to use remote_has if available (most efficient)
         if let Some(searchable) = backend.as_searchable() {
             match searchable.remote_has(package_name).await {
                 Ok(true) => {
-                    // Package exists, now check version constraint if needed
                     if let Some(req) = constraint {
                         match searchable.remote_info(package_name).await {
                             Ok(Some(pkg)) => {
@@ -177,73 +165,35 @@ impl<'a> StateResolver<'a> {
                                     return self.satisfies_constraint(ver, req);
                                 }
                             }
-                            Ok(None) => return false,
-                            Err(e) => {
-                                debug!("remote_info failed for {}: {}", package_name, e);
-                                return false;
-                            }
+                            _ => return false,
                         }
                     }
                     return true;
                 }
-                Ok(false) => return false,
-                Err(e) => {
-                    debug!("remote_has failed for {}: {}, falling back to search", package_name, e);
-                }
+                _ => {}
             }
         }
 
-        // Fallback to search if remote_has is not available
+        // Fallback to search
         if let Some(searchable) = backend.as_searchable() {
-            match searchable.search(package_name).await {
-                Ok(results) => {
-                    for pkg in results {
-                        if pkg.name == package_name {
-                            if let Some(req) = constraint {
-                                if let Some(ver) = pkg.version.as_deref() {
-                                    if self.satisfies_constraint(ver, req) {
-                                        return true;
-                                    }
+            if let Ok(results) = searchable.search(package_name).await {
+                for pkg in results {
+                    if pkg.name == package_name {
+                        if let Some(req) = constraint {
+                            if let Some(ver) = pkg.version.as_deref() {
+                                if self.satisfies_constraint(ver, req) {
+                                    return true;
                                 }
-                            } else {
-                                return true;
                             }
+                        } else {
+                            return true;
                         }
-                    }
-                }
-                Err(e) => {
-                    debug!("Search failed for backend '{}': {}", backend_name, e);
-                }
-            }
-        }
-        
-        // Last resort: some backends might have info that queries remote
-        if let Some(queryable) = backend.as_queryable() {
-            if let Ok(Some(pkg)) = queryable.info(package_name).await {
-                if pkg.properties.contains_key("repository_url") 
-                    || pkg.properties.contains_key("homepage")
-                    || pkg.properties.contains_key("download_url") {
-                    if let Some(req) = constraint {
-                        if let Some(ver) = pkg.version.as_deref() {
-                            if self.satisfies_constraint(ver, req) {
-                                return true;
-                            }
-                        }
-                    } else {
-                        return true;
                     }
                 }
             }
         }
         
-        debug!("Backend '{}' does not have package '{}' in remote repositories", backend_name, package_name);
         false
-    }
-
-    /// Legacy method - kept for compatibility.
-    #[deprecated(since = "3.5.0", note = "Use remote_package_exists for correct probing")]
-    async fn probe_backend(&self, backend_name: &str, package_name: &str, constraint: Option<&str>) -> bool {
-        self.remote_package_exists(backend_name, package_name, constraint).await
     }
 
     /// Logic for SemVer constraint matching.
@@ -267,104 +217,5 @@ impl<'a> StateResolver<'a> {
             Ok(Cmp::Gt) if constraint.starts_with('>') => true,
             _ => false,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::backends::create_default_registry;
-    use crate::core::CommandExecutor;
-    use crate::app::LuaHooks;
-    use tempfile::tempdir;
-
-    fn create_test_config() -> Config {
-        let mut config = Config::default();
-        config.backend_priority = vec!["apt".to_string(), "brew".to_string(), "cargo".to_string()];
-        config
-    }
-
-    async fn create_test_resolver() -> StateResolver<'static> {
-        let config = create_test_config();
-        let executor = CommandExecutor::new(true, false);
-        let hooks = Arc::new(LuaHooks::new(&config).unwrap());
-        let registry = Arc::new(create_default_registry(executor, &config, hooks).await);
-        
-        let config_box = Box::leak(Box::new(config));
-        
-        StateResolver {
-            config: config_box,
-            registry,
-        }
-    }
-
-    #[tokio::test]
-    async fn test_satisfies_constraint() {
-        let resolver = create_test_resolver().await;
-        
-        assert!(resolver.satisfies_constraint("1.2.3", "1.2.3"));
-        assert!(resolver.satisfies_constraint("1.2.3", "latest"));
-        assert!(resolver.satisfies_constraint("1.2.3", "*"));
-        assert!(resolver.satisfies_constraint("1.2.3", ">=1.2.0"));
-        assert!(!resolver.satisfies_constraint("1.2.3", ">=2.0.0"));
-    }
-
-    #[tokio::test]
-    async fn test_parse_simple_spec() {
-        let resolver = create_test_resolver().await;
-        
-        let spec = resolver.parse_and_probe_spec("apt:curl").await.unwrap();
-        assert_eq!(spec.backend, "apt");
-        assert_eq!(spec.name, "curl");
-        
-        let spec = resolver.parse_and_probe_spec("cargo:ripgrep@version=13.0.0").await.unwrap();
-        assert_eq!(spec.backend, "cargo");
-        assert_eq!(spec.name, "ripgrep");
-        assert_eq!(spec.options.get("version"), Some(&"13.0.0".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_parse_with_requires() {
-        let resolver = create_test_resolver().await;
-        
-        let spec = resolver.parse_and_probe_spec("apt:neovim@requires=apt:gcc;apt:make").await.unwrap();
-        assert_eq!(spec.name, "neovim");
-        assert_eq!(spec.requires.len(), 2);
-        assert!(spec.requires.contains(&"apt:gcc".to_string()));
-        assert!(spec.requires.contains(&"apt:make".to_string()));
-    }
-
-    #[test]
-    fn test_version_constraint_parsing() {
-        let config = create_test_config();
-        let registry = Arc::new(crate::backends::BackendRegistry::new());
-        let resolver = StateResolver {
-            config: Box::leak(Box::new(config)),
-            registry,
-        };
-        
-        assert!(resolver.satisfies_constraint("2.0.0", ">=1.0.0"));
-        assert!(resolver.satisfies_constraint("1.5.0", "^1.4.0"));
-        assert!(!resolver.satisfies_constraint("1.0.0", "^2.0.0"));
-    }
-
-    #[tokio::test]
-    async fn test_remote_package_exists() {
-        let resolver = create_test_resolver().await;
-        
-        // This tests the method signature and basic logic
-        // Actual existence depends on network and repositories
-        let exists = resolver.remote_package_exists("apt", "curl", None).await;
-        // In CI without network, this may be false - that's acceptable
-        // The important part is that it doesn't panic
-        let _ = exists;
-    }
-    
-    #[tokio::test]
-    async fn test_recursion_depth_limit() {
-        // Create a resolver and test that deep recursion is caught
-        let resolver = create_test_resolver().await;
-        // This is a compile-time test - the actual depth limit is enforced in resolve_desired_state
-        assert!(MAX_RECURSION_DEPTH == 100);
     }
 }

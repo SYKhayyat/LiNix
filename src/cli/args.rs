@@ -4,7 +4,7 @@ use std::path::PathBuf;
 /// LiNix - Universal Mission-Critical Package Manager
 /// High-performance, DAG-based orchestration for 33+ backends.
 #[derive(Parser, Debug)]
-#[command(name = "linix", version = "3.2.0", about = "Universal Mission-Critical Package Manager")]
+#[command(name = "linix", version = "3.5.0", about = "Universal Mission-Critical Package Manager")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -114,20 +114,39 @@ pub enum Commands {
         packages: Vec<String> 
     },
 
-    /// Export current system state as a LiNix group file
-    Backends,
-
-    /// Generate shell completion scripts
-    Completions { 
-        #[arg(value_enum)] 
-        shell: Shell 
-    },
-
     /// Manage source repositories (PPA, Taps, Buckets, etc.)
     Repo(RepoArgs),
 
     /// Perform system health, snapshot, and backend readiness check
     Doctor,
+
+    // --- NEW VARIANTS FOR VERSION 3.5.0 ---
+
+    /// Point 3: Ingest manually installed packages into LiNix management
+    Migrate,
+
+    /// Point 5: Move a package from one backend to another (e.g. apt -> snap)
+    Teleport {
+        /// Name of the package to move
+        package: String,
+        /// Name of the destination backend
+        to: String,
+    },
+
+    /// Point 19: Enter an ephemeral shell with specific packages loaded
+    Shell {
+        /// Packages to load into the ghost shell
+        packages: Vec<String>,
+    },
+
+    /// Point 12: Interactive snapshot gallery and system rollback
+    Undo,
+
+    /// Point 18: Swap between different system configurations (identities)
+    Profile {
+        /// Name of the profile to switch to
+        name: String,
+    },
 }
 
 #[derive(Args, Debug)]

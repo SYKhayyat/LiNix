@@ -1,9 +1,9 @@
 use crate::App;
-use crate::core::{Result, Error, PackageSpec};
-use crate::core::sandbox::{Sandbox, SandboxConfig};
+use crate::core::{Result, Error};
+use crate::app::sandbox::{Sandbox, SandboxConfig};
 use crate::app::bridge::DependencyBridge;
 use std::process::Command;
-use tracing::{info, debug, warn, error};
+use tracing::{info, debug, error};
 
 /// Handles the execution of commands within specialized LiNix environments.
 /// Orchestrates sandboxing, ephemeral provisioning, and dependency bridging.
@@ -26,7 +26,7 @@ impl<'a> Runner<'a> {
 
         // 1. Resolve and check all required packages
         for pkg_str in packages {
-            let specs = self.app.resolve_spec(pkg_str)?;
+            let specs = self.app.resolve_spec(pkg_str).await?;
             for spec in specs {
                 // Check if any package in the environment requires sandboxing
                 if spec.options.get("sandbox") == Some(&"true".to_string()) {
@@ -38,17 +38,17 @@ impl<'a> Runner<'a> {
 
         // 2. Ensure packages are available
         for spec in &resolved_specs {
-            let backend = self.app.registry.get(&spec.backend)
+            let backend_caps = self.app.registry.get(&spec.backend)
                 .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
             
-            let is_present = if let Some(q) = backend.as_queryable() {
+            let is_present = if let Some(q) = backend_caps.as_queryable() {
                 q.info(&spec.name).await?.is_some()
             } else {
                 false
             };
 
             if !is_present {
-                if let Some(installer) = backend.as_installable() {
+                if let Some(installer) = backend_caps.as_installable() {
                     info!("Runner: Provisioning missing dependency: {}:{}", spec.backend, spec.name);
                     installer.install(&[spec.clone()], true).await?;
                 }
@@ -56,12 +56,15 @@ impl<'a> Runner<'a> {
         }
 
         // 3. Prepare Execution
-        let mut status = if sandbox_requested {
+        let status = if sandbox_requested {
             // Point 17: Execute within a Bubblewrap sandbox
             let config = SandboxConfig {
                 allow_network: true,
                 allow_home: true,
+                allow_write: true,
                 custom_mounts: vec![],
+                custom_read_only_mounts: vec![],
+                environment: vec![],
             };
             Sandbox::run(command, args, &config)?
         } else {
@@ -86,7 +89,7 @@ impl<'a> Runner<'a> {
             if let Some(out) = diag_output {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 let bridge = DependencyBridge::new();
-                bridge.print_suggestions(&stderr, &self.app.config.default_backend.clone().unwrap_or_else(|| "apt".into()));
+                bridge.handle_failure(&stderr, &self.app.config.default_backend.clone().unwrap_or_else(|| "apt".into()), self.app, false).await?;
             }
 
             return Err(Error::CommandFailed(format!("Execution of '{}' failed.", command)));

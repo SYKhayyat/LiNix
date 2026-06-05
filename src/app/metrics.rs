@@ -1,16 +1,15 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tracing::info;
 use chrono::{DateTime, Utc};
 
 /// Represents the performance data of a single package operation.
+/// Hardened for Version 3.5.0: Uses i64 for timestamps to ensure effortless serialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationMetrics {
     pub name: String,
     pub backend: String,
-    pub started_at: DateTime<Utc>,
+    pub started_at_unix: i64,
     pub duration_ms: u64,
     pub success: bool,
     pub error: Option<String>,
@@ -62,8 +61,8 @@ impl MetricsCollector {
         inner.operations.push(OperationMetrics {
             name: name.to_string(),
             backend: backend.to_string(),
-            started_at: start_time,
-            duration_ms: duration as u64,
+            started_at_unix: start_time.timestamp(),
+            duration_ms: duration.max(0) as u64,
             success,
             error,
         });
@@ -95,7 +94,7 @@ impl MetricsCollector {
         println!("Installs:     {}", inner.packages_installed);
         println!("Removals:     {}", inner.packages_removed);
 
-        if inner.verbose_needed() {
+        if !inner.operations.is_empty() {
             println!("\nParallel Task Breakdown:");
             for op in &inner.operations {
                 let status_icon = if op.success { "✓" } else { "✗" };
@@ -110,12 +109,6 @@ impl MetricsCollector {
             }
         }
         println!("===========================\n");
-    }
-}
-
-impl MetricsInner {
-    fn verbose_needed(&self) -> bool {
-        self.operations.len() > 0
     }
 }
 

@@ -1,11 +1,12 @@
 use crate::core::{
-    Backend, CommandExecutor, Installable, Package, PackageSpec, 
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
     Queryable, Result, Error
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{info, debug, warn};
 
 /// Internal state metadata for a managed AppImage.
@@ -16,15 +17,14 @@ struct AppImageState {
     symlink_path: String,
 }
 
-/// A specialized manager for standalone Linux AppImages.
-/// Handles downloads, executable permissions, and ~/.local/bin symlinking.
-pub struct AppImageManager {
-    executor: CommandExecutor,
-    install_dir: PathBuf,
-    state_file: PathBuf,
+/// Core backend implementation for standalone Linux AppImages.
+pub struct AppImageBackendCore {
+    pub executor: CommandExecutor,
+    pub install_dir: PathBuf,
+    pub state_file: PathBuf,
 }
 
-impl AppImageManager {
+impl AppImageBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
         let base = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -40,7 +40,7 @@ impl AppImageManager {
         }
     }
 
-    /// Prepares the filesystem structure for AppImage storage and binary exposure.
+    /// Prepares the filesystem structure for AppImage storage.
     async fn ensure_dirs(&self) -> Result<PathBuf> {
         if !self.install_dir.exists() {
             tokio::fs::create_dir_all(&self.install_dir).await?;
@@ -56,7 +56,6 @@ impl AppImageManager {
         Ok(bin_dir)
     }
 
-    /// Loads the current AppImage registry from disk.
     async fn load_state(&self) -> HashMap<String, AppImageState> {
         if !self.state_file.exists() {
             return HashMap::new();
@@ -65,39 +64,38 @@ impl AppImageManager {
         serde_json::from_str(&data).unwrap_or_default()
     }
 
-    /// Saves the registry state atomically.
     async fn save_state(&self, state: &HashMap<String, AppImageState>) -> Result<()> {
-        let data = serde_json::to_string_pretty(state).map_err(|e| Error::Other(e.to_string()))?;
+        let data = serde_json::to_string_pretty(state).map_err(Error::from)?;
         crate::utils::file::atomic_write(&self.state_file, &data)
     }
 }
 
-impl Backend for AppImageManager {
+#[async_trait]
+impl BackendCore for AppImageBackendCore {
     fn name(&self) -> &str { "appimage" }
 
     fn is_available(&self) -> bool {
-        // AppImages are a Linux-specific distribution format.
         cfg!(target_os = "linux")
     }
+}
 
-    fn as_installable(&self) -> Option<&dyn Installable> { Some(self) }
-    fn as_queryable(&self) -> Option<&dyn Queryable> { Some(self) }
+pub struct AppImageInstallable {
+    pub core: Arc<AppImageBackendCore>,
 }
 
 #[async_trait]
-impl Installable for AppImageManager {
+impl Installable for AppImageInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
-        let bin_dir = self.ensure_dirs().await?;
-        let mut state = self.load_state().await;
+        let bin_dir = self.core.ensure_dirs().await?;
+        let mut state = self.core.load_state().await;
         let client = reqwest::Client::builder()
             .user_agent("linix-manager")
             .build()?;
 
         for spec in specs {
             let url = &spec.name;
-            // Extract a clean filename from the URL.
             let filename = url.split('/').last().unwrap_or("app.AppImage");
-            let dest_path = self.install_dir.join(filename);
+            let dest_path = self.core.install_dir.join(filename);
             
             info!("AppImage: Downloading {}...", url);
             let response = client.get(url).send().await?;
@@ -108,7 +106,6 @@ impl Installable for AppImageManager {
             let bytes = response.bytes().await?;
             tokio::fs::write(&dest_path, bytes).await?;
 
-            // 1. Set Executable Permissions (0755)
             #[cfg(unix)] {
                 use std::os::unix::fs::PermissionsExt;
                 let mut perms = tokio::fs::metadata(&dest_path).await?.permissions();
@@ -116,8 +113,6 @@ impl Installable for AppImageManager {
                 tokio::fs::set_permissions(&dest_path, perms).await?;
             }
 
-            // 2. Create Symlink in user PATH
-            // Use the filename without extension as the command name.
             let link_name = filename.strip_suffix(".AppImage")
                 .or_else(|| filename.strip_suffix(".appimage"))
                 .unwrap_or(filename);
@@ -125,7 +120,6 @@ impl Installable for AppImageManager {
             let link_path = bin_dir.join(link_name);
             
             if link_path.exists() || link_path.is_symlink() {
-                debug!("AppImage: Replacing existing symlink at {:?}", link_path);
                 let _ = tokio::fs::remove_file(&link_path).await;
             }
 
@@ -133,7 +127,6 @@ impl Installable for AppImageManager {
                 std::os::unix::fs::symlink(&dest_path, &link_path)?;
             }
 
-            // 3. Update internal registry
             state.insert(spec.name.clone(), AppImageState {
                 url: url.clone(),
                 local_path: dest_path.to_string_lossy().to_string(),
@@ -142,12 +135,12 @@ impl Installable for AppImageManager {
             info!("AppImage: Successfully installed {} to {}", link_name, link_path.display());
         }
 
-        self.save_state(&state).await?;
+        self.core.save_state(&state).await?;
         Ok(())
     }
 
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
-        let mut state = self.load_state().await;
+        let mut state = self.core.load_state().await;
         
         for name in names {
             if let Some(info) = state.remove(name) {
@@ -160,15 +153,19 @@ impl Installable for AppImageManager {
             }
         }
         
-        self.save_state(&state).await?;
+        self.core.save_state(&state).await?;
         Ok(())
     }
 }
 
+pub struct AppImageQueryable {
+    pub core: Arc<AppImageBackendCore>,
+}
+
 #[async_trait]
-impl Queryable for AppImageManager {
+impl Queryable for AppImageQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let state = self.load_state().await;
+        let state = self.core.load_state().await;
         Ok(state.keys().map(|url| {
             let name = url.split('/').last().unwrap_or(url);
             Package::new(name, "appimage")
@@ -176,7 +173,6 @@ impl Queryable for AppImageManager {
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
-        // AppImages are always manually managed by LiNix.
         self.list_installed().await
     }
 

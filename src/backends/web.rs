@@ -1,5 +1,5 @@
 use crate::core::{
-    manager::{Backend, Installable, Queryable},
+    BackendCore, Installable, Queryable, 
     security::verify_checksum,
     CommandExecutor, Package, PackageSpec, Result, Error,
 };
@@ -7,8 +7,9 @@ use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tokio::sync::Mutex;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Internal state metadata for resources managed via the 'web' backend.
@@ -21,18 +22,16 @@ struct WebState {
     last_modified: Option<String>,
 }
 
-/// A specialized manager for direct HTTP/HTTPS downloads.
-/// Supports fingerprinting (ETags), checksum verification, and binary symlinking.
-/// Follows Roadmap Phase 3.2 for deterministic state management.
-pub struct WebManager {
-    executor: CommandExecutor,
-    install_dir: PathBuf,
-    state_file: PathBuf,
-    /// Internal lock to prevent race conditions on the state registry file.
-    internal_lock: Mutex<()>,
+/// Core backend implementation for direct HTTP/HTTPS downloads.
+pub struct WebBackendCore {
+    pub executor: CommandExecutor,
+    pub name: String,
+    pub install_dir: PathBuf,
+    pub state_file: PathBuf,
+    pub internal_lock: Mutex<()>,
 }
 
-impl WebManager {
+impl WebBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
         let base = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -40,22 +39,15 @@ impl WebManager {
             .join("web");
         Self {
             executor,
+            name: "web".to_string(),
             install_dir: base.clone(),
             state_file: base.join("installed.json"),
             internal_lock: Mutex::new(()),
         }
     }
 
-    /// Prepares directories and creates the internal registry if missing.
-    async fn init_storage(&self) -> Result<()> {
-        if !self.install_dir.exists() {
-            tokio::fs::create_dir_all(&self.install_dir).await?;
-        }
-        Ok(())
-    }
-
-    /// Loads the current web-resource registry.
     async fn load_state(&self) -> HashMap<String, WebState> {
+        let _guard = self.internal_lock.lock().await;
         if !self.state_file.exists() {
             return HashMap::new();
         }
@@ -63,33 +55,34 @@ impl WebManager {
         serde_json::from_str(&data).unwrap_or_default()
     }
 
-    /// Persists state atomically using the utility layer.
     async fn save_state(&self, state: &HashMap<String, WebState>) -> Result<()> {
-        let data = serde_json::to_string_pretty(state).map_err(|e| Error::Other(e.to_string()))?;
+        let _guard = self.internal_lock.lock().await;
+        let data = serde_json::to_string_pretty(state).map_err(Error::from)?;
         crate::utils::file::atomic_write(&self.state_file, &data)
     }
 }
 
-impl Backend for WebManager {
-    fn name(&self) -> &str { "web" }
+#[async_trait]
+impl BackendCore for WebBackendCore {
+    fn name(&self) -> &str { &self.name }
     fn is_available(&self) -> bool { true }
-    fn as_installable(&self) -> Option<&dyn Installable> { Some(self) }
-    fn as_queryable(&self) -> Option<&dyn Queryable> { Some(self) }
+}
+
+pub struct WebInstallable {
+    pub core: Arc<WebBackendCore>,
 }
 
 #[async_trait]
-impl Installable for WebManager {
+impl Installable for WebInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
-        let _guard = self.internal_lock.lock().await;
-        self.init_storage().await?;
-        let mut state = self.load_state().await;
+        let mut state = self.core.load_state().await;
         let client = reqwest::Client::builder()
             .user_agent("linix-manager")
-            .build()?;
+            .build()
+            .map_err(Error::from)?;
 
         for spec in specs {
-            // 1. Efficiency: Check Fingerprints (ETag/Last-Modified) via HTTP HEAD
-            let head_res = client.head(&spec.name).send().await?;
+            let head_res = client.head(&spec.name).send().await.map_err(Error::from)?;
             let remote_etag = head_res.headers().get("etag").and_then(|v| v.to_str().ok().map(|s| s.to_string()));
             let remote_mod = head_res.headers().get("last-modified").and_then(|v| v.to_str().ok().map(|s| s.to_string()));
 
@@ -101,30 +94,22 @@ impl Installable for WebManager {
                 }
             }
 
-            // 2. Download into temporary buffer
             info!("Web: Downloading resource: {}", spec.name);
-            let response = client.get(&spec.name).send().await?;
-            if !response.status().is_success() {
-                return Err(Error::Other(format!("Failed to download {}: {}", spec.name, response.status())));
-            }
-            let bytes = response.bytes().await?;
+            let response = client.get(&spec.name).send().await.map_err(Error::from)?;
+            let bytes = response.bytes().await.map_err(Error::from)?;
 
-            let tmp_dir = tempfile::tempdir()?;
+            let tmp_dir = tempfile::tempdir().map_err(Error::from)?;
             let dl_path = tmp_dir.path().join("downloaded_file");
-            tokio::fs::write(&dl_path, bytes).await?;
+            tokio::fs::write(&dl_path, bytes).await.map_err(Error::from)?;
 
-            // 3. Security: Checksum Verification
             if let Some(expected_sha) = spec.options.get("sha256") {
                 verify_checksum(&dl_path, expected_sha)?;
-            } else {
-                warn!("Web: No SHA256 provided for {}; installing unverified binary.", spec.name);
             }
 
-            // 4. Content Processing (Extraction vs Direct Copy)
             let id = format!("{:x}", md5::compute(&spec.name));
-            let dest_dir = self.install_dir.join(&id);
+            let dest_dir = self.core.install_dir.join(&id);
             let _ = tokio::fs::remove_dir_all(&dest_dir).await;
-            tokio::fs::create_dir_all(&dest_dir).await?;
+            tokio::fs::create_dir_all(&dest_dir).await.map_err(Error::from)?;
 
             let filename = spec.name.split('/').last().unwrap_or("resource");
             let is_archive = [".zip", ".gz", ".tar", ".xz", ".bz2", ".tgz"].iter().any(|ext| filename.contains(ext));
@@ -132,74 +117,86 @@ impl Installable for WebManager {
             if is_archive {
                 extract_archive(&dl_path, &dest_dir)?;
             } else {
-                tokio::fs::copy(&dl_path, dest_dir.join(filename)).await?;
+                tokio::fs::copy(&dl_path, dest_dir.join(filename)).await.map_err(Error::from)?;
             }
 
-            // 5. Binary Linkage (Roadmap 4.2)
-            let mut bin_link = None;
+            // WIRING: Cross-platform binary discovery and linkage
+            let mut final_bin_link = None;
             if spec.options.get("type").map(|t| t == "program").unwrap_or(true) {
                 let bin_name = spec.options.get("bin").map(|s| s.as_str()).unwrap_or_else(|| {
                     filename.split('.').next().unwrap_or(filename)
                 });
                 
-                let bin_dest = dirs::home_dir().unwrap().join(".local").join("bin").join(bin_name);
+                let bin_dest_base = dirs::home_dir()
+                    .ok_or_else(|| Error::Other("Home directory not found".into()))?
+                    .join(".local").join("bin").join(bin_name);
                 
-                // Deep scan for the binary inside the extracted folder
                 let mut entries = walkdir::WalkDir::new(&dest_dir).into_iter().filter_map(|e| e.ok());
                 let bin_src = entries.find(|e| {
                     let fname = e.file_name().to_string_lossy().to_lowercase();
-                    fname == bin_name.to_lowercase() || (fname.starts_with(bin_name) && !fname.contains('.'))
+                    fname == bin_name.to_lowercase() || 
+                    fname == format!("{}.exe", bin_name.to_lowercase()) ||
+                    (fname.starts_with(bin_name) && !fname.contains('.'))
                 }).map(|e| e.into_path());
 
-                if let Some(src) = bin_src {
+                if let Some(src_path) = bin_src {
+                    let bin_dest = bin_dest_base.clone();
+                    let _ = std::fs::create_dir_all(bin_dest.parent().unwrap());
+                    let _ = std::fs::remove_file(&bin_dest);
+
                     #[cfg(unix)] {
                         use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755));
-                        let _ = tokio::fs::remove_file(&bin_dest).await;
-                        let _ = tokio::fs::create_dir_all(bin_dest.parent().unwrap()).await;
-                        std::os::unix::fs::symlink(&src, &bin_dest)?;
-                        bin_link = Some(bin_dest.to_string_lossy().to_string());
+                        let _ = std::fs::set_permissions(&src_path, std::fs::Permissions::from_mode(0o755));
+                        std::os::unix::fs::symlink(&src_path, &bin_dest).map_err(Error::from)?;
                     }
+
+                    #[cfg(windows)] {
+                        let mut win_bin_dest = bin_dest.clone();
+                        if win_bin_dest.extension().is_none() { win_bin_dest.set_extension("exe"); }
+                        std::fs::copy(&src_path, &win_bin_dest).map_err(Error::from)?;
+                    }
+
+                    final_bin_link = Some(bin_dest.to_string_lossy().to_string());
                 }
             }
 
-            // 6. Persistence
             state.insert(spec.name.clone(), WebState {
                 url: spec.name.clone(),
                 local_path: dest_dir.to_string_lossy().to_string(),
-                bin_link,
+                bin_link: final_bin_link,
                 etag: remote_etag,
                 last_modified: remote_mod,
             });
         }
         
-        self.save_state(&state).await?;
+        self.core.save_state(&state).await?;
         Ok(())
     }
 
     async fn remove(&self, urls: &[String], _: bool) -> Result<()> {
-        let _guard = self.internal_lock.lock().await;
-        let mut state = self.load_state().await;
-        
+        let mut state = self.core.load_state().await;
         for url in urls {
             if let Some(entry) = state.remove(url) {
-                if let Some(l) = entry.bin_link {
-                    let _ = tokio::fs::remove_file(l).await;
+                if let Some(ref l) = entry.bin_link {
+                    let _ = std::fs::remove_file(l);
                 }
                 let _ = tokio::fs::remove_dir_all(entry.local_path).await;
                 info!("Web: Removed resource: {}", url);
             }
         }
-        
-        self.save_state(&state).await?;
+        self.core.save_state(&state).await?;
         Ok(())
     }
 }
 
+pub struct WebQueryable {
+    pub core: Arc<WebBackendCore>,
+}
+
 #[async_trait]
-impl Queryable for WebManager {
+impl Queryable for WebQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let state = self.load_state().await;
+        let state = self.core.load_state().await;
         Ok(state.keys().map(|u| Package::new(u, "web")).collect())
     }
 

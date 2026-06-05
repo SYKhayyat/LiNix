@@ -62,7 +62,7 @@ bzip2 = "0.4"
 
 # Versioning Logic
 semver = "1.0"
-version_compare = "0.1"
+version-compare = "0.1"
 
 # Logging & Monitoring
 tracing = "0.1"

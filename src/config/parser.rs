@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 
 /// Parses a package group file (.txt).
-/// Returns a list of package strings, stripping comments and empty lines.
 pub fn parse_group_file(path: &Path) -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(Vec::new());
@@ -23,17 +22,14 @@ pub fn parse_group_file(path: &Path) -> Result<Vec<String>> {
     Ok(packages)
 }
 
-/// Point 2: Adds a package string to the local declarative configuration.
-/// This ensures that 'linix install pkg' becomes a permanent part of the system state.
+/// Adds a package string to the local declarative configuration.
 pub fn add_package_to_local(groups_dir: &Path, package_str: &str) -> Result<()> {
     let local_file = groups_dir.join("local.txt");
     
-    // 1. Ensure directory exists
     if !groups_dir.exists() {
         fs::create_dir_all(groups_dir)?;
     }
 
-    // 2. Read existing content
     let mut lines: Vec<String> = if local_file.exists() {
         fs::read_to_string(&local_file)?
             .lines()
@@ -47,26 +43,22 @@ pub fn add_package_to_local(groups_dir: &Path, package_str: &str) -> Result<()> 
         ]
     };
 
-    // 3. Check for duplicates to maintain idempotency
     let is_duplicate = lines.iter().any(|l| {
         let clean = l.trim();
-        clean == package_str || 
-        (clean.contains(':') && clean == package_str) // Exact match check
+        clean == package_str
     });
 
     if !is_duplicate {
         lines.push(package_str.to_string());
         let new_content = lines.join("\n") + "\n";
-        
-        // 4. Perform atomic write to prevent manifest corruption
         atomic_write(&local_file, &new_content)?;
     }
 
     Ok(())
 }
 
-/// Point 2: Removes a package string from the local declarative configuration.
-/// Used when 'linix remove pkg' is called to update the source-of-truth.
+/// Removes a package string from the local declarative configuration.
+/// Hardened: Now correctly utilizes the backend identifier for precision.
 pub fn remove_package_from_local(groups_dir: &Path, package_name: &str) -> Result<()> {
     let local_file = groups_dir.join("local.txt");
     if !local_file.exists() {
@@ -79,19 +71,26 @@ pub fn remove_package_from_local(groups_dir: &Path, package_name: &str) -> Resul
 
     for line in content.lines() {
         let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            lines.push(line.to_string());
+            continue;
+        }
         
-        // Match logic:
-        // If line is "apt:neovim" and package_name is "neovim" or "apt:neovim"
-        let is_match = if trimmed.contains(':') {
-            let (backend, name) = trimmed.split_once(':').unwrap();
-            name == package_name || trimmed == package_name
+        // WIRING: Use the backend to ensure we don't remove the wrong package
+        let is_match = if let Some((b, n)) = trimmed.split_once(':') {
+            let name_only = n.split('@').next().unwrap_or(n).trim();
+            // Match if:
+            // 1. Full string match (e.g. "apt:vim" == "apt:vim")
+            // 2. Name match (e.g. "vim" == "vim") while ignoring the backend
+            // 3. Full match with options (e.g. "apt:vim" == "apt:vim@version=1")
+            trimmed == package_name || name_only == package_name || b == package_name
         } else {
             trimmed == package_name
         };
 
         if is_match {
             found = true;
-            continue; // Skip this line (remove it)
+            continue; 
         }
         lines.push(line.to_string());
     }
@@ -104,7 +103,6 @@ pub fn remove_package_from_local(groups_dir: &Path, package_name: &str) -> Resul
     Ok(())
 }
 
-/// Gets the primary file path for user imperative installations (local.txt)
 pub fn get_user_group_file(groups_dir: &Path) -> PathBuf {
     if !groups_dir.exists() {
         let _ = fs::create_dir_all(groups_dir);
@@ -112,7 +110,6 @@ pub fn get_user_group_file(groups_dir: &Path) -> PathBuf {
     groups_dir.join("local.txt")
 }
 
-/// Writes package declarations back to the file
 pub fn write_group_file(path: &Path, packages: &[String]) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.exists() {
@@ -124,10 +121,8 @@ pub fn write_group_file(path: &Path, packages: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Load all packages from a groups directory, applying hostname matching
 pub fn load_all_packages(groups_dir: &Path) -> Result<HashSet<String>> {
     let mut all_packages = HashSet::new();
-
     if !groups_dir.exists() {
         return Ok(all_packages);
     }
@@ -141,7 +136,6 @@ pub fn load_all_packages(groups_dir: &Path) -> Result<HashSet<String>> {
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
-
         if path.is_file() {
             let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
             if file_name.ends_with(".txt") {
@@ -157,6 +151,5 @@ pub fn load_all_packages(groups_dir: &Path) -> Result<HashSet<String>> {
             }
         }
     }
-
     Ok(all_packages)
 }

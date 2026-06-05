@@ -79,8 +79,9 @@ fn parse_choco_search(output: &str) -> Vec<Package> {
         .filter_map(|line| {
             // Choco search usually returns "name version" on each line
             let parts: Vec<&str> = line.split_whitespace().collect();
+            // Fix E0277: Dereference &&str
             let name = parts.get(0)?;
-            let mut p = Package::new(name.trim(), "choco");
+            let mut p = Package::new(*name, "choco");
             if let Some(v) = parts.get(1) {
                 p.version = Some(v.to_string());
             }
@@ -94,7 +95,9 @@ fn parse_scoop_search(output: &str) -> Vec<Package> {
         .filter(|l| l.contains('(')) // Scoop search lines usually look like "name (version)"
         .filter_map(|line| {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            Some(Package::new(parts.get(0)?, "scoop"))
+            // Fix E0277: Dereference &&str
+            let name = parts.get(0)?;
+            Some(Package::new(*name, "scoop"))
         }).collect()
 }
 

@@ -1,47 +1,47 @@
-use crate::core::{CommandExecutor, Package, Result, PackageSpec, Backend, Installable, Queryable};
+use crate::core::{CommandExecutor, Package, Result, PackageSpec, BackendCore, Installable, Queryable};
 use async_trait::async_trait;
-use tracing::{debug, info};
+use std::sync::Arc;
+use tracing::info;
 
-/// Specialized manager for Emacs packages via the 'package.el' system.
-/// Uses Emacs batch mode to execute Lisp commands for package lifecycle management.
-/// Serializes operations using the "emacs" LockMap key to prevent profile corruption.
-pub struct EmacsManager {
-    executor: CommandExecutor,
+/// Core backend implementation for Emacs packages via 'package.el'.
+pub struct EmacsBackendCore {
+    pub executor: CommandExecutor,
+    pub name: String,
 }
 
-impl EmacsManager {
+impl EmacsBackendCore {
     pub fn new(executor: CommandExecutor) -> Self { 
-        Self { executor } 
+        Self { 
+            executor,
+            name: "emacs".to_string(),
+        } 
     }
 
     /// Internal helper to execute arbitrary Emacs Lisp code in batch mode.
     async fn run_lisp(&self, lisp: &str) -> Result<String> {
-        // Emacs batch mode: --batch (no UI), --eval (run code)
         self.executor.run_output("emacs", &["--batch", "--eval", lisp], false).await
     }
 }
 
-impl Backend for EmacsManager {
-    fn name(&self) -> &str { "emacs" }
+#[async_trait]
+impl BackendCore for EmacsBackendCore {
+    fn name(&self) -> &str { &self.name }
 
     fn is_available(&self) -> bool { 
         self.executor.command_exists_sync("emacs") 
     }
+}
 
-    fn as_installable(&self) -> Option<&dyn Installable> { Some(self) }
-    fn as_queryable(&self) -> Option<&dyn Queryable> { Some(self) }
+pub struct EmacsInstallable {
+    pub core: Arc<EmacsBackendCore>,
 }
 
 #[async_trait]
-impl Installable for EmacsManager {
+impl Installable for EmacsInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         for spec in specs {
             info!("Emacs: Installing package '{}'...", spec.name);
             
-            // Lisp Logic:
-            // 1. Initialize the package system
-            // 2. Refresh metadata if needed
-            // 3. Install the package
             let lisp = format!(
                 "(progn \
                     (require 'package) \
@@ -52,8 +52,7 @@ impl Installable for EmacsManager {
                 spec.name
             );
 
-            // Serialize access to ~/.emacs.d/elpa
-            self.executor.run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false).await?;
+            self.core.executor.run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false).await?;
         }
         Ok(())
     }
@@ -62,9 +61,6 @@ impl Installable for EmacsManager {
         for name in names {
             info!("Emacs: Removing package '{}'...", name);
             
-            // Lisp Logic:
-            // 1. Locate the package description in the alist
-            // 2. Delete it if it exists
             let lisp = format!(
                 "(progn \
                     (require 'package) \
@@ -75,16 +71,19 @@ impl Installable for EmacsManager {
                 name
             );
 
-            self.executor.run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false).await?;
+            self.core.executor.run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false).await?;
         }
         Ok(())
     }
 }
 
+pub struct EmacsQueryable {
+    pub core: Arc<EmacsBackendCore>,
+}
+
 #[async_trait]
-impl Queryable for EmacsManager {
+impl Queryable for EmacsQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        // Lisp Logic: Map across package-alist and print "name version"
         let lisp = "(progn \
             (require 'package) \
             (package-initialize) \
@@ -93,7 +92,7 @@ impl Queryable for EmacsManager {
                 package-alist) \
         )";
         
-        let out = self.run_lisp(lisp).await?;
+        let out = self.core.run_lisp(lisp).await?;
         Ok(out.lines().filter_map(|l| {
             let (n, v) = l.split_once(' ')?;
             Some(Package::with_version(n.trim(), v.trim(), "emacs"))
@@ -101,21 +100,19 @@ impl Queryable for EmacsManager {
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
-        // Lisp Logic: Print packages specifically listed in package-selected-packages
         let lisp = "(progn \
             (require 'package) \
             (package-initialize) \
             (mapc (lambda (p) (princ (format \"%s\\n\" p))) package-selected-packages) \
         )";
         
-        let out = self.run_lisp(lisp).await?;
+        let out = self.core.run_lisp(lisp).await?;
         Ok(out.lines()
             .map(|l| Package::new(l.trim(), "emacs"))
             .collect())
     }
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {
-        // Detailed info is complex in batch mode; we return the basic object if it's in the list
         let all = self.list_installed().await?;
         Ok(all.into_iter().find(|p| p.name == name))
     }

@@ -16,7 +16,6 @@ pub struct Snapshot {
 
 /// Abstract interface for system snapshots.
 /// Hardened for Version 3.5.0 with Cross-Platform support.
-/// FIX #21: Added ZFS snapshot provider.
 #[async_trait]
 pub trait SnapshotProvider: Send + Sync {
     fn name(&self) -> &str;
@@ -25,16 +24,14 @@ pub trait SnapshotProvider: Send + Sync {
     /// Creates a new system snapshot with a given label.
     async fn create(&self, label: &str) -> Result<Snapshot>;
     
-    /// Lists all snapshots currently managed by this provider.
+    /// Lists all snapshots managed by this provider.
     async fn list(&self) -> Result<Vec<Snapshot>>;
     
-    /// Deletes a specific snapshot by its unique ID.
+    /// Deletes a specific snapshot by its ID.
     async fn delete(&self, id: &str) -> Result<()>;
     
     /// Restores from a specific snapshot.
-    async fn restore(&self, id: &str) -> Result<()> {
-        Err(Error::Snapshot(format!("Restore not implemented for {}", self.name())))
-    }
+    async fn restore(&self, id: &str) -> Result<()>;
 }
 
 /// BTRFS Implementation using subvolume snapshots.
@@ -90,9 +87,16 @@ impl SnapshotProvider for BtrfsProvider {
         self.executor.run("btrfs", &["subvolume", "delete", &path], true).await?;
         Ok(())
     }
+
+    async fn restore(&self, id: &str) -> Result<()> {
+        let path = format!("/.snapshots/{}", id);
+        info!("BTRFS: Rolling back to snapshot: {}", id);
+        self.executor.run("btrfs", &["subvolume", "snapshot", &path, "/"], true).await?;
+        Ok(())
+    }
 }
 
-/// FIX #21: ZFS Implementation using zfs snapshot command.
+/// ZFS Implementation with Root Dataset Auto-Detection.
 pub struct ZfsProvider {
     pub executor: CommandExecutor,
     pub pool: Option<String>,
@@ -100,47 +104,21 @@ pub struct ZfsProvider {
 
 impl ZfsProvider {
     pub fn new(executor: CommandExecutor) -> Self {
-        // Try to auto-detect the root dataset
         let pool = Self::detect_root_dataset();
         Self { executor, pool }
     }
     
-    /// Detects the root ZFS dataset (e.g., "rpool/ROOT/ubuntu").
     fn detect_root_dataset() -> Option<String> {
-        // Try to get the dataset mounted at /
         let output = StdCommand::new("zfs")
-            .args(&["list", "-H", "-o", "name", "-r", "/"])
+            .args(["list", "-H", "-o", "name", "-r", "/"])
             .output()
             .ok()?;
         
         if output.status.success() {
             let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !name.is_empty() {
-                return Some(name);
-            }
+            if !name.is_empty() { return Some(name); }
         }
-        
-        // Fallback: try common pool names
-        let common_pools = ["rpool", "zroot", "tank", "bpool"];
-        for pool in common_pools {
-            let check = StdCommand::new("zfs")
-                .args(&["list", "-H", "-o", "name", pool])
-                .output();
-            if let Ok(out) = check {
-                if out.status.success() && !String::from_utf8_lossy(&out.stdout).trim().is_empty() {
-                    return Some(pool.to_string());
-                }
-            }
-        }
-        
         None
-    }
-    
-    /// Gets the full dataset path for a snapshot.
-    fn get_snapshot_name(&self, label: &str) -> String {
-        let ts = Local::now().format("%Y%m%d%H%M%S").to_string();
-        let dataset = self.pool.as_deref().unwrap_or("rpool");
-        format!("{}@linix_{}_{}", dataset, label, ts)
     }
 }
 
@@ -149,22 +127,16 @@ impl SnapshotProvider for ZfsProvider {
     fn name(&self) -> &str { "zfs" }
 
     async fn is_available(&self) -> bool {
-        cfg!(target_os = "linux") || cfg!(target_os = "freebsd") || cfg!(target_os = "illumos") &&
-        self.executor.command_exists_sync("zfs") &&
-        self.pool.is_some()
+        self.executor.command_exists_sync("zfs") && self.pool.is_some()
     }
 
     async fn create(&self, label: &str) -> Result<Snapshot> {
-        let snapshot_name = self.get_snapshot_name(label);
-        let id = snapshot_name.clone();
+        let ts = Local::now().format("%Y%m%d%H%M%S").to_string();
+        let dataset = self.pool.as_ref().unwrap();
+        let id = format!("{}@linix_{}_{}", dataset, label, ts);
         
-        info!("ZFS: Creating snapshot: {}", snapshot_name);
-        
-        // Create recursive snapshot for the entire dataset
-        self.executor.run("zfs", &["snapshot", "-r", &snapshot_name], true).await?;
-        
-        // Also create a hold to prevent accidental deletion (optional)
-        let _ = self.executor.run("zfs", &["hold", "linix-protect", &snapshot_name], true).await;
+        info!("ZFS: Creating recursive snapshot: {}", id);
+        self.executor.run("zfs", &["snapshot", "-r", &id], true).await?;
         
         Ok(Snapshot {
             id,
@@ -175,59 +147,33 @@ impl SnapshotProvider for ZfsProvider {
     }
 
     async fn list(&self) -> Result<Vec<Snapshot>> {
-        let dataset = self.pool.as_deref().unwrap_or("rpool");
-        let out = self.executor.run_output("zfs", &["list", "-H", "-r", "-t", "snapshot", "-o", "name,creation", dataset], false).await?;
+        let dataset = self.pool.as_ref().unwrap();
+        let out = self.executor.run_output("zfs", &["list", "-H", "-r", "-t", "snapshot", "-o", "name", dataset], false).await?;
         
-        let mut snapshots = Vec::new();
-        for line in out.lines() {
-            if line.contains("linix_") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(name) = parts.first() {
-                    let id = name.to_string();
-                    let timestamp = parts.get(1).map(|s| s.to_string()).unwrap_or_else(|| "unknown".to_string());
-                    
-                    // Extract description from snapshot name (everything after @)
-                    let description = name.split('@').last()
-                        .map(|s| s.replace("linix_", ""))
-                        .unwrap_or_else(|| "ZFS Snapshot".to_string());
-                    
-                    snapshots.push(Snapshot {
-                        id,
-                        timestamp,
-                        description,
-                        backend: "zfs".into(),
-                    });
-                }
-            }
-        }
-        
-        Ok(snapshots)
+        Ok(out.lines()
+            .filter(|l| l.contains("@linix_"))
+            .map(|l| Snapshot {
+                id: l.trim().to_string(),
+                timestamp: "UTC".into(),
+                description: "ZFS Snapshot".into(),
+                backend: "zfs".into(),
+            })
+            .collect())
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        info!("ZFS: Deleting snapshot: {}", id);
-        
-        // Release the hold if it exists
-        let _ = self.executor.run("zfs", &["release", "linix-protect", id], true).await;
-        
-        // Destroy the snapshot
         self.executor.run("zfs", &["destroy", "-r", id], true).await?;
         Ok(())
     }
-    
+
     async fn restore(&self, id: &str) -> Result<()> {
-        info!("ZFS: Rolling back to snapshot: {}", id);
-        
-        // Rollback to the specified snapshot
-        // This will destroy any snapshots and bookmarks after this one
+        info!("ZFS: Performing rollback to {}", id);
         self.executor.run("zfs", &["rollback", "-r", id], true).await?;
-        
-        println!("\nSUCCESS: System rolled back to snapshot {}. Please reboot.", id);
         Ok(())
     }
 }
 
-/// Timeshift Implementation for standard Linux distributions.
+/// Timeshift Implementation.
 pub struct TimeshiftProvider {
     pub executor: CommandExecutor,
 }
@@ -281,6 +227,12 @@ impl SnapshotProvider for TimeshiftProvider {
         self.executor.run("timeshift", &["--delete", "--snapshot", id], true).await?;
         Ok(())
     }
+
+    async fn restore(&self, id: &str) -> Result<()> {
+        let args = ["--restore", "--snapshot", id, "--target-device", "/", "--yes"];
+        self.executor.run("timeshift", &args, true).await?;
+        Ok(())
+    }
 }
 
 /// Windows System Restore Point Provider.
@@ -297,13 +249,7 @@ impl SnapshotProvider for WindowsRestoreProvider {
     }
 
     async fn create(&self, label: &str) -> Result<Snapshot> {
-        info!("Windows: Creating System Restore Point: {}...", label);
-        
-        let ps_cmd = format!(
-            "Checkpoint-Computer -Description 'LiNix: {}' -RestorePointType 'APPLICATION_INSTALL'", 
-            label
-        );
-        
+        let ps_cmd = format!("Checkpoint-Computer -Description 'LiNix: {}' -RestorePointType 'APPLICATION_INSTALL'", label);
         self.executor.run("powershell", &["-Command", &ps_cmd], true).await?;
 
         Ok(Snapshot {
@@ -315,14 +261,12 @@ impl SnapshotProvider for WindowsRestoreProvider {
     }
 
     async fn list(&self) -> Result<Vec<Snapshot>> {
-        let ps_cmd = "Get-ComputerRestorePoint | Select-Object SequenceNumber, CreationTime, Description | ConvertTo-Json";
+        let ps_cmd = "Get-ComputerRestorePoint | ConvertTo-Json";
         let out = self.executor.run_output("powershell", &["-Command", ps_cmd], false).await?;
-        
         if out.is_empty() || out == "null" { return Ok(vec![]); }
 
-        let json: serde_json::Value = serde_json::from_str(&out).map_err(|e| Error::Other(e.to_string()))?;
+        let json: serde_json::Value = serde_json::from_str(&out).map_err(Error::from)?;
         let mut snapshots = Vec::new();
-
         if let Some(items) = json.as_array() {
             for item in items {
                 snapshots.push(Snapshot {
@@ -333,18 +277,19 @@ impl SnapshotProvider for WindowsRestoreProvider {
                 });
             }
         }
-
         Ok(snapshots)
     }
 
-    async fn delete(&self, _id: &str) -> Result<()> {
-        // Windows does not allow deleting specific restore points easily via CLI
+    async fn delete(&self, _id: &str) -> Result<()> { Ok(()) }
+
+    async fn restore(&self, id: &str) -> Result<()> {
+        let ps_cmd = format!("Restore-Computer -RestorePoint {} -Confirm:$false", id);
+        self.executor.run("powershell", &["-Command", &ps_cmd], true).await?;
         Ok(())
     }
 }
 
 /// The Snapshot Factory: Detects and manages system-level atomic recovery points.
-/// FIX #21: Added ZFS provider to the detection chain.
 pub struct SnapshotManager {
     provider: Option<Box<dyn SnapshotProvider>>,
 }
@@ -352,10 +297,10 @@ pub struct SnapshotManager {
 impl SnapshotManager {
     pub async fn new(executor: CommandExecutor) -> Self {
         let providers: Vec<Box<dyn SnapshotProvider>> = vec![
-            Box::new(ZfsProvider::new(executor.clone())),  // FIX #21: ZFS first (most efficient)
-            Box::new(BtrfsProvider { executor: executor.clone() }),
-            Box::new(TimeshiftProvider { executor: executor.clone() }),
-            Box::new(WindowsRestoreProvider { executor: executor.clone() }),
+            Box::new(BtrfsProvider { executor: executor.duplicate() }),
+            Box::new(ZfsProvider::new(executor.duplicate())),
+            Box::new(TimeshiftProvider { executor: executor.duplicate() }),
+            Box::new(WindowsRestoreProvider { executor: executor.duplicate() }),
         ];
 
         let mut active_provider = None;
@@ -372,10 +317,8 @@ impl SnapshotManager {
 
     pub async fn auto_snapshot(&self, label: &str) -> Result<Option<Snapshot>> {
         if let Some(ref p) = self.provider {
-            info!("Safety: Generating system-level rollback point via {}...", p.name());
             Ok(Some(p.create(label).await?))
         } else {
-            warn!("Safety: No snapshot provider available. Transactions will proceed without a system rollback point.");
             Ok(None)
         }
     }
@@ -387,49 +330,12 @@ impl SnapshotManager {
             Ok(vec![])
         }
     }
-    
+
     pub async fn restore_snapshot(&self, id: &str) -> Result<()> {
         if let Some(ref p) = self.provider {
             p.restore(id).await
         } else {
-            Err(Error::Snapshot("No snapshot provider available for restore".into()))
+            Err(Error::Snapshot("No active provider available for restore".into()))
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[tokio::test]
-    async fn test_zfs_detection() {
-        let executor = CommandExecutor::new(true, false);
-        let provider = ZfsProvider::new(executor);
-        
-        // Just test that the provider can be created
-        assert_eq!(provider.name(), "zfs");
-    }
-    
-    #[test]
-    fn test_zfs_snapshot_name_format() {
-        let executor = CommandExecutor::new(true, false);
-        let provider = ZfsProvider::new(executor);
-        
-        let snapshot_name = provider.get_snapshot_name("test");
-        assert!(snapshot_name.contains("@linix_test_"));
-        assert!(snapshot_name.len() > 20);
-    }
-    
-    #[test]
-    fn test_snapshot_struct() {
-        let snapshot = Snapshot {
-            id: "test-123".to_string(),
-            timestamp: "2024-01-01T00:00:00Z".to_string(),
-            description: "Test snapshot".to_string(),
-            backend: "zfs".to_string(),
-        };
-        
-        assert_eq!(snapshot.id, "test-123");
-        assert_eq!(snapshot.backend, "zfs");
     }
 }

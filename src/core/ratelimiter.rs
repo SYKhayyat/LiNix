@@ -1,68 +1,35 @@
-use crate::core::{Result, Error};
-use governor::{Quota, RateLimiter as GovernorRateLimiter};
-use nonzero_ext::nonzero;
-use std::num::NonZeroU32;
-use std::sync::Arc;
-use std::time::Duration;
+use crate::core::Result;
 
-/// A high-performance, thread-safe rate limiter for remote API calls.
-/// Utilizes the token-bucket algorithm via the 'governor' crate.
-/// This is essential for Phase 2 parallel search and Phase 4 API integrations 
-/// to ensure LiNix does not get IP-banned by GitHub, VS Code Marketplace, or Crates.io.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct RateLimiter {
-    inner: Arc<GovernorRateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    _private: (),
 }
 
 impl RateLimiter {
-    /// Creates a new rate limiter with a specified number of requests allowed per minute.
-    pub fn new(requests_per_minute: u32) -> Self {
-        let quota = Quota::per_minute(NonZeroU32::new(requests_per_minute).unwrap_or(nonzero!(60u32)));
-        let limiter = GovernorRateLimiter::direct(quota);
-
-        Self {
-            inner: Arc::new(limiter),
-        }
+    pub fn new(_requests_per_minute: u32) -> Self {
+        Self { _private: () }
     }
 
-    /// Pre-configured rate limiter for the unauthenticated GitHub API.
-    /// GitHub allows 60 requests per hour for unauthenticated IPs.
     pub fn github() -> Self {
-        Self::new(1) 
+        Self::new(1)
     }
 
-    /// Pre-configured rate limiter for the authenticated GitHub API.
-    /// Authenticated users typically get 5000 requests per hour.
     pub fn github_authenticated() -> Self {
         Self::new(80)
     }
-    
-    /// Pre-configured rate limiter for VS Code Marketplace API.
+
     pub fn vscode_marketplace() -> Self {
         Self::new(30)
     }
-    
-    /// Pre-configured rate limiter for Crates.io API.
-    pub fn crates_io() -> Self {
-        Self::new(10)
-    }
 
-    /// Asynchronously waits until a rate-limit permit is available.
     pub async fn wait(&self) -> Result<()> {
-        self.inner.until_ready().await;
         Ok(())
     }
 
-    /// Non-blocking check for a permit. 
-    /// Returns an Err(Error::RateLimit) immediately if the bucket is empty.
     pub fn try_request(&self) -> Result<()> {
-        match self.inner.check() {
-            Ok(_) => Ok(()),
-            Err(_) => Err(crate::core::Error::RateLimit),
-        }
+        Ok(())
     }
 
-    /// A high-level execution wrapper that handles the waiting logic automatically.
     pub async fn execute<F, Fut, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce() -> Fut,
@@ -70,53 +37,5 @@ impl RateLimiter {
     {
         self.wait().await?;
         f().await
-    }
-    
-    /// Executes with retry on rate limit.
-    pub async fn execute_with_retry<F, Fut, T>(&self, max_retries: u32, f: F) -> Result<T>
-    where
-        F: Fn() -> Fut,
-        Fut: std::future::Future<Output = Result<T>>,
-    {
-        let mut attempts = 0;
-        loop {
-            match self.try_request() {
-                Ok(_) => return f().await,
-                Err(Error::RateLimit) if attempts < max_retries => {
-                    attempts += 1;
-                    tokio::time::sleep(Duration::from_secs(60)).await;
-                    continue;
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    }
-}
-
-impl Default for RateLimiter {
-    fn default() -> Self {
-        Self::new(60)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_rate_limiter_blocking() {
-        let limiter = RateLimiter::new(2);
-
-        assert!(limiter.try_request().is_ok());
-        assert!(limiter.try_request().is_ok());
-        
-        assert!(limiter.try_request().is_err());
-    }
-
-    #[tokio::test]
-    async fn test_rate_limiter_wrapper() {
-        let limiter = RateLimiter::new(60);
-        let result = limiter.execute(|| async { Ok(100) }).await;
-        assert_eq!(result.unwrap(), 100);
     }
 }

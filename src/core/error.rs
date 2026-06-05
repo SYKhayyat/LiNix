@@ -1,8 +1,9 @@
 use thiserror::Error;
 
 /// Centralized error handling for the LiNix project.
-/// Utilizes 'thiserror' for ergonomic and descriptive error reporting across 33+ backends.
-#[derive(Debug, Error)]
+/// Hardened for Version 3.5.0 to support parallel execution and telemetry
+/// by ensuring the Error type is fully Cloneable and Debuggable.
+#[derive(Debug, Error, Clone)]
 pub enum Error {
     #[error("Backend '{0}' not found or unsupported on this platform")]
     BackendNotFound(String),
@@ -11,7 +12,7 @@ pub enum Error {
     CommandFailed(String),
 
     #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
+    Io(String),
 
     #[error("Configuration error: {0}")]
     Config(String),
@@ -20,13 +21,13 @@ pub enum Error {
     Validation(String),
 
     #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(String),
 
     #[error("JSON processing error: {0}")]
-    Json(#[from] serde_json::Error),
+    Json(String),
 
     #[error("TOML processing error: {0}")]
-    Toml(#[from] toml::de::Error),
+    Toml(String),
 
     #[error("Package '{0}' was not found in the target repository")]
     PackageNotFound(String),
@@ -62,15 +63,33 @@ pub enum Error {
 /// Specialized Result type for LiNix operations.
 pub type Result<T> = std::result::Result<T, Error>;
 
-impl From<mlua::Error> for Error {
-    fn from(err: mlua::Error) -> Self { 
-        Error::LuaScript(err.to_string()) 
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::Io(err.to_string())
     }
 }
 
-impl From<String> for Error {
-    fn from(s: String) -> Self { 
-        Error::Other(s) 
+impl From<reqwest::Error> for Error {
+    fn from(err: reqwest::Error) -> Self {
+        Error::Http(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Self {
+        Error::Json(err.to_string())
+    }
+}
+
+impl From<toml::de::Error> for Error {
+    fn from(err: toml::de::Error) -> Self {
+        Error::Toml(err.to_string())
+    }
+}
+
+impl From<mlua::Error> for Error {
+    fn from(err: mlua::Error) -> Self { 
+        Error::LuaScript(err.to_string()) 
     }
 }
 
@@ -83,5 +102,11 @@ impl From<tempfile::PersistError> for Error {
 impl From<anyhow::Error> for Error {
     fn from(err: anyhow::Error) -> Self {
         Error::Other(err.to_string())
+    }
+}
+
+impl From<String> for Error {
+    fn from(s: String) -> Self { 
+        Error::Other(s) 
     }
 }

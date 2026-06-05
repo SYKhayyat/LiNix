@@ -5,35 +5,23 @@ use tempfile::NamedTempFile;
 use std::io::Write;
 
 /// Atomically writes content to a file.
-/// This implementation writes to a temporary file in the target directory and then renames it.
-/// On modern filesystems (BTRFS, ZFS, Ext4, NTFS), renaming is an atomic operation.
-/// This ensures the target file is never left in a partially-written state if the 
-/// process crashes or power is lost.
 /// Implementation for Roadmap Phase 3: Mission-Critical Safety.
 pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
-    // 1. Identify the parent directory to ensure the temp file is on the same mount point
     let dir = path.parent().ok_or_else(|| {
-        Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Target path has no parent directory"))
+        // Fix E0308: Explicitly convert io::Error to String for Error::Io
+        let err = std::io::Error::new(std::io::ErrorKind::InvalidInput, "Target path has no parent directory");
+        Error::Io(err.to_string())
     })?;
 
-    // 2. Ensure the parent directory structure exists
     if !dir.exists() {
-        fs::create_dir_all(dir)?;
+        fs::create_dir_all(dir).map_err(Error::from)?;
     }
 
-    // 3. Create a temporary file within the same directory
-    // This is vital because atomic renames usually do not work across different filesystems/mounts.
-    let mut temp_file = NamedTempFile::new_in(dir)?;
-    
-    // 4. Write and flush the data to the temporary file
-    temp_file.write_all(content.as_bytes())?;
-    temp_file.flush()?;
-    
-    // 5. Explicitly sync to ensure data is physically written to the storage medium
-    temp_file.as_file().sync_all()?;
-
-    // 6. Persist performs the atomic rename operation to the final path
-    temp_file.persist(path).map_err(|e| Error::Persist(e.to_string()))?;
+    let mut temp_file = NamedTempFile::new_in(dir).map_err(Error::from)?;
+    temp_file.write_all(content.as_bytes()).map_err(Error::from)?;
+    temp_file.flush().map_err(Error::from)?;
+    temp_file.as_file().sync_all().map_err(Error::from)?;
+    temp_file.persist(path).map_err(Error::from)?;
 
     Ok(())
 }
@@ -41,19 +29,18 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
 /// Utility to ensure a directory exists, creating all parents if necessary.
 pub fn ensure_dir(path: &Path) -> Result<()> {
     if !path.exists() {
-        fs::create_dir_all(path)?;
+        fs::create_dir_all(path).map_err(Error::from)?;
     }
     Ok(())
 }
 
 /// Reads a file and returns a list of non-comment, non-empty lines.
-/// Used for parsing simple package list files (.txt).
 pub fn read_lines_filtered(path: &Path) -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(vec![]);
     }
     
-    let content = fs::read_to_string(path)?;
+    let content = fs::read_to_string(path).map_err(Error::from)?;
     Ok(content
         .lines()
         .map(|line| line.trim())
@@ -66,9 +53,9 @@ pub fn read_lines_filtered(path: &Path) -> Result<Vec<String>> {
 pub fn force_remove(path: &Path) -> Result<()> {
     if path.exists() {
         if path.is_dir() {
-            fs::remove_dir_all(path)?;
+            fs::remove_dir_all(path).map_err(Error::from)?;
         } else {
-            fs::remove_file(path)?;
+            fs::remove_file(path).map_err(Error::from)?;
         }
     }
     Ok(())
