@@ -1,19 +1,50 @@
-use crate::App;
-use crate::core::{Result, Error, PackageSpec};
+use crate::core::{Result, Error, PackageSpec, Validator};
+use crate::backends::BackendRegistry;
+use crate::config::Config;
 use crate::app::sandbox::{Sandbox, SandboxConfig};
+use crate::app::sync::resolver::StateResolver;
 use std::env;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::collections::{VecDeque, HashSet};
 use tracing::{info, debug, warn};
 
 /// Orchestrates ephemeral environments (The Ghost Shell).
-/// Hardened for Phase 3.2: Async I/O and non-blocking process execution.
-pub struct GhostShell<'a> {
-    app: &'a App,
+/// 
+/// Hardened for Phase 4.1: Decoupled from the global App object. Now receives 
+/// specific dependencies via injection, allowing the shell logic to be tested 
+/// independently of the application state.
+pub struct GhostShell {
+    registry: Arc<BackendRegistry>,
+    config: Arc<Config>,
 }
 
-impl<'a> GhostShell<'a> {
-    pub fn new(app: &'a App) -> Self {
-        Self { app }
+impl GhostShell {
+    /// Creates a new GhostShell with explicit dependency injection.
+    pub fn new(registry: Arc<BackendRegistry>, config: Arc<Config>) -> Self {
+        Self { registry, config }
+    }
+
+    /// Internal helper to resolve package specs without depending on the App object.
+    async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
+        let mut resolved = Vec::new();
+        let mut queue = VecDeque::new();
+        let mut seen = HashSet::new();
+
+        let resolver = StateResolver::new(&self.config, self.registry.clone());
+        queue.push_back(resolver.parse_and_probe_spec(spec_str).await?);
+
+        while let Some(spec) = queue.pop_front() {
+            let key = format!("{}:{}", spec.backend, spec.name);
+            if !seen.insert(key) { continue; }
+
+            Validator::validate_package_name(&spec.name)?;
+            for req in &spec.requires {
+                queue.push_back(resolver.parse_and_probe_spec(req).await?);
+            }
+            resolved.push(spec);
+        }
+        Ok(resolved)
     }
 
     /// Spawns a sub-shell with the provided packages available.
@@ -24,14 +55,14 @@ impl<'a> GhostShell<'a> {
 
         // 1. Resolve Specs and Locate Binaries
         for pkg_str in packages {
-            let specs = self.app.resolve_spec(pkg_str).await?;
+            let specs = self.resolve_spec(pkg_str).await?;
             for spec in specs {
                 if let Some(path) = self.locate_package_root(&spec).await? {
                     debug!("GhostShell: Located {} at {:?}", spec.name, path);
                     store_paths.push((path.to_string_lossy().to_string(), spec.name.clone()));
                 } else {
                     info!("GhostShell: Provisioning missing component: {}...", spec.name);
-                    let backend = self.app.registry.get(&spec.backend)
+                    let backend = self.registry.get(&spec.backend)
                         .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
                     
                     if let Some(installer) = backend.as_installable() {
@@ -45,21 +76,24 @@ impl<'a> GhostShell<'a> {
             }
         }
 
-        // 2. Build Sandbox Configuration
-        let mut mounts = Vec::new();
-        for (path, name) in &store_paths {
-            let target = format!("/opt/linix/packages/{}", name);
-            mounts.push((path.clone(), target));
-        }
-
+        // 2. Determine Shell Binary
         let shell = env::var("SHELL").unwrap_or_else(|_| {
             if cfg!(windows) { "cmd.exe".to_string() } else { "/bin/bash".to_string() }
         });
-        
-        // 3. Namespace Provisioning Execution
-        if cfg!(target_os = "linux") && Sandbox::is_supported() {
-            info!("GhostShell: Launching Bubblewrap container for session.");
+
+        // 3. Check Sandbox Availability (Phase 3.2)
+        let settings = &self.config.sandbox;
+        let can_sandbox = Sandbox::is_available(settings).await;
+
+        if can_sandbox {
+            info!("GhostShell: Launching hardened sandbox for session.");
             
+            let mut mounts = Vec::new();
+            for (path, name) in &store_paths {
+                let target = format!("/opt/linix/packages/{}", name);
+                mounts.push((path.clone(), target));
+            }
+
             let config = SandboxConfig {
                 allow_network: true,
                 allow_home: true,
@@ -74,11 +108,11 @@ impl<'a> GhostShell<'a> {
                 internal_path = format!("{}:{}:{}/bin", internal_path, target, target);
             }
 
-            // Sandbox logic involves building a Command and running it.
-            // Since Sandbox currently uses std::process, we wrap the execution in spawn_blocking.
             let shell_cmd = shell.clone();
+            let settings_clone = settings.clone();
+
             tokio::task::spawn_blocking(move || {
-                let mut bwrap = Sandbox::wrap(&shell_cmd, &[], &config)?;
+                let mut bwrap = Sandbox::wrap(&shell_cmd, &[], &config, &settings_clone)?;
                 bwrap.env("PATH", internal_path)
                      .env("LINIX_GHOST", "true")
                      .env("PROMPT_COMMAND", "echo -n '(linix-ghost) '");
@@ -91,14 +125,21 @@ impl<'a> GhostShell<'a> {
             }).await.map_err(|e| Error::Other(e.to_string()))??;
 
         } else {
-            warn!("GhostShell: Platform fallback to PATH mutation.");
-            self.spawn_fallback_shell(&shell, &store_paths).await?;
+            // Sandboxing is unavailable. Check if fallback is permitted.
+            if settings.fallback_allowed {
+                warn!("GhostShell: Sandbox unavailable. Falling back to PATH-only isolation.");
+                self.spawn_fallback_shell(&shell, &store_paths).await?;
+            } else {
+                return Err(Error::UnsupportedPlatform(
+                    "Sandboxing is unavailable on this host and fallback_allowed is false.".into()
+                ));
+            }
         }
 
         Ok(())
     }
 
-    /// Project-local directive.
+    /// Project-local directive: Enters shell if 'linix.txt' is present.
     pub async fn auto_shell(&self) -> Result<()> {
         let local_config = Path::new("linix.txt");
         if tokio::fs::try_exists(local_config).await.unwrap_or(false) {
@@ -119,7 +160,7 @@ impl<'a> GhostShell<'a> {
 
     /// Internal helper to find the physical root of a package.
     async fn locate_package_root(&self, spec: &PackageSpec) -> Result<Option<PathBuf>> {
-        let backend = self.app.registry.get(&spec.backend)
+        let backend = self.registry.get(&spec.backend)
             .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
 
         if let Some(queryable) = backend.as_queryable() {
@@ -138,7 +179,7 @@ impl<'a> GhostShell<'a> {
         Ok(None)
     }
 
-    /// Proper fallback logic that sets PATH for the child process only.
+    /// Fallback logic that sets PATH for the child process without OS-level sandboxing.
     async fn spawn_fallback_shell(&self, shell: &str, store_paths: &[(String, String)]) -> Result<()> {
         let current_path = env::var_os("PATH").unwrap_or_default();
         let mut new_path_parts = Vec::new();
@@ -157,9 +198,6 @@ impl<'a> GhostShell<'a> {
         let new_path = env::join_paths(&new_path_parts)
             .map_err(|e| Error::Other(format!("Failed to build PATH: {}", e)))?;
 
-        // Spawning interactive shells is better handled with tokio::process if we need async control,
-        // but since we usually wait for the shell to finish, status() is appropriate.
-        // We use tokio::process::Command to avoid blocking the thread.
         let mut cmd = tokio::process::Command::new(shell);
         cmd.env("PATH", &new_path)
            .env("LINIX_GHOST", "fallback");

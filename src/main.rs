@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use linix::app::{
-    App, SyncEngine, Runner, ui::TuiPreview, 
+    App, SyncEngine, ui::TuiPreview, 
 };
 use linix::cli::{Cli, Commands, RepoCommand};
 use linix::config::parser::{add_package_to_local, remove_package_from_local};
@@ -25,14 +25,17 @@ async fn main() -> Result<()> {
     if current_bin_name != "linix" && !current_bin_name.starts_with("linix") {
         // We are in shim mode. Load config and delegate to Runner.
         // Config::from_file is sync; wrap in spawn_blocking for async integrity.
-        let config_path = dirs::config_dir().unwrap_or_default().join("linix").join("config.toml");
+        let config_path = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("linix")
+            .join("config.toml");
+            
         let config = tokio::task::spawn_blocking(move || {
             linix::config::Config::from_file(&config_path)
-        }).await.map_err(|e| anyhow::anyhow!(e))?.unwrap_or_default();
+        }).await.map_err(|e| anyhow::anyhow!("Task join error: {}", e))?.unwrap_or_default();
 
         let app = App::new(config).await?;
-        let runner = Runner::new(&app);
-        return runner.exec_shim(&current_bin_name, &args_raw[1..].to_vec()).await.map_err(|e| e.into());
+        return app.runner().exec_shim(&current_bin_name, &args_raw[1..].to_vec()).await.map_err(|e| e.into());
     }
 
     // 2. STANDARD CLI MODE
@@ -48,7 +51,7 @@ async fn main() -> Result<()> {
     // Load config with blocking isolation
     let mut config = tokio::task::spawn_blocking(move || {
         linix::config::Config::from_file(&config_path)
-    }).await.map_err(|e| anyhow::anyhow!(e))?
+    }).await.map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
       .context("CRITICAL: Failed to load LiNix configuration file.")?;
     
     config.merge_cli_overrides(
@@ -60,7 +63,7 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         Commands::Sync { locked: _ } => {
-            // Phase 3.2: SyncEngine::new is now async
+            // SyncEngine handles orchestration of system state
             let engine = SyncEngine::new(
                 &app.config, 
                 app.registry.clone(), 
@@ -127,7 +130,7 @@ async fn main() -> Result<()> {
                     }
                 }
             }
-            // Persistence is blocking; isolate
+            // Persistence is blocking; isolate in spawn_blocking
             let state_final = app.state.lock().await.clone();
             tokio::task::spawn_blocking(move || state_final.save()).await??;
             Ok(())
@@ -186,7 +189,7 @@ async fn main() -> Result<()> {
                     let b_name = backend.as_deref().unwrap_or("apt");
                     let b = app.registry.get(b_name).context("Backend not found")?;
                     let manager = b.as_repo_manager().context("Backend does not support repositories.")?;
-                    // Phase 2.2: Sudo precision
+                    // Phase 2.2: Precision sudo
                     let sudo = b.needs_root();
                     manager.add_repo(name, url, sudo).await?;
                     info!("Successfully added repository: {}", name);
@@ -227,13 +230,12 @@ async fn main() -> Result<()> {
             engine.heal().await.map_err(|e| e.into())
         }
         Commands::Run { packages, command } => {
-            let runner = Runner::new(&app);
             let (cmd_bin, args) = if let Some((c, a)) = linix::utils::command::split_command(command) {
                 (c, a)
             } else {
                 (command.clone(), vec![])
             };
-            runner.run(packages, &cmd_bin, &args).await.map_err(|e| e.into())
+            app.runner().run(packages, &cmd_bin, &args).await.map_err(|e| e.into())
         }
         Commands::Unmanaged => {
             let pkgs = app.get_unmanaged_packages().await?;

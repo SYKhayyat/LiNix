@@ -3,7 +3,7 @@ use crate::utils::file::atomic_write;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::collections::HashMap;
-use chrono::Utc;
+use chrono::{Utc, Duration as ChronoDuration};
 use uuid::Uuid;
 
 /// Represents the state of a journal entry.
@@ -13,6 +13,7 @@ pub enum ActionStatus {
     InProgress,
     Completed,
     Failed,
+    /// Phase 1.1: Entries from crashed/previous sessions that were never finished.
     Abandoned,
 }
 
@@ -24,7 +25,6 @@ pub enum JournalAction {
 }
 
 /// A deterministic record of a single system modification.
-/// Hardened for Version 3.5.0: Uses i64 timestamps to ensure stable serialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalEntry {
     pub id: String,
@@ -39,7 +39,6 @@ pub struct JournalEntry {
 
 /// The Mission-Critical Write-Ahead Log (WAL).
 /// Ensures LiNix can recover from power failures or crashes mid-transaction.
-/// Hardened for Phase 1.1: Async file I/O and improved cleanup.
 pub struct Journal {
     path: PathBuf,
     pub entries: HashMap<String, JournalEntry>,
@@ -48,17 +47,13 @@ pub struct Journal {
 impl Journal {
     /// Initializes or loads an existing journal from the data directory.
     pub fn new() -> Result<Self> {
-        let path = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("linix")
-            .join("journal.json");
+        let path = crate::utils::safe_data_dir().join("journal.json");
         
         let mut journal = Self {
             path,
             entries: HashMap::new(),
         };
 
-        // We check existence synchronously in constructor as this is called during App init.
         if journal.path.exists() {
             journal.load_sync()?;
         }
@@ -66,24 +61,8 @@ impl Journal {
         Ok(journal)
     }
 
-    /// Loads journal state from disk (Sync version for constructor).
     fn load_sync(&mut self) -> Result<()> {
         let data = std::fs::read_to_string(&self.path).map_err(Error::from)?;
-        if data.trim().is_empty() {
-            return Ok(());
-        }
-        self.entries = serde_json::from_str(&data).map_err(|e| {
-            Error::Other(format!("Corrupted WAL Journal: {}", e))
-        })?;
-        Ok(())
-    }
-
-    /// Loads journal state from disk asynchronously.
-    pub async fn load(&mut self) -> Result<()> {
-        if !tokio::fs::try_exists(&self.path).await.unwrap_or(false) {
-            return Ok(());
-        }
-        let data = tokio::fs::read_to_string(&self.path).await.map_err(Error::from)?;
         if data.trim().is_empty() {
             return Ok(());
         }
@@ -101,13 +80,11 @@ impl Journal {
         atomic_write(&self.path, &data)
     }
 
-    /// Generates a unique ID for a journal entry using UUID v4.
     fn generate_id(backend: &str, package: &str) -> String {
         let uuid = Uuid::new_v4();
         format!("{}:{}:{}", backend, package, uuid.simple())
     }
 
-    /// Pre-registers a start of an action. 
     pub fn record_start(&mut self, action: JournalAction) -> Result<String> {
         let (b_name, p_name) = match &action {
             JournalAction::Install(s) => (&s.backend, &s.name),
@@ -131,7 +108,6 @@ impl Journal {
         Ok(id)
     }
 
-    /// Marks an action as successful and stores properties discovered during the run.
     pub fn record_success(&mut self, id: &str, properties: HashMap<String, String>) -> Result<()> {
         if let Some(entry) = self.entries.get_mut(id) {
             entry.status = ActionStatus::Completed;
@@ -142,7 +118,6 @@ impl Journal {
         Ok(())
     }
 
-    /// Marks an action as failed with an error message.
     pub fn record_failure(&mut self, id: &str, err: &str) -> Result<()> {
         if let Some(entry) = self.entries.get_mut(id) {
             entry.status = ActionStatus::Failed;
@@ -153,7 +128,6 @@ impl Journal {
         Ok(())
     }
 
-    /// Returns a list of operations that were left in an inconsistent state.
     pub fn get_incomplete_actions(&self) -> Vec<JournalEntry> {
         self.entries.values()
             .filter(|e| e.status == ActionStatus::InProgress || e.status == ActionStatus::Failed)
@@ -161,13 +135,12 @@ impl Journal {
             .collect()
     }
 
-    /// Returns true if any operations are currently in an inconsistent "InProgress" state.
     pub fn needs_recovery(&self) -> bool {
         self.entries.values().any(|e| e.status == ActionStatus::InProgress)
     }
 
-    /// Purges completed entries from the journal to keep it lean.
-    /// Phase 1.1 Update: Mark InProgress entries from previous sessions as Abandoned.
+    /// Cleans up the journal by removing finished tasks.
+    /// Phase 2.3: Automatically transitions stale InProgress entries to Abandoned.
     pub fn cleanup(&mut self) -> Result<()> {
         let mut to_abandon = Vec::new();
         for (id, entry) in &self.entries {
@@ -182,9 +155,8 @@ impl Journal {
             }
         }
 
-        self.entries.retain(|_, e| {
-            e.status != ActionStatus::Completed && e.status != ActionStatus::Abandoned
-        });
+        // Periodically remove Abandoned/Completed entries (Phase 4.3)
+        self.cleanup_expired_logs(7); 
 
         if self.entries.is_empty() {
             if self.path.exists() {
@@ -194,5 +166,23 @@ impl Journal {
             self.flush()?;
         }
         Ok(())
+    }
+
+    /// Phase 4.3: Removes entries older than the specified threshold.
+    pub fn cleanup_expired_logs(&mut self, days: i64) {
+        let cutoff = Utc::now() - ChronoDuration::days(days);
+        let cutoff_ts = cutoff.timestamp();
+
+        self.entries.retain(|_, entry| {
+            if entry.status == ActionStatus::Completed || entry.status == ActionStatus::Abandoned {
+                // If it finished more than 'days' ago, purge it
+                if let Some(finished) = entry.finished_at_unix {
+                    return finished > cutoff_ts;
+                }
+                // If it never finished but started a long time ago, purge it
+                return entry.started_at_unix > cutoff_ts;
+            }
+            true // Keep InProgress or Failed entries for recovery
+        });
     }
 }

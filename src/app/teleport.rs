@@ -1,42 +1,54 @@
-use crate::App;
-use crate::core::{Error, GhostMetadata, GraphAction, PackageSpec, Result, Transaction};
+use crate::core::{Error, GhostMetadata, GraphAction, PackageSpec, Result, Transaction, StateRegistry, Journal};
+use crate::backends::BackendRegistry;
 use crate::config::manifest::ManifestEngine;
 use crate::utils::safe_data_dir;
 use petgraph::stable_graph::StableDiGraph;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{PathBuf, Path};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{info, debug, warn};
 
 /// The cross-backend transition engine.
 /// Responsible for moving a package between different management backends.
 /// 
-/// Hardened for Phase 2.3: Implements "Meta-Transaction" safety, ensuring that
-/// cross-backend moves update the StateRegistry and re-ghost on failure.
-pub struct Teleporter<'a> {
-    app: &'a App,
+/// Hardened for Phase 4.1: Decoupled from the global App object. Now receives 
+/// specific dependencies, ensuring specific trait-level access and improved safety.
+pub struct Teleporter {
+    registry: Arc<BackendRegistry>,
+    journal: Arc<Mutex<Journal>>,
+    state: Arc<Mutex<StateRegistry>>,
     ghost_path: PathBuf,
     manifest_engine: ManifestEngine,
 }
 
-impl<'a> Teleporter<'a> {
-    pub fn new(app: &'a App) -> Self {
+impl Teleporter {
+    /// Creates a new Teleporter with explicit dependency injection.
+    pub fn new(
+        registry: Arc<BackendRegistry>,
+        journal: Arc<Mutex<Journal>>,
+        state: Arc<Mutex<StateRegistry>>,
+        groups_dir: &Path,
+    ) -> Self {
         let ghost_path = safe_data_dir().join("ghosts.json");
         Self {
-            app,
+            registry,
+            journal,
+            state,
             ghost_path,
-            manifest_engine: ManifestEngine::new(&app.config.groups_dir),
+            manifest_engine: ManifestEngine::new(groups_dir),
         }
     }
 
     /// Primary entry point: Transports a package to a new backend.
     /// 
-    /// This is an atomic operation: if the installation in the target backend
+    /// This is a meta-transaction: if the installation in the target backend
     /// fails, the package state is preserved as a ghost to prevent data loss.
     pub async fn teleport(&self, package_name: &str, target_backend_name: &str) -> Result<()> {
         info!("Teleporter: Initiating transition of '{}' to backend '{}'...", package_name, target_backend_name);
 
         let mut source_backend = None;
-        for backend in self.app.registry.available() {
+        for backend in self.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
                 if let Ok(Some(pkg)) = queryable.info(package_name).await {
                     source_backend = Some((backend.clone(), pkg));
@@ -74,18 +86,18 @@ impl<'a> Teleporter<'a> {
         graph.add_edge(remove_node, install_node, ());
 
         info!("Teleporter: Executing cross-backend transformation...");
-        let mut tx = Transaction::new(graph, self.app.registry.clone(), self.app.journal.clone());
+        let mut tx = Transaction::new(graph, self.registry.clone(), self.journal.clone());
         
         let result = tx.execute().await;
 
-        // 3. Phase 2.3: State Registry Synchronization
+        // 3. State Registry Synchronization
         match result {
             Ok(_) => {
-                let mut state = self.app.state.lock().await;
+                let mut state = self.state.lock().await;
                 state.remove(src_backend_name, package_name);
                 state.add(target_backend_name, package_name, src_pkg.version.clone(), HashMap::new());
                 
-                // StateRegistry::save is blocking
+                // StateRegistry::save is blocking; isolate in spawn_blocking
                 let state_clone = state.clone();
                 tokio::task::spawn_blocking(move || state_clone.save())
                     .await
@@ -103,6 +115,7 @@ impl<'a> Teleporter<'a> {
             }
             Err(e) => {
                 warn!("Teleporter: Cross-backend transition failed: {}. Package preserved as Ghost.", e);
+                // We leave the ghost metadata in place so the package can be recovered manually later.
                 Err(e)
             }
         }
@@ -169,14 +182,14 @@ impl<'a> Teleporter<'a> {
             requires: ghost.requires.clone(),
         };
         
-        let backend_caps = self.app.registry.get(&spec.backend)
+        let backend_caps = self.registry.get(&spec.backend)
             .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
             
         if let Some(installer) = backend_caps.as_installable() {
             let sudo = backend_caps.needs_root();
             installer.install(&[spec], sudo).await?;
             
-            let mut state = self.app.state.lock().await;
+            let mut state = self.state.lock().await;
             state.add(&ghost.backend, name, None, ghost.options.clone());
             
             let state_clone = state.clone();

@@ -10,29 +10,43 @@ use std::sync::Arc;
 use tracing::info;
 
 /// Configuration for the Generic Manager Strategy.
-/// Defines how to translate trait calls into CLI commands.
+/// Fulfills Phase 5.3: Comprehensive documentation of configuration fields.
 #[derive(Debug, Clone)]
 pub struct ManagerConfig {
+    /// The binary name of the package manager (e.g., "apt", "apk").
     pub name: String,
+    /// Static arguments required for installation (e.g., ["install", "-y"]).
     pub install_args: Vec<String>,
+    /// Static arguments required for removal (e.g., ["remove", "-y"]).
     pub remove_args: Vec<String>,
+    /// Static arguments to list all installed packages.
     pub list_args: Vec<String>,
+    /// Optional arguments to list only user-installed (manual) packages.
     pub list_manual_args: Option<Vec<String>>,
+    /// Static arguments for remote package searching.
     pub search_args: Vec<String>,
+    /// Static arguments for full system upgrade.
     pub upgrade_args: Vec<String>,
+    /// Optional arguments to refresh repository metadata (e.g., "apt update").
     pub update_args: Option<Vec<String>>,
+    /// Optional template arguments for adding a repository. Supports {name} and {url} tokens.
     pub repo_add_args: Option<Vec<String>>,
+    /// Optional template arguments for removing a repository. Supports {name} token.
     pub repo_remove_args: Option<Vec<String>>,
+    /// Optional arguments to list configured repositories.
     pub repo_list_args: Option<Vec<String>>,
-    /// Phase 1.1: Command to fetch backend-native dependencies (e.g., "apt-cache depends")
+    /// Phase 1.1: Optional arguments to fetch native dependencies. Supports {name} token.
     pub depends_args: Option<Vec<String>>,
-    /// Phase 2.2: Explicitly define if this backend requires root privileges.
+    /// Phase 2.2: Defines if this manager requires root/sudo privileges for modifications.
     pub needs_root: bool,
+    /// If true, LiNix will ensure only one instance of this manager runs globally.
     pub is_exclusive: bool,
+    /// Internal map for custom backend flags.
     pub flag_map: HashMap<String, String>,
 }
 
 /// Core backend implementation for generic CLI-based managers.
+/// Implements the strategy pattern to allow LiNix to support any CLI tool via configuration.
 pub struct GenericBackendCore {
     pub name: String,
     pub executor: CommandExecutor,
@@ -58,7 +72,7 @@ impl BackendCore for GenericBackendCore {
         if !self.is_available() {
             return Ok(HealthReport {
                 status: HealthStatus::Critical,
-                message: Some(format!("Command '{}' not found in PATH", self.name)),
+                message: Some(format!("Binary for generic manager '{}' not found in PATH", self.name)),
             });
         }
         
@@ -69,9 +83,9 @@ impl BackendCore for GenericBackendCore {
     }
 }
 
-/// Phase 1.1: MetadataProvider for generic backends.
 #[async_trait]
 impl MetadataProvider for GenericBackendCore {
+    /// Fulfills Phase 1.1: Resolves native dependencies using the configured depends_args.
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
         let base_args = match &self.config.depends_args {
             Some(args) => args,
@@ -86,8 +100,6 @@ impl MetadataProvider for GenericBackendCore {
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
         let output = self.executor.run_output(&self.name, &arg_refs, false).await?;
         
-        // Simple line-based dependency parsing for generic backends.
-        // Specific backends like Apt will override this logic in specialized modules.
         Ok(output.lines()
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty())
@@ -95,7 +107,6 @@ impl MetadataProvider for GenericBackendCore {
     }
 }
 
-/// Installable capability for generic backends.
 pub struct GenericInstallable {
     pub core: Arc<GenericBackendCore>,
 }
@@ -106,7 +117,6 @@ impl Installable for GenericInstallable {
         if specs.is_empty() { return Ok(()); }
         
         let mut final_args: Vec<String> = self.core.config.install_args.clone();
-
         for spec in specs {
             final_args.push(spec.name.clone());
         }
@@ -124,21 +134,22 @@ impl Installable for GenericInstallable {
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
         if names.is_empty() { return Ok(()); }
         
-        let mut args: Vec<&str> = self.core.config.remove_args.iter().map(|s| s.as_str()).collect();
+        let mut args: Vec<String> = self.core.config.remove_args.clone();
         for name in names {
-            args.push(name);
+            args.push(name.clone());
         }
 
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
         if self.core.config.is_exclusive {
-            self.core.executor.run_exclusive(&self.core.name, &self.core.name, &args, sudo).await?;
+            self.core.executor.run_exclusive(&self.core.name, &self.core.name, &arg_refs, sudo).await?;
         } else {
-            self.core.executor.run(&self.core.name, &args, sudo).await?;
+            self.core.executor.run(&self.core.name, &arg_refs, sudo).await?;
         }
         Ok(())
     }
 }
 
-/// Queryable capability for generic backends.
 pub struct GenericQueryable {
     pub core: Arc<GenericBackendCore>,
 }
@@ -167,7 +178,6 @@ impl Queryable for GenericQueryable {
     }
 }
 
-/// Searchable capability for generic backends.
 pub struct GenericSearchable {
     pub core: Arc<GenericBackendCore>,
 }
@@ -182,7 +192,6 @@ impl Searchable for GenericSearchable {
     }
 }
 
-/// Upgradable capability for generic backends.
 pub struct GenericUpgradable {
     pub core: Arc<GenericBackendCore>,
 }
@@ -212,7 +221,6 @@ impl Upgradable for GenericUpgradable {
     }
 }
 
-/// RepoManager capability for generic backends.
 pub struct GenericRepoManager {
     pub core: Arc<GenericBackendCore>,
 }
@@ -221,7 +229,7 @@ pub struct GenericRepoManager {
 impl RepoManager for GenericRepoManager {
     async fn add_repo(&self, name: &str, url: &str, sudo: bool) -> Result<()> {
         let base_args = self.core.config.repo_add_args.as_ref()
-            .ok_or_else(|| crate::core::Error::Other("Repo adding not supported".into()))?;
+            .ok_or_else(|| crate::core::Error::Other("Repository addition not supported for this backend".into()))?;
         
         let mut final_args = Vec::new();
         for arg in base_args {
@@ -236,7 +244,7 @@ impl RepoManager for GenericRepoManager {
 
     async fn remove_repo(&self, name: &str, sudo: bool) -> Result<()> {
         let base_args = self.core.config.repo_remove_args.as_ref()
-            .ok_or_else(|| crate::core::Error::Other("Repo removal not supported".into()))?;
+            .ok_or_else(|| crate::core::Error::Other("Repository removal not supported for this backend".into()))?;
             
         let final_args: Vec<String> = base_args.iter().map(|a| a.replace("{name}", name)).collect();
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
@@ -247,7 +255,7 @@ impl RepoManager for GenericRepoManager {
 
     async fn list_repos(&self) -> Result<Vec<(String, String)>> {
         let base_args = self.core.config.repo_list_args.as_ref()
-            .ok_or_else(|| crate::core::Error::Other("Repo listing not supported".into()))?;
+            .ok_or_else(|| crate::core::Error::Other("Repository listing not supported for this backend".into()))?;
         let arg_refs: Vec<&str> = base_args.iter().map(|s| s.as_str()).collect();
         let output = self.core.executor.run_output(&self.core.name, &arg_refs, false).await?;
         

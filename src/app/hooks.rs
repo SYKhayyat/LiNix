@@ -4,30 +4,27 @@ use mlua::Lua;
 use rhai::{Engine, Scope};
 use regex::Regex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::process::Command;
+use tokio::process::Command;
 use std::io::Write;
 use tempfile::NamedTempFile;
 use tracing::{debug, info};
 
 /// Manages the execution of scripting hooks for package lifecycle events.
 /// Supports Lua, Rhai, and any language with a system shebang.
+/// 
+/// Hardened for Phase 3.3: Correctly handles mlua thread-safety by initializing 
+/// the interpreter within the execution context, ensuring the closure is Send.
 pub struct LuaHooks {
-    lua: Arc<Mutex<Lua>>,
     rhai_engine: Engine,
     pub hooks: HashMap<String, HashMap<String, String>>,
 }
 
 impl LuaHooks {
     pub fn new(config: &Config) -> Result<Self> {
-        let lua = Lua::new();
-        Self::setup_lua_sandbox(&lua)?;
-
         let mut rhai_engine = Engine::new();
         Self::setup_rhai_sandbox(&mut rhai_engine);
         
         Ok(Self {
-            lua: Arc::new(Mutex::new(lua)),
             rhai_engine,
             hooks: config.hooks.clone(),
         })
@@ -35,19 +32,23 @@ impl LuaHooks {
 
     /// The Polyglot Bridge: Detects shebangs and executes via system interpreter.
     async fn run_external_polyglot(&self, code: &str, hook: &str, pkg: &str) -> Result<()> {
-        debug!("Hooks: Detected shebang. Launching Polyglot Bridge for {}/{}", hook, pkg);
+        debug!("Hooks: Launching Polyglot Bridge for {}/{}", hook, pkg);
 
-        // Fix E0631: Use Error::from instead of Error::Io shorthand
-        let mut tmp_script = NamedTempFile::new().map_err(Error::from)?;
-        tmp_script.write_all(code.as_bytes()).map_err(Error::from)?;
+        let code_owned = code.to_string();
         
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(tmp_script.path()).map_err(Error::from)?.permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(tmp_script.path(), perms).map_err(Error::from)?;
-        }
+        let tmp_script = tokio::task::spawn_blocking(move || -> Result<NamedTempFile> {
+            let mut tmp = NamedTempFile::new().map_err(Error::from)?;
+            tmp.write_all(code_owned.as_bytes()).map_err(Error::from)?;
+            
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(tmp.path()).map_err(Error::from)?.permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(tmp.path(), perms).map_err(Error::from)?;
+            }
+            Ok(tmp)
+        }).await.map_err(|e| Error::Other(e.to_string()))??;
 
         let mut cmd = Command::new(tmp_script.path());
         cmd.env("LINIX_PKG_NAME", pkg)
@@ -55,7 +56,7 @@ impl LuaHooks {
            .env("LINIX_OS", std::env::consts::OS)
            .env("LINIX_ARCH", std::env::consts::ARCH);
 
-        let status = cmd.status().map_err(|e| Error::Other(format!("Polyglot execution failed: {}", e)))?;
+        let status = cmd.status().await.map_err(|e| Error::Other(format!("Polyglot execution failed: {}", e)))?;
 
         if !status.success() {
             return Err(Error::LuaScript(format!("External hook failed with exit code: {:?}", status.code())));
@@ -96,13 +97,24 @@ impl LuaHooks {
         Ok(())
     }
 
+    /// Runs a Lua hook within a fresh interpreter instance inside a blocking task.
+    /// This ensures thread-safety since mlua::Lua is !Send.
     async fn run_lua(&self, code: &str, hook: &str, pkg: &str) -> Result<()> {
-        let lua = self.lua.lock().map_err(|e| Error::Other(e.to_string()))?;
-        
-        lua.globals().set("PKG_NAME", pkg).map_err(Error::from)?;
-        lua.globals().set("HOOK_TYPE", hook).map_err(Error::from)?;
+        let code_owned = code.to_string();
+        let hook_owned = hook.to_string();
+        let pkg_owned = pkg.to_string();
 
-        lua.load(code).exec().map_err(Error::from)?;
+        tokio::task::spawn_blocking(move || {
+            let lua = Lua::new();
+            Self::setup_lua_sandbox(&lua)?;
+            
+            lua.globals().set("PKG_NAME", pkg_owned).map_err(Error::from)?;
+            lua.globals().set("HOOK_TYPE", hook_owned).map_err(Error::from)?;
+
+            lua.load(&code_owned).exec().map_err(Error::from)?;
+            Ok::<(), Error>(())
+        }).await.map_err(|e| Error::Other(e.to_string()))??;
+
         Ok(())
     }
 
@@ -125,8 +137,14 @@ impl LuaHooks {
         engine.register_fn("print", |msg: &str| info!("[Rhai] {}", msg));
     }
 
+    /// Renders a template using a localized Lua instance.
     pub fn render_template(&self, template: &str) -> String {
-        let lua = self.lua.lock().expect("Failed to acquire Lua lock");
+        let lua = Lua::new();
+        if let Err(e) = Self::setup_lua_sandbox(&lua) {
+            debug!("Template: Failed to setup Lua sandbox: {}", e);
+            return template.to_string();
+        }
+
         let re = Regex::new(r"\{\{(.*?)\}\}").unwrap();
         re.replace_all(template, |caps: &regex::Captures| {
             let code = &caps[1];

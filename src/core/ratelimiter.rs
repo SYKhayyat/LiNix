@@ -1,4 +1,4 @@
-use crate::core::{Result, Error};
+use crate::core::Result;
 use governor::{Quota, RateLimiter as GovRateLimiter, Jitter};
 use governor::state::{InMemoryState, NotKeyed};
 use governor::clock::DefaultClock;
@@ -60,11 +60,6 @@ impl RateLimiter {
     }
 
     /// Executes an asynchronous operation while respecting the rate limit.
-    /// 
-    /// This method automatically handles:
-    /// 1. Asynchronous waiting for a permit.
-    /// 2. Applying randomized jitter to prevent "thundering herd" issues.
-    /// 3. Propagating results and errors from the inner task.
     pub async fn execute<F, Fut, T>(&self, f: F) -> Result<T>
     where
         F: FnOnce() -> Fut,
@@ -73,15 +68,12 @@ impl RateLimiter {
         // 1. Wait for permit with a small jitter (up to 150ms) to desynchronize parallel workers
         let jitter = Jitter::up_to(Duration::from_millis(150));
         
-        // until_ready_with_jitter returns a future that resolves when the permit is acquired
         self.inner.until_ready_with_jitter(jitter).await;
 
         // 2. Execute the task
         match f().await {
             Ok(val) => Ok(val),
             Err(e) => {
-                // If we encounter a 429-style error from the API even with our limiter, 
-                // we warn the user that the remote side is stricter than our local config.
                 let err_msg = format!("{:?}", e);
                 if err_msg.contains("429") || err_msg.contains("RateLimit") {
                     warn!(

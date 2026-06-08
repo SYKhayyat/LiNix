@@ -1,9 +1,10 @@
 use crate::core::{CommandExecutor, Result, Error};
+use crate::config::Config;
 use async_trait::async_trait;
 use chrono::Local;
 use std::path::Path;
 use std::process::Command as StdCommand;
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 
 /// Represents a system-level restorable state in the Snapshot Gallery.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -15,7 +16,7 @@ pub struct Snapshot {
 }
 
 /// Abstract interface for system snapshots.
-/// Hardened for Version 3.5.0 with Cross-Platform support.
+/// Hardened for Phase 1.1: Uses configurable paths from the LiNix Config.
 #[async_trait]
 pub trait SnapshotProvider: Send + Sync {
     fn name(&self) -> &str;
@@ -37,6 +38,7 @@ pub trait SnapshotProvider: Send + Sync {
 /// BTRFS Implementation using subvolume snapshots.
 pub struct BtrfsProvider {
     pub executor: CommandExecutor,
+    pub snapshot_root: String,
 }
 
 #[async_trait]
@@ -46,13 +48,13 @@ impl SnapshotProvider for BtrfsProvider {
     async fn is_available(&self) -> bool {
         cfg!(target_os = "linux") && 
         self.executor.command_exists_sync("btrfs") && 
-        Path::new("/.snapshots").exists()
+        Path::new(&self.snapshot_root).exists()
     }
 
     async fn create(&self, label: &str) -> Result<Snapshot> {
         let ts = Local::now().format("%Y%m%d%H%M%S").to_string();
         let id = format!("linix_pre_{}_{}", label, ts);
-        let path = format!("/.snapshots/{}", id);
+        let path = format!("{}/{}", self.snapshot_root, id);
         
         info!("BTRFS: Creating read-only snapshot of / at {}", path);
         self.executor.run("btrfs", &["subvolume", "snapshot", "-r", "/", &path], true).await?;
@@ -83,29 +85,34 @@ impl SnapshotProvider for BtrfsProvider {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        let path = format!("/.snapshots/{}", id);
+        let path = format!("{}/{}", self.snapshot_root, id);
         self.executor.run("btrfs", &["subvolume", "delete", &path], true).await?;
         Ok(())
     }
 
     async fn restore(&self, id: &str) -> Result<()> {
-        let path = format!("/.snapshots/{}", id);
+        let path = format!("{}/{}", self.snapshot_root, id);
         info!("BTRFS: Rolling back to snapshot: {}", id);
         self.executor.run("btrfs", &["subvolume", "snapshot", &path, "/"], true).await?;
         Ok(())
     }
 }
 
-/// ZFS Implementation with Root Dataset Auto-Detection.
+/// ZFS Implementation with Root Dataset Auto-Detection or Config Override.
 pub struct ZfsProvider {
     pub executor: CommandExecutor,
-    pub pool: Option<String>,
+    pub dataset: String,
 }
 
 impl ZfsProvider {
-    pub fn new(executor: CommandExecutor) -> Self {
-        let pool = Self::detect_root_dataset();
-        Self { executor, pool }
+    pub fn new(executor: CommandExecutor, config: &Config) -> Option<Self> {
+        let dataset = if let Some(ref ds) = config.zfs_dataset {
+            ds.clone()
+        } else {
+            Self::detect_root_dataset()?
+        };
+        
+        Some(Self { executor, dataset })
     }
     
     fn detect_root_dataset() -> Option<String> {
@@ -127,13 +134,12 @@ impl SnapshotProvider for ZfsProvider {
     fn name(&self) -> &str { "zfs" }
 
     async fn is_available(&self) -> bool {
-        self.executor.command_exists_sync("zfs") && self.pool.is_some()
+        self.executor.command_exists_sync("zfs")
     }
 
     async fn create(&self, label: &str) -> Result<Snapshot> {
         let ts = Local::now().format("%Y%m%d%H%M%S").to_string();
-        let dataset = self.pool.as_ref().unwrap();
-        let id = format!("{}@linix_{}_{}", dataset, label, ts);
+        let id = format!("{}@linix_{}_{}", self.dataset, label, ts);
         
         info!("ZFS: Creating recursive snapshot: {}", id);
         self.executor.run("zfs", &["snapshot", "-r", &id], true).await?;
@@ -147,8 +153,7 @@ impl SnapshotProvider for ZfsProvider {
     }
 
     async fn list(&self) -> Result<Vec<Snapshot>> {
-        let dataset = self.pool.as_ref().unwrap();
-        let out = self.executor.run_output("zfs", &["list", "-H", "-r", "-t", "snapshot", "-o", "name", dataset], false).await?;
+        let out = self.executor.run_output("zfs", &["list", "-H", "-r", "-t", "snapshot", "-o", "name", &self.dataset], false).await?;
         
         Ok(out.lines()
             .filter(|l| l.contains("@linix_"))
@@ -295,13 +300,19 @@ pub struct SnapshotManager {
 }
 
 impl SnapshotManager {
-    pub async fn new(executor: CommandExecutor) -> Self {
-        let providers: Vec<Box<dyn SnapshotProvider>> = vec![
-            Box::new(BtrfsProvider { executor: executor.duplicate() }),
-            Box::new(ZfsProvider::new(executor.duplicate())),
+    pub async fn new(executor: CommandExecutor, config: &Config) -> Self {
+        let mut providers: Vec<Box<dyn SnapshotProvider>> = vec![
+            Box::new(BtrfsProvider { 
+                executor: executor.duplicate(), 
+                snapshot_root: config.btrfs_path.clone() 
+            }),
             Box::new(TimeshiftProvider { executor: executor.duplicate() }),
             Box::new(WindowsRestoreProvider { executor: executor.duplicate() }),
         ];
+
+        if let Some(zfs) = ZfsProvider::new(executor.duplicate(), config) {
+            providers.push(Box::new(zfs));
+        }
 
         let mut active_provider = None;
         for p in providers {

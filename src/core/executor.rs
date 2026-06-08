@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use fs2::FileExt;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as StdCommand, Output as StdOutput};
@@ -20,16 +20,27 @@ static LOCK_MAP: Lazy<DashMap<String, Arc<Mutex<()>>>> = Lazy::new(DashMap::new)
 /// The Virtual File System (VFS): Tracks file changes in memory during dry-runs.
 static VFS: Lazy<DashMap<PathBuf, String>> = Lazy::new(DashMap::new);
 
-/// A mock Output for dry-run mode.
-#[derive(Debug)]
+/// A mock Output for dry-run and testing modes.
+/// Fulfills Phase 9.4: Provides inspection methods for testing.
+#[derive(Debug, Clone, Default)]
 pub struct DryRunOutput {
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
 }
 
 impl DryRunOutput {
     pub fn new() -> Self {
-        Self { stdout: Vec::new(), stderr: Vec::new() }
+        Self::default()
+    }
+
+    /// Returns the captured stdout as a UTF-8 String.
+    pub fn stdout_str(&self) -> String {
+        String::from_utf8_lossy(&self.stdout).to_string()
+    }
+
+    /// Returns the captured stderr as a UTF-8 String.
+    pub fn stderr_str(&self) -> String {
+        String::from_utf8_lossy(&self.stderr).to_string()
     }
 }
 
@@ -38,9 +49,9 @@ impl From<DryRunOutput> for StdOutput {
     fn from(dry: DryRunOutput) -> Self {
         // Create a real exit status that represents success (0)
         let status = if cfg!(windows) {
-            StdCommand::new("cmd").args(["/C", "exit", "0"]).status().unwrap()
+            StdCommand::new("cmd").args(["/C", "exit", "0"]).status().expect("Failed to create dummy exit status")
         } else {
-            StdCommand::new("true").status().unwrap()
+            StdCommand::new("true").status().expect("Failed to create dummy exit status")
         };
         StdOutput { status, stdout: dry.stdout, stderr: dry.stderr }
     }
@@ -89,6 +100,34 @@ impl ExecutionLayer for DryRunExecutor {
     }
 }
 
+/// A mock execution layer for testing without real system commands.
+/// Fulfills Phase 9.1: Enables backend unit testing.
+pub struct MockExecutor {
+    pub responses: DashMap<String, Result<StdOutput>>,
+}
+
+impl MockExecutor {
+    pub fn new() -> Self {
+        Self { responses: DashMap::new() }
+    }
+
+    pub fn set_response(&self, cmd_pattern: &str, response: Result<StdOutput>) {
+        self.responses.insert(cmd_pattern.to_string(), response);
+    }
+}
+
+#[async_trait]
+impl ExecutionLayer for MockExecutor {
+    async fn execute(&self, cmd: &str, args: &[String], _env: &HashMap<String, String>) -> Result<StdOutput> {
+        let full_cmd = format!("{} {}", cmd, args.join(" "));
+        if let Some(res) = self.responses.get(&full_cmd) {
+            return res.clone();
+        }
+        // Default success for unmatched commands in mock mode
+        Ok(DryRunOutput::new().into())
+    }
+}
+
 /// The primary coordinator for all external command calls and filesystem IO.
 /// Derived Clone to allow sharing across backends and parallel tasks.
 #[derive(Clone)]
@@ -115,6 +154,11 @@ impl CommandExecutor {
             Arc::new(RawExecutor)
         };
         Self { dry_run, verbose, inner }
+    }
+
+    /// Phase 9.1: Constructor that allows injecting a custom execution layer (Mocking).
+    pub fn with_layer(dry_run: bool, verbose: bool, layer: Arc<dyn ExecutionLayer>) -> Self {
+        Self { dry_run, verbose, inner: layer }
     }
 
     /// Provides a safe way to create a copy of the executor.
@@ -187,7 +231,7 @@ impl CommandExecutor {
                 return Ok(content.clone());
             }
         }
-        fs::read_to_string(path).map_err(Error::from)
+        std::fs::read_to_string(path).map_err(Error::from)
     }
 
     pub async fn write_atomic(&self, path: &Path, content: &str) -> Result<()> {
@@ -195,27 +239,23 @@ impl CommandExecutor {
             VFS.insert(path.to_path_buf(), content.to_string());
             return Ok(());
         }
-        let dir = path.parent().ok_or_else(|| Error::Other("Invalid path".into()))?;
+        let dir = path.parent().ok_or_else(|| Error::Other("Invalid path: target has no parent directory".into()))?;
         tokio::fs::create_dir_all(dir).await.map_err(Error::from)?;
         
-        let mut temp_file = NamedTempFile::new_in(dir).map_err(Error::from)?;
+        let mut temp_file = tokio::task::spawn_blocking({
+            let dir = dir.to_path_buf();
+            move || NamedTempFile::new_in(dir)
+        }).await.map_err(|e| Error::Other(e.to_string()))?.map_err(Error::from)?;
+        
         temp_file.write_all(content.as_bytes()).map_err(Error::from)?;
         temp_file.persist(path).map_err(Error::from)?;
         Ok(())
     }
 
-    pub fn write_atomic_sync(&self, path: &Path, content: &str) -> Result<()> {
-        if self.dry_run {
-            VFS.insert(path.to_path_buf(), content.to_string());
-            return Ok(());
-        }
-        let dir = path.parent().ok_or_else(|| Error::Other("Invalid path".into()))?;
-        fs::create_dir_all(dir).map_err(Error::from)?;
-        
-        let mut temp_file = NamedTempFile::new_in(dir).map_err(Error::from)?;
-        temp_file.write_all(content.as_bytes()).map_err(Error::from)?;
-        temp_file.persist(path).map_err(Error::from)?;
-        Ok(())
+    /// Returns a snapshot of all virtual changes during a dry-run.
+    /// Fulfills Phase 2.7.
+    pub fn get_vfs_diff(&self) -> Vec<(PathBuf, String)> {
+        VFS.iter().map(|item| (item.key().clone(), item.value().clone())).collect()
     }
 
     pub async fn command_exists(&self, cmd: &str) -> bool {
@@ -228,7 +268,7 @@ impl CommandExecutor {
 
     pub fn command_exists_sync(&self, cmd: &str) -> bool {
         let check_bin = if cfg!(windows) { "where" } else { "which" };
-        StdCommand::new(check_bin).arg(cmd).status().map(|s| s.success()).unwrap_or(false)
+        std::process::Command::new(check_bin).arg(cmd).status().map(|s| s.success()).unwrap_or(false)
     }
 
     pub async fn start_sudo_keepalive(&self) -> Option<tokio::task::JoinHandle<()>> {

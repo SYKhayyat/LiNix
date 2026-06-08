@@ -23,6 +23,8 @@ struct WebState {
 }
 
 /// Core backend implementation for direct HTTP/HTTPS downloads.
+/// 
+/// Hardened for Phase 1.5: Accepts configurable installation directories.
 pub struct WebBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -32,16 +34,14 @@ pub struct WebBackendCore {
 }
 
 impl WebBackendCore {
-    pub fn new(executor: CommandExecutor) -> Self {
-        let base = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("linix")
-            .join("web");
+    /// Initializes a new Web backend with a specific installation root.
+    pub fn new(executor: CommandExecutor, install_dir: PathBuf) -> Self {
+        let state_file = install_dir.join("installed.json");
         Self {
             executor,
             name: "web".to_string(),
-            install_dir: base.clone(),
-            state_file: base.join("installed.json"),
+            install_dir,
+            state_file,
             internal_lock: Mutex::new(()),
         }
     }
@@ -72,7 +72,7 @@ impl BackendCore for WebBackendCore {
 #[async_trait]
 impl MetadataProvider for WebBackendCore {
     async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
-        // Direct web downloads are self-contained; no native transitive deps.
+        // Direct web downloads are standalone; no native transitive deps.
         Ok(vec![])
     }
 }

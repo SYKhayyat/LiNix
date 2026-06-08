@@ -15,18 +15,19 @@ impl<'a> Cleaner<'a> {
 
     /// Entry point for deep system cleaning.
     /// 
-    /// 1. Prunes unused dependencies (orphans) across all 33 backends.
+    /// 1. Prunes unused dependencies (orphans) across all available backends.
     /// 2. Clears LiNix's internal metadata caches.
-    /// 3. Cleans backend-specific temporary download directories.
+    /// 3. Cleans backend-specific temporary download directories defined in Config.
     pub async fn clean(&self) -> Result<()> {
         info!("Cleaner: Initiating deep system cleanup...");
 
-        // 1. Backend-specific orphan removal (ISP: Upgradable capability)
+        // 1. Backend-specific orphan removal
         for backend in self.app.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 debug!("Cleaner: Requesting orphan pruning for {}...", backend.name());
-                // We use sudo=true for system-level managers
-                if let Err(e) = upgradable.clean_orphans(true).await {
+                // Use the backend's root requirement setting
+                let sudo = backend.needs_root();
+                if let Err(e) = upgradable.clean_orphans(sudo).await {
                     warn!("Cleaner: Failed to clean orphans for {}: {}", backend.name(), e);
                 }
             }
@@ -36,7 +37,7 @@ impl<'a> Cleaner<'a> {
         debug!("Cleaner: Clearing LiNix metadata cache...");
         self.app.cache.clear_all().await;
 
-        // 3. Clean temporary storage used by Logic backends (GitHub/Web/AppImage)
+        // 3. Clean temporary storage (Phase 1.4: Use configurable path)
         self.clean_temp_dirs().await?;
 
         info!("Cleaner: System cleanup completed successfully.");
@@ -44,16 +45,17 @@ impl<'a> Cleaner<'a> {
     }
 
     /// Internal logic to purge temporary build and download artifacts.
+    /// Fulfills Phase 1.4: Uses the tmp_dir specified in the LiNix configuration.
     async fn clean_temp_dirs(&self) -> Result<()> {
-        let base_temp = dirs::data_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("linix")
-            .join("tmp");
+        let base_temp = &self.app.config.tmp_dir;
 
-        if base_temp.exists() {
+        if tokio::fs::try_exists(base_temp).await.unwrap_or(false) {
             debug!("Cleaner: Purging temporary directory: {:?}", base_temp);
-            tokio::fs::remove_dir_all(&base_temp).await.map_err(Error::Io)?;
-            tokio::fs::create_dir_all(&base_temp).await.map_err(Error::Io)?;
+            // We remove and recreate to ensure a completely clean state
+            tokio::fs::remove_dir_all(base_temp).await.map_err(|e| Error::Io(e.to_string()))?;
+            tokio::fs::create_dir_all(base_temp).await.map_err(|e| Error::Io(e.to_string()))?;
+        } else {
+            debug!("Cleaner: Temporary directory {:?} does not exist. Skipping.", base_temp);
         }
         Ok(())
     }

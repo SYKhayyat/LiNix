@@ -11,6 +11,7 @@ use crate::app::shell::GhostShell;
 use crate::app::profile::ProfileManager;
 use crate::app::shim_manager::ShimManager;
 use crate::app::undo::UndoManager;
+use crate::app::run::Runner;
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 
 use std::sync::Arc;
@@ -23,8 +24,10 @@ use super::{LuaHooks, MetricsCollector, UniversalSearch};
 /// Coordinates state, configuration, and all high-level orchestrators.
 /// 
 /// Hardened for Phase 4.1: Functions as a Service Provider.
+/// Decouples orchestrator logic by injecting specific dependencies rather 
+/// than passing the monolithic App object.
 pub struct App {
-    pub config: Config,
+    pub config: Arc<Config>,
     pub cache: Arc<PackageCache>,
     pub registry: Arc<BackendRegistry>,
     pub executor: CommandExecutor,
@@ -39,6 +42,9 @@ pub struct App {
 
 impl App {
     /// Initializes the application kernel.
+    /// 
+    /// Phase 3.2: Safely handles blocking I/O for registry and journal 
+    /// initialization using async-aware patterns.
     pub async fn new(config: Config) -> Result<Self> {
         let executor = CommandExecutor::new(config.dry_run, config.verbose);
         let hooks = Arc::new(LuaHooks::new(&config)?);
@@ -52,12 +58,16 @@ impl App {
             .map_err(|e| Error::Other(e.to_string()))??;
         let state = Arc::new(Mutex::new(state_val));
         
-        let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate()).await);
+        // SnapshotManager requires Config for path injection (Phase 1.1)
+        let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate(), &config).await);
+        
+        // Journal initialization
         let journal = Arc::new(Mutex::new(Journal::new()?));
         let bridge = Arc::new(DependencyBridge::new());
+        let config_arc = Arc::new(config);
 
         Ok(Self {
-            config,
+            config: config_arc,
             cache: Arc::new(PackageCache::new()),
             registry,
             executor,
@@ -71,20 +81,76 @@ impl App {
         })
     }
 
-    // High-level service accessors
-    pub fn migrator(&self) -> Migrator<'_> { Migrator::new(self) }
-    pub fn teleporter(&self) -> Teleporter<'_> { Teleporter::new(self) }
-    pub fn shell(&self) -> GhostShell<'_> { GhostShell::new(self) }
-    pub fn profile_manager(&self) -> ProfileManager<'_> { ProfileManager::new(self) }
-    pub fn undo_manager(&self) -> UndoManager<'_> { UndoManager::new(self) }
+    // --- Decoupled Service Orchestrators (Phase 4.1) ---
+
+    /// Returns a Migrator instance configured with shared kernel components.
+    pub fn migrator(&self) -> Migrator { 
+        Migrator::new(
+            self.registry.clone(), 
+            self.state.clone(), 
+            &self.config
+        ) 
+    }
+
+    /// Returns a Teleporter instance configured with shared kernel components.
+    pub fn teleporter(&self) -> Teleporter { 
+        Teleporter::new(
+            self.registry.clone(), 
+            self.journal.clone(), 
+            self.state.clone(), 
+            &self.config.groups_dir
+        ) 
+    }
+
+    /// Returns a GhostShell instance configured with shared kernel components.
+    pub fn shell(&self) -> GhostShell { 
+        GhostShell::new(
+            self.registry.clone(), 
+            self.config.clone()
+        ) 
+    }
+
+    /// Returns a ProfileManager instance configured with shared kernel components.
+    pub fn profile_manager(&self) -> ProfileManager { 
+        ProfileManager::new(
+            self.registry.clone(),
+            self.executor.clone(),
+            self.metrics.clone(),
+            self.progress.clone(),
+            self.hooks.clone(),
+            self.snapshot_manager.clone(),
+            self.journal.clone(),
+            self.state.clone(),
+            self.config.clone()
+        ) 
+    }
+
+    /// Returns an UndoManager instance configured with shared kernel components.
+    pub fn undo_manager(&self) -> UndoManager { 
+        UndoManager::new(
+            self.snapshot_manager.clone(), 
+            self.state.clone(), 
+            self.executor.clone()
+        ) 
+    }
+
+    /// Returns a Runner instance configured with shared kernel components.
+    /// Fulfills Phase 5.1: Injects required StateRegistry for dependency bridging.
+    pub fn runner(&self) -> Runner {
+        Runner::new(
+            self.registry.clone(),
+            self.state.clone(),
+            self.config.clone(),
+            self.bridge.clone()
+        )
+    }
     
-    /// Phase 3.2: ShimManager instantiation is now asynchronous.
+    /// Asynchronously initializes the ShimManager.
     pub async fn shim_manager(&self) -> Result<ShimManager> { 
         ShimManager::new().await 
     }
 
     /// Priority-Based Probing and recursive meta-dependency resolution.
-    /// Note: Recursive Native dependencies are handled by the Planner.
     pub async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
         let mut resolved = Vec::new();
         let mut queue = VecDeque::new();
@@ -136,7 +202,7 @@ impl App {
         Ok(())
     }
 
-    /// Upgrades all managed packages.
+    /// Upgrades all managed packages and captures a safety snapshot.
     pub async fn upgrade(&self) -> Result<()> {
         let _snapshot = self.snapshot_manager.auto_snapshot("pre_upgrade").await?;
         for backend in self.registry.available() {

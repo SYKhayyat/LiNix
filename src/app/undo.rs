@@ -1,15 +1,20 @@
-use crate::App;
-use crate::core::{Result, Error, Snapshot, StateRegistry, ManagedPackage};
+use crate::core::{Result, Error, Snapshot, StateRegistry, ManagedPackage, SnapshotManager, CommandExecutor};
 use dialoguer::{theme::ColorfulTheme, Select};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use tracing::{info, debug};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{info, debug, warn};
 use tokio::fs;
 
 /// Manages the Snapshot Gallery and System Time Travel (Point 12).
-/// Hardened for Phase 3.2: Async-safe I/O and blocking task isolation.
-pub struct UndoManager<'a> {
-    app: &'a App,
+/// 
+/// Hardened for Phase 4.1: Decoupled from the global App object. Now receives 
+/// specific trait-based dependencies, enabling isolated testing of the rollback logic.
+pub struct UndoManager {
+    snapshot_manager: Arc<SnapshotManager>,
+    state: Arc<Mutex<StateRegistry>>,
+    executor: CommandExecutor,
 }
 
 #[derive(Debug, Default)]
@@ -39,16 +44,25 @@ const FORBIDDEN_PATHS: &[&str] = &[
     "/sys",
 ];
 
-impl<'a> UndoManager<'a> {
-    pub fn new(app: &'a App) -> Self {
-        Self { app }
+impl UndoManager {
+    /// Creates a new UndoManager with explicit dependency injection.
+    pub fn new(
+        snapshot_manager: Arc<SnapshotManager>,
+        state: Arc<Mutex<StateRegistry>>,
+        executor: CommandExecutor,
+    ) -> Self {
+        Self {
+            snapshot_manager,
+            state,
+            executor,
+        }
     }
 
     /// Entry point for 'linix undo'.
     pub async fn run_interactive(&self) -> Result<()> {
         info!("UndoManager: Querying available system snapshots...");
 
-        let snapshots = self.app.snapshot_manager.list_snapshots().await?;
+        let snapshots = self.snapshot_manager.list_snapshots().await?;
         if snapshots.is_empty() {
             println!("No system snapshots found. LiNix cannot perform time travel on this system.");
             return Ok(());
@@ -59,7 +73,7 @@ impl<'a> UndoManager<'a> {
             .map(|s| format!("[{}] {} - {} ({})", s.backend, s.timestamp, s.description, s.id))
             .collect();
 
-        // Dialoguer is blocking. Wrap in spawn_blocking.
+        // Dialoguer is blocking; wrap in spawn_blocking
         let selection = tokio::task::spawn_blocking(move || {
             Select::with_theme(&ColorfulTheme::default())
                 .with_prompt("Select a system state to inspect/restore (ESC to cancel)")
@@ -79,7 +93,6 @@ impl<'a> UndoManager<'a> {
 
     /// Validates that a path is safe to access.
     async fn validate_snapshot_path(&self, path: &Path, snapshot_backend: &str) -> Result<PathBuf> {
-        // canonicalize is blocking
         let path_owned = path.to_path_buf();
         let canonical = tokio::task::spawn_blocking(move || {
             path_owned.canonicalize()
@@ -159,13 +172,12 @@ impl<'a> UndoManager<'a> {
         
         let data = fs::read_to_string(&snapshot_registry_path).await.map_err(Error::from)?;
         
-        // Serde parsing is CPU intensive, wrap in spawn_blocking
         let snapshot_state: StateRegistry = tokio::task::spawn_blocking(move || {
             serde_json::from_str(&data)
         }).await.map_err(|e| Error::Other(e.to_string()))?
           .map_err(Error::from)?;
         
-        let current_state = self.app.state.lock().await;
+        let current_state = self.state.lock().await;
         let diff = self.calculate_diff(&current_state, &snapshot_state);
         
         if !diff.added.is_empty() || !diff.removed.is_empty() || !diff.changed.is_empty() {
@@ -180,7 +192,7 @@ impl<'a> UndoManager<'a> {
             println!("\nNo package changes detected.");
         }
 
-        println!("\nCRITICAL: Reverting to this snapshot will overwrite your system root (/).");
+        warn!("\nCRITICAL: Reverting to this snapshot will overwrite your system root (/).");
         print!("Are you absolutely sure? Type 'RESTORE' to proceed: ");
         
         use std::io::{self, Write};
@@ -233,11 +245,11 @@ impl<'a> UndoManager<'a> {
         match snapshot.backend.as_str() {
             "btrfs" => {
                 let snapshot_path = format!("/.snapshots/{}", snapshot.id);
-                self.app.executor.run("btrfs", &["subvolume", "snapshot", &snapshot_path, "/"], true).await?;
+                self.executor.run("btrfs", &["subvolume", "snapshot", &snapshot_path, "/"], true).await?;
             }
             "timeshift" => {
                 let args = ["--restore", "--snapshot", &snapshot.id, "--target-device", "/", "--yes"];
-                self.app.executor.run("timeshift", &args, true).await?;
+                self.executor.run("timeshift", &args, true).await?;
             }
             _ => return Err(Error::Snapshot(format!("Unsupported provider: {}", snapshot.backend))),
         }

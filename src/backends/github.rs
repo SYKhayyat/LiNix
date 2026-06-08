@@ -36,7 +36,7 @@ struct GithubRelease {
     assets: Vec<GithubAsset>,
 }
 
-/// Core backend implementation for GitHub.
+/// Core backend implementation for GitHub releases.
 pub struct GithubBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -49,24 +49,22 @@ pub struct GithubBackendCore {
 }
 
 impl GithubBackendCore {
-    pub fn new(executor: CommandExecutor, github_token: Option<String>) -> Self {
-        let base = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("linix")
-            .join("github");
-        
+    /// Phase 1.5: Constructor now accepts install_dir from Config.
+    pub fn new(executor: CommandExecutor, install_dir: PathBuf, github_token: Option<String>) -> Self {
         let rate_limiter = if github_token.is_some() {
             RateLimiter::github_authenticated()
         } else {
             RateLimiter::github()
         };
         
+        let state_file = install_dir.join("installed.json");
+        
         Self {
             executor,
             name: "github".to_string(),
             client: reqwest::Client::new(),
-            install_dir: base.clone(),
-            state_file: base.join("installed.json"),
+            install_dir,
+            state_file,
             rate_limiter,
             github_token,
             internal_lock: Mutex::new(()),

@@ -1,7 +1,10 @@
-use crate::core::{Result, Error};
-use crate::App;
+use crate::core::{Result, Error, StateRegistry};
+use crate::backends::BackendRegistry;
+use crate::config::Config;
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{info, debug, warn};
 use dialoguer::{theme::ColorfulTheme, Confirm};
 
@@ -80,7 +83,7 @@ impl BridgeDb {
 }
 
 /// The Dependency Bridge orchestrator.
-/// Hardened for Phase 1.1: Asynchronous failure diagnosis and auto-remediation.
+/// Hardened for Phase 4.1: Fully decoupled from the God Object (App).
 pub struct DependencyBridge {
     db: BridgeDb,
 }
@@ -90,6 +93,7 @@ impl DependencyBridge {
         Self { db: BridgeDb::new() }
     }
 
+    /// Analyzes stderr output and identifies missing system dependencies.
     pub fn diagnose_failure(&self, stderr: &str, current_backend: &str) -> Vec<String> {
         let mut suggestions = Vec::new();
         debug!("DependencyBridge: Analyzing error output...");
@@ -108,7 +112,17 @@ impl DependencyBridge {
         suggestions
     }
 
-    pub async fn handle_failure(&self, stderr: &str, current_backend: &str, app: &App, auto_install: bool) -> Result<()> {
+    /// Primary decoupled failure handler.
+    /// Fulfills Phase 5.1 cleanup: Removed dead reference to monolithic App.
+    pub async fn handle_failure(
+        &self, 
+        stderr: &str, 
+        current_backend: &str, 
+        registry: Arc<BackendRegistry>,
+        state: Arc<Mutex<StateRegistry>>,
+        config: &Config,
+        auto_install: bool
+    ) -> Result<()> {
         let suggestions = self.diagnose_failure(stderr, current_backend);
         if suggestions.is_empty() { return Ok(()); }
         
@@ -121,7 +135,7 @@ impl DependencyBridge {
         }
         
         if auto_install {
-            self.auto_install_suggestions(&suggestions, app).await?;
+            self.auto_install_suggestions(&suggestions, registry, state, config).await?;
         } else {
             // Confirm::interact() is blocking; wrap in spawn_blocking
             let should_install = tokio::task::spawn_blocking(move || {
@@ -133,37 +147,44 @@ impl DependencyBridge {
               .map_err(|e| Error::Other(e.to_string()))?;
             
             if should_install {
-                self.auto_install_suggestions(&suggestions, app).await?;
+                self.auto_install_suggestions(&suggestions, registry, state, config).await?;
             }
         }
         Ok(())
     }
     
-    async fn auto_install_suggestions(&self, suggestions: &[String], app: &App) -> Result<()> {
+    async fn auto_install_suggestions(
+        &self, 
+        suggestions: &[String], 
+        registry: Arc<BackendRegistry>,
+        state: Arc<Mutex<StateRegistry>>,
+        config: &Config
+    ) -> Result<()> {
         let mut success_count = 0;
+        
+        // Use a resolver to parse the suggestion strings
+        let resolver = crate::app::sync::resolver::StateResolver::new(config, registry.clone());
+
         for suggestion in suggestions {
             info!("DependencyBridge: Auto-installing {}", suggestion);
-            let specs = app.resolve_spec(suggestion).await?;
             
-            for spec in specs {
-                if let Some(backend_cap) = app.registry.get(&spec.backend) {
-                    if let Some(installer) = backend_cap.as_installable() {
-                        // Phase 2.2: Respect backend root requirements
-                        let sudo = backend_cap.needs_root();
-                        match installer.install(&[spec.clone()], sudo).await {
-                            Ok(_) => {
-                                success_count += 1;
-                                let mut state = app.state.lock().await;
-                                state.add_simple(&spec.backend, &spec.name, None);
-                                
-                                // Registry save is blocking
-                                let state_clone = state.clone();
-                                tokio::task::spawn_blocking(move || {
-                                    state_clone.save()
-                                }).await.map_err(|e| Error::Other(e.to_string()))??;
-                            }
-                            Err(e) => warn!("Failed to install {}: {}", suggestion, e),
+            let spec = resolver.parse_and_probe_spec(suggestion).await?;
+            if let Some(backend_cap) = registry.get(&spec.backend) {
+                if let Some(installer) = backend_cap.as_installable() {
+                    let sudo = backend_cap.needs_root();
+                    match installer.install(&[spec.clone()], sudo).await {
+                        Ok(_) => {
+                            success_count += 1;
+                            let mut state_guard = state.lock().await;
+                            state_guard.add_simple(&spec.backend, &spec.name, None);
+                            
+                            // StateRegistry::save is blocking
+                            let state_clone = state_guard.clone();
+                            tokio::task::spawn_blocking(move || {
+                                state_clone.save()
+                            }).await.map_err(|e| Error::Other(e.to_string()))??;
                         }
+                        Err(e) => warn!("Failed to install {}: {}", suggestion, e),
                     }
                 }
             }

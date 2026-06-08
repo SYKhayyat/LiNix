@@ -9,13 +9,38 @@ static PACKAGE_NAME_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._
 /// Regex to detect shell metacharacters that could be used in injection attacks.
 static SHELL_INJECTION_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"[;&|><`$\(\)\[\]\{\}\*\?\!\\]").unwrap());
 
-/// Known destructive patterns blocked at the validation layer.
+/// Comprehensive list of destructive command patterns blocked at the validation layer.
+/// Fulfills Phase 10.1: Security Hardening.
 static DESTRUCTIVE_PATTERNS: &[&str] = &[
-    "rm -rf /", "dd if=", "mkfs", ":(){ :|:& };:", "chmod -R 777", "chown -R", "> /dev/sda", "mv / /dev/null",
+    "rm -rf /", 
+    "dd if=", 
+    "mkfs", 
+    ":(){ :|:& };:", 
+    "chmod -R 777", 
+    "chown -R", 
+    "> /dev/sda", 
+    "mv / /dev/null",
+    "fdisk",
+    "parted",
+    "chattr",
+    "mkswap",
+    "shred",
+    "wipe",
+];
+
+/// Whitelist of trusted binary directories for security verification.
+static TRUSTED_BIN_PATHS: &[&str] = &[
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+    "/usr/local/bin",
+    "C:\\Windows\\System32",
+    "C:\\Program Files",
 ];
 
 /// The Mission-Critical Security Validator.
-/// Implements Roadmap Phase 3 constraints to ensure LiNix cannot be used as an 
+/// Implements strict constraints to ensure LiNix cannot be used as an 
 /// escalation vector or for accidental system destruction.
 pub struct Validator;
 
@@ -41,25 +66,38 @@ impl Validator {
         Ok(())
     }
 
-    /// Validates an external command and its arguments before the CommandExecutor processes it.
-    /// This is the final line of defense before OS process spawning.
+    /// Validates an external command and its arguments before execution.
+    /// Phase 10.1: Hardened check including destructive patterns and binary origin.
     pub fn validate_command(cmd: &str, args: &[&str]) -> Result<()> {
         let full = format!("{} {}", cmd, args.join(" ")).to_lowercase();
         
+        // 1. Block known destructive patterns
         for pattern in DESTRUCTIVE_PATTERNS {
             if full.contains(pattern) {
                 return Err(Error::Validation(format!("Security Block: Destructive command pattern detected: {}", full)));
             }
         }
         
+        // 2. Block shell injection
         if SHELL_INJECTION_REGEX.is_match(&full) {
             return Err(Error::Validation(format!("Security Block: Command injection characters detected: {}", full)));
+        }
+
+        // 3. Binary origin validation (if absolute path is used)
+        let cmd_path = Path::new(cmd);
+        if cmd_path.is_absolute() {
+            let is_trusted = TRUSTED_BIN_PATHS.iter().any(|trusted| {
+                cmd_path.starts_with(trusted)
+            });
+            if !is_trusted {
+                return Err(Error::Validation(format!("Security Block: Execution of absolute path binary outside trusted directories: {}", cmd)));
+            }
         }
         
         Ok(())
     }
 
-    /// Ensures that backend names are strictly alphanumeric (e.g., 'apt', 'cargo').
+    /// Ensures that backend names are strictly alphanumeric.
     pub fn validate_backend_name(name: &str) -> Result<()> {
         if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
             return Err(Error::Validation(format!("Invalid backend identifier: {}", name)));
@@ -67,12 +105,19 @@ impl Validator {
         Ok(())
     }
 
-    /// Prevents symlink-based path traversal and unauthorized access to sensitive system files.
-    /// Resolves canonical paths to ensure that relative path tricks (../../) are neutralized.
-    pub fn validate_path(path: &Path) -> Result<()> {
-        if !path.exists() { return Ok(()); } 
+    /// Asynchronously prevents symlink-based path traversal and unauthorized access.
+    /// Fulfills Phase 3.3: Canonicalization is wrapped in spawn_blocking for async safety.
+    pub async fn validate_path(path: &Path) -> Result<()> {
+        if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+            return Ok(());
+        } 
         
-        let canonical = path.canonicalize().map_err(|e| Error::Validation(format!("Path canonicalization failed: {}", e)))?;
+        let path_owned = path.to_path_buf();
+        let canonical = tokio::task::spawn_blocking(move || {
+            path_owned.canonicalize()
+        }).await.map_err(|e| Error::Other(e.to_string()))?
+          .map_err(|e| Error::Validation(format!("Path canonicalization failed: {}", e)))?;
+
         let path_str = canonical.to_string_lossy();
         
         let sensitive_locations = [

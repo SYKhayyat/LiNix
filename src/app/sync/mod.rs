@@ -29,7 +29,7 @@ pub trait Planner: Send + Sync {
 }
 
 /// Primary entry point for system synchronization.
-/// Hardened for Phase 3.1 & 3.2: Async-compliant Manifest and Shim engines.
+/// Hardened for Phase 2.2: Optimizes state handling by eliminating redundant disk reloads.
 pub struct SyncEngine<'a> {
     pub config: &'a Config,
     pub registry: Arc<BackendRegistry>,
@@ -73,7 +73,7 @@ impl<'a> SyncEngine<'a> {
         let _heartbeat = self.executor.start_sudo_keepalive().await;
         let _ = self.hooks.run_before_sync().await;
         
-        // StateRegistry::load is blocking, wrap in spawn_blocking
+        // Load initial state with async isolation
         let mut state = tokio::task::spawn_blocking(StateRegistry::load)
             .await
             .map_err(|e| crate::core::Error::Other(e.to_string()))??;
@@ -88,17 +88,15 @@ impl<'a> SyncEngine<'a> {
         let result = self.execute_transaction(&changes, &mut state).await;
 
         if result.is_ok() {
-            // StateRegistry::save is blocking, wrap in spawn_blocking
-            tokio::task::spawn_blocking(move || state.save())
+            // Phase 2.2 Optimization: Clone state for saving so we don't consume it
+            let state_to_save = state.clone();
+            tokio::task::spawn_blocking(move || state_to_save.save())
                 .await
                 .map_err(|e| crate::core::Error::Other(e.to_string()))??;
 
-            // Phase 3.1: State is now persistent, re-load for shim reconciliation
-            let final_state = tokio::task::spawn_blocking(StateRegistry::load)
-                .await
-                .map_err(|e| crate::core::Error::Other(e.to_string()))??;
-
-            self.reconcile_all_shims(&final_state).await?;
+            // Reuse the mutated 'state' variable for shim reconciliation instead of reloading from disk
+            self.reconcile_all_shims(&state).await?;
+            
             let _ = self.hooks.run_after_sync().await;
             self.metrics.print_summary();
             
@@ -109,15 +107,8 @@ impl<'a> SyncEngine<'a> {
     }
 
     async fn execute_transaction(&self, changes: &SyncChanges, state: &mut StateRegistry) -> Result<()> {
-        let tx_config = TransactionConfig {
-            max_concurrent: self.config.max_parallel,
-            node_timeout: std::time::Duration::from_secs(300),
-            total_timeout: std::time::Duration::from_secs(3600),
-            max_retries: 3,
-            initial_backoff: std::time::Duration::from_millis(500),
-            max_backoff: std::time::Duration::from_secs(30),
-            auto_rollback: true,
-        };
+        // Phase 1.1: Using a standard TransactionConfig preset
+        let tx_config = TransactionConfig::patient();
 
         let mut tx = Transaction::with_config(
             changes.graph.clone(),
@@ -127,28 +118,40 @@ impl<'a> SyncEngine<'a> {
         );
 
         let pb = self.progress.spinner("Applying parallel system transformations...");
-        let result = tx.execute().await;
+        let results = tx.execute_with_telemetry().await?;
         pb.finish();
 
-        if result.is_ok() {
-            for idx in changes.graph.node_indices() {
-                match &changes.graph[idx] {
-                    GraphAction::Install(spec) => {
-                        state.add(&spec.backend, &spec.name, None, spec.options.clone());
-                        // Phase 3.1: Auto-lock checksums for remote resources
-                        if (spec.backend == "web" || spec.backend == "github") && !spec.options.contains_key("sha256") {
-                            self.attempt_auto_lock(spec).await;
-                        }
-                    }
-                    GraphAction::Remove { name, backend } => {
-                        state.remove(backend, name);
+        // Record telemetry for every operation (Phase 2.4/2.5)
+        for res in results {
+            self.metrics.record_operation(
+                &res.package_name,
+                &res.backend_name,
+                res.start_time,
+                res.result.is_ok(),
+                res.result.err().map(|e| e.to_string()),
+                res.attempt,
+                res.bytes_downloaded,
+            );
+        }
+
+        for idx in changes.graph.node_indices() {
+            match &changes.graph[idx] {
+                GraphAction::Install(spec) => {
+                    state.add(&spec.backend, &spec.name, None, spec.options.clone());
+                    if (spec.backend == "web" || spec.backend == "github") && !spec.options.contains_key("sha256") {
+                        self.attempt_auto_lock(spec).await;
                     }
                 }
+                GraphAction::Remove { name, backend } => {
+                    state.remove(backend, name);
+                }
             }
-            self.metrics.record_install(changes.total_install() as u64);
-            self.metrics.record_remove(changes.total_remove() as u64);
         }
-        result
+        
+        self.metrics.record_install(changes.total_install() as u64);
+        self.metrics.record_remove(changes.total_remove() as u64);
+        
+        Ok(())
     }
 
     async fn attempt_auto_lock(&self, spec: &PackageSpec) {
@@ -159,7 +162,6 @@ impl<'a> SyncEngine<'a> {
                     if let Some(local_path) = pkg.properties.get(path_key) {
                         let path = std::path::Path::new(local_path);
                         
-                        // Checksum generation involves blocking file I/O
                         let path_owned = path.to_path_buf();
                         let hash_res = tokio::task::spawn_blocking(move || generate_checksum(&path_owned)).await;
                         
@@ -170,7 +172,7 @@ impl<'a> SyncEngine<'a> {
                             let opt_parts: Vec<String> = new_options.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
                             let new_spec_str = format!("{}:{}@{}", spec.backend, spec.name, opt_parts.join(","));
                             
-                            // Phase 3.1: ManifestEngine update is now async
+                            // ManifestEngine update is async
                             let _ = self.manifest_engine.update_package(&spec.name, &new_spec_str).await;
                         }
                     }
@@ -180,7 +182,6 @@ impl<'a> SyncEngine<'a> {
     }
 
     async fn reconcile_all_shims(&self, state: &StateRegistry) -> Result<()> {
-        // Phase 3.2: ShimManager instantiation is now async
         let shim_mgr = ShimManager::new().await?;
         for pkg in &state.packages {
             let needs_shim = pkg.options.get("sandbox") == Some(&"true".to_string())

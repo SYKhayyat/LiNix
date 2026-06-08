@@ -18,18 +18,22 @@ pub struct BackendRegistry {
 }
 
 impl BackendRegistry {
+    /// Initializes an empty backend registry.
     pub fn new() -> Self { 
         Self { backends: HashMap::new() } 
     }
     
+    /// Registers a new backend capability set.
     pub fn register(&mut self, backend: Arc<BackendCapabilities>) {
         self.backends.insert(backend.name().to_string(), backend);
     }
 
+    /// Retrieves a specific backend by name.
     pub fn get(&self, name: &str) -> Option<Arc<BackendCapabilities>> {
         self.backends.get(name).cloned()
     }
 
+    /// Returns a list of backends that are currently available on the host system.
     pub fn available(&self) -> Vec<Arc<BackendCapabilities>> {
         self.backends.values()
             .filter(|b| b.is_available())
@@ -37,10 +41,12 @@ impl BackendRegistry {
             .collect()
     }
 
+    /// Returns all registered backends regardless of availability.
     pub fn all(&self) -> Vec<Arc<BackendCapabilities>> {
         self.backends.values().cloned().collect()
     }
 
+    /// Returns a subset of available backends filtered by a name whitelist.
     pub fn get_filtered(&self, enabled: &[String]) -> Vec<Arc<BackendCapabilities>> {
         self.available().into_iter()
             .filter(|b| enabled.contains(&b.name().to_string()))
@@ -51,13 +57,14 @@ impl BackendRegistry {
 /// The master wiring function for LiNix.
 /// 
 /// Hardened for Phase 6.1: Full OS coverage for Linux, macOS, and Windows.
+/// Fulfills Phase 1.5: Injects configurable directories into specialized backends.
 pub async fn create_default_registry(executor: CommandExecutor, config: &Config, _hooks: Arc<LuaHooks>) -> BackendRegistry {
     let mut reg = BackendRegistry::new();
 
     // --- 1. SYSTEM PACKAGE MANAGERS (Linux) ---
     #[cfg(target_os = "linux")]
     {
-        // APT
+        // APT (Debian/Ubuntu)
         let apt_core = Arc::new(GenericBackendCore {
             name: "apt".into(),
             executor: executor.duplicate(),
@@ -92,7 +99,76 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
             .with_metadata_provider(apt_core.clone())
             .build()));
 
-        // Pacman
+        // APK (Alpine Linux)
+        let apk_core = Arc::new(GenericBackendCore {
+            name: "apk".into(),
+            executor: executor.duplicate(),
+            config: ManagerConfig {
+                name: "apk".into(),
+                install_args: vec!["add".into()],
+                remove_args: vec!["del".into()],
+                list_args: vec!["info".into(), "-v".into()],
+                list_manual_args: Some(vec!["world".into()]),
+                search_args: vec!["search".into(), "-v".into()],
+                upgrade_args: vec!["upgrade".into()],
+                update_args: Some(vec!["update".into()]),
+                repo_add_args: None,
+                repo_remove_args: None,
+                repo_list_args: None,
+                depends_args: Some(vec!["info".into(), "-R".into(), "{name}".into()]),
+                needs_root: true,
+                is_exclusive: true,
+                flag_map: HashMap::new(),
+            },
+            parser: Arc::new(LambdaParser {
+                installed_fn: |o| crate::parsers::common::parse_simple_list(o, "apk"),
+                search_fn: |o| crate::parsers::common::parse_simple_list(o, "apk"),
+            }),
+        });
+
+        reg.register(Arc::new(BackendCapabilities::builder(apk_core.clone())
+            .with_installable(Arc::new(GenericInstallable { core: apk_core.clone() }))
+            .with_queryable(Arc::new(GenericQueryable { core: apk_core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: apk_core.clone() }))
+            .with_metadata_provider(apk_core.clone())
+            .build()));
+
+        // Zypper (OpenSUSE)
+        let zypper_core = Arc::new(GenericBackendCore {
+            name: "zypper".into(),
+            executor: executor.duplicate(),
+            config: ManagerConfig {
+                name: "zypper".into(),
+                install_args: vec!["install".into(), "-y".into()],
+                remove_args: vec!["remove".into(), "-y".into()],
+                list_args: vec!["search".into(), "--installed-only".into()],
+                list_manual_args: None,
+                search_args: vec!["search".into()],
+                upgrade_args: vec!["update".into(), "-y".into()],
+                update_args: Some(vec!["refresh".into()]),
+                repo_add_args: Some(vec!["addrepo".into(), "{url}".into(), "{name}".into()]),
+                repo_remove_args: Some(vec!["removerepo".into(), "{name}".into()]),
+                repo_list_args: Some(vec!["repos".into()]),
+                depends_args: Some(vec!["info".into(), "--requires".into(), "{name}".into()]),
+                needs_root: true,
+                is_exclusive: true,
+                flag_map: HashMap::new(),
+            },
+            parser: Arc::new(LambdaParser {
+                installed_fn: crate::parsers::dnf::parse_zypper_search,
+                search_fn: crate::parsers::dnf::parse_zypper_search,
+            }),
+        });
+
+        reg.register(Arc::new(BackendCapabilities::builder(zypper_core.clone())
+            .with_installable(Arc::new(GenericInstallable { core: zypper_core.clone() }))
+            .with_queryable(Arc::new(GenericQueryable { core: zypper_core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: zypper_core.clone() }))
+            .with_repo_manager(Arc::new(GenericRepoManager { core: zypper_core.clone() }))
+            .with_metadata_provider(zypper_core.clone())
+            .build()));
+
+        // Pacman (Arch Linux)
         let pacman_core = Arc::new(crate::backends::pacman::PacmanBackendCore::new(executor.duplicate()));
         reg.register(Arc::new(BackendCapabilities::builder(pacman_core.clone())
             .with_installable(Arc::new(crate::backends::pacman::PacmanInstallable { core: pacman_core.clone() }))
@@ -101,7 +177,7 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
             .with_metadata_provider(pacman_core.clone())
             .build()));
 
-        // DNF
+        // DNF (Fedora/RHEL)
         let dnf_core = Arc::new(crate::backends::dnf::DnfBackendCore::new(executor.duplicate()));
         reg.register(Arc::new(BackendCapabilities::builder(dnf_core.clone())
             .with_installable(Arc::new(crate::backends::dnf::DnfInstallable { core: dnf_core.clone() }))
@@ -284,15 +360,22 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
         .with_metadata_provider(brew_core.clone())
         .build()));
 
-    // Specialized Modules
-    let github_core = Arc::new(crate::backends::github::GithubBackendCore::new(executor.duplicate(), config.github_token.clone()));
+    // Specialized Modules (Phase 1.5 path injection)
+    let github_core = Arc::new(crate::backends::github::GithubBackendCore::new(
+        executor.duplicate(), 
+        config.github_dir.clone(),
+        config.github_token.clone()
+    ));
     reg.register(Arc::new(BackendCapabilities::builder(github_core.clone())
         .with_installable(Arc::new(crate::backends::github::GithubInstallable { core: github_core.clone() }))
         .with_queryable(Arc::new(crate::backends::github::GithubQueryable { core: github_core.clone() }))
         .with_metadata_provider(github_core.clone())
         .build()));
 
-    let web_core = Arc::new(crate::backends::web::WebBackendCore::new(executor.duplicate()));
+    let web_core = Arc::new(crate::backends::web::WebBackendCore::new(
+        executor.duplicate(),
+        config.web_dir.clone()
+    ));
     reg.register(Arc::new(BackendCapabilities::builder(web_core.clone())
         .with_installable(Arc::new(crate::backends::web::WebInstallable { core: web_core.clone() }))
         .with_queryable(Arc::new(crate::backends::web::WebQueryable { core: web_core.clone() }))
@@ -350,7 +433,10 @@ pub async fn create_default_registry(executor: CommandExecutor, config: &Config,
         .with_metadata_provider(service_core.clone())
         .build()));
 
-    let appimage_core = Arc::new(crate::backends::appimage::AppImageBackendCore::new(executor.duplicate()));
+    let appimage_core = Arc::new(crate::backends::appimage::AppImageBackendCore::new(
+        executor.duplicate(),
+        config.appimage_dir.clone()
+    ));
     reg.register(Arc::new(BackendCapabilities::builder(appimage_core.clone())
         .with_installable(Arc::new(crate::backends::appimage::AppImageInstallable { core: appimage_core.clone() }))
         .with_queryable(Arc::new(crate::backends::appimage::AppImageQueryable { core: appimage_core.clone() }))

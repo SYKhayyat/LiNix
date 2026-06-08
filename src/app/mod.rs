@@ -11,44 +11,44 @@ pub mod undo;
 pub mod bridge;
 pub mod shell;
 pub mod profile;
-pub mod ui;
 pub mod sandbox;
 pub mod services;
+pub mod ui;
 
-// Re-export the primary application kernel (The Dependency Injector)
+// Re-export the primary application kernel (The Service Provider)
 pub use self::context::App;
 
-// Re-export the multi-engine scripting engine (Lua + Rhai) - Point 4
+// Re-export the multi-engine scripting engine (Lua + Rhai)
 pub use self::hooks::LuaHooks;
 
-// Re-export the thread-safe telemetry collector - Point 2.3
+// Re-export the thread-safe telemetry collector
 pub use self::metrics::MetricsCollector;
 
-// Re-export the parallel cross-backend search engine - Point 2.3
+// Re-export the parallel cross-backend search engine
 pub use self::search::UniversalSearch;
 
-// Re-export the DAG-based system synchronization engine - Point 2.2 / 8 / 9
+// Re-export the DAG-based system synchronization engine
 pub use self::sync::SyncEngine;
 
-// Re-export the environment runner (Sandboxing & Bridging) - Point 16 / 17 / 19
+// Re-export the environment runner (Sandboxing & Bridging)
 pub use self::run::Runner;
 
-// Re-export the system ingestion engine - Point 3
+// Re-export the system ingestion engine
 pub use self::migrate::Migrator;
 
-// Re-export the cross-backend migration logic - Point 5
+// Re-export the cross-backend transition logic
 pub use self::teleport::Teleporter;
 
-// Re-export the high-performance Rust shim manager - Point 6
+// Re-export the high-performance Rust shim manager
 pub use self::shim_manager::ShimManager;
 
-// Re-export the Snapshot Gallery / Time Travel manager - Point 12
+// Re-export the Snapshot Gallery / Time Travel manager
 pub use self::undo::UndoManager;
 
-// Re-export the contextual identity switcher - Point 18
+// Re-export the contextual identity switcher (Profiles)
 pub use self::profile::ProfileManager;
 
-// Re-export the ephemeral shell orchestrator - Point 19 / 20
+// Re-export the ephemeral shell orchestrator
 pub use self::shell::GhostShell;
 
 /// Application layer constants

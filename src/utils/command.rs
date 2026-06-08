@@ -1,6 +1,5 @@
 use std::process::Stdio;
 use tokio::process::Command;
-use crate::core::{Result, Error};
 
 /// Asynchronously checks if a command exists in the system PATH.
 /// Uses 'which' on Unix-like systems and 'where' on Windows.
@@ -52,7 +51,6 @@ pub async fn get_command_version(cmd: &str) -> Option<String> {
 }
 
 /// Splits a raw command string into a command binary and its arguments.
-/// Respects whitespace and handles simple splitting logic.
 pub fn split_command(cmd_str: &str) -> Option<(String, Vec<String>)> {
     let parts: Vec<&str> = cmd_str.split_whitespace().collect();
     if parts.is_empty() {

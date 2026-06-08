@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 /// container for the LiNix kernel.
 #[derive(Clone)]
 pub struct AppCore {
-    pub config: Config,
+    pub config: Arc<Config>,
     pub cache: Arc<PackageCache>,
     pub registry: Arc<BackendRegistry>,
     pub executor: CommandExecutor,
@@ -31,43 +31,64 @@ pub struct AppCore {
 
 /// Container for all high-level application orchestrators.
 /// 
-/// Phase 4.1 Refactor: Decouples logic from the core state, allowing 
-/// for easier testing and specialized execution contexts.
+/// Phase 4.1 Refactor: Decoupled from monolithic lifetimed references.
+/// These services now use internal Arc-based sharing for safety and performance.
 pub struct AppServices {
-    pub migrator: Migrator<'static>,
-    pub teleporter: Teleporter<'static>,
-    pub shell: GhostShell<'static>,
+    pub migrator: Migrator,
+    pub teleporter: Teleporter,
+    pub shell: GhostShell,
     pub shim_manager: ShimManager,
-    pub undo_manager: UndoManager<'static>,
-    pub profile_manager: ProfileManager<'static>,
+    pub undo_manager: UndoManager,
+    pub profile_manager: ProfileManager,
 }
 
 impl AppServices {
     /// Creates a new service container asynchronously.
     /// 
-    /// This accepts a leaked static reference to the App context to satisfy 
-    /// lifetime requirements of various sub-orchestrators while ensuring 
-    /// zero-cost access to core components.
+    /// Phase 4.1: Destructures the App kernel to provide specific dependencies 
+    /// to each orchestrator constructor.
     pub async fn new(app: &'static crate::App) -> Result<Self> {
-        // Phase 3.2: ShimManager initialization is now async and must be awaited.
         let shim_manager = ShimManager::new().await?;
 
         Ok(Self {
-            migrator: Migrator::new(app),
-            teleporter: Teleporter::new(app),
-            shell: GhostShell::new(app),
+            migrator: Migrator::new(
+                app.registry.clone(),
+                app.state.clone(),
+                &app.config
+            ),
+            teleporter: Teleporter::new(
+                app.registry.clone(),
+                app.journal.clone(),
+                app.state.clone(),
+                &app.config.groups_dir
+            ),
+            shell: GhostShell::new(
+                app.registry.clone(),
+                app.config.clone()
+            ),
             shim_manager,
-            undo_manager: UndoManager::new(app),
-            profile_manager: ProfileManager::new(app),
+            undo_manager: UndoManager::new(
+                app.snapshot_manager.clone(),
+                app.state.clone(),
+                app.executor.clone()
+            ),
+            profile_manager: ProfileManager::new(
+                app.registry.clone(),
+                app.executor.clone(),
+                app.metrics.clone(),
+                app.progress.clone(),
+                app.hooks.clone(),
+                app.snapshot_manager.clone(),
+                app.journal.clone(),
+                app.state.clone(),
+                app.config.clone()
+            ),
         })
     }
 }
 
 impl AppCore {
     /// High-performance asynchronous initializer for the shared application state.
-    /// 
-    /// Wraps blocking filesystem operations (like loading the registry) in 
-    /// `spawn_blocking` to ensure the tokio executor remains responsive.
     pub async fn from_config(config: Config) -> Result<Self> {
         let executor = CommandExecutor::new(config.dry_run, config.verbose);
         let hooks = Arc::new(LuaHooks::new(&config)?);
@@ -75,18 +96,17 @@ impl AppCore {
         let registry = Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
         
-        // Phase 3.2: Wrap synchronous StateRegistry load in blocking task
         let state_val = tokio::task::spawn_blocking(StateRegistry::load)
             .await
             .map_err(|e| Error::Other(e.to_string()))??;
         
         let state = Arc::new(Mutex::new(state_val));
-        let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate()).await);
+        let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate(), &config).await);
         let journal = Arc::new(Mutex::new(Journal::new()?));
         let bridge = Arc::new(DependencyBridge::new());
 
         Ok(Self {
-            config,
+            config: Arc::new(config),
             cache: Arc::new(PackageCache::new()),
             registry,
             executor,

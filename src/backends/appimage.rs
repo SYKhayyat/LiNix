@@ -18,6 +18,9 @@ struct AppImageState {
 }
 
 /// Core backend implementation for standalone Linux AppImages.
+/// 
+/// Hardened for Phase 1.5: Supports configurable installation directories 
+/// injected from the primary Config.
 pub struct AppImageBackendCore {
     pub executor: CommandExecutor,
     pub install_dir: PathBuf,
@@ -25,17 +28,13 @@ pub struct AppImageBackendCore {
 }
 
 impl AppImageBackendCore {
-    pub fn new(executor: CommandExecutor) -> Self {
-        let base = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("linix")
-            .join("appimages");
-        
-        let state = base.join("state.json");
+    /// Initializes a new AppImage backend with a specific installation root.
+    pub fn new(executor: CommandExecutor, install_dir: PathBuf) -> Self {
+        let state = install_dir.join("state.json");
         
         Self { 
             executor, 
-            install_dir: base, 
+            install_dir, 
             state_file: state 
         }
     }
@@ -66,7 +65,6 @@ impl AppImageBackendCore {
 
     async fn save_state(&self, state: &HashMap<String, AppImageState>) -> Result<()> {
         let data = serde_json::to_string_pretty(state).map_err(Error::from)?;
-        // Phase 1: Using the high-level executor for atomic writes
         self.executor.write_atomic(&self.state_file, &data).await
     }
 }
@@ -80,7 +78,7 @@ impl BackendCore for AppImageBackendCore {
     }
 
     fn needs_root(&self) -> bool {
-        // AppImages are installed in user-owned data directories.
+        // AppImages are typically installed in user-owned data directories.
         false
     }
 }
@@ -88,7 +86,8 @@ impl BackendCore for AppImageBackendCore {
 #[async_trait]
 impl MetadataProvider for AppImageBackendCore {
     async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
-        // AppImages are self-contained and do not expose a standard dependency manifest.
+        // AppImages are self-contained by design and do not require 
+        // external dependency orchestration by LiNix.
         Ok(vec![])
     }
 }

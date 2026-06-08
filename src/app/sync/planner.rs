@@ -38,7 +38,9 @@ impl SyncChanges {
 }
 
 /// The brain of the LiNix engine. Calculates the delta between current and desired state.
+/// 
 /// Hardened for Phase 1.1: Implements Recursive Native Dependency Resolution.
+/// Refactored for Technical Debt Cleanup: Split monolithic plan() into logical sub-tasks.
 pub struct ChangePlanner<'a> {
     registry: Arc<BackendRegistry>,
     state: &'a StateRegistry,
@@ -58,17 +60,37 @@ impl<'a> ChangePlanner<'a> {
         let mut changes = SyncChanges::default();
         
         // 1. Recursive Transitive Dependency Expansion
-        // We expand the user's desired state to include backend-native dependencies.
         let expanded_desired = self.expand_transitive_dependencies(desired).await?;
 
-        // 2. Identify and schedule removal for Expired Leases
+        // 2. Process Expirations and Bloatware
+        self.plan_removals_and_expirations(&mut changes).await?;
+
+        // 3. Identify required installations and upgrades
+        let target_specs = self.identify_needed_actions(&expanded_desired).await?;
+
+        // 4. Build DAG Nodes and Edges
+        self.build_execution_graph(&mut changes, &target_specs).await?;
+
+        // 5. Identify Global Drift (Managed packages no longer needed)
+        self.plan_drift_removal(&mut changes, &expanded_desired).await?;
+
+        // 6. Safety Check
+        if is_cyclic_directed(&changes.graph) {
+            return Err(Error::Transaction("Circular dependency detected in graph construction".into()));
+        }
+
+        Ok(changes)
+    }
+
+    async fn plan_removals_and_expirations(&self, changes: &mut SyncChanges) -> Result<()> {
+        // Expired Leases
         let expired = self.state.get_expired_packages();
         for (backend, name) in expired {
             info!("Planner: Lease for '{}:{}' has expired. Scheduling automatic removal.", backend, name);
             changes.graph.add_node(GraphAction::Remove { name, backend });
         }
 
-        // 3. Load bloatware packages and schedule for removal
+        // Bloatware removal
         if self.config.remove_bloatware {
             let bloatware = self.load_bloatware().await?;
             for pkg_str in bloatware {
@@ -84,8 +106,10 @@ impl<'a> ChangePlanner<'a> {
                 }
             }
         }
+        Ok(())
+    }
 
-        // 4. Identify required installations and upgrades
+    async fn identify_needed_actions(&self, expanded_desired: &HashMap<String, PackageSpec>) -> Result<Vec<PackageSpec>> {
         let mut target_specs = Vec::new();
         for spec in expanded_desired.values() {
             let backend_cap = self.registry.get(&spec.backend)
@@ -119,31 +143,30 @@ impl<'a> ChangePlanner<'a> {
                 target_specs.push(spec.clone());
             }
         }
+        Ok(target_specs)
+    }
 
-        // 5. Build DAG Nodes for Installations
-        for spec in &target_specs {
+    async fn build_execution_graph(&self, changes: &mut SyncChanges, target_specs: &[PackageSpec]) -> Result<()> {
+        // Build Nodes
+        for spec in target_specs {
             let key = format!("{}:{}", spec.backend, spec.name);
             let idx = changes.graph.add_node(GraphAction::Install(spec.clone()));
             changes.node_map.insert(key, idx);
         }
 
-        // 6. Resolve DAG Edges (Meta-dependencies and Native dependencies)
-        for spec in &target_specs {
+        // Resolve Edges
+        for spec in target_specs {
             let child_key = format!("{}:{}", spec.backend, spec.name);
             let child_idx = *changes.node_map.get(&child_key)
                 .ok_or_else(|| Error::Transaction(format!("Missing node in map: {}", child_key)))?;
 
-            // Edge from explicit 'requires' (Meta-Dependencies)
             for req_str in &spec.requires {
                 if let Some(&parent_idx) = changes.node_map.get(req_str) {
                     changes.graph.add_edge(parent_idx, child_idx, ());
                 }
             }
             
-            // Edge from expanded dependencies (Native to backend)
-            let backend_cap = self.registry.get(&spec.backend)
-                .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
-
+            let backend_cap = self.registry.get(&spec.backend).unwrap();
             if let Some(provider) = backend_cap.as_metadata_provider() {
                 let native_deps = provider.get_dependencies(&spec.name).await?;
                 for dep_name in native_deps {
@@ -154,8 +177,10 @@ impl<'a> ChangePlanner<'a> {
                 }
             }
         }
+        Ok(())
+    }
 
-        // 7. Identify Global Drift (Managed packages no longer needed)
+    async fn plan_drift_removal(&self, changes: &mut SyncChanges, expanded_desired: &HashMap<String, PackageSpec>) -> Result<()> {
         for managed in &self.state.packages {
             let key = format!("{}:{}", managed.backend, managed.name);
             if !expanded_desired.contains_key(&key) && !self.config.is_protected(&managed.name) {
@@ -168,22 +193,15 @@ impl<'a> ChangePlanner<'a> {
                 }
             }
         }
-
-        // 8. Safety Check
-        if is_cyclic_directed(&changes.graph) {
-            return Err(Error::Transaction("Circular dependency detected in graph construction".into()));
-        }
-
-        Ok(changes)
+        Ok(())
     }
 
     /// Phase 1.1: Recursively expands the requested package set to include backend-native dependencies.
-    async fn expand_transitive_dependencies(&self, desired: &HashMap<String, Vec<PackageSpec>>) -> Result<HashMap<String, PackageSpec>> {
+    pub(crate) async fn expand_transitive_dependencies(&self, desired: &HashMap<String, Vec<PackageSpec>>) -> Result<HashMap<String, PackageSpec>> {
         let mut expanded = HashMap::new();
         let mut queue = VecDeque::new();
         let mut seen = HashSet::new();
 
-        // Initialize queue with user-requested specs
         for specs in desired.values() {
             for spec in specs {
                 queue.push_back(spec.clone());
@@ -192,24 +210,28 @@ impl<'a> ChangePlanner<'a> {
 
         while let Some(spec) = queue.pop_front() {
             let key = format!("{}:{}", spec.backend, spec.name);
-            if !seen.insert(key.clone()) { continue; }
+            if !seen.insert(key.clone()) { 
+                continue; 
+            }
 
-            // Fetch native dependencies from the backend provider
             if let Some(backend_cap) = self.registry.get(&spec.backend) {
                 if let Some(provider) = backend_cap.as_metadata_provider() {
                     let deps = provider.get_dependencies(&spec.name).await?;
                     for dep_name in deps {
                         let dep_key = format!("{}:{}", spec.backend, dep_name);
-                        if !seen.contains(&dep_key) {
-                            // Create an implicit spec for the dependency
-                            let dep_spec = PackageSpec {
-                                name: dep_name,
-                                backend: spec.backend.clone(),
-                                options: HashMap::new(),
-                                requires: Vec::new(),
-                            };
-                            queue.push_back(dep_spec);
+                        
+                        if seen.contains(&dep_key) {
+                            debug!("Planner: Native dependency cycle detected for '{}'. Skipping recursion.", dep_key);
+                            continue;
                         }
+
+                        let dep_spec = PackageSpec {
+                            name: dep_name,
+                            backend: spec.backend.clone(),
+                            options: HashMap::new(),
+                            requires: Vec::new(),
+                        };
+                        queue.push_back(dep_spec);
                     }
                 }
             }
@@ -220,7 +242,7 @@ impl<'a> ChangePlanner<'a> {
         Ok(expanded)
     }
 
-    async fn template_needs_update(&self, spec: &PackageSpec) -> bool {
+    pub(crate) async fn template_needs_update(&self, spec: &PackageSpec) -> bool {
         let target_path_str = match spec.options.get("target") {
             Some(s) => s,
             None => return true,

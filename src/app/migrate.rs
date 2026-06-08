@@ -1,21 +1,36 @@
-use crate::App;
-use crate::core::{Result, Package, Error};
+use crate::core::{Result, Package, Error, StateRegistry};
+use crate::backends::BackendRegistry;
+use crate::config::Config;
 use chrono::Local;
 use tracing::{info, warn, debug};
 use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::io::AsyncWriteExt;
 
 /// The Ingestion Engine (Roadmap Point 3).
 /// Responsible for moving a "dirty" system with existing manual installs into LiNix management.
 /// 
-/// Hardened for Phase 3: Implements full Async I/O for manifest generation and state persistence.
-pub struct Migrator<'a> {
-    app: &'a App,
+/// Hardened for Phase 4.1: Decoupled from the global App object. Now receives 
+/// specific dependencies, improving testability and adhering to the Single Responsibility Principle.
+pub struct Migrator {
+    registry: Arc<BackendRegistry>,
+    state: Arc<Mutex<StateRegistry>>,
+    groups_dir: std::path::PathBuf,
 }
 
-impl<'a> Migrator<'a> {
-    pub fn new(app: &'a App) -> Self {
-        Self { app }
+impl Migrator {
+    /// Creates a new Migrator with explicit dependency injection.
+    pub fn new(
+        registry: Arc<BackendRegistry>,
+        state: Arc<Mutex<StateRegistry>>,
+        config: &Config,
+    ) -> Self {
+        Self {
+            registry,
+            state,
+            groups_dir: config.groups_dir.clone(),
+        }
     }
 
     /// Primary migration logic.
@@ -26,20 +41,18 @@ impl<'a> Migrator<'a> {
         let mut seen = HashSet::new();
 
         // 1. Discovery Phase: Crawl the registry
-        // We do this while holding an immutable reference to the registry through the App context.
-        for backend in self.app.registry.available() {
+        for backend in self.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
                 debug!("Migrator: Probing {}...", backend.name());
                 
-                // list_manual is an async trait method
                 match queryable.list_manual().await {
                     Ok(pkgs) => {
-                        let state = self.app.state.lock().await;
+                        let state_guard = self.state.lock().await;
                         for pkg in pkgs {
                             let key = format!("{}:{}", pkg.backend, pkg.name);
                             
                             // Only migrate if not already managed
-                            if !state.is_managed(&pkg.backend, &pkg.name) && seen.insert(key) {
+                            if !state_guard.is_managed(&pkg.backend, &pkg.name) && seen.insert(key) {
                                 discovered_packages.push(pkg);
                             }
                         }
@@ -61,13 +74,13 @@ impl<'a> Migrator<'a> {
         // 2. Manifest Generation Phase
         let timestamp = Local::now().format("%Y%m%d_%H%M%S");
         let filename = format!("migrated_{}.txt", timestamp);
-        let path = self.app.config.groups_dir.join(&filename);
+        let path = self.groups_dir.join(&filename);
 
         let package_strings: Vec<String> = discovered_packages.iter()
             .map(|p| format!("{}:{}", p.backend, p.name))
             .collect();
 
-        // Phase 3: Async manifest creation
+        // Async directory and file creation
         if let Some(parent) = path.parent() {
             if !tokio::fs::try_exists(parent).await.unwrap_or(false) {
                 tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
@@ -82,12 +95,12 @@ impl<'a> Migrator<'a> {
 
         // 3. Ownership Acquisition Phase
         {
-            let mut state_mut = self.app.state.lock().await;
+            let mut state_mut = self.state.lock().await;
             for pkg in &discovered_packages {
                 state_mut.add_simple(&pkg.backend, &pkg.name, pkg.version.clone());
             }
             
-            // Phase 3: Wrap blocking StateRegistry::save in spawn_blocking
+            // StateRegistry::save is blocking; isolate in spawn_blocking
             let state_clone = state_mut.clone();
             tokio::task::spawn_blocking(move || {
                 state_clone.save()
@@ -108,14 +121,14 @@ impl<'a> Migrator<'a> {
     /// Performs a "Dry-Run" migration to show the user what would be added to their config.
     pub async fn audit(&self) -> Result<Vec<Package>> {
         let mut unmanaged = Vec::new();
-        let state = self.app.state.lock().await;
+        let state_guard = self.state.lock().await;
 
-        for backend in self.app.registry.available() {
+        for backend in self.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
                 match queryable.list_manual().await {
                     Ok(pkgs) => {
                         for pkg in pkgs {
-                            if !state.is_managed(backend.name(), &pkg.name) {
+                            if !state_guard.is_managed(backend.name(), &pkg.name) {
                                 unmanaged.push(pkg);
                             }
                         }

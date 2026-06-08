@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, error};
 use petgraph::stable_graph::StableDiGraph;
 use petgraph::graph::NodeIndex;
 use petgraph::Direction;
@@ -27,6 +27,24 @@ pub struct TransactionConfig {
 
 impl Default for TransactionConfig {
     fn default() -> Self {
+        Self::patient()
+    }
+}
+
+impl TransactionConfig {
+    pub fn quick() -> Self {
+        Self {
+            max_concurrent: 8,
+            node_timeout: Duration::from_secs(60),
+            total_timeout: Duration::from_secs(600),
+            max_retries: 1,
+            initial_backoff: Duration::from_millis(200),
+            max_backoff: Duration::from_secs(5),
+            auto_rollback: true,
+        }
+    }
+
+    pub fn patient() -> Self {
         Self {
             max_concurrent: 4,
             node_timeout: Duration::from_secs(300),
@@ -34,6 +52,18 @@ impl Default for TransactionConfig {
             max_retries: 3,
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
+            auto_rollback: true,
+        }
+    }
+
+    pub fn network_resilient() -> Self {
+        Self {
+            max_concurrent: 2,
+            node_timeout: Duration::from_secs(600),
+            total_timeout: Duration::from_secs(7200),
+            max_retries: 5,
+            initial_backoff: Duration::from_secs(2),
+            max_backoff: Duration::from_secs(120),
             auto_rollback: true,
         }
     }
@@ -46,20 +76,21 @@ pub enum GraphAction {
     Remove { name: String, backend: String },
 }
 
-/// The result of an individual node execution with retry metadata.
+/// The result of an individual node execution with complete telemetry.
 #[derive(Debug)]
-struct TaskResult {
-    node_index: NodeIndex,
-    backend_name: String,
-    package_name: String,
-    properties: HashMap<String, String>,
-    attempt: u32,
-    duration: Duration,
-    result: Result<()>,
+pub struct TaskResult {
+    pub node_index: NodeIndex,
+    pub backend_name: String,
+    pub package_name: String,
+    pub properties: HashMap<String, String>,
+    pub attempt: u32,
+    pub duration: Duration,
+    pub bytes_downloaded: u64,
+    pub start_time: chrono::DateTime<chrono::Utc>,
+    pub result: Result<()>,
 }
 
 /// The High-Performance Mission-Critical Execution Engine.
-/// Hardened for Phase 2.2: Stabilized Journaling and Surgical Sudo.
 pub struct Transaction {
     pub graph: StableDiGraph<GraphAction, ()>,
     registry: Arc<BackendRegistry>,
@@ -68,7 +99,6 @@ pub struct Transaction {
     completed_indices: HashSet<NodeIndex>,
     history: Vec<NodeIndex>,
     cancellation_token: CancellationToken,
-    start_time: Option<std::time::Instant>,
 }
 
 impl Transaction {
@@ -94,12 +124,10 @@ impl Transaction {
             completed_indices: HashSet::new(),
             history: Vec::new(),
             cancellation_token: CancellationToken::new(),
-            start_time: None,
         }
     }
 
-    pub async fn execute(&mut self) -> Result<()> {
-        self.start_time = Some(std::time::Instant::now());
+    pub async fn execute_with_telemetry(&mut self) -> Result<Vec<TaskResult>> {
         let total_timeout = self.config.total_timeout;
         
         match tokio::time::timeout(total_timeout, self.execute_internal()).await {
@@ -108,24 +136,29 @@ impl Transaction {
                 error!("Transaction: Total timeout of {:?} exceeded.", total_timeout);
                 self.cancellation_token.cancel();
                 if self.config.auto_rollback {
-                    self.rollback().await;
+                    let _ = self.rollback().await;
                 }
                 Err(Error::Transaction(format!("Transaction timed out after {:?}", total_timeout)))
             }
         }
     }
+
+    pub async fn execute(&mut self) -> Result<()> {
+        self.execute_with_telemetry().await.map(|_| ())
+    }
     
-    async fn execute_internal(&mut self) -> Result<()> {
+    async fn execute_internal(&mut self) -> Result<Vec<TaskResult>> {
         let total_nodes = self.graph.node_count();
         let mut in_progress = HashSet::new();
         let mut worker_pool = JoinSet::new();
+        let mut telemetry_results = Vec::new();
         let bridge = DependencyBridge::new();
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent));
 
         while self.completed_indices.len() < total_nodes {
             if self.cancellation_token.is_cancelled() {
                 worker_pool.abort_all();
-                if self.config.auto_rollback { self.rollback().await; }
+                if self.config.auto_rollback { let _ = self.rollback().await; }
                 return Err(Error::Transaction("Transaction cancelled".into()));
             }
             
@@ -151,7 +184,7 @@ impl Transaction {
                 let config = self.config.clone();
 
                 worker_pool.spawn(async move {
-                    let _permit = permit; // Move permit into the task to hold the slot
+                    let _permit = permit; 
                     Self::execute_node_with_retry(
                         action, registry, journal, config, cancel_token, idx
                     ).await
@@ -166,32 +199,32 @@ impl Transaction {
                         in_progress.remove(&task_data.node_index);
                         self.completed_indices.insert(task_data.node_index);
                         self.history.push(task_data.node_index);
-                        
-                        info!(
-                            "Node {}:{} completed in {:?} (Attempts: {})", 
-                            task_data.backend_name, 
-                            task_data.package_name,
-                            task_data.duration,
-                            task_data.attempt
-                        );
+                        telemetry_results.push(task_data);
                     }
-                    Err(e) => {
-                        error!("Node {}:{} failed after {:?} (Attempt {}): {}", 
-                               task_data.backend_name, task_data.package_name, task_data.duration, task_data.attempt, e);
+                    Err(ref e) => {
+                        let err_clone = e.clone();
+                        let backend = task_data.backend_name.clone();
+                        let package = task_data.package_name.clone();
                         
-                        if let Error::CommandFailed(ref msg) = e {
-                            bridge.print_suggestions(msg, &task_data.backend_name);
+                        error!("Node {}:{} failed after {:?} (Attempt {}): {}", 
+                               backend, package, task_data.duration, task_data.attempt, err_clone);
+                        
+                        if let Error::CommandFailed(ref msg) = err_clone {
+                            bridge.print_suggestions(msg, &backend);
                         }
+
+                        telemetry_results.push(task_data);
+
                         if self.config.auto_rollback {
                             worker_pool.abort_all();
-                            self.rollback().await;
+                            let _ = self.rollback().await;
                         }
-                        return Err(e);
+                        return Err(err_clone);
                     }
                 }
             }
         }
-        Ok(())
+        Ok(telemetry_results)
     }
     
     async fn execute_node_with_retry(
@@ -207,15 +240,21 @@ impl Transaction {
             GraphAction::Remove { name, backend } => (name.clone(), backend.clone(), JournalAction::Remove { name: name.clone(), backend: backend.clone() }),
         };
 
-        // Pre-fetch backend to check sudo requirements
-        let backend_res = registry.get(&b_name).ok_or_else(|| Error::BackendNotFound(b_name.clone()));
-        let backend_cap = match backend_res {
-            Ok(cap) => cap,
-            Err(e) => return TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: HashMap::new(), attempt: 0, duration: Duration::ZERO, result: Err(e) },
+        let start_time_utc = chrono::Utc::now();
+        let start_instant = std::time::Instant::now();
+
+        // FIX: Fulfills logic bug fix 1. Check backend existence BEFORE creating journal entry.
+        let backend_cap = match registry.get(&b_name) {
+            Some(cap) => cap,
+            None => return TaskResult { 
+                node_index, backend_name: b_name.clone(), package_name: p_name, 
+                properties: HashMap::new(), attempt: 0, duration: Duration::ZERO, 
+                bytes_downloaded: 0, start_time: start_time_utc, result: Err(Error::BackendNotFound(b_name)) 
+            },
         };
+
         let sudo_required = backend_cap.needs_root();
 
-        // Phase 2.1: Register start in Journal ONCE for this node
         let journal_id = {
             let mut j = journal.lock().await;
             j.record_start(j_action.clone()).unwrap_or_else(|_| "transient_id".to_string())
@@ -223,19 +262,21 @@ impl Transaction {
 
         let mut attempt = 0;
         let mut last_error = None;
-        let start = std::time::Instant::now();
         
         while attempt <= config.max_retries {
             attempt += 1;
             
             if cancel_token.is_cancelled() {
-                return TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: HashMap::new(), attempt, duration: start.elapsed(), result: Err(Error::Cancelled) };
+                return TaskResult { 
+                    node_index, backend_name: b_name, package_name: p_name, 
+                    properties: HashMap::new(), attempt: attempt - 1, duration: start_instant.elapsed(), 
+                    bytes_downloaded: 0, start_time: start_time_utc, result: Err(Error::Cancelled) 
+                };
             }
             
             if attempt > 1 {
                 let backoff = std::cmp::min(config.initial_backoff * (1 << (attempt - 2)), config.max_backoff);
                 tokio::time::sleep(backoff).await;
-                debug!("Retrying Node {}:{} (Attempt {}) after {:?}", b_name, p_name, attempt, backoff);
             }
 
             let result = tokio::time::timeout(config.node_timeout, async {
@@ -246,76 +287,108 @@ impl Transaction {
                             let props = if let Some(q) = backend_cap.as_queryable() {
                                 q.info(&spec.name).await?.map(|p| p.properties).unwrap_or_default()
                             } else { HashMap::new() };
-                            Ok(props)
+                            
+                            let bytes = props.get("download_size").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                            Ok((props, bytes))
                         } else { Err(Error::Transaction(format!("Backend '{}' is not installable", b_name))) }
                     }
                     GraphAction::Remove { name, backend: _ } => {
                         if let Some(handler) = backend_cap.as_installable() {
                             handler.remove(&[name.clone()], sudo_required).await?;
-                            Ok(HashMap::new())
+                            Ok((HashMap::new(), 0))
                         } else { Err(Error::Transaction(format!("Backend '{}' is not removable", b_name))) }
                     }
                 }
             }).await;
             
             match result {
-                Ok(Ok(props)) => {
+                Ok(Ok((props, bytes))) => {
                     let mut j = journal.lock().await;
                     let _ = j.record_success(&journal_id, props.clone());
-                    return TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: props, attempt, duration: start.elapsed(), result: Ok(()) };
+                    return TaskResult { 
+                        node_index, backend_name: b_name, package_name: p_name, 
+                        properties: props, attempt: attempt - 1, duration: start_instant.elapsed(), 
+                        bytes_downloaded: bytes, start_time: start_time_utc, result: Ok(()) 
+                    };
                 }
                 Ok(Err(e)) => {
                     warn!("Attempt {} for {}:{} failed: {}", attempt, b_name, p_name, e);
                     last_error = Some(e);
-                    // We don't record failure in journal yet, as we might succeed on retry
                 }
                 Err(_) => {
-                    warn!("Attempt {} for {}:{} timed out after {:?}", attempt, b_name, p_name, config.node_timeout);
+                    warn!("Attempt {} for {}:{} timed out", attempt, b_name, p_name);
                     last_error = Some(Error::Transaction("Node timed out".into()));
                 }
             }
         }
         
-        // If we get here, all retries failed
         let final_err = last_error.unwrap_or(Error::Transaction("Unknown failure".into()));
         let mut j = journal.lock().await;
         let _ = j.record_failure(&journal_id, &format!("{}", final_err));
 
-        TaskResult { node_index, backend_name: b_name, package_name: p_name, properties: HashMap::new(), attempt, duration: start.elapsed(), result: Err(final_err) }
+        TaskResult { 
+            node_index, backend_name: b_name, package_name: p_name, 
+            properties: HashMap::new(), attempt: attempt - 1, duration: start_instant.elapsed(), 
+            bytes_downloaded: 0, start_time: start_time_utc, result: Err(final_err) 
+        }
     }
 
-    async fn rollback(&mut self) {
+    async fn rollback(&mut self) -> Result<()> {
         info!("Transaction: Commencing rollback of {} successful operations.", self.history.len());
+        let mut first_error = None;
         
-        // Rollback in reverse order of success
         for &idx in self.history.iter().rev() {
             let action = &self.graph[idx];
-            match action {
-                GraphAction::Install(spec) => {
-                    if let Some(b) = self.registry.get(&spec.backend) {
-                        let sudo = b.needs_root();
-                        if let Some(h) = b.as_installable() {
-                            debug!("Rollback: Removing {}:{}", spec.backend, spec.name);
-                            if let Err(e) = h.remove(&[spec.name.clone()], sudo).await {
-                                warn!("Rollback failed for {}:{}: {}", spec.backend, spec.name, e);
-                            }
-                        }
+            let mut success = false;
+            
+            for attempt in 1..=2 {
+                let res = match action {
+                    GraphAction::Install(spec) => {
+                        if let Some(b) = self.registry.get(&spec.backend) {
+                            if let Some(h) = b.as_installable() { h.remove(&[spec.name.clone()], b.needs_root()).await }
+                            else { Ok(()) }
+                        } else { Ok(()) }
                     }
-                }
-                GraphAction::Remove { name, backend } => {
-                    if let Some(b) = self.registry.get(backend) {
-                        let sudo = b.needs_root();
-                        if let Some(h) = b.as_installable() {
-                            debug!("Rollback: Re-installing {}:{}", backend, name);
-                            let spec = PackageSpec { name: name.clone(), backend: backend.clone(), options: HashMap::new(), requires: vec![] };
-                            if let Err(e) = h.install(&[spec], sudo).await {
-                                warn!("Rollback failed for {}:{}: {}", backend, name, e);
-                            }
-                        }
+                    GraphAction::Remove { name, backend } => {
+                        if let Some(b) = self.registry.get(backend) {
+                            if let Some(h) = b.as_installable() {
+                                let spec = PackageSpec { 
+                                    name: name.clone(), 
+                                    backend: backend.clone(), 
+                                    options: HashMap::new(), 
+                                    requires: vec![] 
+                                };
+                                h.install(&[spec], b.needs_root()).await
+                            } else { Ok(()) }
+                        } else { Ok(()) }
+                    }
+                };
+
+                if res.is_ok() {
+                    success = true;
+                    break;
+                } else if attempt == 1 {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                } else {
+                    let err = res.err().unwrap();
+                    warn!("Rollback failed for operation at index {:?} on attempt 2: {}", idx, err);
+                    if first_error.is_none() {
+                        first_error = Some(err);
                     }
                 }
             }
+
+            if !success {
+                error!("CRITICAL: Rollback failed for a system modification.");
+            }
         }
-        info!("Transaction: Rollback procedure completed.");
+
+        match first_error {
+            Some(e) => Err(Error::Transaction(format!("Rollback incomplete: {}", e))),
+            None => {
+                info!("Transaction: Rollback procedure completed successfully.");
+                Ok(())
+            }
+        }
     }
 }
