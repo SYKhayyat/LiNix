@@ -1,12 +1,12 @@
-\# LiNix: Universal Mission-Critical Package Orchestrator
+# LiNix: Universal Mission-Critical Package Orchestrator
 
 
 
-\*\*LiNix\*\* (pronounced \*\*L·I·N·I·X\*\* – say the letters) is a high‑performance, asynchronous package management \*\*orchestrator\*\*. It is not “just another package manager” – it is the \*\*manager of managers\*\*. Whether you are on Linux, macOS, or Windows, LiNix allows you to define your entire system state declaratively, then synchronises it with atomic, parallel, and self‑healing transactions.
+**LiNix** (pronounced **L·I·N·I·X** – say the letters) is a high‑performance, asynchronous package management **orchestrator**. It is not “just another package manager” – it is the **manager of managers**. Whether you are on Linux, macOS, or Windows, LiNix allows you to define your entire system state declaratively, then synchronises it with atomic, parallel, and self‑healing transactions.
 
 
 
-\## Why LiNix?
+## Why LiNix?
 
 
 
@@ -14,45 +14,45 @@ Traditional package managers operate in a “fire and forget” mode. If a trans
 
 
 
-\- \*\*Atomic Transactions\*\* – A Write‑Ahead Log (WAL) ensures that if LiNix crashes, it will automatically \*\*heal\*\* on the next run, replaying or reverting incomplete actions.
+- **Atomic Transactions** – A Write‑Ahead Log (WAL) ensures that if LiNix crashes, it will automatically **heal** on the next run, replaying or reverting incomplete actions.
 
-\- \*\*DAG‑Based Parallel Planning\*\* – LiNix builds a Directed Acyclic Graph (DAG) of your desired state and executes independent tasks concurrently, while respecting strict ordering of dependencies.  
+- **DAG‑Based Parallel Planning** – LiNix builds a Directed Acyclic Graph (DAG) of your desired state and executes independent tasks concurrently, while respecting strict ordering of dependencies.  
 
-&#x20; \*Result: super‑fast synchronisations even with hundreds of packages.\*
+&#x20; *Result: super‑fast synchronisations even with hundreds of packages.*
 
-\- \*\*Universal Reach (33+ backends)\*\* – From system managers (APT, Pacman, DNF, Winget, Brew) and language tools (Cargo, NPM, Pip, Gem) to specialised resources (GitHub Releases, direct HTTP downloads, AppImages, VS Code extensions, Emacs packages, system services, BTRFS subvolumes, and more).
+- **Universal Reach (33+ backends)** – From system managers (APT, Pacman, DNF, Winget, Brew) and language tools (Cargo, NPM, Pip, Gem) to specialised resources (GitHub Releases, direct HTTP downloads, AppImages, VS Code extensions, Emacs packages, system services, BTRFS subvolumes, and more).
 
-\- \*\*Imperative → Declarative Bridge\*\* – `linix install` and `linix remove` automatically write to your declarative manifests (`local.txt`). You can start with an empty config, imperatively add packages as you need them, and later run `linix sync` to clean up or replicate the same state elsewhere.
+- **Imperative → Declarative Bridge** – `linix install` and `linix remove` automatically write to your declarative manifests (`local.txt`). You can start with an empty config, imperatively add packages as you need them, and later run `linix sync` to clean up or replicate the same state elsewhere.
 
-\- \*\*Automatic Drift Correction\*\* – Packages that are no longer present in your manifests are automatically removed during `linix sync` (unless they are marked as protected).
+- **Automatic Drift Correction** – Packages that are no longer present in your manifests are automatically removed during `linix sync` (unless they are marked as protected).
 
-\- \*\*Time Travel (Snapshots)\*\* – Built‑in support for BTRFS, ZFS, Timeshift, and Windows Restore Points. Create an automatic snapshot before every `sync` or `upgrade`, and roll back your entire system with `linix undo`.
+- **Time Travel (Snapshots)** – Built‑in support for BTRFS, ZFS, Timeshift, and Windows Restore Points. Create an automatic snapshot before every `sync` or `upgrade`, and roll back your entire system with `linix undo`.
 
-\- \*\*Sandboxing \& Security\*\* – Hardened execution using Bubblewrap (Linux), `sandbox‑exec` (macOS), and Windows Sandbox (with fallback). Define sandbox policies declaratively per package.
+- **Sandboxing & Security** – Hardened execution using Bubblewrap (Linux), `sandbox‑exec` (macOS), and Windows Sandbox (with fallback). Define sandbox policies declaratively per package.
 
-\- \*\*Self‑Healing \& Telemetry\*\* – Every operation is logged with retry counts, download sizes, and timings. The engine automatically retries transient failures and rolls back on critical errors.
+- **Self‑Healing & Telemetry** – Every operation is logged with retry counts, download sizes, and timings. The engine automatically retries transient failures and rolls back on critical errors.
 
-\- \*\*Ephemeral Environments (Ghost Shell)\*\* – Run `linix shell --packages python:3.11 node:20` and get an isolated, one‑off environment with exactly those tools – no pollution, no leftovers.
+- **Ephemeral Environments (Ghost Shell)** – Run `linix shell --packages python:3.11 node:20` and get an isolated, one‑off environment with exactly those tools – no pollution, no leftovers.
 
-\- \*\*High‑Performance Rust Shims\*\* – Deploy sub‑millisecond shims to `\~/.local/bin` that act as transparent proxies to sandboxed applications.
+- **High‑Performance Rust Shims** – Deploy sub‑millisecond shims to `~/.local/bin` that act as transparent proxies to sandboxed applications.
 
-\- \*\*Cross‑Backend Teleportation\*\* – Move a package from one backend to another (e.g., `apt:ripgrep` → `cargo:ripgrep`) with a single command. LiNix updates both the live system and your declarative manifests.
+- **Cross‑Backend Teleportation** – Move a package from one backend to another (e.g., `apt:ripgrep` → `cargo:ripgrep`) with a single command. LiNix updates both the live system and your declarative manifests.
 
-\- \*\*System Profiles\*\* – Switch between different machine identities (e.g., “work”, “gaming”, “server”) with `linix profile`. Each profile can have its own set of group files.
+- **System Profiles** – Switch between different machine identities (e.g., “work”, “gaming”, “server”) with `linix profile`. Each profile can have its own set of group files.
 
-\- \*\*Imperative‑to‑Declarative Migration\*\* – Already installed a bunch of packages manually? Run `linix migrate` – LiNix discovers all installed packages across every backend and automatically writes them into your declarative manifests, taking ownership without reinstalling.
+- **Imperative‑to‑Declarative Migration** – Already installed a bunch of packages manually? Run `linix migrate` – LiNix discovers all installed packages across every backend and automatically writes them into your declarative manifests, taking ownership without reinstalling.
 
-\- \*\*Auto‑Lock Checksums\*\* – For `web` and `github` packages, LiNix automatically calculates SHA256 checksums and stores them in a staging lock file (`locks.json`), preventing race conditions and ensuring integrity.
+- **Auto‑Lock Checksums** – For `web` and `github` packages, LiNix automatically calculates SHA256 checksums and stores them in a staging lock file (`locks.json`), preventing race conditions and ensuring integrity.
 
-\- \*\*Dry‑Run Mode\*\* – Use `linix --dry-run sync` to preview exactly what would change without touching the system.
-
-
-
-\## Quick Start
+- **Dry‑Run Mode** – Use `linix --dry-run sync` to preview exactly what would change without touching the system.
 
 
 
-\### Installation
+## Quick Start
+
+
+
+### Installation
 
 
 
@@ -64,13 +64,13 @@ LiNix is written in Rust. From source:
 
 cargo build --release
 
-cp target/release/linix \~/.local/bin/
+cp target/release/linix ~/.local/bin/
 
 ```
 
 
 
-\### Your First Manifest (Declarative)
+### Your First Manifest (Declarative)
 
 
 
@@ -80,7 +80,7 @@ Create a directory and a manifest file:
 
 ```bash
 
-mkdir -p \~/.config/linix/groups
+mkdir -p ~/.config/linix/groups
 
 echo 'apt:curl
 
@@ -92,13 +92,13 @@ npm:typescript@version=>5.0.0
 
 github:BurntSushi/ripgrep
 
-web:https://example.com/app.tar.gz' > \~/.config/linix/groups/local.txt
+web:https://example.com/app.tar.gz' > ~/.config/linix/groups/local.txt
 
 ```
 
 
 
-\### Or Start Imperatively
+### Or Start Imperatively
 
 
 
@@ -116,7 +116,7 @@ LiNix will automatically append these entries to `local.txt`. Later, you can edi
 
 
 
-\### Synchronise
+### Synchronise
 
 
 
@@ -130,19 +130,19 @@ linix sync
 
 LiNix will:
 
-\- Query every backend to see what is already installed.
+- Query every backend to see what is already installed.
 
-\- Resolve all transitive dependencies (e.g., `apt-cache depends`).
+- Resolve all transitive dependencies (e.g., `apt-cache depends`).
 
-\- Build a DAG of required installs, upgrades, and removals.
+- Build a DAG of required installs, upgrades, and removals.
 
-\- Execute the plan in parallel, respecting ordering.
+- Execute the plan in parallel, respecting ordering.
 
-\- On success, update the local state registry and optionally auto‑lock checksums.
+- On success, update the local state registry and optionally auto‑lock checksums.
 
 
 
-\## Command Reference
+## Command Reference
 
 
 
@@ -152,9 +152,9 @@ LiNix will:
 
 | `sync` | Align system state with declarative manifests (`.txt` files). |
 
-| `install` | Imperatively add a package and \*\*auto‑commit\*\* to your `local.txt`. |
+| `install` | Imperatively add a package and **auto‑commit** to your `local.txt`. |
 
-| `remove` | Purge a package and \*\*auto‑update\*\* manifests. |
+| `remove` | Purge a package and **auto‑update** manifests. |
 
 | `teleport` | Move a package from one backend to another. |
 
@@ -180,67 +180,67 @@ LiNix will:
 
 
 
-\## Architecture Highlights
+## Architecture Highlights
 
 
 
-\### SOLID by Design
+### SOLID by Design
 
 
 
-\- \*\*Capability‑based\*\* – Backends implement only the traits they support: `Installable`, `Queryable`, `Searchable`, `Upgradable`, `RepoManager`, `MetadataProvider`.
+- **Capability‑based** – Backends implement only the traits they support: `Installable`, `Queryable`, `Searchable`, `Upgradable`, `RepoManager`, `MetadataProvider`.
 
-\- \*\*Interface Segregation\*\* – LiNix never requires a backend to provide features it doesn’t have.
+- **Interface Segregation** – LiNix never requires a backend to provide features it doesn’t have.
 
-\- \*\*Dependency Inversion\*\* – High‑level planners depend on abstract `BackendCore` traits, not concrete implementations.
-
-
-
-\### Recursive Dependency Resolution
+- **Dependency Inversion** – High‑level planners depend on abstract `BackendCore` traits, not concrete implementations.
 
 
 
-LiNix does not rely only on your declared `requires`. It queries each backend’s native metadata (e.g., `apt-cache depends`, `pacman -Si`, `dnf repoquery`) to build a \*\*complete transitive dependency graph\*\* before any installation begins.
+### Recursive Dependency Resolution
 
 
 
-\### Transaction Engine
+LiNix does not rely only on your declared `requires`. It queries each backend’s native metadata (e.g., `apt-cache depends`, `pacman -Si`, `dnf repoquery`) to build a **complete transitive dependency graph** before any installation begins.
+
+
+
+### Transaction Engine
 
 
 
 Every DAG node is executed with:
 
-\- Per‑node timeouts
+- Per‑node timeouts
 
-\- Exponential backoff retries
+- Exponential backoff retries
 
-\- Telemetry (attempt count, bytes downloaded, duration)
+- Telemetry (attempt count, bytes downloaded, duration)
 
-\- Journaled Write‑Ahead Log (WAL) for crash recovery
-
-
-
-If a node fails and `auto\_rollback` is enabled, the engine rolls back successfully completed nodes in reverse order – with its own retry logic – leaving the system in a consistent state.
+- Journaled Write‑Ahead Log (WAL) for crash recovery
 
 
 
-\### 100% Hermetic Test Suite
+If a node fails and `auto_rollback` is enabled, the engine rolls back successfully completed nodes in reverse order – with its own retry logic – leaving the system in a consistent state.
+
+
+
+### 100% Hermetic Test Suite
 
 
 
 LiNix ships with a fully isolated integration suite:
 
-\- Uses `MockExecutor` to simulate command outputs.
+- Uses `MockExecutor` to simulate command outputs.
 
-\- Redirects all filesystem operations to temporary directories.
+- Redirects all filesystem operations to temporary directories.
 
-\- Never touches the real network, disk, or system state.
+- Never touches the real network, disk, or system state.
 
-\- Platform‑gated tests (apt only on Linux, winget only on Windows, etc.).
+- Platform‑gated tests (apt only on Linux, winget only on Windows, etc.).
 
 
 
-\## Platform Support
+## Platform Support
 
 
 
@@ -248,29 +248,29 @@ LiNix ships with a fully isolated integration suite:
 
 |----------|------------|--------------------|------------------|
 
-| \*\*Linux\*\* | Bubblewrap (bwrap) | BTRFS, Timeshift, ZFS | apt, pacman, dnf, apk, zypper, snap, flatpak, nix, cargo, npm, pip, pipx, bun, yarn, pnpm, gem, go, composer, link, service, github, web, appimage, emacs, vscode, btrfs |
+| **Linux** | Bubblewrap (bwrap) | BTRFS, Timeshift, ZFS | apt, pacman, dnf, apk, zypper, snap, flatpak, nix, cargo, npm, pip, pipx, bun, yarn, pnpm, gem, go, composer, link, service, github, web, appimage, emacs, vscode, btrfs |
 
-| \*\*macOS\*\* | `sandbox‑exec` | Time Machine (planned) | brew, mas, cargo, npm, pip, pipx, gem, go, link, service, github, web, emacs, vscode |
+| **macOS** | `sandbox‑exec` | Time Machine (planned) | brew, mas, cargo, npm, pip, pipx, gem, go, link, service, github, web, emacs, vscode |
 
-| \*\*Windows\*\* | Windows Sandbox + low‑integrity fallback | Windows Restore Points | winget, scoop, choco, cargo, npm, pip, bun, yarn, pnpm, gem, go, link, service, github, web, emacs, vscode |
-
-
-
-\## Configuration
+| **Windows** | Windows Sandbox + low‑integrity fallback | Windows Restore Points | winget, scoop, choco, cargo, npm, pip, bun, yarn, pnpm, gem, go, link, service, github, web, emacs, vscode |
 
 
 
-LiNix is configured via `\~/.config/linix/config.toml`. You can:
+## Configuration
 
-\- Set global backend priority
 
-\- Enable/disable specific backends
 
-\- Redirect snapshot and temporary directories
+LiNix is configured via `~/.config/linix/config.toml`. You can:
 
-\- Define sandboxing behaviour
+- Set global backend priority
 
-\- Add custom Lua/Rhai hooks
+- Enable/disable specific backends
+
+- Redirect snapshot and temporary directories
+
+- Define sandboxing behaviour
+
+- Add custom Lua/Rhai hooks
 
 
 
@@ -278,35 +278,35 @@ See `linix doctor` for a quick health check of your configuration and backends.
 
 
 
-\## Contributing \& Roadmap
+## Contributing & Roadmap
 
 
 
 LiNix is open source (MIT license). Contributions are welcome – especially:
 
-\- More backends (e.g., Podman, Docker, Helm)
+- More backends (e.g., Podman, Docker, Helm)
 
-\- Additional snapshot providers (e.g., LVM, rsnapshot)
+- Additional snapshot providers (e.g., LVM, rsnapshot)
 
-\- Windows Sandbox enhancements
-
-
-
-\## Final Words
+- Windows Sandbox enhancements
 
 
 
-LiNix v3.5.0 is \*\*mission‑critical ready\*\*. It has been hardened with:
-
-\- Thousands of lines of async‑safe I/O
-
-\- A fully decoupled, testable service architecture
-
-\- Zero `unwrap()` panics in production paths
-
-\- Real‑world testing across Linux, macOS, and Windows
+## Final Words
 
 
 
-\*\*Try it today – define your system once, run it anywhere.\*\*
+LiNix v3.5.0 is **mission‑critical ready**. It has been hardened with:
+
+- Thousands of lines of async‑safe I/O
+
+- A fully decoupled, testable service architecture
+
+- Zero `unwrap()` panics in production paths
+
+- Real‑world testing across Linux, macOS, and Windows
+
+
+
+**Try it today – define your system once, run it anywhere.**
 
