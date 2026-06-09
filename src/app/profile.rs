@@ -93,6 +93,7 @@ impl ProfileManager {
         info!("ProfileManager: Identity '{}' staged. Triggering parallel system sync...", profile_name);
 
         // 3. Phase 2.2 Integration: Realize the new identity via SyncEngine
+        // FIX: Passed self.state.clone() to satisfy the new 9-argument signature
         let engine = SyncEngine::new(
             &self.config,
             self.registry.clone(),
@@ -102,6 +103,7 @@ impl ProfileManager {
             self.hooks.clone(),
             self.snapshot_manager.clone(),
             self.journal.clone(),
+            self.state.clone(),
         ).await;
 
         // Calculate the delta for the new profile

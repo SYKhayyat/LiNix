@@ -135,7 +135,6 @@ impl App {
     }
 
     /// Returns a Runner instance configured with shared kernel components.
-    /// Fulfills Phase 5.1: Injects required StateRegistry for dependency bridging.
     pub fn runner(&self) -> Runner {
         Runner::new(
             self.registry.clone(),

@@ -47,7 +47,7 @@ impl BackendCore for ServiceBackendCore {
     }
 
     fn needs_root(&self) -> bool {
-        // System service management almost always requires root/administrative privileges.
+        // System service management requires root/administrative privileges.
         true
     }
 }
@@ -55,9 +55,7 @@ impl BackendCore for ServiceBackendCore {
 #[async_trait]
 impl MetadataProvider for ServiceBackendCore {
     async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
-        // While services can have unit dependencies (e.g. 'After=' or 'Requires=' in systemd),
-        // LiNix treats the service backend as a state-manager for existing units rather
-        // than a package manager. We return empty to avoid recursing into OS init logic.
+        // Services handle their own unit dependencies; LiNix manages state only.
         Ok(vec![])
     }
 }
@@ -170,12 +168,15 @@ impl Queryable for ServiceQueryable {
         self.list_installed().await
     }
 
+    /// FIX: Hardening Phase 5.2. No longer greedy. 
+    /// Verifies existence before returning metadata.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
-        let mut p = Package::new(name, "service");
-        
-        self.fill_platform_metadata(&mut p).await?;
-
-        Ok(Some(p))
+        let installed = self.list_installed().await?;
+        if let Some(mut pkg) = installed.into_iter().find(|p| p.name == name) {
+            self.fill_platform_metadata(&mut pkg).await?;
+            return Ok(Some(pkg));
+        }
+        Ok(None)
     }
 }
 

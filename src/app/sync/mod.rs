@@ -29,7 +29,7 @@ pub trait Planner: Send + Sync {
 }
 
 /// Primary entry point for system synchronization.
-/// Hardened for Phase 2.2: Optimizes state handling by eliminating redundant disk reloads.
+/// Hardened for Phase 4.1: Uses a shared StateRegistry Arc to ensure a single source of truth.
 pub struct SyncEngine<'a> {
     pub config: &'a Config,
     pub registry: Arc<BackendRegistry>,
@@ -39,6 +39,7 @@ pub struct SyncEngine<'a> {
     pub hooks: Arc<LuaHooks>,
     pub snapshot_manager: Arc<SnapshotManager>,
     pub journal: Arc<Mutex<Journal>>,
+    pub state: Arc<Mutex<StateRegistry>>,
     pub manifest_engine: ManifestEngine,
 }
 
@@ -52,6 +53,7 @@ impl<'a> SyncEngine<'a> {
         hooks: Arc<LuaHooks>,
         snapshot_manager: Arc<SnapshotManager>,
         journal: Arc<Mutex<Journal>>,
+        state: Arc<Mutex<StateRegistry>>,
     ) -> Self {
         let manifest_engine = ManifestEngine::new(&config.groups_dir);
         Self {
@@ -63,21 +65,16 @@ impl<'a> SyncEngine<'a> {
             hooks,
             snapshot_manager,
             journal,
+            state,
             manifest_engine,
         }
     }
 
     /// Primary entry point for system synchronization.
-    /// Accepts a pre-calculated plan to respect user filtering in the TUI.
     pub async fn sync(&self, changes: SyncChanges) -> Result<()> {
         let _heartbeat = self.executor.start_sudo_keepalive().await;
         let _ = self.hooks.run_before_sync().await;
         
-        // Load initial state with async isolation
-        let mut state = tokio::task::spawn_blocking(StateRegistry::load)
-            .await
-            .map_err(|e| crate::core::Error::Other(e.to_string()))??;
-
         if changes.is_empty() {
             info!("Success: System is consistent with declarative manifests.");
             return Ok(());
@@ -85,17 +82,22 @@ impl<'a> SyncEngine<'a> {
 
         let _snapshot = self.snapshot_manager.auto_snapshot("pre_sync").await?;
 
-        let result = self.execute_transaction(&changes, &mut state).await;
+        // Phase 4.1 Fix: Lock the shared state registry directly instead of loading from disk
+        let result = {
+            let mut state_guard = self.state.lock().await;
+            self.execute_transaction(&changes, &mut state_guard).await
+        };
 
         if result.is_ok() {
-            // Phase 2.2 Optimization: Clone state for saving so we don't consume it
-            let state_to_save = state.clone();
+            // Persist the shared state to disk
+            let state_to_save = self.state.lock().await.clone();
             tokio::task::spawn_blocking(move || state_to_save.save())
                 .await
                 .map_err(|e| crate::core::Error::Other(e.to_string()))??;
 
-            // Reuse the mutated 'state' variable for shim reconciliation instead of reloading from disk
-            self.reconcile_all_shims(&state).await?;
+            // Perform post-transaction reconciliations using the updated state
+            let final_state = self.state.lock().await;
+            self.reconcile_all_shims(&final_state).await?;
             
             let _ = self.hooks.run_after_sync().await;
             self.metrics.print_summary();
@@ -107,7 +109,6 @@ impl<'a> SyncEngine<'a> {
     }
 
     async fn execute_transaction(&self, changes: &SyncChanges, state: &mut StateRegistry) -> Result<()> {
-        // Phase 1.1: Using a standard TransactionConfig preset
         let tx_config = TransactionConfig::patient();
 
         let mut tx = Transaction::with_config(
@@ -121,7 +122,6 @@ impl<'a> SyncEngine<'a> {
         let results = tx.execute_with_telemetry().await?;
         pb.finish();
 
-        // Record telemetry for every operation (Phase 2.4/2.5)
         for res in results {
             self.metrics.record_operation(
                 &res.package_name,
@@ -161,7 +161,6 @@ impl<'a> SyncEngine<'a> {
                     let path_key = if spec.backend == "github" { "install_path" } else { "local_path" };
                     if let Some(local_path) = pkg.properties.get(path_key) {
                         let path = std::path::Path::new(local_path);
-                        
                         let path_owned = path.to_path_buf();
                         let hash_res = tokio::task::spawn_blocking(move || generate_checksum(&path_owned)).await;
                         
@@ -171,8 +170,6 @@ impl<'a> SyncEngine<'a> {
                             new_options.insert("sha256".into(), hash);
                             let opt_parts: Vec<String> = new_options.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
                             let new_spec_str = format!("{}:{}@{}", spec.backend, spec.name, opt_parts.join(","));
-                            
-                            // ManifestEngine update is async
                             let _ = self.manifest_engine.update_package(&spec.name, &new_spec_str).await;
                         }
                     }

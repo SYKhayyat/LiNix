@@ -74,6 +74,8 @@ pub struct LinkInstallable {
 #[async_trait]
 impl Installable for LinkInstallable {
     /// Aligns the target file with the source (Link or Rendered Template).
+    /// Hardened for Phase 1.1 Correction: Uses the abstracted executor.symlink() 
+    /// to ensure dry-run VFS recording.
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         for spec in specs {
             let source = PathBuf::from(&spec.name);
@@ -130,29 +132,23 @@ impl Installable for LinkInstallable {
             }
 
             info!("Link: Creating link {:?} -> {:?}", source, target_path);
-            if !self.core.executor.dry_run {
-                if let Some(p) = target_path.parent() {
-                    tokio::fs::create_dir_all(p).await.map_err(Error::from)?;
+            
+            // Fulfills Phase 1.1 Correction: Delegate to executor to allow VFS recording in tests.
+            #[cfg(target_os = "windows")]
+            {
+                let source_abs = source.canonicalize().unwrap_or_else(|_| source.clone());
+                if !self.core.executor.dry_run && !LinkBackendCore::is_same_drive(&source_abs, &target_path) {
+                    warn!("Link: Cross-drive fallback to COPY for {:?}", source);
+                    tokio::fs::copy(&source, &target_path).await.map_err(Error::from)?;
+                } else {
+                    // This now handles dry-run automatically via VFS
+                    self.core.executor.symlink(&source, &target_path).await?;
                 }
+            }
 
-                #[cfg(unix)] {
-                    tokio::fs::symlink(&source, &target_path).await.map_err(Error::from)?;
-                }
-
-                #[cfg(target_os = "windows")] {
-                    let source_abs = source.canonicalize().unwrap_or_else(|_| source.clone());
-                    if !LinkBackendCore::is_same_drive(&source_abs, &target_path) {
-                        warn!("Link: Cross-drive fallback to COPY for {:?}", source);
-                        tokio::fs::copy(&source, &target_path).await.map_err(Error::from)?;
-                    } else {
-                        let is_dir = tokio::fs::metadata(&source).await.map(|m| m.is_dir()).unwrap_or(false);
-                        if is_dir {
-                            tokio::fs::symlink_dir(&source, &target_path).await.map_err(Error::from)?;
-                        } else {
-                            tokio::fs::symlink_file(&source, &target_path).await.map_err(Error::from)?;
-                        }
-                    }
-                }
+            #[cfg(unix)]
+            {
+                self.core.executor.symlink(&source, &target_path).await?;
             }
         }
         Ok(())

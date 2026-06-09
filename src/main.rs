@@ -13,7 +13,6 @@ use std::collections::HashMap;
 #[tokio::main]
 async fn main() -> Result<()> {
     // 1. HIGH-PERFORMANCE RUST SHIM HIJACK
-    // Detect if we are being called via a symlink or a renamed binary (shim mode)
     let args_raw: Vec<String> = env::args().collect();
     let bin_path = env::current_exe().ok();
     let current_bin_name = bin_path
@@ -23,8 +22,6 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "linix".to_string());
 
     if current_bin_name != "linix" && !current_bin_name.starts_with("linix") {
-        // We are in shim mode. Load config and delegate to Runner.
-        // Config::from_file is sync; wrap in spawn_blocking for async integrity.
         let config_path = dirs::config_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("."))
             .join("linix")
@@ -48,7 +45,6 @@ async fn main() -> Result<()> {
         dirs::config_dir().unwrap_or_default().join("linix").join("config.toml")
     });
 
-    // Load config with blocking isolation
     let mut config = tokio::task::spawn_blocking(move || {
         linix::config::Config::from_file(&config_path)
     }).await.map_err(|e| anyhow::anyhow!("Task join error: {}", e))?
@@ -63,7 +59,7 @@ async fn main() -> Result<()> {
 
     match &cli.command {
         Commands::Sync { locked: _ } => {
-            // SyncEngine handles orchestration of system state
+            // FIX: Pass app.state.clone() to satisfy the 9-argument signature
             let engine = SyncEngine::new(
                 &app.config, 
                 app.registry.clone(), 
@@ -72,7 +68,8 @@ async fn main() -> Result<()> {
                 app.progress.clone(), 
                 app.hooks.clone(), 
                 app.snapshot_manager.clone(),
-                app.journal.clone()
+                app.journal.clone(),
+                app.state.clone(),
             ).await;
 
             if app.journal.lock().await.needs_recovery() {
@@ -95,7 +92,6 @@ async fn main() -> Result<()> {
             }
 
             if !app.config.yes {
-                // TUI runs on main thread; it blocks, but since we are at a decision point, this is expected.
                 let mut preview = TuiPreview::new(&changes, HashMap::new());
                 if !preview.run()? {
                     info!("Sync cancelled by user.");
@@ -116,21 +112,18 @@ async fn main() -> Result<()> {
                     
                     if let Some(installer) = backend_cap.as_installable() {
                         info!("Installing {} via {}...", spec.name, spec.backend);
-                        // Phase 2.2: Respect backend root requirements
                         let sudo = backend_cap.needs_root();
                         installer.install(&[spec.clone()], sudo).await?;
                         
                         let mut state_guard = app.state.lock().await;
                         state_guard.add_simple(&spec.backend, &spec.name, None);
                         
-                        // Phase 3.2: add_package_to_local is now async
                         if let Err(e) = add_package_to_local(&app.config.groups_dir, pkg_str).await {
                             warn!("Auto-Commit failed for {}: {}", spec.name, e);
                         }
                     }
                 }
             }
-            // Persistence is blocking; isolate in spawn_blocking
             let state_final = app.state.lock().await.clone();
             tokio::task::spawn_blocking(move || state_final.save()).await??;
             Ok(())
@@ -144,14 +137,12 @@ async fn main() -> Result<()> {
                         if queryable.info(pkg_name).await?.is_some() {
                             if let Some(installer) = backend.as_installable() {
                                 info!("Removing {} from {}...", pkg_name, backend.name());
-                                // Phase 2.2: Respect backend root requirements
                                 let sudo = backend.needs_root();
                                 installer.remove(&[pkg_name.clone()], sudo).await?;
                                 
                                 let mut state_guard = app.state.lock().await;
                                 state_guard.remove(backend.name(), pkg_name);
                                 
-                                // Phase 3.2: remove_package_from_local is now async
                                 let _ = remove_package_from_local(&app.config.groups_dir, pkg_name).await;
                                 found = true;
                                 break;
@@ -189,7 +180,6 @@ async fn main() -> Result<()> {
                     let b_name = backend.as_deref().unwrap_or("apt");
                     let b = app.registry.get(b_name).context("Backend not found")?;
                     let manager = b.as_repo_manager().context("Backend does not support repositories.")?;
-                    // Phase 2.2: Precision sudo
                     let sudo = b.needs_root();
                     manager.add_repo(name, url, sudo).await?;
                     info!("Successfully added repository: {}", name);
@@ -221,11 +211,13 @@ async fn main() -> Result<()> {
         Commands::Orphans => app.clean_orphans().await.map_err(|e| e.into()),
         Commands::Clean => app.clean_orphans().await.map_err(|e| e.into()),
         Commands::Heal => {
+            // FIX: Pass app.state.clone() to satisfy the 9-argument signature
             let engine = SyncEngine::new(
                 &app.config, app.registry.clone(), app.executor.duplicate(), 
                 app.metrics.clone(), app.progress.clone(), 
                 app.hooks.clone(), app.snapshot_manager.clone(),
-                app.journal.clone()
+                app.journal.clone(),
+                app.state.clone(),
             ).await;
             engine.heal().await.map_err(|e| e.into())
         }

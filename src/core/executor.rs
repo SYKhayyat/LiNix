@@ -47,7 +47,6 @@ impl DryRunOutput {
 /// Conversion to make DryRunOutput behave like a real OS process output.
 impl From<DryRunOutput> for StdOutput {
     fn from(dry: DryRunOutput) -> Self {
-        // Create a real exit status that represents success (0)
         let status = if cfg!(windows) {
             StdCommand::new("cmd").args(["/C", "exit", "0"]).status().expect("Failed to create dummy exit status")
         } else {
@@ -57,10 +56,17 @@ impl From<DryRunOutput> for StdOutput {
     }
 }
 
-/// Defines a pluggable layer for low-level command execution.
+/// Defines a pluggable layer for low-level command execution and system queries.
 #[async_trait]
 pub trait ExecutionLayer: Send + Sync {
+    /// Executes a command asynchronously.
     async fn execute(&self, cmd: &str, args: &[String], env: &HashMap<String, String>) -> Result<StdOutput>;
+    
+    /// Checks if a command exists in the system PATH.
+    fn check_command(&self, cmd: &str) -> bool;
+
+    /// Phase 1.1 Correction: Abstract symlinking to allow VFS recording and mock testing.
+    async fn symlink(&self, src: &Path, dst: &Path) -> Result<()>;
 }
 
 /// Actual OS process execution layer.
@@ -87,6 +93,32 @@ impl ExecutionLayer for RawExecutor {
             .wait_with_output().await?;
         Ok(output)
     }
+
+    fn check_command(&self, cmd: &str) -> bool {
+        let check_bin = if cfg!(windows) { "where" } else { "which" };
+        StdCommand::new(check_bin)
+            .arg(cmd)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
+        #[cfg(unix)]
+        {
+            tokio::fs::symlink(src, dst).await.map_err(|e| Error::Io(e.to_string()))
+        }
+        #[cfg(windows)]
+        {
+            if src.is_dir() {
+                tokio::fs::symlink_dir(src, dst).await.map_err(|e| Error::Io(e.to_string()))
+            } else {
+                tokio::fs::symlink_file(src, dst).await.map_err(|e| Error::Io(e.to_string()))
+            }
+        }
+    }
 }
 
 /// Dry-run execution layer that logs instead of executing.
@@ -98,21 +130,38 @@ impl ExecutionLayer for DryRunExecutor {
         info!("[DRY-RUN] Would execute: {} {}", cmd, args.join(" "));
         Ok(DryRunOutput::new().into())
     }
+
+    fn check_command(&self, _cmd: &str) -> bool {
+        true
+    }
+
+    async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
+        let val = format!("SYMLINK:{}", src.display());
+        VFS.insert(dst.to_path_buf(), val);
+        Ok(())
+    }
 }
 
 /// A mock execution layer for testing without real system commands.
-/// Fulfills Phase 9.1: Enables backend unit testing.
 pub struct MockExecutor {
     pub responses: DashMap<String, Result<StdOutput>>,
+    pub command_existence: DashMap<String, bool>,
 }
 
 impl MockExecutor {
     pub fn new() -> Self {
-        Self { responses: DashMap::new() }
+        Self { 
+            responses: DashMap::new(),
+            command_existence: DashMap::new(),
+        }
     }
 
     pub fn set_response(&self, cmd_pattern: &str, response: Result<StdOutput>) {
         self.responses.insert(cmd_pattern.to_string(), response);
+    }
+
+    pub fn set_command_exists(&self, cmd: &str, exists: bool) {
+        self.command_existence.insert(cmd.to_string(), exists);
     }
 }
 
@@ -123,13 +172,21 @@ impl ExecutionLayer for MockExecutor {
         if let Some(res) = self.responses.get(&full_cmd) {
             return res.clone();
         }
-        // Default success for unmatched commands in mock mode
         Ok(DryRunOutput::new().into())
+    }
+
+    fn check_command(&self, cmd: &str) -> bool {
+        self.command_existence.get(cmd).map(|r| *r.value()).unwrap_or(true)
+    }
+
+    async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
+        let val = format!("SYMLINK:{}", src.display());
+        VFS.insert(dst.to_path_buf(), val);
+        Ok(())
     }
 }
 
 /// The primary coordinator for all external command calls and filesystem IO.
-/// Derived Clone to allow sharing across backends and parallel tasks.
 #[derive(Clone)]
 pub struct CommandExecutor {
     pub dry_run: bool,
@@ -156,12 +213,10 @@ impl CommandExecutor {
         Self { dry_run, verbose, inner }
     }
 
-    /// Phase 9.1: Constructor that allows injecting a custom execution layer (Mocking).
     pub fn with_layer(dry_run: bool, verbose: bool, layer: Arc<dyn ExecutionLayer>) -> Self {
         Self { dry_run, verbose, inner: layer }
     }
 
-    /// Provides a safe way to create a copy of the executor.
     pub fn duplicate(&self) -> Self {
         self.clone()
     }
@@ -252,23 +307,21 @@ impl CommandExecutor {
         Ok(())
     }
 
-    /// Returns a snapshot of all virtual changes during a dry-run.
-    /// Fulfills Phase 2.7.
+    /// Abstracted symlink for cross-platform and virtual filesystem support.
+    pub async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
+        self.inner.symlink(src, dst).await
+    }
+
     pub fn get_vfs_diff(&self) -> Vec<(PathBuf, String)> {
         VFS.iter().map(|item| (item.key().clone(), item.value().clone())).collect()
     }
 
     pub async fn command_exists(&self, cmd: &str) -> bool {
-        let check_bin = if cfg!(windows) { "where" } else { "which" };
-        match Command::new(check_bin).arg(cmd).status().await {
-            Ok(status) => status.success(),
-            Err(_) => false,
-        }
+        self.inner.check_command(cmd)
     }
 
     pub fn command_exists_sync(&self, cmd: &str) -> bool {
-        let check_bin = if cfg!(windows) { "where" } else { "which" };
-        std::process::Command::new(check_bin).arg(cmd).status().map(|s| s.success()).unwrap_or(false)
+        self.inner.check_command(cmd)
     }
 
     pub async fn start_sudo_keepalive(&self) -> Option<tokio::task::JoinHandle<()>> {

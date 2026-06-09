@@ -113,7 +113,7 @@ impl DependencyBridge {
     }
 
     /// Primary decoupled failure handler.
-    /// Fulfills Phase 5.1 cleanup: Removed dead reference to monolithic App.
+    /// FIX: Removed dead reference to monolithic App.
     pub async fn handle_failure(
         &self, 
         stderr: &str, 
@@ -137,7 +137,6 @@ impl DependencyBridge {
         if auto_install {
             self.auto_install_suggestions(&suggestions, registry, state, config).await?;
         } else {
-            // Confirm::interact() is blocking; wrap in spawn_blocking
             let should_install = tokio::task::spawn_blocking(move || {
                 Confirm::with_theme(&ColorfulTheme::default())
                     .with_prompt("Would you like to install these dependencies now?")
@@ -162,7 +161,6 @@ impl DependencyBridge {
     ) -> Result<()> {
         let mut success_count = 0;
         
-        // Use a resolver to parse the suggestion strings
         let resolver = crate::app::sync::resolver::StateResolver::new(config, registry.clone());
 
         for suggestion in suggestions {
@@ -178,7 +176,6 @@ impl DependencyBridge {
                             let mut state_guard = state.lock().await;
                             state_guard.add_simple(&spec.backend, &spec.name, None);
                             
-                            // StateRegistry::save is blocking
                             let state_clone = state_guard.clone();
                             tokio::task::spawn_blocking(move || {
                                 state_clone.save()

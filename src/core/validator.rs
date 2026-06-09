@@ -4,6 +4,7 @@ use regex::Regex;
 use std::path::Path;
 
 /// Strict regex for package names to prevent shell injection or path traversal.
+/// Allows letters, numbers, and common delimiters for scoped packages (@org/pkg).
 static PACKAGE_NAME_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._@:+/-]+$").unwrap());
 
 /// Regex to detect shell metacharacters that could be used in injection attacks.
@@ -47,12 +48,23 @@ pub struct Validator;
 impl Validator {
     /// Validates a package name against strict character rules.
     /// Blocks potential path traversals and shell injection characters.
+    /// 
+    /// FIX: Explicitly blocks '..' to prevent path traversal vulnerabilities.
     pub fn validate_package_name(name: &str) -> Result<()> {
         if name.is_empty() { 
             return Err(Error::Validation("Package name cannot be empty".into())); 
         }
         if name.len() > 256 { 
             return Err(Error::Validation("Package name length exceeds 256 characters".into())); 
+        }
+
+        // Phase 10.1 Hardening: Explicitly block directory traversal patterns
+        // even if the regex allows dots and slashes.
+        if name.contains("..") {
+            return Err(Error::Validation(format!(
+                "Security Block: Directory traversal pattern '..' detected in package name: {}", 
+                name
+            )));
         }
         
         if !PACKAGE_NAME_REGEX.is_match(name) {
