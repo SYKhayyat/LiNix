@@ -6,11 +6,9 @@ use std::path::{Path, PathBuf};
 use crate::utils::{safe_data_dir, safe_config_dir};
 
 /// Configuration for platform-specific sandboxing behaviors.
-/// Fulfills Phase 3.1 of the Mission-Critical Plan.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SandboxSettings {
     /// On Linux, if true, LiNix will fail if 'bwrap' is missing. 
-    /// If false, it falls back to PATH-only isolation.
     #[serde(default = "default_false")]
     pub require_bwrap: bool,
 
@@ -18,12 +16,10 @@ pub struct SandboxSettings {
     pub macos_profile_template: Option<PathBuf>,
 
     /// On Windows, if true, LiNix will fail if Windows Sandbox is unavailable.
-    /// If false, it falls back to restricted integrity levels.
     #[serde(default = "default_false")]
     pub windows_require_sandbox: bool,
 
-    /// If true, LiNix will allow running without true OS-level isolation 
-    /// if the primary sandbox mechanism is missing.
+    /// If true, allow running without OS-level isolation if mechanisms are missing.
     #[serde(default = "default_true")]
     pub fallback_allowed: bool,
 }
@@ -39,131 +35,154 @@ impl Default for SandboxSettings {
     }
 }
 
-/// The primary configuration for LiNix Version 3.5.0 "Consistency & Integrity."
-/// Central source of truth for execution parameters, backend behavior, and system identity.
+/// Feature 2: Settings for automatic system snapshot management.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SnapshotSettings {
+    /// Maximum age of a snapshot in days before it is pruned.
+    #[serde(default = "default_max_age")]
+    pub max_age_days: u32,
+
+    /// Maximum number of snapshots to keep.
+    #[serde(default = "default_max_count")]
+    pub max_count: u32,
+
+    /// If true, prune snapshots automatically after successful transactions.
+    #[serde(default = "default_true")]
+    pub auto_prune: bool,
+}
+
+impl Default for SnapshotSettings {
+    fn default() -> Self {
+        Self {
+            max_age_days: 30,
+            max_count: 10,
+            auto_prune: true,
+        }
+    }
+}
+
+/// Feature 5: Configuration for background scheduled tasks.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ScheduleConfig {
+    /// Unique identifier for the task.
+    pub name: String,
+    /// Cron expression (e.g., "0 2 * * *").
+    pub cron: String,
+    /// The LiNix command to run.
+    pub command: String,
+    /// Notification channel: "desktop", "email", or "none".
+    pub notification: Option<String>,
+    /// Last time the task was successfully verified in the system scheduler.
+    pub last_synced: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// The primary configuration for LiNix Version 3.6.0.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
-    /// Maps generic backend names to specific implementations (e.g., "sys" -> "apt").
     #[serde(default)]
     pub aliases: HashMap<String, String>,
     
-    /// User-defined package groups in config.toml (e.g., "dev" -> ["git", "vim"]).
     #[serde(default)]
     pub groups: HashMap<String, Vec<String>>,
     
-    /// If true, no system modifications will be performed.
     #[serde(default)]
     pub dry_run: bool,
     
-    /// If true, all confirmation prompts are skipped.
     #[serde(default)]
     pub yes: bool,
     
-    /// The directory where .txt group files are stored.
     #[serde(default = "default_groups_dir")]
     pub groups_dir: PathBuf,
+
+    /// Feature 3: Directory containing reusable .module.txt files.
+    #[serde(default = "default_modules_dir")]
+    pub modules_dir: PathBuf,
     
-    /// The path to the active configuration file (internal tracking).
     #[serde(skip)]
     pub config_file: PathBuf,
     
-    /// A whitelist of backends allowed to run. If empty, all available backends are used.
     #[serde(default)]
     pub enabled_backends: Vec<String>,
 
-    /// The order in which backends are queried during a universal search or discovery.
     #[serde(default = "default_priority")]
     pub backend_priority: Vec<String>,
     
-    /// Lua and Rhai scripts mapped to package lifecycle events.
     #[serde(default)]
     pub hooks: HashMap<String, HashMap<String, String>>,
     
-    /// Packages to be installed only on specific machines, identified by hostname.
     #[serde(default)]
     pub hostname_packages: HashMap<String, Vec<String>>,
     
-    /// Path to the list of packages designated for removal during a 'clean' sync.
     #[serde(default = "default_bloatware_file")]
     pub bloatware_file: PathBuf,
     
-    /// Whether to automatically remove bloatware during system sync.
     #[serde(default)]
     pub remove_bloatware: bool,
 
-    /// Whether to automatically prune unused dependencies (orphans) during sync.
     #[serde(default = "default_false")]
     pub purge_orphans: bool,
 
-    /// Whether to automatically lock checksums into manifests for web/github resources.
     #[serde(default = "default_true")]
     pub auto_lock_checksums: bool,
     
-    /// Toggles the indicatif progress bars.
     #[serde(default = "default_true")]
     pub show_progress: bool,
     
-    /// Toggles debug-level logging output.
     #[serde(default)]
     pub verbose: bool,
     
-    /// Time-to-live for internal package metadata caches (seconds).
     #[serde(default = "default_cache_ttl")]
     pub cache_ttl: u64,
     
-    /// Personal Access Token for GitHub API to increase rate limits.
     #[serde(default)]
     pub github_token: Option<String>,
     
-    /// Maximum number of parallel tasks in the JoinSet worker pool.
     #[serde(default = "default_max_parallel")]
     pub max_parallel: usize,
     
-    /// Arbitrary key-value settings passed to individual backends.
     #[serde(default)]
     pub backend_settings: HashMap<String, HashMap<String, String>>,
     
-    /// The backend used if none is specified in a package string.
     #[serde(default)]
     pub default_backend: Option<String>,
     
-    /// Configurable list of protected packages that should never be removed.
     #[serde(default = "default_protected_packages")]
     pub protected_packages: Vec<String>,
 
-    /// Path to BTRFS snapshot directory.
     #[serde(default = "default_btrfs_path")]
     pub btrfs_path: String,
 
-    /// Template path for Timeshift snapshots.
     #[serde(default = "default_timeshift_path")]
     pub timeshift_path: String,
 
-    /// Optional specific ZFS dataset to snapshot.
     pub zfs_dataset: Option<String>,
 
-    /// Global temporary directory for build artifacts and downloads.
     #[serde(default = "default_tmp_dir")]
     pub tmp_dir: PathBuf,
 
-    /// Installation root for GitHub-sourced binaries.
     #[serde(default = "default_github_dir")]
     pub github_dir: PathBuf,
 
-    /// Installation root for direct web downloads.
     #[serde(default = "default_web_dir")]
     pub web_dir: PathBuf,
 
-    /// Installation root for standalone AppImages.
     #[serde(default = "default_appimage_dir")]
     pub appimage_dir: PathBuf,
 
-    /// Sandboxing settings for isolated execution.
     #[serde(default)]
     pub sandbox: SandboxSettings,
+
+    /// Feature 2: Snapshot pruning configuration.
+    #[serde(default)]
+    pub snapshots: SnapshotSettings,
+
+    /// Feature 5: Native background schedules.
+    #[serde(default)]
+    pub schedules: Vec<ScheduleConfig>,
 }
 
 fn default_groups_dir() -> PathBuf { safe_config_dir().join("groups") }
+fn default_modules_dir() -> PathBuf { safe_config_dir().join("modules") }
 fn default_bloatware_file() -> PathBuf { safe_config_dir().join("bloatware.txt") }
 fn default_btrfs_path() -> String { "/.snapshots".to_string() }
 fn default_timeshift_path() -> String { "/run/timeshift/backup/timeshift/snapshots".to_string() }
@@ -175,6 +194,8 @@ fn default_true() -> bool { true }
 fn default_false() -> bool { false }
 fn default_cache_ttl() -> u64 { 300 }
 fn default_max_parallel() -> usize { 4 }
+fn default_max_age() -> u32 { 30 }
+fn default_max_count() -> u32 { 10 }
 
 fn default_priority() -> Vec<String> {
     vec![
@@ -197,7 +218,7 @@ fn default_protected_packages() -> Vec<String> {
     }
     #[cfg(target_os = "windows")]
     {
-        packages.extend(vec!["windows".into(), "win32".into(), "kernel32".into()]);
+        packages.extend(vec!["windows".into(), "win32".into(), "kernel32".into(), "ntdll.dll".into()]);
     }
     #[cfg(target_os = "macos")]
     {
@@ -214,7 +235,8 @@ impl Default for Config {
             dry_run: false,
             yes: false,
             groups_dir: default_groups_dir(),
-            config_file: PathBuf::from("/etc/linix/config.toml"),
+            modules_dir: default_modules_dir(),
+            config_file: safe_config_dir().join("config.toml"),
             enabled_backends: Vec::new(),
             backend_priority: default_priority(),
             hooks: HashMap::new(),
@@ -239,6 +261,8 @@ impl Default for Config {
             web_dir: default_web_dir(),
             appimage_dir: default_appimage_dir(),
             sandbox: SandboxSettings::default(),
+            snapshots: SnapshotSettings::default(),
+            schedules: Vec::new(),
         }
     }
 }
@@ -255,9 +279,12 @@ impl Config {
         Ok(config)
     }
 
-    pub fn to_file(&self, path: &Path) -> Result<()> {
+    pub fn save(&self) -> Result<()> {
         let content = toml::to_string_pretty(self).map_err(|e| Error::Config(format!("Failed to serialize config: {}", e)))?;
-        fs::write(path, content).map_err(|e| Error::Config(format!("Failed to write config file: {}", e)))?;
+        if let Some(parent) = self.config_file.parent() {
+            fs::create_dir_all(parent).map_err(Error::from)?;
+        }
+        fs::write(&self.config_file, content).map_err(|e| Error::Config(format!("Failed to write config file: {}", e)))?;
         Ok(())
     }
 
@@ -286,11 +313,13 @@ impl Config {
         if self.max_parallel == 0 {
             return Err(Error::Config("max_parallel must be greater than 0".into()));
         }
+        // Verify cron strings for any schedules
+        for schedule in &self.schedules {
+            if let Err(e) = schedule.cron.parse::<cron::Schedule>() {
+                return Err(Error::Config(format!("Invalid cron expression for task '{}': {}", schedule.name, e)));
+            }
+        }
         Ok(())
-    }
-    
-    pub fn get_protected_packages(&self) -> &[String] {
-        &self.protected_packages
     }
     
     pub fn is_protected(&self, package_name: &str) -> bool {

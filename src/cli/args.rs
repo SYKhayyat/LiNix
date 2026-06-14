@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 /// LiNix - Universal Mission-Critical Package Manager
 /// High-performance, DAG-based orchestration for 33+ backends.
+/// Version 3.6.0: Consistency, Integrity, and Native Automation.
 #[derive(Parser, Debug)]
-#[command(name = "linix", version = "3.5.0", about = "Universal Mission-Critical Package Manager")]
+#[command(name = "linix", version = "3.6.0", about = "Universal Mission-Critical Package Manager")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -42,9 +43,13 @@ pub struct Cli {
 pub enum Commands {
     /// Synchronize system state with declarative configuration (DAG-based)
     Sync { 
-        /// Force strict version matching
+        /// Force strict version matching against locked state
         #[arg(long)] 
-        locked: bool 
+        locked: bool,
+
+        /// Output the transition plan as JSON (requires --dry-run)
+        #[arg(long)]
+        json: bool,
     },
 
     /// Run a command within an ephemeral package environment
@@ -71,7 +76,7 @@ pub enum Commands {
     /// Perform a deep system cleanup (orphans, cache, temp files)
     Clean,
 
-    /// Roadmap 3.3: Identify all packages installed on the OS but not managed by LiNix
+    /// Identify all packages installed on the OS but not managed by LiNix
     Unmanaged,
 
     /// List and remove orphaned dependencies across all backends
@@ -86,14 +91,34 @@ pub enum Commands {
     /// Refresh repository metadata for all backends
     Update,
 
-    /// Upgrade all managed packages to their latest versions (auto-snapshot)
-    Upgrade,
+    /// Upgrade managed packages to their latest versions
+    Upgrade {
+        /// Limit upgrade to a specific profile
+        #[arg(long)]
+        profile: Option<String>,
+
+        /// Limit upgrade to a specific module
+        #[arg(long)]
+        module: Option<String>,
+
+        /// Limit upgrade to a specific group defined in config
+        #[arg(long)]
+        group: Option<String>,
+
+        /// Output potential changes as JSON (requires --dry-run)
+        #[arg(long)]
+        json: bool,
+    },
 
     /// List all installed packages
     List { 
         /// Filter results by a specific backend
         #[arg(short, long)] 
-        backend: Option<String> 
+        backend: Option<String>,
+
+        /// Output the list in machine-readable JSON format
+        #[arg(long)]
+        json: bool,
     },
 
     /// Fetch detailed metadata and properties for a specific package
@@ -105,13 +130,21 @@ pub enum Commands {
     /// Imperatively install one or more packages
     Install { 
         /// Package strings (e.g. "apt:curl", "cargo:exa")
-        packages: Vec<String> 
+        packages: Vec<String>,
+
+        /// Output the resulting changes as JSON (requires --dry-run)
+        #[arg(long)]
+        json: bool,
     },
 
     /// Imperatively remove one or more packages
     Remove { 
         /// Names of packages to purge
-        packages: Vec<String> 
+        packages: Vec<String>,
+
+        /// Output the resulting changes as JSON (requires --dry-run)
+        #[arg(long)]
+        json: bool,
     },
 
     /// Manage source repositories (PPA, Taps, Buckets, etc.)
@@ -120,12 +153,10 @@ pub enum Commands {
     /// Perform system health, snapshot, and backend readiness check
     Doctor,
 
-    // --- NEW VARIANTS FOR VERSION 3.5.0 ---
-
-    /// Point 3: Ingest manually installed packages into LiNix management
+    /// Ingest manually installed packages into LiNix management
     Migrate,
 
-    /// Point 5: Move a package from one backend to another (e.g. apt -> snap)
+    /// Move a package from one backend to another (e.g. apt -> snap)
     Teleport {
         /// Name of the package to move
         package: String,
@@ -133,20 +164,34 @@ pub enum Commands {
         to: String,
     },
 
-    /// Point 19: Enter an ephemeral shell with specific packages loaded
+    /// Enter an ephemeral shell with specific packages loaded
     Shell {
         /// Packages to load into the ghost shell
         packages: Vec<String>,
     },
 
-    /// Point 12: Interactive snapshot gallery and system rollback
+    /// Interactive snapshot gallery and system rollback
     Undo,
 
-    /// Point 18: Swap between different system configurations (identities)
+    /// Swap between different system configurations (identities)
     Profile {
         /// Name of the profile to switch to
         name: String,
     },
+
+    // --- NEW FOR 3.6.0 ---
+
+    /// Reusable package modules (@module syntax)
+    Module(ModuleArgs),
+
+    /// System snapshots and atomic rollbacks
+    Snapshot(SnapshotArgs),
+
+    /// Manage package leases and expirations
+    Lease(LeaseArgs),
+
+    /// Native system-level task scheduling (systemd, launchd, task-scheduler)
+    Schedule(ScheduleArgs),
 }
 
 #[derive(Args, Debug)]
@@ -175,6 +220,88 @@ pub enum RepoCommand {
         #[arg(short, long)] 
         backend: Option<String> 
     },
+}
+
+#[derive(Args, Debug)]
+pub struct ModuleArgs {
+    #[command(subcommand)]
+    pub command: ModuleCommand
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ModuleCommand {
+    /// List all available reusable modules
+    List,
+    /// Display the contents of a specific module
+    Show { name: String },
+    /// Create a new module interactively
+    Create { name: String },
+}
+
+#[derive(Args, Debug)]
+pub struct SnapshotArgs {
+    #[command(subcommand)]
+    pub command: SnapshotCommand
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SnapshotCommand {
+    /// List all system-level snapshots
+    List,
+    /// Prune snapshots based on age and count limits defined in config
+    Prune {
+        /// Force removal without verification
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct LeaseArgs {
+    #[command(subcommand)]
+    pub command: LeaseCommand
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LeaseCommand {
+    /// List all packages with active leases and their expiration times
+    List,
+    /// Set or update the lease duration for a managed package
+    Set {
+        /// Package identifier (backend:name)
+        package: String,
+        /// Duration string (e.g. "30d", "2h", "15m")
+        #[arg(short, long)]
+        duration: String,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct ScheduleArgs {
+    #[command(subcommand)]
+    pub command: ScheduleCommand
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ScheduleCommand {
+    /// Add a new background task to the system scheduler
+    Add {
+        /// Unique name for the scheduled task
+        name: String,
+        /// Cron-style execution string (e.g. "0 2 * * *")
+        #[arg(long)]
+        cron: String,
+        /// Command to execute within LiNix (e.g. "upgrade --profile dev")
+        #[arg(long)]
+        command: String,
+        /// Notification channel (desktop, email, or none)
+        #[arg(long)]
+        notification: Option<String>,
+    },
+    /// List all tasks currently registered in the native scheduler
+    List,
+    /// Remove a task from the native scheduler
+    Remove { name: String },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]

@@ -8,12 +8,17 @@ pub mod migrate;
 pub mod teleport;
 pub mod shim_manager;
 pub mod undo;
-pub mod bridge;
-pub mod shell;
+pub mod diagnostics;
 pub mod profile;
 pub mod sandbox;
 pub mod services;
 pub mod ui;
+
+// Feature 5: Native System Automation & Alerts
+pub mod scheduler;
+
+// Feature 6: Ephemeral Environments (Directory-based mod)
+pub mod shell;
 
 // Re-export the primary application kernel (The Service Provider)
 pub use self::context::App;
@@ -48,7 +53,7 @@ pub use self::undo::UndoManager;
 // Re-export the contextual identity switcher (Profiles)
 pub use self::profile::ProfileManager;
 
-// Re-export the ephemeral shell orchestrator
+// Re-export the ephemeral shell orchestrator (Feature 6)
 pub use self::shell::GhostShell;
 
 /// Application layer constants
