@@ -6,13 +6,13 @@ use crate::backends::BackendRegistry;
 use crate::config::Config;
 use crate::config::manifest::ManifestEngine;
 use crate::app::{LuaHooks, MetricsCollector, ShimManager};
-use crate::app::diagnostics::FailureDiagnosticEngine; // Modernized: DI Import
+use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::utils::progress::ProgressReporter;
 use crate::core::security::generate_checksum;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
-use tracing::{info, warn, error, debug, instrument}; // Modernized: Pruned unused 'trace'
+use tracing::{info, warn, error, debug, instrument};
 
 pub mod planner;
 pub mod resolver;
@@ -20,14 +20,23 @@ pub mod resolver;
 pub use self::planner::{ChangePlanner, SyncChanges, ScopedFilter};
 pub use self::resolver::StateResolver;
 
+/// Interface for system state resolution logic.
+#[async_trait::async_trait]
+pub trait Resolver: Send + Sync {
+    async fn resolve_desired_state(&self) -> Result<std::collections::HashMap<String, Vec<PackageSpec>>>;
+}
+
+/// Interface for transaction planning logic.
+#[async_trait::async_trait]
+pub trait Planner: Send + Sync {
+    async fn plan(&self, desired: &std::collections::HashMap<String, Vec<PackageSpec>>, scope: ScopedFilter) -> Result<SyncChanges>;
+}
+
 /// Primary entry point for parallel system synchronization.
 /// 
-/// The SyncEngine manages the full lifecycle of a system transformation:
-/// 1. Pre-flight checks and hooks.
-/// 2. Atomic safety (Snapshotting).
-/// 3. Parallel Execution (DAG-based Transaction with Diagnostic support).
-/// 4. State Consolidation (Registry updates).
-/// 5. Post-transaction maintenance (Parallel Shim reconciliation & Pruning).
+/// The SyncEngine manages the full lifecycle of a system transformation, 
+/// ensuring that safety snapshots are taken before modifications and that 
+/// system state is correctly consolidated in the registry.
 pub struct SyncEngine<'a> {
     pub config: &'a Config,
     pub registry: Arc<BackendRegistry>,
@@ -39,15 +48,11 @@ pub struct SyncEngine<'a> {
     pub journal: Arc<Mutex<Journal>>,
     pub state: Arc<Mutex<StateRegistry>>,
     pub manifest_engine: ManifestEngine,
-    /// Modernized v3.6.0: Injected engine for autonomous failure analysis.
     pub diagnostics: Arc<FailureDiagnosticEngine>,
 }
 
 impl<'a> SyncEngine<'a> {
     /// Initializes the engine with the full kernel context.
-    /// 
-    /// # Arguments
-    /// Modernized: Now accepts the diagnostic engine to support DI for Transactions.
     pub async fn new(
         config: &'a Config,
         registry: Arc<BackendRegistry>,
@@ -83,7 +88,7 @@ impl<'a> SyncEngine<'a> {
         let _ = self.hooks.run_before_sync().await;
         
         if changes.is_empty() {
-            info!("Sync: OS state is already consistent with declarative manifests.");
+            info!("Sync: OS state is consistent with declarative manifests.");
             return Ok(());
         }
 
@@ -91,8 +96,6 @@ impl<'a> SyncEngine<'a> {
         let _snapshot = self.snapshot_manager.auto_snapshot("pre_sync").await?;
 
         // 2. Execute Transaction
-        // We lock the shared state registry directly to ensure it acts as the 
-        // Single Source of Truth during parallel execution.
         let result = {
             let mut state_guard = self.state.lock().await;
             self.execute_transaction(&changes, &mut state_guard).await
@@ -102,13 +105,11 @@ impl<'a> SyncEngine<'a> {
         if result.is_ok() {
             debug!("Sync: Finalizing transaction state and persistence.");
 
-            // Persist the state registry (Async-wrapped blocking IO)
             let state_to_save = self.state.lock().await.clone();
             tokio::task::spawn_blocking(move || state_to_save.save())
                 .await
                 .map_err(|e| Error::Other(format!("Kernel panic during state persistence: {}", e)))??;
 
-            // Feature 4/6: Parallelized Shim Reconciliation (A+ High Performance)
             let final_state = self.state.lock().await;
             self.reconcile_all_shims(&final_state).await?;
             
@@ -124,17 +125,14 @@ impl<'a> SyncEngine<'a> {
     }
 
     /// Internal orchestrator for the DAG execution.
-    /// 
-    /// Resolves E0061: Passes the injected diagnostic engine into the transaction.
     async fn execute_transaction(&self, changes: &SyncChanges, state: &mut StateRegistry) -> Result<()> {
         let tx_config = TransactionConfig::patient();
 
-        // Modernized v3.6.0: Transaction initialized with DI diagnostics
         let mut tx = Transaction::with_config(
             changes.graph.clone(),
             self.registry.clone(),
             self.journal.clone(),
-            self.diagnostics.clone(), // Correctly providing the 4th argument
+            self.diagnostics.clone(),
             tx_config,
         );
 
@@ -142,7 +140,6 @@ impl<'a> SyncEngine<'a> {
         let results = tx.execute_with_telemetry().await?;
         pb.finish();
 
-        // Identify if we are in an ephemeral shell session (Feature 6)
         let session_active = state.active_session_id.is_some();
 
         for res in results {
@@ -162,7 +159,6 @@ impl<'a> SyncEngine<'a> {
                         source, session_active
                     );
 
-                    // Feature 7: Auto-locking unauthenticated resources (Bug Fix 7)
                     let lockable_backends = ["web", "github", "appimage"];
                     if lockable_backends.contains(&spec.backend.as_str()) && !spec.options.contains_key("sha256") {
                         if self.config.auto_lock_checksums {
@@ -217,7 +213,7 @@ impl<'a> SyncEngine<'a> {
         let shim_mgr = Arc::new(ShimManager::new().await?);
         let mut worker_set = JoinSet::new();
 
-        debug!("Sync: Initiating parallel shim audit for {} closure packages.", state.packages.len());
+        debug!("Sync: Initiating parallel shim audit for {} packages.", state.packages.len());
 
         for pkg in &state.packages {
             let mgr = shim_mgr.clone();
@@ -241,7 +237,10 @@ impl<'a> SyncEngine<'a> {
         Ok(())
     }
 
-    /// Mission-critical healing logic for unresolved journal records.
+    /// System-wide self-healing logic. Resolves incomplete WAL records.
+    /// 
+    /// Resolves Critical Path Failure: Correctly updates Journal entry status 
+    /// after remediation to ensure system reports a clean state.
     pub async fn heal(&self) -> Result<()> {
         let incomplete_actions = {
             let j = self.journal.lock().await;
@@ -263,18 +262,30 @@ impl<'a> SyncEngine<'a> {
             if let Some(backend_cap) = self.registry.get(&backend) {
                 if let Some(handler) = backend_cap.as_installable() {
                     let sudo = backend_cap.needs_root();
-                    if is_install {
+                    let remediation_res = if is_install {
+                        // Re-attempting installation sequence
                         let _ = handler.remove(&[package.clone()], sudo).await;
                         if let crate::core::journal::JournalAction::Install(spec) = &entry.action {
-                            let _ = handler.install(&[spec.clone()], sudo).await;
-                        }
+                            handler.install(&[spec.clone()], sudo).await
+                        } else { Ok(()) }
                     } else {
-                        let _ = handler.remove(&[package.clone()], sudo).await;
+                        // Re-attempting removal
+                        handler.remove(&[package.clone()], sudo).await
+                    };
+
+                    // Logic Fix: Update the WAL record once physically resolved
+                    if remediation_res.is_ok() {
+                        let mut j = self.journal.lock().await;
+                        let _ = j.record_success(&entry.id, std::collections::HashMap::new());
+                        debug!("Heal: Task {} successfully resolved and marked in WAL.", entry.id);
+                    } else {
+                        error!("Heal: Failed to resolve task {}: {:?}", entry.id, remediation_res.err());
                     }
                 }
             }
         }
         
+        // Finalize the WAL maintenance
         let mut j = self.journal.lock().await;
         let _ = j.cleanup();
         Ok(())

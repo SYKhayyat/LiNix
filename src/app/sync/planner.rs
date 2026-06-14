@@ -1,10 +1,12 @@
+// src/app/sync/planner.rs
+
 use crate::core::{Result, Error, StateRegistry, GraphAction, PackageSpec};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
 use std::collections::{HashMap, VecDeque, HashSet};
 use std::sync::Arc;
 use std::path::Path;
-use tracing::{info, debug, instrument}; // Modernized: Removed unused 'trace'
+use tracing::{info, debug, instrument};
 use version_compare::{Cmp, compare as loose_compare};
 use semver::{Version, VersionReq};
 use petgraph::graph::NodeIndex;
@@ -12,7 +14,6 @@ use petgraph::stable_graph::StableDiGraph;
 use petgraph::algo::is_cyclic_directed;
 use serde::Serialize;
 
-/// Feature 1: Structured report for dry-run automation.
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct SyncReport {
     pub install: Vec<ReportEntry>,
@@ -28,7 +29,6 @@ pub struct ReportEntry {
     pub source: Option<String>,
 }
 
-/// Feature 4: Scope definitions for targeted planning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopedFilter {
     None,
@@ -37,7 +37,6 @@ pub enum ScopedFilter {
     Group(String),
 }
 
-/// A high-performance synchronization plan represented as a Directed Acyclic Graph.
 #[derive(Debug, Default, Clone)]
 pub struct SyncChanges {
     pub graph: StableDiGraph<GraphAction, ()>,
@@ -106,16 +105,57 @@ impl<'a> ChangePlanner<'a> {
         let filtered_desired = self.apply_scope_filtering(desired, &scope);
         let expanded_desired = self.expand_transitive_dependencies(&filtered_desired).await?;
 
-        if scope == ScopedFilter::None {
-            self.plan_removals_and_expirations(&mut changes).await?;
+        // Precompute desired keys for O(1) lookup
+        let desired_keys: HashSet<String> = expanded_desired.keys().cloned().collect();
+
+        // Preload bloatware set if enabled
+        let bloatware_set: HashSet<String> = if self.config.remove_bloatware {
+            if let Ok(bloat) = self.load_bloatware().await {
+                bloat.into_iter()
+                    .map(|entry| {
+                        entry.split_once(':')
+                            .map(|(b, n)| format!("{}:{}", b, n))
+                            .unwrap_or_else(|| format!("{}:{}", self.config.default_backend.clone().unwrap_or_else(|| "apt".into()), entry))
+                    })
+                    .collect()
+            } else {
+                HashSet::new()
+            }
+        } else {
+            HashSet::new()
+        };
+
+        // Single pass over all managed packages to schedule removals
+        for pkg in &self.state.packages {
+            let key = format!("{}:{}", pkg.backend, pkg.name);
+
+            // Skip if already scheduled or present in desired state
+            if changes.removal_tracker.contains(&key) || desired_keys.contains(&key) {
+                continue;
+            }
+
+            // Check for expired lease
+            let is_expired = pkg.expires_at.map_or(false, |exp| Self::now() >= exp);
+
+            if is_expired {
+                info!("Planner: Lease for '{}' expired, not in desired. Scheduling removal.", key);
+                changes.removal_tracker.insert(key.clone());
+                changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
+            } else if bloatware_set.contains(&key) {
+                debug!("Planner: Scheduling bloatware removal: {}", key);
+                changes.removal_tracker.insert(key.clone());
+                changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
+            } else if !self.config.is_protected(&pkg.name) {
+                // Drift removal (only if not protected)
+                debug!("Planner: Scheduling drift removal: {}", key);
+                changes.removal_tracker.insert(key.clone());
+                changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
+            }
         }
 
+        // Installations and dependency graph
         let target_specs = self.identify_needed_actions(&expanded_desired).await?;
         self.build_execution_graph(&mut changes, &target_specs).await?;
-
-        if scope == ScopedFilter::None {
-            self.plan_drift_removal(&mut changes, &expanded_desired).await?;
-        }
 
         if is_cyclic_directed(&changes.graph) {
             return Err(Error::Transaction("Circular dependency detected in graph construction.".into()));
@@ -132,7 +172,6 @@ impl<'a> ChangePlanner<'a> {
             ScopedFilter::Group(g) => format!("group:{}", g),
             _ => String::new(),
         };
-
         let mut filtered = HashMap::new();
         for (backend, specs) in desired {
             let matched: Vec<PackageSpec> = specs.iter()
@@ -141,36 +180,6 @@ impl<'a> ChangePlanner<'a> {
             if !matched.is_empty() { filtered.insert(backend.clone(), matched); }
         }
         filtered
-    }
-
-    async fn plan_removals_and_expirations(&self, changes: &mut SyncChanges) -> Result<()> {
-        for (backend, name) in self.state.get_expired_packages() {
-            let key = format!("{}:{}", backend, name);
-            if changes.removal_tracker.insert(key) {
-                info!("Planner: Lease for '{}:{}' has expired. Scheduling removal.", backend, name);
-                changes.graph.add_node(GraphAction::Remove { name, backend });
-            }
-        }
-
-        if self.config.remove_bloatware {
-            if let Ok(bloat) = self.load_bloatware().await {
-                for entry in bloat {
-                    let (backend, name) = entry.split_once(':')
-                        .map(|(b, n)| (b.to_string(), n.to_string()))
-                        .unwrap_or_else(|| (self.config.default_backend.clone().unwrap_or_else(|| "apt".into()), entry));
-                    
-                    if self.state.is_managed(&backend, &name) {
-                        let key = format!("{}:{}", backend, name);
-                        // Resolves E0382: Clone key before inserting into HashSet
-                        if changes.removal_tracker.insert(key.clone()) {
-                            debug!("Planner: Scheduling bloatware removal: {}", key);
-                            changes.graph.add_node(GraphAction::Remove { name, backend });
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     async fn identify_needed_actions(&self, expanded: &HashMap<String, PackageSpec>) -> Result<Vec<PackageSpec>> {
@@ -202,18 +211,15 @@ impl<'a> ChangePlanner<'a> {
             let idx = changes.graph.add_node(GraphAction::Install(spec.clone()));
             changes.install_map.insert(key, idx);
         }
-
         for spec in targets {
             let child_key = format!("{}:{}", spec.backend, spec.name);
             let child_idx = *changes.install_map.get(&child_key)
                 .ok_or_else(|| Error::Transaction(format!("Consistency Error: Node {} missing.", child_key)))?;
-
             for req in &spec.requires {
                 if let Some(&parent_idx) = changes.install_map.get(req) {
                     changes.graph.add_edge(parent_idx, child_idx, ());
                 }
             }
-            
             if let Some(b) = self.registry.get(&spec.backend) {
                 if let Some(p) = b.as_metadata_provider() {
                     if let Ok(native_deps) = p.get_dependencies(&spec.name).await {
@@ -224,19 +230,6 @@ impl<'a> ChangePlanner<'a> {
                             }
                         }
                     }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn plan_drift_removal(&self, changes: &mut SyncChanges, expanded: &HashMap<String, PackageSpec>) -> Result<()> {
-        for managed in &self.state.packages {
-            let key = format!("{}:{}", managed.backend, managed.name);
-            if !expanded.contains_key(&key) && !self.config.is_protected(&managed.name) {
-                if !changes.install_map.contains_key(&key) && changes.removal_tracker.insert(key.clone()) {
-                    debug!("Planner: Scheduling drift removal: {}", key);
-                    changes.graph.add_node(GraphAction::Remove { name: managed.name.clone(), backend: managed.backend.clone() });
                 }
             }
         }
@@ -289,5 +282,12 @@ impl<'a> ChangePlanner<'a> {
         if !tokio::fs::try_exists(&self.config.bloatware_file).await.unwrap_or(false) { return Ok(Vec::new()); }
         let content = tokio::fs::read_to_string(&self.config.bloatware_file).await?;
         Ok(content.lines().map(|l| l.trim()).filter(|l| !l.is_empty() && !l.starts_with('#')).map(|l| l.to_string()).collect())
+    }
+
+    fn now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
 }

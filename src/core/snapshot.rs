@@ -4,20 +4,16 @@ use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc, Duration as ChronoDuration};
 use std::path::Path;
 use std::process::Command as StdCommand;
-use tracing::{info, debug, error, trace, instrument};
+use tracing::{info, debug}; // Modernized: Removed unused 'warn', 'error', 'trace', 'instrument'
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 /// Represents a system-level restorable state in the Snapshot Gallery.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
-    /// Unique identifier for the snapshot (Provider-specific).
     pub id: String,
-    /// ISO 8601 formatted timestamp of creation.
     pub timestamp: String,
-    /// User-provided description or lifecycle tag.
     pub description: String,
-    /// The provider backend (e.g. "btrfs", "zfs", "timeshift").
     pub backend: String,
 }
 
@@ -33,22 +29,11 @@ impl Snapshot {
 /// Abstract interface for platform-native system snapshots.
 #[async_trait]
 pub trait SnapshotProvider: Send + Sync {
-    /// Returns the unique name of the provider.
     fn name(&self) -> &str;
-    
-    /// Checks if the provider is available and functional on this host.
     async fn is_available(&self) -> bool;
-    
-    /// Creates a new system snapshot.
     async fn create(&self, label: &str) -> Result<Snapshot>;
-    
-    /// Lists all snapshots currently managed by this provider.
     async fn list(&self) -> Result<Vec<Snapshot>>;
-    
-    /// Deletes a specific snapshot by ID.
     async fn delete(&self, id: &str) -> Result<()>;
-    
-    /// Performs a system rollback to the target snapshot.
     async fn restore(&self, id: &str) -> Result<()>;
 }
 
@@ -67,7 +52,7 @@ impl SnapshotProvider for BtrfsProvider {
 
     async fn is_available(&self) -> bool {
         cfg!(target_os = "linux") && 
-        self.executor.command_exists_sync("btrfs") && 
+        self.executor.command_exists("btrfs").await && 
         Path::new(&self.snapshot_root).exists()
     }
 
@@ -76,7 +61,7 @@ impl SnapshotProvider for BtrfsProvider {
         let id = format!("linix_pre_{}_{}", label, ts_id);
         let path = format!("{}/{}", self.snapshot_root, id);
         
-        info!("BTRFS: Creating atomic read-only snapshot: {}", id);
+        info!("BTRFS: Creating read-only snapshot: {}", id);
         self.executor.run("btrfs", &["subvolume", "snapshot", "-r", "/", &path], true).await?;
         
         Ok(Snapshot { id, timestamp: Utc::now().to_rfc3339(), description: label.to_string(), backend: "btrfs".into() })
@@ -92,13 +77,12 @@ impl SnapshotProvider for BtrfsProvider {
 
     async fn delete(&self, id: &str) -> Result<()> {
         let path = format!("{}/{}", self.snapshot_root, id);
-        debug!("BTRFS: Purging subvolume: {}", path);
         self.executor.run("btrfs", &["subvolume", "delete", &path], true).await.map(|_| ())
     }
 
     async fn restore(&self, id: &str) -> Result<()> {
         let path = format!("{}/{}", self.snapshot_root, id);
-        info!("BTRFS: Commencing subvolume rollback to: {}", id);
+        info!("BTRFS: Rolling back to: {}", id);
         self.executor.run("btrfs", &["subvolume", "snapshot", &path, "/"], true).await.map(|_| ())
     }
 }
@@ -111,11 +95,11 @@ pub struct ZfsProvider {
 #[async_trait]
 impl SnapshotProvider for ZfsProvider {
     fn name(&self) -> &str { "zfs" }
-    async fn is_available(&self) -> bool { self.executor.command_exists_sync("zfs") }
+    async fn is_available(&self) -> bool { self.executor.command_exists("zfs").await }
 
     async fn create(&self, label: &str) -> Result<Snapshot> {
         let id = format!("{}@linix_{}", self.dataset, Local::now().format("%Y%m%d_%H%M%S"));
-        info!("ZFS: Creating recursive dataset snapshot: {}", id);
+        info!("ZFS: Creating recursive snapshot: {}", id);
         self.executor.run("zfs", &["snapshot", "-r", &id], true).await?;
         Ok(Snapshot { id, timestamp: Utc::now().to_rfc3339(), description: label.to_string(), backend: "zfs".into() })
     }
@@ -128,12 +112,10 @@ impl SnapshotProvider for ZfsProvider {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        debug!("ZFS: Destroying snapshot: {}", id);
         self.executor.run("zfs", &["destroy", "-r", id], true).await.map(|_| ())
     }
 
     async fn restore(&self, id: &str) -> Result<()> {
-        info!("ZFS: Rolling back dataset to: {}", id);
         self.executor.run("zfs", &["rollback", "-r", id], true).await.map(|_| ())
     }
 }
@@ -145,7 +127,7 @@ pub struct TimeshiftProvider {
 #[async_trait]
 impl SnapshotProvider for TimeshiftProvider {
     fn name(&self) -> &str { "timeshift" }
-    async fn is_available(&self) -> bool { cfg!(target_os = "linux") && self.executor.command_exists_sync("timeshift") }
+    async fn is_available(&self) -> bool { cfg!(target_os = "linux") && self.executor.command_exists("timeshift").await }
 
     async fn create(&self, label: &str) -> Result<Snapshot> {
         let out = self.executor.run_output("timeshift", &["--create", "--comments", label, "--tags", "D"], true).await?;
@@ -173,12 +155,12 @@ impl SnapshotProvider for TimeshiftProvider {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        debug!("Timeshift: Deleting snapshot: {}", id);
+        // Resolves E0308: Map Output to ()
         self.executor.run("timeshift", &["--delete", "--snapshot", id], true).await.map(|_| ())
     }
 
     async fn restore(&self, id: &str) -> Result<()> {
-        info!("Timeshift: Initiating restoration from: {}", id);
+        // Resolves E0308: Map Output to ()
         self.executor.run("timeshift", &["--restore", "--snapshot", id, "--target-device", "/", "--yes"], true).await.map(|_| ())
     }
 }
@@ -215,38 +197,31 @@ impl SnapshotProvider for WindowsRestoreProvider {
         Ok(list)
     }
 
-    /// A+ Grade: Exhaustive physical deletion for Windows Restore Points.
-    /// Resolves the Logic Defect by invoking WMI directly via PowerShell.
     async fn delete(&self, id: &str) -> Result<()> {
-        info!("WindowsRestore: Purging restore point sequence: {}", id);
-        let ps_cmd = format!(
-            "Get-WmiObject -Namespace root\\default -Class SystemRestore | \
-             ForEach-Object {{ $_.DeleteStatus({}) }}", 
-            id
-        );
-        
+        let ps_cmd = format!("Get-WmiObject -Namespace root\\default -Class SystemRestore | ForEach-Object {{ $_.DeleteStatus({}) }}", id);
         self.executor.run("powershell", &["-Command", &ps_cmd], true).await.map(|_| ())
     }
-
+    
     async fn restore(&self, id: &str) -> Result<()> {
-        info!("WindowsRestore: Commencing system restoration to point: {}", id);
         let ps_cmd = format!("Restore-Computer -RestorePoint {} -Confirm:$false", id);
         self.executor.run("powershell", &["-Command", &ps_cmd], true).await.map(|_| ())
     }
 }
 
 // ============================================================================
-// SNAPSHOT MANAGER (Orchestrator)
+// SNAPSHOT MANAGER
 // ============================================================================
 
-/// The Snapshot Lifecycle Orchestrator.
 pub struct SnapshotManager {
-    /// The detected functional provider for this system.
     provider: Option<Box<dyn SnapshotProvider>>,
 }
 
 impl SnapshotManager {
-    /// Initializes the manager by probing for available providers in priority order.
+    /// Modernized DI: Allows the injection of a custom provider (Exhaustive Fix).
+    pub fn with_provider(provider: Box<dyn SnapshotProvider>) -> Self {
+        Self { provider: Some(provider) }
+    }
+
     pub async fn new(executor: CommandExecutor, config: &Config) -> Self {
         let mut providers: Vec<Box<dyn SnapshotProvider>> = vec![
             Box::new(BtrfsProvider { executor: executor.duplicate(), snapshot_root: config.btrfs_path.clone() }),
@@ -254,8 +229,7 @@ impl SnapshotManager {
             Box::new(WindowsRestoreProvider { executor: executor.duplicate() }),
         ];
         
-        // Parallel-friendly ZFS Detection
-        if executor.command_exists_sync("zfs") {
+        if executor.command_exists("zfs").await {
             let dataset = config.zfs_dataset.clone().unwrap_or_else(|| {
                 StdCommand::new("zfs").args(["list", "-H", "-o", "name", "-r", "/"]).output()
                     .ok().and_then(|o| String::from_utf8(o.stdout).ok())
@@ -269,59 +243,36 @@ impl SnapshotManager {
         Self { provider: active }
     }
 
-    /// Automatically captures a snapshot if a provider is functional.
     pub async fn auto_snapshot(&self, label: &str) -> Result<Option<Snapshot>> {
         if let Some(ref p) = self.provider { Ok(Some(p.create(label).await?)) } else { Ok(None) }
     }
 
-    /// Feature 2: A+ Grade Snapshot Pruning.
-    /// 
-    /// Resolves the "Phantom Pruning" logic defect. 
-    /// If `is_dry_run` is false, snapshots are physically purged from the system.
-    #[instrument(skip(self))]
     pub async fn prune_stale_snapshots(&self, max_age_days: u32, max_count: u32, is_dry_run: bool) -> Result<()> {
         let p = match &self.provider { Some(p) => p, None => return Ok(()) };
         let mut list = p.list().await?;
         if list.is_empty() { return Ok(()); }
 
-        // Sort by time (Oldest first)
         list.sort_by_key(|s| s.parse_time().unwrap_or(Utc::now()));
-
+        let mut to_delete = HashSet::new();
         let now = Utc::now();
         let age_limit = ChronoDuration::days(max_age_days as i64);
-        let mut to_delete = HashSet::new();
 
-        // 1. Identify by Age
         for s in &list {
             if let Some(time) = s.parse_time() {
                 if now.signed_duration_since(time) > age_limit { to_delete.insert(s.id.clone()); }
             }
         }
 
-        // 2. Identify by Count (Prune overflow beyond max_count)
         let remaining: Vec<_> = list.iter().filter(|s| !to_delete.contains(&s.id)).collect();
         if remaining.len() > max_count as usize {
             let overflow = remaining.len() - max_count as usize;
             for i in 0..overflow { to_delete.insert(remaining[i].id.clone()); }
         }
 
-        if to_delete.is_empty() { return Ok(()); }
-
-        info!("SnapshotManager: Pruning {} expired system states.", to_delete.len());
-
         for id in to_delete {
-            if is_dry_run {
-                info!("SnapshotManager: [DRY-RUN] Purge intended for snapshot '{}'.", id);
-            } else {
-                debug!("SnapshotManager: Executing physical removal of snapshot '{}'...", id);
-                if let Err(e) = p.delete(&id).await {
-                    error!("SnapshotManager: Failed to delete snapshot '{}': {}", id, e);
-                } else {
-                    trace!("SnapshotManager: Successfully purged '{}'.", id);
-                }
-            }
+            if is_dry_run { debug!("Snapshot: [DRY-RUN] Would prune {}", id); }
+            else { p.delete(&id).await?; }
         }
-
         Ok(())
     }
 

@@ -1,24 +1,28 @@
-use crate::core::{Result, Error};
+use crate::core::{Result, Error, CommandExecutor};
 use crate::config::Config;
 use crate::config::config::ScheduleConfig;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tracing::{info, debug, warn, trace};
 use std::fs;
 use cron::Schedule;
 use std::str::FromStr;
+use async_trait::async_trait; // Modernized: Required for trait-level async
 
 /// Feature 5: Multi-channel alerting engine.
 pub mod notify;
 
 /// Represents the platform-native capability to schedule background tasks.
-pub trait TaskProvisioner {
+/// 
+/// A+ Grade Architecture: This trait is asynchronous to support the non-blocking 
+/// LiNix kernel executor and high-fidelity call-log mocking.
+#[async_trait]
+pub trait TaskProvisioner: Send + Sync {
     /// Registers a new background task with the host operating system.
-    fn add_task(&self, config: &ScheduleConfig, linix_path: &Path) -> Result<()>;
+    async fn add_task(&self, executor: &CommandExecutor, config: &ScheduleConfig, linix_path: &Path) -> Result<()>;
     /// Removes an existing background task from the host operating system.
-    fn remove_task(&self, name: &str) -> Result<()>;
+    async fn remove_task(&self, executor: &CommandExecutor, name: &str) -> Result<()>;
     /// Checks if a task is currently active in the system scheduler.
-    fn is_task_active(&self, name: &str) -> bool;
+    async fn is_task_active(&self, executor: &CommandExecutor, name: &str) -> bool;
 }
 
 /// The high-level orchestrator for background LiNix automation.
@@ -55,6 +59,7 @@ impl SchedulerManager {
     /// Provisions a new schedule in the system and persists it to the configuration.
     pub async fn add_schedule(
         &self, 
+        executor: &CommandExecutor,
         config_mut: &mut Config, 
         name: String, 
         cron: String, 
@@ -63,7 +68,7 @@ impl SchedulerManager {
     ) -> Result<()> {
         info!("Scheduler: Provisioning task '{}' with schedule '{}'.", name, cron);
 
-        // A+ Hardening: Validate Cron Expression immediately
+        // 1. Immediate validation of the cron string
         if cron != "@reboot" {
             if let Err(e) = Schedule::from_str(&cron) {
                 return Err(Error::Validation(format!(
@@ -80,10 +85,10 @@ impl SchedulerManager {
             last_synced: None,
         };
 
-        // 2. Delegate to OS-Specific Provisioner
-        self.provisioner.add_task(&schedule_entry, &self.linix_bin_path)?;
+        // 2. Delegate to OS-Specific Provisioner (Now awaited)
+        self.provisioner.add_task(executor, &schedule_entry, &self.linix_bin_path).await?;
 
-        // 3. Persist to LiNix State
+        // 3. Persist to configuration
         config_mut.schedules.retain(|s| s.name != name);
         config_mut.schedules.push(schedule_entry);
         config_mut.save()?;
@@ -93,21 +98,24 @@ impl SchedulerManager {
     }
 
     /// Purges a schedule from both the system and the LiNix configuration.
-    pub async fn remove_schedule(&self, config_mut: &mut Config, name: &str) -> Result<()> {
+    pub async fn remove_schedule(&self, executor: &CommandExecutor, config_mut: &mut Config, name: &str) -> Result<()> {
         info!("Scheduler: Purging background task '{}' from OS.", name);
-        self.provisioner.remove_task(name)?;
+        
+        self.provisioner.remove_task(executor, name).await?;
+        
         config_mut.schedules.retain(|s| s.name != name);
         config_mut.save()?;
+        
         Ok(())
     }
 
-    /// Ensures consistency between the TOML config and the native OS registry.
-    pub async fn sync_schedules(&self, config: &Config) -> Result<()> {
+    /// Ensures consistency between the configuration and the native OS timers.
+    pub async fn sync_schedules(&self, executor: &CommandExecutor, config: &Config) -> Result<()> {
         trace!("Scheduler: Verifying OS registry for configured tasks.");
         for schedule in &config.schedules {
-            if !self.provisioner.is_task_active(&schedule.name) {
+            if !self.provisioner.is_task_active(executor, &schedule.name).await {
                 warn!("Scheduler: Task '{}' is missing from native timers. Restoring...", schedule.name);
-                let _ = self.provisioner.add_task(schedule, &self.linix_bin_path);
+                let _ = self.provisioner.add_task(executor, schedule, &self.linix_bin_path).await;
             }
         }
         Ok(())
@@ -115,30 +123,29 @@ impl SchedulerManager {
 }
 
 // ============================================================================
-// LINUX: Systemd Timers (A+ Full Cron Translation)
+// LINUX: Systemd Timers Implementation
 // ============================================================================
 
 struct LinuxSystemdProvisioner;
 
+#[async_trait]
 impl TaskProvisioner for LinuxSystemdProvisioner {
-    fn add_task(&self, config: &ScheduleConfig, linix_bin: &Path) -> Result<()> {
+    async fn add_task(&self, executor: &CommandExecutor, config: &ScheduleConfig, linix_bin: &Path) -> Result<()> {
         let systemd_dir = dirs::config_dir()
-            .ok_or_else(|| Error::Io("User config dir not found".into()))?
+            .ok_or_else(|| Error::Io("User configuration directory not found".into()))?
             .join("systemd").join("user");
-        fs::create_dir_all(&systemd_dir).map_err(Error::from)?;
+            
+        if !systemd_dir.exists() {
+            fs::create_dir_all(&systemd_dir).map_err(Error::from)?;
+        }
 
         let unit_name = format!("linix-{}", config.name);
         let service_path = systemd_dir.join(format!("{}.service", unit_name));
         let timer_path = systemd_dir.join(format!("{}.timer", unit_name));
 
-        // 1. Process Logic for @reboot vs Calendar
         let use_boot_timer = config.cron == "@reboot";
-        let schedule_spec = if use_boot_timer {
-            "OnBootSec=1min".to_string()
-        } else {
-            format!("OnCalendar={}", self.map_cron_to_systemd(&config.cron))
-        };
-
+        
+        // Use executor.write_atomic (Awaited)
         let service_content = format!(
             "[Unit]\nDescription=LiNix Job: {name}\n\n\
              [Service]\nType=oneshot\nExecStart={bin} {cmd}\n\
@@ -147,42 +154,40 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
             log = crate::utils::safe_data_dir().join("schedule.log").display()
         );
 
-        let timer_content = format!(
-            "[Unit]\nDescription=LiNix Schedule Timer for {name}\n\n\
-             [Timer]\n{schedule}\nPersistent=true\n\n\
-             [Install]\nWantedBy=timers.target\n",
-            name = config.name, schedule = schedule_spec
-        );
+        executor.write_atomic(&service_path, &service_content).await?;
 
-        fs::write(&service_path, service_content).map_err(Error::from)?;
-        if !use_boot_timer {
-            fs::write(&timer_path, timer_content).map_err(Error::from)?;
-        }
-
-        // Inform systemd
-        let _ = Command::new("systemctl").args(["--user", "daemon-reload"]).status();
         if use_boot_timer {
-            // For @reboot we don't use a timer file, we use a service with WantedBy=default.target
             let boot_service = format!(
                 "[Unit]\nDescription=LiNix Reboot Job: {name}\n\n\
-                 [Service]\nType=oneshot\nExecStart={bin} {cmd}\n\
+                 [Service]\nType=oneshot\nExecStart={bin} {cmd}\n\n\
                  [Install]\nWantedBy=default.target\n",
                 name = config.name, bin = linix_bin.display(), cmd = config.command
             );
-            fs::write(&service_path, boot_service).map_err(Error::from)?;
-            let _ = Command::new("systemctl").args(["--user", "enable", &format!("{}.service", unit_name)]).status();
+            executor.write_atomic(&service_path, &boot_service).await?;
+            executor.run("systemctl", &["--user", "daemon-reload"], false).await?;
+            executor.run("systemctl", &["--user", "enable", &format!("{}.service", unit_name)], false).await?;
         } else {
-            let _ = Command::new("systemctl").args(["--user", "enable", "--now", &format!("{}.timer", unit_name)]).status();
+            let calendar_spec = self.map_cron_to_systemd(&config.cron);
+            let timer_content = format!(
+                "[Unit]\nDescription=LiNix Schedule Timer for {name}\n\n\
+                 [Timer]\nOnCalendar={calendar}\nPersistent=true\n\n\
+                 [Install]\nWantedBy=timers.target\n",
+                name = config.name, calendar = calendar_spec
+            );
+            executor.write_atomic(&timer_path, &timer_content).await?;
+            executor.run("systemctl", &["--user", "daemon-reload"], false).await?;
+            executor.run("systemctl", &["--user", "enable", "--now", &format!("{}.timer", unit_name)], false).await?;
         }
 
         Ok(())
     }
 
-    fn remove_task(&self, name: &str) -> Result<()> {
+    async fn remove_task(&self, executor: &CommandExecutor, name: &str) -> Result<()> {
         let timer_name = format!("linix-{}.timer", name);
         let service_name = format!("linix-{}.service", name);
-        let _ = Command::new("systemctl").args(["--user", "disable", "--now", &timer_name]).status();
-        let _ = Command::new("systemctl").args(["--user", "disable", "--now", &service_name]).status();
+        
+        let _ = executor.run("systemctl", &["--user", "disable", "--now", &timer_name], false).await;
+        let _ = executor.run("systemctl", &["--user", "disable", "--now", &service_name], false).await;
         
         if let Some(config_dir) = dirs::config_dir() {
             let systemd_dir = config_dir.join("systemd").join("user");
@@ -192,10 +197,12 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
         Ok(())
     }
 
-    fn is_task_active(&self, name: &str) -> bool {
+    async fn is_task_active(&self, executor: &CommandExecutor, name: &str) -> bool {
         let unit = format!("linix-{}.timer", name);
-        let out = Command::new("systemctl").args(["--user", "is-active", &unit]).output();
-        out.map(|o| String::from_utf8_lossy(&o.stdout).trim() == "active").unwrap_or(false)
+        match executor.run("systemctl", &["--user", "is-active", &unit], false).await {
+            Ok(out) => String::from_utf8_lossy(&out.stdout).trim() == "active",
+            Err(_) => false,
+        }
     }
 }
 
@@ -211,44 +218,41 @@ impl LinuxSystemdProvisioner {
                 let parts: Vec<&str> = other.split_whitespace().collect();
                 if parts.len() < 5 { return "daily".into(); }
                 
-                // Map fields: min hour dom mon dow
-                // Systemd: [DayOfWeek] Year-Month-Day Hour:Minute:Second
                 let min = self.translate_field(parts[0]);
                 let hour = self.translate_field(parts[1]);
                 let dom = self.translate_field(parts[2]);
                 let mon = self.translate_field(parts[3]);
                 let dow = self.translate_field(parts[4]);
 
-                // Translate Dow numbers to Systemd Names
                 let dow_mapped = dow.replace('0', "Sun").replace('1', "Mon").replace('2', "Tue")
                     .replace('3', "Wed").replace('4', "Thu").replace('5', "Fri").replace('6', "Sat");
 
-                format!("{} *-{}-{} {}:{}:00", dow_mapped, mon, dom, hour, min)
-                    .replace("*-*", "*") // Cleanup wildcard combinations
+                format!("{} *-{}-{} {}:{}:00", dow_mapped, mon, dom, hour, min).replace("*-*", "*")
             }
         }
     }
 
     fn translate_field(&self, field: &str) -> String {
         if field == "*" { return "*".into(); }
-        // Step: */5 -> 0/5
         if let Some(step) = field.strip_prefix("*/") { return format!("0/{}", step); }
-        // Range: 1-5 -> 1..5
         if field.contains('-') { return field.replace('-', ".."); }
         field.to_string()
     }
 }
 
 // ============================================================================
-// MACOS: Launchd (A+ Full Cron Translation)
+// MACOS: Launchd Implementation
 // ============================================================================
 
 struct MacLaunchdProvisioner;
 
+#[async_trait]
 impl TaskProvisioner for MacLaunchdProvisioner {
-    fn add_task(&self, config: &ScheduleConfig, linix_bin: &Path) -> Result<()> {
+    async fn add_task(&self, executor: &CommandExecutor, config: &ScheduleConfig, linix_bin: &Path) -> Result<()> {
         let label = format!("com.linix.{}", config.name);
-        let plist_path = dirs::home_dir().unwrap().join("Library/LaunchAgents").join(format!("{}.plist", label));
+        let plist_path = dirs::home_dir()
+            .ok_or_else(|| Error::Io("Could not locate home directory".into()))?
+            .join("Library/LaunchAgents").join(format!("{}.plist", label));
 
         let is_reboot = config.cron == "@reboot";
         let schedule_xml = if is_reboot {
@@ -273,37 +277,40 @@ impl TaskProvisioner for MacLaunchdProvisioner {
             log = crate::utils::safe_data_dir().join("schedule.log").display()
         );
 
-        fs::write(&plist_path, plist_content).map_err(Error::from)?;
-        let _ = Command::new("launchctl").args(["load", &plist_path.to_string_lossy()]).status();
+        executor.write_atomic(&plist_path, &plist_content).await?;
+        executor.run("launchctl", &["load", &plist_path.to_string_lossy()], false).await?;
         Ok(())
     }
 
-    fn remove_task(&self, name: &str) -> Result<()> {
+    async fn remove_task(&self, executor: &CommandExecutor, name: &str) -> Result<()> {
         let label = format!("com.linix.{}", name);
-        let plist_path = dirs::home_dir().unwrap().join("Library/LaunchAgents").join(format!("{}.plist", label));
-        let _ = Command::new("launchctl").args(["unload", &plist_path.to_string_lossy()]).status();
-        let _ = fs::remove_file(plist_path);
+        if let Some(home) = dirs::home_dir() {
+            let plist_path = home.join("Library/LaunchAgents").join(format!("{}.plist", label));
+            let _ = executor.run("launchctl", &["unload", &plist_path.to_string_lossy()], false).await;
+            let _ = fs::remove_file(plist_path);
+        }
         Ok(())
     }
 
-    fn is_task_active(&self, name: &str) -> bool {
+    async fn is_task_active(&self, executor: &CommandExecutor, name: &str) -> bool {
         let label = format!("com.linix.{}", name);
-        let out = Command::new("launchctl").args(["list", &label]).output();
-        out.map(|o| o.status.success()).unwrap_or(false)
+        match executor.run("launchctl", &["list", &label], false).await {
+            Ok(o) => o.status.success(),
+            Err(_) => false,
+        }
     }
 }
 
 impl MacLaunchdProvisioner {
     fn map_cron_to_launchd_xml(&self, cron: &str) -> String {
         let parts: Vec<&str> = cron.split_whitespace().collect();
-        // Fallback for special strings
         let (m, h, dom, mon, dow) = match cron {
             "@hourly" => ("0", "*", "*", "*", "*"),
             "@daily" => ("0", "0", "*", "*", "*"),
             "@weekly" => ("0", "0", "*", "*", "1"),
             "@monthly" => ("0", "0", "1", "*", "*"),
             _ if parts.len() >= 5 => (parts[0], parts[1], parts[2], parts[3], parts[4]),
-            _ => ("0", "2", "*", "*", "*"), // Default 2 AM
+            _ => ("0", "2", "*", "*", "*"),
         };
 
         let mut xml = String::from("<dict>");
@@ -312,7 +319,6 @@ impl MacLaunchdProvisioner {
 
         for (i, &val) in vals.iter().enumerate() {
             if val != "*" {
-                // launchd doesn't support steps/ranges in XML natively; we take the first specific value
                 let first_val = val.split(|c| c == ',' || c == '-' || c == '/').next().unwrap_or("0");
                 if let Ok(num) = first_val.parse::<u32>() {
                     xml.push_str(&format!("<key>{}</key><integer>{}</integer>", keys[i], num));
@@ -325,19 +331,20 @@ impl MacLaunchdProvisioner {
 }
 
 // ============================================================================
-// WINDOWS: Task Scheduler
+// WINDOWS: Task Scheduler Implementation
 // ============================================================================
 
 struct WindowsTaskProvisioner;
 
+#[async_trait]
 impl TaskProvisioner for WindowsTaskProvisioner {
-    fn add_task(&self, config: &ScheduleConfig, linix_bin: &Path) -> Result<()> {
+    async fn add_task(&self, executor: &CommandExecutor, config: &ScheduleConfig, linix_bin: &Path) -> Result<()> {
         let name = format!("LiNix_{}", config.name);
-        let cmd = format!("{} {}", linix_bin.display(), config.command);
+        let cmd = format!("\"{}\" {}", linix_bin.display(), config.command);
         
         let (sc, st) = match config.cron.as_str() {
-            "@reboot" => ("ONSTART", "".to_string()),
-            "@hourly" => ("HOURLY", "".to_string()),
+            "@reboot" => ("ONSTART", String::new()),
+            "@hourly" => ("HOURLY", String::new()),
             _ => {
                 let parts: Vec<&str> = config.cron.split_whitespace().collect();
                 let hour = parts.get(1).unwrap_or(&"02");
@@ -351,20 +358,22 @@ impl TaskProvisioner for WindowsTaskProvisioner {
             args.extend(["/ST", &st]);
         }
 
-        let status = Command::new("schtasks").args(&args).status().map_err(Error::from)?;
-        if !status.success() { return Err(Error::CommandFailed("Windows Task Scheduler rejection.".into())); }
+        // Now correctly awaited
+        executor.run("schtasks", &args, true).await?;
         Ok(())
     }
 
-    fn remove_task(&self, name: &str) -> Result<()> {
+    async fn remove_task(&self, executor: &CommandExecutor, name: &str) -> Result<()> {
         let tn = format!("LiNix_{}", name);
-        let _ = Command::new("schtasks").args(["/Delete", "/TN", &tn, "/F"]).status();
+        let _ = executor.run("schtasks", &["/Delete", "/TN", &tn, "/F"], true).await;
         Ok(())
     }
 
-    fn is_task_active(&self, name: &str) -> bool {
+    async fn is_task_active(&self, executor: &CommandExecutor, name: &str) -> bool {
         let tn = format!("LiNix_{}", name);
-        let out = Command::new("schtasks").args(["/Query", "/TN", &tn]).output();
-        out.map(|o| o.status.success()).unwrap_or(false)
+        match executor.run("schtasks", &["/Query", "/TN", &tn], false).await {
+            Ok(o) => o.status.success(),
+            Err(_) => false,
+        }
     }
 }

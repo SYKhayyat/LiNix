@@ -8,30 +8,20 @@ use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, debug, error, trace}; // Modernized: Removed unused 'warn' and 'instrument'
+use tracing::{info, debug, error, trace}; 
 use petgraph::stable_graph::StableDiGraph;
 use petgraph::graph::NodeIndex;
 use petgraph::Direction;
 
-/// Configuration for transaction execution.
-/// 
-/// Controls the parallel throughput, timeouts, and resiliency strategy 
-/// for system modifications.
+/// Configuration for transaction execution profiles.
 #[derive(Debug, Clone)]
 pub struct TransactionConfig {
-    /// Maximum number of concurrent package operations.
     pub max_concurrent: usize,
-    /// Timeout for an individual node operation.
     pub node_timeout: Duration,
-    /// Global timeout for the entire DAG closure.
     pub total_timeout: Duration,
-    /// Number of retries before a node is marked as permanently failed.
     pub max_retries: u32,
-    /// Initial delay for exponential backoff logic.
     pub initial_backoff: Duration,
-    /// Ceiling for backoff delays.
     pub max_backoff: Duration,
-    /// If true, a terminal failure triggers a rollback of the transaction.
     pub auto_rollback: bool,
 }
 
@@ -42,7 +32,21 @@ impl Default for TransactionConfig {
 }
 
 impl TransactionConfig {
-    /// Balanced settings for standard system maintenance.
+    /// High-Performance Profile: Optimized for local filesystem or high-speed cache 
+    /// operations where network latency is not a factor.
+    pub fn quick() -> Self {
+        Self {
+            max_concurrent: 8,
+            node_timeout: Duration::from_secs(60),
+            total_timeout: Duration::from_secs(600),
+            max_retries: 1,
+            initial_backoff: Duration::from_millis(100),
+            max_backoff: Duration::from_secs(2),
+            auto_rollback: true,
+        }
+    }
+
+    /// Resilient Profile: Optimized for mixed remote and system-level operations.
     pub fn patient() -> Self {
         Self {
             max_concurrent: 4,
@@ -59,9 +63,7 @@ impl TransactionConfig {
 /// Represents a discrete modification unit within the DAG.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum GraphAction {
-    /// Request to install or update a specific package spec.
     Install(PackageSpec),
-    /// Request to purge a package from the host OS.
     Remove { name: String, backend: String },
 }
 
@@ -80,32 +82,19 @@ pub struct TaskResult {
 }
 
 /// The High-Performance Mission-Critical Execution Engine.
-/// 
-/// Modernized for v3.6.0: Utilizes Dependency Injection for diagnostics 
-/// and provides a panic-free execution pipeline for parallel backends.
 pub struct Transaction {
-    /// The Directed Acyclic Graph representing system dependencies.
     pub graph: StableDiGraph<GraphAction, ()>,
-    /// Backend registry for trait-based capability checking.
     registry: Arc<BackendRegistry>,
-    /// Persistent Write-Ahead Log (WAL) for crash resiliency.
     journal: Arc<Mutex<Journal>>,
-    /// Shared Knowledge Base for build failure analysis.
     diagnostics: Arc<FailureDiagnosticEngine>,
-    /// Execution parameters.
     config: TransactionConfig,
-    /// Set of indices already successfully processed.
     completed_indices: HashSet<NodeIndex>,
-    /// Sequential history of successful nodes (used for rollback).
     history: Vec<NodeIndex>,
-    /// Mechanism for stopping the transaction across all workers.
     cancellation_token: CancellationToken,
 }
 
 impl Transaction {
     /// Initializes a new Transaction with default configuration.
-    /// 
-    /// Resolves E0599: Takes the diagnostics engine as an injected dependency.
     pub fn new(
         graph: StableDiGraph<GraphAction, ()>, 
         registry: Arc<BackendRegistry>,
@@ -115,7 +104,7 @@ impl Transaction {
         Self::with_config(graph, registry, journal, diagnostics, TransactionConfig::default())
     }
     
-    /// Initializes a new Transaction with specific timing and retry parameters.
+    /// Initializes a new Transaction with a specific performance profile.
     pub fn with_config(
         graph: StableDiGraph<GraphAction, ()>, 
         registry: Arc<BackendRegistry>,
@@ -140,48 +129,45 @@ impl Transaction {
         let total_timeout = self.config.total_timeout;
         let start_time = Instant::now();
 
-        info!("Transaction: Initializing execution for {} closure nodes.", self.graph.node_count());
+        info!("Transaction: Initializing parallel execution for {} nodes.", self.graph.node_count());
         
         match tokio::time::timeout(total_timeout, self.execute_internal()).await {
             Ok(res) => {
-                debug!("Transaction: Closure reached terminal state in {:?}", start_time.elapsed());
+                debug!("Transaction: DAG closure reached in {:?}", start_time.elapsed());
                 res
             },
             Err(_) => {
-                error!("Transaction: CRITICAL - Global timeout of {:?} reached. Aborting.", total_timeout);
+                error!("Transaction: CRITICAL FAILURE - Global timeout of {:?} reached.", total_timeout);
                 self.cancellation_token.cancel();
                 if self.config.auto_rollback {
                     let _ = self.rollback().await;
                 }
-                Err(Error::Transaction(format!("Transaction exceeded global timeout of {:?}", total_timeout)))
+                Err(Error::Transaction(format!("Transaction timed out after {:?}", total_timeout)))
             }
         }
     }
 
-    /// High-level execution method (Ignores detailed telemetry).
+    /// Simplified execution entry point.
     pub async fn execute(&mut self) -> Result<()> {
         self.execute_with_telemetry().await.map(|_| ())
     }
     
-    /// The parallel execution loop. Identifies ready nodes and manages worker pool.
+    /// The parallel execution loop.
     async fn execute_internal(&mut self) -> Result<Vec<TaskResult>> {
         let total_nodes = self.graph.node_count();
         let mut in_progress = HashSet::new();
         let mut worker_pool = JoinSet::new();
         let mut telemetry_results = Vec::new();
         
-        // Parallelism governor
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent));
 
         while self.completed_indices.len() < total_nodes {
-            // Check for manual or software-driven cancellation
             if self.cancellation_token.is_cancelled() {
                 worker_pool.abort_all();
                 if self.config.auto_rollback { let _ = self.rollback().await; }
-                return Err(Error::Transaction("Transaction was cancelled during execution.".into()));
+                return Err(Error::Transaction("Transaction cancelled.".into()));
             }
             
-            // 1. DAG Analysis: Find nodes whose dependencies are satisfied
             let ready_nodes: Vec<NodeIndex> = self.graph.node_indices()
                 .filter(|&idx| {
                     !self.completed_indices.contains(&idx) &&
@@ -191,11 +177,10 @@ impl Transaction {
                 })
                 .collect();
 
-            // 2. Worker Spawning
             for idx in ready_nodes {
                 let permit = match semaphore.clone().acquire_owned().await {
                     Ok(p) => p,
-                    Err(e) => return Err(Error::Transaction(format!("Concurrency semaphore error: {}", e))),
+                    Err(e) => return Err(Error::Transaction(format!("Semaphore failure: {}", e))),
                 };
                 
                 in_progress.insert(idx);
@@ -214,11 +199,10 @@ impl Transaction {
                 });
             }
 
-            // 3. Collection Phase
             if let Some(finished_task) = worker_pool.join_next().await {
                 let task_data = finished_task.map_err(|e| Error::Transaction(format!("Worker Panic: {}", e)))?;
                 
-                // Resolves E0505: Capture error status BEFORE moving task_data into vector
+                // Ownership Guard: Determine failure status before moving data
                 let is_failure = task_data.result.is_err();
 
                 if !is_failure {
@@ -228,35 +212,31 @@ impl Transaction {
                     self.history.push(task_data.node_index);
                     telemetry_results.push(task_data);
                 } else {
-                    // Extract error for diagnostics before moving task telemetry
                     let error_msg = task_data.result.as_ref().err()
                         .map(|e| e.to_string())
-                        .unwrap_or_else(|| "Unknown Execution Error".into());
+                        .unwrap_or_else(|| "Execution Error".into());
 
                     error!("Node {}:{} FAILED: {}", task_data.backend_name, task_data.package_name, error_msg);
                     
-                    // A+ Feature: Autonomous Diagnosis
                     self.diagnostics.print_suggestions(&error_msg, &task_data.backend_name);
 
-                    // Now safe to move task_data because we finished with references inside it
                     let final_err = task_data.result.clone().err().unwrap();
                     telemetry_results.push(task_data);
 
                     if self.config.auto_rollback {
-                        info!("Transaction: Failure detected with auto_rollback=true. Reverting changes...");
+                        info!("Transaction: Commencing auto-rollback...");
                         worker_pool.abort_all();
                         let _ = self.rollback().await;
                     }
                     return Err(final_err);
                 }
             } else if in_progress.is_empty() && self.completed_indices.len() < total_nodes {
-                return Err(Error::Transaction("Circular dependency or logic stall detected in DAG.".into()));
+                return Err(Error::Transaction("DAG Logic Stall: Cycle detected in closure.".into()));
             }
         }
         Ok(telemetry_results)
     }
     
-    /// Executes a system modification with exponential backoff and trait-safe capability checks.
     async fn execute_node_with_retry(
         action: GraphAction,
         registry: Arc<BackendRegistry>,
@@ -273,7 +253,6 @@ impl Transaction {
         let start_time_utc = chrono::Utc::now();
         let start_instant = Instant::now();
 
-        // 1. Verify Backend and Permissions
         let backend_cap = match registry.get(&b_name) {
             Some(cap) => cap,
             None => return TaskResult { 
@@ -284,7 +263,6 @@ impl Transaction {
             },
         };
 
-        // 2. WAL Journaling: Mark Start
         let journal_id = {
             let mut j = journal.lock().await;
             match j.record_start(j_action.clone()) {
@@ -293,7 +271,7 @@ impl Transaction {
                     node_index, backend_name: b_name, package_name: p_name, 
                     properties: HashMap::new(), attempt: 0, duration: Duration::ZERO, 
                     bytes_downloaded: 0, start_time: start_time_utc, 
-                    result: Err(Error::Journal(format!("WAL recording failed: {}", e))) 
+                    result: Err(Error::Journal(format!("WAL error: {}", e))) 
                 },
             }
         };
@@ -301,7 +279,6 @@ impl Transaction {
         let mut attempt = 0;
         let mut last_error = None;
         
-        // 3. Resiliency Loop
         while attempt <= config.max_retries {
             attempt += 1;
             if cancel_token.is_cancelled() {
@@ -331,7 +308,7 @@ impl Transaction {
                             let bytes = props.get("download_size").and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
                             Ok((props, bytes))
                         } else { 
-                            Err(Error::Transaction(format!("Backend '{}' lacks the Installable capability.", b_name))) 
+                            Err(Error::Transaction(format!("Backend '{}' is not installable.", b_name))) 
                         }
                     }
                     GraphAction::Remove { name, .. } => {
@@ -339,7 +316,7 @@ impl Transaction {
                             handler.remove(&[name.clone()], backend_cap.needs_root()).await?;
                             Ok((HashMap::new(), 0))
                         } else { 
-                            Err(Error::Transaction(format!("Backend '{}' lacks the Removable capability.", b_name))) 
+                            Err(Error::Transaction(format!("Backend '{}' is not removable.", b_name))) 
                         }
                     }
                 }
@@ -356,11 +333,11 @@ impl Transaction {
                     };
                 }
                 Ok(Err(e)) => { last_error = Some(e); }
-                Err(_) => { last_error = Some(Error::Transaction("Node modification timed out.".into())); }
+                Err(_) => { last_error = Some(Error::Transaction("Node timed out.".into())); }
             }
         }
         
-        let final_err = last_error.unwrap_or(Error::Transaction("Terminal execution failure.".into()));
+        let final_err = last_error.unwrap_or(Error::Transaction("Unknown error".into()));
         let mut j = journal.lock().await;
         let _ = j.record_failure(&journal_id, &format!("{}", final_err));
 
@@ -371,9 +348,8 @@ impl Transaction {
         }
     }
 
-    /// Reverts successful changes in reverse topological order.
     async fn rollback(&mut self) -> Result<()> {
-        info!("Transaction: Commencing rollback of {} successful nodes.", self.history.len());
+        info!("Transaction: Reverting modification history.");
         for &idx in self.history.iter().rev() {
             let action = &self.graph[idx];
             match action {

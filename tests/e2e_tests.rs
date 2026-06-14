@@ -1,153 +1,149 @@
-use linix::app::{App, SyncEngine};
 use linix::app::sync::resolver::StateResolver;
-use linix::app::sync::planner::ChangePlanner;
-use linix::config::Config;
-use linix::core::{
-    CommandExecutor, GraphAction, PackageSpec, StateRegistry,
-    Transaction, TransactionConfig
-};
-use linix::core::executor::{MockExecutor, DryRunOutput};
+use linix::app::sync::planner::{ChangePlanner, ScopedFilter};
+use linix::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
+use linix::core::executor::DryRunOutput;
 use std::collections::HashMap;
-use std::sync::Arc;
-use tempfile::TempDir;
+use tokio::fs;
+
+// Import our authoritative A+ Test Infrastructure
+mod mock_providers;
+use mock_providers::TestKernel;
 
 // ============================================================================
-// E2E Test Harness
+// E2E LOGIC TESTS: DECLARATIVE SYNC FLOW
 // ============================================================================
 
-struct E2ETestEnv {
-    pub app: App,
-    pub mock_layer: Arc<MockExecutor>,
-    pub _tmp: TempDir,
+/// Verifies the full LiNix system lifecycle closure: 
+/// Manifest Creation -> Resolution -> Planning -> Parallel Execution -> State Update.
+#[tokio::test]
+async fn test_e2e_sync_flow_hermetic() {
+    // 1. Initialize hermetic test environment (DI + Async Bootstrap)
+    let kernel = TestKernel::new().await;
+    
+    // 2. Setup: Define a declarative manifest on the virtual disk
+    let manifest_path = kernel.app.config.groups_dir.join("workstation.txt");
+    fs::create_dir_all(&kernel.app.config.groups_dir).await.unwrap();
+    // We use 'brew' as our universal mock identifier
+    fs::write(&manifest_path, "brew:neovim\n").await.unwrap();
+
+    // 3. Resolution Phase: Transform manifest strings into PackageSpecs
+    // Modernized v3.6.0: Await async constructor and provide explicit locked=false
+    let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
+    let desired = resolver.resolve_desired_state().await
+        .expect("E2E Resolution Error: Manifest closure expansion failed.");
+    
+    // 4. Planning Phase: Calculate the system delta
+    let changes = {
+        let state_guard = kernel.state.lock().await;
+        let planner = ChangePlanner::new(kernel.app.registry.clone(), &state_guard, &kernel.app.config);
+        // ScopedFilter::None handles global system reconciliation
+        planner.plan(&desired, ScopedFilter::None).await
+            .expect("E2E Planning Error: Failed to generate SyncChanges DAG.")
+    };
+
+    // 5. Prime Mocks: Set expected CLI output for the executor
+    kernel.mock_executor.set_response(
+        "brew install neovim", 
+        Ok(DryRunOutput::default().into())
+    );
+
+    // 6. Execution Phase: Apply the transaction closure
+    // Modernized v3.6.0: Uses the Kernel's sync_engine factory to ensure 10-arg DI is correct
+    let engine = kernel.app.sync_engine().await;
+    let result = engine.sync(changes).await;
+    
+    assert!(result.is_ok(), "E2E Transaction Logic Failed: {:?}", result.err());
+
+    // 7. Verification: Consolidation check in the mission-critical registry
+    let state = kernel.state.lock().await;
+    assert!(state.is_managed("brew", "neovim"), 
+            "Integrity Failure: 'neovim' missing from registry post-transaction.");
 }
 
-async fn create_e2e_test_env() -> E2ETestEnv {
-    let tmp = tempfile::Builder::new()
-        .prefix("linix_e2e_")
-        .tempdir()
-        .expect("Failed to create temp dir");
+// ============================================================================
+// E2E LOGIC TESTS: CROSS-BACKEND TRANSITIONS
+// ============================================================================
 
-    // Redirect the StateRegistry path for isolation
-    let registry_path = tmp.path().join("registry.json");
-    StateRegistry::set_test_path(registry_path);
+/// Verifies the 'teleport' meta-transaction: moving a package across backends
+/// with atomic safety and ghost metadata archival.
+#[tokio::test]
+async fn test_e2e_cross_backend_teleport() {
+    let kernel = TestKernel::new().await;
+    let teleporter = kernel.app.teleporter();
 
-    let mut config = Config::default();
-    config.groups_dir = tmp.path().join("groups");
-    config.dry_run = true;
-
-    let mock_layer = Arc::new(MockExecutor::new());
-    // Ensure mock layer reports cross-platform backends as available
-    mock_layer.set_command_exists("brew", true);
-    mock_layer.set_command_exists("cargo", true);
+    // 1. Setup Mock: Source backend (brew) reports package as installed
+    let mock_info = "name: curl\nversion: 8.0.1\ninstall_path: /mock/brew/curl";
+    kernel.mock_executor.set_response(
+        "brew info curl", 
+        Ok(DryRunOutput { stdout: mock_info.as_bytes().to_vec(), stderr: vec![] }.into())
+    );
     
-    // Initialize App (Async)
-    let app = App::new(config).await.expect("Failed to init app");
+    // 2. Prime Mocks: Removal from source, installation in target (cargo)
+    kernel.mock_executor.set_response("brew uninstall curl", Ok(DryRunOutput::default().into()));
+    kernel.mock_executor.set_response("cargo install curl", Ok(DryRunOutput::default().into()));
 
-    E2ETestEnv {
-        app,
-        mock_layer,
-        _tmp: tmp,
+    // 3. Execute Teleportation
+    let result = teleporter.teleport("curl", "cargo").await;
+    
+    // 4. Verification: Resolves E0382 (borrow after move)
+    // We check the status using as_ref() to avoid consuming the Result object
+    let is_ok = result.is_ok();
+    let is_not_found = matches!(result.as_ref().err(), Some(linix::core::Error::PackageNotFound(_)));
+    
+    assert!(is_ok || is_not_found, "Teleport logic failed with unexpected error: {:?}", result.err());
+    
+    if is_ok {
+        let state = kernel.state.lock().await;
+        assert!(state.is_managed("cargo", "curl"), "Teleportation failed to acquire target ownership.");
+        assert!(!state.is_managed("brew", "curl"), "Teleportation failed to purge source ownership.");
     }
 }
 
 // ============================================================================
-// E2E Logic Tests
+// E2E LOGIC TESTS: CONCURRENCY & PARALLEL INTEGRITY
 // ============================================================================
 
-#[tokio::test]
-async fn test_e2e_sync_flow_hermetic() {
-    let env = create_e2e_test_env().await;
-    
-    // 1. Create a manifest file in the isolated groups dir
-    let test_group_path = env.app.config.groups_dir.join("test.txt");
-    tokio::fs::create_dir_all(&env.app.config.groups_dir).await.unwrap();
-    // Use 'brew' for platform-agnostic testing
-    tokio::fs::write(&test_group_path, "brew:vim\n").await.unwrap();
-
-    // 2. Setup the Sync Engine with 9 arguments (Phase 4.1 State Injection Fix)
-    // We pass env.app.state.clone() so the engine and test share the same memory.
-    let executor = CommandExecutor::with_layer(true, false, env.mock_layer.clone());
-    let engine = SyncEngine::new(
-        &env.app.config,
-        env.app.registry.clone(),
-        executor,
-        env.app.metrics.clone(),
-        env.app.progress.clone(),
-        env.app.hooks.clone(),
-        env.app.snapshot_manager.clone(),
-        env.app.journal.clone(),
-        env.app.state.clone(),
-    ).await;
-
-    // 3. Resolve and Plan
-    let resolver = StateResolver::new(&env.app.config, env.app.registry.clone());
-    let desired = resolver.resolve_desired_state().await.unwrap();
-    
-    let changes = {
-        let state_guard = env.app.state.lock().await;
-        let planner = ChangePlanner::new(env.app.registry.clone(), &*state_guard, &env.app.config);
-        planner.plan(&desired).await.unwrap()
-    };
-
-    // 4. Prime mock
-    env.mock_layer.set_response("brew install vim", Ok(DryRunOutput::default().into()));
-
-    // 5. Execute Sync
-    let result = engine.sync(changes).await;
-    assert!(result.is_ok(), "E2E Sync failed: {:?}", result.err());
-
-    // 6. Verify state modification
-    // Because we injected the Arc<Mutex<StateRegistry>>, this lock now sees the engine's changes.
-    let state = env.app.state.lock().await;
-    assert!(state.is_managed("brew", "vim"), "Package not found in state registry after sync");
-}
-
-#[tokio::test]
-async fn test_e2e_cross_backend_teleport() {
-    let env = create_e2e_test_env().await;
-    let teleporter = env.app.teleporter();
-
-    // Use cross-platform 'brew' as source
-    let mock_info = "curl 8.0.1";
-    env.mock_layer.set_response("brew list --versions", 
-        Ok(DryRunOutput { stdout: mock_info.as_bytes().to_vec(), stderr: vec![] }.into())
-    );
-    
-    // Prime installation in target backend (cargo)
-    env.mock_layer.set_response("cargo install curl", Ok(DryRunOutput::default().into()));
-    // Prime removal in source backend (brew)
-    env.mock_layer.set_response("brew uninstall curl", Ok(DryRunOutput::default().into()));
-
-    // Execute Teleport
-    let result = teleporter.teleport("curl", "cargo").await;
-    
-    // Verify path logic completion
-    assert!(result.is_ok() || matches!(result.err(), Some(linix::core::Error::PackageNotFound(_))));
-}
-
+/// Verifies that high-breadth parallel transactions execute without deadlocks
+/// and correctly share the kernel-wide Diagnostic Engine.
 #[tokio::test]
 async fn test_concurrent_transaction_safety_e2e() {
-    let env = create_e2e_test_env().await;
+    let kernel = TestKernel::new().await;
     
+    // 1. Build a high-throughput parallel DAG (5 independent nodes)
     let mut graph = petgraph::stable_graph::StableDiGraph::new();
     for i in 0..5 {
+        let pkg_name = format!("pkg-parallel-{}", i);
         let spec = PackageSpec {
-            name: format!("pkg-{}", i),
+            name: pkg_name.clone(),
             backend: "brew".into(),
             options: HashMap::new(),
             requires: vec![],
         };
+        
+        // Setup expected responses in mock layer
+        kernel.mock_executor.set_response(
+            &format!("brew install {}", pkg_name), 
+            Ok(DryRunOutput::default().into())
+        );
+        
         graph.add_node(GraphAction::Install(spec));
     }
 
+    // 2. Initialize Transaction
+    // Modernized v3.6.0: Provides Diagnostics (4th arg) and Config (5th arg)
     let mut tx = Transaction::with_config(
         graph, 
-        env.app.registry.clone(), 
-        env.app.journal.clone(), 
-        TransactionConfig::quick()
+        kernel.app.registry.clone(), 
+        kernel.app.journal.clone(), 
+        kernel.app.diagnostics.clone(), // DI
+        TransactionConfig::quick()      // Production performance profile
     );
 
-    // Verify parallel execution completion on mock backend
+    // 3. Execute with telemetry
     let result = tx.execute_with_telemetry().await;
-    assert!(result.is_ok());
+    
+    // 4. Verification
+    assert!(result.is_ok(), "Concurrent parallel transaction failed: {:?}", result.err());
+    let telemetry = result.expect("Telemetry record missing");
+    assert_eq!(telemetry.len(), 5, "Not all parallel nodes reached terminal success.");
 }

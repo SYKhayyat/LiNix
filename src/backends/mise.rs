@@ -1,5 +1,7 @@
+// src/backends/mise.rs
+
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
     Queryable, Result, Upgradable, Error, MetadataProvider
 };
 use async_trait::async_trait;
@@ -7,7 +9,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 
-/// Core backend implementation for Mise (runtime version manager).
+#[derive(Clone)]
 pub struct MiseBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -20,28 +22,30 @@ impl MiseBackendCore {
             name: "mise".to_string(),
         }
     }
+
+    async fn get_mise_data_dir(&self) -> Result<String> {
+        let result = self.executor.run_output("mise", &["path"], false).await;
+        match result {
+            Ok(output) => Ok(output.trim().to_string()),
+            Err(_) => {
+                let home = dirs::home_dir()
+                    .ok_or_else(|| Error::Other("Could not determine home directory".into()))?;
+                Ok(home.join(".local/share/mise").to_string_lossy().to_string())
+            }
+        }
+    }
 }
 
 #[async_trait]
 impl BackendCore for MiseBackendCore {
     fn name(&self) -> &str { &self.name }
-
-    fn is_available(&self) -> bool {
-        self.executor.command_exists_sync("mise")
-    }
-
-    fn needs_root(&self) -> bool {
-        // Mise typically manages tools in the user's home directory (~/.local/share/mise)
-        false
-    }
+    fn is_available(&self) -> bool { self.executor.command_exists_sync("mise") }
+    fn needs_root(&self) -> bool { false }
 }
 
 #[async_trait]
 impl MetadataProvider for MiseBackendCore {
     async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
-        // Mise handles versioned runtimes which are generally leaf nodes or 
-        // handle their own internal versioning. We return empty to avoid
-        // over-complicating system-level orchestration with tool-specific runtimes.
         Ok(vec![])
     }
 }
@@ -52,18 +56,17 @@ pub struct MiseInstallable {
 
 #[async_trait]
 impl Installable for MiseInstallable {
-    async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
+    async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
             let version = spec.options.get("version").map(|v| v.as_str()).unwrap_or("latest");
             let tool_spec = format!("{}@{}", spec.name, version);
-
             info!("Mise: Installing global tool {}...", tool_spec);
             self.core.executor.run_exclusive("mise", "mise", &["use", "-g", &tool_spec], false).await?;
         }
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("Mise: Uninstalling tool {}...", name);
             self.core.executor.run_exclusive("mise", "mise", &["uninstall", name], false).await?;
@@ -79,12 +82,12 @@ pub struct MiseQueryable {
 #[async_trait]
 impl Queryable for MiseQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("mise", &["ls", "--json"], false).await?;
-        if output.is_empty() || output == "{}" { return Ok(vec![]); }
-
+        let output = self.core.executor.run_output("mise", &["list", "--json"], false).await?;
+        if output.is_empty() || output == "{}" {
+            return Ok(vec![]);
+        }
         let json: Value = serde_json::from_str(&output).map_err(|e| Error::Other(format!("Mise JSON error: {}", e)))?;
         let mut packages = Vec::new();
-
         if let Some(tools) = json.as_object() {
             for (name, versions) in tools {
                 if let Some(v_list) = versions.as_array() {
@@ -92,11 +95,10 @@ impl Queryable for MiseQueryable {
                         let version = v_obj.get("version")
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown");
-                        
                         let mut p = Package::with_version(name, version, "mise");
                         if let Some(source) = v_obj.get("source")
                             .and_then(|s| s.get("type"))
-                            .and_then(|t| t.as_str()) 
+                            .and_then(|t| t.as_str())
                         {
                             p.properties.insert("source_type".into(), source.to_string());
                         }
@@ -122,11 +124,22 @@ impl Queryable for MiseQueryable {
                 if plugin_name.trim() == name {
                     let mut p = Package::new(name, "mise");
                     p.properties.insert("repository_url".into(), url.trim().to_string());
+                    let data_dir = self.core.get_mise_data_dir().await?;
+                    let install_path = format!("{}/installs/{}", data_dir, name);
+                    p.properties.insert("install_path".into(), install_path);
                     return Ok(Some(p));
                 }
             }
         }
-        Ok(None)
+        let all = self.list_installed().await?;
+        if let Some(mut p) = all.into_iter().find(|p| p.name == name) {
+            let data_dir = self.core.get_mise_data_dir().await?;
+            let install_path = format!("{}/installs/{}/{}", data_dir, p.name, p.version.as_deref().unwrap_or("unknown"));
+            p.properties.insert("install_path".into(), install_path);
+            Ok(Some(p))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -136,19 +149,19 @@ pub struct MiseUpgradable {
 
 #[async_trait]
 impl Upgradable for MiseUpgradable {
-    async fn update(&self, _: bool) -> Result<()> {
+    async fn update(&self, _sudo: bool) -> Result<()> {
         info!("Mise: Updating plugin repository metadata...");
         self.core.executor.run("mise", &["plugins", "update"], false).await?;
         Ok(())
     }
 
-    async fn upgrade(&self, _: bool) -> Result<()> {
+    async fn upgrade(&self, _sudo: bool) -> Result<()> {
         info!("Mise: Upgrading all globally installed tools...");
         self.core.executor.run_exclusive("mise", "mise", &["upgrade"], false).await?;
         Ok(())
     }
 
-    async fn clean_orphans(&self, _: bool) -> Result<()> {
+    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
         info!("Mise: Pruning unused tool versions from cache...");
         self.core.executor.run("mise", &["prune", "--force"], false).await?;
         Ok(())

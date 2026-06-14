@@ -17,6 +17,13 @@ pub mod btrfs;
 pub mod pacman;
 pub mod dnf;
 
+// New specialized backends with install path support
+pub mod brew;
+pub mod cargo;
+pub mod pipx;
+pub mod npm;
+pub mod pnpm;
+pub mod yarn;
+
 pub use registry::{create_default_registry, BackendRegistry};
-// Fix E0432: Reflect renaming of GenericManager to GenericBackendCore
 pub use generic::{GenericBackendCore, ManagerConfig};

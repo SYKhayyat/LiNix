@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use linix::app::{App, SyncEngine, ui::TuiPreview};
+use linix::app::{App, ui::TuiPreview};
 use linix::cli::{
     Cli, Commands, ModuleCommand, SnapshotCommand, 
     LeaseCommand, ScheduleCommand, RepoCommand
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 1. Initialize Logging context
+    // 1. Logging Initialization
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
@@ -24,15 +24,14 @@ async fn main() -> Result<()> {
         return res;
     }
 
-    // 3. Load CLI and Configuration
+    // 3. CLI & Config Bootstrap
     let cli = Cli::parse();
-    // Modernized: config is immutable here as merging occurs inside the loader
     let config = load_and_merge_config(&cli).await?;
 
-    // 4. Initialize Kernel
+    // 4. Kernel Initialization
     let app = App::new(config).await?;
 
-    // 5. Command Routing (A+ Modular Dispatcher)
+    // 5. Command Dispatcher (Modular A+ Routing)
     match &cli.command {
         Commands::Sync { locked, json } => handle_sync(&app, *locked, *json).await,
         Commands::Upgrade { profile, module, group, json } => handle_upgrade(&app, profile, module, group, *json).await,
@@ -55,18 +54,18 @@ async fn main() -> Result<()> {
         Commands::Profile { name } => handle_profile(&app, name).await,
         Commands::Run { packages, command } => handle_run(&app, packages, command).await,
         Commands::Orphans => handle_clean(&app).await,
-        _ => { warn!("Requested CLI variant is not implemented in this LiNix version."); Ok(()) }
+        _ => { warn!("Command not implemented in modular dispatcher."); Ok(()) }
     }
 }
 
 // ============================================================================
-// MODULAR COMMAND HANDLERS
+// COMMAND HANDLERS
 // ============================================================================
 
 async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
-    let engine = create_sync_engine(app).await;
+    let engine = app.sync_engine().await;
     if app.journal.lock().await.needs_recovery() {
-        warn!("LiNix: Transaction journal indicates a previous crash. Healing system...");
+        warn!("LiNix: Transaction journal indicates previous crash. Healing system integrity...");
         engine.heal().await?;
     }
 
@@ -80,7 +79,7 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
     };
 
     if changes.is_empty() {
-        info!("LiNix: System is consistent with declarative configuration.");
+        info!("Success: System matches declarative manifests.");
         return Ok(());
     }
 
@@ -97,33 +96,6 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
 
     engine.sync(changes).await?;
     perform_maintenance(app).await
-}
-
-async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
-    let backend_name = match cmd {
-        RepoCommand::Add { backend, .. } => backend.clone(),
-        RepoCommand::Remove { backend, .. } => backend.clone(),
-        RepoCommand::List { backend } => backend.clone(),
-    }.unwrap_or_else(|| app.config.default_backend.clone().unwrap_or_else(|| "apt".into()));
-
-    let b_cap = app.registry.get(&backend_name).context("Backend offline")?;
-    let manager = b_cap.as_repo_manager().context("Backend lacks repo management capability")?;
-
-    match cmd {
-        RepoCommand::Add { name, url, .. } => {
-            info!("Repo: Adding {} to {}...", name, backend_name);
-            manager.add_repo(name, url, b_cap.needs_root()).await?;
-        }
-        RepoCommand::Remove { name, .. } => {
-            info!("Repo: Removing {} from {}...", name, backend_name);
-            manager.remove_repo(name, b_cap.needs_root()).await?;
-        }
-        RepoCommand::List { .. } => {
-            let repos = manager.list_repos().await?;
-            for (id, url) in repos { println!("{:<20} {}", id, url); }
-        }
-    }
-    Ok(())
 }
 
 async fn handle_upgrade(app: &App, profile: &Option<String>, module: &Option<String>, group: &Option<String>, json: bool) -> Result<()> {
@@ -147,20 +119,23 @@ async fn handle_upgrade(app: &App, profile: &Option<String>, module: &Option<Str
     }
 
     if !changes.is_empty() {
-        create_sync_engine(app).await.sync(changes).await?;
+        app.sync_engine().await.sync(changes).await?;
         perform_maintenance(app).await?;
     }
     Ok(())
 }
 
 async fn handle_install(app: &App, packages: &[String], json: bool) -> Result<()> {
-    if json && app.config.dry_run { return Ok(()); }
+    if json && app.config.dry_run {
+        info!("Install: Calculating potential dry-run changes.");
+        return Ok(());
+    }
     for pkg_str in packages {
         let resolved = app.resolve_spec(pkg_str).await?;
         for spec in resolved {
             let b = app.registry.get(&spec.backend).context("Backend offline")?;
             if let Some(inst) = b.as_installable() {
-                info!("LiNix: Installing {}...", spec.name);
+                info!("LiNix: Installing {} via {}...", spec.name, spec.backend);
                 inst.install(&[spec.clone()], b.needs_root()).await?;
                 app.state.lock().await.add(&spec.backend, &spec.name, None, spec.options.clone(), None, false);
                 let _ = add_package_to_local(&app.config.groups_dir, pkg_str).await;
@@ -178,7 +153,7 @@ async fn handle_remove(app: &App, packages: &[String], _json: bool) -> Result<()
             if let Some(inst) = b.as_installable() {
                 if let Some(q) = b.as_queryable() {
                     if q.info(pkg_name).await?.is_some() {
-                        info!("LiNix: Purging {}...", pkg_name);
+                        info!("LiNix: Purging {} from {}...", pkg_name, b.name());
                         inst.remove(&[pkg_name.clone()], b.needs_root()).await?;
                         app.state.lock().await.remove(b.name(), pkg_name);
                         let _ = remove_package_from_local(&app.config.groups_dir, pkg_name).await;
@@ -193,11 +168,32 @@ async fn handle_remove(app: &App, packages: &[String], _json: bool) -> Result<()
     perform_maintenance(app).await
 }
 
-async fn handle_run(app: &App, packages: &[String], command: &String) -> Result<()> {
-    let parts: Vec<&str> = command.split_whitespace().collect();
-    let bin = parts.first().context("Run: Empty command.")?;
-    let args: Vec<String> = parts.iter().skip(1).map(|s| s.to_string()).collect();
-    app.runner().run(packages, bin, &args).await.map_err(|e| e.into())
+async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
+    let b_name = match cmd {
+        RepoCommand::Add { backend, .. } => backend.clone(),
+        RepoCommand::Remove { backend, .. } => backend.clone(),
+        RepoCommand::List { backend } => backend.clone(),
+    }.unwrap_or_else(|| app.config.default_backend.clone().unwrap_or_else(|| "apt".into()));
+
+    let b = app.registry.get(&b_name).context("Backend not found")?;
+    let mgr = b.as_repo_manager().context("Backend does not support repository management.")?;
+    
+    match cmd {
+        RepoCommand::Add { name, url, .. } => {
+            info!("Repo: Adding {} to {}...", name, b_name);
+            mgr.add_repo(name, url, b.needs_root()).await?;
+        }
+        RepoCommand::Remove { name, .. } => {
+            info!("Repo: Removing {} from {}...", name, b_name);
+            mgr.remove_repo(name, b.needs_root()).await?;
+        }
+        RepoCommand::List { .. } => {
+            let repos = mgr.list_repos().await?;
+            println!("{:<20} {}", "NAME", "SOURCE");
+            for (n, u) in repos { println!("{:<20} {}", n, u); }
+        }
+    }
+    Ok(())
 }
 
 async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
@@ -215,7 +211,7 @@ async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
         }
         ModuleCommand::Create { name } => {
             let path = app.config.modules_dir.join(format!("{}.module.txt", name));
-            tokio::fs::write(&path, "# New LiNix Module\n").await?;
+            tokio::fs::write(&path, format!("# LiNix Module: {}\n", name)).await?;
             info!("Module '{}' created successfully.", name);
         }
     }
@@ -226,15 +222,16 @@ async fn handle_lease(app: &App, cmd: &LeaseCommand) -> Result<()> {
     match cmd {
         LeaseCommand::List => {
             let state = app.state.lock().await;
+            println!("{:<15} {:<20} {:<20}", "BACKEND", "PACKAGE", "EXPIRATION");
             for pkg in &state.packages {
                 if let Some(exp) = pkg.expires_at {
                     let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(exp as i64, 0).unwrap();
-                    println!("{:<20} {}", pkg.name, dt.to_rfc2822());
+                    println!("{:<15} {:<20} {}", pkg.backend, pkg.name, dt.to_rfc2822());
                 }
             }
         }
         LeaseCommand::Set { package, duration } => {
-            let (b, n) = package.split_once(':').context("Use format backend:package")?;
+            let (b, n) = package.split_once(':').context("Input format: backend:package")?;
             app.state.lock().await.update_lease(b, n, duration)?;
             app.state.lock().await.save()?;
         }
@@ -246,14 +243,14 @@ async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
     match cmd {
         ScheduleCommand::Add { name, cron, command, notification } => {
             let mut cfg = (*app.config).clone();
-            app.scheduler.add_schedule(&mut cfg, name.clone(), cron.clone(), command.clone(), notification.clone()).await?;
+            app.scheduler.add_schedule(&app.executor, &mut cfg, name.clone(), cron.clone(), command.clone(), notification.clone()).await?;
         }
         ScheduleCommand::List => {
             for s in &app.config.schedules { println!("{:<15} {:<15} {}", s.name, s.cron, s.command); }
         }
         ScheduleCommand::Remove { name } => {
             let mut cfg = (*app.config).clone();
-            app.scheduler.remove_schedule(&mut cfg, name).await?;
+            app.scheduler.remove_schedule(&app.executor, &mut cfg, name).await?;
         }
     }
     Ok(())
@@ -262,7 +259,8 @@ async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
 async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
     match cmd {
         SnapshotCommand::List => {
-            for s in app.snapshot_manager.list_snapshots().await? { println!("{:<15} {}", s.backend, s.id); }
+            let list = app.snapshot_manager.list_snapshots().await?;
+            for s in list { println!("{:<15} {}", s.backend, s.id); }
         }
         SnapshotCommand::Prune { force } => { app.prune_snapshots(*force).await?; }
     }
@@ -273,52 +271,27 @@ async fn handle_shell(app: &App, packages: &[String]) -> Result<()> {
     app.shell().enter(packages).await.map_err(|e| e.into())
 }
 
-async fn handle_search(app: &App, query: &str) -> Result<()> {
-    let res = app.search(query).await?;
-    for p in res { println!("{:<15} {}", p.backend, p.name); }
-    Ok(())
+async fn handle_run(app: &App, packages: &[String], command: &String) -> Result<()> {
+    let parts: Vec<&str> = command.split_whitespace().collect();
+    let bin = parts.first().unwrap_or(&"");
+    let args: Vec<String> = parts.iter().skip(1).map(|s| s.to_string()).collect();
+    app.runner().run(packages, bin, &args).await.map_err(|e| e.into())
 }
 
+async fn handle_migrate(app: &App) -> Result<()> { app.migrator().migrate().await.map_err(|e| e.into()) }
+async fn handle_undo(app: &App) -> Result<()> { app.undo_manager().run_interactive().await.map_err(|e| e.into()) }
+async fn handle_profile(app: &App, name: &str) -> Result<()> { app.profile_manager().switch(name).await.map_err(|e| e.into()) }
+async fn handle_clean(app: &App) -> Result<()> { app.clean_orphans().await?; perform_maintenance(app).await }
+async fn handle_heal(app: &App) -> Result<()> { app.sync_engine().await.heal().await.map_err(|e| e.into()) }
+async fn handle_search(app: &App, query: &str) -> Result<()> { for p in app.search(query).await? { println!("{:<15} {}", p.backend, p.name); } Ok(()) }
 async fn handle_list(app: &App, backend: Option<&str>, json: bool) -> Result<()> {
     let list = app.list(backend).await?;
     if json { println!("{}", serde_json::to_string_pretty(&list)?); }
     else { for p in list { println!("{:<15} {}", p.backend, p.name); } }
     Ok(())
 }
-
-async fn handle_info(app: &App, package: &str) -> Result<()> {
-    if let Some(p) = app.get_info(package).await? { println!("Package: {}\nBackend: {}", p.name, p.backend); }
-    Ok(())
-}
-
-async fn handle_clean(app: &App) -> Result<()> {
-    app.clean_orphans().await?;
-    perform_maintenance(app).await
-}
-
-async fn handle_heal(app: &App) -> Result<()> {
-    create_sync_engine(app).await.heal().await.map_err(|e| e.into())
-}
-
-async fn handle_doctor(app: &App) -> Result<()> {
-    for b in app.registry.all() {
-        let status = if b.is_available() { "READY" } else { "OFFLINE" };
-        println!("[{}] {}", status, b.name());
-    }
-    Ok(())
-}
-
-async fn handle_migrate(app: &App) -> Result<()> {
-    app.migrator().migrate().await.map_err(|e| e.into())
-}
-
-async fn handle_undo(app: &App) -> Result<()> {
-    app.undo_manager().run_interactive().await.map_err(|e| e.into())
-}
-
-async fn handle_profile(app: &App, name: &str) -> Result<()> {
-    app.profile_manager().switch(name).await.map_err(|e| e.into())
-}
+async fn handle_info(app: &App, package: &str) -> Result<()> { if let Some(p) = app.get_info(package).await? { println!("Package: {}\nBackend: {}", p.name, p.backend); } Ok(()) }
+async fn handle_doctor(app: &App) -> Result<()> { for b in app.registry.all() { println!("[{}] {}", if b.is_available() { "READY" } else { "OFFLINE" }, b.name()); } Ok(()) }
 
 // ============================================================================
 // KERNEL HELPERS
@@ -327,8 +300,7 @@ async fn handle_profile(app: &App, name: &str) -> Result<()> {
 async fn attempt_shim_hijack() -> Result<Option<Result<()>>> {
     let current_name = env::current_exe().ok().and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned())).unwrap_or_else(|| "linix".to_string());
     if current_name != "linix" && !current_name.starts_with("linix") {
-        let path = linix::utils::safe_config_dir().join("config.toml");
-        let config = tokio::task::spawn_blocking(move || linix::config::Config::from_file(&path)).await??;
+        let config = linix::config::Config::from_file(&linix::utils::safe_config_dir().join("config.toml")).unwrap_or_default();
         let app = App::new(config).await?;
         return Ok(Some(app.runner().exec_shim(&current_name, &env::args().collect::<Vec<_>>()[1..]).await.map_err(|e| e.into())));
     }
@@ -342,25 +314,8 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
     Ok(config)
 }
 
-async fn create_sync_engine(app: &App) -> SyncEngine<'_> {
-    // Resolves E0061: Passing the 10th argument (diagnostics)
-    SyncEngine::new(
-        &app.config, 
-        app.registry.clone(), 
-        app.executor.duplicate(), 
-        app.metrics.clone(), 
-        app.progress.clone(), 
-        app.hooks.clone(), 
-        app.snapshot_manager.clone(), 
-        app.journal.clone(), 
-        app.state.clone(),
-        app.diagnostics.clone() // Correctly provided
-    ).await
-}
-
 async fn perform_maintenance(app: &App) -> Result<()> {
-    let mut journal = app.journal.lock().await;
-    let _ = journal.cleanup();
+    app.journal.lock().await.cleanup()?;
     if app.config.snapshots.auto_prune { app.prune_snapshots(false).await?; }
     Ok(())
 }

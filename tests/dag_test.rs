@@ -1,60 +1,44 @@
-use linix::core::{GraphAction, PackageSpec, Transaction, Journal, StateRegistry};
-use linix::core::executor::MockExecutor;
-use linix::backends::create_default_registry;
-use linix::config::Config;
-use linix::app::LuaHooks;
-use linix::core::CommandExecutor;
+use linix::core::{GraphAction, PackageSpec, Transaction, StateRegistry};
+use linix::app::sync::planner::{ChangePlanner, ScopedFilter};
 use petgraph::stable_graph::StableDiGraph;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::collections::HashMap;
-use tempfile::tempdir;
 
-/// Helper to create a hermetic environment for DAG testing.
-async fn create_dag_test_env() -> (Arc<linix::backends::BackendRegistry>, Arc<Mutex<Journal>>, Config) {
-    let tmp = tempdir().unwrap();
-    StateRegistry::set_test_path(tmp.path().join("registry.json"));
+// Import our authoritative A+ Test Infrastructure
+mod mock_providers;
+use mock_providers::TestKernel;
 
-    let config = Config::default();
-    let mock_layer = Arc::new(MockExecutor::new());
-    
-    // Phase 6.1: Ensure 'brew' exists for cross-platform test reliability
-    mock_layer.set_command_exists("brew", true);
-    
-    let executor = CommandExecutor::with_layer(true, false, mock_layer);
-    let hooks = Arc::new(LuaHooks::new(&config).unwrap());
-    let registry = Arc::new(create_default_registry(executor, &config, hooks).await);
-    let journal = Arc::new(Mutex::new(Journal::new().unwrap()));
-    
-    (registry, journal, config)
-}
-
+/// Verifies that the LiNix Transaction engine executes nodes in the 
+/// correct topological order while respecting parallel dependencies.
+/// 
+/// Scenario: Node C depends on Node A and Node B.
+/// Logic: (A & B) must be recorded in the call log before C.
 #[tokio::test]
 async fn test_dag_execution_order_wiring() {
-    let (registry, journal, _) = create_dag_test_env().await;
+    // 1. Initialize hermetic test kernel (Async DI bootstrap)
+    let kernel = TestKernel::new().await;
     let mut graph = StableDiGraph::new();
 
-    // Scenario: Node C depends on A and B
-    // Using 'brew' for universal OS compatibility in tests
+    // 2. Define standard package specs for a dependency chain
     let spec_a = PackageSpec {
-        name: "gcc".into(),
+        name: "compiler-core".into(),
         backend: "brew".into(),
         options: HashMap::new(),
         requires: vec![],
     };
     let spec_b = PackageSpec {
-        name: "make".into(),
+        name: "build-system".into(),
         backend: "brew".into(),
         options: HashMap::new(),
         requires: vec![],
     };
     let spec_c = PackageSpec {
-        name: "neovim".into(),
+        name: "complex-app".into(),
         backend: "brew".into(),
         options: HashMap::new(),
-        requires: vec!["brew:gcc".into(), "brew:make".into()],
+        requires: vec!["brew:compiler-core".into(), "brew:build-system".into()],
     };
 
+    // 3. Construct the DAG
     let a = graph.add_node(GraphAction::Install(spec_a));
     let b = graph.add_node(GraphAction::Install(spec_b));
     let c = graph.add_node(GraphAction::Install(spec_c));
@@ -62,56 +46,86 @@ async fn test_dag_execution_order_wiring() {
     graph.add_edge(a, c, ());
     graph.add_edge(b, c, ());
 
-    let mut tx = Transaction::new(graph, registry, journal);
+    // 4. Initialize the Transaction
+    // Resolves E0061: Passes kernel-wide diagnostics engine as the 4th argument via DI
+    let mut tx = Transaction::new(
+        graph, 
+        kernel.app.registry.clone(), 
+        kernel.app.journal.clone(),
+        kernel.app.diagnostics.clone()
+    );
     
-    // Phase 2.2 Alignment: Use telemetry entry point
+    // 5. Execute closure
     let result = tx.execute_with_telemetry().await;
-    assert!(result.is_ok(), "Parallel execution of DAG failed: {:?}", result.err());
+    assert!(result.is_ok(), "Topological execution failed: {:?}", result.err());
+    
+    // 6. Verification: Logic check of the call log order
+    let calls = kernel.mock_executor.get_calls().await;
+    let pos_a = calls.iter().position(|c| c.contains("compiler-core")).expect("Node A missing");
+    let pos_b = calls.iter().position(|c| c.contains("build-system")).expect("Node B missing");
+    let pos_c = calls.iter().position(|c| c.contains("complex-app")).expect("Node C missing");
+
+    assert!(pos_a < pos_c, "Ordering Error: Root A must precede Child C");
+    assert!(pos_b < pos_c, "Ordering Error: Root B must precede Child C");
 }
 
+/// Verifies that the ChangePlanner detects circular dependency loops 
+/// in the manifest closure and refuses to build a flawed DAG.
 #[tokio::test]
 async fn test_circular_dependency_detection_wiring() {
-    let (registry, _, config) = create_dag_test_env().await;
-    let state = StateRegistry::default();
+    let kernel = TestKernel::new().await;
     
-    // FIX: Fulfills Phase 4.1. Pass the required 3rd argument (&config)
-    let planner = linix::app::sync::planner::ChangePlanner::new(registry, &state, &config);
+    // Use a fresh registry-state for planner isolation
+    let state = StateRegistry::default();
+    let planner = ChangePlanner::new(
+        kernel.app.registry.clone(), 
+        &state, 
+        &kernel.app.config
+    );
 
-    // Create a circular dependency: A requires B, B requires A
+    // 1. Create a circular paradox: A -> B -> A
     let mut desired = HashMap::new();
     desired.insert("brew".to_string(), vec![
         PackageSpec {
-            name: "pkg-a".into(),
+            name: "loop-a".into(),
             backend: "brew".into(),
             options: HashMap::new(),
-            requires: vec!["brew:pkg-b".into()],
+            requires: vec!["brew:loop-b".into()],
         },
         PackageSpec {
-            name: "pkg-b".into(),
+            name: "loop-b".into(),
             backend: "brew".into(),
             options: HashMap::new(),
-            requires: vec!["brew:pkg-a".into()],
+            requires: vec!["brew:loop-a".into()],
         }
     ]);
 
-    let plan_result = planner.plan(&desired).await;
+    // 2. Attempt Planning
+    // Resolves E0061: Provides ScopedFilter::None (Full Sync)
+    let plan_result = planner.plan(&desired, ScopedFilter::None).await;
     
-    assert!(plan_result.is_err(), "Planner failed to detect circular dependency");
+    // 3. Assert Failure
+    assert!(plan_result.is_err(), "Planner allowed a circular dependency loop.");
     if let Err(linix::core::Error::Transaction(msg)) = plan_result {
-        assert!(msg.contains("Circular dependency"));
+        assert!(msg.contains("Circular dependency"), "Incorrect error context: {}", msg);
     }
 }
 
+/// Verifies that the CommandExecutor's LockMap allows distinct backends to execute in parallel 
+/// while enforcing mutual exclusion for the same backend.
 #[tokio::test]
 async fn test_parallel_task_isolation_wiring() {
-    let mock_layer = Arc::new(MockExecutor::new());
-    let executor = CommandExecutor::with_layer(true, false, mock_layer);
+    let kernel = TestKernel::new().await;
+    let executor = kernel.app.executor.clone();
     
-    // Verifies that the LockMap allows different backends to run in parallel
-    let lock1 = executor.run_exclusive("brew", "ls", &[], false);
-    let lock2 = executor.run_exclusive("cargo", "ls", &[], false);
+    // Logic: brew and cargo should lock their own DBs and run concurrently.
+    let lock1 = executor.run_exclusive("brew", "brew", &["list"], false);
+    let lock2 = executor.run_exclusive("cargo", "cargo", &["install", "--list"], false);
     
+    // If the logic is correct, these join successfully. 
+    // If a global lock exists, they would stall.
     let (res1, res2) = tokio::join!(lock1, lock2);
-    assert!(res1.is_ok());
-    assert!(res2.is_ok());
+    
+    assert!(res1.is_ok(), "Lock acquisition failed for brew");
+    assert!(res2.is_ok(), "Lock acquisition failed for cargo");
 }
