@@ -1,3 +1,5 @@
+// src/backends/github.rs
+
 use crate::core::{
     BackendCore, Installable, Queryable,
     security::verify_checksum,
@@ -49,7 +51,6 @@ pub struct GithubBackendCore {
 }
 
 impl GithubBackendCore {
-    /// Phase 1.5: Constructor now accepts install_dir from Config.
     pub fn new(executor: CommandExecutor, install_dir: PathBuf, github_token: Option<String>) -> Self {
         let rate_limiter = if github_token.is_some() {
             RateLimiter::github_authenticated()
@@ -243,7 +244,8 @@ impl Installable for GithubInstallable {
                     if let Some(parent) = bin_dest.parent() {
                         tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
                     }
-                    tokio::fs::os::unix::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
+                    // FIX: Use tokio::os::unix::fs::symlink (correct path)
+                    tokio::os::unix::fs::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
                 }
 
                 final_bin_path = Some(bin_dest.to_string_lossy().to_string());

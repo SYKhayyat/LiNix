@@ -1,3 +1,5 @@
+// src/backends/appimage.rs
+
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
     Queryable, Result, Error, MetadataProvider
@@ -18,9 +20,6 @@ struct AppImageState {
 }
 
 /// Core backend implementation for standalone Linux AppImages.
-/// 
-/// Hardened for Phase 1.5: Supports configurable installation directories 
-/// injected from the primary Config.
 pub struct AppImageBackendCore {
     pub executor: CommandExecutor,
     pub install_dir: PathBuf,
@@ -28,7 +27,6 @@ pub struct AppImageBackendCore {
 }
 
 impl AppImageBackendCore {
-    /// Initializes a new AppImage backend with a specific installation root.
     pub fn new(executor: CommandExecutor, install_dir: PathBuf) -> Self {
         let state = install_dir.join("state.json");
         
@@ -39,7 +37,6 @@ impl AppImageBackendCore {
         }
     }
 
-    /// Prepares the filesystem structure for AppImage storage.
     async fn ensure_dirs(&self) -> Result<PathBuf> {
         if !tokio::fs::try_exists(&self.install_dir).await.unwrap_or(false) {
             tokio::fs::create_dir_all(&self.install_dir).await?;
@@ -78,7 +75,6 @@ impl BackendCore for AppImageBackendCore {
     }
 
     fn needs_root(&self) -> bool {
-        // AppImages are typically installed in user-owned data directories.
         false
     }
 }
@@ -86,8 +82,6 @@ impl BackendCore for AppImageBackendCore {
 #[async_trait]
 impl MetadataProvider for AppImageBackendCore {
     async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
-        // AppImages are self-contained by design and do not require 
-        // external dependency orchestration by LiNix.
         Ok(vec![])
     }
 }
@@ -138,7 +132,8 @@ impl Installable for AppImageInstallable {
             }
 
             #[cfg(unix)] {
-                tokio::fs::os::unix::symlink(&dest_path, &link_path).await?;
+                // FIX: Use tokio::os::unix::fs::symlink (correct path)
+                tokio::os::unix::fs::symlink(&dest_path, &link_path).await?;
             }
 
             state.insert(spec.name.clone(), AppImageState {

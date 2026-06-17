@@ -1,3 +1,5 @@
+// src/backends/web.rs
+
 use crate::core::{
     BackendCore, Installable, Queryable, 
     security::verify_checksum,
@@ -23,8 +25,6 @@ struct WebState {
 }
 
 /// Core backend implementation for direct HTTP/HTTPS downloads.
-/// 
-/// Hardened for Phase 1.5: Accepts configurable installation directories.
 pub struct WebBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -34,7 +34,6 @@ pub struct WebBackendCore {
 }
 
 impl WebBackendCore {
-    /// Initializes a new Web backend with a specific installation root.
     pub fn new(executor: CommandExecutor, install_dir: PathBuf) -> Self {
         let state_file = install_dir.join("installed.json");
         Self {
@@ -72,7 +71,6 @@ impl BackendCore for WebBackendCore {
 #[async_trait]
 impl MetadataProvider for WebBackendCore {
     async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
-        // Direct web downloads are standalone; no native transitive deps.
         Ok(vec![])
     }
 }
@@ -135,7 +133,6 @@ impl Installable for WebInstallable {
                 tokio::fs::copy(&dl_path, dest_dir.join(filename)).await.map_err(Error::from)?;
             }
 
-            // Cross-platform binary discovery and linkage
             let mut final_bin_link = None;
             if spec.options.get("type").map(|t| t == "program").unwrap_or(true) {
                 let bin_name = spec.options.get("bin").map(|s| s.as_str()).unwrap_or_else(|| {
@@ -176,7 +173,8 @@ impl Installable for WebInstallable {
                         let mut perms = metadata.permissions();
                         perms.set_mode(0o755);
                         tokio::fs::set_permissions(&src_path, perms).await.map_err(Error::from)?;
-                        tokio::fs::os::unix::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
+                        // FIX: Use tokio::os::unix::fs::symlink (correct path)
+                        tokio::os::unix::fs::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
                     }
 
                     #[cfg(windows)] {

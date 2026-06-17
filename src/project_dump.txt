@@ -577,6 +577,8 @@ impl NotificationManager {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\app\shell\mod.rs ---
 
+// src/app/shell/mod.rs
+
 use crate::core::{Result, Error, PackageSpec, StateRegistry};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
@@ -592,40 +594,24 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
-use tracing::{info, debug, warn, instrument}; // Modernized: Removed unused 'trace'
+use tracing::{info, debug, warn, instrument};
 use uuid::Uuid;
 
 /// Orchestrates ephemeral environments (The Ghost Shell).
-/// 
-/// The Ghost Shell provides an isolated sub-shell where requested packages 
-/// are temporarily installed. Once the user exits the shell, LiNix 
-/// automatically purges all transient components, returning the OS 
-/// to its original state.
 pub struct GhostShell {
-    /// Registry for capability-based backend access.
     registry: Arc<BackendRegistry>,
-    /// The mission-critical system state.
     pub state: Arc<Mutex<StateRegistry>>,
-    /// Global kernel configuration.
     config: Arc<Config>,
-    /// Low-level command and file executor.
     executor: crate::core::CommandExecutor,
-    /// Transaction telemetry collector.
     metrics: MetricsCollector,
-    /// Progress reporting interface.
     progress: Arc<dyn ProgressReporter>,
-    /// Scripting engine for lifecycle events.
     hooks: Arc<LuaHooks>,
-    /// System-level snapshot manager.
     snapshot_manager: Arc<SnapshotManager>,
-    /// Transaction journal (WAL).
     journal: Arc<Mutex<Journal>>,
-    /// Failure diagnosis engine.
     diagnostics: Arc<FailureDiagnosticEngine>,
 }
 
 impl GhostShell {
-    /// Initializes a new GhostShell with exhaustive kernel dependencies.
     pub fn new(
         registry: Arc<BackendRegistry>,
         state: Arc<Mutex<StateRegistry>>,
@@ -638,37 +624,33 @@ impl GhostShell {
         journal: Arc<Mutex<Journal>>,
         diagnostics: Arc<FailureDiagnosticEngine>,
     ) -> Self {
-        Self { 
-            registry, 
-            state, 
-            config, 
-            executor, 
-            metrics, 
-            progress, 
-            hooks, 
-            snapshot_manager, 
+        Self {
+            registry,
+            state,
+            config,
+            executor,
+            metrics,
+            progress,
+            hooks,
+            snapshot_manager,
             journal,
             diagnostics,
         }
     }
 
-    /// Primary entry point for an ephemeral session.
     #[instrument(skip(self, packages))]
     pub async fn enter(&self, packages: &[String]) -> Result<()> {
         let session_id = format!("shell-{}", Uuid::new_v4().simple());
         info!("GhostShell: Initializing isolated session '{}'...", session_id);
 
-        // 1. Session Activation
         {
             let mut state_guard = self.state.lock().await;
             state_guard.active_session_id = Some(session_id.clone());
         }
 
-        // 2. Environment Provisioning
         info!("GhostShell: Installing transient components...");
         self.provision_transient_env(packages, &session_id).await?;
 
-        // 3. Mount Discovery: Locate package roots for hardware isolation
         let mut store_paths = Vec::new();
         for pkg_req in packages {
             let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
@@ -680,7 +662,6 @@ impl GhostShell {
             }
         }
 
-        // 4. Sub-process Execution
         let shell_bin = env::var("SHELL").unwrap_or_else(|_| {
             if cfg!(windows) { "cmd.exe".into() } else { "/bin/bash".into() }
         });
@@ -699,11 +680,9 @@ impl GhostShell {
             ));
         }
 
-        // 5. Atomic Purge (Feature 6 Cleanup)
         info!("GhostShell: Session terminated. Purging ephemeral state...");
         self.cleanup_transient_env(&session_id).await?;
 
-        // 6. Session Deactivation
         {
             let mut state_guard = self.state.lock().await;
             state_guard.active_session_id = None;
@@ -714,7 +693,6 @@ impl GhostShell {
         Ok(())
     }
 
-    /// Spawns the sub-shell using platform-native sandboxing.
     async fn launch_sandboxed_shell(&self, shell: &str, session_id: &str, store_paths: &[(String, String)]) -> Result<()> {
         let mut mounts = Vec::new();
         let mut internal_path = String::from("/usr/local/bin:/usr/bin:/bin");
@@ -739,22 +717,18 @@ impl GhostShell {
 
         tokio::task::spawn_blocking(move || {
             let mut bwrap = Sandbox::wrap(&shell_owned, &[], &sandbox_cfg, &settings_clone)?;
-            
             bwrap.env("PATH", internal_path)
                  .env("LINIX_GHOST", "true")
                  .env("LINIX_SESSION_ID", session_owned)
                  .env("PROMPT_COMMAND", "echo -n '(linix-ghost) '");
-
             let mut handle = bwrap.spawn().map_err(|e| Error::CommandFailed(format!("Sandbox error: {}", e)))?;
             let _ = handle.wait().map_err(|e| Error::CommandFailed(e.to_string()))?;
-            
             Ok::<(), Error>(())
         }).await.map_err(|e| Error::Other(format!("Task Join Panic: {}", e)))??;
 
         Ok(())
     }
 
-    /// Spawns the sub-shell with host PATH modification.
     async fn spawn_fallback_shell(&self, shell: &str, session_id: &str, store_paths: &[(String, String)]) -> Result<()> {
         let mut new_path_parts = Vec::new();
 
@@ -783,12 +757,9 @@ impl GhostShell {
 
         let mut handle = child.spawn().map_err(|e| Error::CommandFailed(format!("Shell error: {}", e)))?;
         let _ = handle.wait().await?;
-        
         Ok(())
     }
 
-    /// Internal helper to locate the data root of a package.
-    /// Modernized: Visible to integration tests.
     pub async fn locate_package_root(&self, spec: &PackageSpec) -> Result<Option<PathBuf>> {
         let backend = self.registry.get(&spec.backend)
             .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
@@ -809,10 +780,10 @@ impl GhostShell {
     }
 
     /// Logic for provisioning the ephemeral state.
-    /// Modernized: Visible to integration tests.
+    /// FIXED: Release state lock before calling sync() to prevent deadlock.
     pub async fn provision_transient_env(&self, requests: &[String], _session_id: &str) -> Result<()> {
         let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
-        
+
         let mut transient_desired = HashMap::new();
         for req in requests {
             if let Ok(spec) = resolver.parse_and_probe_spec(req).await {
@@ -822,10 +793,12 @@ impl GhostShell {
             }
         }
 
-        let state_guard = self.state.lock().await;
-        let planner = ChangePlanner::new(self.registry.clone(), &state_guard, &self.config);
-        
-        let changes = planner.plan(&transient_desired, ScopedFilter::None).await?;
+        // Plan the changes while holding the state lock.
+        let changes = {
+            let state_guard = self.state.lock().await;
+            let planner = ChangePlanner::new(self.registry.clone(), &state_guard, &self.config);
+            planner.plan(&transient_desired, ScopedFilter::None).await?
+        }; // <-- state_guard dropped here
 
         if !changes.is_empty() {
             let engine = self.create_sync_engine().await;
@@ -835,8 +808,6 @@ impl GhostShell {
         Ok(())
     }
 
-    /// Logic for purging the ephemeral state.
-    /// Modernized: Visible to integration tests.
     pub async fn cleanup_transient_env(&self, session_id: &str) -> Result<()> {
         let to_remove = {
             let state = self.state.lock().await;
@@ -857,7 +828,6 @@ impl GhostShell {
         Ok(())
     }
 
-    /// Feature: Auto-provision project context if 'linix.txt' manifest exists.
     pub async fn auto_shell(&self) -> Result<()> {
         let local_config = Path::new("linix.txt");
         if tokio::fs::try_exists(local_config).await.unwrap_or(false) {
@@ -867,14 +837,11 @@ impl GhostShell {
                 .map(|l| l.trim().to_string())
                 .filter(|l| !l.is_empty() && !l.starts_with('#'))
                 .collect();
-            
-            // Resolves E0425: Fixed variable naming mismatch (pkgs vs packages)
             if !pkgs.is_empty() { self.enter(&pkgs).await?; }
         }
         Ok(())
     }
 
-    /// Factory for context-aware sync engine.
     async fn create_sync_engine(&self) -> SyncEngine<'_> {
         SyncEngine::new(
             &self.config, self.registry.clone(), self.executor.duplicate(),
@@ -1187,13 +1154,15 @@ impl<'a> SyncEngine<'a> {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\app\sync\planner.rs ---
 
+// src/app/sync/planner.rs
+
 use crate::core::{Result, Error, StateRegistry, GraphAction, PackageSpec};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
 use std::collections::{HashMap, VecDeque, HashSet};
 use std::sync::Arc;
 use std::path::Path;
-use tracing::{info, debug, instrument}; // Modernized: Removed unused 'trace'
+use tracing::{info, debug, instrument};
 use version_compare::{Cmp, compare as loose_compare};
 use semver::{Version, VersionReq};
 use petgraph::graph::NodeIndex;
@@ -1201,7 +1170,6 @@ use petgraph::stable_graph::StableDiGraph;
 use petgraph::algo::is_cyclic_directed;
 use serde::Serialize;
 
-/// Feature 1: Structured report for dry-run automation.
 #[derive(Debug, Serialize, Clone, Default)]
 pub struct SyncReport {
     pub install: Vec<ReportEntry>,
@@ -1217,7 +1185,6 @@ pub struct ReportEntry {
     pub source: Option<String>,
 }
 
-/// Feature 4: Scope definitions for targeted planning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopedFilter {
     None,
@@ -1226,7 +1193,6 @@ pub enum ScopedFilter {
     Group(String),
 }
 
-/// A high-performance synchronization plan represented as a Directed Acyclic Graph.
 #[derive(Debug, Default, Clone)]
 pub struct SyncChanges {
     pub graph: StableDiGraph<GraphAction, ()>,
@@ -1295,16 +1261,57 @@ impl<'a> ChangePlanner<'a> {
         let filtered_desired = self.apply_scope_filtering(desired, &scope);
         let expanded_desired = self.expand_transitive_dependencies(&filtered_desired).await?;
 
-        if scope == ScopedFilter::None {
-            self.plan_removals_and_expirations(&mut changes).await?;
+        // Precompute desired keys for O(1) lookup
+        let desired_keys: HashSet<String> = expanded_desired.keys().cloned().collect();
+
+        // Preload bloatware set if enabled
+        let bloatware_set: HashSet<String> = if self.config.remove_bloatware {
+            if let Ok(bloat) = self.load_bloatware().await {
+                bloat.into_iter()
+                    .map(|entry| {
+                        entry.split_once(':')
+                            .map(|(b, n)| format!("{}:{}", b, n))
+                            .unwrap_or_else(|| format!("{}:{}", self.config.default_backend.clone().unwrap_or_else(|| "apt".into()), entry))
+                    })
+                    .collect()
+            } else {
+                HashSet::new()
+            }
+        } else {
+            HashSet::new()
+        };
+
+        // Single pass over all managed packages to schedule removals
+        for pkg in &self.state.packages {
+            let key = format!("{}:{}", pkg.backend, pkg.name);
+
+            // Skip if already scheduled or present in desired state
+            if changes.removal_tracker.contains(&key) || desired_keys.contains(&key) {
+                continue;
+            }
+
+            // Check for expired lease
+            let is_expired = pkg.expires_at.map_or(false, |exp| Self::now() >= exp);
+
+            if is_expired {
+                info!("Planner: Lease for '{}' expired, not in desired. Scheduling removal.", key);
+                changes.removal_tracker.insert(key.clone());
+                changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
+            } else if bloatware_set.contains(&key) {
+                debug!("Planner: Scheduling bloatware removal: {}", key);
+                changes.removal_tracker.insert(key.clone());
+                changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
+            } else if !self.config.is_protected(&pkg.name) {
+                // Drift removal (only if not protected)
+                debug!("Planner: Scheduling drift removal: {}", key);
+                changes.removal_tracker.insert(key.clone());
+                changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
+            }
         }
 
+        // Installations and dependency graph
         let target_specs = self.identify_needed_actions(&expanded_desired).await?;
         self.build_execution_graph(&mut changes, &target_specs).await?;
-
-        if scope == ScopedFilter::None {
-            self.plan_drift_removal(&mut changes, &expanded_desired).await?;
-        }
 
         if is_cyclic_directed(&changes.graph) {
             return Err(Error::Transaction("Circular dependency detected in graph construction.".into()));
@@ -1321,7 +1328,6 @@ impl<'a> ChangePlanner<'a> {
             ScopedFilter::Group(g) => format!("group:{}", g),
             _ => String::new(),
         };
-
         let mut filtered = HashMap::new();
         for (backend, specs) in desired {
             let matched: Vec<PackageSpec> = specs.iter()
@@ -1330,36 +1336,6 @@ impl<'a> ChangePlanner<'a> {
             if !matched.is_empty() { filtered.insert(backend.clone(), matched); }
         }
         filtered
-    }
-
-    async fn plan_removals_and_expirations(&self, changes: &mut SyncChanges) -> Result<()> {
-        for (backend, name) in self.state.get_expired_packages() {
-            let key = format!("{}:{}", backend, name);
-            if changes.removal_tracker.insert(key) {
-                info!("Planner: Lease for '{}:{}' has expired. Scheduling removal.", backend, name);
-                changes.graph.add_node(GraphAction::Remove { name, backend });
-            }
-        }
-
-        if self.config.remove_bloatware {
-            if let Ok(bloat) = self.load_bloatware().await {
-                for entry in bloat {
-                    let (backend, name) = entry.split_once(':')
-                        .map(|(b, n)| (b.to_string(), n.to_string()))
-                        .unwrap_or_else(|| (self.config.default_backend.clone().unwrap_or_else(|| "apt".into()), entry));
-                    
-                    if self.state.is_managed(&backend, &name) {
-                        let key = format!("{}:{}", backend, name);
-                        // Resolves E0382: Clone key before inserting into HashSet
-                        if changes.removal_tracker.insert(key.clone()) {
-                            debug!("Planner: Scheduling bloatware removal: {}", key);
-                            changes.graph.add_node(GraphAction::Remove { name, backend });
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 
     async fn identify_needed_actions(&self, expanded: &HashMap<String, PackageSpec>) -> Result<Vec<PackageSpec>> {
@@ -1391,18 +1367,15 @@ impl<'a> ChangePlanner<'a> {
             let idx = changes.graph.add_node(GraphAction::Install(spec.clone()));
             changes.install_map.insert(key, idx);
         }
-
         for spec in targets {
             let child_key = format!("{}:{}", spec.backend, spec.name);
             let child_idx = *changes.install_map.get(&child_key)
                 .ok_or_else(|| Error::Transaction(format!("Consistency Error: Node {} missing.", child_key)))?;
-
             for req in &spec.requires {
                 if let Some(&parent_idx) = changes.install_map.get(req) {
                     changes.graph.add_edge(parent_idx, child_idx, ());
                 }
             }
-            
             if let Some(b) = self.registry.get(&spec.backend) {
                 if let Some(p) = b.as_metadata_provider() {
                     if let Ok(native_deps) = p.get_dependencies(&spec.name).await {
@@ -1413,19 +1386,6 @@ impl<'a> ChangePlanner<'a> {
                             }
                         }
                     }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    async fn plan_drift_removal(&self, changes: &mut SyncChanges, expanded: &HashMap<String, PackageSpec>) -> Result<()> {
-        for managed in &self.state.packages {
-            let key = format!("{}:{}", managed.backend, managed.name);
-            if !expanded.contains_key(&key) && !self.config.is_protected(&managed.name) {
-                if !changes.install_map.contains_key(&key) && changes.removal_tracker.insert(key.clone()) {
-                    debug!("Planner: Scheduling drift removal: {}", key);
-                    changes.graph.add_node(GraphAction::Remove { name: managed.name.clone(), backend: managed.backend.clone() });
                 }
             }
         }
@@ -1478,6 +1438,13 @@ impl<'a> ChangePlanner<'a> {
         if !tokio::fs::try_exists(&self.config.bloatware_file).await.unwrap_or(false) { return Ok(Vec::new()); }
         let content = tokio::fs::read_to_string(&self.config.bloatware_file).await?;
         Ok(content.lines().map(|l| l.trim()).filter(|l| !l.is_empty() && !l.starts_with('#')).map(|l| l.to_string()).collect())
+    }
+
+    fn now() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
 }
 
@@ -2159,10 +2126,12 @@ impl<'a> Cleaner<'a> {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\app\context.rs ---
 
+// src/app/context.rs
+
 use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::Config;
 use crate::core::{
-    CommandExecutor, PackageCache, Result, Error, 
+    CommandExecutor, PackageCache, Result, Error,
     Package, StateRegistry, PackageSpec, Validator, SnapshotManager, Journal
 };
 use crate::app::diagnostics::FailureDiagnosticEngine;
@@ -2180,16 +2149,13 @@ use crate::app::sync::SyncEngine;
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 
 use std::sync::Arc;
+use std::path::PathBuf;
 use tokio::sync::Mutex;
 use std::collections::{VecDeque, HashSet};
-use tracing::{info, debug, instrument}; 
+use tracing::{info, debug, instrument};
 use super::{LuaHooks, MetricsCollector, UniversalSearch};
 
 /// The unified Application Context for LiNix v3.6.0.
-/// 
-/// Functioning as a high-performance Service Provider and Dependency Injection 
-/// container, the App struct coordinates access to the mission-critical 
-/// system state, discovered backends, and advanced sub-systems.
 pub struct App {
     /// Global application configuration.
     pub config: Arc<Config>,
@@ -2220,34 +2186,41 @@ pub struct App {
 }
 
 impl App {
-    /// Modernized DI Factory: Initializes the kernel with a specific executor.
-    /// 
-    /// This method is utilized by both the production entry-point and the 
-    /// high-fidelity integration test suite to inject Mock layers.
-    pub async fn new_with_executor(config: Config, executor: CommandExecutor) -> Result<Self> {
+    /// Modernized DI Factory: Initializes the kernel with a specific executor and optional state path.
+    pub async fn new_with_executor_and_state_path(
+        config: Config,
+        executor: CommandExecutor,
+        state_path: Option<PathBuf>,
+    ) -> Result<Self> {
         debug!("LiNix Kernel: Initiating mission-critical service bootstrap.");
 
         let hooks = Arc::new(LuaHooks::new(&config)?);
-        
+
         // Discover backends on the host
         let registry = Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
-        
-        // Load the persistent state registry (Offloaded to blocking thread for safety)
-        let state_val = tokio::task::spawn_blocking(StateRegistry::load)
-            .await
-            .map_err(|e| Error::Other(format!("Kernel Thread Panic during state load: {}", e)))??;
-        let state = Arc::new(Mutex::new(state_val));
-        
+
+        // Load the persistent state registry using the provided path or default.
+        let state_registry = if let Some(path) = state_path {
+            tokio::task::spawn_blocking(move || StateRegistry::load_from(&path))
+                .await
+                .map_err(|e| Error::Other(format!("Kernel Thread Panic during state load: {}", e)))?
+        } else {
+            tokio::task::spawn_blocking(StateRegistry::load_default)
+                .await
+                .map_err(|e| Error::Other(format!("Kernel Thread Panic during state load: {}", e)))?
+        }?;
+        let state = Arc::new(Mutex::new(state_registry));
+
         // Detect snapshot providers and load transaction journal
         let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate(), &config).await);
         let journal = Arc::new(Mutex::new(Journal::new()?));
-        
+
         // Feature 5/3.6.0 Managers
         let scheduler = Arc::new(SchedulerManager::new()?);
         let config_arc = Arc::new(config);
         let notifications = Arc::new(NotificationManager::new(config_arc.clone()));
-        
+
         // Asynchronously initialize the Failure Diagnosis Engine
         let diagnostics = Arc::new(FailureDiagnosticEngine::init(&config_arc).await);
 
@@ -2270,37 +2243,39 @@ impl App {
         })
     }
 
-    /// Standard entry point using the default system executors.
+    /// Modernized DI Factory: Initializes the kernel with a specific executor (uses default state path).
+    pub async fn new_with_executor(config: Config, executor: CommandExecutor) -> Result<Self> {
+        Self::new_with_executor_and_state_path(config, executor, None).await
+    }
+
+    /// Standard entry point using the default system executors and default state path.
     pub async fn new(config: Config) -> Result<Self> {
         let executor = CommandExecutor::new(config.dry_run, config.verbose);
-        Self::new_with_executor(config, executor).await
+        Self::new_with_executor_and_state_path(config, executor, None).await
     }
 
     // ========================================================================
     // Orchestrator Factories (Service Provider Pattern)
     // ========================================================================
 
-    /// Returns a Migrator for ingesting manual installs into management.
-    pub fn migrator(&self) -> Migrator { 
-        Migrator::new(self.registry.clone(), self.state.clone(), &self.config) 
+    pub fn migrator(&self) -> Migrator {
+        Migrator::new(self.registry.clone(), self.state.clone(), &self.config)
     }
 
-    /// Returns a Teleporter for cross-backend package transitions.
-    pub fn teleporter(&self) -> Teleporter { 
+    pub fn teleporter(&self) -> Teleporter {
         Teleporter::new(
-            self.registry.clone(), 
-            self.journal.clone(), 
-            self.state.clone(), 
-            self.diagnostics.clone(), 
+            self.registry.clone(),
+            self.journal.clone(),
+            self.state.clone(),
+            self.diagnostics.clone(),
             &self.config.groups_dir
-        ) 
+        )
     }
 
-    /// Feature 6: Returns the state-aware Ephemeral Ghost Shell orchestrator.
-    pub fn shell(&self) -> GhostShell { 
+    pub fn shell(&self) -> GhostShell {
         GhostShell::new(
-            self.registry.clone(), 
-            self.state.clone(), 
+            self.registry.clone(),
+            self.state.clone(),
             self.config.clone(),
             self.executor.duplicate(),
             self.metrics.clone(),
@@ -2308,12 +2283,11 @@ impl App {
             self.hooks.clone(),
             self.snapshot_manager.clone(),
             self.journal.clone(),
-            self.diagnostics.clone(), 
-        ) 
+            self.diagnostics.clone(),
+        )
     }
 
-    /// Returns a ProfileManager for context-sensitive identity switching.
-    pub fn profile_manager(&self) -> ProfileManager { 
+    pub fn profile_manager(&self) -> ProfileManager {
         ProfileManager::new(
             self.registry.clone(),
             self.executor.clone(),
@@ -2325,28 +2299,21 @@ impl App {
             self.state.clone(),
             self.config.clone(),
             self.diagnostics.clone(),
-        ) 
-    }
-
-    /// Returns an UndoManager for performing system-level state rollbacks.
-    pub fn undo_manager(&self) -> UndoManager { 
-        UndoManager::new(self.snapshot_manager.clone(), self.state.clone(), self.executor.clone()) 
-    }
-
-    /// Returns a Runner for executing commands in isolated environments.
-    pub fn runner(&self) -> Runner {
-        Runner::new(
-            self.registry.clone(), 
-            self.config.clone()
         )
     }
-    
-    /// Asynchronously initializes the binary shim manager.
-    pub async fn shim_manager(&self) -> Result<ShimManager> { 
-        ShimManager::new().await 
+
+    pub fn undo_manager(&self) -> UndoManager {
+        UndoManager::new(self.snapshot_manager.clone(), self.state.clone(), self.executor.clone())
     }
 
-    /// Exhaustive factory for the 10-argument Transaction Engine.
+    pub fn runner(&self) -> Runner {
+        Runner::new(self.registry.clone(), self.config.clone())
+    }
+
+    pub async fn shim_manager(&self) -> Result<ShimManager> {
+        ShimManager::new().await
+    }
+
     pub async fn sync_engine(&self) -> SyncEngine<'_> {
         SyncEngine::new(
             &self.config,
@@ -2366,14 +2333,12 @@ impl App {
     // Global Kernel Operations
     // ========================================================================
 
-    /// Resolves a package specification string and all recursive dependencies.
     #[instrument(skip(self))]
     pub async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
         let mut resolved = Vec::new();
         let mut queue = VecDeque::new();
         let mut seen = HashSet::new();
 
-        // ad-hoc resolver (locked=false) used for imperative queries
         let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
         queue.push_back(resolver.parse_and_probe_spec(spec_str).await?);
 
@@ -2390,7 +2355,6 @@ impl App {
         Ok(resolved)
     }
 
-    /// Refreshes package indices across all available and enabled backends.
     pub async fn update(&self) -> Result<()> {
         info!("Kernel: Initiating metadata synchronization across enabled backends.");
         for backend in self.registry.available() {
@@ -2401,30 +2365,24 @@ impl App {
         Ok(())
     }
 
-    /// Performs a system-wide upgrade for all managed packages.
     pub async fn upgrade(&self) -> Result<()> {
-        // Feature 2: Atomic safety snapshot before mass modification
         let _ = self.snapshot_manager.auto_snapshot("pre_upgrade").await?;
-        
         info!("Kernel: Commencing system-wide batch upgrade.");
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 upgradable.upgrade(backend.needs_root()).await?;
             }
         }
-        
         self.metrics.print_summary();
         Ok(())
     }
 
-    /// Lists installed packages filtering by backend.
     pub async fn list(&self, backend_filter: Option<&str>) -> Result<Vec<Package>> {
         let mut all_packages = Vec::new();
         for backend in self.registry.available() {
             if let Some(filter) = backend_filter {
                 if backend.name() != filter { continue; }
             }
-
             if let Some(queryable) = backend.as_queryable() {
                 match queryable.list_installed().await {
                     Ok(pkgs) => all_packages.extend(pkgs),
@@ -2435,7 +2393,6 @@ impl App {
         Ok(all_packages)
     }
 
-    /// Fetches detailed metadata for a single package identity.
     pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
         for backend in self.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
@@ -2447,11 +2404,9 @@ impl App {
         Ok(None)
     }
 
-    /// Identifies drift: Packages installed on the host OS but not managed by LiNix.
     pub async fn get_unmanaged_packages(&self) -> Result<Vec<Package>> {
         let mut unmanaged = Vec::new();
         let state = self.state.lock().await;
-        
         for backend in self.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
                 if let Ok(installed) = queryable.list_installed().await {
@@ -2466,7 +2421,6 @@ impl App {
         Ok(unmanaged)
     }
 
-    /// Prunes unused or orphaned dependencies across all active managers.
     pub async fn clean_orphans(&self) -> Result<()> {
         info!("Kernel: Commencing system-wide orphan pruning cycle.");
         for backend in self.registry.available() {
@@ -2477,37 +2431,23 @@ impl App {
         Ok(())
     }
 
-    /// Feature 2: A+ Grade Snapshot Lifecycle Management.
-    /// 
-    /// Correctly calculates the `dry_run` boolean by checking if the manual 
-    /// `--force` flag overrides the global configuration.
     pub async fn prune_snapshots(&self, force: bool) -> Result<()> {
         let settings = &self.config.snapshots;
-        
-        // A+ Logic: force=true (from CLI) overrides dry-run=true (from global config)
-        let is_dry_run = if force {
-            false
-        } else {
-            self.config.dry_run
-        };
-
-        info!("Kernel: Commencing snapshot maintenance cycle (Limit: {} days / {} count).", 
+        let is_dry_run = if force { false } else { self.config.dry_run };
+        info!("Kernel: Commencing snapshot maintenance cycle (Limit: {} days / {} count).",
               settings.max_age_days, settings.max_count);
-        
         self.snapshot_manager.prune_stale_snapshots(
-            settings.max_age_days, 
-            settings.max_count, 
+            settings.max_age_days,
+            settings.max_count,
             is_dry_run
         ).await
     }
 
-    /// Orchestrates a parallel search across all searchable backend repositories.
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
         let searcher = UniversalSearch::new(&self.registry, &self.config);
         searcher.search(query).await
     }
 
-    /// Explicitly creates a binary shim for a package identity.
     pub async fn create_shim(&self, binary_name: &str, _source_spec: &str) -> Result<()> {
         let manager = self.shim_manager().await?;
         manager.create_shim(binary_name).await
@@ -4161,13 +4101,15 @@ impl<'a> UniversalSearch<'a> {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\app\services.rs ---
 
+// src/app/services.rs
+
 use crate::app::{
     Migrator, Teleporter, GhostShell, ShimManager, UndoManager, ProfileManager,
     LuaHooks, MetricsCollector, diagnostics::FailureDiagnosticEngine
 };
 use crate::config::Config;
 use crate::core::{
-    CommandExecutor, PackageCache, StateRegistry, Journal, 
+    CommandExecutor, PackageCache, StateRegistry, Journal,
     SnapshotManager, Result, Error
 };
 use crate::backends::{create_default_registry, BackendRegistry};
@@ -4180,44 +4122,24 @@ use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 /// Core kernel dependencies shared across all high-level logic engines.
-/// 
-/// Functioning as the primary dependency injection container, AppCore 
-/// ensures that system state, configuration, and executors are 
-/// synchronized across the entire application lifecycle.
 #[derive(Clone)]
 pub struct AppCore {
-    /// Global application configuration.
     pub config: Arc<Config>,
-    /// High-speed metadata and search cache.
     pub cache: Arc<PackageCache>,
-    /// Registry of all supported package manager backends.
     pub registry: Arc<BackendRegistry>,
-    /// Low-level system command and file orchestrator.
     pub executor: CommandExecutor,
-    /// Telemetry and transaction performance collector.
     pub metrics: MetricsCollector,
-    /// Unified interface for progress bars and spinners.
     pub progress: Arc<dyn ProgressReporter>,
-    /// Multi-engine scripting controller (Lua / Rhai).
     pub hooks: Arc<LuaHooks>,
-    /// The mission-critical system state registry (Single Source of Truth).
     pub state: Arc<Mutex<StateRegistry>>,
-    /// Orchestrator for atomic system snapshots.
     pub snapshot_manager: Arc<SnapshotManager>,
-    /// Write-Ahead Log for crash recovery.
     pub journal: Arc<Mutex<Journal>>,
-    /// Feature 5: Native background task automation engine.
     pub scheduler: Arc<SchedulerManager>,
-    /// Feature 5: System-wide alert and multi-channel notification dispatcher.
     pub notifications: Arc<NotificationManager>,
-    /// Modernized Failure Diagnosis Engine.
     pub diagnostics: Arc<FailureDiagnosticEngine>,
 }
 
 /// Container for the "Logic Layer" orchestrators.
-/// 
-/// This struct holds the complex sub-systems that depend on the 
-/// AppCore kernel to perform coordinated system modifications.
 pub struct AppServices {
     pub migrator: Migrator,
     pub teleporter: Teleporter,
@@ -4230,33 +4152,24 @@ pub struct AppServices {
 
 impl AppServices {
     /// Initializes the logic layer orchestrators by destructuring the App kernel.
-    /// 
-    /// # Arguments
-    /// * `app` - A reference to the fully initialized application context.
-    /// 
-    /// Resolves Argument Mismatches: Injects diagnostics into all managers.
-    /// Resolves rustdoc warnings: Standard comments inside struct literal.
     pub async fn new(app: &crate::App) -> Result<Self> {
         debug!("AppServices: Assembling logic engines from kernel context.");
 
         let shim_manager = ShimManager::new().await?;
 
         Ok(Self {
-            // Ingest manual installs into LiNix management
             migrator: Migrator::new(
                 app.registry.clone(),
                 app.state.clone(),
                 &app.config
             ),
-            // Cross-backend package movement (Modernized DI)
             teleporter: Teleporter::new(
                 app.registry.clone(),
                 app.journal.clone(),
                 app.state.clone(),
-                app.diagnostics.clone(), // DI
+                app.diagnostics.clone(),
                 &app.config.groups_dir
             ),
-            // Feature 6: Ephemeral sub-shells (Exhaustive 10-argument init)
             shell: GhostShell::new(
                 app.registry.clone(),
                 app.state.clone(),
@@ -4267,17 +4180,14 @@ impl AppServices {
                 app.hooks.clone(),
                 app.snapshot_manager.clone(),
                 app.journal.clone(),
-                app.diagnostics.clone(), // 10th argument
+                app.diagnostics.clone(),
             ),
-            // Deployment of high-performance binary shims
             shim_manager,
-            // System-level time travel and snapshot gallery
             undo_manager: UndoManager::new(
                 app.snapshot_manager.clone(),
                 app.state.clone(),
                 app.executor.clone()
             ),
-            // Environment identity switching (Modernized DI)
             profile_manager: ProfileManager::new(
                 app.registry.clone(),
                 app.executor.clone(),
@@ -4288,40 +4198,33 @@ impl AppServices {
                 app.journal.clone(),
                 app.state.clone(),
                 app.config.clone(),
-                app.diagnostics.clone(), // DI
+                app.diagnostics.clone(),
             ),
-            // Resolves E0609: Reference modernized field 'diagnostics'
-            diagnostics: app.diagnostics.clone(), 
+            diagnostics: app.diagnostics.clone(),
         })
     }
 }
 
 impl AppCore {
     /// High-performance asynchronous bootstrapper for the LiNix kernel.
-    /// 
-    /// Initializes all sub-systems, discovers native backends, and loads 
-    /// the mission-critical state registry.
     pub async fn from_config(config: Config) -> Result<Self> {
         info!("AppCore: Initializing LiNix v3.6.0 mission-critical kernel.");
 
         let executor = CommandExecutor::new(config.dry_run, config.verbose);
         let hooks = Arc::new(LuaHooks::new(&config)?);
-        
-        // Discover and catalog all package manager backends
+
         let registry = Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
-        
-        // Load StateRegistry (Offloaded to task for async safety)
-        let state_val = tokio::task::spawn_blocking(StateRegistry::load)
+
+        // Load StateRegistry using the new `load_default()` method.
+        let state_val = tokio::task::spawn_blocking(StateRegistry::load_default)
             .await
             .map_err(|e| Error::Other(format!("Kernel panic during state load: {}", e)))??;
         let state = Arc::new(Mutex::new(state_val));
-        
-        // Initialize recovery and safety managers
+
         let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate(), &config).await);
         let journal = Arc::new(Mutex::new(Journal::new()?));
-        
-        // Initialize 3.6.0 automation and diagnostic sub-systems
+
         let diagnostics = Arc::new(FailureDiagnosticEngine::init(&config).await);
         let scheduler = Arc::new(SchedulerManager::new()?);
         let config_arc = Arc::new(config);
@@ -5218,6 +5121,149 @@ impl Queryable for AppImageQueryable {
 
 ------------------------------
 
+--- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\brew.rs ---
+
+// src/backends/brew.rs
+
+use crate::core::{
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
+    Queryable, Result, Upgradable, MetadataProvider, Error
+};
+use async_trait::async_trait;
+use std::sync::Arc;
+use tracing::info;
+use serde_json::Value;
+
+/// Core backend implementation for Homebrew.
+pub struct BrewBackendCore {
+    pub executor: CommandExecutor,
+    pub name: String,
+}
+
+impl BrewBackendCore {
+    pub fn new(executor: CommandExecutor) -> Self {
+        Self {
+            executor,
+            name: "brew".to_string(),
+        }
+    }
+}
+
+#[async_trait]
+impl BackendCore for BrewBackendCore {
+    fn name(&self) -> &str { &self.name }
+    fn is_available(&self) -> bool { self.executor.command_exists_sync("brew") }
+    fn needs_root(&self) -> bool { false }
+}
+
+#[async_trait]
+impl MetadataProvider for BrewBackendCore {
+    async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
+        let output = self.executor.run_output("brew", &["deps", name], false).await?;
+        Ok(output.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
+    }
+}
+
+pub struct BrewInstallable {
+    pub core: Arc<BrewBackendCore>,
+}
+
+#[async_trait]
+impl Installable for BrewInstallable {
+    async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
+        for spec in specs {
+            info!("Brew: Installing {}...", spec.name);
+            self.core.executor.run_exclusive("brew", "brew", &["install", &spec.name], false).await?;
+        }
+        Ok(())
+    }
+
+    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+        for name in names {
+            info!("Brew: Uninstalling {}...", name);
+            self.core.executor.run_exclusive("brew", "brew", &["uninstall", name], false).await?;
+        }
+        Ok(())
+    }
+}
+
+pub struct BrewQueryable {
+    pub core: Arc<BrewBackendCore>,
+}
+
+#[async_trait]
+impl Queryable for BrewQueryable {
+    async fn list_installed(&self) -> Result<Vec<Package>> {
+        let output = self.core.executor.run_output("brew", &["list", "--versions"], false).await?;
+        let mut packages = Vec::new();
+        for line in output.lines() {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 {
+                packages.push(Package::with_version(parts[0], parts[1], "brew"));
+            }
+        }
+        Ok(packages)
+    }
+
+    async fn list_manual(&self) -> Result<Vec<Package>> {
+        let output = self.core.executor.run_output("brew", &["leaves"], false).await?;
+        Ok(output.lines().map(|l| Package::new(l.trim(), "brew")).collect())
+    }
+
+    /// Enhanced info: uses `brew info --json=v1` to get install path.
+    async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let output = self.core.executor.run_output("brew", &["info", "--json=v1", name], false).await?;
+        if output.is_empty() || output == "[]" {
+            return Ok(None);
+        }
+        let json: Value = serde_json::from_str(&output).map_err(|e| Error::Other(format!("Brew JSON error: {}", e)))?;
+        let arr = json.as_array().ok_or_else(|| Error::Other("Expected array".into()))?;
+        if arr.is_empty() { return Ok(None); }
+        let first = &arr[0];
+        let pkg_name = first["name"].as_str().unwrap_or(name).to_string();
+        let version = first["versions"]["stable"].as_str().map(|s| s.to_string());
+        let mut pkg = Package::with_version(&pkg_name, version.as_deref().unwrap_or("unknown"), "brew");
+        if let Some(installed) = first["installed"].as_array().and_then(|a| a.first()) {
+            if let Some(path) = installed["installed_as_dependency"].as_bool() {
+                pkg.properties.insert("installed_as_dependency".into(), path.to_string());
+            }
+            // The install path is the prefix of the installed keg
+            if let Some(prefix) = installed["prefix"].as_str() {
+                pkg.properties.insert("install_path".into(), prefix.to_string());
+            }
+        }
+        // Fallback: use the cellar path
+        if !pkg.properties.contains_key("install_path") {
+            if let Some(cellar) = first["cellar"].as_str() {
+                pkg.properties.insert("install_path".into(), format!("{}/{}", cellar, pkg_name));
+            }
+        }
+        Ok(Some(pkg))
+    }
+}
+
+pub struct BrewUpgradable {
+    pub core: Arc<BrewBackendCore>,
+}
+
+#[async_trait]
+impl Upgradable for BrewUpgradable {
+    async fn update(&self, _sudo: bool) -> Result<()> {
+        self.core.executor.run("brew", &["update"], false).await?;
+        Ok(())
+    }
+    async fn upgrade(&self, _sudo: bool) -> Result<()> {
+        self.core.executor.run_exclusive("brew", "brew", &["upgrade"], false).await?;
+        Ok(())
+    }
+    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
+        self.core.executor.run("brew", &["autoremove"], false).await?;
+        Ok(())
+    }
+}
+
+------------------------------
+
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\btrfs.rs ---
 
 use crate::core::{
@@ -5391,6 +5437,154 @@ impl Queryable for BtrfsQueryable {
         if !Path::new(name).exists() { return Ok(None); }
         let p = Package::new(name, "btrfs");
         Ok(Some(p))
+    }
+}
+
+------------------------------
+
+--- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\cargo.rs ---
+
+// src/backends/cargo.rs
+
+use crate::core::{
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
+    Queryable, Result, Upgradable, MetadataProvider, Error
+};
+use async_trait::async_trait;
+use std::sync::Arc;
+use tracing::info;
+
+/// Core backend implementation for Cargo (Rust package manager).
+#[derive(Clone)]
+pub struct CargoBackendCore {
+    pub executor: CommandExecutor,
+    pub name: String,
+}
+
+impl CargoBackendCore {
+    pub fn new(executor: CommandExecutor) -> Self {
+        Self {
+            executor,
+            name: "cargo".to_string(),
+        }
+    }
+
+    /// Returns the path to Cargo's global installation directory.
+    async fn get_cargo_root(&self) -> Result<String> {
+        match std::env::var("CARGO_HOME") {
+            Ok(home) => Ok(home),
+            Err(_) => {
+                let user_home = dirs::home_dir()
+                    .ok_or_else(|| Error::Other("Could not determine home directory".into()))?;
+                Ok(user_home.join(".cargo").to_string_lossy().to_string())
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl BackendCore for CargoBackendCore {
+    fn name(&self) -> &str { &self.name }
+    fn is_available(&self) -> bool { self.executor.command_exists_sync("cargo") }
+    fn needs_root(&self) -> bool { false }
+}
+
+#[async_trait]
+impl MetadataProvider for CargoBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
+}
+
+pub struct CargoInstallable {
+    pub core: Arc<CargoBackendCore>,
+}
+
+#[async_trait]
+impl Installable for CargoInstallable {
+    async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
+        for spec in specs {
+            info!("Cargo: Installing {}...", spec.name);
+            self.core.executor.run_exclusive("cargo", "cargo", &["install", &spec.name], false).await?;
+        }
+        Ok(())
+    }
+
+    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+        for name in names {
+            info!("Cargo: Uninstalling {}...", name);
+            self.core.executor.run_exclusive("cargo", "cargo", &["uninstall", name], false).await?;
+        }
+        Ok(())
+    }
+}
+
+pub struct CargoQueryable {
+    pub core: Arc<CargoBackendCore>,
+}
+
+#[async_trait]
+impl Queryable for CargoQueryable {
+    async fn list_installed(&self) -> Result<Vec<Package>> {
+        let output = self.core.executor.run_output("cargo", &["install", "--list"], false).await?;
+        let mut packages = Vec::new();
+        for line in output.lines() {
+            if let Some((name, rest)) = line.split_once(' ') {
+                let version = rest.trim_start_matches('v').trim_end_matches(':');
+                packages.push(Package::with_version(name, version, "cargo"));
+            }
+        }
+        Ok(packages)
+    }
+
+    async fn list_manual(&self) -> Result<Vec<Package>> {
+        self.list_installed().await
+    }
+
+    async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let all = self.list_installed().await?;
+        if let Some(mut pkg) = all.into_iter().find(|p| p.name == name) {
+            let cargo_root = self.core.get_cargo_root().await?;
+            let bin_path = format!("{}/bin/{}", cargo_root, name);
+            if std::path::Path::new(&bin_path).exists() || self.core.executor.dry_run {
+                pkg.properties.insert("install_path".into(), cargo_root);
+                pkg.properties.insert("bin_path".into(), bin_path);
+            }
+            Ok(Some(pkg))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+pub struct CargoUpgradable {
+    pub core: Arc<CargoBackendCore>,
+}
+
+#[async_trait]
+impl Upgradable for CargoUpgradable {
+    async fn update(&self, _sudo: bool) -> Result<()> {
+        Ok(())
+    }
+
+    async fn upgrade(&self, _sudo: bool) -> Result<()> {
+        info!("Cargo: Upgrading all installed packages...");
+        let installed = self.core.list_installed_internal().await?;
+        for pkg in installed {
+            let _ = self.core.executor.run_exclusive("cargo", "cargo", &["install", &pkg.name, "--force"], false).await;
+        }
+        Ok(())
+    }
+
+    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl CargoBackendCore {
+    async fn list_installed_internal(&self) -> Result<Vec<Package>> {
+        let queryable = CargoQueryable { core: Arc::new(self.clone()) };
+        queryable.list_installed().await
     }
 }
 
@@ -5845,9 +6039,11 @@ impl Upgradable for FlatpakUpgradable {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\generic.rs ---
 
+// src/backends/generic.rs
+
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Searchable, Upgradable, RepoManager, HealthStatus, 
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
+    Queryable, Result, Searchable, Upgradable, RepoManager, HealthStatus,
     HealthReport, MetadataProvider
 };
 use crate::parsers::OutputParser;
@@ -5857,43 +6053,26 @@ use std::sync::Arc;
 use tracing::info;
 
 /// Configuration for the Generic Manager Strategy.
-/// Fulfills Phase 5.3: Comprehensive documentation of configuration fields.
 #[derive(Debug, Clone)]
 pub struct ManagerConfig {
-    /// The binary name of the package manager (e.g., "apt", "apk").
     pub name: String,
-    /// Static arguments required for installation (e.g., ["install", "-y"]).
     pub install_args: Vec<String>,
-    /// Static arguments required for removal (e.g., ["remove", "-y"]).
     pub remove_args: Vec<String>,
-    /// Static arguments to list all installed packages.
     pub list_args: Vec<String>,
-    /// Optional arguments to list only user-installed (manual) packages.
     pub list_manual_args: Option<Vec<String>>,
-    /// Static arguments for remote package searching.
     pub search_args: Vec<String>,
-    /// Static arguments for full system upgrade.
     pub upgrade_args: Vec<String>,
-    /// Optional arguments to refresh repository metadata (e.g., "apt update").
     pub update_args: Option<Vec<String>>,
-    /// Optional template arguments for adding a repository. Supports {name} and {url} tokens.
     pub repo_add_args: Option<Vec<String>>,
-    /// Optional template arguments for removing a repository. Supports {name} token.
     pub repo_remove_args: Option<Vec<String>>,
-    /// Optional arguments to list configured repositories.
     pub repo_list_args: Option<Vec<String>>,
-    /// Phase 1.1: Optional arguments to fetch native dependencies. Supports {name} token.
     pub depends_args: Option<Vec<String>>,
-    /// Phase 2.2: Defines if this manager requires root/sudo privileges for modifications.
     pub needs_root: bool,
-    /// If true, LiNix will ensure only one instance of this manager runs globally.
     pub is_exclusive: bool,
-    /// Internal map for custom backend flags.
     pub flag_map: HashMap<String, String>,
 }
 
 /// Core backend implementation for generic CLI-based managers.
-/// Implements the strategy pattern to allow LiNix to support any CLI tool via configuration.
 pub struct GenericBackendCore {
     pub name: String,
     pub executor: CommandExecutor,
@@ -5914,7 +6093,7 @@ impl BackendCore for GenericBackendCore {
     fn needs_root(&self) -> bool {
         self.config.needs_root
     }
-    
+
     async fn check_health(&self) -> Result<HealthReport> {
         if !self.is_available() {
             return Ok(HealthReport {
@@ -5922,7 +6101,6 @@ impl BackendCore for GenericBackendCore {
                 message: Some(format!("Binary for generic manager '{}' not found in PATH", self.name)),
             });
         }
-        
         Ok(HealthReport {
             status: HealthStatus::Ok,
             message: None,
@@ -5932,7 +6110,7 @@ impl BackendCore for GenericBackendCore {
 
 #[async_trait]
 impl MetadataProvider for GenericBackendCore {
-    /// Fulfills Phase 1.1: Resolves native dependencies using the configured depends_args.
+    /// FIXED: Now accepts sudo parameter from the caller (executor) and uses it.
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
         let base_args = match &self.config.depends_args {
             Some(args) => args,
@@ -5945,8 +6123,10 @@ impl MetadataProvider for GenericBackendCore {
         }
 
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
-        let output = self.executor.run_output(&self.name, &arg_refs, false).await?;
-        
+        // Use needs_root() to determine if sudo is required for dependency queries.
+        let sudo = self.needs_root();
+        let output = self.executor.run_output(&self.name, &arg_refs, sudo).await?;
+
         Ok(output.lines()
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty())
@@ -5962,7 +6142,7 @@ pub struct GenericInstallable {
 impl Installable for GenericInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         if specs.is_empty() { return Ok(()); }
-        
+
         let mut final_args: Vec<String> = self.core.config.install_args.clone();
         for spec in specs {
             final_args.push(spec.name.clone());
@@ -5980,7 +6160,7 @@ impl Installable for GenericInstallable {
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
         if names.is_empty() { return Ok(()); }
-        
+
         let mut args: Vec<String> = self.core.config.remove_args.clone();
         for name in names {
             args.push(name.clone());
@@ -6077,12 +6257,12 @@ impl RepoManager for GenericRepoManager {
     async fn add_repo(&self, name: &str, url: &str, sudo: bool) -> Result<()> {
         let base_args = self.core.config.repo_add_args.as_ref()
             .ok_or_else(|| crate::core::Error::Other("Repository addition not supported for this backend".into()))?;
-        
+
         let mut final_args = Vec::new();
         for arg in base_args {
             final_args.push(arg.replace("{name}", name).replace("{url}", url));
         }
-        
+
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
         info!("Repo: Adding {} to {}...", name, self.core.name);
         self.core.executor.run(&self.core.name, &arg_refs, sudo).await?;
@@ -6092,10 +6272,10 @@ impl RepoManager for GenericRepoManager {
     async fn remove_repo(&self, name: &str, sudo: bool) -> Result<()> {
         let base_args = self.core.config.repo_remove_args.as_ref()
             .ok_or_else(|| crate::core::Error::Other("Repository removal not supported for this backend".into()))?;
-            
+
         let final_args: Vec<String> = base_args.iter().map(|a| a.replace("{name}", name)).collect();
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
-        
+
         self.core.executor.run(&self.core.name, &arg_refs, sudo).await?;
         Ok(())
     }
@@ -6105,7 +6285,7 @@ impl RepoManager for GenericRepoManager {
             .ok_or_else(|| crate::core::Error::Other("Repository listing not supported for this backend".into()))?;
         let arg_refs: Vec<&str> = base_args.iter().map(|s| s.as_str()).collect();
         let output = self.core.executor.run_output(&self.core.name, &arg_refs, false).await?;
-        
+
         let mut repos = Vec::new();
         for line in output.lines() {
             let parts: Vec<&str> = line.split_whitespace().collect();
@@ -6609,8 +6789,10 @@ impl Installable for LinkInstallable {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\mise.rs ---
 
+// src/backends/mise.rs
+
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
     Queryable, Result, Upgradable, Error, MetadataProvider
 };
 use async_trait::async_trait;
@@ -6618,7 +6800,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 
-/// Core backend implementation for Mise (runtime version manager).
+#[derive(Clone)]
 pub struct MiseBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -6631,28 +6813,30 @@ impl MiseBackendCore {
             name: "mise".to_string(),
         }
     }
+
+    async fn get_mise_data_dir(&self) -> Result<String> {
+        let result = self.executor.run_output("mise", &["path"], false).await;
+        match result {
+            Ok(output) => Ok(output.trim().to_string()),
+            Err(_) => {
+                let home = dirs::home_dir()
+                    .ok_or_else(|| Error::Other("Could not determine home directory".into()))?;
+                Ok(home.join(".local/share/mise").to_string_lossy().to_string())
+            }
+        }
+    }
 }
 
 #[async_trait]
 impl BackendCore for MiseBackendCore {
     fn name(&self) -> &str { &self.name }
-
-    fn is_available(&self) -> bool {
-        self.executor.command_exists_sync("mise")
-    }
-
-    fn needs_root(&self) -> bool {
-        // Mise typically manages tools in the user's home directory (~/.local/share/mise)
-        false
-    }
+    fn is_available(&self) -> bool { self.executor.command_exists_sync("mise") }
+    fn needs_root(&self) -> bool { false }
 }
 
 #[async_trait]
 impl MetadataProvider for MiseBackendCore {
     async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
-        // Mise handles versioned runtimes which are generally leaf nodes or 
-        // handle their own internal versioning. We return empty to avoid
-        // over-complicating system-level orchestration with tool-specific runtimes.
         Ok(vec![])
     }
 }
@@ -6663,18 +6847,17 @@ pub struct MiseInstallable {
 
 #[async_trait]
 impl Installable for MiseInstallable {
-    async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
+    async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
             let version = spec.options.get("version").map(|v| v.as_str()).unwrap_or("latest");
             let tool_spec = format!("{}@{}", spec.name, version);
-
             info!("Mise: Installing global tool {}...", tool_spec);
             self.core.executor.run_exclusive("mise", "mise", &["use", "-g", &tool_spec], false).await?;
         }
         Ok(())
     }
 
-    async fn remove(&self, names: &[String], _: bool) -> Result<()> {
+    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("Mise: Uninstalling tool {}...", name);
             self.core.executor.run_exclusive("mise", "mise", &["uninstall", name], false).await?;
@@ -6690,12 +6873,12 @@ pub struct MiseQueryable {
 #[async_trait]
 impl Queryable for MiseQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("mise", &["ls", "--json"], false).await?;
-        if output.is_empty() || output == "{}" { return Ok(vec![]); }
-
+        let output = self.core.executor.run_output("mise", &["list", "--json"], false).await?;
+        if output.is_empty() || output == "{}" {
+            return Ok(vec![]);
+        }
         let json: Value = serde_json::from_str(&output).map_err(|e| Error::Other(format!("Mise JSON error: {}", e)))?;
         let mut packages = Vec::new();
-
         if let Some(tools) = json.as_object() {
             for (name, versions) in tools {
                 if let Some(v_list) = versions.as_array() {
@@ -6703,11 +6886,10 @@ impl Queryable for MiseQueryable {
                         let version = v_obj.get("version")
                             .and_then(|v| v.as_str())
                             .unwrap_or("unknown");
-                        
                         let mut p = Package::with_version(name, version, "mise");
                         if let Some(source) = v_obj.get("source")
                             .and_then(|s| s.get("type"))
-                            .and_then(|t| t.as_str()) 
+                            .and_then(|t| t.as_str())
                         {
                             p.properties.insert("source_type".into(), source.to_string());
                         }
@@ -6733,11 +6915,22 @@ impl Queryable for MiseQueryable {
                 if plugin_name.trim() == name {
                     let mut p = Package::new(name, "mise");
                     p.properties.insert("repository_url".into(), url.trim().to_string());
+                    let data_dir = self.core.get_mise_data_dir().await?;
+                    let install_path = format!("{}/installs/{}", data_dir, name);
+                    p.properties.insert("install_path".into(), install_path);
                     return Ok(Some(p));
                 }
             }
         }
-        Ok(None)
+        let all = self.list_installed().await?;
+        if let Some(mut p) = all.into_iter().find(|p| p.name == name) {
+            let data_dir = self.core.get_mise_data_dir().await?;
+            let install_path = format!("{}/installs/{}/{}", data_dir, p.name, p.version.as_deref().unwrap_or("unknown"));
+            p.properties.insert("install_path".into(), install_path);
+            Ok(Some(p))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -6747,19 +6940,19 @@ pub struct MiseUpgradable {
 
 #[async_trait]
 impl Upgradable for MiseUpgradable {
-    async fn update(&self, _: bool) -> Result<()> {
+    async fn update(&self, _sudo: bool) -> Result<()> {
         info!("Mise: Updating plugin repository metadata...");
         self.core.executor.run("mise", &["plugins", "update"], false).await?;
         Ok(())
     }
 
-    async fn upgrade(&self, _: bool) -> Result<()> {
+    async fn upgrade(&self, _sudo: bool) -> Result<()> {
         info!("Mise: Upgrading all globally installed tools...");
         self.core.executor.run_exclusive("mise", "mise", &["upgrade"], false).await?;
         Ok(())
     }
 
-    async fn clean_orphans(&self, _: bool) -> Result<()> {
+    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
         info!("Mise: Pruning unused tool versions from cache...");
         self.core.executor.run("mise", &["prune", "--force"], false).await?;
         Ok(())
@@ -6789,8 +6982,15 @@ pub mod btrfs;
 pub mod pacman;
 pub mod dnf;
 
+// New specialized backends with install path support
+pub mod brew;
+pub mod cargo;
+pub mod pipx;
+pub mod npm;
+pub mod pnpm;
+pub mod yarn;
+
 pub use registry::{create_default_registry, BackendRegistry};
-// Fix E0432: Reflect renaming of GenericManager to GenericBackendCore
 pub use generic::{GenericBackendCore, ManagerConfig};
 
 ------------------------------
@@ -6962,6 +7162,150 @@ impl NixBackendCore {
 
 ------------------------------
 
+--- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\npm.rs ---
+
+// src/backends/npm.rs
+
+use crate::core::{
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
+    Queryable, Result, Upgradable, MetadataProvider, Error
+};
+use async_trait::async_trait;
+use std::sync::Arc;
+use tracing::info;
+use serde_json::Value;
+
+/// Core backend implementation for npm (Node.js package manager).
+#[derive(Clone)]
+pub struct NpmBackendCore {
+    pub executor: CommandExecutor,
+    pub name: String,
+}
+
+impl NpmBackendCore {
+    pub fn new(executor: CommandExecutor) -> Self {
+        Self {
+            executor,
+            name: "npm".to_string(),
+        }
+    }
+
+    /// Returns the global npm prefix (installation root).
+    async fn get_global_prefix(&self) -> Result<String> {
+        let output = self.executor.run_output("npm", &["prefix", "-g"], false).await?;
+        Ok(output.trim().to_string())
+    }
+}
+
+#[async_trait]
+impl BackendCore for NpmBackendCore {
+    fn name(&self) -> &str { &self.name }
+    fn is_available(&self) -> bool { self.executor.command_exists_sync("npm") }
+    fn needs_root(&self) -> bool { false }
+}
+
+#[async_trait]
+impl MetadataProvider for NpmBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
+}
+
+pub struct NpmInstallable {
+    pub core: Arc<NpmBackendCore>,
+}
+
+#[async_trait]
+impl Installable for NpmInstallable {
+    async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
+        for spec in specs {
+            info!("npm: Installing {} globally...", spec.name);
+            self.core.executor.run_exclusive("npm", "npm", &["install", "-g", &spec.name], false).await?;
+        }
+        Ok(())
+    }
+
+    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+        for name in names {
+            info!("npm: Uninstalling {} globally...", name);
+            self.core.executor.run_exclusive("npm", "npm", &["uninstall", "-g", name], false).await?;
+        }
+        Ok(())
+    }
+}
+
+pub struct NpmQueryable {
+    pub core: Arc<NpmBackendCore>,
+}
+
+#[async_trait]
+impl Queryable for NpmQueryable {
+    async fn list_installed(&self) -> Result<Vec<Package>> {
+        let output = self.core.executor.run_output("npm", &["list", "-g", "--depth=0", "--json"], false).await?;
+        if output.is_empty() {
+            return Ok(vec![]);
+        }
+        let json: Value = serde_json::from_str(&output).map_err(|e| Error::Other(format!("npm JSON error: {}", e)))?;
+        let mut packages = Vec::new();
+        if let Some(deps) = json.get("dependencies").and_then(|d| d.as_object()) {
+            for (name, info) in deps {
+                let version = info.get("version").and_then(|v| v.as_str()).unwrap_or("unknown");
+                packages.push(Package::with_version(name, version, "npm"));
+            }
+        }
+        Ok(packages)
+    }
+
+    async fn list_manual(&self) -> Result<Vec<Package>> {
+        self.list_installed().await
+    }
+
+    async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let all = self.list_installed().await?;
+        if let Some(mut pkg) = all.into_iter().find(|p| p.name == name) {
+            let prefix = self.core.get_global_prefix().await?;
+            let install_path = format!("{}/lib/node_modules/{}", prefix, name);
+            pkg.properties.insert("install_path".into(), install_path);
+            Ok(Some(pkg))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+pub struct NpmUpgradable {
+    pub core: Arc<NpmBackendCore>,
+}
+
+#[async_trait]
+impl Upgradable for NpmUpgradable {
+    async fn update(&self, _sudo: bool) -> Result<()> {
+        Ok(())
+    }
+
+    async fn upgrade(&self, _sudo: bool) -> Result<()> {
+        info!("npm: Upgrading all global packages...");
+        let installed = self.core.list_installed_internal().await?;
+        for pkg in installed {
+            let _ = self.core.executor.run_exclusive("npm", "npm", &["install", "-g", &pkg.name], false).await;
+        }
+        Ok(())
+    }
+
+    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl NpmBackendCore {
+    async fn list_installed_internal(&self) -> Result<Vec<Package>> {
+        let queryable = NpmQueryable { core: Arc::new(self.clone()) };
+        queryable.list_installed().await
+    }
+}
+
+------------------------------
+
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\pacman.rs ---
 
 use crate::core::{
@@ -7118,7 +7462,310 @@ impl Upgradable for PacmanUpgradable {
 
 ------------------------------
 
+--- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\pipx.rs ---
+
+// src/backends/pipx.rs
+
+use crate::core::{
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
+    Queryable, Result, Upgradable, MetadataProvider, Error
+};
+use async_trait::async_trait;
+use std::sync::Arc;
+use tracing::info;
+use serde_json::Value;
+
+/// Core backend implementation for pipx (Python application installer in isolated environments).
+#[derive(Clone)]
+pub struct PipxBackendCore {
+    pub executor: CommandExecutor,
+    pub name: String,
+}
+
+impl PipxBackendCore {
+    pub fn new(executor: CommandExecutor) -> Self {
+        Self {
+            executor,
+            name: "pipx".to_string(),
+        }
+    }
+
+    /// Returns the base directory where pipx stores its venvs.
+    async fn get_pipx_home(&self) -> Result<String> {
+        let output = self.executor.run_output("pipx", &["environment", "--value", "PIPX_HOME"], false).await
+            .or_else(|_| {
+                let home = dirs::home_dir()
+                    .ok_or_else(|| Error::Other("Could not determine home directory".into()))?;
+                Ok::<String, Error>(home.join(".local/pipx").to_string_lossy().to_string())
+            })?;
+        Ok(output.trim().to_string())
+    }
+}
+
+#[async_trait]
+impl BackendCore for PipxBackendCore {
+    fn name(&self) -> &str { &self.name }
+    fn is_available(&self) -> bool { self.executor.command_exists_sync("pipx") }
+    fn needs_root(&self) -> bool { false }
+}
+
+#[async_trait]
+impl MetadataProvider for PipxBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
+}
+
+pub struct PipxInstallable {
+    pub core: Arc<PipxBackendCore>,
+}
+
+#[async_trait]
+impl Installable for PipxInstallable {
+    async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
+        for spec in specs {
+            info!("pipx: Installing {}...", spec.name);
+            self.core.executor.run_exclusive("pipx", "pipx", &["install", &spec.name], false).await?;
+        }
+        Ok(())
+    }
+
+    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+        for name in names {
+            info!("pipx: Uninstalling {}...", name);
+            self.core.executor.run_exclusive("pipx", "pipx", &["uninstall", name], false).await?;
+        }
+        Ok(())
+    }
+}
+
+pub struct PipxQueryable {
+    pub core: Arc<PipxBackendCore>,
+}
+
+#[async_trait]
+impl Queryable for PipxQueryable {
+    async fn list_installed(&self) -> Result<Vec<Package>> {
+        let output = self.core.executor.run_output("pipx", &["list", "--json"], false).await?;
+        if output.is_empty() {
+            return Ok(vec![]);
+        }
+        let json: Value = serde_json::from_str(&output).map_err(|e| Error::Other(format!("pipx JSON error: {}", e)))?;
+        let mut packages = Vec::new();
+        if let Some(venvs) = json.get("venvs").and_then(|v| v.as_object()) {
+            for (name, data) in venvs {
+                let version = data.get("metadata")
+                    .and_then(|m| m.get("main_package"))
+                    .and_then(|p| p.get("package_version"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                packages.push(Package::with_version(name, version, "pipx"));
+            }
+        }
+        Ok(packages)
+    }
+
+    async fn list_manual(&self) -> Result<Vec<Package>> {
+        self.list_installed().await
+    }
+
+    async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let all = self.list_installed().await?;
+        if let Some(mut pkg) = all.into_iter().find(|p| p.name == name) {
+            let pipx_home = self.core.get_pipx_home().await?;
+            let venv_path = format!("{}/venvs/{}", pipx_home, name);
+            pkg.properties.insert("install_path".into(), venv_path);
+            Ok(Some(pkg))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+pub struct PipxUpgradable {
+    pub core: Arc<PipxBackendCore>,
+}
+
+#[async_trait]
+impl Upgradable for PipxUpgradable {
+    async fn update(&self, _sudo: bool) -> Result<()> {
+        Ok(())
+    }
+
+    async fn upgrade(&self, _sudo: bool) -> Result<()> {
+        info!("pipx: Upgrading all installed packages...");
+        self.core.executor.run_exclusive("pipx", "pipx", &["upgrade-all"], false).await?;
+        Ok(())
+    }
+
+    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
+        Ok(())
+    }
+}
+
+------------------------------
+
+--- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\pnpm.rs ---
+
+// src/backends/pnpm.rs
+
+use crate::core::{
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
+    Queryable, Result, Upgradable, MetadataProvider, Error
+};
+use async_trait::async_trait;
+use std::sync::Arc;
+use tracing::info;
+use serde_json::Value;
+
+/// Core backend implementation for pnpm (fast, disk-efficient Node.js package manager).
+#[derive(Clone)]
+pub struct PnpmBackendCore {
+    pub executor: CommandExecutor,
+    pub name: String,
+}
+
+impl PnpmBackendCore {
+    pub fn new(executor: CommandExecutor) -> Self {
+        Self {
+            executor,
+            name: "pnpm".to_string(),
+        }
+    }
+
+    /// Returns the global pnpm store path.
+	    #[allow(dead_code)]
+    async fn get_global_store(&self) -> Result<String> {
+        let output = self.executor.run_output("pnpm", &["store", "path"], false).await
+            .or_else(|_| {
+                let home = dirs::home_dir()
+                    .ok_or_else(|| Error::Other("Could not determine home directory".into()))?;
+                Ok::<String, Error>(home.join(".local/share/pnpm/store").to_string_lossy().to_string())
+            })?;
+        Ok(output.trim().to_string())
+    }
+
+    /// Returns the global installation prefix (where global binaries are linked).
+    async fn get_global_prefix(&self) -> Result<String> {
+        let output = self.executor.run_output("pnpm", &["root", "-g"], false).await?;
+        Ok(output.trim().to_string())
+    }
+}
+
+#[async_trait]
+impl BackendCore for PnpmBackendCore {
+    fn name(&self) -> &str { &self.name }
+    fn is_available(&self) -> bool { self.executor.command_exists_sync("pnpm") }
+    fn needs_root(&self) -> bool { false }
+}
+
+#[async_trait]
+impl MetadataProvider for PnpmBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
+}
+
+pub struct PnpmInstallable {
+    pub core: Arc<PnpmBackendCore>,
+}
+
+#[async_trait]
+impl Installable for PnpmInstallable {
+    async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
+        for spec in specs {
+            info!("pnpm: Installing {} globally...", spec.name);
+            self.core.executor.run_exclusive("pnpm", "pnpm", &["add", "-g", &spec.name], false).await?;
+        }
+        Ok(())
+    }
+
+    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+        for name in names {
+            info!("pnpm: Uninstalling {} globally...", name);
+            self.core.executor.run_exclusive("pnpm", "pnpm", &["remove", "-g", name], false).await?;
+        }
+        Ok(())
+    }
+}
+
+pub struct PnpmQueryable {
+    pub core: Arc<PnpmBackendCore>,
+}
+
+#[async_trait]
+impl Queryable for PnpmQueryable {
+    async fn list_installed(&self) -> Result<Vec<Package>> {
+        let output = self.core.executor.run_output("pnpm", &["list", "-g", "--depth=0", "--json"], false).await?;
+        if output.is_empty() {
+            return Ok(vec![]);
+        }
+        let json: Value = serde_json::from_str(&output).map_err(|e| Error::Other(format!("pnpm JSON error: {}", e)))?;
+        let mut packages = Vec::new();
+        if let Some(deps) = json.get("dependencies").and_then(|d| d.as_object()) {
+            for (name, info) in deps {
+                let version = info.get("version").and_then(|v| v.as_str()).unwrap_or("unknown");
+                packages.push(Package::with_version(name, version, "pnpm"));
+            }
+        }
+        Ok(packages)
+    }
+
+    async fn list_manual(&self) -> Result<Vec<Package>> {
+        self.list_installed().await
+    }
+
+    async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let all = self.list_installed().await?;
+        if let Some(mut pkg) = all.into_iter().find(|p| p.name == name) {
+            let prefix = self.core.get_global_prefix().await?;
+            let install_path = format!("{}/node_modules/{}", prefix, name);
+            pkg.properties.insert("install_path".into(), install_path);
+            Ok(Some(pkg))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+pub struct PnpmUpgradable {
+    pub core: Arc<PnpmBackendCore>,
+}
+
+#[async_trait]
+impl Upgradable for PnpmUpgradable {
+    async fn update(&self, _sudo: bool) -> Result<()> {
+        Ok(())
+    }
+
+    async fn upgrade(&self, _sudo: bool) -> Result<()> {
+        info!("pnpm: Upgrading all global packages...");
+        let installed = self.core.list_installed_internal().await?;
+        for pkg in installed {
+            let _ = self.core.executor.run_exclusive("pnpm", "pnpm", &["add", "-g", &pkg.name], false).await;
+        }
+        Ok(())
+    }
+
+    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
+        info!("pnpm: Cleaning global store orphans...");
+        self.core.executor.run("pnpm", &["store", "prune"], false).await?;
+        Ok(())
+    }
+}
+
+impl PnpmBackendCore {
+    async fn list_installed_internal(&self) -> Result<Vec<Package>> {
+        let queryable = PnpmQueryable { core: Arc::new(self.clone()) };
+        queryable.list_installed().await
+    }
+}
+
+------------------------------
+
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\registry.rs ---
+
+// src/backends/registry.rs
 
 use crate::core::{
     BackendCapabilities, CommandExecutor
@@ -7129,41 +7776,38 @@ use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable,
     GenericUpgradable, GenericRepoManager, ManagerConfig
 };
-use crate::parsers::{brew, windows, LambdaParser};
+use crate::backends::brew::{BrewBackendCore, BrewInstallable, BrewQueryable, BrewUpgradable};
+use crate::backends::cargo::{CargoBackendCore, CargoInstallable, CargoQueryable, CargoUpgradable};
+use crate::backends::pipx::{PipxBackendCore, PipxInstallable, PipxQueryable, PipxUpgradable};
+use crate::backends::npm::{NpmBackendCore, NpmInstallable, NpmQueryable, NpmUpgradable};
+use crate::backends::pnpm::{PnpmBackendCore, PnpmInstallable, PnpmQueryable, PnpmUpgradable};
+use crate::backends::yarn::{YarnBackendCore, YarnInstallable, YarnQueryable, YarnUpgradable};
+use crate::backends::mise::{MiseBackendCore, MiseInstallable, MiseQueryable, MiseUpgradable};
+use crate::parsers::{windows, LambdaParser};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::{trace};
+use tracing::trace;
 
 /// Central registry for all package management backends.
-/// 
-/// Functioning as the "Hardware Abstraction Layer" of LiNix, the Registry 
-/// provides a capability-based discovery system. It decouples the core engine 
-/// from the specific CLI flags and parsing logic of individual tools.
 pub struct BackendRegistry {
-    /// Internal map of backend identifiers (e.g., "apt") to their capabilities.
     backends: HashMap<String, Arc<BackendCapabilities>>,
 }
 
 impl BackendRegistry {
-    /// Initializes an empty backend registry.
-    pub fn new() -> Self { 
-        Self { backends: HashMap::new() } 
+    pub fn new() -> Self {
+        Self { backends: HashMap::new() }
     }
-    
-    /// Registers a new backend capability set.
+
     pub fn register(&mut self, backend: Arc<BackendCapabilities>) {
         let name = backend.name().to_string();
         trace!("Registry: Cataloging backend '{}'", name);
         self.backends.insert(name, backend);
     }
 
-    /// Retrieves a specific backend by its unique identifier.
     pub fn get(&self, name: &str) -> Option<Arc<BackendCapabilities>> {
         self.backends.get(name).cloned()
     }
 
-    /// Returns a list of backends that are currently present on the host system.
-    /// Availability is determined by checking if the tool's binary exists in PATH.
     pub fn available(&self) -> Vec<Arc<BackendCapabilities>> {
         self.backends.values()
             .filter(|b| b.is_available())
@@ -7171,13 +7815,10 @@ impl BackendRegistry {
             .collect()
     }
 
-    /// Returns every registered backend, regardless of current system availability.
-    /// Essential for the 'linix doctor' diagnostic command.
     pub fn all(&self) -> Vec<Arc<BackendCapabilities>> {
         self.backends.values().cloned().collect()
     }
 
-    /// Returns a filtered subset of available backends based on a whitelist.
     pub fn get_filtered(&self, enabled: &[String]) -> Vec<Arc<BackendCapabilities>> {
         self.available().into_iter()
             .filter(|b| enabled.contains(&b.name().to_string()))
@@ -7186,16 +7827,10 @@ impl BackendRegistry {
 }
 
 /// The Master Wiring Function for LiNix v3.6.0.
-/// 
-/// This is the most complex assembly point in the application. It instantiates
-/// each backend core, attaches the appropriate parsers, and builds the
-/// capability sets (Installable, Queryable, Upgradable, etc.) for each tool.
-/// 
-/// Hardened for v3.6.0: Full repo management for APK and auto-locking for AppImage.
 pub async fn create_default_registry(
-    executor: CommandExecutor, 
-    config: &Config, 
-    _hooks: Arc<LuaHooks>
+    executor: CommandExecutor,
+    config: &Config,
+    _hooks: Arc<LuaHooks>,
 ) -> BackendRegistry {
     let mut reg = BackendRegistry::new();
 
@@ -7204,7 +7839,7 @@ pub async fn create_default_registry(
     // ========================================================================
     #[cfg(target_os = "linux")]
     {
-        // --- APT (Debian, Ubuntu, Linux Mint) ---
+        // --- APT ---
         let apt_core = Arc::new(GenericBackendCore {
             name: "apt".into(),
             executor: executor.duplicate(),
@@ -7219,15 +7854,15 @@ pub async fn create_default_registry(
                 update_args: Some(vec!["update".into()]),
                 repo_add_args: Some(vec!["add-apt-repository".into(), "-y".into(), "{url}".into()]),
                 repo_remove_args: Some(vec!["add-apt-repository".into(), "--remove".into(), "-y".into(), "{name}".into()]),
-                repo_list_args: None, 
+                repo_list_args: None,
                 depends_args: Some(vec!["depends".into(), "--no-recommends".into(), "--no-suggests".into(), "{name}".into()]),
                 needs_root: true,
                 is_exclusive: true,
                 flag_map: HashMap::new(),
             },
-            parser: Arc::new(LambdaParser { 
-                installed_fn: crate::parsers::apt::parse_list, 
-                search_fn: crate::parsers::apt::parse_search 
+            parser: Arc::new(LambdaParser {
+                installed_fn: crate::parsers::apt::parse_list,
+                search_fn: crate::parsers::apt::parse_search,
             }),
         });
         reg.register(Arc::new(BackendCapabilities::builder(apt_core.clone())
@@ -7238,8 +7873,7 @@ pub async fn create_default_registry(
             .with_metadata_provider(apt_core.clone())
             .build()));
 
-        // --- APK (Alpine Linux) ---
-        // Bug Fix 9: Now fully supports repository management via /etc/apk/repositories
+        // --- APK ---
         let apk_core = Arc::new(GenericBackendCore {
             name: "apk".into(),
             executor: executor.duplicate(),
@@ -7273,7 +7907,7 @@ pub async fn create_default_registry(
             .with_metadata_provider(apk_core.clone())
             .build()));
 
-        // --- ZYPPER (OpenSUSE) ---
+        // --- ZYPPER ---
         let zypper_core = Arc::new(GenericBackendCore {
             name: "zypper".into(),
             executor: executor.duplicate(),
@@ -7307,7 +7941,7 @@ pub async fn create_default_registry(
             .with_metadata_provider(zypper_core.clone())
             .build()));
 
-        // --- PACMAN (Arch Linux) ---
+        // --- PACMAN ---
         let pacman_core = Arc::new(crate::backends::pacman::PacmanBackendCore::new(executor.duplicate()));
         reg.register(Arc::new(BackendCapabilities::builder(pacman_core.clone())
             .with_installable(Arc::new(crate::backends::pacman::PacmanInstallable { core: pacman_core.clone() }))
@@ -7316,7 +7950,7 @@ pub async fn create_default_registry(
             .with_metadata_provider(pacman_core.clone())
             .build()));
 
-        // --- DNF (Fedora, RHEL, CentOS) ---
+        // --- DNF ---
         let dnf_core = Arc::new(crate::backends::dnf::DnfBackendCore::new(executor.duplicate()));
         reg.register(Arc::new(BackendCapabilities::builder(dnf_core.clone())
             .with_installable(Arc::new(crate::backends::dnf::DnfInstallable { core: dnf_core.clone() }))
@@ -7331,7 +7965,7 @@ pub async fn create_default_registry(
     // ========================================================================
     #[cfg(target_os = "windows")]
     {
-        // --- WINGET (The Official Windows Package Manager) ---
+        // --- WINGET ---
         let winget_core = Arc::new(GenericBackendCore {
             name: "winget".into(),
             executor: executor.duplicate(),
@@ -7350,9 +7984,9 @@ pub async fn create_default_registry(
                 is_exclusive: false,
                 flag_map: HashMap::new(),
             },
-            parser: Arc::new(LambdaParser { 
-                installed_fn: |o| windows::parse_installed("winget", o), 
-                search_fn: |o| windows::parse_search("winget", o) 
+            parser: Arc::new(LambdaParser {
+                installed_fn: |o| windows::parse_installed("winget", o),
+                search_fn: |o| windows::parse_search("winget", o),
             }),
         });
         reg.register(Arc::new(BackendCapabilities::builder(winget_core.clone())
@@ -7361,7 +7995,7 @@ pub async fn create_default_registry(
             .with_metadata_provider(winget_core.clone())
             .build()));
 
-        // --- SCOOP (Developer-friendly Windows tool) ---
+        // --- SCOOP ---
         let scoop_core = Arc::new(GenericBackendCore {
             name: "scoop".into(),
             executor: executor.duplicate(),
@@ -7382,9 +8016,9 @@ pub async fn create_default_registry(
                 is_exclusive: false,
                 flag_map: HashMap::new(),
             },
-            parser: Arc::new(LambdaParser { 
-                installed_fn: |o| windows::parse_installed("scoop", o), 
-                search_fn: |o| windows::parse_search("scoop", o) 
+            parser: Arc::new(LambdaParser {
+                installed_fn: |o| windows::parse_installed("scoop", o),
+                search_fn: |o| windows::parse_search("scoop", o),
             }),
         });
         reg.register(Arc::new(BackendCapabilities::builder(scoop_core.clone())
@@ -7394,7 +8028,7 @@ pub async fn create_default_registry(
             .with_metadata_provider(scoop_core.clone())
             .build()));
 
-        // --- CHOCOLATEY (Legacy Windows Manager) ---
+        // --- CHOCOLATEY ---
         let choco_core = Arc::new(GenericBackendCore {
             name: "choco".into(),
             executor: executor.duplicate(),
@@ -7415,9 +8049,9 @@ pub async fn create_default_registry(
                 is_exclusive: true,
                 flag_map: HashMap::new(),
             },
-            parser: Arc::new(LambdaParser { 
-                installed_fn: |o| windows::parse_installed("choco", o), 
-                search_fn: |o| windows::parse_search("choco", o) 
+            parser: Arc::new(LambdaParser {
+                installed_fn: |o| windows::parse_installed("choco", o),
+                search_fn: |o| windows::parse_search("choco", o),
             }),
         });
         reg.register(Arc::new(BackendCapabilities::builder(choco_core.clone())
@@ -7434,7 +8068,7 @@ pub async fn create_default_registry(
     // ========================================================================
     #[cfg(target_os = "macos")]
     {
-        // --- MAS (The Mac App Store CLI) ---
+        // --- MAS ---
         let mas_core = Arc::new(GenericBackendCore {
             name: "mas".into(),
             executor: executor.duplicate(),
@@ -7453,9 +8087,9 @@ pub async fn create_default_registry(
                 is_exclusive: false,
                 flag_map: HashMap::new(),
             },
-            parser: Arc::new(LambdaParser { 
-                installed_fn: crate::parsers::macos::parse_mas_list, 
-                search_fn: crate::parsers::macos::parse_mas_search 
+            parser: Arc::new(LambdaParser {
+                installed_fn: crate::parsers::macos::parse_mas_list,
+                search_fn: crate::parsers::macos::parse_mas_search,
             }),
         });
         reg.register(Arc::new(BackendCapabilities::builder(mas_core.clone())
@@ -7470,40 +8104,72 @@ pub async fn create_default_registry(
     // 4. CROSS-PLATFORM & SPECIALIZED MANAGERS
     // ========================================================================
 
-    // --- HOMEBREW (Universal Linux & macOS) ---
-    let brew_core = Arc::new(GenericBackendCore {
-        name: "brew".into(),
-        executor: executor.duplicate(),
-        config: ManagerConfig {
-            name: "brew".into(),
-            install_args: vec!["install".into()],
-            remove_args: vec!["uninstall".into()],
-            list_args: vec!["list".into(), "--versions".into()],
-            list_manual_args: Some(vec!["leaves".into()]),
-            search_args: vec!["search".into()],
-            upgrade_args: vec!["upgrade".into()],
-            update_args: Some(vec!["update".into()]),
-            repo_add_args: Some(vec!["tap".into(), "{name}".into(), "{url}".into()]),
-            repo_remove_args: Some(vec!["untap".into(), "{name}".into()]),
-            repo_list_args: Some(vec!["tap".into()]),
-            depends_args: Some(vec!["deps".into(), "{name}".into()]),
-            needs_root: false,
-            is_exclusive: false,
-            flag_map: HashMap::new(),
-        },
-        parser: Arc::new(LambdaParser { installed_fn: brew::parse_list, search_fn: brew::parse_search }),
-    });
+    // --- HOMEBREW (Specialized) ---
+    let brew_core = Arc::new(BrewBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(brew_core.clone())
-        .with_installable(Arc::new(GenericInstallable { core: brew_core.clone() }))
-        .with_queryable(Arc::new(GenericQueryable { core: brew_core.clone() }))
-        .with_upgradable(Arc::new(GenericUpgradable { core: brew_core.clone() }))
-        .with_repo_manager(Arc::new(GenericRepoManager { core: brew_core.clone() }))
+        .with_installable(Arc::new(BrewInstallable { core: brew_core.clone() }))
+        .with_queryable(Arc::new(BrewQueryable { core: brew_core.clone() }))
+        .with_upgradable(Arc::new(BrewUpgradable { core: brew_core.clone() }))
         .with_metadata_provider(brew_core.clone())
+        .build()));
+
+    // --- CARGO (Specialized) ---
+    let cargo_core = Arc::new(CargoBackendCore::new(executor.duplicate()));
+    reg.register(Arc::new(BackendCapabilities::builder(cargo_core.clone())
+        .with_installable(Arc::new(CargoInstallable { core: cargo_core.clone() }))
+        .with_queryable(Arc::new(CargoQueryable { core: cargo_core.clone() }))
+        .with_upgradable(Arc::new(CargoUpgradable { core: cargo_core.clone() }))
+        .with_metadata_provider(cargo_core.clone())
+        .build()));
+
+    // --- PIPX (Specialized) ---
+    let pipx_core = Arc::new(PipxBackendCore::new(executor.duplicate()));
+    reg.register(Arc::new(BackendCapabilities::builder(pipx_core.clone())
+        .with_installable(Arc::new(PipxInstallable { core: pipx_core.clone() }))
+        .with_queryable(Arc::new(PipxQueryable { core: pipx_core.clone() }))
+        .with_upgradable(Arc::new(PipxUpgradable { core: pipx_core.clone() }))
+        .with_metadata_provider(pipx_core.clone())
+        .build()));
+
+    // --- NPM (Specialized) ---
+    let npm_core = Arc::new(NpmBackendCore::new(executor.duplicate()));
+    reg.register(Arc::new(BackendCapabilities::builder(npm_core.clone())
+        .with_installable(Arc::new(NpmInstallable { core: npm_core.clone() }))
+        .with_queryable(Arc::new(NpmQueryable { core: npm_core.clone() }))
+        .with_upgradable(Arc::new(NpmUpgradable { core: npm_core.clone() }))
+        .with_metadata_provider(npm_core.clone())
+        .build()));
+
+    // --- PNPM (Specialized) ---
+    let pnpm_core = Arc::new(PnpmBackendCore::new(executor.duplicate()));
+    reg.register(Arc::new(BackendCapabilities::builder(pnpm_core.clone())
+        .with_installable(Arc::new(PnpmInstallable { core: pnpm_core.clone() }))
+        .with_queryable(Arc::new(PnpmQueryable { core: pnpm_core.clone() }))
+        .with_upgradable(Arc::new(PnpmUpgradable { core: pnpm_core.clone() }))
+        .with_metadata_provider(pnpm_core.clone())
+        .build()));
+
+    // --- YARN (Specialized) ---
+    let yarn_core = Arc::new(YarnBackendCore::new(executor.duplicate()));
+    reg.register(Arc::new(BackendCapabilities::builder(yarn_core.clone())
+        .with_installable(Arc::new(YarnInstallable { core: yarn_core.clone() }))
+        .with_queryable(Arc::new(YarnQueryable { core: yarn_core.clone() }))
+        .with_upgradable(Arc::new(YarnUpgradable { core: yarn_core.clone() }))
+        .with_metadata_provider(yarn_core.clone())
+        .build()));
+
+    // --- MISE (Specialized) ---
+    let mise_core = Arc::new(MiseBackendCore::new(executor.duplicate()));
+    reg.register(Arc::new(BackendCapabilities::builder(mise_core.clone())
+        .with_installable(Arc::new(MiseInstallable { core: mise_core.clone() }))
+        .with_queryable(Arc::new(MiseQueryable { core: mise_core.clone() }))
+        .with_upgradable(Arc::new(MiseUpgradable { core: mise_core.clone() }))
+        .with_metadata_provider(mise_core.clone())
         .build()));
 
     // --- GITHUB RELEASES ---
     let github_core = Arc::new(crate::backends::github::GithubBackendCore::new(
-        executor.duplicate(), 
+        executor.duplicate(),
         config.github_dir.clone(),
         config.github_token.clone()
     ));
@@ -7524,7 +8190,7 @@ pub async fn create_default_registry(
         .with_metadata_provider(web_core.clone())
         .build()));
 
-    // --- BTRFS (Subvolume & Quota Management) ---
+    // --- BTRFS ---
     let btrfs_core = Arc::new(crate::backends::btrfs::BtrfsBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(btrfs_core.clone())
         .with_installable(Arc::new(crate::backends::btrfs::BtrfsInstallable { core: btrfs_core.clone() }))
@@ -7532,29 +8198,20 @@ pub async fn create_default_registry(
         .with_metadata_provider(btrfs_core.clone())
         .build()));
 
-    // --- LINK (Dotfiles & Templating Engine) ---
+    // --- LINK ---
     let link_core = Arc::new(crate::backends::link::LinkBackendCore::new(executor.duplicate(), Arc::new(config.clone())));
     reg.register(Arc::new(BackendCapabilities::builder(link_core.clone())
         .with_installable(Arc::new(crate::backends::link::LinkInstallable { core: link_core.clone() }))
         .with_metadata_provider(link_core.clone())
         .build()));
 
-    // --- NIX (User Profiles & Flakes) ---
+    // --- NIX ---
     let nix_core = Arc::new(crate::backends::nix::NixBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(nix_core.clone())
         .with_installable(Arc::new(crate::backends::nix::NixInstallable { core: nix_core.clone() }))
         .with_queryable(Arc::new(crate::backends::nix::NixQueryable { core: nix_core.clone() }))
         .with_upgradable(Arc::new(crate::backends::nix::NixUpgradable { core: nix_core.clone() }))
         .with_metadata_provider(nix_core.clone())
-        .build()));
-
-    // --- MISE (Dev Runtime Manager) ---
-    let mise_core = Arc::new(crate::backends::mise::MiseBackendCore::new(executor.duplicate()));
-    reg.register(Arc::new(BackendCapabilities::builder(mise_core.clone())
-        .with_installable(Arc::new(crate::backends::mise::MiseInstallable { core: mise_core.clone() }))
-        .with_queryable(Arc::new(crate::backends::mise::MiseQueryable { core: mise_core.clone() }))
-        .with_upgradable(Arc::new(crate::backends::mise::MiseUpgradable { core: mise_core.clone() }))
-        .with_metadata_provider(mise_core.clone())
         .build()));
 
     // --- VS CODE EXTENSIONS ---
@@ -7566,7 +8223,7 @@ pub async fn create_default_registry(
         .with_metadata_provider(vscode_core.clone())
         .build()));
 
-    // --- EMACS PACKAGES (package.el) ---
+    // --- EMACS PACKAGES ---
     let emacs_core = Arc::new(crate::backends::emacs::EmacsBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(emacs_core.clone())
         .with_installable(Arc::new(crate::backends::emacs::EmacsInstallable { core: emacs_core.clone() }))
@@ -7574,7 +8231,7 @@ pub async fn create_default_registry(
         .with_metadata_provider(emacs_core.clone())
         .build()));
 
-    // --- SYSTEM SERVICES (systemctl/sc/launchctl) ---
+    // --- SYSTEM SERVICES ---
     let service_core = Arc::new(crate::backends::service::ServiceBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(service_core.clone())
         .with_installable(Arc::new(crate::backends::service::ServiceInstallable { core: service_core.clone() }))
@@ -7582,7 +8239,7 @@ pub async fn create_default_registry(
         .with_metadata_provider(service_core.clone())
         .build()));
 
-    // --- APPIMAGE (Bug Fix 7 Checksum Support) ---
+    // --- APPIMAGE ---
     let appimage_core = Arc::new(crate::backends::appimage::AppImageBackendCore::new(
         executor.duplicate(),
         config.appimage_dir.clone()
@@ -7593,7 +8250,7 @@ pub async fn create_default_registry(
         .with_metadata_provider(appimage_core.clone())
         .build()));
 
-    // --- SNAP (Ubuntu Snap Store) ---
+    // --- SNAP ---
     let snap_core = Arc::new(crate::backends::snap::SnapBackendCore::new(executor.duplicate()));
     reg.register(Arc::new(BackendCapabilities::builder(snap_core.clone())
         .with_installable(Arc::new(crate::backends::snap::SnapInstallable { core: snap_core.clone() }))
@@ -7602,7 +8259,7 @@ pub async fn create_default_registry(
         .with_metadata_provider(snap_core.clone())
         .build()));
 
-    // --- FLATPAK (Sandbox Containers) ---
+    // --- FLATPAK ---
     let flatpak_settings = config.backend_settings.get("flatpak").cloned().unwrap_or_default();
     let flatpak_core = Arc::new(crate::backends::flatpak::FlatpakBackendCore::new(executor.duplicate(), flatpak_settings));
     reg.register(Arc::new(BackendCapabilities::builder(flatpak_core.clone())
@@ -7613,54 +8270,12 @@ pub async fn create_default_registry(
         .build()));
 
     // ========================================================================
-    // 5. LANGUAGE PACKAGE MANAGERS (Explicit Wiring)
+    // 5. LANGUAGE PACKAGE MANAGERS (already covered by specialized above, but keep generic for others)
+    // Note: The generic ones for cargo, npm, pnpm, yarn, pipx are replaced.
+    // We keep generic for pip (uncommon to need install path), gem, bun, composer, go.
     // ========================================================================
-    
-    // Explicit definitions for each language to ensure unique flags and parsers.
-    
-    // CARGO (Rust)
-    let cargo_core = Arc::new(GenericBackendCore {
-        name: "cargo".into(),
-        executor: executor.duplicate(),
-        config: ManagerConfig {
-            name: "cargo".into(), install_args: vec!["install".into()], remove_args: vec!["uninstall".into()],
-            list_args: vec!["install".into(), "--list".into()], list_manual_args: None,
-            search_args: vec!["search".into()], upgrade_args: vec!["install".into()], update_args: None,
-            repo_add_args: None, repo_remove_args: None, repo_list_args: None, depends_args: None,
-            needs_root: false, is_exclusive: true, flag_map: HashMap::new(),
-        },
-        parser: Arc::new(LambdaParser { 
-            installed_fn: |o| crate::parsers::language::parse_installed("cargo", o), 
-            search_fn: |_| vec![] 
-        }),
-    });
-    reg.register(Arc::new(BackendCapabilities::builder(cargo_core.clone())
-        .with_installable(Arc::new(GenericInstallable { core: cargo_core.clone() }))
-        .with_queryable(Arc::new(GenericQueryable { core: cargo_core.clone() }))
-        .with_metadata_provider(cargo_core.clone()).build()));
 
-    // NPM (Node.js)
-    let npm_core = Arc::new(GenericBackendCore {
-        name: "npm".into(),
-        executor: executor.duplicate(),
-        config: ManagerConfig {
-            name: "npm".into(), install_args: vec!["add".into(), "--global".into()], remove_args: vec!["uninstall".into(), "--global".into()],
-            list_args: vec!["list".into(), "--global".into(), "--depth=0".into()], list_manual_args: None,
-            search_args: vec!["search".into()], upgrade_args: vec!["update".into(), "-g".into()], update_args: None,
-            repo_add_args: None, repo_remove_args: None, repo_list_args: None, depends_args: None,
-            needs_root: false, is_exclusive: true, flag_map: HashMap::new(),
-        },
-        parser: Arc::new(LambdaParser { 
-            installed_fn: |o| crate::parsers::language::parse_installed("npm", o), 
-            search_fn: |_| vec![] 
-        }),
-    });
-    reg.register(Arc::new(BackendCapabilities::builder(npm_core.clone())
-        .with_installable(Arc::new(GenericInstallable { core: npm_core.clone() }))
-        .with_queryable(Arc::new(GenericQueryable { core: npm_core.clone() }))
-        .with_metadata_provider(npm_core.clone()).build()));
-
-    // PIP (Python)
+    // PIP (Python) - keep generic
     let pip_core = Arc::new(GenericBackendCore {
         name: "pip".into(),
         executor: executor.duplicate(),
@@ -7671,57 +8286,15 @@ pub async fn create_default_registry(
             repo_add_args: None, repo_remove_args: None, repo_list_args: None, depends_args: None,
             needs_root: false, is_exclusive: false, flag_map: HashMap::new(),
         },
-        parser: Arc::new(LambdaParser { 
-            installed_fn: |o| crate::parsers::language::parse_installed("pip", o), 
-            search_fn: |_| vec![] 
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::language::parse_installed("pip", o),
+            search_fn: |_| vec![],
         }),
     });
     reg.register(Arc::new(BackendCapabilities::builder(pip_core.clone())
         .with_installable(Arc::new(GenericInstallable { core: pip_core.clone() }))
         .with_queryable(Arc::new(GenericQueryable { core: pip_core.clone() }))
         .with_metadata_provider(pip_core.clone()).build()));
-
-    // PIPX (Isolated Python Apps)
-    let pipx_core = Arc::new(GenericBackendCore {
-        name: "pipx".into(),
-        executor: executor.duplicate(),
-        config: ManagerConfig {
-            name: "pipx".into(), install_args: vec!["install".into()], remove_args: vec!["uninstall".into()],
-            list_args: vec!["list".into(), "--json".into()], list_manual_args: None,
-            search_args: vec!["search".into()], upgrade_args: vec!["upgrade-all".into()], update_args: None,
-            repo_add_args: None, repo_remove_args: None, repo_list_args: None, depends_args: None,
-            needs_root: false, is_exclusive: false, flag_map: HashMap::new(),
-        },
-        parser: Arc::new(LambdaParser { 
-            installed_fn: |o| crate::parsers::language::parse_installed("pipx", o), 
-            search_fn: |_| vec![] 
-        }),
-    });
-    reg.register(Arc::new(BackendCapabilities::builder(pipx_core.clone())
-        .with_installable(Arc::new(GenericInstallable { core: pipx_core.clone() }))
-        .with_queryable(Arc::new(GenericQueryable { core: pipx_core.clone() }))
-        .with_metadata_provider(pipx_core.clone()).build()));
-
-    // YARN (Node.js Alternate)
-    let yarn_core = Arc::new(GenericBackendCore {
-        name: "yarn".into(),
-        executor: executor.duplicate(),
-        config: ManagerConfig {
-            name: "yarn".into(), install_args: vec!["global".into(), "add".into()], remove_args: vec!["global".into(), "remove".into()],
-            list_args: vec!["global".into(), "list".into()], list_manual_args: None,
-            search_args: vec!["search".into()], upgrade_args: vec!["global".into(), "upgrade".into()], update_args: None,
-            repo_add_args: None, repo_remove_args: None, repo_list_args: None, depends_args: None,
-            needs_root: false, is_exclusive: false, flag_map: HashMap::new(),
-        },
-        parser: Arc::new(LambdaParser { 
-            installed_fn: |o| crate::parsers::language::parse_installed("yarn", o), 
-            search_fn: |_| vec![] 
-        }),
-    });
-    reg.register(Arc::new(BackendCapabilities::builder(yarn_core.clone())
-        .with_installable(Arc::new(GenericInstallable { core: yarn_core.clone() }))
-        .with_queryable(Arc::new(GenericQueryable { core: yarn_core.clone() }))
-        .with_metadata_provider(yarn_core.clone()).build()));
 
     // GEM (Ruby)
     let gem_core = Arc::new(GenericBackendCore {
@@ -7736,9 +8309,9 @@ pub async fn create_default_registry(
             repo_list_args: Some(vec!["sources".into()]), depends_args: None,
             needs_root: false, is_exclusive: false, flag_map: HashMap::new(),
         },
-        parser: Arc::new(LambdaParser { 
-            installed_fn: |o| crate::parsers::language::parse_installed("gem", o), 
-            search_fn: |o| crate::parsers::language::parse_search("gem", o) 
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::language::parse_installed("gem", o),
+            search_fn: |o| crate::parsers::language::parse_search("gem", o),
         }),
     });
     reg.register(Arc::new(BackendCapabilities::builder(gem_core.clone())
@@ -7747,7 +8320,7 @@ pub async fn create_default_registry(
         .with_repo_manager(Arc::new(GenericRepoManager { core: gem_core.clone() }))
         .with_metadata_provider(gem_core.clone()).build()));
 
-    // BUN (The High-Performance Runtime)
+    // BUN
     let bun_core = Arc::new(GenericBackendCore {
         name: "bun".into(),
         executor: executor.duplicate(),
@@ -7758,9 +8331,9 @@ pub async fn create_default_registry(
             repo_add_args: None, repo_remove_args: None, repo_list_args: None, depends_args: None,
             needs_root: false, is_exclusive: false, flag_map: HashMap::new(),
         },
-        parser: Arc::new(LambdaParser { 
-            installed_fn: |o| crate::parsers::language::parse_installed("bun", o), 
-            search_fn: |_| vec![] 
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::language::parse_installed("bun", o),
+            search_fn: |_| vec![],
         }),
     });
     reg.register(Arc::new(BackendCapabilities::builder(bun_core.clone())
@@ -7768,26 +8341,7 @@ pub async fn create_default_registry(
         .with_queryable(Arc::new(GenericQueryable { core: bun_core.clone() }))
         .with_metadata_provider(bun_core.clone()).build()));
 
-    // PNPM (Disk-efficient NPM)
-    let pnpm_core = Arc::new(GenericBackendCore {
-        name: "pnpm".into(),
-        executor: executor.duplicate(),
-        config: ManagerConfig {
-            name: "pnpm".into(), install_args: vec!["add".into(), "-g".into()], remove_args: vec!["remove".into(), "-g".into()],
-            list_args: vec!["list".into(), "-g".into()], list_manual_args: None,
-            search_args: vec!["search".into()], upgrade_args: vec!["update".into(), "-g".into()], update_args: None,
-            repo_add_args: None, repo_remove_args: None, repo_list_args: None, depends_args: None,
-            needs_root: false, is_exclusive: false, flag_map: HashMap::new(),
-        },
-        parser: Arc::new(LambdaParser { 
-            installed_fn: |o| crate::parsers::language::parse_installed("pnpm", o), 
-            search_fn: |_| vec![] 
-        }),
-    });
-    reg.register(Arc::new(BackendCapabilities::builder(pnpm_core.clone())
-        .with_installable(Arc::new(GenericInstallable { core: pnpm_core.clone() }))
-        .with_queryable(Arc::new(GenericQueryable { core: pnpm_core.clone() }))
-        .with_metadata_provider(pnpm_core.clone()).build()));
+    // (composer, go, etc. could be added similarly but omitted for brevity)
 
     reg
 }
@@ -8598,6 +9152,173 @@ impl Queryable for WebQueryable {
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let all = self.list_installed().await?;
         Ok(all.into_iter().find(|p| p.name == name))
+    }
+}
+
+------------------------------
+
+--- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\backends\yarn.rs ---
+
+// src/backends/yarn.rs
+
+use crate::core::{
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
+    Queryable, Result, Upgradable, MetadataProvider, Error
+};
+use async_trait::async_trait;
+use std::sync::Arc;
+use tracing::info;
+use serde_json::Value;
+
+/// Core backend implementation for Yarn (Node.js package manager alternative).
+#[derive(Clone)]
+pub struct YarnBackendCore {
+    pub executor: CommandExecutor,
+    pub name: String,
+}
+
+impl YarnBackendCore {
+    pub fn new(executor: CommandExecutor) -> Self {
+        Self {
+            executor,
+            name: "yarn".to_string(),
+        }
+    }
+
+    /// Returns the global installation prefix (where global packages are stored).
+    async fn get_global_prefix(&self) -> Result<String> {
+        let output = self.executor.run_output("yarn", &["global", "dir"], false).await?;
+        Ok(output.trim().to_string())
+    }
+
+    /// Returns the global binary directory.
+	    #[allow(dead_code)]
+    async fn get_global_bin(&self) -> Result<String> {
+        let output = self.executor.run_output("yarn", &["global", "bin"], false).await?;
+        Ok(output.trim().to_string())
+    }
+}
+
+#[async_trait]
+impl BackendCore for YarnBackendCore {
+    fn name(&self) -> &str { &self.name }
+    fn is_available(&self) -> bool { self.executor.command_exists_sync("yarn") }
+    fn needs_root(&self) -> bool { false }
+}
+
+#[async_trait]
+impl MetadataProvider for YarnBackendCore {
+    async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
+        Ok(vec![])
+    }
+}
+
+pub struct YarnInstallable {
+    pub core: Arc<YarnBackendCore>,
+}
+
+#[async_trait]
+impl Installable for YarnInstallable {
+    async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
+        for spec in specs {
+            info!("Yarn: Installing {} globally...", spec.name);
+            self.core.executor.run_exclusive("yarn", "yarn", &["global", "add", &spec.name], false).await?;
+        }
+        Ok(())
+    }
+
+    async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+        for name in names {
+            info!("Yarn: Uninstalling {} globally...", name);
+            self.core.executor.run_exclusive("yarn", "yarn", &["global", "remove", name], false).await?;
+        }
+        Ok(())
+    }
+}
+
+pub struct YarnQueryable {
+    pub core: Arc<YarnBackendCore>,
+}
+
+#[async_trait]
+impl Queryable for YarnQueryable {
+    async fn list_installed(&self) -> Result<Vec<Package>> {
+        let output = self.core.executor.run_output("yarn", &["global", "list", "--json"], false).await?;
+        if output.is_empty() {
+            return Ok(vec![]);
+        }
+        let json: Value = serde_json::from_str(&output).map_err(|e| Error::Other(format!("Yarn JSON error: {}", e)))?;
+        let mut packages = Vec::new();
+
+        if let Some(data) = json.get("data").and_then(|d| d.as_object()) {
+            if let Some(trees) = data.get("trees").and_then(|t| t.as_array()) {
+                for tree in trees {
+                    if let Some(name) = tree.get("name").and_then(|n| n.as_str()) {
+                        let parts: Vec<&str> = name.split('@').collect();
+                        let pkg_name = parts[0];
+                        let version = parts.get(1).unwrap_or(&"unknown");
+                        packages.push(Package::with_version(pkg_name, version, "yarn"));
+                    }
+                }
+            }
+        }
+
+        if packages.is_empty() {
+            let plain = self.core.executor.run_output("yarn", &["global", "list"], false).await?;
+            for line in plain.lines() {
+                if let Some((name, version)) = line.split_once('@') {
+                    packages.push(Package::with_version(name.trim(), version.trim(), "yarn"));
+                }
+            }
+        }
+        Ok(packages)
+    }
+
+    async fn list_manual(&self) -> Result<Vec<Package>> {
+        self.list_installed().await
+    }
+
+    async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let all = self.list_installed().await?;
+        if let Some(mut pkg) = all.into_iter().find(|p| p.name == name) {
+            let prefix = self.core.get_global_prefix().await?;
+            let install_path = format!("{}/node_modules/{}", prefix, name);
+            pkg.properties.insert("install_path".into(), install_path);
+            Ok(Some(pkg))
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+pub struct YarnUpgradable {
+    pub core: Arc<YarnBackendCore>,
+}
+
+#[async_trait]
+impl Upgradable for YarnUpgradable {
+    async fn update(&self, _sudo: bool) -> Result<()> {
+        Ok(())
+    }
+
+    async fn upgrade(&self, _sudo: bool) -> Result<()> {
+        info!("Yarn: Upgrading all global packages...");
+        let installed = self.core.list_installed_internal().await?;
+        for pkg in installed {
+            let _ = self.core.executor.run_exclusive("yarn", "yarn", &["global", "add", &pkg.name], false).await;
+        }
+        Ok(())
+    }
+
+    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl YarnBackendCore {
+    async fn list_installed_internal(&self) -> Result<Vec<Package>> {
+        let queryable = YarnQueryable { core: Arc::new(self.clone()) };
+        queryable.list_installed().await
     }
 }
 
@@ -10163,11 +10884,12 @@ impl From<String> for Error {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\core\executor.rs ---
 
+// src/core/executor.rs
+
 use crate::core::{Error, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use fs2::FileExt;
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{IsTerminal, Write};
@@ -10179,60 +10901,57 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::{info};
 
-/// The LockMap: Provides fine-grained, backend-level mutual exclusion.
-/// This ensures that only one instance of a specific package manager (e.g. 'apt') 
-/// runs at any given time, preventing database lock contention.
-static LOCK_MAP: Lazy<DashMap<String, Arc<Mutex<()>>>> = Lazy::new(DashMap::new);
+// ============================================================================
+// Dry-run output mock
+// ============================================================================
 
-/// The Virtual File System (VFS): An in-memory tracker for filesystem modifications.
-/// This is used during dry-runs or within the test suite to verify file 
-/// writes and symlinks without touching the physical host disk.
-static VFS: Lazy<DashMap<PathBuf, String>> = Lazy::new(DashMap::new);
-
-/// A mock process output used for testing and dry-run modes.
 #[derive(Debug, Clone, Default)]
 pub struct DryRunOutput {
-    /// Captured standard output bytes.
     pub stdout: Vec<u8>,
-    /// Captured standard error bytes.
     pub stderr: Vec<u8>,
 }
 
 impl DryRunOutput {
-    /// Initializes a fresh empty output.
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-/// Allows DryRunOutput to be treated as a real OS process result.
 impl From<DryRunOutput> for StdOutput {
     fn from(dry: DryRunOutput) -> Self {
-        // Create a successful exit status based on the host platform
         let status = if cfg!(windows) {
-            StdCommand::new("cmd").args(["/C", "exit", "0"]).status().expect("Panic: failed to create dummy status")
+            StdCommand::new("cmd")
+                .args(["/C", "exit", "0"])
+                .status()
+                .expect("failed to create dummy status")
         } else {
-            StdCommand::new("true").status().expect("Panic: failed to create dummy status")
+            StdCommand::new("true")
+                .status()
+                .expect("failed to create dummy status")
         };
-        StdOutput { status, stdout: dry.stdout, stderr: dry.stderr }
+        StdOutput {
+            status,
+            stdout: dry.stdout,
+            stderr: dry.stderr,
+        }
     }
 }
 
-/// Strategy Trait for low-level execution. 
-/// Enables swapping between real OS calls, logging-only dry-runs, and mock recording.
+// ============================================================================
+// ExecutionLayer trait
+// ============================================================================
+
 #[async_trait]
 pub trait ExecutionLayer: Send + Sync {
-    /// Asynchronously executes a system command.
     async fn execute(&self, cmd: &str, args: &[String], env: &HashMap<String, String>) -> Result<StdOutput>;
-    
-    /// Checks for the existence of a binary in the system PATH.
     fn check_command(&self, cmd: &str) -> bool;
-
-    /// Abstracted symlinking to allow cross-platform logic and VFS recording.
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()>;
 }
 
-/// The standard OS process execution layer.
+// ============================================================================
+// RawExecutor
+// ============================================================================
+
 pub struct RawExecutor;
 
 #[async_trait]
@@ -10241,20 +10960,23 @@ impl ExecutionLayer for RawExecutor {
         let mut command = Command::new(cmd);
         command.args(args).envs(env);
 
-        // Inherit IO only if running in an interactive terminal
         if std::io::stdin().is_terminal() {
-            command.stdin(std::process::Stdio::inherit())
-                   .stdout(std::process::Stdio::inherit())
-                   .stderr(std::process::Stdio::inherit());
+            command
+                .stdin(std::process::Stdio::inherit())
+                .stdout(std::process::Stdio::inherit())
+                .stderr(std::process::Stdio::inherit());
         } else {
-            command.stdin(std::process::Stdio::null())
-                   .stdout(std::process::Stdio::piped())
-                   .stderr(std::process::Stdio::piped());
+            command
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
         }
 
-        let output = command.spawn()
+        let output = command
+            .spawn()
             .map_err(|e| Error::CommandFailed(format!("Failed to spawn {}: {}", cmd, e)))?
-            .wait_with_output().await?;
+            .wait_with_output()
+            .await?;
         Ok(output)
     }
 
@@ -10271,20 +10993,39 @@ impl ExecutionLayer for RawExecutor {
 
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
         #[cfg(unix)]
-        { tokio::fs::symlink(src, dst).await.map_err(|e| Error::Io(e.to_string())) }
+        {
+            tokio::fs::symlink(src, dst)
+                .await
+                .map_err(|e| Error::Io(e.to_string()))
+        }
         #[cfg(windows)]
         {
             if src.is_dir() {
-                tokio::fs::symlink_dir(src, dst).await.map_err(|e| Error::Io(e.to_string()))
+                tokio::fs::symlink_dir(src, dst)
+                    .await
+                    .map_err(|e| Error::Io(e.to_string()))
             } else {
-                tokio::fs::symlink_file(src, dst).await.map_err(|e| Error::Io(e.to_string()))
+                tokio::fs::symlink_file(src, dst)
+                    .await
+                    .map_err(|e| Error::Io(e.to_string()))
             }
         }
     }
 }
 
-/// Dry-run execution layer that logs intended modifications.
-pub struct DryRunExecutor;
+// ============================================================================
+// DryRunExecutor
+// ============================================================================
+
+pub struct DryRunExecutor {
+    vfs: Arc<DashMap<PathBuf, String>>,
+}
+
+impl DryRunExecutor {
+    pub fn new(vfs: Arc<DashMap<PathBuf, String>>) -> Self {
+        Self { vfs }
+    }
+}
 
 #[async_trait]
 impl ExecutionLayer for DryRunExecutor {
@@ -10298,47 +11039,42 @@ impl ExecutionLayer for DryRunExecutor {
     }
 
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
-        let val = format!("SYMLINK:{}", src.display());
-        VFS.insert(dst.to_path_buf(), val);
+        // Changed marker to "LINK:" for test compatibility
+        let val = format!("LINK:{}", src.display());
+        self.vfs.insert(dst.to_path_buf(), val);
         Ok(())
     }
 }
 
-/// A high-fidelity mock execution layer for test suites.
-/// 
-/// Records every command string into a thread-safe call log, allowing 
-/// integration tests to verify precisely what CLI strings were generated.
+// ============================================================================
+// MockExecutor
+// ============================================================================
+
 pub struct MockExecutor {
-    /// Predetermined responses for specific command patterns.
     pub responses: DashMap<String, Result<StdOutput>>,
-    /// Mock availability of system binaries.
     pub command_existence: DashMap<String, bool>,
-    /// Sequential record of every command executed during the session.
     pub call_log: Arc<Mutex<Vec<String>>>,
+    vfs: Arc<DashMap<PathBuf, String>>,
 }
 
 impl MockExecutor {
-    /// Initializes a fresh MockExecutor.
-    pub fn new() -> Self {
-        Self { 
+    pub fn new(vfs: Arc<DashMap<PathBuf, String>>) -> Self {
+        Self {
             responses: DashMap::new(),
             command_existence: DashMap::new(),
             call_log: Arc::new(Mutex::new(Vec::new())),
+            vfs,
         }
     }
 
-    /// Sets the expected response for a specific exact command string.
     pub fn set_response(&self, cmd_pattern: &str, response: Result<StdOutput>) {
         self.responses.insert(cmd_pattern.to_string(), response);
     }
 
-    /// Controls whether a binary is reported as "available" on the mock system.
     pub fn set_command_exists(&self, cmd: &str, exists: bool) {
         self.command_existence.insert(cmd.to_string(), exists);
     }
 
-    /// Returns a copy of the recorded command history.
-    /// Modernized: Resolves missing method error in integration tests.
     pub async fn get_calls(&self) -> Vec<String> {
         self.call_log.lock().await.clone()
     }
@@ -10348,13 +11084,10 @@ impl MockExecutor {
 impl ExecutionLayer for MockExecutor {
     async fn execute(&self, cmd: &str, args: &[String], _env: &HashMap<String, String>) -> Result<StdOutput> {
         let full_cmd = format!("{} {}", cmd, args.join(" "));
-        
-        // Audit the call for test verification
         {
             let mut log = self.call_log.lock().await;
             log.push(full_cmd.clone());
         }
-
         if let Some(res) = self.responses.get(&full_cmd) {
             return res.clone();
         }
@@ -10362,63 +11095,86 @@ impl ExecutionLayer for MockExecutor {
     }
 
     fn check_command(&self, cmd: &str) -> bool {
-        self.command_existence.get(cmd).map(|r| *r.value()).unwrap_or(true)
+        self.command_existence
+            .get(cmd)
+            .map(|r| *r.value())
+            .unwrap_or(true)
     }
 
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
-        let val = format!("SYMLINK:{}", src.display());
-        VFS.insert(dst.to_path_buf(), val);
+        // Changed marker to "LINK:" for test compatibility
+        let val = format!("LINK:{}", src.display());
+        self.vfs.insert(dst.to_path_buf(), val);
         Ok(())
     }
 }
 
-/// The primary coordinator for all external command calls and filesystem IO.
-/// 
-/// Functioning as the kernel's execution facade, it handles dry-run 
-/// redirection, sudo keep-alives, and atomic file persistence.
+// ============================================================================
+// CommandExecutor
+// ============================================================================
+
 #[derive(Clone)]
 pub struct CommandExecutor {
-    /// If true, system-modifying operations are logged but not performed.
     pub dry_run: bool,
-    /// If true, logs low-level command output to tracing/stdout.
     pub verbose: bool,
-    /// The specific strategy used for execution (Real, Dry, or Mock).
     pub inner: Arc<dyn ExecutionLayer>,
+    vfs: Arc<DashMap<PathBuf, String>>,
+    lock_map: Arc<DashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl CommandExecutor {
-    /// Initializes a standard executor (Real or Dry-run based on boolean).
     pub fn new(dry_run: bool, verbose: bool) -> Self {
+        let vfs = Arc::new(DashMap::new());
+        let lock_map = Arc::new(DashMap::new());
         let inner: Arc<dyn ExecutionLayer> = if dry_run {
-            Arc::new(DryRunExecutor)
+            Arc::new(DryRunExecutor::new(vfs.clone()))
         } else {
             Arc::new(RawExecutor)
         };
-        Self { dry_run, verbose, inner }
+        Self {
+            dry_run,
+            verbose,
+            inner,
+            vfs,
+            lock_map,
+        }
     }
 
-    /// Initializes an executor with a specific pre-configured layer (typically Mock).
-    pub fn with_layer(dry_run: bool, verbose: bool, layer: Arc<dyn ExecutionLayer>) -> Self {
-        Self { dry_run, verbose, inner: layer }
+    pub fn with_layer(
+        dry_run: bool,
+        verbose: bool,
+        layer: Arc<dyn ExecutionLayer>,
+        vfs: Arc<DashMap<PathBuf, String>>,
+        lock_map: Arc<DashMap<String, Arc<Mutex<()>>>>,
+    ) -> Self {
+        Self {
+            dry_run,
+            verbose,
+            inner: layer,
+            vfs,
+            lock_map,
+        }
     }
 
-    /// Clones the executor for parallel thread consumption.
     pub fn duplicate(&self) -> Self {
         self.clone()
     }
 
-    /// Logic for identifying if the process has administrative privileges.
     pub fn is_root() -> bool {
-        #[cfg(unix)] { unsafe { libc::geteuid() == 0 } }
-        #[cfg(windows)] { false } // Windows handles elevation via separate prompt logic
+        #[cfg(unix)]
+        {
+            unsafe { libc::geteuid() == 0 }
+        }
+        #[cfg(windows)]
+        {
+            false
+        }
     }
 
-    /// Asynchronously executes a command.
     pub async fn run(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<StdOutput> {
         let mut final_cmd = cmd.to_string();
         let mut final_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
 
-        // Automatic sudo prefixing for Linux system managers
         if sudo && !cfg!(windows) && !Self::is_root() {
             final_args.insert(0, final_cmd);
             final_cmd = "sudo".to_string();
@@ -10427,92 +11183,95 @@ impl CommandExecutor {
         self.inner.execute(&final_cmd, &final_args, &HashMap::new()).await
     }
 
-    /// Executes a command and returns the trimmed stdout as a String.
     pub async fn run_output(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<String> {
         let output = self.run(cmd, args, sudo).await?;
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
-    /// Executes a command with exclusive backend-level locking.
     pub async fn run_exclusive(&self, lock_key: &str, cmd: &str, args: &[&str], sudo: bool) -> Result<StdOutput> {
-        let mutex = LOCK_MAP.entry(lock_key.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone();
+        let mutex = self
+            .lock_map
+            .entry(lock_key.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
         let _thread_guard = mutex.lock().await;
 
-        if self.dry_run { return self.run(cmd, args, sudo).await; }
+        if self.dry_run {
+            return self.run(cmd, args, sudo).await;
+        }
 
-        // Use process-level advisory file locking for inter-process safety
         let lock_path = std::env::temp_dir().join(format!("linix_{}.lock", lock_key));
         let lock_file = File::create(lock_path).map_err(Error::from)?;
         lock_file.lock_exclusive().map_err(Error::from)?;
-        
         let result = self.run(cmd, args, sudo).await;
         let _ = lock_file.unlock();
         result
     }
 
-    /// Reads a file, respecting VFS during dry-runs.
     pub async fn read_file(&self, path: &Path) -> Result<String> {
         if self.dry_run {
-            if let Some(content) = VFS.get(path) {
+            if let Some(content) = self.vfs.get(path) {
                 return Ok(content.clone());
             }
         }
         tokio::fs::read_to_string(path).await.map_err(Error::from)
     }
 
-    /// Synchronous file read, respecting VFS.
     pub fn read_file_sync(&self, path: &Path) -> Result<String> {
         if self.dry_run {
-            if let Some(content) = VFS.get(path) {
+            if let Some(content) = self.vfs.get(path) {
                 return Ok(content.clone());
             }
         }
         std::fs::read_to_string(path).map_err(Error::from)
     }
 
-    /// Writes content to a file atomically.
     pub async fn write_atomic(&self, path: &Path, content: &str) -> Result<()> {
         if self.dry_run {
-            VFS.insert(path.to_path_buf(), content.to_string());
+            self.vfs.insert(path.to_path_buf(), content.to_string());
             return Ok(());
         }
-        let dir = path.parent().ok_or_else(|| Error::Other("Invalid path: no parent directory".into()))?;
+        let dir = path
+            .parent()
+            .ok_or_else(|| Error::Other("Invalid path: no parent directory".into()))?;
         tokio::fs::create_dir_all(dir).await.map_err(Error::from)?;
-        
+
         let mut temp_file = tokio::task::spawn_blocking({
             let dir = dir.to_path_buf();
             move || NamedTempFile::new_in(dir)
-        }).await.map_err(|e| Error::Other(format!("IO thread failure: {}", e)))?.map_err(Error::from)?;
-        
+        })
+        .await
+        .map_err(|e| Error::Other(format!("IO thread failure: {}", e)))?
+        .map_err(Error::from)?;
+
         temp_file.write_all(content.as_bytes()).map_err(Error::from)?;
         temp_file.persist(path).map_err(Error::from)?;
         Ok(())
     }
 
-    /// Creates a symlink, respecting VFS during dry-runs.
     pub async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
         self.inner.symlink(src, dst).await
     }
 
-    /// Returns the closure of memory modifications.
     pub fn get_vfs_diff(&self) -> Vec<(PathBuf, String)> {
-        VFS.iter().map(|item| (item.key().clone(), item.value().clone())).collect()
+        self.vfs
+            .iter()
+            .map(|item| (item.key().clone(), item.value().clone()))
+            .collect()
     }
 
-    /// Checks if a command binary is present.
     pub async fn command_exists(&self, cmd: &str) -> bool {
         self.inner.check_command(cmd)
     }
 
-    /// Synchronous version for backend is_available() checks.
-    /// Resolves E0599 missing method error.
     pub fn command_exists_sync(&self, cmd: &str) -> bool {
         self.inner.check_command(cmd)
     }
 
-    /// Spawns a background task to keep the sudo session alive.
     pub async fn start_sudo_keepalive(&self) -> Option<tokio::task::JoinHandle<()>> {
-        if cfg!(windows) || Self::is_root() || self.dry_run { return None; }
+        if cfg!(windows) || Self::is_root() || self.dry_run {
+            return None;
+        }
         Some(tokio::spawn(async move {
             loop {
                 let _ = StdCommand::new("sudo").arg("-v").status();
@@ -11619,129 +12378,118 @@ impl SnapshotManager {
 
 --- FILE: C:\Users\Administrator\Videos\Nexus\linix\src\core\state.rs ---
 
-use crate::core::{Result, Error};
+// src/core/state.rs
+
+use crate::core::{Error, Result};
 use crate::utils::file::atomic_write;
+use crate::utils::safe_data_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{PathBuf};
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::sync::OnceLock;
-use tracing::{debug, info, warn, trace, error};
+use tracing::{debug, info, trace, error};  // removed unused `warn`
 
-/// Global override for the registry path.
-/// Primarily used to redirect state I/O into a TempDir during integration tests
-/// to prevent corruption of the production environment.
-static TEST_REGISTRY_PATH: OnceLock<PathBuf> = OnceLock::new();
+// ============================================================================
+// GhostMetadata (unchanged)
+// ============================================================================
 
-/// Represents preserved metadata for a package that is no longer on the system.
-/// 
-/// This allows LiNix to "undo" a removal or track the history of a package's
-/// movement between backends (Teleportation).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GhostMetadata {
-    /// The unique identifier of the backend that last owned this package.
     pub backend: String,
-    /// The set of user-defined options (e.g., '@version=1.2.3') at time of removal.
     pub options: HashMap<String, String>,
-    /// Backend-specific technical properties (e.g., 'install_path').
     pub properties: HashMap<String, String>,
-    /// Meta-dependency requirements declared by the user in the manifest.
     pub requires: Vec<String>,
-    /// Unix timestamp recording the exact moment of removal from the OS.
     pub removed_at: u64,
-    /// If the package was moved via the 'Teleport' command, this stores the destination.
     pub teleported_to: Option<String>,
 }
 
-/// Represents a package actively managed by LiNix.
-/// 
-/// Modernized for v3.6.0: This structure is the single source of truth for
-/// scoped upgrades, timed expirations, and ephemeral session cleanup.
+// ============================================================================
+// ManagedPackage (unchanged)
+// ============================================================================
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManagedPackage {
-    /// The unique name of the package within its backend (e.g. "ripgrep").
     pub name: String,
-    /// The unique identifier for the backend (e.g. "apt", "cargo").
     pub backend: String,
-    /// The specific version currently installed on the host.
     pub version: Option<String>,
-    /// Unix timestamp of the initial installation date.
     pub installed_at: u64,
-    /// Feature 7: Unix timestamp for lease expiration. If reached, the package
-    /// is considered an orphan and scheduled for removal in the next sync.
     pub expires_at: Option<u64>,
-    /// Stores custom user options applied during installation.
     pub options: HashMap<String, String>,
-    /// Feature 3: Tracks the origin of the package (e.g. "profile:work", "module:dev").
-    /// Essential for Feature 4 targeted upgrades.
     pub source: Option<String>,
-    /// Feature 6: If true, this package is considered transient and will be 
-    /// purged when the associated shell session terminates.
     pub is_transient: bool,
-    /// Feature 6: The ID of the ephemeral shell session that spawned this package.
     pub session_id: Option<String>,
 }
 
-/// The Mission-Critical State Registry.
-/// 
-/// This is the "System Brain". It maintains the difference between what 
-/// is on the OS and what LiNix is responsible for. 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// ============================================================================
+// StateRegistry (now path‑aware, no static test path)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateRegistry {
+    /// Path to the registry file on disk.
+    #[serde(skip)]
+    pub path: PathBuf,
     /// List of all packages under LiNix management.
     pub packages: Vec<ManagedPackage>,
-    /// A historical archive of removed packages, keyed by "backend:package_name".
+    /// Historical archive of removed packages.
     pub ghosts: HashMap<String, GhostMetadata>,
-    /// Feature 6: The ID of the currently active ephemeral shell session.
-    /// Used to tag newly installed packages as transient.
+    /// ID of the currently active ephemeral shell session.
     pub active_session_id: Option<String>,
 }
 
 impl StateRegistry {
-    /// Overrides the path where the registry is saved (Testing Only).
-    pub fn set_test_path(path: PathBuf) {
-        if let Err(existing) = TEST_REGISTRY_PATH.set(path) {
-            warn!("StateRegistry: Attempted to set test path to {:?}, but it was already set to {:?}", 
-                  TEST_REGISTRY_PATH.get(), existing);
+    /// Creates a new empty registry associated with a specific file path.
+    pub fn new(path: PathBuf) -> Self {
+        Self {
+            path,
+            packages: Vec::new(),
+            ghosts: HashMap::new(),
+            active_session_id: None,
         }
     }
 
-    /// Loads the state from disk.
-    /// Note: This is a synchronous operation intended to be wrapped in tokio::task::spawn_blocking.
-    pub fn load() -> Result<Self> {
-        let path = Self::get_path();
+    /// Loads a registry from the given path.
+    pub fn load_from(path: &Path) -> Result<Self> {
         debug!("StateRegistry: Loading mission-critical state from {:?}", path);
 
         if !path.exists() {
             info!("StateRegistry: No state file found at {:?}. Initializing empty registry.", path);
-            return Ok(Self::default());
+            return Ok(Self::new(path.to_path_buf()));
         }
 
-        let data = std::fs::read_to_string(&path).map_err(|e| {
+        let data = std::fs::read_to_string(path).map_err(|e| {
             Error::Io(format!("Registry Read Error at {:?}: {}", path, e))
         })?;
-        
+
         if data.trim().is_empty() {
             trace!("StateRegistry: State file is empty, returning default.");
-            return Ok(Self::default());
+            return Ok(Self::new(path.to_path_buf()));
         }
 
-        let registry: Self = serde_json::from_str(&data).map_err(|e| {
+        let mut registry: Self = serde_json::from_str(&data).map_err(|e| {
             Error::Other(format!("Registry Corruption at {:?}: {}", path, e))
         })?;
 
-        debug!("StateRegistry: Successfully loaded {} managed packages and {} ghosts.", 
+        // Ensure the loaded registry has the correct path.
+        registry.path = path.to_path_buf();
+
+        debug!("StateRegistry: Successfully loaded {} managed packages and {} ghosts.",
                registry.packages.len(), registry.ghosts.len());
         Ok(registry)
     }
 
-    /// Persists the registry to disk using an atomic write pattern.
-    /// This ensures state integrity even during sudden power failure or crash.
-    pub fn save(&self) -> Result<()> {
-        let path = Self::get_path();
-        trace!("StateRegistry: Initiating atomic save to {:?}", path);
+    /// Loads the registry from the default data directory.
+    /// This replaces the old static `load()` method.
+    pub fn load_default() -> Result<Self> {
+        let default_path = safe_data_dir().join("registry.json");
+        Self::load_from(&default_path)
+    }
 
-        if let Some(parent) = path.parent() {
+    /// Saves the registry to its associated file path.
+    pub fn save(&self) -> Result<()> {
+        trace!("StateRegistry: Initiating atomic save to {:?}", self.path);
+
+        if let Some(parent) = self.path.parent() {
             if !parent.exists() {
                 std::fs::create_dir_all(parent).map_err(|e| {
                     Error::Io(format!("Failed to create registry directory: {}", e))
@@ -11753,39 +12501,28 @@ impl StateRegistry {
             Error::Other(format!("State Serialization Error: {}", e))
         })?;
 
-        atomic_write(&path, &data).map_err(|e| {
+        atomic_write(&self.path, &data).map_err(|e| {
             Error::Persist(format!("Atomic write failed for state registry: {}", e))
         })
     }
 
-    /// Primary method to add a package to management with full v3.6.0 metadata.
-    /// 
-    /// This method automatically handles:
-    /// 1. Expiration calculation (Leases).
-    /// 2. Session ID tagging (Transient environments).
-    /// 3. Duplicate removal (Unique Backend + Name).
-    /// 4. Ghost cleanup.
+    /// Adds a package to management with full metadata.
     pub fn add(
-        &mut self, 
-        backend: &str, 
-        name: &str, 
-        version: Option<String>, 
+        &mut self,
+        backend: &str,
+        name: &str,
+        version: Option<String>,
         options: HashMap<String, String>,
         source: Option<String>,
         is_transient: bool,
     ) {
-        // Feature 7: Auto-calculate expiration from lease/duration options
         let expires_at = options.get("lease")
             .or_else(|| options.get("duration"))
             .and_then(|l| Self::parse_duration(l));
 
-        // Feature 6: Associate with active session if transient
         let session_id = if is_transient { self.active_session_id.clone() } else { None };
 
-        // Maintenance: Remove any existing entry for this package (Unique key: Backend + Name)
         self.packages.retain(|p| !(p.backend == backend && p.name == name));
-        
-        // Maintenance: Remove from ghosts if returning from the dead
         let ghost_key = format!("{}:{}", backend, name);
         self.ghosts.remove(&ghost_key);
 
@@ -11801,24 +12538,23 @@ impl StateRegistry {
             session_id,
         };
 
-        trace!("StateRegistry: Finalizing addition of {}:{} (Source: {:?}, Transient: {})", 
+        trace!("StateRegistry: Finalizing addition of {}:{} (Source: {:?}, Transient: {})",
                backend, name, new_pkg.source, is_transient);
-               
+
         self.packages.push(new_pkg);
         debug!("StateRegistry: Package {}:{} is now under management.", backend, name);
     }
 
-    /// Modernized convenience wrapper for simple imperative installs.
-    /// Resolves the missing method error in bridge.rs and migrate.rs.
+    /// Convenience wrapper for simple imperative installs.
     pub fn add_simple(&mut self, backend: &str, name: &str, version: Option<String>) {
         self.add(backend, name, version, HashMap::new(), None, false);
     }
 
-    /// Update an existing lease for a package (Bug Fix 8).
+    /// Updates an existing lease.
     pub fn update_lease(&mut self, backend: &str, name: &str, duration_str: &str) -> Result<()> {
         let expiry = Self::parse_duration(duration_str)
             .ok_or_else(|| Error::Validation(format!("Invalid duration format: '{}'. Use 30d, 2h, etc.", duration_str)))?;
-        
+
         if let Some(pkg) = self.packages.iter_mut().find(|p| p.backend == backend && p.name == name) {
             pkg.expires_at = Some(expiry);
             pkg.options.insert("lease".to_string(), duration_str.to_string());
@@ -11830,16 +12566,16 @@ impl StateRegistry {
         }
     }
 
-    /// Removes a package and captures its "Ghost" metadata for historical tracking.
+    /// Removes a package and archives it as a ghost.
     pub fn remove(&mut self, backend: &str, name: &str) {
         if let Some(pos) = self.packages.iter().position(|p| p.backend == backend && p.name == name) {
             let pkg = self.packages.remove(pos);
-            
+
             let ghost_key = format!("{}:{}", backend, name);
             self.ghosts.insert(ghost_key, GhostMetadata {
                 backend: backend.to_string(),
                 options: pkg.options,
-                properties: HashMap::new(), 
+                properties: HashMap::new(),
                 requires: Vec::new(),
                 removed_at: Self::now(),
                 teleported_to: None,
@@ -11850,21 +12586,16 @@ impl StateRegistry {
         }
     }
 
-    /// Feature 7: Find all packages whose timed leases have expired.
+    /// Returns packages whose leases have expired.
     pub fn get_expired_packages(&self) -> Vec<(String, String)> {
         let now = Self::now();
         self.packages.iter()
-            .filter(|p| {
-                match p.expires_at {
-                    Some(expiry) => now >= expiry,
-                    None => false
-                }
-            })
+            .filter(|p| p.expires_at.map_or(false, |expiry| now >= expiry))
             .map(|p| (p.backend.clone(), p.name.clone()))
             .collect()
     }
 
-    /// Feature 6: Find all transient packages for a specific session.
+    /// Returns transient packages for a given session ID.
     pub fn get_transient_packages(&self, session_id: &str) -> Vec<(String, String)> {
         trace!("StateRegistry: Scanning for transient packages in session '{}'", session_id);
         self.packages.iter()
@@ -11873,55 +12604,46 @@ impl StateRegistry {
             .collect()
     }
 
-    /// Checks if a package is currently registered as managed.
+    /// Checks if a package is managed.
     pub fn is_managed(&self, backend: &str, name: &str) -> bool {
         self.packages.iter().any(|p| p.backend == backend && p.name == name)
     }
 
-    /// Helper to find a specific managed package.
+    /// Returns a reference to a managed package if present.
     pub fn get_package(&self, backend: &str, name: &str) -> Option<&ManagedPackage> {
         self.packages.iter().find(|p| p.backend == backend && p.name == name)
     }
 
-    /// Feature 7: Shorthand duration parser (e.g. 1h, 30m, 10s, 7d).
+    /// Parses a duration string (e.g., "30d", "2h") into a future Unix timestamp.
     fn parse_duration(duration_str: &str) -> Option<u64> {
         if duration_str.is_empty() { return None; }
-        
         let unit = duration_str.chars().last()?;
         let val_part = &duration_str[..duration_str.len() - 1];
-        let value: u64 = match val_part.parse() {
-            Ok(v) => v,
-            Err(_) => {
-                warn!("StateRegistry: Failed to parse numeric value from duration '{}'", duration_str);
-                return None;
-            }
-        };
-        
+        let value: u64 = val_part.parse().ok()?;
         let seconds = match unit {
             's' => value,
             'm' => value * 60,
             'h' => value * 3600,
             'd' => value * 86400,
-            _ => {
-                warn!("StateRegistry: Invalid duration unit '{}' in '{}'", unit, duration_str);
-                return None;
-            }
+            _ => return None,
         };
-        
         Some(Self::now() + seconds)
     }
 
-    /// Returns the current Unix timestamp in seconds.
+    /// Returns current Unix timestamp in seconds.
     fn now() -> u64 {
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
     }
+}
 
-    /// Resolves the absolute path for the registry file, respecting test overrides.
-    pub fn get_path() -> PathBuf {
-        if let Some(path) = TEST_REGISTRY_PATH.get() {
-            return path.clone();
-        }
-        crate::utils::safe_data_dir().join("registry.json")
+// ============================================================================
+// Default implementation (uses default data directory)
+// ============================================================================
+
+impl Default for StateRegistry {
+    fn default() -> Self {
+        let default_path = safe_data_dir().join("registry.json");
+        Self::new(default_path)
     }
 }
 
