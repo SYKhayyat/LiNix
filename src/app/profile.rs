@@ -85,15 +85,17 @@ impl ProfileManager {
                 
                 #[cfg(unix)]
                 {
+                    // On Unix, we use symlinks to allow live updates if the profile source changes
                     if tokio::fs::try_exists(&dest).await.unwrap_or(false) || dest.is_symlink() {
                         tokio::fs::remove_file(&dest).await?;
                     }
-                    // FIX: Use tokio::os::unix::fs::symlink (correct path)
-                    tokio::os::unix::fs::symlink(&path, &dest).await.map_err(Error::from)?;
+                    // FIX: Use tokio::fs::symlink (correct async symlink API)
+                    tokio::fs::symlink(&path, &dest).await.map_err(Error::from)?;
                 }
                 
                 #[cfg(windows)]
                 {
+                    // Windows symlinks are privileged; copies are more reliable for profiles
                     tokio::fs::copy(&path, &dest).await.map_err(Error::from)?;
                 }
                 provisioned_count += 1;

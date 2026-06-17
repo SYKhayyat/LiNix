@@ -173,8 +173,8 @@ impl Installable for WebInstallable {
                         let mut perms = metadata.permissions();
                         perms.set_mode(0o755);
                         tokio::fs::set_permissions(&src_path, perms).await.map_err(Error::from)?;
-                        // FIX: Use tokio::os::unix::fs::symlink (correct path)
-                        tokio::os::unix::fs::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
+                        // FIX: Use tokio::fs::symlink (correct async symlink API)
+                        tokio::fs::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
                     }
 
                     #[cfg(windows)] {

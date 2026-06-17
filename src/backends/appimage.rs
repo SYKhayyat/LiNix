@@ -132,8 +132,8 @@ impl Installable for AppImageInstallable {
             }
 
             #[cfg(unix)] {
-                // FIX: Use tokio::os::unix::fs::symlink (correct path)
-                tokio::os::unix::fs::symlink(&dest_path, &link_path).await?;
+                // FIX: Use tokio::fs::symlink (correct async symlink API)
+                tokio::fs::symlink(&dest_path, &link_path).await?;
             }
 
             state.insert(spec.name.clone(), AppImageState {

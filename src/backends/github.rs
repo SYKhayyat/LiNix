@@ -244,8 +244,8 @@ impl Installable for GithubInstallable {
                     if let Some(parent) = bin_dest.parent() {
                         tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
                     }
-                    // FIX: Use tokio::os::unix::fs::symlink (correct path)
-                    tokio::os::unix::fs::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
+                    // FIX: Use tokio::fs::symlink (correct async symlink API)
+                    tokio::fs::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
                 }
 
                 final_bin_path = Some(bin_dest.to_string_lossy().to_string());
