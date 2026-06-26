@@ -24,15 +24,15 @@ pub fn parse_simple_list(output: &str, backend: &str) -> Vec<Package> {
 /// Example: "package-name-1.2.3-r1" -> Name: "package-name", Version: "1.2.3-r1"
 /// Common in older RPM-based systems or Alpine (APK) info commands.
 pub fn parse_dash_version_list(output: &str, backend: &str) -> Vec<Package> {
-    sanitize(output).lines().filter_map(|line| {
+    sanitize(output).lines().map(|line| {
         // We assume the last two parts after splitting by dash are part of the version (version-revision)
         let parts: Vec<&str> = line.rsplitn(3, '-').collect();
         if parts.len() >= 3 {
             let name = parts[2].to_string();
             let version = format!("{}-{}", parts[1], parts[0]);
-            Some(Package::with_version(&name, &version, backend))
-        } else { 
-            Some(Package::new(line, backend)) 
+            Package::with_version(&name, &version, backend)
+        } else {
+            Package::new(line, backend)
         }
     }).collect()
 }

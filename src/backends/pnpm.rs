@@ -2,8 +2,9 @@
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Upgradable, MetadataProvider, Error
+    Queryable, Result, Searchable, Upgradable, MetadataProvider, Error
 };
+use crate::backends::node_registry::registry_search;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
@@ -65,8 +66,12 @@ pub struct PnpmInstallable {
 impl Installable for PnpmInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
-            info!("pnpm: Installing {} globally...", spec.name);
-            self.core.executor.run_exclusive("pnpm", "pnpm", &["add", "-g", &spec.name], false).await?;
+            let target = match spec.options.get("version") {
+                Some(v) if crate::backends::concrete_version(v) => format!("{}@{}", spec.name, v),
+                _ => spec.name.clone(),
+            };
+            info!("pnpm: Installing {} globally...", target);
+            self.core.executor.run_exclusive("pnpm", "pnpm", &["add", "-g", &target], false).await?;
         }
         Ok(())
     }
@@ -119,6 +124,18 @@ impl Queryable for PnpmQueryable {
     }
 }
 
+pub struct PnpmSearchable {
+    pub core: Arc<PnpmBackendCore>,
+}
+
+#[async_trait]
+impl Searchable for PnpmSearchable {
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        // pnpm has no `search` subcommand; it resolves from the npm registry.
+        registry_search(query, "pnpm", 25).await
+    }
+}
+
 pub struct PnpmUpgradable {
     pub core: Arc<PnpmBackendCore>,
 }
@@ -150,4 +167,20 @@ impl PnpmBackendCore {
         let queryable = PnpmQueryable { core: Arc::new(self.clone()) };
         queryable.list_installed().await
     }
+}
+
+/// Build and register the pnpm backend with all its capabilities.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(PnpmBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(PnpmInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(PnpmQueryable { core: core.clone() }))
+        .with_searchable(Arc::new(PnpmSearchable { core: core.clone() }))
+        .with_upgradable(Arc::new(PnpmUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
 }

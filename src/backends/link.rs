@@ -93,10 +93,10 @@ impl Installable for LinkInstallable {
             if spec.options.get("template") == Some(&"true".to_string()) {
                 let rendered = self.core.render_template(&source).await?;
                 
-                let needs_write = match self.core.executor.read_file(&target_path).await {
-                    Ok(existing) if existing == rendered => false,
-                    _ => true,
-                };
+                let needs_write = !matches!(
+                    self.core.executor.read_file(&target_path).await,
+                    Ok(existing) if existing == rendered
+                );
 
                 if needs_write {
                     info!("Link: Rendering template {:?} -> {:?}", source, target_path);
@@ -174,4 +174,17 @@ impl Installable for LinkInstallable {
         }
         Ok(())
     }
+}
+
+/// Build and register the symlink/template backend.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    cfg: &crate::config::Config,
+) {
+    let core = Arc::new(LinkBackendCore::new(exec.duplicate(), Arc::new(cfg.clone())));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(LinkInstallable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
 }

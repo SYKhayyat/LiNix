@@ -195,7 +195,21 @@ impl ServiceQueryable {
                 p.properties.insert("config_raw".into(), out);
             }
         }
-        
+
         Ok(())
     }
+}
+
+/// Build and register the system-service backend.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(ServiceBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(ServiceInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(ServiceQueryable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
 }

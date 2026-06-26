@@ -119,6 +119,12 @@ pub struct Config {
     #[serde(default)]
     pub remove_bloatware: bool,
 
+    /// Whether `sync` removes drift (packages installed but no longer in the manifests).
+    /// Default false: `sync` only installs/upgrades, and drift removal is an explicit,
+    /// separate step (`linix prune`). Set true to fold pruning back into `sync`.
+    #[serde(default = "default_false")]
+    pub prune_on_sync: bool,
+
     #[serde(default = "default_false")]
     pub purge_orphans: bool,
 
@@ -139,7 +145,21 @@ pub struct Config {
     
     #[serde(default = "default_max_parallel")]
     pub max_parallel: usize,
-    
+
+    /// Timeout (seconds) for outbound HTTP requests (registry/PyPI/marketplace search).
+    #[serde(default = "default_network_timeout_secs")]
+    pub network_timeout_secs: u64,
+
+    /// Retention window passed to `nix-collect-garbage --delete-older-than` during
+    /// orphan cleanup (e.g. "30d", "2w"). Replaces the previously hardcoded "30d".
+    #[serde(default = "default_nix_gc_age")]
+    pub nix_gc_age: String,
+
+    /// When true, destructive operations (removals) require interactive confirmation
+    /// unless `yes` is set. Extra guard on top of the normal preview.
+    #[serde(default = "default_false")]
+    pub confirm_destructive: bool,
+
     #[serde(default)]
     pub backend_settings: HashMap<String, HashMap<String, String>>,
     
@@ -194,6 +214,8 @@ fn default_true() -> bool { true }
 fn default_false() -> bool { false }
 fn default_cache_ttl() -> u64 { 300 }
 fn default_max_parallel() -> usize { 4 }
+fn default_network_timeout_secs() -> u64 { 15 }
+fn default_nix_gc_age() -> String { "30d".to_string() }
 fn default_max_age() -> u32 { 30 }
 fn default_max_count() -> u32 { 10 }
 
@@ -243,6 +265,7 @@ impl Default for Config {
             hostname_packages: HashMap::new(),
             bloatware_file: default_bloatware_file(),
             remove_bloatware: false,
+            prune_on_sync: false,
             purge_orphans: false,
             auto_lock_checksums: true,
             show_progress: true,
@@ -250,6 +273,9 @@ impl Default for Config {
             cache_ttl: 300,
             github_token: None,
             max_parallel: 4,
+            network_timeout_secs: default_network_timeout_secs(),
+            nix_gc_age: default_nix_gc_age(),
+            confirm_destructive: false,
             backend_settings: HashMap::new(),
             default_backend: None,
             protected_packages: default_protected_packages(),
@@ -269,8 +295,14 @@ impl Default for Config {
 
 impl Config {
     pub fn from_file(path: &Path) -> Result<Self> {
-        if !path.exists() { return Ok(Self::default()); }
-        let content = fs::read_to_string(path).map_err(|e| Error::Config(format!("Failed to read config file: {}", e)))?;
+        // Avoid TOCTOU: don't pre-check existence then read (the file could vanish in
+        // between, turning a graceful default into a hard error). Read directly and treat
+        // NotFound as "use defaults".
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(Error::Config(format!("Failed to read config file: {}", e))),
+        };
         let mut config: Self = toml::from_str(&content)?;
         config.config_file = path.to_path_buf();
         if config.protected_packages.is_empty() {
@@ -322,11 +354,31 @@ impl Config {
         Ok(())
     }
     
+    /// True only on an EXACT (case-insensitive) match against a protected entry.
+    /// Substring matching was a bug: protecting `libc`/`apt`/`kernel` also shielded
+    /// `libc-bin`, `aptitude`, `kernelshark`, etc. from removal.
     pub fn is_protected(&self, package_name: &str) -> bool {
         let name_lower = package_name.to_lowercase();
-        self.protected_packages.iter().any(|p| {
-            let p_lower = p.to_lowercase();
-            name_lower == p_lower || name_lower.contains(&p_lower)
-        })
+        self.protected_packages.iter().any(|p| p.to_lowercase() == name_lower)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_protected_is_exact_not_substring() {
+        let cfg = Config {
+            protected_packages: vec!["libc".into(), "apt".into(), "kernel".into()],
+            ..Config::default()
+        };
+        // exact matches (case-insensitive) are protected
+        assert!(cfg.is_protected("libc"));
+        assert!(cfg.is_protected("APT"));
+        // substrings/superstrings are NOT protected (the old bug)
+        assert!(!cfg.is_protected("libc-bin"));
+        assert!(!cfg.is_protected("aptitude"));
+        assert!(!cfg.is_protected("kernelshark"));
     }
 }

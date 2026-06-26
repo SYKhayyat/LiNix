@@ -1,6 +1,6 @@
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Upgradable, Error, MetadataProvider
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
+    Queryable, Result, Searchable, Upgradable, Error, MetadataProvider
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -11,13 +11,16 @@ use tracing::info;
 pub struct NixBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
+    /// Retention window for `nix-collect-garbage --delete-older-than` (from config).
+    pub gc_age: String,
 }
 
 impl NixBackendCore {
-    pub fn new(executor: CommandExecutor) -> Self {
+    pub fn new(executor: CommandExecutor, gc_age: String) -> Self {
         Self {
             executor,
             name: "nix".to_string(),
+            gc_age,
         }
     }
 }
@@ -68,16 +71,35 @@ impl Installable for NixInstallable {
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
         let installed = self.core.list_installed_internal().await?;
-        
+
+        // `nix profile` identifies elements by their array position ("index"). Each
+        // `nix profile remove <index>` RENUMBERS every element after it, so removing
+        // multiple packages by their originally-resolved indices would target the wrong
+        // elements after the first removal. Remove highest-index-first: lower indices are
+        // unaffected by the removal of a higher one, so the snapshot stays valid.
+        let mut indexed: Vec<(usize, &str)> = Vec::new();
+        let mut by_name: Vec<&str> = Vec::new();
         for name in names {
+            // not installed => nothing to remove
             if let Some(pkg) = installed.iter().find(|p| p.name == *name) {
-                if let Some(index) = pkg.properties.get("index") {
-                    info!("Nix: Removing package at profile index {} ({})", index, name);
-                    self.core.executor.run_exclusive("nix", "nix", &["profile", "remove", index], sudo).await?;
-                } else {
-                    self.core.executor.run_exclusive("nix", "nix", &["profile", "remove", name], sudo).await?;
+                match pkg.properties.get("index").and_then(|i| i.parse::<usize>().ok()) {
+                    Some(idx) => indexed.push((idx, name)),
+                    None => by_name.push(name),
                 }
             }
+        }
+
+        indexed.sort_by(|a, b| b.0.cmp(&a.0)); // descending
+        for (idx, name) in indexed {
+            let idx_str = idx.to_string();
+            info!("Nix: Removing package at profile index {} ({})", idx_str, name);
+            self.core.executor.run_exclusive("nix", "nix", &["profile", "remove", &idx_str], sudo).await?;
+        }
+
+        // Fallback path: remove by attribute name (modern `nix profile remove <name>`).
+        for name in by_name {
+            info!("Nix: Removing package by name ({})", name);
+            self.core.executor.run_exclusive("nix", "nix", &["profile", "remove", name], sudo).await?;
         }
         Ok(())
     }
@@ -103,6 +125,47 @@ impl Queryable for NixQueryable {
     }
 }
 
+pub struct NixSearchable {
+    pub core: Arc<NixBackendCore>,
+}
+
+#[async_trait]
+impl Searchable for NixSearchable {
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let output = self.core.executor
+            .run_output("nix", &["search", "nixpkgs", query, "--json"], false)
+            .await?;
+        parse_nix_search(&output)
+    }
+}
+
+/// Parse `nix search nixpkgs <q> --json` => `{ "<attrpath>": { pname, version, description } }`.
+fn parse_nix_search(output: &str) -> Result<Vec<Package>> {
+    if output.trim().is_empty() || output.trim() == "{}" {
+        return Ok(vec![]);
+    }
+    let json: Value = serde_json::from_str(output)
+        .map_err(|e| Error::Other(format!("Nix search JSON error: {}", e)))?;
+    let mut results = Vec::new();
+    if let Some(map) = json.as_object() {
+        for (attr, meta) in map {
+            // Prefer `pname`; otherwise derive from the last attribute-path segment.
+            let name = meta.get("pname").and_then(|v| v.as_str())
+                .unwrap_or_else(|| attr.rsplit('.').next().unwrap_or(attr));
+            let mut p = Package::new(name, "nix");
+            if let Some(v) = meta.get("version").and_then(|v| v.as_str()) {
+                if !v.is_empty() { p.version = Some(v.to_string()); }
+            }
+            if let Some(d) = meta.get("description").and_then(|v| v.as_str()) {
+                if !d.is_empty() { p.properties.insert("description".into(), d.to_string()); }
+            }
+            p.properties.insert("attr_path".into(), attr.clone());
+            results.push(p);
+        }
+    }
+    Ok(results)
+}
+
 pub struct NixUpgradable {
     pub core: Arc<NixBackendCore>,
 }
@@ -120,8 +183,8 @@ impl Upgradable for NixUpgradable {
     }
 
     async fn clean_orphans(&self, sudo: bool) -> Result<()> {
-        info!("Nix: Performing garbage collection (GC)...");
-        self.core.executor.run("nix-collect-garbage", &["--delete-older-than", "30d"], sudo).await?;
+        info!("Nix: Performing garbage collection (GC, older than {})...", self.core.gc_age);
+        self.core.executor.run("nix-collect-garbage", &["--delete-older-than", &self.core.gc_age], sudo).await?;
         Ok(())
     }
 }
@@ -141,7 +204,7 @@ impl NixBackendCore {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
                 
-                let name = attr_path.split('.').last().unwrap_or(attr_path);
+                let name = attr_path.split('.').next_back().unwrap_or(attr_path);
                 
                 let mut p = Package::new(name, "nix");
                 p.properties.insert("index".into(), i.to_string());
@@ -158,5 +221,47 @@ impl NixBackendCore {
         }
 
         Ok(packages)
+    }
+}
+
+/// Build and register the Nix backend with all its capabilities.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    cfg: &crate::config::Config,
+) {
+    let core = Arc::new(NixBackendCore::new(exec.duplicate(), cfg.nix_gc_age.clone()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(NixInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(NixQueryable { core: core.clone() }))
+        .with_searchable(Arc::new(NixSearchable { core: core.clone() }))
+        .with_upgradable(Arc::new(NixUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nix_search_parses_json_map() {
+        let out = r#"{
+            "legacyPackages.x86_64-linux.ripgrep": {"pname":"ripgrep","version":"14.1.0","description":"fast grep"},
+            "legacyPackages.x86_64-linux.bat": {"pname":"bat","version":"0.24.0","description":"cat clone"}
+        }"#;
+        let pkgs = parse_nix_search(out).unwrap();
+        assert_eq!(pkgs.len(), 2);
+        // HashMap order is nondeterministic; assert by membership.
+        let rg = pkgs.iter().find(|p| p.name == "ripgrep").expect("ripgrep present");
+        assert_eq!(rg.version.as_deref(), Some("14.1.0"));
+        assert!(rg.properties.get("attr_path").unwrap().ends_with("ripgrep"));
+        assert!(pkgs.iter().any(|p| p.name == "bat"));
+    }
+
+    #[test]
+    fn nix_search_empty_is_ok() {
+        assert!(parse_nix_search("{}").unwrap().is_empty());
+        assert!(parse_nix_search("").unwrap().is_empty());
     }
 }

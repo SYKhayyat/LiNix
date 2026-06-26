@@ -2,7 +2,7 @@
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Upgradable, MetadataProvider, Error
+    Queryable, Result, Searchable, Upgradable, MetadataProvider, Error
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -47,8 +47,14 @@ pub struct BrewInstallable {
 impl Installable for BrewInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
-            info!("Brew: Installing {}...", spec.name);
-            self.core.executor.run_exclusive("brew", "brew", &["install", &spec.name], false).await?;
+            // Best-effort version pin via brew's versioned formulae (e.g. `python@3.11`).
+            // Only some formulae publish versioned variants; otherwise brew installs latest.
+            let target = match spec.options.get("version") {
+                Some(v) if crate::backends::concrete_version(v) => format!("{}@{}", spec.name, v),
+                _ => spec.name.clone(),
+            };
+            info!("Brew: Installing {}...", target);
+            self.core.executor.run_exclusive("brew", "brew", &["install", &target], false).await?;
         }
         Ok(())
     }
@@ -117,6 +123,30 @@ impl Queryable for BrewQueryable {
     }
 }
 
+pub struct BrewSearchable {
+    pub core: Arc<BrewBackendCore>,
+}
+
+#[async_trait]
+impl Searchable for BrewSearchable {
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let output = self.core.executor.run_output("brew", &["search", query], false).await?;
+        Ok(parse_brew_search(&output))
+    }
+}
+
+/// Parse `brew search <q>` — one formula/cask name per line, with "==> Formulae" /
+/// "==> Casks" section headers to skip.
+fn parse_brew_search(output: &str) -> Vec<Package> {
+    let mut results = Vec::new();
+    for line in output.lines() {
+        let name = line.trim();
+        if name.is_empty() || name.starts_with("==>") { continue; }
+        results.push(Package::new(name, "brew"));
+    }
+    results
+}
+
 pub struct BrewUpgradable {
     pub core: Arc<BrewBackendCore>,
 }
@@ -134,5 +164,35 @@ impl Upgradable for BrewUpgradable {
     async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
         self.core.executor.run("brew", &["autoremove"], false).await?;
         Ok(())
+    }
+}
+
+/// Build and register the Homebrew backend with all its capabilities.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(BrewBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(BrewInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(BrewQueryable { core: core.clone() }))
+        .with_searchable(Arc::new(BrewSearchable { core: core.clone() }))
+        .with_upgradable(Arc::new(BrewUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brew_search_skips_section_headers() {
+        let out = "==> Formulae\nripgrep\nripgrep-all\n==> Casks\nripgrep-cask\n";
+        let pkgs = parse_brew_search(out);
+        assert_eq!(pkgs.len(), 3);
+        assert!(pkgs.iter().all(|p| !p.name.starts_with("==>")));
+        assert_eq!(pkgs[0].name, "ripgrep");
     }
 }

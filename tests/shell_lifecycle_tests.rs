@@ -29,7 +29,7 @@ async fn test_ghost_shell_transient_registration_logic() {
         state_guard.active_session_id = Some(session_id.to_string());
     }
 
-    shell.provision_transient_env(&vec!["brew:vim".to_string()], session_id)
+    shell.provision_transient_env(&["brew:vim".to_string()], session_id)
         .await
         .expect("Ephemeral provisioning logic failed.");
 

@@ -8,6 +8,7 @@ use tempfile::NamedTempFile;
 
 /// Configuration for the declarative sandbox environment.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct SandboxConfig {
     pub allow_network: bool,
     pub allow_home: bool,
@@ -17,18 +18,6 @@ pub struct SandboxConfig {
     pub environment: Vec<(String, String)>,
 }
 
-impl Default for SandboxConfig {
-    fn default() -> Self {
-        Self {
-            allow_network: false,
-            allow_home: false,
-            allow_write: false,
-            custom_mounts: Vec::new(),
-            custom_read_only_mounts: Vec::new(),
-            environment: Vec::new(),
-        }
-    }
-}
 
 /// A wrapper for sandboxing that works across platforms.
 /// 

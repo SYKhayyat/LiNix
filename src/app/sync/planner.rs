@@ -57,6 +57,20 @@ impl SyncChanges {
         self.graph.node_weights().filter(|w| matches!(w, GraphAction::Remove { .. })).count()
     }
 
+    /// Produce a copy containing only the Remove actions, for the `prune` command (which
+    /// removes drift but never installs). Removals have no inter-node ordering.
+    pub fn removals_only(&self) -> SyncChanges {
+        let mut out = SyncChanges::default();
+        for weight in self.graph.node_weights() {
+            if let GraphAction::Remove { name, backend } = weight {
+                let key = format!("{}:{}", backend, name);
+                out.removal_tracker.insert(key);
+                out.graph.add_node(GraphAction::Remove { name: name.clone(), backend: backend.clone() });
+            }
+        }
+        out
+    }
+
     pub fn generate_report(&self) -> SyncReport {
         let mut report = SyncReport::default();
         for weight in self.graph.node_weights() {
@@ -88,11 +102,21 @@ pub struct ChangePlanner<'a> {
     registry: Arc<BackendRegistry>,
     state: &'a StateRegistry,
     config: &'a Config,
+    /// Whether to schedule drift removals (packages in state but not in desired).
+    /// Defaults to true to preserve existing reconcile behavior; `sync` overrides this
+    /// from `config.prune_on_sync` so pruning is opt-in there.
+    prune: bool,
 }
 
 impl<'a> ChangePlanner<'a> {
     pub fn new(registry: Arc<BackendRegistry>, state: &'a StateRegistry, config: &'a Config) -> Self {
-        Self { registry, state, config }
+        Self { registry, state, config, prune: true }
+    }
+
+    /// Control whether drift packages are scheduled for removal.
+    pub fn with_prune(mut self, prune: bool) -> Self {
+        self.prune = prune;
+        self
     }
 
     #[instrument(skip(self, desired))]
@@ -108,49 +132,59 @@ impl<'a> ChangePlanner<'a> {
         // Precompute desired keys for O(1) lookup
         let desired_keys: HashSet<String> = expanded_desired.keys().cloned().collect();
 
-        // Preload bloatware set if enabled
-        let bloatware_set: HashSet<String> = if self.config.remove_bloatware {
-            if let Ok(bloat) = self.load_bloatware().await {
-                bloat.into_iter()
-                    .map(|entry| {
-                        entry.split_once(':')
-                            .map(|(b, n)| format!("{}:{}", b, n))
-                            .unwrap_or_else(|| format!("{}:{}", self.config.default_backend.clone().unwrap_or_else(|| "apt".into()), entry))
-                    })
-                    .collect()
+        // Removal planning (drift / bloatware / expired leases) is GLOBAL: it acts on
+        // every managed package not present in `desired`. That is only safe for a full,
+        // unscoped sync. When the caller narrows to a single profile/module/group
+        // (`upgrade --module X`), `desired` has already been reduced to that scope, so
+        // running removal here would delete every package OUTSIDE the scope. A targeted
+        // upgrade must be non-destructive — skip all removal planning when scoped.
+        if matches!(scope, ScopedFilter::None) {
+            // Preload bloatware set if enabled
+            let bloatware_set: HashSet<String> = if self.config.remove_bloatware {
+                if let Ok(bloat) = self.load_bloatware().await {
+                    bloat.into_iter()
+                        .map(|entry| {
+                            entry.split_once(':')
+                                .map(|(b, n)| format!("{}:{}", b, n))
+                                .unwrap_or_else(|| format!("{}:{}", self.config.default_backend.clone().unwrap_or_else(|| "apt".into()), entry))
+                        })
+                        .collect()
+                } else {
+                    HashSet::new()
+                }
             } else {
                 HashSet::new()
+            };
+
+            // Single pass over all managed packages to schedule removals
+            for pkg in &self.state.packages {
+                let key = format!("{}:{}", pkg.backend, pkg.name);
+
+                // Skip if already scheduled or present in desired state
+                if changes.removal_tracker.contains(&key) || desired_keys.contains(&key) {
+                    continue;
+                }
+
+                // Check for expired lease
+                let is_expired = pkg.expires_at.is_some_and(|exp| Self::now() >= exp);
+
+                if is_expired {
+                    info!("Planner: Lease for '{}' expired, not in desired. Scheduling removal.", key);
+                    changes.removal_tracker.insert(key.clone());
+                    changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
+                } else if bloatware_set.contains(&key) {
+                    debug!("Planner: Scheduling bloatware removal: {}", key);
+                    changes.removal_tracker.insert(key.clone());
+                    changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
+                } else if self.prune && !self.config.is_protected(&pkg.name) {
+                    // Drift removal (only when pruning is enabled and not protected)
+                    debug!("Planner: Scheduling drift removal: {}", key);
+                    changes.removal_tracker.insert(key.clone());
+                    changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
+                }
             }
         } else {
-            HashSet::new()
-        };
-
-        // Single pass over all managed packages to schedule removals
-        for pkg in &self.state.packages {
-            let key = format!("{}:{}", pkg.backend, pkg.name);
-
-            // Skip if already scheduled or present in desired state
-            if changes.removal_tracker.contains(&key) || desired_keys.contains(&key) {
-                continue;
-            }
-
-            // Check for expired lease
-            let is_expired = pkg.expires_at.map_or(false, |exp| Self::now() >= exp);
-
-            if is_expired {
-                info!("Planner: Lease for '{}' expired, not in desired. Scheduling removal.", key);
-                changes.removal_tracker.insert(key.clone());
-                changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
-            } else if bloatware_set.contains(&key) {
-                debug!("Planner: Scheduling bloatware removal: {}", key);
-                changes.removal_tracker.insert(key.clone());
-                changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
-            } else if !self.config.is_protected(&pkg.name) {
-                // Drift removal (only if not protected)
-                debug!("Planner: Scheduling drift removal: {}", key);
-                changes.removal_tracker.insert(key.clone());
-                changes.graph.add_node(GraphAction::Remove { name: pkg.name.clone(), backend: pkg.backend.clone() });
-            }
+            debug!("Planner: Scoped plan ({:?}) — skipping all removal planning (non-destructive).", scope);
         }
 
         // Installations and dependency graph
@@ -175,11 +209,26 @@ impl<'a> ChangePlanner<'a> {
         let mut filtered = HashMap::new();
         for (backend, specs) in desired {
             let matched: Vec<PackageSpec> = specs.iter()
-                .filter(|s| s.options.get("__source").map_or(false, |src| src.contains(&prefix)))
+                .filter(|s| s.options.get("__source").is_some_and(|src| Self::source_matches_scope(src, &prefix)))
                 .cloned().collect();
             if !matched.is_empty() { filtered.insert(backend.clone(), matched); }
         }
         filtered
+    }
+
+    /// Exact-segment match between a package's `__source` tag and a scope prefix.
+    ///
+    /// Sources look like `module:dev`, `manifest:base.txt`, `group:editors`, or the
+    /// composite `config:group:editors`. A scope prefix is e.g. `module:dev` or
+    /// `group:editors`. We must NOT use a naive substring match (`module:dev` would
+    /// then wrongly match `module:dev-tools`). Match if the source equals the prefix
+    /// or ends with `:{prefix}` (so `config:group:editors` still matches `group:editors`).
+    fn source_matches_scope(source: &str, prefix: &str) -> bool {
+        // A source may carry multiple origins joined by ';' (see resolver tagging).
+        source.split(';').any(|src| {
+            let src = src.trim();
+            src == prefix || src.ends_with(&format!(":{}", prefix))
+        })
     }
 
     async fn identify_needed_actions(&self, expanded: &HashMap<String, PackageSpec>) -> Result<Vec<PackageSpec>> {
@@ -190,7 +239,7 @@ impl<'a> ChangePlanner<'a> {
                 match q.info(&spec.name).await {
                     Ok(Some(p)) => {
                         if let Some(req_v) = spec.options.get("version") {
-                            p.version.as_deref().map_or(true, |inst_v| !self.satisfies_constraint(inst_v, req_v))
+                            p.version.as_deref().is_none_or(|inst_v| !self.satisfies_constraint(inst_v, req_v))
                         } else {
                             if spec.backend == "link" && spec.options.get("template") == Some(&"true".into()) {
                                 self.template_needs_update(spec).await
@@ -289,5 +338,89 @@ impl<'a> ChangePlanner<'a> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::state::ManagedPackage;
+    use std::path::PathBuf;
+
+    fn managed(name: &str, backend: &str) -> ManagedPackage {
+        ManagedPackage {
+            name: name.into(),
+            backend: backend.into(),
+            version: None,
+            installed_at: 0,
+            expires_at: None,
+            options: HashMap::new(),
+            source: None,
+            is_transient: false,
+            session_id: None,
+        }
+    }
+
+    // Regression guard for the data-loss-class bug: a scoped upgrade must never
+    // schedule removals for packages outside the scope. An unscoped sync still does.
+    #[tokio::test]
+    async fn scoped_plan_is_non_destructive() {
+        let registry = Arc::new(BackendRegistry::new());
+        let config = Config::default();
+        let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
+        // A managed package that is NOT in the (empty) desired state == drift.
+        state.packages.push(managed("drift-pkg-xyz", "generic-test"));
+
+        let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
+
+        // Unscoped: drift removal IS planned.
+        let unscoped = {
+            let planner = ChangePlanner::new(registry.clone(), &state, &config);
+            planner.plan(&desired, ScopedFilter::None).await.unwrap()
+        };
+        assert_eq!(unscoped.total_remove(), 1, "unscoped sync should remove drift");
+
+        // Scoped: NO removals, regardless of drift.
+        let scoped = {
+            let planner = ChangePlanner::new(registry.clone(), &state, &config);
+            planner.plan(&desired, ScopedFilter::Module("dev".into())).await.unwrap()
+        };
+        assert_eq!(scoped.total_remove(), 0, "scoped upgrade must never remove packages");
+    }
+
+    // `with_prune(false)` (what `sync` uses when prune_on_sync is off) must NOT schedule
+    // drift removals; `with_prune(true)` does. Removals are now opt-in for sync.
+    #[tokio::test]
+    async fn prune_flag_gates_drift_removal() {
+        let registry = Arc::new(BackendRegistry::new());
+        let config = Config::default();
+        let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
+        state.packages.push(managed("drift-pkg-xyz", "generic-test"));
+        let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
+
+        let no_prune = ChangePlanner::new(registry.clone(), &state, &config)
+            .with_prune(false)
+            .plan(&desired, ScopedFilter::None).await.unwrap();
+        assert_eq!(no_prune.total_remove(), 0, "with_prune(false) must not remove drift");
+
+        let pruned = ChangePlanner::new(registry.clone(), &state, &config)
+            .with_prune(true)
+            .plan(&desired, ScopedFilter::None).await.unwrap();
+        assert_eq!(pruned.total_remove(), 1, "with_prune(true) should remove drift");
+        // removals_only() preserves the removal
+        assert_eq!(pruned.removals_only().total_remove(), 1);
+    }
+
+    #[test]
+    fn scope_match_is_exact_segment() {
+        // exact
+        assert!(ChangePlanner::source_matches_scope("module:dev", "module:dev"));
+        // composite source still matches a bare group scope
+        assert!(ChangePlanner::source_matches_scope("config:group:editors", "group:editors"));
+        // must NOT substring-match a longer module name
+        assert!(!ChangePlanner::source_matches_scope("module:dev-tools", "module:dev"));
+        assert!(!ChangePlanner::source_matches_scope("module:dev", "module:dev-tools"));
+        // multi-origin source (';'-joined) matches if any segment matches
+        assert!(ChangePlanner::source_matches_scope("manifest:base.txt;module:dev", "module:dev"));
     }
 }

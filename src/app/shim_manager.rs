@@ -37,7 +37,7 @@ impl ShimManager {
 
         #[cfg(windows)]
         {
-            if target_path.extension().map_or(true, |ext| ext != "exe") {
+            if target_path.extension().is_none_or(|ext| ext != "exe") {
                 target_path.set_extension("exe");
             }
         }

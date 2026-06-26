@@ -298,7 +298,7 @@ impl Transaction {
                 match &action {
                     GraphAction::Install(spec) => {
                         if let Some(handler) = backend_cap.as_installable() {
-                            handler.install(&[spec.clone()], backend_cap.needs_root()).await?;
+                            handler.install(std::slice::from_ref(spec), backend_cap.needs_root()).await?;
                             let mut props = HashMap::new();
                             if let Some(q) = backend_cap.as_queryable() {
                                 if let Ok(Some(pkg)) = q.info(&spec.name).await {
@@ -313,7 +313,7 @@ impl Transaction {
                     }
                     GraphAction::Remove { name, .. } => {
                         if let Some(handler) = backend_cap.as_installable() {
-                            handler.remove(&[name.clone()], backend_cap.needs_root()).await?;
+                            handler.remove(std::slice::from_ref(name), backend_cap.needs_root()).await?;
                             Ok((HashMap::new(), 0))
                         } else { 
                             Err(Error::Transaction(format!("Backend '{}' is not removable.", b_name))) 
@@ -355,8 +355,8 @@ impl Transaction {
             match action {
                 GraphAction::Install(spec) => {
                     if let Some(b) = self.registry.get(&spec.backend) {
-                        if let Some(h) = b.as_installable() { 
-                            let _ = h.remove(&[spec.name.clone()], b.needs_root()).await; 
+                        if let Some(h) = b.as_installable() {
+                            let _ = h.remove(std::slice::from_ref(&spec.name), b.needs_root()).await;
                         }
                     }
                 }

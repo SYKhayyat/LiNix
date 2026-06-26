@@ -1,2 +1,10 @@
 /target
 .aider*
+
+# IDE
+.idea/
+.vscode/
+
+# Local scratch / source dumps
+project_dump.txt
+dump_files.ps1

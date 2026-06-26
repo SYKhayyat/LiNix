@@ -193,9 +193,9 @@ impl<'a> StateResolver<'a> {
                     }
 
                     // Feature 4: Scoped Identification & Deduplication
-                    if seen_keys.insert(unique_id) {
+                    if seen_keys.insert(unique_id.clone()) {
                         Validator::validate_package_name(&spec.name)?;
-                        
+
                         // Internal tagging for Feature 4 Targeted Upgrades
                         spec.options.insert("__source".to_string(), source.clone());
 
@@ -205,6 +205,18 @@ impl<'a> StateResolver<'a> {
                         }
 
                         resolved.entry(spec.backend.clone()).or_default().push(spec);
+                    } else {
+                        // Already resolved from another source. Instead of dropping this
+                        // origin (first-write-wins, which could hide the package from
+                        // `upgrade --module X` if a different source enqueued it first),
+                        // MERGE this source into the existing spec's `__source` tag.
+                        // Sources are ';'-joined; the planner's scope matcher splits on ';'.
+                        if let Some(specs) = resolved.get_mut(&spec.backend) {
+                            if let Some(existing) = specs.iter_mut().find(|s| s.name == spec.name) {
+                                let entry = existing.options.entry("__source".to_string()).or_default();
+                                merge_source_tag(entry, &source);
+                            }
+                        }
                     }
                 }
             }
@@ -287,22 +299,19 @@ impl<'a> StateResolver<'a> {
         // Panic-free Trait Check (A+ Hardened)
         if let Some(searchable) = backend_cap.as_searchable() {
             // First: Attempt fast existence check if supported
-            match searchable.remote_has(package_name).await {
-                Ok(true) => {
-                    if let Some(req) = constraint {
-                        // If version is specific, perform deeper metadata check
-                        match searchable.remote_info(package_name).await {
-                            Ok(Some(pkg)) => {
-                                if let Some(ver) = pkg.version.as_deref() {
-                                    return self.satisfies_constraint(ver, req);
-                                }
+            if let Ok(true) = searchable.remote_has(package_name).await {
+                if let Some(req) = constraint {
+                    // If version is specific, perform deeper metadata check
+                    match searchable.remote_info(package_name).await {
+                        Ok(Some(pkg)) => {
+                            if let Some(ver) = pkg.version.as_deref() {
+                                return self.satisfies_constraint(ver, req);
                             }
-                            _ => return false,
                         }
+                        _ => return false,
                     }
-                    return true;
                 }
-                _ => {} // Continue to fallback
+                return true;
             }
             
             // Second: Search-based fallback if remote_has is inconclusive
@@ -310,7 +319,7 @@ impl<'a> StateResolver<'a> {
                 return results.iter().any(|pkg| {
                     if pkg.name == package_name {
                         match constraint {
-                            Some(req) => pkg.version.as_deref().map_or(false, |v| self.satisfies_constraint(v, req)),
+                            Some(req) => pkg.version.as_deref().is_some_and(|v| self.satisfies_constraint(v, req)),
                             None => true,
                         }
                     } else {
@@ -347,5 +356,45 @@ impl<'a> StateResolver<'a> {
             Ok(Cmp::Gt) if constraint.starts_with('>') => true,
             _ => false,
         }
+    }
+}
+
+/// Merge an additional origin into a package's `;`-joined `__source` tag, de-duplicated.
+/// This lets a package that appears in multiple sources (e.g. a manifest AND a module)
+/// remain matchable by every scope it belongs to. The planner splits this tag on `;`.
+fn merge_source_tag(existing: &mut String, source: &str) {
+    if existing.split(';').any(|s| s == source) {
+        return;
+    }
+    if existing.is_empty() {
+        existing.push_str(source);
+    } else {
+        existing.push(';');
+        existing.push_str(source);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_source_tag;
+
+    #[test]
+    fn merges_and_dedups_sources() {
+        let mut s = String::from("manifest:base.txt");
+        merge_source_tag(&mut s, "module:dev");
+        assert_eq!(s, "manifest:base.txt;module:dev");
+
+        // duplicate source is not appended again
+        merge_source_tag(&mut s, "module:dev");
+        assert_eq!(s, "manifest:base.txt;module:dev");
+
+        // a third distinct source joins
+        merge_source_tag(&mut s, "group:editors");
+        assert_eq!(s, "manifest:base.txt;module:dev;group:editors");
+
+        // empty start
+        let mut empty = String::new();
+        merge_source_tag(&mut empty, "module:x");
+        assert_eq!(empty, "module:x");
     }
 }

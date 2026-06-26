@@ -120,7 +120,7 @@ impl Installable for WebInstallable {
             }
             tokio::fs::create_dir_all(&dest_dir).await.map_err(Error::from)?;
 
-            let filename = spec.name.split('/').last().unwrap_or("resource");
+            let filename = spec.name.split('/').next_back().unwrap_or("resource");
             let is_archive = [".zip", ".gz", ".tar", ".xz", ".bz2", ".tgz"].iter().any(|ext| filename.contains(ext));
             
             if is_archive {
@@ -235,4 +235,18 @@ impl Queryable for WebQueryable {
         let all = self.list_installed().await?;
         Ok(all.into_iter().find(|p| p.name == name))
     }
+}
+
+/// Build and register the Web download backend.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    cfg: &crate::config::Config,
+) {
+    let core = Arc::new(WebBackendCore::new(exec.duplicate(), cfg.web_dir.clone()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(WebInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(WebQueryable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
 }

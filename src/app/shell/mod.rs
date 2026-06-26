@@ -33,6 +33,7 @@ pub struct GhostShell {
 }
 
 impl GhostShell {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         registry: Arc<BackendRegistry>,
         state: Arc<Mutex<StateRegistry>>,

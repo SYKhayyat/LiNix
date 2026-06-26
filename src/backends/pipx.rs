@@ -58,8 +58,13 @@ pub struct PipxInstallable {
 impl Installable for PipxInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
-            info!("pipx: Installing {}...", spec.name);
-            self.core.executor.run_exclusive("pipx", "pipx", &["install", &spec.name], false).await?;
+            // pipx accepts a pip requirement spec: pin with `name==version`.
+            let target = match spec.options.get("version") {
+                Some(v) if crate::backends::concrete_version(v) => format!("{}=={}", spec.name, v),
+                _ => spec.name.clone(),
+            };
+            info!("pipx: Installing {}...", target);
+            self.core.executor.run_exclusive("pipx", "pipx", &["install", &target], false).await?;
         }
         Ok(())
     }
@@ -135,4 +140,19 @@ impl Upgradable for PipxUpgradable {
     async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
         Ok(())
     }
+}
+
+/// Build and register the pipx backend with all its capabilities.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(PipxBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(PipxInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(PipxQueryable { core: core.clone() }))
+        .with_upgradable(Arc::new(PipxUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
 }

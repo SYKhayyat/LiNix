@@ -101,7 +101,7 @@ impl Installable for AppImageInstallable {
 
         for spec in specs {
             let url = &spec.name;
-            let filename = url.split('/').last().unwrap_or("app.AppImage");
+            let filename = url.split('/').next_back().unwrap_or("app.AppImage");
             let dest_path = self.core.install_dir.join(filename);
             
             info!("AppImage: Downloading {}...", url);
@@ -176,7 +176,7 @@ impl Queryable for AppImageQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
         let state = self.core.load_state().await;
         Ok(state.keys().map(|url| {
-            let name = url.split('/').last().unwrap_or(url);
+            let name = url.split('/').next_back().unwrap_or(url);
             Package::new(name, "appimage")
         }).collect())
     }
@@ -189,4 +189,18 @@ impl Queryable for AppImageQueryable {
         let all = self.list_installed().await?;
         Ok(all.into_iter().find(|p| p.name == name))
     }
+}
+
+/// Build and register the AppImage backend.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    cfg: &crate::config::Config,
+) {
+    let core = Arc::new(AppImageBackendCore::new(exec.duplicate(), cfg.appimage_dir.clone()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(AppImageInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(AppImageQueryable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
 }

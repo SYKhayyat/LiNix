@@ -3,9 +3,9 @@ use std::path::PathBuf;
 
 /// LiNix - Universal Mission-Critical Package Manager
 /// High-performance, DAG-based orchestration for 33+ backends.
-/// Version 3.6.0: Consistency, Integrity, and Native Automation.
+/// Version 5.0.0: Capability completeness, non-destructive scoped upgrades, config.
 #[derive(Parser, Debug)]
-#[command(name = "linix", version = "3.6.0", about = "Universal Mission-Critical Package Manager")]
+#[command(name = "linix", version = "5.0.0", about = "Universal Mission-Critical Package Manager")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -82,10 +82,33 @@ pub enum Commands {
     /// List and remove orphaned dependencies across all backends
     Orphans,
 
+    /// Show what `sync` would change (to install / drift to remove / unmanaged) — read-only
+    #[command(alias = "diff")]
+    Status {
+        /// Output the report as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Remove drift: packages installed but no longer in your manifests
+    Prune {
+        /// Output the removal plan as JSON without removing anything
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Record the installed version of every managed package to locks.json, so
+    /// `sync --locked` reproduces those exact versions on another machine
+    Lock,
+
     /// Parallel search across all searchable repositories
-    Search { 
+    Search {
         /// Search query string
-        query: String 
+        query: String,
+
+        /// Output results as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Refresh repository metadata for all backends
@@ -192,6 +215,35 @@ pub enum Commands {
 
     /// Native system-level task scheduling (systemd, launchd, task-scheduler)
     Schedule(ScheduleArgs),
+
+    /// Inspect and scaffold the LiNix application configuration file
+    Config(ConfigArgs),
+
+    /// Generate a shell completion script (bash, zsh, fish, powershell, elvish)
+    Completions {
+        /// Target shell
+        shell: Shell,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub command: ConfigCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigCommand {
+    /// Write a commented default config.toml (refuses to overwrite unless --force)
+    Init {
+        /// Overwrite an existing config file
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the resolved configuration file path
+    Path,
+    /// Print the active configuration and its source (file or built-in defaults)
+    Show,
 }
 
 #[derive(Args, Debug)]

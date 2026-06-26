@@ -2,10 +2,11 @@
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Upgradable, Error, MetadataProvider
+    Queryable, Result, Searchable, Upgradable, Error, MetadataProvider
 };
 use async_trait::async_trait;
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
 
@@ -23,16 +24,20 @@ impl MiseBackendCore {
         }
     }
 
-    async fn get_mise_data_dir(&self) -> Result<String> {
-        let result = self.executor.run_output("mise", &["path"], false).await;
-        match result {
-            Ok(output) => Ok(output.trim().to_string()),
-            Err(_) => {
-                let home = dirs::home_dir()
-                    .ok_or_else(|| Error::Other("Could not determine home directory".into()))?;
-                Ok(home.join(".local/share/mise").to_string_lossy().to_string())
-            }
+    /// Resolve mise's data directory in a cross-platform way. `mise path` is not a real
+    /// subcommand, so we honor `MISE_DATA_DIR`, then fall back to the platform default:
+    /// `%LOCALAPPDATA%\mise` on Windows, `~/.local/share/mise` on Unix/macOS.
+    fn mise_data_dir(&self) -> Result<PathBuf> {
+        if let Ok(dir) = std::env::var("MISE_DATA_DIR") {
+            if !dir.is_empty() { return Ok(PathBuf::from(dir)); }
         }
+        let base = if cfg!(windows) {
+            dirs::data_local_dir()
+        } else {
+            dirs::home_dir().map(|h| h.join(".local").join("share"))
+        };
+        base.map(|p| p.join("mise"))
+            .ok_or_else(|| Error::Other("Could not determine mise data directory".into()))
     }
 }
 
@@ -124,23 +129,50 @@ impl Queryable for MiseQueryable {
                 if plugin_name.trim() == name {
                     let mut p = Package::new(name, "mise");
                     p.properties.insert("repository_url".into(), url.trim().to_string());
-                    let data_dir = self.core.get_mise_data_dir().await?;
-                    let install_path = format!("{}/installs/{}", data_dir, name);
-                    p.properties.insert("install_path".into(), install_path);
+                    let install_path = self.core.mise_data_dir()?.join("installs").join(name);
+                    p.properties.insert("install_path".into(), install_path.to_string_lossy().to_string());
                     return Ok(Some(p));
                 }
             }
         }
         let all = self.list_installed().await?;
         if let Some(mut p) = all.into_iter().find(|p| p.name == name) {
-            let data_dir = self.core.get_mise_data_dir().await?;
-            let install_path = format!("{}/installs/{}/{}", data_dir, p.name, p.version.as_deref().unwrap_or("unknown"));
-            p.properties.insert("install_path".into(), install_path);
+            let version = p.version.as_deref().unwrap_or("unknown").to_string();
+            let install_path = self.core.mise_data_dir()?.join("installs").join(&p.name).join(&version);
+            p.properties.insert("install_path".into(), install_path.to_string_lossy().to_string());
             Ok(Some(p))
         } else {
             Ok(None)
         }
     }
+}
+
+pub struct MiseSearchable {
+    pub core: Arc<MiseBackendCore>,
+}
+
+#[async_trait]
+impl Searchable for MiseSearchable {
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        // `mise registry` lists every known tool ("<name>  <backend:slug> ..."). There is
+        // no server-side search, so filter the registry by the query substring.
+        let output = self.core.executor.run_output("mise", &["registry"], false).await?;
+        Ok(filter_mise_registry(&output, query))
+    }
+}
+
+/// Filter `mise registry` output (`"<name>  <backend:slug> ..."`) by query substring.
+fn filter_mise_registry(output: &str, query: &str) -> Vec<Package> {
+    let q = query.to_lowercase();
+    let mut results = Vec::new();
+    for line in output.lines() {
+        let name = line.split_whitespace().next().unwrap_or("").trim();
+        if name.is_empty() || name.eq_ignore_ascii_case("tool") { continue; } // skip header
+        if name.to_lowercase().contains(&q) {
+            results.push(Package::new(name, "mise"));
+        }
+    }
+    results
 }
 
 pub struct MiseUpgradable {
@@ -165,5 +197,37 @@ impl Upgradable for MiseUpgradable {
         info!("Mise: Pruning unused tool versions from cache...");
         self.core.executor.run("mise", &["prune", "--force"], false).await?;
         Ok(())
+    }
+}
+
+/// Build and register the mise backend with all its capabilities.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(MiseBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(MiseInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(MiseQueryable { core: core.clone() }))
+        .with_searchable(Arc::new(MiseSearchable { core: core.clone() }))
+        .with_upgradable(Arc::new(MiseUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filter_mise_registry;
+
+    #[test]
+    fn mise_registry_filters_by_query() {
+        let out = "Tool  Backends\nnode  core:node\nnodejs  asdf:nodejs\npython  core:python\n";
+        let pkgs = filter_mise_registry(out, "node");
+        // matches "node" and "nodejs", skips header + python
+        assert_eq!(pkgs.len(), 2);
+        assert!(pkgs.iter().any(|p| p.name == "node"));
+        assert!(pkgs.iter().any(|p| p.name == "nodejs"));
+        assert!(pkgs.iter().all(|p| p.backend == "mise"));
     }
 }

@@ -1,4 +1,5 @@
 // tests/mock_providers.rs
+#![allow(clippy::field_reassign_with_default, dead_code)]
 
 use linix::core::{Snapshot, SnapshotProvider, Result, Error, PackageSpec, StateRegistry, CommandExecutor};
 use linix::app::App;
@@ -91,6 +92,12 @@ pub struct MockSnapshotProvider {
     pub deletions: Arc<Mutex<Vec<String>>>,
 }
 
+impl Default for MockSnapshotProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockSnapshotProvider {
     pub fn new() -> Self {
         Self {
@@ -147,6 +154,12 @@ impl SnapshotProvider for MockSnapshotProvider {
 
 pub struct MockTaskProvisioner {
     pub active_tasks: Arc<Mutex<HashMap<String, ScheduleConfig>>>,
+}
+
+impl Default for MockTaskProvisioner {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MockTaskProvisioner {

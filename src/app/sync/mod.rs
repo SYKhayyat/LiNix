@@ -53,6 +53,7 @@ pub struct SyncEngine<'a> {
 
 impl<'a> SyncEngine<'a> {
     /// Initializes the engine with the full kernel context.
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         config: &'a Config,
         registry: Arc<BackendRegistry>,
@@ -126,7 +127,11 @@ impl<'a> SyncEngine<'a> {
 
     /// Internal orchestrator for the DAG execution.
     async fn execute_transaction(&self, changes: &SyncChanges, state: &mut StateRegistry) -> Result<()> {
-        let tx_config = TransactionConfig::patient();
+        // Honor the user-configured parallelism (`max_parallel`) for the install/remove
+        // engine. Previously this hardcoded `patient()` (max_concurrent = 4), so the
+        // documented `max_parallel` knob only affected `search`. Floor at 1.
+        let mut tx_config = TransactionConfig::patient();
+        tx_config.max_concurrent = self.config.max_parallel.max(1);
 
         let mut tx = Transaction::with_config(
             changes.graph.clone(),
@@ -160,11 +165,10 @@ impl<'a> SyncEngine<'a> {
                     );
 
                     let lockable_backends = ["web", "github", "appimage"];
-                    if lockable_backends.contains(&spec.backend.as_str()) && !spec.options.contains_key("sha256") {
-                        if self.config.auto_lock_checksums {
+                    if lockable_backends.contains(&spec.backend.as_str()) && !spec.options.contains_key("sha256")
+                        && self.config.auto_lock_checksums {
                             self.attempt_auto_lock(spec).await;
                         }
-                    }
                 }
                 GraphAction::Remove { name, backend } => {
                     state.remove(backend, name);
@@ -264,13 +268,13 @@ impl<'a> SyncEngine<'a> {
                     let sudo = backend_cap.needs_root();
                     let remediation_res = if is_install {
                         // Re-attempting installation sequence
-                        let _ = handler.remove(&[package.clone()], sudo).await;
+                        let _ = handler.remove(std::slice::from_ref(&package), sudo).await;
                         if let crate::core::journal::JournalAction::Install(spec) = &entry.action {
-                            handler.install(&[spec.clone()], sudo).await
+                            handler.install(std::slice::from_ref(spec), sudo).await
                         } else { Ok(()) }
                     } else {
                         // Re-attempting removal
-                        handler.remove(&[package.clone()], sudo).await
+                        handler.remove(std::slice::from_ref(&package), sudo).await
                     };
 
                     // Logic Fix: Update the WAL record once physically resolved

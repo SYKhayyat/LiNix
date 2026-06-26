@@ -30,9 +30,9 @@ pub fn parse_search(output: &str) -> Vec<Package> {
 
         let parts: Vec<&str> = line.split_whitespace().collect();
         // Format is usually: core/bash 5.1.016-1 (base) [installed]
-        if let Some(repo_name) = parts.get(0) {
+        if let Some(repo_name) = parts.first() {
             // Strip the repository prefix (e.g., "core/")
-            let name = repo_name.split('/').last().unwrap_or(repo_name);
+            let name = repo_name.split('/').next_back().unwrap_or(repo_name);
             let mut p = Package::new(name, "pacman");
             
             // Second part is usually the version

@@ -15,8 +15,21 @@ groups_dir = "~/.config/linix/groups"
 # When a package name is ambiguous, LiNix checks these backends in order.
 backend_priority = ["apt", "pacman", "dnf", "winget", "brew", "flatpak", "snap", "cargo", "npm", "pip"]
 
-# Maximum number of parallel operations (Phase 2.3).
+# Maximum number of parallel operations. Now drives the install/remove transaction
+# engine (DAG concurrency) as well as parallel search — not just search.
 max_parallel = 8
+
+# Timeout (in seconds) for outbound HTTP search requests
+# (npm/pnpm/yarn registry, PyPI for pip, the VS Code marketplace).
+network_timeout_secs = 15
+
+# Retention window passed to `nix-collect-garbage --delete-older-than` when cleaning
+# Nix orphans (e.g. "30d", "2w"). Replaces the previously hardcoded 30 days.
+nix_gc_age = "30d"
+
+# Require an extra confirmation before destructive (removal) operations,
+# unless `yes = true`.
+confirm_destructive = false
 
 # Cache TTL (Time-to-Live) in seconds for remote metadata lookups.
 cache_ttl = 300
@@ -27,6 +40,11 @@ enabled_backends = []
 # Source of truth for packages to remove (bloatware).
 bloatware_file = "~/.config/linix/bloatware.txt"
 remove_bloatware = false
+
+# Whether `sync` removes drift (packages installed but no longer in your manifests).
+# Default false — `sync` only installs/upgrades, and drift is removed explicitly with
+# `linix prune` (preview it first with `linix status`). Set true to prune during sync.
+prune_on_sync = false
 
 # Show professional progress indicators and spinners.
 show_progress = true

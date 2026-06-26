@@ -1,7 +1,25 @@
-use crate::core::{CommandExecutor, Package, Result, PackageSpec, BackendCore, Installable, Queryable, MetadataProvider};
+use crate::core::{CommandExecutor, Package, Result, PackageSpec, BackendCore, Installable, Queryable, Searchable, Upgradable, MetadataProvider, Error};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
+
+/// Emacs package names become elisp symbols inside an `--eval` form. Reject anything
+/// that isn't a plain package symbol so a crafted name (whitespace, parens, quotes,
+/// backslash) cannot break out of the form and inject arbitrary Lisp.
+fn validate_symbol(name: &str) -> Result<()> {
+    if !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '.'))
+    {
+        Ok(())
+    } else {
+        Err(Error::Other(format!("Invalid emacs package name: '{}'", name)))
+    }
+}
+
+/// Escape a free-text search term for safe embedding inside an elisp string literal.
+fn escape_lisp_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
 
 /// Core backend implementation for Emacs packages via 'package.el'.
 pub struct EmacsBackendCore {
@@ -53,8 +71,9 @@ pub struct EmacsInstallable {
 impl Installable for EmacsInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         for spec in specs {
+            validate_symbol(&spec.name)?;
             info!("Emacs: Installing package '{}'...", spec.name);
-            
+
             let lisp = format!(
                 "(progn \
                     (require 'package) \
@@ -72,8 +91,9 @@ impl Installable for EmacsInstallable {
 
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
         for name in names {
+            validate_symbol(name)?;
             info!("Emacs: Removing package '{}'...", name);
-            
+
             let lisp = format!(
                 "(progn \
                     (require 'package) \
@@ -129,4 +149,87 @@ impl Queryable for EmacsQueryable {
         let all = self.list_installed().await?;
         Ok(all.into_iter().find(|p| p.name == name))
     }
+}
+
+pub struct EmacsSearchable {
+    pub core: Arc<EmacsBackendCore>,
+}
+
+#[async_trait]
+impl Searchable for EmacsSearchable {
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let needle = escape_lisp_string(query);
+        let lisp = format!(
+            "(progn \
+                (require 'package) \
+                (package-initialize) \
+                (unless package-archive-contents (package-refresh-contents)) \
+                (dolist (p package-archive-contents) \
+                    (let ((name (symbol-name (car p)))) \
+                        (when (string-match-p \"{}\" name) \
+                            (princ (format \"%s %s\\n\" name \
+                                (package-version-join (package-desc-version (cadr p))))))))) ",
+            needle
+        );
+        let out = self.core.run_lisp(&lisp).await?;
+        Ok(out.lines().filter_map(|l| {
+            let (n, v) = l.split_once(' ')?;
+            Some(Package::with_version(n.trim(), v.trim(), "emacs"))
+        }).collect())
+    }
+}
+
+pub struct EmacsUpgradable {
+    pub core: Arc<EmacsBackendCore>,
+}
+
+#[async_trait]
+impl Upgradable for EmacsUpgradable {
+    async fn update(&self, _: bool) -> Result<()> {
+        info!("Emacs: Refreshing package archives...");
+        let lisp = "(progn (require 'package) (package-initialize) (package-refresh-contents))";
+        self.core.run_lisp(lisp).await?;
+        Ok(())
+    }
+
+    async fn upgrade(&self, _: bool) -> Result<()> {
+        info!("Emacs: Upgrading all packages...");
+        // `package-upgrade-all` exists on Emacs 29+. On older versions fall back to
+        // per-package `package-upgrade` where available; a no-op otherwise.
+        let lisp = "(progn \
+            (require 'package) \
+            (package-initialize) \
+            (package-refresh-contents) \
+            (if (fboundp 'package-upgrade-all) \
+                (package-upgrade-all) \
+                (when (fboundp 'package-upgrade) \
+                    (dolist (pkg (mapcar #'car package-alist)) \
+                        (ignore-errors (package-upgrade pkg)))))) ";
+        self.core.executor.run_exclusive("emacs", "emacs", &["--batch", "--eval", lisp], false).await?;
+        Ok(())
+    }
+
+    async fn clean_orphans(&self, _: bool) -> Result<()> {
+        info!("Emacs: Autoremoving unused packages...");
+        let lisp = "(progn (require 'package) (package-initialize) \
+            (when (fboundp 'package-autoremove) (package-autoremove)))";
+        self.core.executor.run_exclusive("emacs", "emacs", &["--batch", "--eval", lisp], false).await?;
+        Ok(())
+    }
+}
+
+/// Build and register the Emacs package backend.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(EmacsBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(EmacsInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(EmacsQueryable { core: core.clone() }))
+        .with_searchable(Arc::new(EmacsSearchable { core: core.clone() }))
+        .with_upgradable(Arc::new(EmacsUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
 }

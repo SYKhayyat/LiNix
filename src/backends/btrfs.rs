@@ -171,3 +171,17 @@ impl Queryable for BtrfsQueryable {
         Ok(Some(p))
     }
 }
+
+/// Build and register the BTRFS subvolume backend.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(BtrfsBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(BtrfsInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(BtrfsQueryable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
+}

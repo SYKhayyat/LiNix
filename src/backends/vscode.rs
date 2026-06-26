@@ -1,7 +1,7 @@
 use crate::core::{
-    CommandExecutor, Package, Result, PackageSpec, 
-    BackendCore, Installable, Queryable, Searchable, RateLimiter,
-    HealthReport, HealthStatus, MetadataProvider
+    CommandExecutor, Package, Result, PackageSpec,
+    BackendCore, Installable, Queryable, Searchable, Upgradable, RateLimiter,
+    MetadataProvider
 };
 use async_trait::async_trait;
 use serde_json::json;
@@ -65,9 +65,9 @@ impl BackendCore for VscodeBackendCore {
     fn name(&self) -> &str { &self.name }
     fn is_available(&self) -> bool { self.executor.command_exists_sync("code") }
     fn needs_root(&self) -> bool { false }
-    async fn check_health(&self) -> Result<HealthReport> {
-        Ok(HealthReport { status: HealthStatus::Ok, message: None })
-    }
+    // NOTE: previously this overrode check_health to always-Ok, masking a missing `code`
+    // binary. We rely on the default `BackendCore::check_health`, which reports Critical
+    // when the backend is unavailable.
 }
 
 /// Phase 1.1: MetadataProvider for VSCode.
@@ -100,8 +100,13 @@ pub struct VscodeInstallable {
 impl Installable for VscodeInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         for spec in specs {
-            info!("VSCode: Installing extension '{}'...", spec.name);
-            self.core.executor.run("code", &["--install-extension", &spec.name, "--force"], false).await?;
+            // VS Code supports pinning an extension version: `publisher.ext@1.2.3`.
+            let target = match spec.options.get("version") {
+                Some(v) if crate::backends::concrete_version(v) => format!("{}@{}", spec.name, v),
+                _ => spec.name.clone(),
+            };
+            info!("VSCode: Installing extension '{}'...", target);
+            self.core.executor.run("code", &["--install-extension", &target, "--force"], false).await?;
         }
         Ok(())
     }
@@ -160,6 +165,33 @@ impl Queryable for VscodeQueryable {
     }
 }
 
+pub struct VscodeUpgradable {
+    pub core: Arc<VscodeBackendCore>,
+}
+
+#[async_trait]
+impl Upgradable for VscodeUpgradable {
+    // The `code` CLI has no batch-update command; refreshing metadata is a no-op.
+    async fn update(&self, _: bool) -> Result<()> { Ok(()) }
+
+    /// Re-install every installed extension with `--force`, which pulls the latest
+    /// published version for each. This is the documented way to upgrade extensions
+    /// from the CLI.
+    async fn upgrade(&self, _: bool) -> Result<()> {
+        let out = self.core.executor.run_output("code", &["--list-extensions"], false).await?;
+        for line in out.lines() {
+            let id = line.trim();
+            if id.is_empty() { continue; }
+            info!("VSCode: Upgrading extension '{}'...", id);
+            self.core.executor.run("code", &["--install-extension", id, "--force"], false).await?;
+        }
+        Ok(())
+    }
+
+    // Extensions have no orphan concept managed by the CLI.
+    async fn clean_orphans(&self, _: bool) -> Result<()> { Ok(()) }
+}
+
 pub struct VscodeSearchable {
     pub core: Arc<VscodeBackendCore>,
 }
@@ -184,4 +216,20 @@ impl Searchable for VscodeSearchable {
         }
         Ok(results)
     }
+}
+
+/// Build and register the VS Code extensions backend.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(VscodeBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(VscodeInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(VscodeQueryable { core: core.clone() }))
+        .with_searchable(Arc::new(VscodeSearchable { core: core.clone() }))
+        .with_upgradable(Arc::new(VscodeUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
 }

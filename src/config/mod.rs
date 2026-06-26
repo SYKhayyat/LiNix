@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 pub mod config;
 pub mod parser;
 pub mod manifest; // <-- added

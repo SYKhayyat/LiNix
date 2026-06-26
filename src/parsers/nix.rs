@@ -20,7 +20,7 @@ pub fn parse_list(output: &str) -> Vec<Package> {
                     .unwrap_or("unknown");
                 
                 // Extract clean name from attribute path
-                let name = attr_path.split('.').last().unwrap_or(attr_path);
+                let name = attr_path.split('.').next_back().unwrap_or(attr_path);
                 let mut p = Package::new(name, "nix");
                 
                 // Track internal indices and paths for deterministic removals
@@ -65,7 +65,7 @@ pub fn parse_search(output: &str) -> Vec<Package> {
         .filter_map(|line| {
             // nix-env -qa format: "attribute-path  name-version"
             let parts: Vec<&str> = line.split_whitespace().collect();
-            let full_name = parts.get(0)?;
+            let full_name = parts.first()?;
             
             if let Some((name, ver)) = full_name.rsplit_once('-') {
                 Some(Package::with_version(name, ver, "nix"))

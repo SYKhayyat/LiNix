@@ -76,10 +76,11 @@ impl Teleporter {
             }
         }
 
+        // Pass just the package name — `Error::PackageNotFound` already formats the
+        // "Package '<name>' was not found" message (passing a full sentence here
+        // produced a double-wrapped error).
         let (src_backend, src_pkg) = source_backend
-            .ok_or_else(|| Error::PackageNotFound(format!(
-                "Cannot teleport '{}': Identity not found in any available backend.", package_name
-            )))?;
+            .ok_or_else(|| Error::PackageNotFound(package_name.to_string()))?;
 
         let src_backend_name = src_backend.name();
         if src_backend_name == target_backend_name {

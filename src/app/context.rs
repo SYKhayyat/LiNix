@@ -96,7 +96,7 @@ impl App {
         // Asynchronously initialize the Failure Diagnosis Engine
         let diagnostics = Arc::new(FailureDiagnosticEngine::init(&config_arc).await);
 
-        info!("LiNix Kernel: v3.6.0 kernel initialized successfully.");
+        info!("LiNix Kernel: v5.0.0 kernel initialized successfully.");
 
         Ok(Self {
             config: config_arc,

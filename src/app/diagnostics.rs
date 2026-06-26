@@ -181,7 +181,7 @@ impl FailureDiagnosticEngine {
             
             if let Some(b_cap) = registry.get(&spec.backend) {
                 if let Some(installer) = b_cap.as_installable() {
-                    match installer.install(&[spec.clone()], b_cap.needs_root()).await {
+                    match installer.install(std::slice::from_ref(&spec), b_cap.needs_root()).await {
                         Ok(_) => {
                             // Bug Fix Resolve E0597: Extract and clone data while under lock
                             let state_snapshot = {

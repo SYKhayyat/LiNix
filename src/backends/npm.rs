@@ -2,8 +2,9 @@
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Upgradable, MetadataProvider, Error
+    Queryable, Result, Searchable, Upgradable, MetadataProvider, Error
 };
+use crate::backends::node_registry::registry_search;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
@@ -53,8 +54,12 @@ pub struct NpmInstallable {
 impl Installable for NpmInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
-            info!("npm: Installing {} globally...", spec.name);
-            self.core.executor.run_exclusive("npm", "npm", &["install", "-g", &spec.name], false).await?;
+            let target = match spec.options.get("version") {
+                Some(v) if crate::backends::concrete_version(v) => format!("{}@{}", spec.name, v),
+                _ => spec.name.clone(),
+            };
+            info!("npm: Installing {} globally...", target);
+            self.core.executor.run_exclusive("npm", "npm", &["install", "-g", &target], false).await?;
         }
         Ok(())
     }
@@ -98,12 +103,30 @@ impl Queryable for NpmQueryable {
         let all = self.list_installed().await?;
         if let Some(mut pkg) = all.into_iter().find(|p| p.name == name) {
             let prefix = self.core.get_global_prefix().await?;
-            let install_path = format!("{}/lib/node_modules/{}", prefix, name);
-            pkg.properties.insert("install_path".into(), install_path);
+            // Global module layout differs by OS: POSIX puts them under
+            // `<prefix>/lib/node_modules`, Windows directly under `<prefix>/node_modules`.
+            let base = std::path::Path::new(&prefix);
+            let install_path = if cfg!(windows) {
+                base.join("node_modules").join(name)
+            } else {
+                base.join("lib").join("node_modules").join(name)
+            };
+            pkg.properties.insert("install_path".into(), install_path.to_string_lossy().to_string());
             Ok(Some(pkg))
         } else {
             Ok(None)
         }
+    }
+}
+
+pub struct NpmSearchable {
+    pub core: Arc<NpmBackendCore>,
+}
+
+#[async_trait]
+impl Searchable for NpmSearchable {
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        registry_search(query, "npm", 25).await
     }
 }
 
@@ -136,4 +159,20 @@ impl NpmBackendCore {
         let queryable = NpmQueryable { core: Arc::new(self.clone()) };
         queryable.list_installed().await
     }
+}
+
+/// Build and register the npm backend with all its capabilities.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(NpmBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(NpmInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(NpmQueryable { core: core.clone() }))
+        .with_searchable(Arc::new(NpmSearchable { core: core.clone() }))
+        .with_upgradable(Arc::new(NpmUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
 }

@@ -2,12 +2,26 @@
 
 use crate::core::{
     BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Upgradable, MetadataProvider, Error
+    Queryable, Result, Searchable, Upgradable, MetadataProvider, Error
 };
+use crate::backends::node_registry::registry_search;
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
 use serde_json::Value;
+
+/// Split a yarn tree label like `lodash@4.17.0` or `@scope/pkg@1.0.0` into
+/// `(name, version)`. Splitting on the FIRST `@` breaks scoped packages (whose name
+/// itself starts with `@`), so split on the LAST `@` instead. A leading `@` with no
+/// later `@` means a scoped package with no version.
+fn split_name_version(label: &str) -> (String, String) {
+    match label.rsplit_once('@') {
+        // `rsplit_once` on "@scope/pkg" would yield ("", "scope/pkg"); guard the
+        // leading-scope-only case where the only `@` is at index 0.
+        Some((name, ver)) if !name.is_empty() => (name.to_string(), ver.to_string()),
+        _ => (label.to_string(), "unknown".to_string()),
+    }
+}
 
 /// Core backend implementation for Yarn (Node.js package manager alternative).
 #[derive(Clone)]
@@ -60,8 +74,12 @@ pub struct YarnInstallable {
 impl Installable for YarnInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
-            info!("Yarn: Installing {} globally...", spec.name);
-            self.core.executor.run_exclusive("yarn", "yarn", &["global", "add", &spec.name], false).await?;
+            let target = match spec.options.get("version") {
+                Some(v) if crate::backends::concrete_version(v) => format!("{}@{}", spec.name, v),
+                _ => spec.name.clone(),
+            };
+            info!("Yarn: Installing {} globally...", target);
+            self.core.executor.run_exclusive("yarn", "yarn", &["global", "add", &target], false).await?;
         }
         Ok(())
     }
@@ -93,10 +111,8 @@ impl Queryable for YarnQueryable {
             if let Some(trees) = data.get("trees").and_then(|t| t.as_array()) {
                 for tree in trees {
                     if let Some(name) = tree.get("name").and_then(|n| n.as_str()) {
-                        let parts: Vec<&str> = name.split('@').collect();
-                        let pkg_name = parts[0];
-                        let version = parts.get(1).unwrap_or(&"unknown");
-                        packages.push(Package::with_version(pkg_name, version, "yarn"));
+                        let (pkg_name, version) = split_name_version(name);
+                        packages.push(Package::with_version(&pkg_name, &version, "yarn"));
                     }
                 }
             }
@@ -105,9 +121,10 @@ impl Queryable for YarnQueryable {
         if packages.is_empty() {
             let plain = self.core.executor.run_output("yarn", &["global", "list"], false).await?;
             for line in plain.lines() {
-                if let Some((name, version)) = line.split_once('@') {
-                    packages.push(Package::with_version(name.trim(), version.trim(), "yarn"));
-                }
+                let label = line.trim();
+                if label.is_empty() || !label.contains('@') { continue; }
+                let (name, version) = split_name_version(label);
+                packages.push(Package::with_version(name.trim(), version.trim(), "yarn"));
             }
         }
         Ok(packages)
@@ -127,6 +144,18 @@ impl Queryable for YarnQueryable {
         } else {
             Ok(None)
         }
+    }
+}
+
+pub struct YarnSearchable {
+    pub core: Arc<YarnBackendCore>,
+}
+
+#[async_trait]
+impl Searchable for YarnSearchable {
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        // `yarn search` was removed in Yarn 2+ (Berry); resolve from the npm registry.
+        registry_search(query, "yarn", 25).await
     }
 }
 
@@ -158,5 +187,37 @@ impl YarnBackendCore {
     async fn list_installed_internal(&self) -> Result<Vec<Package>> {
         let queryable = YarnQueryable { core: Arc::new(self.clone()) };
         queryable.list_installed().await
+    }
+}
+
+/// Build and register the Yarn backend with all its capabilities.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(YarnBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(YarnInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(YarnQueryable { core: core.clone() }))
+        .with_searchable(Arc::new(YarnSearchable { core: core.clone() }))
+        .with_upgradable(Arc::new(YarnUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_name_version;
+
+    #[test]
+    fn parses_plain_and_scoped_names() {
+        assert_eq!(split_name_version("lodash@4.17.0"), ("lodash".into(), "4.17.0".into()));
+        // scoped package: name itself begins with '@'
+        assert_eq!(split_name_version("@scope/pkg@1.0.0"), ("@scope/pkg".into(), "1.0.0".into()));
+        // scoped, no version
+        assert_eq!(split_name_version("@scope/pkg"), ("@scope/pkg".into(), "unknown".into()));
+        // plain, no version
+        assert_eq!(split_name_version("ripgrep"), ("ripgrep".into(), "unknown".into()));
     }
 }

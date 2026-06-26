@@ -105,12 +105,12 @@ impl GithubBackendCore {
         let arch = std::env::consts::ARCH;
 
         if name.contains(os) { score += 50; }
-        else if os == "linux" && name.contains("linux") { score += 40; }
-        else if os == "macos" && (name.contains("darwin") || name.contains("apple")) { score += 40; }
+        else if (os == "linux" && name.contains("linux"))
+             || (os == "macos" && (name.contains("darwin") || name.contains("apple"))) { score += 40; }
 
         if name.contains(arch) { score += 50; }
-        else if arch == "x86_64" && (name.contains("amd64") || name.contains("x64")) { score += 45; }
-        else if arch == "aarch64" && (name.contains("arm64") || name.contains("armv8")) { score += 45; }
+        else if (arch == "x86_64" && (name.contains("amd64") || name.contains("x64")))
+             || (arch == "aarch64" && (name.contains("arm64") || name.contains("armv8"))) { score += 45; }
 
         if name.ends_with(".tar.gz") || name.ends_with(".zip") || name.ends_with(".tgz") { score += 10; }
         if name.contains("musl") && os == "linux" { score += 5; }
@@ -200,7 +200,7 @@ impl Installable for GithubInstallable {
                 extract_archive(&dl_path_archive, &pkg_dir_archive)
             }).await.map_err(|e| Error::Other(e.to_string()))??;
 
-            let repo_name = spec.name.split('/').last().unwrap_or(&spec.name);
+            let repo_name = spec.name.split('/').next_back().unwrap_or(&spec.name);
             let bin_dest_base = dirs::home_dir()
                 .ok_or_else(|| Error::Other("Home directory not found".into()))?
                 .join(".local").join("bin").join(repo_name);
@@ -300,4 +300,22 @@ impl Queryable for GithubQueryable {
         let all = self.list_installed().await?;
         Ok(all.into_iter().find(|p| p.name == name))
     }
+}
+
+/// Build and register the GitHub Releases backend.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    cfg: &crate::config::Config,
+) {
+    let core = Arc::new(GithubBackendCore::new(
+        exec.duplicate(),
+        cfg.github_dir.clone(),
+        cfg.github_token.clone(),
+    ));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(GithubInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(GithubQueryable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
 }

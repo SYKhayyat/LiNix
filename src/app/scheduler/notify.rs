@@ -139,7 +139,7 @@ impl NotificationManager {
              Message:\n\
              {}\n\n\
              ---\n\
-             Automated Management via LiNix v3.6.0",
+             Automated Management via LiNix v5.0.0",
             level, chrono::Local::now().to_rfc2822(), crate::config::Config::get_hostname(), body
         );
 

@@ -111,7 +111,7 @@ impl Runner {
                 if let Some(installer) = backend_caps.as_installable() {
                     info!("Runner: Auto-provisioning missing component: {}:{}", spec.backend, spec.name);
                     let sudo = backend_caps.needs_root();
-                    installer.install(&[spec.clone()], sudo).await?;
+                    installer.install(std::slice::from_ref(spec), sudo).await?;
                 } else {
                     return Err(Error::Transaction(format!(
                         "Component {}:{} is required but the backend does not support installation.", 

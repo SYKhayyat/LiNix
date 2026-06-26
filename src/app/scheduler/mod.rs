@@ -319,7 +319,7 @@ impl MacLaunchdProvisioner {
 
         for (i, &val) in vals.iter().enumerate() {
             if val != "*" {
-                let first_val = val.split(|c| c == ',' || c == '-' || c == '/').next().unwrap_or("0");
+                let first_val = val.split([',', '-', '/']).next().unwrap_or("0");
                 if let Ok(num) = first_val.parse::<u32>() {
                     xml.push_str(&format!("<key>{}</key><integer>{}</integer>", keys[i], num));
                 }
@@ -348,7 +348,7 @@ impl TaskProvisioner for WindowsTaskProvisioner {
             _ => {
                 let parts: Vec<&str> = config.cron.split_whitespace().collect();
                 let hour = parts.get(1).unwrap_or(&"02");
-                let min = parts.get(0).unwrap_or(&"00");
+                let min = parts.first().unwrap_or(&"00");
                 ("DAILY", format!("{}:{}", hour, min))
             }
         };

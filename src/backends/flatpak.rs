@@ -1,6 +1,6 @@
 use crate::core::{
-    CommandExecutor, Package, Result, PackageSpec, 
-    BackendCore, Installable, Queryable, Upgradable, MetadataProvider
+    CommandExecutor, Package, Result, PackageSpec,
+    BackendCore, Installable, Queryable, Searchable, Upgradable, MetadataProvider
 };
 use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
@@ -140,6 +140,41 @@ impl Queryable for FlatpakQueryable {
     }
 }
 
+pub struct FlatpakSearchable {
+    pub core: Arc<FlatpakBackendCore>,
+}
+
+#[async_trait]
+impl Searchable for FlatpakSearchable {
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let output = self.core.executor.run_output("flatpak", &["search", query], false).await?;
+        Ok(parse_flatpak_search(&output))
+    }
+}
+
+/// Parse `flatpak search <q>` => TAB-separated columns:
+/// Name \t Description \t Application ID \t Version \t Branch \t Remotes.
+/// The Application ID is the installable identifier, so prefer it as the name.
+fn parse_flatpak_search(output: &str) -> Vec<Package> {
+    let mut results = Vec::new();
+    for line in sanitize(output).lines() {
+        if line.trim().is_empty() { continue; }
+        let cols: Vec<&str> = line.split('\t').map(|c| c.trim()).collect();
+        let display_name = cols.first().copied().unwrap_or("").trim();
+        let app_id = cols.get(2).copied().filter(|s| !s.is_empty()).unwrap_or(display_name);
+        if app_id.is_empty() { continue; }
+        let mut p = Package::new(app_id, "flatpak");
+        if let Some(desc) = cols.get(1).filter(|s| !s.is_empty()) {
+            p.properties.insert("description".into(), desc.to_string());
+        }
+        if let Some(ver) = cols.get(3).filter(|s| !s.is_empty()) {
+            p.version = Some(ver.to_string());
+        }
+        results.push(p);
+    }
+    results
+}
+
 pub struct FlatpakUpgradable {
     pub core: Arc<FlatpakBackendCore>,
 }
@@ -147,8 +182,10 @@ pub struct FlatpakUpgradable {
 #[async_trait]
 impl Upgradable for FlatpakUpgradable {
     async fn update(&self, sudo: bool) -> Result<()> {
+        // Must pass -y --noninteractive (like install/upgrade/clean_orphans), otherwise an
+        // automated run blocks on flatpak's interactive confirmation prompt.
         let mut args = self.core.scope_args();
-        args.push("update");
+        args.extend(["update", "-y", "--noninteractive"]);
         debug!("Flatpak: Refreshing remotes...");
         self.core.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
         Ok(())
@@ -168,5 +205,39 @@ impl Upgradable for FlatpakUpgradable {
         info!("Flatpak: Removing unused runtimes and extensions...");
         self.core.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
         Ok(())
+    }
+}
+
+/// Build and register the Flatpak backend with all its capabilities.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    cfg: &crate::config::Config,
+) {
+    let settings = cfg.backend_settings.get("flatpak").cloned().unwrap_or_default();
+    let core = Arc::new(FlatpakBackendCore::new(exec.duplicate(), settings));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(FlatpakInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(FlatpakQueryable { core: core.clone() }))
+        .with_searchable(Arc::new(FlatpakSearchable { core: core.clone() }))
+        .with_upgradable(Arc::new(FlatpakUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flatpak_search_prefers_app_id() {
+        // Name \t Description \t AppID \t Version \t Branch \t Remotes
+        let out = "Blender\tFree 3D suite\torg.blender.Blender\t4.0\tstable\tflathub\n\
+                   GIMP\tImage editor\torg.gimp.GIMP\t2.10\tstable\tflathub\n";
+        let pkgs = parse_flatpak_search(out);
+        assert_eq!(pkgs.len(), 2);
+        assert_eq!(pkgs[0].name, "org.blender.Blender");
+        assert_eq!(pkgs[0].version.as_deref(), Some("4.0"));
+        assert_eq!(pkgs[0].properties.get("description").map(String::as_str), Some("Free 3D suite"));
     }
 }

@@ -51,7 +51,7 @@ impl ManifestEngine {
             WalkDir::new(&groups_dir)
                 .into_iter()
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_file() && e.path().extension().map_or(false, |ext| ext == "txt"))
+                .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "txt"))
                 .map(|e| e.path().to_path_buf())
                 .collect()
         }).await.map_err(|e| Error::Other(e.to_string()))?;
@@ -205,7 +205,7 @@ impl ManifestEngine {
             WalkDir::new(&groups_dir)
                 .into_iter()
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_file() && e.path().extension().map_or(false, |ext| ext == "txt"))
+                .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "txt"))
                 .map(|e| e.path().to_path_buf())
                 .collect()
         }).await.map_err(|e| Error::Other(e.to_string()))?;

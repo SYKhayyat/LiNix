@@ -210,7 +210,7 @@ impl StateRegistry {
     pub fn get_expired_packages(&self) -> Vec<(String, String)> {
         let now = Self::now();
         self.packages.iter()
-            .filter(|p| p.expires_at.map_or(false, |expiry| now >= expiry))
+            .filter(|p| p.expires_at.is_some_and(|expiry| now >= expiry))
             .map(|p| (p.backend.clone(), p.name.clone()))
             .collect()
     }

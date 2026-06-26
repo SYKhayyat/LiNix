@@ -70,7 +70,7 @@ impl SnapshotProvider for BtrfsProvider {
     async fn list(&self) -> Result<Vec<Snapshot>> {
         let out = self.executor.run_output("btrfs", &["subvolume", "list", "/"], false).await?;
         Ok(out.lines().filter(|l| l.contains("linix_pre_")).filter_map(|l| {
-            let id = l.split('/').last()?.trim();
+            let id = l.split('/').next_back()?.trim();
             Some(Snapshot { id: id.to_string(), timestamp: Utc::now().to_rfc3339(), description: "BTRFS System State".into(), backend: "btrfs".into() })
         }).collect())
     }
@@ -266,7 +266,7 @@ impl SnapshotManager {
         let remaining: Vec<_> = list.iter().filter(|s| !to_delete.contains(&s.id)).collect();
         if remaining.len() > max_count as usize {
             let overflow = remaining.len() - max_count as usize;
-            for i in 0..overflow { to_delete.insert(remaining[i].id.clone()); }
+            for snap in remaining.iter().take(overflow) { to_delete.insert(snap.id.clone()); }
         }
 
         for id in to_delete {

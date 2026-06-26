@@ -74,13 +74,11 @@ impl<'a> UniversalSearch<'a> {
                             trace!("Search: Backend '{}' returned {} results.", b.name(), results.len());
                             Ok(results)
                         },
-                        Err(e) => {
-                            warn!("Search: Backend '{}' query failed: {}. Continuing...", b.name(), e);
-                            Ok(vec![]) // We return empty rather than failing the whole universal search
-                        }
+                        // Surface (don't swallow) the failure, tagged with the backend name,
+                        // so the user is told which backends errored vs. returned nothing.
+                        Err(e) => Err(Error::Other(format!("{}: {}", b.name(), e))),
                     }
                 } else {
-                    // Logic check: The backend should still be searchable, but we handle the alternative.
                     Ok(vec![])
                 }
             });
@@ -89,6 +87,7 @@ impl<'a> UniversalSearch<'a> {
         // 3. Collection & Deduplication
         let mut all_packages = Vec::new();
         let mut seen_keys = HashSet::new();
+        let mut failed_backends: Vec<String> = Vec::new();
 
         while let Some(task_result) = worker_pool.join_next().await {
             match task_result {
@@ -102,18 +101,28 @@ impl<'a> UniversalSearch<'a> {
                     }
                 },
                 Ok(Err(e)) => {
-                    // This catches the semaphore acquisition failure
-                    error!("Search: A parallel task failed significantly: {}", e);
+                    warn!("Search: {}", e);
+                    failed_backends.push(e.to_string());
                 },
                 Err(panic_err) => {
                     error!("Search: A worker thread panicked: {}", panic_err);
+                    failed_backends.push(format!("worker panic: {}", panic_err));
                 }
             }
         }
 
         // 4. Final Polish: Lexicographical sorting for consistent UI
         all_packages.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        
+
+        // User-visible summary of backends that errored (distinct from "0 results").
+        if !failed_backends.is_empty() {
+            eprintln!(
+                "Search: {} backend(s) failed and were skipped: {}",
+                failed_backends.len(),
+                failed_backends.join("; ")
+            );
+        }
+
         info!("Search: Completed. Discovered {} unique candidates.", all_packages.len());
         Ok(all_packages)
     }

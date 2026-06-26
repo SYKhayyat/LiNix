@@ -53,8 +53,9 @@ impl MetricsCollector {
     }
 
     /// Records a completed operation from a DAG node.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_operation(
-        &self, 
+        &self,
         name: &str, 
         backend: &str, 
         start_time: DateTime<Utc>, 

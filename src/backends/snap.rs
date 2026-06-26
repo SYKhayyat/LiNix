@@ -1,6 +1,6 @@
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Upgradable, MetadataProvider
+    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
+    Queryable, Result, Searchable, Upgradable, MetadataProvider
 };
 use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
@@ -105,8 +105,8 @@ impl Queryable for SnapQueryable {
         
         for line in sanitize(&output).lines().skip(1) {
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if let (Some(name), Some(version)) = (parts.get(0), parts.get(1)) {
-                packages.push(Package::with_version(*name, *version, "snap"));
+            if let (Some(name), Some(version)) = (parts.first(), parts.get(1)) {
+                packages.push(Package::with_version(name, version, "snap"));
             }
         }
         Ok(packages)
@@ -138,6 +138,37 @@ impl Queryable for SnapQueryable {
     }
 }
 
+pub struct SnapSearchable {
+    pub core: Arc<SnapBackendCore>,
+}
+
+#[async_trait]
+impl Searchable for SnapSearchable {
+    async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let output = self.core.executor.run_output("snap", &["find", query], false).await?;
+        Ok(parse_snap_find(&output))
+    }
+}
+
+/// Parse `snap find <q>` => "Name  Version  Publisher  Notes  Summary" (header + rows).
+fn parse_snap_find(output: &str) -> Vec<Package> {
+    let mut results = Vec::new();
+    for line in sanitize(output).lines().skip(1) {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        let Some(name) = parts.first() else { continue };
+        let mut p = Package::new(*name, "snap");
+        if let Some(version) = parts.get(1) { p.version = Some(version.to_string()); }
+        if let Some(publisher) = parts.get(2) {
+            p.properties.insert("publisher".into(), publisher.to_string());
+        }
+        if parts.len() > 4 {
+            p.properties.insert("summary".into(), parts[4..].join(" "));
+        }
+        results.push(p);
+    }
+    results
+}
+
 pub struct SnapUpgradable {
     pub core: Arc<SnapBackendCore>,
 }
@@ -157,5 +188,39 @@ impl Upgradable for SnapUpgradable {
     async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
         // Snap automatically manages its own revisions and core dependencies.
         Ok(())
+    }
+}
+
+/// Build and register the Snap backend with all its capabilities.
+pub fn register(
+    reg: &mut crate::backends::BackendRegistry,
+    exec: &CommandExecutor,
+    _cfg: &crate::config::Config,
+) {
+    let core = Arc::new(SnapBackendCore::new(exec.duplicate()));
+    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(SnapInstallable { core: core.clone() }))
+        .with_queryable(Arc::new(SnapQueryable { core: core.clone() }))
+        .with_searchable(Arc::new(SnapSearchable { core: core.clone() }))
+        .with_upgradable(Arc::new(SnapUpgradable { core: core.clone() }))
+        .with_metadata_provider(core.clone())
+        .build()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snap_find_parses_rows() {
+        let out = "Name   Version  Publisher  Notes  Summary\n\
+                   hello  2.10     canonical  -      GNU Hello prints a greeting\n\
+                   code   1.85     vscode✓    classic Code editing redefined\n";
+        let pkgs = parse_snap_find(out);
+        assert_eq!(pkgs.len(), 2);
+        assert_eq!(pkgs[0].name, "hello");
+        assert_eq!(pkgs[0].version.as_deref(), Some("2.10"));
+        assert_eq!(pkgs[0].properties.get("publisher").map(String::as_str), Some("canonical"));
+        assert!(pkgs[0].properties.get("summary").unwrap().contains("greeting"));
     }
 }

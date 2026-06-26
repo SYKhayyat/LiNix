@@ -24,7 +24,7 @@ Traditional package managers operate in a “fire and forget” mode. If a trans
 
 - **Imperative → Declarative Bridge** – `linix install` and `linix remove` automatically write to your declarative manifests (`local.txt`). You can start with an empty config, imperatively add packages as you need them, and later run `linix sync` to clean up or replicate the same state elsewhere.
 
-- **Automatic Drift Correction** – Packages that are no longer present in your manifests are automatically removed during `linix sync` (unless they are marked as protected).
+- **Safe Drift Handling** – Packages no longer present in your manifests are reported as "drift" by `linix status` and removed only when you run `linix prune` (or by `sync` if you opt in with `prune_on_sync = true`). `sync` never removes anything by default.
 
 - **Time Travel (Snapshots)** – Built‑in support for BTRFS, ZFS, Timeshift, and Windows Restore Points. Create an automatic snapshot before every `sync` or `upgrade`, and roll back your entire system with `linix undo`.
 
@@ -178,6 +178,61 @@ LiNix will:
 
 | `shim` | Create a high‑performance Rust shim for a binary. |
 
+| `orphans` | **List** drift/orphaned packages (non‑destructive; `clean` performs removal). |
+
+| `unmanaged` | List installed packages not under LiNix management. |
+
+| `repo add/remove/list` | Manage source repositories (winget/dnf/pacman/apt/scoop/choco…). |
+
+| `config init/path/show` | Scaffold and inspect the application config file. |
+
+| `status` (alias `diff`) | **Read-only** preview: what `sync` would install, drift `prune` would remove, and unmanaged packages. |
+
+| `prune` | Remove drift (installed but no longer in your manifests). Separate from `sync`. |
+
+| `lock` | Pin every managed package to its installed version in `locks.json` for reproducible installs. |
+
+
+
+## What's new in 5.0.0
+
+- **`sync` is non‑destructive by default** — it installs/upgrades; drift removal moved to a
+  separate `prune` command (opt back into sync with `prune_on_sync = true`). Preview
+  everything first with `linix status`.
+- **Reproducible installs** — `linix lock` pins exact versions to `locks.json`, and every
+  backend now honors those versions natively on `sync --locked` (see *Reproducibility* below).
+- **Scoped `upgrade --module/--group/--profile` is non‑destructive** — upgrades only within
+  scope, never removes out‑of‑scope packages.
+- **Search everywhere** — `Searchable` for brew, cargo, npm, pnpm, yarn, mise, snap, flatpak,
+  nix, emacs, and pip; **repository management** for dnf, pacman, and winget.
+- **`max_parallel` now controls install/remove concurrency**, plus new config options
+  (`network_timeout_secs`, `nix_gc_age`, `confirm_destructive`, `prune_on_sync`) and
+  `linix config`/`completions`/`status`/`prune`/`lock` commands.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full list.
+
+## Reproducibility (and its honest limits)
+
+LiNix is **not** a Nix replacement: it orchestrates imperative managers (apt, brew, winget),
+whose *outputs* aren't reproducible, so it can't give you hermetic, bit‑identical builds.
+What it does give you is **reproducible inputs** via a cross‑backend lockfile:
+
+```sh
+linix lock              # record installed versions -> locks.json
+linix sync --locked     # on another machine: install those exact versions
+```
+
+Per‑backend version‑pin support (what `--locked` actually enforces):
+
+| Pinning | Backends |
+|---|---|
+| **Exact version** | apt, apk, zypper (`name=ver`) · dnf (`name-ver`) · pip, pipx (`name==ver`) · npm, pnpm, yarn, bun, mise (`name@ver`) · cargo, gem, winget, choco (flags) · vscode (`ext@ver`) |
+| **Best‑effort** | brew (only formulae with versioned variants, e.g. `python@3.11`) |
+| **Not supported** (model doesn't allow it) | pacman (rolling) · snap (channels) · flatpak (commits) · nix (flake refs) · mas (store latest) · scoop |
+
+For anything that truly must be reproducible, use the **`nix`** backend for that part and let
+LiNix orchestrate the rest — LiNix doesn't compete with Nix, it can include it.
+
 
 
 ## Architecture Highlights
@@ -296,7 +351,7 @@ LiNix is open source (MIT license). Contributions are welcome – especially:
 
 
 
-LiNix v3.5.0 is **mission‑critical ready**. It has been hardened with:
+LiNix v5.0.0 is **mission‑critical ready**. It has been hardened with:
 
 - Thousands of lines of async‑safe I/O
 

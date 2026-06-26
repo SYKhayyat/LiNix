@@ -86,6 +86,11 @@ where
         store.len()
     }
 
+    /// Returns true if the cache holds no entries.
+    pub async fn is_empty(&self) -> bool {
+        self.len().await == 0
+    }
+
     /// Get or insert a value using a provided async function.
     /// This pattern is vital for the parallel discovery engine to avoid duplicate IO.
     pub async fn get_or_insert_with<F, Fut>(&self, key: K, f: F) -> Result<V>

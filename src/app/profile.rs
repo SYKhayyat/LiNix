@@ -28,6 +28,7 @@ pub struct ProfileManager {
 }
 
 impl ProfileManager {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         registry: Arc<BackendRegistry>,
         executor: CommandExecutor,
@@ -77,7 +78,7 @@ impl ProfileManager {
 
         while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
             let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "txt") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "txt") {
                 let file_name = entry.file_name();
                 let dest = self.config.groups_dir.join(file_name);
                 
@@ -167,7 +168,7 @@ impl ProfileManager {
 
         while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
             let path = entry.path();
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "txt") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "txt") {
                 let dest = target_path.join(entry.file_name());
                 debug!("ProfileManager: Archiving {:?} -> {:?}", path, dest);
                 tokio::fs::copy(&path, &dest).await.map_err(Error::from)?;
@@ -188,7 +189,7 @@ impl ProfileManager {
         let mut entries = tokio::fs::read_dir(&self.profiles_dir).await.map_err(Error::from)?;
         
         while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
-            if entry.file_type().await.map_or(false, |t| t.is_dir()) {
+            if entry.file_type().await.is_ok_and(|t| t.is_dir()) {
                 profiles.push(entry.file_name().to_string_lossy().to_string());
             }
         }
