@@ -181,6 +181,7 @@ impl Queryable for ServiceQueryable {
 }
 
 impl ServiceQueryable {
+    #[allow(unused_variables)] // `p` is used only on linux/windows metadata paths
     async fn fill_platform_metadata(&self, p: &mut Package) -> Result<()> {
         #[cfg(target_os = "linux")]
         {

@@ -1,6 +1,7 @@
 use crate::core::{Result, Error};
 use crate::config::config::SandboxSettings;
 use std::process::Command;
+#[allow(unused_imports)] // `Path` is unused on macOS but used on linux/windows
 use std::path::Path;
 // `info`, `Write` and `NamedTempFile` are used only by the Windows/macOS sandbox paths.
 #[allow(unused_imports)]

@@ -226,17 +226,35 @@ impl LinuxSystemdProvisioner {
                 let parts: Vec<&str> = other.split_whitespace().collect();
                 if parts.len() < 5 { return "daily".into(); }
                 
-                let min = self.translate_field(parts[0]);
-                let hour = self.translate_field(parts[1]);
+                // systemd OnCalendar = [DOW ]YYYY-MM-DD HH:MM:SS with `*` wildcards and
+                // zero-padded time. Standard cron order is min hour dom month dow.
+                let min = self.pad2(&self.translate_field(parts[0]));
+                let hour = self.pad2(&self.translate_field(parts[1]));
                 let dom = self.translate_field(parts[2]);
                 let mon = self.translate_field(parts[3]);
                 let dow = self.translate_field(parts[4]);
 
-                let dow_mapped = dow.replace('0', "Sun").replace('1', "Mon").replace('2', "Tue")
-                    .replace('3', "Wed").replace('4', "Thu").replace('5', "Fri").replace('6', "Sat");
+                let date = format!("*-{}-{}", mon, dom);
+                let time = format!("{}:{}:00", hour, min);
 
-                format!("{} *-{}-{} {}:{}:00", dow_mapped, mon, dom, hour, min).replace("*-*", "*")
+                if dow == "*" {
+                    format!("{} {}", date, time)
+                } else {
+                    let dow_mapped = dow.replace('0', "Sun").replace('1', "Mon").replace('2', "Tue")
+                        .replace('3', "Wed").replace('4', "Thu").replace('5', "Fri").replace('6', "Sat");
+                    format!("{} {} {}", dow_mapped, date, time)
+                }
             }
+        }
+    }
+
+    /// Zero-pad a single-digit numeric field to two digits (systemd time); leave
+    /// wildcards / ranges / step expressions untouched.
+    fn pad2(&self, s: &str) -> String {
+        if s.len() == 1 && s.chars().all(|c| c.is_ascii_digit()) {
+            format!("0{}", s)
+        } else {
+            s.to_string()
         }
     }
 
@@ -383,5 +401,20 @@ impl TaskProvisioner for WindowsTaskProvisioner {
             Ok(o) => o.status.success(),
             Err(_) => false,
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::LinuxSystemdProvisioner;
+
+    #[test]
+    fn systemd_oncalendar_mapping() {
+        let p = LinuxSystemdProvisioner;
+        // every Monday 04:30 -> zero-padded time, full date wildcards, weekday name
+        assert_eq!(p.map_cron_to_systemd("30 4 * * 1"), "Mon *-*-* 04:30:00");
+        // daily midnight: no weekday constraint
+        assert_eq!(p.map_cron_to_systemd("0 0 * * *"), "*-*-* 00:00:00");
+        // @-macros pass through
+        assert_eq!(p.map_cron_to_systemd("@daily"), "daily");
     }
 }
