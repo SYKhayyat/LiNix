@@ -28,6 +28,7 @@ impl ShimManager {
 
     /// Deploys a high-performance binary shim.
     pub async fn create_shim(&self, binary_name: &str) -> Result<()> {
+        #[allow(unused_mut)] // mutated only under cfg(windows)
         let mut target_path = self.bin_dir.join(binary_name);
 
         // Ensure we don't accidentally overwrite the main 'linix' binary
@@ -83,6 +84,7 @@ impl ShimManager {
 
     /// Removes a deployed shim.
     pub async fn remove_shim(&self, binary_name: &str) -> Result<()> {
+        #[allow(unused_mut)] // mutated only under cfg(windows)
         let mut target_path = self.bin_dir.join(binary_name);
         
         #[cfg(windows)]

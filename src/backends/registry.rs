@@ -8,7 +8,9 @@ use crate::backends::generic::{
     GenericUpgradable, GenericRepoManager, ManagerConfig, VersionPin,
 };
 use crate::backends::pip_search::PipSearchable;
-use crate::parsers::{windows, LambdaParser};
+use crate::parsers::LambdaParser;
+#[cfg(target_os = "windows")]
+use crate::parsers::windows;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::trace;

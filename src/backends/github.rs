@@ -224,6 +224,7 @@ impl Installable for GithubInstallable {
             }).await.map_err(|e| Error::Other(e.to_string()))?;
 
             if let Some(src_path) = discovery_result? {
+                #[allow(unused_mut)] // mutated only under cfg(windows)
                 let mut bin_dest = bin_dest_base.clone();
                 
                 #[cfg(windows)] {

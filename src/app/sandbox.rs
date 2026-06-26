@@ -2,8 +2,12 @@ use crate::core::{Result, Error};
 use crate::config::config::SandboxSettings;
 use std::process::Command;
 use std::path::Path;
+// `info`, `Write` and `NamedTempFile` are used only by the Windows/macOS sandbox paths.
+#[allow(unused_imports)]
 use tracing::{info, debug};
+#[allow(unused_imports)]
 use std::io::Write;
+#[allow(unused_imports)]
 use tempfile::NamedTempFile;
 
 /// Configuration for the declarative sandbox environment.

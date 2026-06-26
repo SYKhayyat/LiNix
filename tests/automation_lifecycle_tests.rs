@@ -163,6 +163,7 @@ async fn test_scheduler_reboot_mapping_fidelity() {
     
     #[cfg(target_os = "linux")]
     {
+        let vfs_diff = kernel.app.executor.get_vfs_diff();
         let (_, service_content) = vfs_diff.iter()
             .find(|(p, _)| p.to_string_lossy().contains("linix-reboot-cleanup.service"))
             .expect("Systemd service file missing from VFS.");
@@ -174,6 +175,7 @@ async fn test_scheduler_reboot_mapping_fidelity() {
 
     #[cfg(target_os = "macos")]
     {
+        let vfs_diff = kernel.app.executor.get_vfs_diff();
         let (_, plist_content) = vfs_diff.iter()
             .find(|(p, _)| p.to_string_lossy().contains("com.linix.reboot-cleanup.plist"))
             .expect("macOS Plist missing from VFS.");

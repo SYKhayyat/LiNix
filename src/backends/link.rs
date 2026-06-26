@@ -3,6 +3,7 @@ use crate::config::Config;
 use async_trait::async_trait;
 use std::sync::Arc;
 use std::path::{Path, PathBuf};
+#[allow(unused_imports)] // `warn` is used only under cfg(windows)
 use tracing::{info, warn, debug};
 use tera::{Tera, Context};
 
