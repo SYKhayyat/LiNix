@@ -68,9 +68,17 @@ impl SchedulerManager {
     ) -> Result<()> {
         info!("Scheduler: Provisioning task '{}' with schedule '{}'.", name, cron);
 
-        // 1. Immediate validation of the cron string
-        if cron != "@reboot" {
-            if let Err(e) = Schedule::from_str(&cron) {
+        // 1. Immediate validation of the cron string. Standard cron is 5-field
+        //    (min hour dom month dow); the `cron` crate expects a 6-field form with
+        //    seconds, so normalize 5-field expressions by prepending "0". `@`-macros
+        //    (@reboot, @daily, ...) are handled by the systemd/launchd mapping below.
+        if !cron.starts_with('@') {
+            let normalized = if cron.split_whitespace().count() == 5 {
+                format!("0 {}", cron)
+            } else {
+                cron.clone()
+            };
+            if let Err(e) = Schedule::from_str(&normalized) {
                 return Err(Error::Validation(format!(
                     "Invalid cron syntax for task '{}': {}. Rejection issued.", name, e
                 )));

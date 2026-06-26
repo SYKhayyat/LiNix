@@ -345,9 +345,16 @@ impl Config {
         if self.max_parallel == 0 {
             return Err(Error::Config("max_parallel must be greater than 0".into()));
         }
-        // Verify cron strings for any schedules
+        // Verify cron strings for any schedules. Standard 5-field cron is normalized to
+        // the `cron` crate's 6-field (with-seconds) form; `@`-macros are accepted as-is.
         for schedule in &self.schedules {
-            if let Err(e) = schedule.cron.parse::<cron::Schedule>() {
+            if schedule.cron.starts_with('@') { continue; }
+            let normalized = if schedule.cron.split_whitespace().count() == 5 {
+                format!("0 {}", schedule.cron)
+            } else {
+                schedule.cron.clone()
+            };
+            if let Err(e) = normalized.parse::<cron::Schedule>() {
                 return Err(Error::Config(format!("Invalid cron expression for task '{}': {}", schedule.name, e)));
             }
         }
@@ -366,6 +373,32 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn schedule(cron: &str) -> ScheduleConfig {
+        ScheduleConfig {
+            name: "t".into(),
+            cron: cron.into(),
+            command: "sync".into(),
+            notification: None,
+            last_synced: None,
+        }
+    }
+
+    #[test]
+    fn validate_accepts_standard_and_macro_cron() {
+        // standard 5-field cron is accepted (normalized to the crate's 6-field form)
+        let cfg = Config { schedules: vec![schedule("30 4 * * 1")], ..Config::default() };
+        assert!(cfg.validate().is_ok(), "5-field cron should be valid");
+        // explicit 6-field also accepted
+        let cfg = Config { schedules: vec![schedule("0 30 4 * * 1")], ..Config::default() };
+        assert!(cfg.validate().is_ok(), "6-field cron should be valid");
+        // @-macros accepted
+        let cfg = Config { schedules: vec![schedule("@daily")], ..Config::default() };
+        assert!(cfg.validate().is_ok(), "@daily should be valid");
+        // garbage rejected
+        let cfg = Config { schedules: vec![schedule("not a cron")], ..Config::default() };
+        assert!(cfg.validate().is_err(), "garbage cron should be rejected");
+    }
 
     #[test]
     fn is_protected_is_exact_not_substring() {
