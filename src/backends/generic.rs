@@ -118,9 +118,18 @@ impl MetadataProvider for GenericBackendCore {
         let sudo = self.needs_root();
         let output = self.executor.run_output(&self.name, &arg_refs, sudo).await?;
 
+        // Extract clean package names. apt/zypper print labelled lines
+        // ("Depends: libc6", "Requires: foo"); strip the "Label: " prefix and take the
+        // bare name (dropping any version constraint / alternative). Backends that print
+        // bare names (e.g. apk) pass through unchanged.
         Ok(output.lines()
-            .map(|l| l.trim().to_string())
+            .map(|l| l.trim())
             .filter(|l| !l.is_empty())
+            .filter_map(|l| {
+                let after_label = l.rsplit(": ").next().unwrap_or(l);
+                after_label.split_whitespace().next().map(|s| s.to_string())
+            })
+            .filter(|s| !s.is_empty())
             .collect())
     }
 }

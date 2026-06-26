@@ -112,7 +112,7 @@ impl<'a> UniversalSearch<'a> {
         }
 
         // 4. Final Polish: Lexicographical sorting for consistent UI
-        all_packages.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        all_packages.sort_by_key(|p| p.name.to_lowercase());
 
         // User-visible summary of backends that errored (distinct from "0 results").
         if !failed_backends.is_empty() {

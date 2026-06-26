@@ -89,7 +89,7 @@ impl Installable for NixInstallable {
             }
         }
 
-        indexed.sort_by(|a, b| b.0.cmp(&a.0)); // descending
+        indexed.sort_by_key(|x| std::cmp::Reverse(x.0)); // highest index first
         for (idx, name) in indexed {
             let idx_str = idx.to_string();
             info!("Nix: Removing package at profile index {} ({})", idx_str, name);
