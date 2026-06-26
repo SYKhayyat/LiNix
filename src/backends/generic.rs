@@ -115,8 +115,8 @@ impl MetadataProvider for GenericBackendCore {
         }
 
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
-        let sudo = self.needs_root();
-        let output = self.executor.run_output(&self.name, &arg_refs, sudo).await?;
+        // Dependency resolution is a read-only query — never escalate with sudo.
+        let output = self.executor.run_output(&self.name, &arg_refs, false).await?;
 
         // Extract clean package names. apt/zypper print labelled lines
         // ("Depends: libc6", "Requires: foo"); strip the "Label: " prefix and take the
@@ -330,6 +330,47 @@ impl RepoManager for GenericRepoManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::core::executor::{CommandExecutor, MockExecutor, DryRunOutput};
+    use crate::parsers::LambdaParser;
+    use dashmap::DashMap;
+
+    fn apt_like_core(mock: Arc<MockExecutor>, vfs: Arc<DashMap<std::path::PathBuf, String>>) -> GenericBackendCore {
+        let exec = CommandExecutor::with_layer(true, false, mock, vfs, Arc::new(DashMap::new()));
+        GenericBackendCore {
+            name: "apt".into(),
+            executor: exec,
+            config: ManagerConfig {
+                name: "apt".into(),
+                install_args: vec![], remove_args: vec![], list_args: vec![],
+                list_manual_args: None, search_args: vec![], search_binary: None,
+                upgrade_args: vec![], update_args: None,
+                repo_add_args: None, repo_remove_args: None, repo_list_args: None,
+                depends_args: Some(vec!["depends".into(), "--no-recommends".into(), "--no-suggests".into(), "{name}".into()]),
+                version_pin: None,
+                needs_root: true, // apt needs root for writes — but reads must NOT escalate
+                is_exclusive: true,
+                flag_map: HashMap::new(),
+            },
+            parser: Arc::new(LambdaParser { installed_fn: |_| vec![], search_fn: |_| vec![] }),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_dependencies_parses_names_without_sudo() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        // Respond to the NON-sudo command; if get_dependencies escalated, this wouldn't
+        // match and the result would be empty.
+        mock.set_response(
+            "apt depends --no-recommends --no-suggests curl",
+            Ok(DryRunOutput { stdout: b"Depends: libc6\nDepends: bash\n".to_vec(), stderr: vec![] }.into()),
+        );
+        let core = apt_like_core(mock, vfs);
+        let deps = core.get_dependencies("curl").await.unwrap();
+        // "Depends: libc6" -> "libc6" (label + constraints stripped)
+        assert_eq!(deps, vec!["libc6".to_string(), "bash".to_string()]);
+    }
 
     #[test]
     fn version_pin_renders_native_syntax() {
