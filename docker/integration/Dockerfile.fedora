@@ -1,0 +1,21 @@
+# LiNix integration image — Fedora (dnf). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.fedora -t linix-it-fedora .
+#   docker run --rm linix-it-fedora            # defaults to: dnf jq
+FROM fedora:41
+# Essential toolchain + a broad set of language package managers so the harness can sweep
+# many backends in one container (dnf + npm + yarn + pnpm + pipx + uv + bun + cargo + gem).
+RUN dnf install -y curl gcc gcc-c++ make pkgconf-pkg-config openssl-devel perl git \
+    nodejs npm python3 python3-pip pipx rubygems \
+    && dnf clean all
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+# Extra managers via their own installers. Tolerant (`|| true`): a build-time network hiccup
+# leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
+RUN corepack enable || true
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
+RUN curl -fsSL https://bun.sh/install | bash || true
+ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
+WORKDIR /src
+COPY . /src
+RUN cargo build --release
+ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
+CMD ["dnf", "jq"]

@@ -1,4 +1,7 @@
-use crate::core::{CommandExecutor, Package, Result, PackageSpec, BackendCore, Installable, Queryable, Searchable, Upgradable, MetadataProvider, Error};
+use crate::core::{
+    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    Queryable, Result, Searchable, Upgradable,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
@@ -8,11 +11,16 @@ use tracing::info;
 /// backslash) cannot break out of the form and inject arbitrary Lisp.
 fn validate_symbol(name: &str) -> Result<()> {
     if !name.is_empty()
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '.'))
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '.'))
     {
         Ok(())
     } else {
-        Err(Error::Other(format!("Invalid emacs package name: '{}'", name)))
+        Err(Error::Other(format!(
+            "Invalid emacs package name: '{}'",
+            name
+        )))
     }
 }
 
@@ -28,25 +36,29 @@ pub struct EmacsBackendCore {
 }
 
 impl EmacsBackendCore {
-    pub fn new(executor: CommandExecutor) -> Self { 
-        Self { 
+    pub fn new(executor: CommandExecutor) -> Self {
+        Self {
             executor,
             name: "emacs".to_string(),
-        } 
+        }
     }
 
     /// Internal helper to execute arbitrary Emacs Lisp code in batch mode.
     async fn run_lisp(&self, lisp: &str) -> Result<String> {
-        self.executor.run_output("emacs", &["--batch", "--eval", lisp], false).await
+        self.executor
+            .run_output("emacs", &["--batch", "--eval", lisp], false)
+            .await
     }
 }
 
 #[async_trait]
 impl BackendCore for EmacsBackendCore {
-    fn name(&self) -> &str { &self.name }
+    fn name(&self) -> &str {
+        &self.name
+    }
 
-    fn is_available(&self) -> bool { 
-        self.executor.command_exists_sync("emacs") 
+    fn is_available(&self) -> bool {
+        self.executor.command_exists_sync("emacs")
     }
 
     fn needs_root(&self) -> bool {
@@ -80,11 +92,14 @@ impl Installable for EmacsInstallable {
                     (package-initialize) \
                     (unless package-archive-contents (package-refresh-contents)) \
                     (package-install '{}) \
-                )", 
+                )",
                 spec.name
             );
 
-            self.core.executor.run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false).await?;
+            self.core
+                .executor
+                .run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false)
+                .await?;
         }
         Ok(())
     }
@@ -100,11 +115,14 @@ impl Installable for EmacsInstallable {
                     (package-initialize) \
                     (let ((p (cadr (assoc '{} package-alist)))) \
                         (if p (package-delete p))) \
-                )", 
+                )",
                 name
             );
 
-            self.core.executor.run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false).await?;
+            self.core
+                .executor
+                .run_exclusive("emacs", "emacs", &["--batch", "--eval", &lisp], false)
+                .await?;
         }
         Ok(())
     }
@@ -124,12 +142,15 @@ impl Queryable for EmacsQueryable {
                 (princ (format \"%s %s\\n\" (car p) (package-version-join (package-desc-version (cadr p)))))) \
                 package-alist) \
         )";
-        
+
         let out = self.core.run_lisp(lisp).await?;
-        Ok(out.lines().filter_map(|l| {
-            let (n, v) = l.split_once(' ')?;
-            Some(Package::with_version(n.trim(), v.trim(), "emacs"))
-        }).collect())
+        Ok(out
+            .lines()
+            .filter_map(|l| {
+                let (n, v) = l.split_once(' ')?;
+                Some(Package::with_version(n.trim(), v.trim(), "emacs"))
+            })
+            .collect())
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
@@ -138,9 +159,10 @@ impl Queryable for EmacsQueryable {
             (package-initialize) \
             (mapc (lambda (p) (princ (format \"%s\\n\" p))) package-selected-packages) \
         )";
-        
+
         let out = self.core.run_lisp(lisp).await?;
-        Ok(out.lines()
+        Ok(out
+            .lines()
             .map(|l| Package::new(l.trim(), "emacs"))
             .collect())
     }
@@ -172,10 +194,13 @@ impl Searchable for EmacsSearchable {
             needle
         );
         let out = self.core.run_lisp(&lisp).await?;
-        Ok(out.lines().filter_map(|l| {
-            let (n, v) = l.split_once(' ')?;
-            Some(Package::with_version(n.trim(), v.trim(), "emacs"))
-        }).collect())
+        Ok(out
+            .lines()
+            .filter_map(|l| {
+                let (n, v) = l.split_once(' ')?;
+                Some(Package::with_version(n.trim(), v.trim(), "emacs"))
+            })
+            .collect())
     }
 }
 
@@ -205,7 +230,10 @@ impl Upgradable for EmacsUpgradable {
                 (when (fboundp 'package-upgrade) \
                     (dolist (pkg (mapcar #'car package-alist)) \
                         (ignore-errors (package-upgrade pkg)))))) ";
-        self.core.executor.run_exclusive("emacs", "emacs", &["--batch", "--eval", lisp], false).await?;
+        self.core
+            .executor
+            .run_exclusive("emacs", "emacs", &["--batch", "--eval", lisp], false)
+            .await?;
         Ok(())
     }
 
@@ -213,7 +241,10 @@ impl Upgradable for EmacsUpgradable {
         info!("Emacs: Autoremoving unused packages...");
         let lisp = "(progn (require 'package) (package-initialize) \
             (when (fboundp 'package-autoremove) (package-autoremove)))";
-        self.core.executor.run_exclusive("emacs", "emacs", &["--batch", "--eval", lisp], false).await?;
+        self.core
+            .executor
+            .run_exclusive("emacs", "emacs", &["--batch", "--eval", lisp], false)
+            .await?;
         Ok(())
     }
 }
@@ -225,11 +256,13 @@ pub fn register(
     _cfg: &crate::config::Config,
 ) {
     let core = Arc::new(EmacsBackendCore::new(exec.duplicate()));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(EmacsInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(EmacsQueryable { core: core.clone() }))
-        .with_searchable(Arc::new(EmacsSearchable { core: core.clone() }))
-        .with_upgradable(Arc::new(EmacsUpgradable { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(EmacsInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(EmacsQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(EmacsSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(EmacsUpgradable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }

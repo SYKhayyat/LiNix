@@ -1,13 +1,14 @@
-use regex::Regex;
 use once_cell::sync::Lazy;
+use regex::Regex;
 
 /// A production-grade regular expression to identify and strip ANSI escape codes.
 /// Used to ensure that CLI output from backends is clean before parsing.
 static ANSI_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"[\u001b\u009b]\[[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]").unwrap()
+    Regex::new(r"[\u001b\u009b]\[[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]")
+        .unwrap()
 });
 
-/// Cleans raw CLI output by removing ANSI color codes, normalizing CRLF to LF, 
+/// Cleans raw CLI output by removing ANSI color codes, normalizing CRLF to LF,
 /// and trimming leading/trailing whitespace.
 /// Essential for consistent cross-platform parsing.
 pub fn sanitize(input: &str) -> String {
@@ -15,7 +16,7 @@ pub fn sanitize(input: &str) -> String {
     cleaned.replace("\r\n", "\n").trim().to_string()
 }
 
-/// Splits a string into columns based on whitespace, but handles quoted strings 
+/// Splits a string into columns based on whitespace, but handles quoted strings
 /// as single tokens. Useful for Windows managers like Winget that use spaces in names.
 pub fn split_columns(line: &str) -> Vec<String> {
     let mut columns = Vec::new();

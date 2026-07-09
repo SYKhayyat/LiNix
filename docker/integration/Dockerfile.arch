@@ -1,0 +1,21 @@
+# LiNix integration image — Arch Linux (pacman). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.arch -t linix-it-arch .
+#   docker run --rm linix-it-arch              # defaults to: pacman jq
+FROM archlinux:latest
+# Essential toolchain + a broad set of language package managers so the harness can sweep
+# many backends in one container (pacman + npm + yarn + pnpm + pipx + uv + bun + cargo + gem).
+RUN pacman -Syu --noconfirm \
+    && pacman -S --noconfirm --needed curl gcc make pkgconf openssl perl git rustup \
+       nodejs npm python-pipx ruby \
+    && rustup default stable
+# Extra managers via their own installers. Tolerant (`|| true`): a build-time network hiccup
+# leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
+RUN corepack enable || true
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
+RUN curl -fsSL https://bun.sh/install | bash || true
+ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
+WORKDIR /src
+COPY . /src
+RUN cargo build --release
+ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
+CMD ["pacman", "jq"]

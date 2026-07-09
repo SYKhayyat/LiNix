@@ -34,6 +34,19 @@ confirm_destructive = false
 # Cache TTL (Time-to-Live) in seconds for remote metadata lookups.
 cache_ttl = 300
 
+# Drift-removal scope for `prune`/`sync`:
+#   "managed" (default) — only remove packages LiNix manages that left the manifests.
+#   "system"            — remove ANY installed package not in your manifests (except
+#                         protected packages). Powerful and dangerous; enable deliberately.
+prune_scope = "managed"
+
+# Shield imperatively-installed packages (`linix install ...`) from drift pruning even if
+# they never made it into a manifest. Safe default: true.
+protect_imperative = true
+
+# Default SSH destinations for `linix fleet` when none are passed on the command line.
+# fleet_hosts = ["user@web-01", "user@web-02"]
+
 # Whitelist of enabled backends (empty = all available discovered binaries).
 enabled_backends = []
 
@@ -76,6 +89,49 @@ ext = "vscode"
 # workstation = ["docker", "kubernetes-cli", "terraform"]
 # gaming-pc = ["steam", "discord", "nvidia-settings"]
 
+# Hostname-specific backend allow-lists.
+# When a host has a (non-empty) entry here it overrides the global `enabled_backends`
+# for that machine: manifest entries for any other backend are ignored on that host
+# (not an error), and search / system-prune respect the same set. Omit or leave empty
+# to manage all backends (the default). Handy for keeping dev tooling off a server.
+[hostname_backends]
+# server-01 = ["apt", "service", "github", "web"]
+# workstation = ["apt", "cargo", "npm", "uv", "flatpak", "vscode"]
+
+# Managed config files, contents declared inline (target path -> file body).
+# Each becomes a managed `link` file: written on `sync`, self-healed if edited, tracked
+# for drift, and removed by `prune` when you delete the entry. Any pre-existing file at
+# the target is backed up once to "<target>.linix-backup" before it is overwritten, and
+# LiNix logs where the backup went. (To point at a separate source file instead, use a
+# `link:` line in a manifest; to fill in per-machine values, use a link template.)
+[managed_files]
+# "~/.gitconfig" = '''
+# [user]
+#     name = Ada Lovelace
+#     email = ada@example.com
+# [init]
+#     defaultBranch = main
+# '''
+
+# Retention: how long to keep each of LiNix's three histories. Each block is independent
+# (they cost very different amounts of disk). Rules combine as a UNION — an entry is kept
+# if it matches ANY rule — and the single most-recent entry is always kept. An empty
+# block keeps everything.
+#   keep_last  — keep the N newest
+#   keep_days  — keep anything younger than N days
+#   keep       — always keep these ids/labels (pins)
+[retention.generations]
+# keep_last = 50
+# keep_days = 90
+# keep = ["known-good-2026-07"]
+
+[retention.snapshots]
+# keep_last = 5
+# keep_days = 30
+
+[retention.manifests]
+# keep_last = 100
+
 # Scripting Hooks (Phase 4.1)
 [hooks.before_install]
 "*" = '''
@@ -105,3 +161,33 @@ user = "true"
 
 [backend_settings.pip]
 # index_url = "https://pypi.org/simple"
+
+[backend_settings.conda]
+# Conda is environment-scoped: LiNix operates on this environment for
+# install/remove/list/upgrade. Defaults to "base" when unset.
+# env = "base"
+
+# ---------------------------------------------------------------------------
+# Onboarding your own package managers (the "onboarder")
+# ---------------------------------------------------------------------------
+# LiNix can learn any CLI-based package manager with no source changes. Define
+# backends declaratively in a SEPARATE file, ~/.config/linix/custom_backends.toml.
+# They are loaded last and can never override a built-in backend. Example:
+#
+#   [[backend]]
+#   name = "paru"                        # also the invoked binary
+#   install_args = ["-S", "--noconfirm"]
+#   remove_args  = ["-R", "--noconfirm"]
+#   list_args    = ["-Qm"]
+#   search_args  = ["-Ss"]
+#   upgrade_args = ["-Syu", "--noconfirm"]
+#   needs_root   = false
+#   is_exclusive = true
+#   [backend.parser]                     # how to read `list` output
+#   format = "columns"                   # lines | columns | json | regex
+#   name_col = 0
+#   version_col = 1
+#   [backend.search_parser]              # optional; defaults to [backend.parser]
+#   format = "columns"
+#   name_col = 0
+#   version_col = 1

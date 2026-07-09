@@ -1,13 +1,16 @@
-pub mod common;
 pub mod apt;
-pub mod pacman;
-pub mod dnf;
 pub mod brew;
+pub mod common;
+pub mod conda;
+pub mod dnf;
+pub mod dotnet;
 pub mod language;
-pub mod windows;
 pub mod macos;
 pub mod nix;
+pub mod pacman;
+pub mod pkgsrc;
 pub mod utils;
+pub mod windows;
 
 use crate::core::Package;
 
@@ -17,13 +20,13 @@ use crate::core::Package;
 pub trait OutputParser: Send + Sync {
     /// Parses a raw string of installed packages into structured Package objects.
     fn parse_installed(&self, output: &str) -> Vec<Package>;
-    
+
     /// Parses raw search results into structured Package objects.
     fn parse_search(&self, output: &str) -> Vec<Package>;
 }
 
 /// A Functional Strategy Parser that allows injecting functions as data.
-/// Used in backends/registry.rs to configure GenericManagers without 
+/// Used in backends/registry.rs to configure GenericManagers without
 /// creating dozens of boilerplate structs.
 pub struct LambdaParser {
     pub installed_fn: fn(&str) -> Vec<Package>,

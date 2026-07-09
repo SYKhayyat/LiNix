@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, info, trace, error};  // removed unused `warn`
+use tracing::{debug, error, info, trace}; // removed unused `warn`
 
 // ============================================================================
 // GhostMetadata (unchanged)
@@ -70,31 +70,38 @@ impl StateRegistry {
 
     /// Loads a registry from the given path.
     pub fn load_from(path: &Path) -> Result<Self> {
-        debug!("StateRegistry: Loading mission-critical state from {:?}", path);
+        debug!(
+            "StateRegistry: Loading mission-critical state from {:?}",
+            path
+        );
 
         if !path.exists() {
-            info!("StateRegistry: No state file found at {:?}. Initializing empty registry.", path);
+            info!(
+                "StateRegistry: No state file found at {:?}. Initializing empty registry.",
+                path
+            );
             return Ok(Self::new(path.to_path_buf()));
         }
 
-        let data = std::fs::read_to_string(path).map_err(|e| {
-            Error::Io(format!("Registry Read Error at {:?}: {}", path, e))
-        })?;
+        let data = std::fs::read_to_string(path)
+            .map_err(|e| Error::Io(format!("Registry Read Error at {:?}: {}", path, e)))?;
 
         if data.trim().is_empty() {
             trace!("StateRegistry: State file is empty, returning default.");
             return Ok(Self::new(path.to_path_buf()));
         }
 
-        let mut registry: Self = serde_json::from_str(&data).map_err(|e| {
-            Error::Other(format!("Registry Corruption at {:?}: {}", path, e))
-        })?;
+        let mut registry: Self = serde_json::from_str(&data)
+            .map_err(|e| Error::Other(format!("Registry Corruption at {:?}: {}", path, e)))?;
 
         // Ensure the loaded registry has the correct path.
         registry.path = path.to_path_buf();
 
-        debug!("StateRegistry: Successfully loaded {} managed packages and {} ghosts.",
-               registry.packages.len(), registry.ghosts.len());
+        debug!(
+            "StateRegistry: Successfully loaded {} managed packages and {} ghosts.",
+            registry.packages.len(),
+            registry.ghosts.len()
+        );
         Ok(registry)
     }
 
@@ -117,13 +124,11 @@ impl StateRegistry {
             }
         }
 
-        let data = serde_json::to_string_pretty(self).map_err(|e| {
-            Error::Other(format!("State Serialization Error: {}", e))
-        })?;
+        let data = serde_json::to_string_pretty(self)
+            .map_err(|e| Error::Other(format!("State Serialization Error: {}", e)))?;
 
-        atomic_write(&self.path, &data).map_err(|e| {
-            Error::Persist(format!("Atomic write failed for state registry: {}", e))
-        })
+        atomic_write(&self.path, &data)
+            .map_err(|e| Error::Persist(format!("Atomic write failed for state registry: {}", e)))
     }
 
     /// Adds a package to management with full metadata.
@@ -136,13 +141,19 @@ impl StateRegistry {
         source: Option<String>,
         is_transient: bool,
     ) {
-        let expires_at = options.get("lease")
+        let expires_at = options
+            .get("lease")
             .or_else(|| options.get("duration"))
             .and_then(|l| Self::parse_duration(l));
 
-        let session_id = if is_transient { self.active_session_id.clone() } else { None };
+        let session_id = if is_transient {
+            self.active_session_id.clone()
+        } else {
+            None
+        };
 
-        self.packages.retain(|p| !(p.backend == backend && p.name == name));
+        self.packages
+            .retain(|p| !(p.backend == backend && p.name == name));
         let ghost_key = format!("{}:{}", backend, name);
         self.ghosts.remove(&ghost_key);
 
@@ -158,11 +169,19 @@ impl StateRegistry {
             session_id,
         };
 
-        trace!("StateRegistry: Finalizing addition of {}:{} (Source: {:?}, Transient: {})",
-               backend, name, new_pkg.source, is_transient);
+        trace!(
+            "StateRegistry: Finalizing addition of {}:{} (Source: {:?}, Transient: {})",
+            backend,
+            name,
+            new_pkg.source,
+            is_transient
+        );
 
         self.packages.push(new_pkg);
-        debug!("StateRegistry: Package {}:{} is now under management.", backend, name);
+        debug!(
+            "StateRegistry: Package {}:{} is now under management.",
+            backend, name
+        );
     }
 
     /// Convenience wrapper for simple imperative installs.
@@ -172,44 +191,74 @@ impl StateRegistry {
 
     /// Updates an existing lease.
     pub fn update_lease(&mut self, backend: &str, name: &str, duration_str: &str) -> Result<()> {
-        let expiry = Self::parse_duration(duration_str)
-            .ok_or_else(|| Error::Validation(format!("Invalid duration format: '{}'. Use 30d, 2h, etc.", duration_str)))?;
+        let expiry = Self::parse_duration(duration_str).ok_or_else(|| {
+            Error::Validation(format!(
+                "Invalid duration format: '{}'. Use 30d, 2h, etc.",
+                duration_str
+            ))
+        })?;
 
-        if let Some(pkg) = self.packages.iter_mut().find(|p| p.backend == backend && p.name == name) {
+        if let Some(pkg) = self
+            .packages
+            .iter_mut()
+            .find(|p| p.backend == backend && p.name == name)
+        {
             pkg.expires_at = Some(expiry);
-            pkg.options.insert("lease".to_string(), duration_str.to_string());
-            info!("StateRegistry: Updated lease for {}:{} -> Expires at Unix {}", backend, name, expiry);
+            pkg.options
+                .insert("lease".to_string(), duration_str.to_string());
+            info!(
+                "StateRegistry: Updated lease for {}:{} -> Expires at Unix {}",
+                backend, name, expiry
+            );
             Ok(())
         } else {
-            error!("StateRegistry: Attempted to set lease for unmanaged package {}:{}", backend, name);
+            error!(
+                "StateRegistry: Attempted to set lease for unmanaged package {}:{}",
+                backend, name
+            );
             Err(Error::PackageNotFound(format!("{}:{}", backend, name)))
         }
     }
 
     /// Removes a package and archives it as a ghost.
     pub fn remove(&mut self, backend: &str, name: &str) {
-        if let Some(pos) = self.packages.iter().position(|p| p.backend == backend && p.name == name) {
+        if let Some(pos) = self
+            .packages
+            .iter()
+            .position(|p| p.backend == backend && p.name == name)
+        {
             let pkg = self.packages.remove(pos);
 
             let ghost_key = format!("{}:{}", backend, name);
-            self.ghosts.insert(ghost_key, GhostMetadata {
-                backend: backend.to_string(),
-                options: pkg.options,
-                properties: HashMap::new(),
-                requires: Vec::new(),
-                removed_at: Self::now(),
-                teleported_to: None,
-            });
-            debug!("StateRegistry: Package {}:{} archived as Ghost.", backend, name);
+            self.ghosts.insert(
+                ghost_key,
+                GhostMetadata {
+                    backend: backend.to_string(),
+                    options: pkg.options,
+                    properties: HashMap::new(),
+                    requires: Vec::new(),
+                    removed_at: Self::now(),
+                    teleported_to: None,
+                },
+            );
+            debug!(
+                "StateRegistry: Package {}:{} archived as Ghost.",
+                backend, name
+            );
         } else {
-            trace!("StateRegistry: Requested removal of {}:{} but it was not managed.", backend, name);
+            trace!(
+                "StateRegistry: Requested removal of {}:{} but it was not managed.",
+                backend,
+                name
+            );
         }
     }
 
     /// Returns packages whose leases have expired.
     pub fn get_expired_packages(&self) -> Vec<(String, String)> {
         let now = Self::now();
-        self.packages.iter()
+        self.packages
+            .iter()
             .filter(|p| p.expires_at.is_some_and(|expiry| now >= expiry))
             .map(|p| (p.backend.clone(), p.name.clone()))
             .collect()
@@ -217,8 +266,12 @@ impl StateRegistry {
 
     /// Returns transient packages for a given session ID.
     pub fn get_transient_packages(&self, session_id: &str) -> Vec<(String, String)> {
-        trace!("StateRegistry: Scanning for transient packages in session '{}'", session_id);
-        self.packages.iter()
+        trace!(
+            "StateRegistry: Scanning for transient packages in session '{}'",
+            session_id
+        );
+        self.packages
+            .iter()
             .filter(|p| p.is_transient && p.session_id.as_deref() == Some(session_id))
             .map(|p| (p.backend.clone(), p.name.clone()))
             .collect()
@@ -226,17 +279,23 @@ impl StateRegistry {
 
     /// Checks if a package is managed.
     pub fn is_managed(&self, backend: &str, name: &str) -> bool {
-        self.packages.iter().any(|p| p.backend == backend && p.name == name)
+        self.packages
+            .iter()
+            .any(|p| p.backend == backend && p.name == name)
     }
 
     /// Returns a reference to a managed package if present.
     pub fn get_package(&self, backend: &str, name: &str) -> Option<&ManagedPackage> {
-        self.packages.iter().find(|p| p.backend == backend && p.name == name)
+        self.packages
+            .iter()
+            .find(|p| p.backend == backend && p.name == name)
     }
 
     /// Parses a duration string (e.g., "30d", "2h") into a future Unix timestamp.
     fn parse_duration(duration_str: &str) -> Option<u64> {
-        if duration_str.is_empty() { return None; }
+        if duration_str.is_empty() {
+            return None;
+        }
         let unit = duration_str.chars().last()?;
         let val_part = &duration_str[..duration_str.len() - 1];
         let value: u64 = val_part.parse().ok()?;
@@ -252,7 +311,10 @@ impl StateRegistry {
 
     /// Returns current Unix timestamp in seconds.
     fn now() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
     }
 }
 

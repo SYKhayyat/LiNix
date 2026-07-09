@@ -1,14 +1,14 @@
 use crate::core::{Error, Result};
+use crate::utils::{safe_config_dir, safe_data_dir};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::utils::{safe_data_dir, safe_config_dir};
 
 /// Configuration for platform-specific sandboxing behaviors.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SandboxSettings {
-    /// On Linux, if true, LiNix will fail if 'bwrap' is missing. 
+    /// On Linux, if true, LiNix will fail if 'bwrap' is missing.
     #[serde(default = "default_false")]
     pub require_bwrap: bool,
 
@@ -61,6 +61,21 @@ impl Default for SnapshotSettings {
     }
 }
 
+/// Which installed packages drift removal (`prune`, or `sync` with `prune_on_sync`)
+/// is allowed to remove.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PruneScope {
+    /// Only remove packages under LiNix management that are no longer in the desired
+    /// state. Installed-but-unmanaged software is never touched. Safe default.
+    #[default]
+    Managed,
+    /// Remove ANY installed package (across every backend) not present in the desired
+    /// state — a true "make the system exactly match my manifests" mode. Protected
+    /// packages are always spared. Dangerous: enable deliberately.
+    System,
+}
+
 /// Feature 5: Configuration for background scheduled tasks.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScheduleConfig {
@@ -81,41 +96,62 @@ pub struct ScheduleConfig {
 pub struct Config {
     #[serde(default)]
     pub aliases: HashMap<String, String>,
-    
+
     #[serde(default)]
     pub groups: HashMap<String, Vec<String>>,
-    
+
     #[serde(default)]
     pub dry_run: bool,
-    
+
     #[serde(default)]
     pub yes: bool,
-    
+
     #[serde(default = "default_groups_dir")]
     pub groups_dir: PathBuf,
 
     /// Feature 3: Directory containing reusable .module.txt files.
     #[serde(default = "default_modules_dir")]
     pub modules_dir: PathBuf,
-    
+
     #[serde(skip)]
     pub config_file: PathBuf,
-    
+
     #[serde(default)]
     pub enabled_backends: Vec<String>,
 
     #[serde(default = "default_priority")]
     pub backend_priority: Vec<String>,
-    
+
     #[serde(default)]
     pub hooks: HashMap<String, HashMap<String, String>>,
-    
+
     #[serde(default)]
     pub hostname_packages: HashMap<String, Vec<String>>,
-    
+
+    /// Per-host backend allow-lists. When the current host has a (non-empty) entry here,
+    /// it overrides the global `enabled_backends` for that host, so a machine can manage
+    /// only a subset of backends (e.g. no `npm`/`cargo` on a server). Empty = inherit
+    /// the global list (which, when itself empty, means "all backends").
+    #[serde(default)]
+    pub hostname_backends: HashMap<String, Vec<String>>,
+
+    /// Config files whose *contents* are declared inline here (target path -> file body),
+    /// instead of pointing the `link` backend at a separate source file. Each entry is
+    /// materialized as a managed `link` file: written on `sync`, self-healed if edited,
+    /// tracked for drift, and removed by `prune` when the entry is deleted. A pre-existing
+    /// file at the target is backed up once before it is overwritten.
+    #[serde(default)]
+    pub managed_files: HashMap<String, String>,
+
+    /// How long to retain each of LiNix's three histories — archived manifests,
+    /// generations, and filesystem snapshots — each configured independently. See
+    /// [`crate::core::RetentionConfig`]. Empty/zero policies keep everything (default).
+    #[serde(default)]
+    pub retention: crate::core::RetentionConfig,
+
     #[serde(default = "default_bloatware_file")]
     pub bloatware_file: PathBuf,
-    
+
     #[serde(default)]
     pub remove_bloatware: bool,
 
@@ -128,21 +164,36 @@ pub struct Config {
     #[serde(default = "default_false")]
     pub purge_orphans: bool,
 
+    /// Drift-removal scope for `prune`/`sync`. `Managed` (default) only removes
+    /// LiNix-managed packages; `System` removes anything installed that isn't in your
+    /// manifests (except protected packages).
+    #[serde(default)]
+    pub prune_scope: PruneScope,
+
+    /// When true, packages you installed imperatively (`linix install ...`) are never
+    /// removed by drift pruning, even if they aren't in any manifest. Safe default: true.
+    #[serde(default = "default_true")]
+    pub protect_imperative: bool,
+
+    /// Default SSH destinations for `linix fleet` when none are given on the command line.
+    #[serde(default)]
+    pub fleet_hosts: Vec<String>,
+
     #[serde(default = "default_true")]
     pub auto_lock_checksums: bool,
-    
+
     #[serde(default = "default_true")]
     pub show_progress: bool,
-    
+
     #[serde(default)]
     pub verbose: bool,
-    
+
     #[serde(default = "default_cache_ttl")]
     pub cache_ttl: u64,
-    
+
     #[serde(default)]
     pub github_token: Option<String>,
-    
+
     #[serde(default = "default_max_parallel")]
     pub max_parallel: usize,
 
@@ -162,10 +213,10 @@ pub struct Config {
 
     #[serde(default)]
     pub backend_settings: HashMap<String, HashMap<String, String>>,
-    
+
     #[serde(default)]
     pub default_backend: Option<String>,
-    
+
     #[serde(default = "default_protected_packages")]
     pub protected_packages: Vec<String>,
 
@@ -201,29 +252,70 @@ pub struct Config {
     pub schedules: Vec<ScheduleConfig>,
 }
 
-fn default_groups_dir() -> PathBuf { safe_config_dir().join("groups") }
-fn default_modules_dir() -> PathBuf { safe_config_dir().join("modules") }
-fn default_bloatware_file() -> PathBuf { safe_config_dir().join("bloatware.txt") }
-fn default_btrfs_path() -> String { "/.snapshots".to_string() }
-fn default_timeshift_path() -> String { "/run/timeshift/backup/timeshift/snapshots".to_string() }
-fn default_tmp_dir() -> PathBuf { safe_data_dir().join("tmp") }
-fn default_github_dir() -> PathBuf { safe_data_dir().join("github") }
-fn default_web_dir() -> PathBuf { safe_data_dir().join("web") }
-fn default_appimage_dir() -> PathBuf { safe_data_dir().join("appimages") }
-fn default_true() -> bool { true }
-fn default_false() -> bool { false }
-fn default_cache_ttl() -> u64 { 300 }
-fn default_max_parallel() -> usize { 4 }
-fn default_network_timeout_secs() -> u64 { 15 }
-fn default_nix_gc_age() -> String { "30d".to_string() }
-fn default_max_age() -> u32 { 30 }
-fn default_max_count() -> u32 { 10 }
+fn default_groups_dir() -> PathBuf {
+    safe_config_dir().join("groups")
+}
+fn default_modules_dir() -> PathBuf {
+    safe_config_dir().join("modules")
+}
+fn default_bloatware_file() -> PathBuf {
+    safe_config_dir().join("bloatware.txt")
+}
+fn default_btrfs_path() -> String {
+    "/.snapshots".to_string()
+}
+fn default_timeshift_path() -> String {
+    "/run/timeshift/backup/timeshift/snapshots".to_string()
+}
+fn default_tmp_dir() -> PathBuf {
+    safe_data_dir().join("tmp")
+}
+fn default_github_dir() -> PathBuf {
+    safe_data_dir().join("github")
+}
+fn default_web_dir() -> PathBuf {
+    safe_data_dir().join("web")
+}
+fn default_appimage_dir() -> PathBuf {
+    safe_data_dir().join("appimages")
+}
+fn default_true() -> bool {
+    true
+}
+fn default_false() -> bool {
+    false
+}
+fn default_cache_ttl() -> u64 {
+    300
+}
+fn default_max_parallel() -> usize {
+    4
+}
+fn default_network_timeout_secs() -> u64 {
+    15
+}
+fn default_nix_gc_age() -> String {
+    "30d".to_string()
+}
+fn default_max_age() -> u32 {
+    30
+}
+fn default_max_count() -> u32 {
+    10
+}
 
 fn default_priority() -> Vec<String> {
     vec![
-        "apt".into(), "pacman".into(), "dnf".into(), "winget".into(),
-        "brew".into(), "flatpak".into(), "snap".into(), "cargo".into(),
-        "npm".into(), "pip".into(),
+        "apt".into(),
+        "pacman".into(),
+        "dnf".into(),
+        "winget".into(),
+        "brew".into(),
+        "flatpak".into(),
+        "snap".into(),
+        "cargo".into(),
+        "npm".into(),
+        "pip".into(),
     ]
 }
 
@@ -232,15 +324,31 @@ fn default_protected_packages() -> Vec<String> {
     #[cfg(target_os = "linux")]
     {
         packages.extend(vec![
-            "linux-image".into(), "linux-headers".into(), "kernel".into(), "systemd".into(),
-            "libc6".into(), "libc".into(), "glibc".into(), "grub".into(), "grub2".into(),
-            "coreutils".into(), "filesystem".into(), "apt".into(), "pacman".into(),
-            "dnf".into(), "rpm".into(),
+            "linux-image".into(),
+            "linux-headers".into(),
+            "kernel".into(),
+            "systemd".into(),
+            "libc6".into(),
+            "libc".into(),
+            "glibc".into(),
+            "grub".into(),
+            "grub2".into(),
+            "coreutils".into(),
+            "filesystem".into(),
+            "apt".into(),
+            "pacman".into(),
+            "dnf".into(),
+            "rpm".into(),
         ]);
     }
     #[cfg(target_os = "windows")]
     {
-        packages.extend(vec!["windows".into(), "win32".into(), "kernel32".into(), "ntdll.dll".into()]);
+        packages.extend(vec![
+            "windows".into(),
+            "win32".into(),
+            "kernel32".into(),
+            "ntdll.dll".into(),
+        ]);
     }
     #[cfg(target_os = "macos")]
     {
@@ -263,10 +371,16 @@ impl Default for Config {
             backend_priority: default_priority(),
             hooks: HashMap::new(),
             hostname_packages: HashMap::new(),
+            hostname_backends: HashMap::new(),
+            managed_files: HashMap::new(),
+            retention: crate::core::RetentionConfig::default(),
             bloatware_file: default_bloatware_file(),
             remove_bloatware: false,
             prune_on_sync: false,
             purge_orphans: false,
+            prune_scope: PruneScope::default(),
+            protect_imperative: true,
+            fleet_hosts: Vec::new(),
             auto_lock_checksums: true,
             show_progress: true,
             verbose: false,
@@ -312,16 +426,39 @@ impl Config {
     }
 
     pub fn save(&self) -> Result<()> {
-        let content = toml::to_string_pretty(self).map_err(|e| Error::Config(format!("Failed to serialize config: {}", e)))?;
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| Error::Config(format!("Failed to serialize config: {}", e)))?;
         if let Some(parent) = self.config_file.parent() {
             fs::create_dir_all(parent).map_err(Error::from)?;
         }
-        fs::write(&self.config_file, content).map_err(|e| Error::Config(format!("Failed to write config file: {}", e)))?;
+        fs::write(&self.config_file, content)
+            .map_err(|e| Error::Config(format!("Failed to write config file: {}", e)))?;
         Ok(())
     }
 
     pub fn get_hostname() -> String {
-        hostname::get().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "unknown".to_string())
+        hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "unknown".to_string())
+    }
+
+    /// The set of backends LiNix manages on the current host. A non-empty per-host
+    /// override in `[hostname_backends]` wins; otherwise the global `enabled_backends`.
+    /// An empty result means "all backends" — the default when nothing is configured.
+    pub fn effective_enabled_backends(&self) -> Vec<String> {
+        let host = Self::get_hostname();
+        match self.hostname_backends.get(&host) {
+            Some(list) if !list.is_empty() => list.clone(),
+            _ => self.enabled_backends.clone(),
+        }
+    }
+
+    /// Whether `backend` is managed on this host. An empty effective set enables every
+    /// backend, preserving the zero-config default where nothing is filtered.
+    pub fn is_backend_enabled(&self, backend: &str) -> bool {
+        let effective = self.effective_enabled_backends();
+        effective.is_empty() || effective.iter().any(|b| b == backend)
     }
 
     pub fn merge_cli_overrides(
@@ -333,12 +470,24 @@ impl Config {
         groups_dir: Option<PathBuf>,
         verbose: Option<bool>,
     ) {
-        if let Some(dr) = dry_run { self.dry_run = dr; }
-        if let Some(y) = yes { self.yes = y; }
-        if let Some(b) = backend { self.enabled_backends = vec![b]; }
-        if let Some(cp) = config_path { self.config_file = cp; }
-        if let Some(gd) = groups_dir { self.groups_dir = gd; }
-        if let Some(v) = verbose { self.verbose = v; }
+        if let Some(dr) = dry_run {
+            self.dry_run = dr;
+        }
+        if let Some(y) = yes {
+            self.yes = y;
+        }
+        if let Some(b) = backend {
+            self.enabled_backends = vec![b];
+        }
+        if let Some(cp) = config_path {
+            self.config_file = cp;
+        }
+        if let Some(gd) = groups_dir {
+            self.groups_dir = gd;
+        }
+        if let Some(v) = verbose {
+            self.verbose = v;
+        }
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -348,25 +497,32 @@ impl Config {
         // Verify cron strings for any schedules. Standard 5-field cron is normalized to
         // the `cron` crate's 6-field (with-seconds) form; `@`-macros are accepted as-is.
         for schedule in &self.schedules {
-            if schedule.cron.starts_with('@') { continue; }
+            if schedule.cron.starts_with('@') {
+                continue;
+            }
             let normalized = if schedule.cron.split_whitespace().count() == 5 {
                 format!("0 {}", schedule.cron)
             } else {
                 schedule.cron.clone()
             };
             if let Err(e) = normalized.parse::<cron::Schedule>() {
-                return Err(Error::Config(format!("Invalid cron expression for task '{}': {}", schedule.name, e)));
+                return Err(Error::Config(format!(
+                    "Invalid cron expression for task '{}': {}",
+                    schedule.name, e
+                )));
             }
         }
         Ok(())
     }
-    
+
     /// True only on an EXACT (case-insensitive) match against a protected entry.
     /// Substring matching was a bug: protecting `libc`/`apt`/`kernel` also shielded
     /// `libc-bin`, `aptitude`, `kernelshark`, etc. from removal.
     pub fn is_protected(&self, package_name: &str) -> bool {
         let name_lower = package_name.to_lowercase();
-        self.protected_packages.iter().any(|p| p.to_lowercase() == name_lower)
+        self.protected_packages
+            .iter()
+            .any(|p| p.to_lowercase() == name_lower)
     }
 }
 
@@ -385,18 +541,65 @@ mod tests {
     }
 
     #[test]
+    fn backend_gating_defaults_to_all_enabled() {
+        let cfg = Config::default();
+        // Zero config → every backend is managed.
+        assert!(cfg.is_backend_enabled("apt"));
+        assert!(cfg.is_backend_enabled("cargo"));
+        assert!(cfg.effective_enabled_backends().is_empty());
+    }
+
+    #[test]
+    fn global_enabled_backends_restricts() {
+        let cfg = Config {
+            enabled_backends: vec!["apt".into(), "cargo".into()],
+            ..Default::default()
+        };
+        assert!(cfg.is_backend_enabled("apt"));
+        assert!(!cfg.is_backend_enabled("npm"));
+    }
+
+    #[test]
+    fn per_host_override_wins_over_global() {
+        // A per-host entry for THIS machine replaces the global list entirely.
+        let mut hostname_backends = HashMap::new();
+        hostname_backends.insert(Config::get_hostname(), vec!["cargo".into(), "npm".into()]);
+        let cfg = Config {
+            enabled_backends: vec!["apt".into()],
+            hostname_backends,
+            ..Default::default()
+        };
+        assert!(cfg.is_backend_enabled("cargo"));
+        assert!(cfg.is_backend_enabled("npm"));
+        // 'apt' was only in the global list, which the host override supersedes.
+        assert!(!cfg.is_backend_enabled("apt"));
+    }
+
+    #[test]
     fn validate_accepts_standard_and_macro_cron() {
         // standard 5-field cron is accepted (normalized to the crate's 6-field form)
-        let cfg = Config { schedules: vec![schedule("30 4 * * 1")], ..Config::default() };
+        let cfg = Config {
+            schedules: vec![schedule("30 4 * * 1")],
+            ..Config::default()
+        };
         assert!(cfg.validate().is_ok(), "5-field cron should be valid");
         // explicit 6-field also accepted
-        let cfg = Config { schedules: vec![schedule("0 30 4 * * 1")], ..Config::default() };
+        let cfg = Config {
+            schedules: vec![schedule("0 30 4 * * 1")],
+            ..Config::default()
+        };
         assert!(cfg.validate().is_ok(), "6-field cron should be valid");
         // @-macros accepted
-        let cfg = Config { schedules: vec![schedule("@daily")], ..Config::default() };
+        let cfg = Config {
+            schedules: vec![schedule("@daily")],
+            ..Config::default()
+        };
         assert!(cfg.validate().is_ok(), "@daily should be valid");
         // garbage rejected
-        let cfg = Config { schedules: vec![schedule("not a cron")], ..Config::default() };
+        let cfg = Config {
+            schedules: vec![schedule("not a cron")],
+            ..Config::default()
+        };
         assert!(cfg.validate().is_err(), "garbage cron should be rejected");
     }
 

@@ -1,12 +1,12 @@
 use crate::core::{
-    BackendCore, Installable, Package, PackageSpec, 
-    Queryable, Result, Error, CommandExecutor, MetadataProvider
+    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    Queryable, Result,
 };
 use async_trait::async_trait;
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 use std::sync::Arc;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 /// Core backend implementation for managing BTRFS filesystem resources.
 pub struct BtrfsBackendCore {
@@ -16,7 +16,7 @@ pub struct BtrfsBackendCore {
 
 impl BtrfsBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
-        Self { 
+        Self {
             executor,
             name: "btrfs".to_string(),
         }
@@ -25,23 +25,37 @@ impl BtrfsBackendCore {
     /// Helper to ensure quota groups (qgroups) are enabled.
     async fn ensure_qgroups(&self, path: &str, sudo: bool) -> Result<()> {
         debug!("BTRFS: Ensuring qgroups are enabled for {}", path);
-        self.executor.run("btrfs", &["quota", "enable", path], sudo).await?;
+        self.executor
+            .run("btrfs", &["quota", "enable", path], sudo)
+            .await?;
         Ok(())
     }
 
     /// Discovers the UUID of the filesystem containing the given path.
     async fn get_fs_uuid(&self, path: &str) -> Result<String> {
-        let output = self.executor.run_output("btrfs", &["filesystem", "show", path], false).await?;
+        let output = self
+            .executor
+            .run_output("btrfs", &["filesystem", "show", path], false)
+            .await?;
         for line in output.lines() {
             if let Some(uuid_part) = line.trim().strip_prefix("uuid:") {
                 return Ok(uuid_part.trim().to_string());
             }
         }
-        Err(Error::Other(format!("Could not determine BTRFS UUID for {}", path)))
+        Err(Error::Other(format!(
+            "Could not determine BTRFS UUID for {}",
+            path
+        )))
     }
 
     /// Manages /etc/fstab entries for declarative subvolume mounting.
-    fn update_fstab(&self, uuid: &str, subvol_path: &str, mount_point: &str, options: &str) -> Result<()> {
+    fn update_fstab(
+        &self,
+        uuid: &str,
+        subvol_path: &str,
+        mount_point: &str,
+        options: &str,
+    ) -> Result<()> {
         let fstab_path = Path::new("/etc/fstab");
         if !fstab_path.exists() {
             return Err(Error::Other("/etc/fstab not found".into()));
@@ -50,7 +64,7 @@ impl BtrfsBackendCore {
         // fstab modification is synchronous and requires careful atomic handling
         let content = fs::read_to_string(fstab_path).map_err(Error::from)?;
         let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-        
+
         lines.retain(|l| !l.contains(mount_point));
 
         let new_line = format!(
@@ -61,14 +75,16 @@ impl BtrfsBackendCore {
 
         let final_content = lines.join("\n") + "\n";
         crate::utils::file::atomic_write(fstab_path, &final_content)?;
-        
+
         Ok(())
     }
 }
 
 #[async_trait]
 impl BackendCore for BtrfsBackendCore {
-    fn name(&self) -> &str { &self.name }
+    fn name(&self) -> &str {
+        &self.name
+    }
 
     fn is_available(&self) -> bool {
         cfg!(target_os = "linux") && self.executor.command_exists_sync("btrfs")
@@ -97,25 +113,38 @@ impl Installable for BtrfsInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         for spec in specs {
             let path = &spec.name;
-            
+
             if !Path::new(path).exists() {
                 info!("BTRFS: Creating subvolume at {}", path);
-                self.core.executor.run("btrfs", &["subvolume", "create", path], sudo).await?;
+                self.core
+                    .executor
+                    .run("btrfs", &["subvolume", "create", path], sudo)
+                    .await?;
             }
 
             if let Some(quota_size) = spec.options.get("quota") {
                 let _ = self.core.ensure_qgroups(path, sudo).await;
-                self.core.executor.run("btrfs", &["qgroup", "limit", quota_size, path], sudo).await?;
+                self.core
+                    .executor
+                    .run("btrfs", &["qgroup", "limit", quota_size, path], sudo)
+                    .await?;
             }
 
             if let Some(mount_point) = spec.options.get("mount") {
                 if !Path::new(mount_point).exists() {
-                    self.core.executor.run("mkdir", &["-p", mount_point], sudo).await?;
+                    self.core
+                        .executor
+                        .run("mkdir", &["-p", mount_point], sudo)
+                        .await?;
                 }
 
                 let uuid = self.core.get_fs_uuid(path).await?;
-                let custom_options = spec.options.get("options").map(|s| s.as_str()).unwrap_or("defaults");
-                
+                let custom_options = spec
+                    .options
+                    .get("options")
+                    .map(|s| s.as_str())
+                    .unwrap_or("defaults");
+
                 let core_ref = self.core.clone();
                 let uuid_str = uuid.clone();
                 let path_str = path.clone();
@@ -124,9 +153,14 @@ impl Installable for BtrfsInstallable {
 
                 tokio::task::spawn_blocking(move || {
                     core_ref.update_fstab(&uuid_str, &path_str, &mount_str, &opt_str)
-                }).await.map_err(|e| Error::Other(e.to_string()))??;
+                })
+                .await
+                .map_err(|e| Error::Other(e.to_string()))??;
 
-                self.core.executor.run("mount", &[mount_point], sudo).await?;
+                self.core
+                    .executor
+                    .run("mount", &[mount_point], sudo)
+                    .await?;
             }
         }
         Ok(())
@@ -136,7 +170,10 @@ impl Installable for BtrfsInstallable {
         for name in names {
             if Path::new(name).exists() {
                 info!("BTRFS: Deleting subvolume {}", name);
-                self.core.executor.run("btrfs", &["subvolume", "delete", name], sudo).await?;
+                self.core
+                    .executor
+                    .run("btrfs", &["subvolume", "delete", name], sudo)
+                    .await?;
             }
         }
         Ok(())
@@ -150,11 +187,19 @@ pub struct BtrfsQueryable {
 #[async_trait]
 impl Queryable for BtrfsQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("btrfs", &["subvolume", "list", "-p", "/"], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("btrfs", &["subvolume", "list", "-p", "/"], false)
+            .await?;
         let mut packages = Vec::new();
         for line in output.lines() {
             if let Some(path_part) = line.split("path ").last() {
-                let full_path = if path_part.starts_with('/') { path_part.to_string() } else { format!("/{}", path_part) };
+                let full_path = if path_part.starts_with('/') {
+                    path_part.to_string()
+                } else {
+                    format!("/{}", path_part)
+                };
                 packages.push(Package::new(full_path, "btrfs"));
             }
         }
@@ -166,7 +211,9 @@ impl Queryable for BtrfsQueryable {
     }
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {
-        if !Path::new(name).exists() { return Ok(None); }
+        if !Path::new(name).exists() {
+            return Ok(None);
+        }
         let p = Package::new(name, "btrfs");
         Ok(Some(p))
     }
@@ -179,9 +226,11 @@ pub fn register(
     _cfg: &crate::config::Config,
 ) {
     let core = Arc::new(BtrfsBackendCore::new(exec.duplicate()));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(BtrfsInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(BtrfsQueryable { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(BtrfsInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(BtrfsQueryable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }

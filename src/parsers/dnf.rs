@@ -24,7 +24,8 @@ pub fn parse_dnf_search(output: &str) -> Vec<Package> {
             // DNF usually includes the architecture in the search name (e.g., .noarch or .x86_64)
             let name = name_part.split('.').next()?.trim();
             let mut p = Package::new(name, "dnf");
-            p.properties.insert("description".into(), desc.trim().to_string());
+            p.properties
+                .insert("description".into(), desc.trim().to_string());
             Some(p)
         })
         .collect()
@@ -45,16 +46,16 @@ pub fn parse_zypper_search(output: &str) -> Vec<Package> {
                 let status = parts[0].trim();
                 let name = parts[1].trim();
                 let summary = parts[2].trim();
-                
+
                 let mut p = Package::new(name, "zypper");
                 p.properties.insert("summary".into(), summary.to_string());
                 p.properties.insert("status_raw".into(), status.to_string());
-                
+
                 // If status contains 'i', it's already installed
                 if status.contains('i') {
                     p.properties.insert("installed".into(), "true".into());
                 }
-                
+
                 Some(p)
             } else {
                 None
@@ -82,6 +83,9 @@ mod tests {
         let res = parse_dnf_search(input);
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "htop");
-        assert_eq!(res[0].properties.get("description").unwrap(), "Interactive process viewer");
+        assert_eq!(
+            res[0].properties.get("description").unwrap(),
+            "Interactive process viewer"
+        );
     }
 }

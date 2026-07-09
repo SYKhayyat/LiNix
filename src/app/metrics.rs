@@ -1,7 +1,7 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use chrono::{DateTime, Utc};
 
 /// Represents the performance data of a single package operation.
 /// Hardened for Phase 2.5: Includes retry counts and bandwidth telemetry.
@@ -56,19 +56,21 @@ impl MetricsCollector {
     #[allow(clippy::too_many_arguments)]
     pub fn record_operation(
         &self,
-        name: &str, 
-        backend: &str, 
-        start_time: DateTime<Utc>, 
-        success: bool, 
+        name: &str,
+        backend: &str,
+        start_time: DateTime<Utc>,
+        success: bool,
         error: Option<String>,
         retry_count: u32,
         bytes_downloaded: u64,
     ) {
         let mut inner = self.inner.lock().expect("Metrics lock poisoned");
-        let duration = Utc::now().signed_duration_since(start_time).num_milliseconds();
-        
+        let duration = Utc::now()
+            .signed_duration_since(start_time)
+            .num_milliseconds();
+
         inner.total_bytes_downloaded += bytes_downloaded;
-        
+
         inner.operations.push(OperationMetrics {
             name: name.to_string(),
             backend: backend.to_string(),
@@ -93,20 +95,32 @@ impl MetricsCollector {
 
     pub fn record_error(&self, context: &str, message: &str) {
         let mut inner = self.inner.lock().expect("Metrics lock poisoned");
-        inner.errors.push((context.to_string(), message.to_string()));
+        inner
+            .errors
+            .push((context.to_string(), message.to_string()));
     }
 
     /// Generates a summary report for the user.
     pub fn print_summary(&self) {
         let inner = self.inner.lock().expect("Metrics lock poisoned");
-        let total_duration = inner.start_time.map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.0);
+        let total_duration = inner
+            .start_time
+            .map(|s| s.elapsed().as_secs_f64())
+            .unwrap_or(0.0);
 
         println!("\n=== Transaction Summary ===");
-        println!("Status:       {}", if inner.errors.is_empty() { "SUCCESS" } else { "DEGRADED" });
+        println!(
+            "Status:       {}",
+            if inner.errors.is_empty() {
+                "SUCCESS"
+            } else {
+                "DEGRADED"
+            }
+        );
         println!("Time:         {:.2}s", total_duration);
         println!("Installs:     {}", inner.packages_installed);
         println!("Removals:     {}", inner.packages_removed);
-        
+
         if inner.total_bytes_downloaded > 0 {
             let mb = inner.total_bytes_downloaded as f64 / 1024.0 / 1024.0;
             println!("Downloaded:   {:.2} MB", mb);
@@ -121,9 +135,9 @@ impl MetricsCollector {
                 } else {
                     "".to_string()
                 };
-                
+
                 println!(
-                    "  {} [{:<8}] {:<20} ({}ms){}", 
+                    "  {} [{:<8}] {:<20} ({}ms){}",
                     status_icon, op.backend, op.name, op.duration_ms, retry_text
                 );
             }

@@ -1,9 +1,8 @@
 // src/backends/generic.rs
 
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Searchable, Upgradable, RepoManager, HealthStatus,
-    HealthReport, MetadataProvider
+    BackendCore, CommandExecutor, HealthReport, HealthStatus, Installable, MetadataProvider,
+    Package, PackageSpec, Queryable, RepoManager, Result, Searchable, Upgradable,
 };
 use crate::parsers::OutputParser;
 use async_trait::async_trait;
@@ -26,10 +25,16 @@ impl VersionPin {
     /// Produce the install argument(s) for `name` pinned to `version`.
     fn apply(&self, name: &str, version: &str) -> Vec<String> {
         match self {
-            VersionPin::Inline(tmpl) => vec![tmpl.replace("{name}", name).replace("{version}", version)],
+            VersionPin::Inline(tmpl) => {
+                vec![tmpl.replace("{name}", name).replace("{version}", version)]
+            }
             VersionPin::Flag(flags) => {
                 let mut out = vec![name.to_string()];
-                out.extend(flags.iter().map(|f| f.replace("{name}", name).replace("{version}", version)));
+                out.extend(
+                    flags
+                        .iter()
+                        .map(|f| f.replace("{name}", name).replace("{version}", version)),
+                );
                 out
             }
         }
@@ -52,8 +57,15 @@ pub struct ManagerConfig {
     pub search_args: Vec<String>,
     /// Optional: if specified, use this binary for search instead of the backend name.
     pub search_binary: Option<String>,
+    /// Optional: binary to run the LIST commands (`list_args`/`list_manual_args`) with,
+    /// instead of the backend name. Required when a manager's query tool is a *separate*
+    /// program — e.g. apt lists installed packages via `dpkg-query`, not `apt dpkg-query`.
+    pub list_binary: Option<String>,
     pub upgrade_args: Vec<String>,
     pub update_args: Option<Vec<String>>,
+    /// Native args for orphan/unused-dependency removal (e.g. apt `autoremove -y`).
+    /// `None` means the backend has no orphan concept → `clean_orphans` reports Unsupported.
+    pub orphan_args: Option<Vec<String>>,
     pub repo_add_args: Option<Vec<String>>,
     pub repo_remove_args: Option<Vec<String>>,
     pub repo_list_args: Option<Vec<String>>,
@@ -91,7 +103,10 @@ impl BackendCore for GenericBackendCore {
         if !self.is_available() {
             return Ok(HealthReport {
                 status: HealthStatus::Critical,
-                message: Some(format!("Binary for generic manager '{}' not found in PATH", self.name)),
+                message: Some(format!(
+                    "Binary for generic manager '{}' not found in PATH",
+                    self.name
+                )),
             });
         }
         Ok(HealthReport {
@@ -116,13 +131,17 @@ impl MetadataProvider for GenericBackendCore {
 
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
         // Dependency resolution is a read-only query — never escalate with sudo.
-        let output = self.executor.run_output(&self.name, &arg_refs, false).await?;
+        let output = self
+            .executor
+            .run_output(&self.name, &arg_refs, false)
+            .await?;
 
         // Extract clean package names. apt/zypper print labelled lines
         // ("Depends: libc6", "Requires: foo"); strip the "Label: " prefix and take the
         // bare name (dropping any version constraint / alternative). Backends that print
         // bare names (e.g. apk) pass through unchanged.
-        Ok(output.lines()
+        Ok(output
+            .lines()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty())
             .filter_map(|l| {
@@ -141,7 +160,9 @@ pub struct GenericInstallable {
 #[async_trait]
 impl Installable for GenericInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
-        if specs.is_empty() { return Ok(()); }
+        if specs.is_empty() {
+            return Ok(());
+        }
 
         let mut final_args: Vec<String> = self.core.config.install_args.clone();
         for spec in specs {
@@ -158,15 +179,23 @@ impl Installable for GenericInstallable {
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
 
         if self.core.config.is_exclusive {
-            self.core.executor.run_exclusive(&self.core.name, &self.core.name, &arg_refs, sudo).await?;
+            self.core
+                .executor
+                .run_exclusive(&self.core.name, &self.core.name, &arg_refs, sudo)
+                .await?;
         } else {
-            self.core.executor.run(&self.core.name, &arg_refs, sudo).await?;
+            self.core
+                .executor
+                .run(&self.core.name, &arg_refs, sudo)
+                .await?;
         }
         Ok(())
     }
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
-        if names.is_empty() { return Ok(()); }
+        if names.is_empty() {
+            return Ok(());
+        }
 
         let mut args: Vec<String> = self.core.config.remove_args.clone();
         for name in names {
@@ -176,9 +205,15 @@ impl Installable for GenericInstallable {
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         if self.core.config.is_exclusive {
-            self.core.executor.run_exclusive(&self.core.name, &self.core.name, &arg_refs, sudo).await?;
+            self.core
+                .executor
+                .run_exclusive(&self.core.name, &self.core.name, &arg_refs, sudo)
+                .await?;
         } else {
-            self.core.executor.run(&self.core.name, &arg_refs, sudo).await?;
+            self.core
+                .executor
+                .run(&self.core.name, &arg_refs, sudo)
+                .await?;
         }
         Ok(())
     }
@@ -191,15 +226,35 @@ pub struct GenericQueryable {
 #[async_trait]
 impl Queryable for GenericQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let args: Vec<&str> = self.core.config.list_args.iter().map(|s| s.as_str()).collect();
-        let output = self.core.executor.run_output(&self.core.name, &args, false).await?;
+        let args: Vec<&str> = self
+            .core
+            .config
+            .list_args
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        // Use the configured list binary if the query tool is a separate program (e.g.
+        // apt -> dpkg-query); otherwise the backend's own binary.
+        let bin = self
+            .core
+            .config
+            .list_binary
+            .as_deref()
+            .unwrap_or(&self.core.name);
+        let output = self.core.executor.run_output(bin, &args, false).await?;
         Ok(self.core.parser.parse_installed(&output))
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
         if let Some(ref manual_args) = self.core.config.list_manual_args {
             let args: Vec<&str> = manual_args.iter().map(|s| s.as_str()).collect();
-            let output = self.core.executor.run_output(&self.core.name, &args, false).await?;
+            let bin = self
+                .core
+                .config
+                .list_binary
+                .as_deref()
+                .unwrap_or(&self.core.name);
+            let output = self.core.executor.run_output(bin, &args, false).await?;
             Ok(self.core.parser.parse_installed(&output))
         } else {
             self.list_installed().await
@@ -208,7 +263,14 @@ impl Queryable for GenericQueryable {
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let all = self.list_installed().await?;
-        Ok(all.into_iter().find(|p| p.name == name))
+        // winget records the canonical Id (e.g. "jqlang.jq"), but packages are commonly
+        // installed — and thus removed — by their bare moniker ("jq"). Match the trailing
+        // dot-segment for winget so `remove winget:jq` finds "jqlang.jq". Scoped to winget
+        // to avoid mis-matching legitimately dotted names elsewhere (e.g. npm "socket.io").
+        let winget = self.core.name == "winget";
+        Ok(all.into_iter().find(|p| {
+            p.name == name || (winget && p.name.rsplit('.').next() == Some(name))
+        }))
     }
 }
 
@@ -219,10 +281,21 @@ pub struct GenericSearchable {
 #[async_trait]
 impl Searchable for GenericSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let mut args: Vec<&str> = self.core.config.search_args.iter().map(|s| s.as_str()).collect();
+        let mut args: Vec<&str> = self
+            .core
+            .config
+            .search_args
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
         args.push(query);
         // Use search_binary if specified, otherwise fallback to the backend name
-        let bin = self.core.config.search_binary.as_deref().unwrap_or(&self.core.name);
+        let bin = self
+            .core
+            .config
+            .search_binary
+            .as_deref()
+            .unwrap_or(&self.core.name);
         let output = self.core.executor.run_output(bin, &args, false).await?;
         Ok(self.core.parser.parse_search(&output))
     }
@@ -243,17 +316,45 @@ impl Upgradable for GenericUpgradable {
     }
 
     async fn upgrade(&self, sudo: bool) -> Result<()> {
-        let args: Vec<&str> = self.core.config.upgrade_args.iter().map(|s| s.as_str()).collect();
+        let args: Vec<&str> = self
+            .core
+            .config
+            .upgrade_args
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
         if self.core.config.is_exclusive {
-            self.core.executor.run_exclusive(&self.core.name, &self.core.name, &args, sudo).await?;
+            self.core
+                .executor
+                .run_exclusive(&self.core.name, &self.core.name, &args, sudo)
+                .await?;
         } else {
             self.core.executor.run(&self.core.name, &args, sudo).await?;
         }
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        Ok(())
+    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
+        // If the backend declares native orphan-removal args, run them; otherwise be
+        // honest that it has no orphan concept (LSP) rather than silently succeeding.
+        match &self.core.config.orphan_args {
+            Some(args) => {
+                let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                if self.core.config.is_exclusive {
+                    self.core
+                        .executor
+                        .run_exclusive(&self.core.name, &self.core.name, &arg_refs, sudo)
+                        .await?;
+                } else {
+                    self.core
+                        .executor
+                        .run(&self.core.name, &arg_refs, sudo)
+                        .await?;
+                }
+                Ok(())
+            }
+            None => Err(crate::core::Error::Unsupported(self.core.name.clone())),
+        }
     }
 }
 
@@ -265,8 +366,16 @@ pub struct GenericRepoManager {
 /// (e.g. apk/apt). Reject shell metacharacters so a crafted argument cannot break out
 /// of the intended command.
 fn reject_shell_meta(field: &str, value: &str) -> Result<()> {
-    if value.chars().any(|c| matches!(c, '\'' | '"' | '`' | '$' | ';' | '&' | '|' | '<' | '>' | '\n' | '\r' | '\\')) {
-        return Err(crate::core::Error::Other(format!("Unsafe characters in repo {}: '{}'", field, value)));
+    if value.chars().any(|c| {
+        matches!(
+            c,
+            '\'' | '"' | '`' | '$' | ';' | '&' | '|' | '<' | '>' | '\n' | '\r' | '\\'
+        )
+    }) {
+        return Err(crate::core::Error::Other(format!(
+            "Unsafe characters in repo {}: '{}'",
+            field, value
+        )));
     }
     Ok(())
 }
@@ -276,8 +385,9 @@ impl RepoManager for GenericRepoManager {
     async fn add_repo(&self, name: &str, url: &str, sudo: bool) -> Result<()> {
         reject_shell_meta("name", name)?;
         reject_shell_meta("url", url)?;
-        let base_args = self.core.config.repo_add_args.as_ref()
-            .ok_or_else(|| crate::core::Error::Other("Repository addition not supported for this backend".into()))?;
+        let base_args = self.core.config.repo_add_args.as_ref().ok_or_else(|| {
+            crate::core::Error::Other("Repository addition not supported for this backend".into())
+        })?;
 
         let mut final_args = Vec::new();
         for arg in base_args {
@@ -286,41 +396,69 @@ impl RepoManager for GenericRepoManager {
 
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
         info!("Repo: Adding {} to {}...", name, self.core.name);
-        self.core.executor.run(&self.core.name, &arg_refs, sudo).await?;
+        self.core
+            .executor
+            .run(&self.core.name, &arg_refs, sudo)
+            .await?;
         Ok(())
     }
 
     async fn remove_repo(&self, name: &str, sudo: bool) -> Result<()> {
         reject_shell_meta("name", name)?;
-        let base_args = self.core.config.repo_remove_args.as_ref()
-            .ok_or_else(|| crate::core::Error::Other("Repository removal not supported for this backend".into()))?;
+        let base_args = self.core.config.repo_remove_args.as_ref().ok_or_else(|| {
+            crate::core::Error::Other("Repository removal not supported for this backend".into())
+        })?;
 
-        let final_args: Vec<String> = base_args.iter().map(|a| a.replace("{name}", name)).collect();
+        let final_args: Vec<String> = base_args
+            .iter()
+            .map(|a| a.replace("{name}", name))
+            .collect();
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
 
-        self.core.executor.run(&self.core.name, &arg_refs, sudo).await?;
+        self.core
+            .executor
+            .run(&self.core.name, &arg_refs, sudo)
+            .await?;
         Ok(())
     }
 
     async fn list_repos(&self) -> Result<Vec<(String, String)>> {
-        let base_args = self.core.config.repo_list_args.as_ref()
-            .ok_or_else(|| crate::core::Error::Other("Repository listing not supported for this backend".into()))?;
+        let base_args = self.core.config.repo_list_args.as_ref().ok_or_else(|| {
+            crate::core::Error::Other("Repository listing not supported for this backend".into())
+        })?;
         let arg_refs: Vec<&str> = base_args.iter().map(|s| s.as_str()).collect();
-        let output = self.core.executor.run_output(&self.core.name, &arg_refs, false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output(&self.core.name, &arg_refs, false)
+            .await?;
 
         let mut repos = Vec::new();
         for line in output.lines() {
             let trimmed = line.trim();
-            if trimmed.is_empty() { continue; }
+            if trimmed.is_empty() {
+                continue;
+            }
             // Skip dashed separator rows ("--------").
-            if trimmed.chars().all(|c| c == '-' || c == '=') { continue; }
+            if trimmed.chars().all(|c| c == '-' || c == '=') {
+                continue;
+            }
             let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() < 2 { continue; }
+            if parts.len() < 2 {
+                continue;
+            }
             // Skip obvious table headers (e.g. winget "Name Argument Explicit",
             // scoop "Name Source Updated") so they don't show up as repositories.
-            let is_header = matches!(parts[0], "Name" | "NAME" | "Repository" | "Repo" | "Bucket" | "Source")
-                && matches!(parts[1], "Argument" | "URL" | "Url" | "Source" | "Updated" | "Explicit" | "Enabled");
-            if is_header { continue; }
+            let is_header = matches!(
+                parts[0],
+                "Name" | "NAME" | "Repository" | "Repo" | "Bucket" | "Source"
+            ) && matches!(
+                parts[1],
+                "Argument" | "URL" | "Url" | "Source" | "Updated" | "Explicit" | "Enabled"
+            );
+            if is_header {
+                continue;
+            }
             repos.push((parts[0].to_string(), parts[1].to_string()));
         }
         Ok(repos)
@@ -331,28 +469,48 @@ impl RepoManager for GenericRepoManager {
 mod tests {
     use super::*;
 
-    use crate::core::executor::{CommandExecutor, MockExecutor, DryRunOutput};
+    use crate::core::executor::{CommandExecutor, DryRunOutput, MockExecutor};
     use crate::parsers::LambdaParser;
     use dashmap::DashMap;
 
-    fn apt_like_core(mock: Arc<MockExecutor>, vfs: Arc<DashMap<std::path::PathBuf, String>>) -> GenericBackendCore {
+    fn apt_like_core(
+        mock: Arc<MockExecutor>,
+        vfs: Arc<DashMap<std::path::PathBuf, String>>,
+    ) -> GenericBackendCore {
         let exec = CommandExecutor::with_layer(true, false, mock, vfs, Arc::new(DashMap::new()));
         GenericBackendCore {
             name: "apt".into(),
             executor: exec,
             config: ManagerConfig {
                 name: "apt".into(),
-                install_args: vec![], remove_args: vec![], list_args: vec![],
-                list_manual_args: None, search_args: vec![], search_binary: None,
-                upgrade_args: vec![], update_args: None,
-                repo_add_args: None, repo_remove_args: None, repo_list_args: None,
-                depends_args: Some(vec!["depends".into(), "--no-recommends".into(), "--no-suggests".into(), "{name}".into()]),
+                install_args: vec![],
+                remove_args: vec![],
+                list_args: vec![],
+                list_manual_args: None,
+                search_args: vec![],
+                search_binary: None,
+                list_binary: None,
+                upgrade_args: vec![],
+                update_args: None,
+                orphan_args: None,
+                repo_add_args: None,
+                repo_remove_args: None,
+                repo_list_args: None,
+                depends_args: Some(vec![
+                    "depends".into(),
+                    "--no-recommends".into(),
+                    "--no-suggests".into(),
+                    "{name}".into(),
+                ]),
                 version_pin: None,
                 needs_root: true, // apt needs root for writes — but reads must NOT escalate
                 is_exclusive: true,
                 flag_map: HashMap::new(),
             },
-            parser: Arc::new(LambdaParser { installed_fn: |_| vec![], search_fn: |_| vec![] }),
+            parser: Arc::new(LambdaParser {
+                installed_fn: |_| vec![],
+                search_fn: |_| vec![],
+            }),
         }
     }
 
@@ -364,7 +522,11 @@ mod tests {
         // match and the result would be empty.
         mock.set_response(
             "apt depends --no-recommends --no-suggests curl",
-            Ok(DryRunOutput { stdout: b"Depends: libc6\nDepends: bash\n".to_vec(), stderr: vec![] }.into()),
+            Ok(DryRunOutput {
+                stdout: b"Depends: libc6\nDepends: bash\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
         );
         let core = apt_like_core(mock, vfs);
         let deps = core.get_dependencies("curl").await.unwrap();
@@ -375,13 +537,34 @@ mod tests {
     #[test]
     fn version_pin_renders_native_syntax() {
         // inline forms (apt/pip/bun)
-        assert_eq!(VersionPin::Inline("{name}={version}".into()).apply("curl", "7.81.0"), vec!["curl=7.81.0"]);
-        assert_eq!(VersionPin::Inline("{name}=={version}".into()).apply("requests", "2.31.0"), vec!["requests==2.31.0"]);
+        assert_eq!(
+            VersionPin::Inline("{name}={version}".into()).apply("curl", "7.81.0"),
+            vec!["curl=7.81.0"]
+        );
+        assert_eq!(
+            VersionPin::Inline("{name}=={version}".into()).apply("requests", "2.31.0"),
+            vec!["requests==2.31.0"]
+        );
         // flag forms (winget/choco/gem)
         assert_eq!(
-            VersionPin::Flag(vec!["--version".into(), "{version}".into()]).apply("Git.Git", "2.54.0"),
+            VersionPin::Flag(vec!["--version".into(), "{version}".into()])
+                .apply("Git.Git", "2.54.0"),
             vec!["Git.Git", "--version", "2.54.0"]
         );
+    }
+
+    #[tokio::test]
+    async fn clean_orphans_reports_unsupported_without_orphan_args() {
+        // A generic backend with no `orphan_args` must report Unsupported (an honest,
+        // benign skip) instead of silently returning Ok — the LSP fix.
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let core = Arc::new(apt_like_core(mock, vfs)); // apt_like_core sets orphan_args: None
+        let up = GenericUpgradable { core };
+        match up.clean_orphans(true).await {
+            Err(crate::core::Error::Unsupported(name)) => assert_eq!(name, "apt"),
+            other => panic!("expected Unsupported, got {:?}", other),
+        }
     }
 
     #[test]

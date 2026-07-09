@@ -17,10 +17,9 @@ async fn test_ghost_shell_transient_registration_logic() {
     let kernel = TestKernel::new().await;
     let shell = kernel.app.shell();
 
-    kernel.mock_executor.set_response(
-        "brew install vim",
-        Ok(DryRunOutput::default().into())
-    );
+    kernel
+        .mock_executor
+        .set_response("brew install vim", Ok(DryRunOutput::default().into()));
 
     let session_id = "test-session-v3.6.0";
 
@@ -29,17 +28,25 @@ async fn test_ghost_shell_transient_registration_logic() {
         state_guard.active_session_id = Some(session_id.to_string());
     }
 
-    shell.provision_transient_env(&["brew:vim".to_string()], session_id)
+    shell
+        .provision_transient_env(&["brew:vim".to_string()], session_id)
         .await
         .expect("Ephemeral provisioning logic failed.");
 
     let state_final = kernel.state.lock().await;
-    let pkg = state_final.get_package("brew", "vim")
+    let pkg = state_final
+        .get_package("brew", "vim")
         .expect("Package was not correctly registered in state after shell provision.");
 
-    assert!(pkg.is_transient, "Package in Ghost Shell must be marked as 'transient'.");
-    assert_eq!(pkg.session_id.as_deref(), Some(session_id),
-               "Package must be cryptographically associated with the active session ID.");
+    assert!(
+        pkg.is_transient,
+        "Package in Ghost Shell must be marked as 'transient'."
+    );
+    assert_eq!(
+        pkg.session_id.as_deref(),
+        Some(session_id),
+        "Package must be cryptographically associated with the active session ID."
+    );
 }
 
 #[tokio::test]
@@ -64,10 +71,12 @@ async fn test_ghost_shell_atomic_purge_isolation_logic() {
 
     kernel.mock_executor.set_response(
         "brew uninstall temp-tool-1",
-        Ok(DryRunOutput::default().into())
+        Ok(DryRunOutput::default().into()),
     );
 
-    shell.cleanup_transient_env(target_session_id).await
+    shell
+        .cleanup_transient_env(target_session_id)
+        .await
         .expect("Atomic purge orchestration failed.");
 
     let state_final = kernel.state.lock().await;
@@ -75,11 +84,15 @@ async fn test_ghost_shell_atomic_purge_isolation_logic() {
     assert!(state_final.is_managed("brew", "git"),
             "CRITICAL INTEGRITY FAILURE: Permanent system package was incorrectly purged during shell exit!");
 
-    assert!(state_final.is_managed("brew", "temp-tool-2"),
-            "Logic Error: Transient package from a different session was incorrectly purged!");
+    assert!(
+        state_final.is_managed("brew", "temp-tool-2"),
+        "Logic Error: Transient package from a different session was incorrectly purged!"
+    );
 
-    assert!(!state_final.is_managed("brew", "temp-tool-1"),
-            "Failure: Targeted transient package physically remains in registry after purge.");
+    assert!(
+        !state_final.is_managed("brew", "temp-tool-1"),
+        "Failure: Targeted transient package physically remains in registry after purge."
+    );
 }
 
 #[tokio::test]
@@ -90,13 +103,20 @@ async fn test_ghost_shell_auto_manifest_discovery() {
     let manifest_path = kernel.tmp.path().join("linix.txt");
     fs::write(&manifest_path, manifest_content).await.unwrap();
 
-    let content = fs::read_to_string(&manifest_path).await.expect("Failed to read test manifest.");
-    let pkgs: Vec<String> = content.lines()
+    let content = fs::read_to_string(&manifest_path)
+        .await
+        .expect("Failed to read test manifest.");
+    let pkgs: Vec<String> = content
+        .lines()
         .map(|l| l.trim().to_string())
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .collect();
 
-    assert_eq!(pkgs.len(), 2, "Manifest parser failed to identify all package lines.");
+    assert_eq!(
+        pkgs.len(),
+        2,
+        "Manifest parser failed to identify all package lines."
+    );
     assert_eq!(pkgs[0], "brew:jq");
     assert_eq!(pkgs[1], "brew:htop");
 }
@@ -127,7 +147,11 @@ async fn test_ghost_shell_mount_point_resolution() {
 
     kernel.mock_executor.set_response(
         expected_cmd,
-        Ok(DryRunOutput { stdout: json_output.as_bytes().to_vec(), stderr: vec![] }.into())
+        Ok(DryRunOutput {
+            stdout: json_output.as_bytes().to_vec(),
+            stderr: vec![],
+        }
+        .into()),
     );
 
     let spec = PackageSpec {
@@ -137,9 +161,18 @@ async fn test_ghost_shell_mount_point_resolution() {
         requires: vec![],
     };
 
-    let result = shell.locate_package_root(&spec).await
+    let result = shell
+        .locate_package_root(&spec)
+        .await
         .expect("Path discovery logic crashed.");
 
-    assert!(result.is_some(), "GhostShell failed to resolve physical root for sandbox mount.");
-    assert_eq!(result.unwrap(), simulated_root, "Resolved path does not match simulated installation store path.");
+    assert!(
+        result.is_some(),
+        "GhostShell failed to resolve physical root for sandbox mount."
+    );
+    assert_eq!(
+        result.unwrap(),
+        simulated_root,
+        "Resolved path does not match simulated installation store path."
+    );
 }

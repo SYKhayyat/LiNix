@@ -1,0 +1,18 @@
+# Keep the Docker build context small and Linux-clean: never ship the host's build
+# artifacts (esp. Windows/MSVC target/) or VCS/editor cruft into the integration images.
+target/
+**/target/
+.git/
+*.log
+*.tmp
+.idea/
+.vscode/
+
+# Docs, host-only scripts, and the bind-mounted test driver don't belong in the image.
+# Excluding them means editing them never busts the cargo build cache (the image just
+# needs the Rust sources to compile `linix`; run-in-container.sh is bind-mounted at run).
+docs/
+scripts/
+*.md
+*.org
+docker/integration/run-in-container.sh

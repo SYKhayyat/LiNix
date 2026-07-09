@@ -145,11 +145,11 @@ mod tests {
         assert_eq!(result.unwrap(), 42);
         assert_eq!(counter.load(Ordering::SeqCst), 3);
     }
-    
+
     #[test]
     fn test_retry_sync_eventual_success() {
         let counter = AtomicU32::new(0);
-        
+
         let result = retry_sync(3, || {
             let attempt = counter.fetch_add(1, Ordering::SeqCst) + 1;
             if attempt < 3 {
@@ -158,7 +158,7 @@ mod tests {
                 Ok(42)
             }
         });
-        
+
         assert_eq!(result.unwrap(), 42);
         assert_eq!(counter.load(Ordering::SeqCst), 3);
     }

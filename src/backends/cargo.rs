@@ -1,8 +1,8 @@
 // src/backends/cargo.rs
 
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Searchable, Upgradable, MetadataProvider, Error
+    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    Queryable, Result, Searchable, Upgradable,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -38,9 +38,15 @@ impl CargoBackendCore {
 
 #[async_trait]
 impl BackendCore for CargoBackendCore {
-    fn name(&self) -> &str { &self.name }
-    fn is_available(&self) -> bool { self.executor.command_exists_sync("cargo") }
-    fn needs_root(&self) -> bool { false }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn is_available(&self) -> bool {
+        self.executor.command_exists_sync("cargo")
+    }
+    fn needs_root(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]
@@ -61,11 +67,18 @@ impl Installable for CargoInstallable {
             info!("Cargo: Installing {}...", spec.name);
             let mut args = vec!["install", spec.name.as_str()];
             // Reproducible installs: pin the exact version with `--version` when set.
-            if let Some(v) = spec.options.get("version").filter(|v| crate::backends::concrete_version(v)) {
+            if let Some(v) = spec
+                .options
+                .get("version")
+                .filter(|v| crate::backends::concrete_version(v))
+            {
                 args.push("--version");
                 args.push(v.as_str());
             }
-            self.core.executor.run_exclusive("cargo", "cargo", &args, false).await?;
+            self.core
+                .executor
+                .run_exclusive("cargo", "cargo", &args, false)
+                .await?;
         }
         Ok(())
     }
@@ -73,7 +86,10 @@ impl Installable for CargoInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("Cargo: Uninstalling {}...", name);
-            self.core.executor.run_exclusive("cargo", "cargo", &["uninstall", name], false).await?;
+            self.core
+                .executor
+                .run_exclusive("cargo", "cargo", &["uninstall", name], false)
+                .await?;
         }
         Ok(())
     }
@@ -86,7 +102,11 @@ pub struct CargoQueryable {
 #[async_trait]
 impl Queryable for CargoQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("cargo", &["install", "--list"], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("cargo", &["install", "--list"], false)
+            .await?;
         Ok(parse_cargo_list(&output))
     }
 
@@ -100,11 +120,18 @@ impl Queryable for CargoQueryable {
             let cargo_root = self.core.get_cargo_root().await?;
             // Build the binary path with PathBuf and a platform-correct executable
             // extension (`.exe` on Windows) instead of hardcoding POSIX `/bin/<name>`.
-            let bin_name = if cfg!(windows) { format!("{}.exe", name) } else { name.to_string() };
-            let bin_path = std::path::Path::new(&cargo_root).join("bin").join(&bin_name);
+            let bin_name = if cfg!(windows) {
+                format!("{}.exe", name)
+            } else {
+                name.to_string()
+            };
+            let bin_path = std::path::Path::new(&cargo_root)
+                .join("bin")
+                .join(&bin_name);
             if bin_path.exists() || self.core.executor.dry_run {
                 pkg.properties.insert("install_path".into(), cargo_root);
-                pkg.properties.insert("bin_path".into(), bin_path.to_string_lossy().to_string());
+                pkg.properties
+                    .insert("bin_path".into(), bin_path.to_string_lossy().to_string());
             }
             Ok(Some(pkg))
         } else {
@@ -120,7 +147,11 @@ pub struct CargoSearchable {
 #[async_trait]
 impl Searchable for CargoSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("cargo", &["search", query], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("cargo", &["search", query], false)
+            .await?;
         Ok(parse_cargo_search(&output))
     }
 }
@@ -146,18 +177,27 @@ fn parse_cargo_list(output: &str) -> Vec<Package> {
 fn parse_cargo_search(output: &str) -> Vec<Package> {
     let mut results = Vec::new();
     for line in output.lines() {
-        let Some((name, rest)) = line.split_once('=') else { continue };
+        let Some((name, rest)) = line.split_once('=') else {
+            continue;
+        };
         let name = name.trim();
         // The trailing "... and N crates more (use --limit N to see more)" line has no '='
         // before it, but guard anyway.
-        if name.is_empty() || name.starts_with("...") { continue; }
+        if name.is_empty() || name.starts_with("...") {
+            continue;
+        }
         let mut pkg = Package::new(name, "cargo");
         if let Some((ver, _)) = rest.trim().trim_start_matches('"').split_once('"') {
-            if !ver.is_empty() { pkg.version = Some(ver.to_string()); }
+            if !ver.is_empty() {
+                pkg.version = Some(ver.to_string());
+            }
         }
         if let Some((_, desc)) = rest.split_once('#') {
             let desc = desc.trim();
-            if !desc.is_empty() { pkg.properties.insert("description".into(), desc.to_string()); }
+            if !desc.is_empty() {
+                pkg.properties
+                    .insert("description".into(), desc.to_string());
+            }
         }
         results.push(pkg);
     }
@@ -178,19 +218,26 @@ impl Upgradable for CargoUpgradable {
         info!("Cargo: Upgrading all installed packages...");
         let installed = self.core.list_installed_internal().await?;
         for pkg in installed {
-            let _ = self.core.executor.run_exclusive("cargo", "cargo", &["install", &pkg.name, "--force"], false).await;
+            let _ = self
+                .core
+                .executor
+                .run_exclusive("cargo", "cargo", &["install", &pkg.name, "--force"], false)
+                .await;
         }
         Ok(())
     }
 
     async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        Ok(())
+        // cargo has no global orphan concept; report honestly instead of faking success.
+        Err(crate::core::Error::Unsupported("cargo".into()))
     }
 }
 
 impl CargoBackendCore {
     async fn list_installed_internal(&self) -> Result<Vec<Package>> {
-        let queryable = CargoQueryable { core: Arc::new(self.clone()) };
+        let queryable = CargoQueryable {
+            core: Arc::new(self.clone()),
+        };
         queryable.list_installed().await
     }
 }
@@ -202,13 +249,15 @@ pub fn register(
     _cfg: &crate::config::Config,
 ) {
     let core = Arc::new(CargoBackendCore::new(exec.duplicate()));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(CargoInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(CargoQueryable { core: core.clone() }))
-        .with_searchable(Arc::new(CargoSearchable { core: core.clone() }))
-        .with_upgradable(Arc::new(CargoUpgradable { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(CargoInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(CargoQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(CargoSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(CargoUpgradable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }
 
 #[cfg(test)]
@@ -236,7 +285,10 @@ mod tests {
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "ripgrep");
         assert_eq!(pkgs[0].version.as_deref(), Some("13.0.0"));
-        assert_eq!(pkgs[0].properties.get("description").map(String::as_str), Some("line-oriented search tool"));
+        assert_eq!(
+            pkgs[0].properties.get("description").map(String::as_str),
+            Some("line-oriented search tool")
+        );
         assert_eq!(pkgs[1].name, "bat");
     }
 }

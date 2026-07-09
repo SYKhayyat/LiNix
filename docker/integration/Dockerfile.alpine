@@ -1,0 +1,24 @@
+# LiNix integration image — Alpine (apk, musl). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.alpine -t linix-it-alpine .
+#   docker run --rm linix-it-alpine            # defaults to: apk jq
+#
+# Note: Alpine is musl, not glibc. build-base + openssl-dev cover the vendored C
+# dependencies (mlua, ring, etc.); this is the most likely image to need per-crate
+# tweaks if a native dep doesn't support musl cleanly. bun ships glibc-only builds,
+# so it is intentionally omitted here (the sweep auto-skips backends that aren't READY).
+FROM alpine:latest
+# Essential toolchain + language package managers so the harness can sweep many backends
+# in one container (apk + npm + yarn + pnpm + pipx + uv + cargo + gem).
+RUN apk add --no-cache curl build-base pkgconf openssl-dev perl git rustup bash \
+    nodejs npm pipx ruby \
+    && rustup-init -y --profile minimal
+ENV PATH="/root/.local/bin:/root/.cargo/bin:${PATH}"
+# Extra managers via their own installers. Tolerant (`|| true`): a build-time network hiccup
+# leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
+RUN corepack enable || true
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
+WORKDIR /src
+COPY . /src
+RUN cargo build --release
+ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
+CMD ["apk", "jq"]

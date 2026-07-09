@@ -1,0 +1,269 @@
+#+TITLE: LiNix — Current Behavior Reference
+#+SUBTITLE: v6.0.0 — what the binary actually does today
+#+AUTHOR: LiNix
+#+OPTIONS: toc:2 num:t
+#+STARTUP: showall
+
+* What LiNix is
+
+LiNix is a "manager of managers": one CLI that orchestrates 33+ package backends
+(apt, dnf, pacman, apk, zypper, brew, winget, scoop, choco, npm, cargo, pip,
+flatpak, snap, nix, github releases, …) behind a single declarative model.
+
+Two ways to drive it:
+
+- *Imperative* — ~linix install~ / ~linix remove~ / ~linix search~, like a normal
+  package manager, but backend-agnostic.
+- *Declarative* — write packages into manifest files, then ~linix sync~ converges
+  the system to match. ~linix prune~ removes drift; generations enable rollback.
+
+This document records *current, observed behavior* — the contract the test sweeps
+in [[*Real-world test harness][Real-world test harness]] assert. It is descriptive, not aspirational.
+
+* Package spec syntax
+
+A package argument is ~[backend:]name[@options]~:
+
+| Form                       | Meaning                                                        |
+|----------------------------+---------------------------------------------------------------|
+| ~ripgrep~                  | auto-detect backend by priority                               |
+| ~cargo:exa~                | force the ~cargo~ backend                                     |
+| ~npm:typescript@version=>5.0.0~ | force backend + option (version constraint)              |
+| ~github:BurntSushi/ripgrep~ | install from a GitHub release                                |
+
+For ~remove~, a recognized ~backend:~ prefix scopes the removal to that backend;
+otherwise every backend is searched. The backend queries/removes by the *bare*
+name (the ~backend:~ prefix is stripped before it reaches the backend).
+
+* Global flags
+
+All are ~global = true~ (valid before or after the subcommand):
+
+| Flag              | Short | Effect                                                      |
+|-------------------+-------+-------------------------------------------------------------|
+| ~--dry-run~       | ~-n~  | preview only; never prompts, never mutates                  |
+| ~--yes~           | ~-y~  | skip confirmation prompts (required in non-interactive use) |
+| ~--backend NAME~  | ~-b~  | force/scope a single backend                                |
+| ~--config PATH~   | ~-c~  | use an alternate ~config.toml~                              |
+| ~--groups-dir DIR~| ~-g~  | read manifests from DIR (overrides the default location)    |
+| ~--verbose~       | ~-v~  | debug-level logging                                         |
+| ~--progress~      |       | toggle progress indicators (default on)                     |
+
+* Command surface
+
+** Imperative
+- ~search <query> [--json]~ — parallel search across searchable backends.
+- ~install <pkg…> [--json]~ — install; tagged "imperative" so drift-prune won't
+  touch it. ~--json~ with ~--dry-run~ emits the plan instead of installing.
+- ~remove <pkg…> [--json]~ — remove if installed under some managed backend;
+  if not found, *warns and exits 0* (a not-installed remove is not an error).
+- ~list [--backend B] [--json]~ — installed packages (live query per backend).
+- ~info <pkg>~ — metadata (version, description, install path, dependencies).
+- ~run -p <pkg…> <command>~ — run a command in an ephemeral package environment.
+- ~shell -p <pkg…>~ — enter an ephemeral environment.
+
+** Declarative lifecycle
+- ~init [--force]~ — scaffold the on-disk layout and a starter ~local.txt~ manifest.
+- ~sync [--locked] [--json]~ — converge system to manifests. Installs/upgrades;
+  removes drift *only* if ~prune_on_sync = true~. Non-interactive callers must
+  pass ~--yes~ (or ~--json~) or ~sync~ refuses rather than hang or auto-apply.
+- ~status~ (alias ~diff~) ~[--json]~ — read-only: what ~sync~ would install, what
+  drift ~prune~ would remove, and what is installed-but-unmanaged. Changes nothing.
+- ~orphans~ — read-only report of packages an unscoped ~sync~/~clean~ would prune.
+- ~prune [--json]~ — remove drift (managed packages no longer in manifests).
+  Scope from ~prune_scope~: ~"managed"~ (default) or ~"system"~.
+- ~lock~ — pin each managed package's installed version into ~locks.json~ so
+  ~sync --locked~ reproduces those versions where the backend supports it.
+- ~upgrade [--profile|--module|--group] [--canary --test CMD] [--json]~ — upgrade;
+  ~--canary~ snapshots, upgrades, runs a health check, and auto-rolls-back on failure.
+- ~generation list|rollback <id> [--package P]|pin <id>|unpin <id>~ — manage
+  generations (created around ~sync~); rollback restores a prior state.
+- ~rollback <id> [--package P]~ — shorthand for ~generation rollback~.
+- ~clean~ / ~heal~ — deep cleanup / recover an interrupted transaction (WAL).
+
+** Profiles (identities)
+- ~activate <name…>~ — add profile(s) to the active set and converge the system to the
+  *union* of all active profiles. Several profiles can be active at once; live, no reboot.
+- ~deactivate <name…>~ — drop profile(s) from the active set and converge, removing packages
+  no longer required by any remaining active profile (imperative installs are always spared).
+- ~profile list~ — every defined profile (a ~★~ marks the active ones).
+- ~profile show <name>~ — the resolved package set the profile expands to.
+- ~profile create <name>~ — scaffold an empty ~<name>.profile~.
+- ~profile save <name>~ — snapshot the current desired state as a new standalone profile.
+- ~profile switch <name>~ — exclusively switch to one profile (deactivate all others).
+- ~profile active~ — just the currently-active profiles.
+
+A profile is ~<profiles_dir>/<name>.profile~ (a manifest with extra directives), or a legacy
+~<profiles_dir>/<name>/~ directory of ~.txt~ manifests. Directives compose profiles:
+
+| Directive         | Meaning                                                    |
+|-------------------+------------------------------------------------------------|
+| ~include <name>~  | union another profile's resolved set (the "plus")          |
+| ~exclude <name>~  | subtract another profile's resolved set                    |
+| ~-<pkg>~          | subtract a single package (the "minus")                    |
+| any other line    | a package spec (~ripgrep~, ~cargo:exa~, ~@module:dev~, …)  |
+
+Subtraction always wins (applied after all additions); ~include~/~exclude~ recursion is
+cycle-guarded. The active set lives in ~<profiles_dir>/active~; the union is rendered into the
+reserved manifest ~<groups_dir>/_active_profiles.txt~, so the ordinary declarative pipeline
+(resolve → plan → sync, which prunes managed drift) converges the system in both directions.
+So ~lean = base + rust − heavy~ is expressible, and ~work~ + ~gaming~ can be active together.
+
+** Inspection & system
+- ~doctor~ — per-backend ~[READY]~/~[OFFLINE]~.
+- ~update~ — refresh repository metadata for all backends.
+- ~unmanaged~ — installed packages not managed by LiNix.
+- ~why <pkg>~ / ~audit [--json]~ / ~sbom~ — provenance, vulnerability audit, SBOM.
+- ~status~/~config~/~repo~/~module~/~lease~/~schedule~/~snapshot~/
+  ~teleport~/~shim~/~migrate~/~undo~/~bisect~/~clone~/~fleet~/~policy~/
+  ~completions~ — see ~linix <cmd> --help~.
+
+* Exit-code & failure contract
+
+This is the invariant the negative-path tests guard, and the one most recently
+hardened:
+
+- *Mutating commands enforce process exit status.* Any write path (~install~,
+  ~remove~, ~sync~, ~prune~, upgrades — anything routed through the executor's
+  ~run~/~run_exclusive~) that spawns a package-manager command which exits
+  non-zero now returns ~CommandFailed~ with the captured stderr. A failed install
+  or remove *propagates* as a non-zero ~linix~ exit — it is no longer silently
+  swallowed.
+- *Reads tolerate non-zero.* Query/probe paths (~search~, installed-list lookups,
+  service-state probes) route through an unchecked read path, so "no results" or
+  "unit not found" is a normal empty answer, not an error.
+- *Benign-exit allowlist (Windows managers).* A few managers report success with
+  a non-zero code. These specific codes are treated as success, scoped per manager:
+  - ~choco~ / ~chocolatey~: ~1605, 1614, 1618, 1641, 3010~ (MSI "not installed",
+    "in progress", "reboot required/initiated").
+  - ~winget~: ~-1978335189~ (no applicable upgrade), ~-1978335212~ (not installed),
+    ~-1978335215~ (already installed).
+  The allowlist is matched on the command's base name (path- and ~.exe~-qualified
+  invocations resolve correctly) and never leaks across managers.
+- *Signals are never benign.* A command terminated by a signal (no exit code) is
+  always a failure.
+- ~remove~ of a *not-installed* package is a warning and exits 0 — that is not a
+  command failure, it is a no-op.
+
+* Config surface (config.toml)
+
+Written by ~linix config init~; every key is optional. Notable defaults:
+
+| Key                    | Default     | Effect                                             |
+|------------------------+-------------+----------------------------------------------------|
+| ~max_parallel~         | ~4~         | parallel install/remove/search fan-out             |
+| ~network_timeout_secs~ | ~15~        | HTTP search timeout (npm/PyPI/marketplace)         |
+| ~prune_on_sync~        | ~false~     | whether ~sync~ also removes drift                  |
+| ~prune_scope~          | ~"managed"~ | drift scope: managed-only vs any system package    |
+| ~protect_imperative~   | ~true~      | never prune packages installed via ~linix install~ |
+| ~confirm_destructive~  | ~false~     | extra prompt before removals                       |
+| ~protected_packages~   | —           | names that must never be removed                   |
+| ~default_backend~      | auto        | force a single default backend                     |
+
+~linix config show~ prints the effective config and its source (file vs built-in
+defaults). ~linix config path~ prints the file location.
+
+* Real-world test harness
+
+The unit suite in ~tests/~ is *hermetic* — it mocks command execution, proving the
+logic but never touching a real package manager. The harness below fills that gap:
+it runs the real binary against real backends through a full lifecycle, and is the
+executable form of this document's contract.
+
+** Linux (containers)
+
+Requires Docker. From the repo root:
+
+#+begin_src bash
+./docker/integration/run.sh                       # ubuntu(apt), fedora(dnf), arch(pacman), alpine(apk)
+./docker/integration/run.sh htop                  # override the canary package
+DISTROS="ubuntu arch" ./docker/integration/run.sh # a subset
+#+end_src
+
+Each distro image now bundles a broad set of package managers (the native one plus
+~npm~, ~yarn~, ~pnpm~, ~bun~, ~pipx~, ~uv~, ~cargo~, ~gem~), so one container exercises
+*many* backends. ~run-in-container.sh <native-backend> <pkg> <pkg2>~ sweeps, in order:
+
+1. discovery (doctor/search/info) and a printed list of every ~READY~ backend
+2. dry-run safety (no mutation, no manifest write)
+3. imperative install + list + info + *config coherence* (the manifest is updated)
+4. idempotency
+5. imperative remove + coherence
+6. the *negative path* — a failed mutation must exit non-zero
+7. declarative diagnostic — unscoped ~status~ across every backend must not hang
+8. the declarative *roundtrip* — write a package into the manifest *file* → ~sync~ →
+   assert installed; blank the file → ~prune~ → assert removed
+9. the JSON contract — ~search~/~list~/~status~ ~--json~ validated with a *real* JSON
+   parser (pretty-printed multi-line JSON, on stdout; logs go to stderr)
+10. *profiles* — ~activate~/~deactivate~, two profiles active at once, and a relational
+    ~lean = (alpha + bravo) − pkg~ profile, asserting the exact resulting package set
+11. a *multi-backend sweep* — for every other ~READY~ manager, a full install → list
+    (parser) → coherence → remove lifecycle (install failure is soft, since ecosystem
+    variance like corepack-yarn v4 or uv venv rules isn't a core-orchestration bug;
+    everything after a successful install is a hard check)
+12. read-only smoke of the remaining command surface
+
+Each check is tallied; the run exits non-zero if any HARD check failed.
+
+The editable test script is *bind-mounted*, so editing ~run-in-container.sh~ needs
+*no image rebuild* — only changes to Rust source (or the Dockerfiles) trigger a
+rebuild. Backends that can't run in a bare container (~snap~ needs systemd, ~flatpak~
+needs a configured remote) and the macOS-only managers (~brew~, ~mas~, ~macports~) are
+out of scope here; ~scoop~/~winget~/~choco~ are covered by the Windows sweep below.
+
+*Canary choice:* the default package is ~jq~, not ~tree~. busybox (Alpine, ≥1.37)
+ships a ~tree~ applet, so removing the ~tree~ package still leaves ~/usr/bin/tree~
+on PATH — making "binary gone after remove" unfalsifiable. ~jq~ is packaged by
+every backend in the matrix and has no busybox applet.
+
+** Windows / macOS (native — not containerizable)
+
+Windows can't run in a Linux container, and macOS can't be virtualized off Apple
+hardware, so their backends are tested natively:
+
+#+begin_src bash
+cargo build            # or: cargo build --release
+scripts/integration-windows.sh scoop busybox      # user-scoped, no admin, reversible (safe default)
+scripts/integration-windows.sh winget jq          # exercises the winget HRESULT allowlist
+scripts/integration-windows.sh brew wget           # on a real Mac (the script is backend-agnostic)
+#+end_src
+
+Same sweep shape as the container script. ~scoop~ is the safe default; ~winget~/
+~choco~ may require elevation and touch the system more broadly — run those
+deliberately. Point ~LINIX~ at a release build for a release check:
+~LINIX=./target/release/linix.exe scripts/integration-windows.sh~.
+
+* Fixed: declarative-path defects found by the real-world sweep
+
+The first container matrix runs surfaced four defects in the declarative path
+(the imperative path was clean throughout). All four are fixed; root causes and
+fixes recorded here for the changelog:
+
+- *Self-deadlock in ~sync~/~prune~/~upgrade~ (all backends).* The engine held the
+  state-registry lock across ~record_generation()~, which re-acquires the same
+  non-reentrant ~tokio::sync::Mutex~ — a guaranteed self-deadlock *after* the
+  transaction had already applied. dnf/pacman showed the package installed, then
+  the process hung. *Fix:* scope the guard to shim reconciliation only, so the
+  generation record acquires the lock cleanly (~sync/mod.rs~).
+- *Recursive dependency expansion hangs ~status~/~sync~ (apt; latent on
+  dnf/pacman).* The planner walked the *full* native dependency tree by calling
+  each backend's ~depends~ query per node; where that query answers from a local
+  cache (apt), it fanned out into hundreds of subprocesses. *Fix:* expand only
+  *direct* native dependencies (one level) — every backend resolves the full
+  closure itself at install time (~planner.rs~).
+- *apk ~sync~ installed a bogus versioned name (~jq-1.8.1-r0~).* ~apk info -R~
+  emits a header line and virtual provider tokens (~so:…~), which the generic
+  dependency parser turned into fake package targets. *Fix:* apk (and apt) set
+  ~depends_args: None~ — both resolve their own closures (~registry.rs~).
+- *~--json~ output was corrupted by logs.* ~tracing~ wrote to *stdout*,
+  interleaving ~INFO~ lines with JSON. *Fix:* logs go to *stderr*; stdout carries
+  only the payload (~main.rs~). See the exit-code & failure contract above.
+
+** What the sweeps prove (and their limits)
+
+- *Prove:* backends spawn; real search/list output parses; install/remove work
+  end-to-end; failed mutations surface as non-zero exits; the declarative
+  lifecycle converges and prunes; JSON output is well-formed.
+- *Don't prove:* long-tail package edge cases, version-pin fidelity on every
+  backend, dependency-resolution corners, multi-package/transaction atomicity.
+  Extend ~run-in-container.sh~ to cover more.

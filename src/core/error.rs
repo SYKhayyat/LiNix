@@ -1,9 +1,9 @@
 use thiserror::Error;
 
 /// Centralized error handling for the LiNix mission-critical engine.
-/// 
-/// Modernized for v3.6.0: This enum provides high-fidelity error variants 
-/// for every LiNix subsystem. It is designed to be thread-safe (Clone + Send) 
+///
+/// Modernized for v3.6.0: This enum provides high-fidelity error variants
+/// for every LiNix subsystem. It is designed to be thread-safe (Clone + Send)
 /// to support parallel transaction auditing and autonomous diagnostics.
 #[derive(Debug, Error, Clone)]
 pub enum Error {
@@ -87,6 +87,12 @@ pub enum Error {
     #[error("Interactive UI error (Dialoguer): {0}")]
     Dialoguer(String),
 
+    /// The requested operation is not supported by this backend (e.g. a backend
+    /// with no notion of orphan cleanup). This is a benign, honest "skip" — callers
+    /// should treat it differently from a real failure rather than pretending success.
+    #[error("Operation not supported by backend '{0}'")]
+    Unsupported(String),
+
     /// Generic catch-all for miscellaneous failures.
     #[error("{0}")]
     Other(String),
@@ -120,14 +126,14 @@ impl From<toml::de::Error> for Error {
 }
 
 impl From<mlua::Error> for Error {
-    fn from(err: mlua::Error) -> Self { 
-        Error::LuaScript(err.to_string()) 
+    fn from(err: mlua::Error) -> Self {
+        Error::LuaScript(err.to_string())
     }
 }
 
 impl From<tempfile::PersistError> for Error {
-    fn from(err: tempfile::PersistError) -> Self { 
-        Error::Persist(err.to_string()) 
+    fn from(err: tempfile::PersistError) -> Self {
+        Error::Persist(err.to_string())
     }
 }
 
@@ -145,7 +151,7 @@ impl From<dialoguer::Error> for Error {
 }
 
 impl From<String> for Error {
-    fn from(s: String) -> Self { 
-        Error::Other(s) 
+    fn from(s: String) -> Self {
+        Error::Other(s)
     }
 }

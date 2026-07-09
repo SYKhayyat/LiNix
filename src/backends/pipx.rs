@@ -1,13 +1,13 @@
 // src/backends/pipx.rs
 
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Upgradable, MetadataProvider, Error
+    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    Queryable, Result, Upgradable,
 };
 use async_trait::async_trait;
+use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
-use serde_json::Value;
 
 /// Core backend implementation for pipx (Python application installer in isolated environments).
 #[derive(Clone)]
@@ -26,7 +26,10 @@ impl PipxBackendCore {
 
     /// Returns the base directory where pipx stores its venvs.
     async fn get_pipx_home(&self) -> Result<String> {
-        let output = self.executor.run_output("pipx", &["environment", "--value", "PIPX_HOME"], false).await
+        let output = self
+            .executor
+            .run_output("pipx", &["environment", "--value", "PIPX_HOME"], false)
+            .await
             .or_else(|_| {
                 let home = dirs::home_dir()
                     .ok_or_else(|| Error::Other("Could not determine home directory".into()))?;
@@ -38,9 +41,15 @@ impl PipxBackendCore {
 
 #[async_trait]
 impl BackendCore for PipxBackendCore {
-    fn name(&self) -> &str { &self.name }
-    fn is_available(&self) -> bool { self.executor.command_exists_sync("pipx") }
-    fn needs_root(&self) -> bool { false }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn is_available(&self) -> bool {
+        self.executor.command_exists_sync("pipx")
+    }
+    fn needs_root(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]
@@ -64,7 +73,10 @@ impl Installable for PipxInstallable {
                 _ => spec.name.clone(),
             };
             info!("pipx: Installing {}...", target);
-            self.core.executor.run_exclusive("pipx", "pipx", &["install", &target], false).await?;
+            self.core
+                .executor
+                .run_exclusive("pipx", "pipx", &["install", &target], false)
+                .await?;
         }
         Ok(())
     }
@@ -72,7 +84,10 @@ impl Installable for PipxInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("pipx: Uninstalling {}...", name);
-            self.core.executor.run_exclusive("pipx", "pipx", &["uninstall", name], false).await?;
+            self.core
+                .executor
+                .run_exclusive("pipx", "pipx", &["uninstall", name], false)
+                .await?;
         }
         Ok(())
     }
@@ -85,15 +100,21 @@ pub struct PipxQueryable {
 #[async_trait]
 impl Queryable for PipxQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("pipx", &["list", "--json"], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("pipx", &["list", "--json"], false)
+            .await?;
         if output.is_empty() {
             return Ok(vec![]);
         }
-        let json: Value = serde_json::from_str(&output).map_err(|e| Error::Other(format!("pipx JSON error: {}", e)))?;
+        let json: Value = serde_json::from_str(&output)
+            .map_err(|e| Error::Other(format!("pipx JSON error: {}", e)))?;
         let mut packages = Vec::new();
         if let Some(venvs) = json.get("venvs").and_then(|v| v.as_object()) {
             for (name, data) in venvs {
-                let version = data.get("metadata")
+                let version = data
+                    .get("metadata")
                     .and_then(|m| m.get("main_package"))
                     .and_then(|p| p.get("package_version"))
                     .and_then(|v| v.as_str())
@@ -133,12 +154,16 @@ impl Upgradable for PipxUpgradable {
 
     async fn upgrade(&self, _sudo: bool) -> Result<()> {
         info!("pipx: Upgrading all installed packages...");
-        self.core.executor.run_exclusive("pipx", "pipx", &["upgrade-all"], false).await?;
+        self.core
+            .executor
+            .run_exclusive("pipx", "pipx", &["upgrade-all"], false)
+            .await?;
         Ok(())
     }
 
     async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        Ok(())
+        // pipx isolates each app in its own venv; there are no shared orphans to prune.
+        Err(crate::core::Error::Unsupported("pipx".into()))
     }
 }
 
@@ -149,10 +174,12 @@ pub fn register(
     _cfg: &crate::config::Config,
 ) {
     let core = Arc::new(PipxBackendCore::new(exec.duplicate()));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(PipxInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(PipxQueryable { core: core.clone() }))
-        .with_upgradable(Arc::new(PipxUpgradable { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(PipxInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(PipxQueryable { core: core.clone() }))
+            .with_upgradable(Arc::new(PipxUpgradable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }

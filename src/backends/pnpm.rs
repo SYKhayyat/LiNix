@@ -1,14 +1,14 @@
 // src/backends/pnpm.rs
 
-use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Searchable, Upgradable, MetadataProvider, Error
-};
 use crate::backends::node_registry::registry_search;
+use crate::core::{
+    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    Queryable, Result, Searchable, Upgradable,
+};
 use async_trait::async_trait;
+use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
-use serde_json::Value;
 
 /// Core backend implementation for pnpm (fast, disk-efficient Node.js package manager).
 #[derive(Clone)]
@@ -26,29 +26,45 @@ impl PnpmBackendCore {
     }
 
     /// Returns the global pnpm store path.
-	    #[allow(dead_code)]
+    #[allow(dead_code)]
     async fn get_global_store(&self) -> Result<String> {
-        let output = self.executor.run_output("pnpm", &["store", "path"], false).await
+        let output = self
+            .executor
+            .run_output("pnpm", &["store", "path"], false)
+            .await
             .or_else(|_| {
                 let home = dirs::home_dir()
                     .ok_or_else(|| Error::Other("Could not determine home directory".into()))?;
-                Ok::<String, Error>(home.join(".local/share/pnpm/store").to_string_lossy().to_string())
+                Ok::<String, Error>(
+                    home.join(".local/share/pnpm/store")
+                        .to_string_lossy()
+                        .to_string(),
+                )
             })?;
         Ok(output.trim().to_string())
     }
 
     /// Returns the global installation prefix (where global binaries are linked).
     async fn get_global_prefix(&self) -> Result<String> {
-        let output = self.executor.run_output("pnpm", &["root", "-g"], false).await?;
+        let output = self
+            .executor
+            .run_output("pnpm", &["root", "-g"], false)
+            .await?;
         Ok(output.trim().to_string())
     }
 }
 
 #[async_trait]
 impl BackendCore for PnpmBackendCore {
-    fn name(&self) -> &str { &self.name }
-    fn is_available(&self) -> bool { self.executor.command_exists_sync("pnpm") }
-    fn needs_root(&self) -> bool { false }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn is_available(&self) -> bool {
+        self.executor.command_exists_sync("pnpm")
+    }
+    fn needs_root(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]
@@ -71,7 +87,10 @@ impl Installable for PnpmInstallable {
                 _ => spec.name.clone(),
             };
             info!("pnpm: Installing {} globally...", target);
-            self.core.executor.run_exclusive("pnpm", "pnpm", &["add", "-g", &target], false).await?;
+            self.core
+                .executor
+                .run_exclusive("pnpm", "pnpm", &["add", "-g", &target], false)
+                .await?;
         }
         Ok(())
     }
@@ -79,7 +98,10 @@ impl Installable for PnpmInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("pnpm: Uninstalling {} globally...", name);
-            self.core.executor.run_exclusive("pnpm", "pnpm", &["remove", "-g", name], false).await?;
+            self.core
+                .executor
+                .run_exclusive("pnpm", "pnpm", &["remove", "-g", name], false)
+                .await?;
         }
         Ok(())
     }
@@ -92,16 +114,33 @@ pub struct PnpmQueryable {
 #[async_trait]
 impl Queryable for PnpmQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("pnpm", &["list", "-g", "--depth=0", "--json"], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("pnpm", &["list", "-g", "--depth=0", "--json"], false)
+            .await?;
         if output.is_empty() {
             return Ok(vec![]);
         }
-        let json: Value = serde_json::from_str(&output).map_err(|e| Error::Other(format!("pnpm JSON error: {}", e)))?;
+        let json: Value = serde_json::from_str(&output)
+            .map_err(|e| Error::Other(format!("pnpm JSON error: {}", e)))?;
         let mut packages = Vec::new();
-        if let Some(deps) = json.get("dependencies").and_then(|d| d.as_object()) {
-            for (name, info) in deps {
-                let version = info.get("version").and_then(|v| v.as_str()).unwrap_or("unknown");
-                packages.push(Package::with_version(name, version, "pnpm"));
+        // `pnpm list -g --json` returns an ARRAY of project objects
+        // (`[{"dependencies":{...}}]`), not a bare object — so iterate entries and collect
+        // each one's dependency map, else every global package parses as empty.
+        let entries: Vec<&Value> = match &json {
+            Value::Array(items) => items.iter().collect(),
+            other => vec![other],
+        };
+        for entry in entries {
+            if let Some(deps) = entry.get("dependencies").and_then(|d| d.as_object()) {
+                for (name, info) in deps {
+                    let version = info
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    packages.push(Package::with_version(name, version, "pnpm"));
+                }
             }
         }
         Ok(packages)
@@ -150,21 +189,30 @@ impl Upgradable for PnpmUpgradable {
         info!("pnpm: Upgrading all global packages...");
         let installed = self.core.list_installed_internal().await?;
         for pkg in installed {
-            let _ = self.core.executor.run_exclusive("pnpm", "pnpm", &["add", "-g", &pkg.name], false).await;
+            let _ = self
+                .core
+                .executor
+                .run_exclusive("pnpm", "pnpm", &["add", "-g", &pkg.name], false)
+                .await;
         }
         Ok(())
     }
 
     async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
         info!("pnpm: Cleaning global store orphans...");
-        self.core.executor.run("pnpm", &["store", "prune"], false).await?;
+        self.core
+            .executor
+            .run("pnpm", &["store", "prune"], false)
+            .await?;
         Ok(())
     }
 }
 
 impl PnpmBackendCore {
     async fn list_installed_internal(&self) -> Result<Vec<Package>> {
-        let queryable = PnpmQueryable { core: Arc::new(self.clone()) };
+        let queryable = PnpmQueryable {
+            core: Arc::new(self.clone()),
+        };
         queryable.list_installed().await
     }
 }
@@ -176,11 +224,13 @@ pub fn register(
     _cfg: &crate::config::Config,
 ) {
     let core = Arc::new(PnpmBackendCore::new(exec.duplicate()));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(PnpmInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(PnpmQueryable { core: core.clone() }))
-        .with_searchable(Arc::new(PnpmSearchable { core: core.clone() }))
-        .with_upgradable(Arc::new(PnpmUpgradable { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(PnpmInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(PnpmQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(PnpmSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(PnpmUpgradable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }

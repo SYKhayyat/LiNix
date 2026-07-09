@@ -1,31 +1,31 @@
 // src/app/context.rs
 
+use crate::app::diagnostics::FailureDiagnosticEngine;
+use crate::app::migrate::Migrator;
+use crate::app::profile::ProfileManager;
+use crate::app::run::Runner;
+use crate::app::scheduler::notify::NotificationManager;
+use crate::app::scheduler::SchedulerManager;
+use crate::app::shell::GhostShell;
+use crate::app::shim_manager::ShimManager;
+use crate::app::sync::resolver::StateResolver;
+use crate::app::sync::SyncEngine;
+use crate::app::teleport::Teleporter;
+use crate::app::undo::UndoManager;
 use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::Config;
 use crate::core::{
-    CommandExecutor, PackageCache, Result, Error,
-    Package, StateRegistry, PackageSpec, Validator, SnapshotManager, Journal
+    CommandExecutor, Error, Journal, Package, PackageCache, PackageSpec, Result, SnapshotManager,
+    StateRegistry, Validator,
 };
-use crate::app::diagnostics::FailureDiagnosticEngine;
-use crate::app::migrate::Migrator;
-use crate::app::teleport::Teleporter;
-use crate::app::shell::GhostShell;
-use crate::app::profile::ProfileManager;
-use crate::app::shim_manager::ShimManager;
-use crate::app::undo::UndoManager;
-use crate::app::run::Runner;
-use crate::app::scheduler::SchedulerManager;
-use crate::app::scheduler::notify::NotificationManager;
-use crate::app::sync::resolver::StateResolver;
-use crate::app::sync::SyncEngine;
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 
-use std::sync::Arc;
-use std::path::PathBuf;
-use tokio::sync::Mutex;
-use std::collections::{VecDeque, HashSet};
-use tracing::{info, debug, instrument};
 use super::{LuaHooks, MetricsCollector, UniversalSearch};
+use std::collections::{HashSet, VecDeque};
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::{debug, info, instrument, warn};
 
 /// The unified Application Context for LiNix v3.6.0.
 pub struct App {
@@ -69,18 +69,23 @@ impl App {
         let hooks = Arc::new(LuaHooks::new(&config)?);
 
         // Discover backends on the host
-        let registry = Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
+        let registry =
+            Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
 
         // Load the persistent state registry using the provided path or default.
         let state_registry = if let Some(path) = state_path {
             tokio::task::spawn_blocking(move || StateRegistry::load_from(&path))
                 .await
-                .map_err(|e| Error::Other(format!("Kernel Thread Panic during state load: {}", e)))?
+                .map_err(|e| {
+                    Error::Other(format!("Kernel Thread Panic during state load: {}", e))
+                })?
         } else {
             tokio::task::spawn_blocking(StateRegistry::load_default)
                 .await
-                .map_err(|e| Error::Other(format!("Kernel Thread Panic during state load: {}", e)))?
+                .map_err(|e| {
+                    Error::Other(format!("Kernel Thread Panic during state load: {}", e))
+                })?
         }?;
         let state = Arc::new(Mutex::new(state_registry));
 
@@ -96,7 +101,7 @@ impl App {
         // Asynchronously initialize the Failure Diagnosis Engine
         let diagnostics = Arc::new(FailureDiagnosticEngine::init(&config_arc).await);
 
-        info!("LiNix Kernel: v5.0.0 kernel initialized successfully.");
+        info!("LiNix Kernel: v6.0.0 kernel initialized successfully.");
 
         Ok(Self {
             config: config_arc,
@@ -140,7 +145,7 @@ impl App {
             self.journal.clone(),
             self.state.clone(),
             self.diagnostics.clone(),
-            &self.config.groups_dir
+            &self.config.groups_dir,
         )
     }
 
@@ -175,7 +180,12 @@ impl App {
     }
 
     pub fn undo_manager(&self) -> UndoManager {
-        UndoManager::new(self.snapshot_manager.clone(), self.state.clone(), self.executor.clone())
+        UndoManager::new(
+            self.snapshot_manager.clone(),
+            self.state.clone(),
+            self.executor.clone(),
+            self.config.groups_dir.clone(),
+        )
     }
 
     pub fn runner(&self) -> Runner {
@@ -198,7 +208,8 @@ impl App {
             self.journal.clone(),
             self.state.clone(),
             self.diagnostics.clone(),
-        ).await
+        )
+        .await
     }
 
     // ========================================================================
@@ -216,7 +227,9 @@ impl App {
 
         while let Some(spec) = queue.pop_front() {
             let key = format!("{}:{}", spec.backend, spec.name);
-            if !seen.insert(key) { continue; }
+            if !seen.insert(key) {
+                continue;
+            }
 
             Validator::validate_package_name(&spec.name)?;
             for req in &spec.requires {
@@ -231,7 +244,7 @@ impl App {
         info!("Kernel: Initiating metadata synchronization across enabled backends.");
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
-                upgradable.update(backend.needs_root()).await?;
+                upgradable.update(backend.sudo_for_write()).await?;
             }
         }
         Ok(())
@@ -242,7 +255,7 @@ impl App {
         info!("Kernel: Commencing system-wide batch upgrade.");
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
-                upgradable.upgrade(backend.needs_root()).await?;
+                upgradable.upgrade(backend.sudo_for_write()).await?;
             }
         }
         self.metrics.print_summary();
@@ -253,12 +266,18 @@ impl App {
         let mut all_packages = Vec::new();
         for backend in self.registry.available() {
             if let Some(filter) = backend_filter {
-                if backend.name() != filter { continue; }
+                if backend.name() != filter {
+                    continue;
+                }
             }
             if let Some(queryable) = backend.as_queryable() {
                 match queryable.list_installed().await {
                     Ok(pkgs) => all_packages.extend(pkgs),
-                    Err(e) => debug!("Kernel: Query failed for backend '{}': {}", backend.name(), e),
+                    Err(e) => debug!(
+                        "Kernel: Query failed for backend '{}': {}",
+                        backend.name(),
+                        e
+                    ),
                 }
             }
         }
@@ -293,26 +312,82 @@ impl App {
         Ok(unmanaged)
     }
 
-    pub async fn clean_orphans(&self) -> Result<()> {
-        info!("Kernel: Commencing system-wide orphan pruning cycle.");
-        for backend in self.registry.available() {
-            if let Some(upgradable) = backend.as_upgradable() {
-                let _ = upgradable.clean_orphans(backend.needs_root()).await;
+    /// Remove any managed packages whose lease has expired, across their backends, and
+    /// persist the updated state. Called during post-command maintenance so that
+    /// temporary installs (`linix install foo@lease=30d`) really do uninstall themselves
+    /// once time is up, without waiting for the next explicit `sync`/`prune`. No-op in
+    /// dry-run mode.
+    pub async fn sweep_expired_leases(&self) -> Result<()> {
+        if self.config.dry_run {
+            return Ok(());
+        }
+        let expired = { self.state.lock().await.get_expired_packages() };
+        if expired.is_empty() {
+            return Ok(());
+        }
+        info!(
+            "Kernel: {} package(s) have expired leases — reclaiming.",
+            expired.len()
+        );
+        for (backend, name) in expired {
+            if let Some(b) = self.registry.get(&backend) {
+                if let Some(inst) = b.as_installable() {
+                    info!("Lease expired: removing {}:{}", backend, name);
+                    if let Err(e) = inst
+                        .remove(std::slice::from_ref(&name), b.sudo_for_write())
+                        .await
+                    {
+                        warn!(
+                            "Kernel: failed to remove expired {}:{}: {}",
+                            backend, name, e
+                        );
+                        continue;
+                    }
+                    self.state.lock().await.remove(&backend, &name);
+                }
             }
         }
+        self.state.lock().await.save()?;
+        Ok(())
+    }
+
+    pub async fn clean_orphans(&self) -> Result<()> {
+        info!("Kernel: Commencing system-wide orphan pruning cycle.");
+        let (mut cleaned, mut skipped, mut failed) = (0u32, 0u32, 0u32);
+        for backend in self.registry.available() {
+            if let Some(upgradable) = backend.as_upgradable() {
+                match upgradable.clean_orphans(backend.sudo_for_write()).await {
+                    Ok(()) => cleaned += 1,
+                    // A backend with no orphan concept is a benign skip, not a failure.
+                    Err(Error::Unsupported(_)) => skipped += 1,
+                    Err(e) => {
+                        failed += 1;
+                        debug!(
+                            "Kernel: orphan cleanup failed for {}: {}",
+                            backend.name(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
+        info!(
+            "Kernel: orphan pruning complete — {} cleaned, {} not applicable, {} failed.",
+            cleaned, skipped, failed
+        );
         Ok(())
     }
 
     pub async fn prune_snapshots(&self, force: bool) -> Result<()> {
         let settings = &self.config.snapshots;
         let is_dry_run = if force { false } else { self.config.dry_run };
-        info!("Kernel: Commencing snapshot maintenance cycle (Limit: {} days / {} count).",
-              settings.max_age_days, settings.max_count);
-        self.snapshot_manager.prune_stale_snapshots(
-            settings.max_age_days,
-            settings.max_count,
-            is_dry_run
-        ).await
+        info!(
+            "Kernel: Commencing snapshot maintenance cycle (Limit: {} days / {} count).",
+            settings.max_age_days, settings.max_count
+        );
+        self.snapshot_manager
+            .prune_stale_snapshots(settings.max_age_days, settings.max_count, is_dry_run)
+            .await
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {

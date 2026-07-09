@@ -1,17 +1,16 @@
 // src/backends/web.rs
 
 use crate::core::{
-    BackendCore, Installable, Queryable, 
-    security::verify_checksum,
-    CommandExecutor, Package, PackageSpec, Result, Error, MetadataProvider
+    security::verify_checksum, BackendCore, CommandExecutor, Error, Installable, MetadataProvider,
+    Package, PackageSpec, Queryable, Result,
 };
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{PathBuf};
-use tokio::sync::Mutex;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 /// Internal state metadata for resources managed via the 'web' backend.
@@ -47,10 +46,15 @@ impl WebBackendCore {
 
     async fn load_state(&self) -> HashMap<String, WebState> {
         let _guard = self.internal_lock.lock().await;
-        if !tokio::fs::try_exists(&self.state_file).await.unwrap_or(false) {
+        if !tokio::fs::try_exists(&self.state_file)
+            .await
+            .unwrap_or(false)
+        {
             return HashMap::new();
         }
-        let data = tokio::fs::read_to_string(&self.state_file).await.unwrap_or_default();
+        let data = tokio::fs::read_to_string(&self.state_file)
+            .await
+            .unwrap_or_default();
         serde_json::from_str(&data).unwrap_or_default()
     }
 
@@ -63,9 +67,15 @@ impl WebBackendCore {
 
 #[async_trait]
 impl BackendCore for WebBackendCore {
-    fn name(&self) -> &str { &self.name }
-    fn is_available(&self) -> bool { true }
-    fn needs_root(&self) -> bool { false }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn needs_root(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]
@@ -90,12 +100,19 @@ impl Installable for WebInstallable {
 
         for spec in specs {
             let head_res = client.head(&spec.name).send().await.map_err(Error::from)?;
-            let remote_etag = head_res.headers().get("etag").and_then(|v| v.to_str().ok().map(|s| s.to_string()));
-            let remote_mod = head_res.headers().get("last-modified").and_then(|v| v.to_str().ok().map(|s| s.to_string()));
+            let remote_etag = head_res
+                .headers()
+                .get("etag")
+                .and_then(|v| v.to_str().ok().map(|s| s.to_string()));
+            let remote_mod = head_res
+                .headers()
+                .get("last-modified")
+                .and_then(|v| v.to_str().ok().map(|s| s.to_string()));
 
             if let Some(existing) = state.get(&spec.name) {
-                if (remote_etag.is_some() && remote_etag == existing.etag) || 
-                   (remote_mod.is_some() && remote_mod == existing.last_modified) {
+                if (remote_etag.is_some() && remote_etag == existing.etag)
+                    || (remote_mod.is_some() && remote_mod == existing.last_modified)
+                {
                     debug!("Web: {} is up to date, skipping download.", spec.name);
                     continue;
                 }
@@ -107,7 +124,9 @@ impl Installable for WebInstallable {
 
             let tmp_dir = tempfile::tempdir().map_err(Error::from)?;
             let dl_path = tmp_dir.path().join("downloaded_file");
-            tokio::fs::write(&dl_path, bytes).await.map_err(Error::from)?;
+            tokio::fs::write(&dl_path, bytes)
+                .await
+                .map_err(Error::from)?;
 
             if let Some(expected_sha) = spec.options.get("sha256") {
                 verify_checksum(&dl_path, expected_sha)?;
@@ -116,86 +135,129 @@ impl Installable for WebInstallable {
             let id = format!("{:x}", md5::compute(&spec.name));
             let dest_dir = self.core.install_dir.join(&id);
             if dest_dir.exists() {
-                tokio::fs::remove_dir_all(&dest_dir).await.map_err(Error::from)?;
+                tokio::fs::remove_dir_all(&dest_dir)
+                    .await
+                    .map_err(Error::from)?;
             }
-            tokio::fs::create_dir_all(&dest_dir).await.map_err(Error::from)?;
+            tokio::fs::create_dir_all(&dest_dir)
+                .await
+                .map_err(Error::from)?;
 
             let filename = spec.name.split('/').next_back().unwrap_or("resource");
-            let is_archive = [".zip", ".gz", ".tar", ".xz", ".bz2", ".tgz"].iter().any(|ext| filename.contains(ext));
-            
+            let is_archive = [".zip", ".gz", ".tar", ".xz", ".bz2", ".tgz"]
+                .iter()
+                .any(|ext| filename.contains(ext));
+
             if is_archive {
                 let dl_path_archive = dl_path.clone();
                 let dest_dir_archive = dest_dir.clone();
                 tokio::task::spawn_blocking(move || {
                     extract_archive(&dl_path_archive, &dest_dir_archive)
-                }).await.map_err(|e| Error::Other(e.to_string()))??;
+                })
+                .await
+                .map_err(|e| Error::Other(e.to_string()))??;
             } else {
-                tokio::fs::copy(&dl_path, dest_dir.join(filename)).await.map_err(Error::from)?;
+                tokio::fs::copy(&dl_path, dest_dir.join(filename))
+                    .await
+                    .map_err(Error::from)?;
             }
 
             let mut final_bin_link = None;
-            if spec.options.get("type").map(|t| t == "program").unwrap_or(true) {
-                let bin_name = spec.options.get("bin").map(|s| s.as_str()).unwrap_or_else(|| {
-                    filename.split('.').next().unwrap_or(filename)
-                });
-                
+            if spec
+                .options
+                .get("type")
+                .map(|t| t == "program")
+                .unwrap_or(true)
+            {
+                let bin_name = spec
+                    .options
+                    .get("bin")
+                    .map(|s| s.as_str())
+                    .unwrap_or_else(|| filename.split('.').next().unwrap_or(filename));
+
                 let bin_dest_base = dirs::home_dir()
                     .ok_or_else(|| Error::Other("Home directory not found".into()))?
-                    .join(".local").join("bin").join(bin_name);
-                
+                    .join(".local")
+                    .join("bin")
+                    .join(bin_name);
+
                 let dest_dir_discovery = dest_dir.clone();
                 let bin_name_str = bin_name.to_string();
 
-                let bin_src_result: Result<Option<PathBuf>> = tokio::task::spawn_blocking(move || {
-                    let mut entries = walkdir::WalkDir::new(&dest_dir_discovery).into_iter().filter_map(|e| e.ok());
-                    let found = entries.find(|e| {
-                        let fname = e.file_name().to_string_lossy().to_lowercase();
-                        fname == bin_name_str.to_lowercase() || 
-                        fname == format!("{}.exe", bin_name_str.to_lowercase()) ||
-                        (fname.starts_with(&bin_name_str) && !fname.contains('.'))
-                    }).map(|e| e.into_path());
-                    Ok(found)
-                }).await.map_err(|e| Error::Other(e.to_string()))?;
+                let bin_src_result: Result<Option<PathBuf>> =
+                    tokio::task::spawn_blocking(move || {
+                        let mut entries = walkdir::WalkDir::new(&dest_dir_discovery)
+                            .into_iter()
+                            .filter_map(|e| e.ok());
+                        let found = entries
+                            .find(|e| {
+                                let fname = e.file_name().to_string_lossy().to_lowercase();
+                                fname == bin_name_str.to_lowercase()
+                                    || fname == format!("{}.exe", bin_name_str.to_lowercase())
+                                    || (fname.starts_with(&bin_name_str) && !fname.contains('.'))
+                            })
+                            .map(|e| e.into_path());
+                        Ok(found)
+                    })
+                    .await
+                    .map_err(|e| Error::Other(e.to_string()))?;
 
                 if let Some(src_path) = bin_src_result? {
                     let bin_dest = bin_dest_base.clone();
                     if let Some(parent) = bin_dest.parent() {
-                        tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
-                    }
-                    
-                    if bin_dest.exists() || bin_dest.is_symlink() {
-                        tokio::fs::remove_file(&bin_dest).await.map_err(Error::from)?;
+                        tokio::fs::create_dir_all(parent)
+                            .await
+                            .map_err(Error::from)?;
                     }
 
-                    #[cfg(unix)] {
+                    if bin_dest.exists() || bin_dest.is_symlink() {
+                        tokio::fs::remove_file(&bin_dest)
+                            .await
+                            .map_err(Error::from)?;
+                    }
+
+                    #[cfg(unix)]
+                    {
                         use std::os::unix::fs::PermissionsExt;
                         let metadata = tokio::fs::metadata(&src_path).await?;
                         let mut perms = metadata.permissions();
                         perms.set_mode(0o755);
-                        tokio::fs::set_permissions(&src_path, perms).await.map_err(Error::from)?;
+                        tokio::fs::set_permissions(&src_path, perms)
+                            .await
+                            .map_err(Error::from)?;
                         // FIX: Use tokio::fs::symlink (correct async symlink API)
-                        tokio::fs::symlink(&src_path, &bin_dest).await.map_err(Error::from)?;
+                        tokio::fs::symlink(&src_path, &bin_dest)
+                            .await
+                            .map_err(Error::from)?;
                     }
 
-                    #[cfg(windows)] {
+                    #[cfg(windows)]
+                    {
                         let mut win_bin_dest = bin_dest.clone();
-                        if win_bin_dest.extension().is_none() { win_bin_dest.set_extension("exe"); }
-                        tokio::fs::copy(&src_path, &win_bin_dest).await.map_err(Error::from)?;
+                        if win_bin_dest.extension().is_none() {
+                            win_bin_dest.set_extension("exe");
+                        }
+                        tokio::fs::copy(&src_path, &win_bin_dest)
+                            .await
+                            .map_err(Error::from)?;
                     }
 
                     final_bin_link = Some(bin_dest.to_string_lossy().to_string());
                 }
             }
 
-            state.insert(spec.name.clone(), WebState {
-                url: spec.name.clone(),
-                local_path: dest_dir.to_string_lossy().to_string(),
-                bin_link: final_bin_link,
-                etag: remote_etag,
-                last_modified: remote_mod,
-            });
+            state.insert(
+                spec.name.clone(),
+                WebState {
+                    url: spec.name.clone(),
+                    local_path: dest_dir.to_string_lossy().to_string(),
+                    bin_link: final_bin_link,
+                    etag: remote_etag,
+                    last_modified: remote_mod,
+                },
+            );
         }
-        
+
         self.core.save_state(&state).await?;
         Ok(())
     }
@@ -244,9 +306,11 @@ pub fn register(
     cfg: &crate::config::Config,
 ) {
     let core = Arc::new(WebBackendCore::new(exec.duplicate(), cfg.web_dir.clone()));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(WebInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(WebQueryable { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(WebInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(WebQueryable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }

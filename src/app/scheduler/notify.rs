@@ -1,13 +1,13 @@
 // src/app/scheduler/notify.rs
 
-use crate::core::{Result, Error};
 use crate::config::Config;
-#[allow(unused_imports)]
-use notify_rust::{Notification, Timeout, Hint};
+use crate::core::{Error, Result};
 use lettre::transport::smtp::authentication::Credentials;
-use lettre::{Message, AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
-use tracing::{info, warn, error, debug, trace};
+use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+#[allow(unused_imports)]
+use notify_rust::{Hint, Notification, Timeout};
 use std::sync::Arc;
+use tracing::{debug, error, info, trace, warn};
 
 /// Represents the severity of a LiNix system event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +47,13 @@ impl NotificationManager {
         Self { config }
     }
 
-    pub async fn notify(&self, channel: Option<&str>, level: NotificationLevel, subject: &str, body: &str) -> Result<()> {
+    pub async fn notify(
+        &self,
+        channel: Option<&str>,
+        level: NotificationLevel,
+        subject: &str,
+        body: &str,
+    ) -> Result<()> {
         let channel = channel.unwrap_or("none");
         trace!("Notification: Level {:?} to channel '{}'", level, channel);
 
@@ -75,7 +81,7 @@ impl NotificationManager {
 
     fn send_desktop(&self, level: NotificationLevel, subject: &str, body: &str) -> Result<()> {
         let full_title = format!("{}: {}", level.title_prefix(), subject);
-        
+
         let mut note = Notification::new();
         note.summary(&full_title)
             .body(body)
@@ -106,7 +112,10 @@ impl NotificationManager {
         match note.show() {
             Ok(_) => debug!("Notification: Desktop alert dispatched."),
             Err(e) => {
-                warn!("Notification: Desktop alerts unavailable ({}). Logging to console.", e);
+                warn!(
+                    "Notification: Desktop alerts unavailable ({}). Logging to console.",
+                    e
+                );
                 info!("[{}] {}: {}", level.emoji(), subject, body);
             }
         }
@@ -123,11 +132,22 @@ impl NotificationManager {
             }
         };
 
-        let host = settings.get("host").ok_or_else(|| Error::Config("SMTP: host missing".into()))?;
-        let port = settings.get("port").and_then(|p| p.parse::<u16>().ok()).unwrap_or(587);
-        let user = settings.get("user").ok_or_else(|| Error::Config("SMTP: user missing".into()))?;
-        let pass = settings.get("pass").ok_or_else(|| Error::Config("SMTP: pass missing".into()))?;
-        let to_addr = settings.get("to").ok_or_else(|| Error::Config("SMTP: to address missing".into()))?;
+        let host = settings
+            .get("host")
+            .ok_or_else(|| Error::Config("SMTP: host missing".into()))?;
+        let port = settings
+            .get("port")
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or(587);
+        let user = settings
+            .get("user")
+            .ok_or_else(|| Error::Config("SMTP: user missing".into()))?;
+        let pass = settings
+            .get("pass")
+            .ok_or_else(|| Error::Config("SMTP: pass missing".into()))?;
+        let to_addr = settings
+            .get("to")
+            .ok_or_else(|| Error::Config("SMTP: to address missing".into()))?;
 
         let email_subject = format!("{} {} - {}", level.emoji(), level.title_prefix(), subject);
         let email_body = format!(
@@ -140,18 +160,26 @@ impl NotificationManager {
              {}\n\n\
              ---\n\
              Automated Management via LiNix v5.0.0",
-            level, chrono::Local::now().to_rfc2822(), crate::config::Config::get_hostname(), body
+            level,
+            chrono::Local::now().to_rfc2822(),
+            crate::config::Config::get_hostname(),
+            body
         );
 
         let email = Message::builder()
-            .from(user.parse().map_err(|e| Error::Other(format!("SMTP From invalid: {}", e)))?)
-            .to(to_addr.parse().map_err(|e| Error::Other(format!("SMTP To invalid: {}", e)))?)
+            .from(
+                user.parse()
+                    .map_err(|e| Error::Other(format!("SMTP From invalid: {}", e)))?,
+            )
+            .to(to_addr
+                .parse()
+                .map_err(|e| Error::Other(format!("SMTP To invalid: {}", e)))?)
             .subject(email_subject)
             .body(email_body)
             .map_err(|e| Error::Other(format!("Failed to build message: {}", e)))?;
 
         let creds = Credentials::new(user.to_string(), pass.to_string());
-        
+
         let mailer = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
             .map_err(|e| Error::Other(format!("SMTP Transport error: {}", e)))?
             .credentials(creds)

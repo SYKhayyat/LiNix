@@ -1,15 +1,15 @@
 use crate::backends::BackendRegistry;
 use crate::config::Config;
-use crate::core::{Package, Result, Error};
+use crate::core::{Error, Package, Result};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
-use tracing::{info, warn, error, debug, trace, instrument};
+use tracing::{debug, error, info, instrument, trace, warn};
 /// A high-performance search orchestrator that queries multiple backends in parallel.
-/// 
-/// Modernized for v3.6.0: This implementation utilizes an asynchronous 
-/// worker-pool pattern with backpressure governed by a Semaphore. It is 
+///
+/// Modernized for v3.6.0: This implementation utilizes an asynchronous
+/// worker-pool pattern with backpressure governed by a Semaphore. It is
 /// entirely panic-free and handles concurrent I/O failures gracefully.
 pub struct UniversalSearch<'a> {
     /// Registry containing all package backends.
@@ -25,19 +25,23 @@ impl<'a> UniversalSearch<'a> {
     }
 
     /// Performs a cross-backend search and returns a deduplicated, sorted result set.
-    /// 
-    /// This method is exhaustive: it filters for searchable backends, respects 
-    /// concurrency limits via semaphores, and performs high-fidelity 
+    ///
+    /// This method is exhaustive: it filters for searchable backends, respects
+    /// concurrency limits via semaphores, and performs high-fidelity
     /// deduplication based on the "backend:name" identity key.
     #[instrument(skip(self, query))]
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        info!("Search: Initiating parallel universal query for '{}'...", query);
+        info!(
+            "Search: Initiating parallel universal query for '{}'...",
+            query
+        );
 
         // 1. Discovery: Identify all available backends that support searching
-        let searchable_backends: Vec<_> = if self.config.enabled_backends.is_empty() {
+        let effective = self.config.effective_enabled_backends();
+        let searchable_backends: Vec<_> = if effective.is_empty() {
             self.registry.available()
         } else {
-            self.registry.get_filtered(&self.config.enabled_backends)
+            self.registry.get_filtered(&effective)
         }
         .into_iter()
         .filter(|b| b.as_searchable().is_some())
@@ -49,10 +53,10 @@ impl<'a> UniversalSearch<'a> {
         }
 
         // 2. Worker Pool Initialization
-        // We use a Semaphore to ensure we never exceed config.max_parallel 
+        // We use a Semaphore to ensure we never exceed config.max_parallel
         // concurrent network requests.
         let semaphore = Arc::new(Semaphore::new(self.config.max_parallel));
-		let mut worker_pool: JoinSet<Result<Vec<Package>>> = JoinSet::new();
+        let mut worker_pool: JoinSet<Result<Vec<Package>>> = JoinSet::new();
 
         for backend in searchable_backends {
             let sem_ref = semaphore.clone();
@@ -62,18 +66,23 @@ impl<'a> UniversalSearch<'a> {
             worker_pool.spawn(async move {
                 // A+ Grade Fix: Replace .unwrap() with fallible mapping
                 // This prevents a panic if the semaphore is closed.
-                let _permit = sem_ref.acquire().await
-                    .map_err(|e| Error::Transaction(format!("Search concurrency semaphore failure: {}", e)))?;
+                let _permit = sem_ref.acquire().await.map_err(|e| {
+                    Error::Transaction(format!("Search concurrency semaphore failure: {}", e))
+                })?;
 
                 debug!("Search: Querying backend '{}'...", b.name());
-                
+
                 // A+ Grade Fix: Panic-free trait access
                 if let Some(searchable) = b.as_searchable() {
                     match searchable.search(&query_string).await {
                         Ok(results) => {
-                            trace!("Search: Backend '{}' returned {} results.", b.name(), results.len());
+                            trace!(
+                                "Search: Backend '{}' returned {} results.",
+                                b.name(),
+                                results.len()
+                            );
                             Ok(results)
-                        },
+                        }
                         // Surface (don't swallow) the failure, tagged with the backend name,
                         // so the user is told which backends errored vs. returned nothing.
                         Err(e) => Err(Error::Other(format!("{}: {}", b.name(), e))),
@@ -99,11 +108,11 @@ impl<'a> UniversalSearch<'a> {
                             all_packages.push(pkg);
                         }
                     }
-                },
+                }
                 Ok(Err(e)) => {
                     warn!("Search: {}", e);
                     failed_backends.push(e.to_string());
-                },
+                }
                 Err(panic_err) => {
                     error!("Search: A worker thread panicked: {}", panic_err);
                     failed_backends.push(format!("worker panic: {}", panic_err));
@@ -123,7 +132,10 @@ impl<'a> UniversalSearch<'a> {
             );
         }
 
-        info!("Search: Completed. Discovered {} unique candidates.", all_packages.len());
+        info!(
+            "Search: Completed. Discovered {} unique candidates.",
+            all_packages.len()
+        );
         Ok(all_packages)
     }
 }

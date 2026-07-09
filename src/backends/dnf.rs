@@ -1,8 +1,8 @@
 // src/backends/dnf.rs
 
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Searchable, Upgradable, RepoManager, MetadataProvider, Error
+    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    Queryable, RepoManager, Result, Searchable, Upgradable,
 };
 use crate::parsers::dnf;
 use async_trait::async_trait;
@@ -13,7 +13,9 @@ use tracing::info;
 /// used for command injection.
 fn validate_repo_name(name: &str) -> Result<()> {
     if !name.is_empty()
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     {
         Ok(())
     } else {
@@ -37,7 +39,9 @@ impl DnfBackendCore {
 
 #[async_trait]
 impl BackendCore for DnfBackendCore {
-    fn name(&self) -> &str { &self.name }
+    fn name(&self) -> &str {
+        &self.name
+    }
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("dnf")
@@ -51,8 +55,23 @@ impl BackendCore for DnfBackendCore {
 #[async_trait]
 impl MetadataProvider for DnfBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
-        let output = self.executor.run_output("dnf", &["repoquery", "--requires", "--resolve", "--queryformat", "%{name}", name], false).await?;
-        Ok(output.lines()
+        let output = self
+            .executor
+            .run_output(
+                "dnf",
+                &[
+                    "repoquery",
+                    "--requires",
+                    "--resolve",
+                    "--queryformat",
+                    "%{name}",
+                    name,
+                ],
+                false,
+            )
+            .await?;
+        Ok(output
+            .lines()
             .map(|l| l.trim().to_string())
             .filter(|l| !l.is_empty())
             .collect())
@@ -66,31 +85,44 @@ pub struct DnfInstallable {
 #[async_trait]
 impl Installable for DnfInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
-        if specs.is_empty() { return Ok(()); }
+        if specs.is_empty() {
+            return Ok(());
+        }
         let mut args = vec!["install", "-y"];
         // Reproducible installs: dnf pins with `name-version`.
-        let names: Vec<String> = specs.iter().map(|s| match s.options.get("version") {
-            Some(v) if crate::backends::concrete_version(v) => format!("{}-{}", s.name, v),
-            _ => s.name.clone(),
-        }).collect();
+        let names: Vec<String> = specs
+            .iter()
+            .map(|s| match s.options.get("version") {
+                Some(v) if crate::backends::concrete_version(v) => format!("{}-{}", s.name, v),
+                _ => s.name.clone(),
+            })
+            .collect();
         for name in &names {
             args.push(name);
         }
 
         info!("DNF: Installing {} package(s)...", specs.len());
-        self.core.executor.run_exclusive("dnf", "dnf", &args, sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("dnf", "dnf", &args, sudo)
+            .await?;
         Ok(())
     }
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
-        if names.is_empty() { return Ok(()); }
+        if names.is_empty() {
+            return Ok(());
+        }
         let mut args = vec!["remove", "-y"];
         for name in names {
             args.push(name);
         }
 
         info!("DNF: Removing {} package(s)...", names.len());
-        self.core.executor.run_exclusive("dnf", "dnf", &args, sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("dnf", "dnf", &args, sudo)
+            .await?;
         Ok(())
     }
 }
@@ -102,12 +134,28 @@ pub struct DnfQueryable {
 #[async_trait]
 impl Queryable for DnfQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("rpm", &["-qa", "--queryformat", "%{NAME}|%{VERSION}\n"], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output(
+                "rpm",
+                &["-qa", "--queryformat", "%{NAME}|%{VERSION}\n"],
+                false,
+            )
+            .await?;
         Ok(dnf::parse_rpm_qa(&output, "dnf"))
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("dnf", &["repoquery", "--userinstalled", "--qf", "%{name}|%{version}"], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output(
+                "dnf",
+                &["repoquery", "--userinstalled", "--qf", "%{name}|%{version}"],
+                false,
+            )
+            .await?;
         Ok(dnf::parse_rpm_qa(&output, "dnf"))
     }
 
@@ -124,7 +172,11 @@ pub struct DnfSearchable {
 #[async_trait]
 impl Searchable for DnfSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("dnf", &["search", query], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("dnf", &["search", query], false)
+            .await?;
         Ok(dnf::parse_dnf_search(&output))
     }
 }
@@ -138,10 +190,13 @@ impl RepoManager for DnfRepoManager {
     /// Add a repo via `dnf config-manager --add-repo <url>` (requires dnf-plugins-core).
     async fn add_repo(&self, name: &str, url: &str, sudo: bool) -> Result<()> {
         if url.trim().is_empty() {
-            return Err(Error::Other("dnf add_repo requires a repository URL".into()));
+            return Err(Error::Other(
+                "dnf add_repo requires a repository URL".into(),
+            ));
         }
         info!("DNF: Adding repository '{}' ({})...", name, url);
-        self.core.executor
+        self.core
+            .executor
             .run_exclusive("dnf", "dnf", &["config-manager", "--add-repo", url], sudo)
             .await?;
         Ok(())
@@ -158,11 +213,17 @@ impl RepoManager for DnfRepoManager {
 
     /// List configured repositories via `dnf repolist` (id + display name).
     async fn list_repos(&self) -> Result<Vec<(String, String)>> {
-        let output = self.core.executor.run_output("dnf", &["repolist", "--all"], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("dnf", &["repolist", "--all"], false)
+            .await?;
         let mut repos = Vec::new();
         for line in output.lines().skip(1) {
             let line = line.trim();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             let mut it = line.splitn(2, char::is_whitespace);
             if let Some(id) = it.next() {
                 let name = it.next().unwrap_or("").trim().to_string();
@@ -186,13 +247,19 @@ impl Upgradable for DnfUpgradable {
 
     async fn upgrade(&self, sudo: bool) -> Result<()> {
         info!("DNF: Upgrading system packages...");
-        self.core.executor.run_exclusive("dnf", "dnf", &["upgrade", "-y"], sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("dnf", "dnf", &["upgrade", "-y"], sudo)
+            .await?;
         Ok(())
     }
 
     async fn clean_orphans(&self, sudo: bool) -> Result<()> {
         info!("DNF: Removing unused dependencies...");
-        self.core.executor.run_exclusive("dnf", "dnf", &["autoremove", "-y"], sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("dnf", "dnf", &["autoremove", "-y"], sudo)
+            .await?;
         Ok(())
     }
 }
@@ -204,12 +271,14 @@ pub fn register(
     _cfg: &crate::config::Config,
 ) {
     let core = Arc::new(DnfBackendCore::new(exec.duplicate()));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(DnfInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(DnfQueryable { core: core.clone() }))
-        .with_searchable(Arc::new(DnfSearchable { core: core.clone() }))
-        .with_upgradable(Arc::new(DnfUpgradable { core: core.clone() }))
-        .with_repo_manager(Arc::new(DnfRepoManager { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(DnfInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(DnfQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(DnfSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(DnfUpgradable { core: core.clone() }))
+            .with_repo_manager(Arc::new(DnfRepoManager { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }

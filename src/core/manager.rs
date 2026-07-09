@@ -1,7 +1,7 @@
 use crate::core::{Package, PackageSpec, Result};
 use async_trait::async_trait;
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// Represents the health status of a specific backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ pub struct HealthReport {
 // ============================================================================
 
 /// Core trait that every package management backend must implement.
-/// 
+///
 /// This trait defines the identity and system-level availability of the backend.
 #[async_trait]
 pub trait BackendCore: Send + Sync {
@@ -36,21 +36,24 @@ pub trait BackendCore: Send + Sync {
     /// Checks if the underlying tool binary is available in the system PATH.
     fn is_available(&self) -> bool;
 
-    /// Phase 2.2: Returns true if the backend requires root/sudo privileges 
+    /// Phase 2.2: Returns true if the backend requires root/sudo privileges
     /// for modification (Install/Remove/Upgrade).
-    /// 
-    /// System managers (apt, dnf) return true. 
+    ///
+    /// System managers (apt, dnf) return true.
     /// User managers (cargo, npm, scoop) return false.
     fn needs_root(&self) -> bool;
 
     /// Performs a diagnostic check to verify if the backend is healthy.
     async fn check_health(&self) -> Result<HealthReport> {
         if self.is_available() {
-            Ok(HealthReport { status: HealthStatus::Ok, message: None })
+            Ok(HealthReport {
+                status: HealthStatus::Ok,
+                message: None,
+            })
         } else {
-            Ok(HealthReport { 
-                status: HealthStatus::Critical, 
-                message: Some(format!("Binary for {} not found in PATH", self.name())) 
+            Ok(HealthReport {
+                status: HealthStatus::Critical,
+                message: Some(format!("Binary for {} not found in PATH", self.name())),
             })
         }
     }
@@ -62,7 +65,7 @@ pub trait Installable: Send + Sync {
     /// Installs a set of packages according to the provided specifications.
     /// The `sudo` parameter is provided by the execution engine based on `needs_root()`.
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()>;
-    
+
     /// Purges a set of packages from the system by name.
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()>;
 }
@@ -72,12 +75,12 @@ pub trait Installable: Send + Sync {
 pub trait Queryable: Send + Sync {
     /// Returns a list of every package currently installed via this backend.
     async fn list_installed(&self) -> Result<Vec<Package>>;
-    
+
     /// Returns only packages explicitly requested by the user (non-dependencies).
-    /// If a backend does not support tracking manual intent, this should return 
+    /// If a backend does not support tracking manual intent, this should return
     /// a list filtered against the LiNix state registry.
     async fn list_manual(&self) -> Result<Vec<Package>>;
-    
+
     /// Fetches rich metadata (version, install path, etc.) for a specific package.
     async fn info(&self, name: &str) -> Result<Option<Package>>;
 }
@@ -87,13 +90,13 @@ pub trait Queryable: Send + Sync {
 pub trait Searchable: Send + Sync {
     /// Performs a remote query and returns a list of matching available packages.
     async fn search(&self, query: &str) -> Result<Vec<Package>>;
-    
+
     /// Checks if a specific package exists in the remote repository.
     async fn remote_has(&self, name: &str) -> Result<bool> {
         let results = self.search(name).await?;
         Ok(results.iter().any(|p| p.name == name))
     }
-    
+
     /// Gets detailed remote information for a package without installing it.
     async fn remote_info(&self, name: &str) -> Result<Option<Package>> {
         let results = self.search(name).await?;
@@ -106,7 +109,7 @@ pub trait Searchable: Send + Sync {
 pub trait Upgradable: Send + Sync {
     /// Refreshes local metadata, cache, or package indices (e.g. 'apt update').
     async fn update(&self, sudo: bool) -> Result<()>;
-    
+
     /// Upgrades all packages managed by this backend to their latest compatible versions.
     async fn upgrade(&self, sudo: bool) -> Result<()>;
 
@@ -126,9 +129,9 @@ pub trait RepoManager: Send + Sync {
 }
 
 /// Phase 1.1: Capability trait for providing backend-native dependency metadata.
-/// 
-/// This is used by the `ChangePlanner` to perform recursive expansion of the system 
-/// dependency graph. The names returned must be the package names used natively 
+///
+/// This is used by the `ChangePlanner` to perform recursive expansion of the system
+/// dependency graph. The names returned must be the package names used natively
 /// by the underlying package manager.
 #[async_trait]
 pub trait MetadataProvider: Send + Sync {
@@ -141,8 +144,8 @@ pub trait MetadataProvider: Send + Sync {
 // ============================================================================
 
 /// A container that aggregates a backend's core identity and its optional capabilities.
-/// 
-/// This structure allows the LiNix engine to query backends for specific 
+///
+/// This structure allows the LiNix engine to query backends for specific
 /// functionalities (ISP) without requiring every backend to implement every trait.
 pub struct BackendCapabilities {
     core: Arc<dyn BackendCore>,
@@ -160,28 +163,75 @@ impl BackendCapabilities {
         BackendCapabilitiesBuilder::new(core)
     }
 
-    pub fn core(&self) -> &Arc<dyn BackendCore> { &self.core }
-    pub fn name(&self) -> &str { self.core.name() }
-    pub fn is_available(&self) -> bool { self.core.is_available() }
-    pub fn needs_root(&self) -> bool { self.core.needs_root() }
+    pub fn core(&self) -> &Arc<dyn BackendCore> {
+        &self.core
+    }
+    pub fn name(&self) -> &str {
+        self.core.name()
+    }
+    pub fn is_available(&self) -> bool {
+        self.core.is_available()
+    }
+    pub fn needs_root(&self) -> bool {
+        self.core.needs_root()
+    }
 
-    pub fn is_installable(&self) -> bool { self.installable.is_some() }
-    pub fn as_installable(&self) -> Option<&Arc<dyn Installable>> { self.installable.as_ref() }
+    /// Single source of truth for the privilege policy on **write** operations
+    /// (install / remove / upgrade / clean_orphans / repo changes): escalate iff the
+    /// backend declares it needs root. Call this instead of `needs_root()` at write
+    /// sites so the policy lives in one place, not scattered ad hoc per call site.
+    pub fn sudo_for_write(&self) -> bool {
+        self.core.needs_root()
+    }
 
-    pub fn is_searchable(&self) -> bool { self.searchable.is_some() }
-    pub fn as_searchable(&self) -> Option<&Arc<dyn Searchable>> { self.searchable.as_ref() }
+    /// Privilege policy for **read-only** queries (list/info/search/dependency probes):
+    /// never escalate. Provided as a named constant so read sites document intent
+    /// rather than passing a bare `false`.
+    pub fn sudo_for_read(&self) -> bool {
+        false
+    }
 
-    pub fn is_queryable(&self) -> bool { self.queryable.is_some() }
-    pub fn as_queryable(&self) -> Option<&Arc<dyn Queryable>> { self.queryable.as_ref() }
+    pub fn is_installable(&self) -> bool {
+        self.installable.is_some()
+    }
+    pub fn as_installable(&self) -> Option<&Arc<dyn Installable>> {
+        self.installable.as_ref()
+    }
 
-    pub fn is_upgradable(&self) -> bool { self.upgradable.is_some() }
-    pub fn as_upgradable(&self) -> Option<&Arc<dyn Upgradable>> { self.upgradable.as_ref() }
+    pub fn is_searchable(&self) -> bool {
+        self.searchable.is_some()
+    }
+    pub fn as_searchable(&self) -> Option<&Arc<dyn Searchable>> {
+        self.searchable.as_ref()
+    }
 
-    pub fn is_repo_manager(&self) -> bool { self.repo_manager.is_some() }
-    pub fn as_repo_manager(&self) -> Option<&Arc<dyn RepoManager>> { self.repo_manager.as_ref() }
+    pub fn is_queryable(&self) -> bool {
+        self.queryable.is_some()
+    }
+    pub fn as_queryable(&self) -> Option<&Arc<dyn Queryable>> {
+        self.queryable.as_ref()
+    }
 
-    pub fn is_metadata_provider(&self) -> bool { self.metadata_provider.is_some() }
-    pub fn as_metadata_provider(&self) -> Option<&Arc<dyn MetadataProvider>> { self.metadata_provider.as_ref() }
+    pub fn is_upgradable(&self) -> bool {
+        self.upgradable.is_some()
+    }
+    pub fn as_upgradable(&self) -> Option<&Arc<dyn Upgradable>> {
+        self.upgradable.as_ref()
+    }
+
+    pub fn is_repo_manager(&self) -> bool {
+        self.repo_manager.is_some()
+    }
+    pub fn as_repo_manager(&self) -> Option<&Arc<dyn RepoManager>> {
+        self.repo_manager.as_ref()
+    }
+
+    pub fn is_metadata_provider(&self) -> bool {
+        self.metadata_provider.is_some()
+    }
+    pub fn as_metadata_provider(&self) -> Option<&Arc<dyn MetadataProvider>> {
+        self.metadata_provider.as_ref()
+    }
 }
 
 /// Builder for constructing BackendCapabilities with a fluent interface.
@@ -207,14 +257,32 @@ impl BackendCapabilitiesBuilder {
             metadata_provider: None,
         }
     }
-    
-    pub fn with_installable(mut self, i: Arc<dyn Installable>) -> Self { self.installable = Some(i); self }
-    pub fn with_searchable(mut self, s: Arc<dyn Searchable>) -> Self { self.searchable = Some(s); self }
-    pub fn with_queryable(mut self, q: Arc<dyn Queryable>) -> Self { self.queryable = Some(q); self }
-    pub fn with_upgradable(mut self, u: Arc<dyn Upgradable>) -> Self { self.upgradable = Some(u); self }
-    pub fn with_repo_manager(mut self, r: Arc<dyn RepoManager>) -> Self { self.repo_manager = Some(r); self }
-    pub fn with_metadata_provider(mut self, m: Arc<dyn MetadataProvider>) -> Self { self.metadata_provider = Some(m); self }
-    
+
+    pub fn with_installable(mut self, i: Arc<dyn Installable>) -> Self {
+        self.installable = Some(i);
+        self
+    }
+    pub fn with_searchable(mut self, s: Arc<dyn Searchable>) -> Self {
+        self.searchable = Some(s);
+        self
+    }
+    pub fn with_queryable(mut self, q: Arc<dyn Queryable>) -> Self {
+        self.queryable = Some(q);
+        self
+    }
+    pub fn with_upgradable(mut self, u: Arc<dyn Upgradable>) -> Self {
+        self.upgradable = Some(u);
+        self
+    }
+    pub fn with_repo_manager(mut self, r: Arc<dyn RepoManager>) -> Self {
+        self.repo_manager = Some(r);
+        self
+    }
+    pub fn with_metadata_provider(mut self, m: Arc<dyn MetadataProvider>) -> Self {
+        self.metadata_provider = Some(m);
+        self
+    }
+
     pub fn build(self) -> BackendCapabilities {
         BackendCapabilities {
             core: self.core,

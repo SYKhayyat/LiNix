@@ -21,17 +21,29 @@ impl<'a> Cleaner<'a> {
     pub async fn clean(&self) -> Result<()> {
         info!("Cleaner: Initiating deep system cleanup...");
 
-        // 1. Backend-specific orphan removal
+        // 1. Backend-specific orphan removal. We categorize honestly: a backend that has
+        //    no orphan concept returns Error::Unsupported (a benign skip), which must not
+        //    be reported like a real failure.
+        let (mut cleaned, mut skipped, mut failed) = (0u32, 0u32, 0u32);
         for backend in self.app.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 debug!("Cleaner: Requesting orphan pruning for {}...", backend.name());
-                // Use the backend's root requirement setting
-                let sudo = backend.needs_root();
-                if let Err(e) = upgradable.clean_orphans(sudo).await {
-                    warn!("Cleaner: Failed to clean orphans for {}: {}", backend.name(), e);
+                let sudo = backend.sudo_for_write();
+                match upgradable.clean_orphans(sudo).await {
+                    Ok(()) => { cleaned += 1; }
+                    Err(Error::Unsupported(_)) => {
+                        skipped += 1;
+                        debug!("Cleaner: {} has no orphan-cleanup concept — skipping.", backend.name());
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        warn!("Cleaner: Failed to clean orphans for {}: {}", backend.name(), e);
+                    }
                 }
             }
         }
+        info!("Cleaner: orphan pass complete — {} cleaned, {} not applicable, {} failed.",
+              cleaned, skipped, failed);
 
         // 2. Clear LiNix internal PackageCache
         debug!("Cleaner: Clearing LiNix metadata cache...");

@@ -1,9 +1,9 @@
 #[allow(clippy::module_inception)]
 pub mod config;
-pub mod parser;
-pub mod manifest; // <-- added
+pub mod manifest;
+pub mod parser; // <-- added
 
-pub use config::Config;
+pub use config::{Config, PruneScope};
 
 /// Module-level constants for configuration defaults
 pub const DEFAULT_BACKEND: &str = "apt";

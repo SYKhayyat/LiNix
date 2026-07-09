@@ -1,11 +1,11 @@
-use crate::core::{Result, Error, PackageSpec};
+use crate::core::{Error, PackageSpec, Result};
 use crate::utils::file::atomic_write;
+use chrono::{Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
-use std::path::{PathBuf};
 use std::collections::HashMap;
-use chrono::{Utc, Duration as ChronoDuration};
+use std::path::PathBuf;
+use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
-use tracing::{info, debug, warn, trace};
 
 /// Represents the lifecycle stage of a specific system modification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,14 +28,11 @@ pub enum JournalAction {
     /// Request to install or upgrade a package.
     Install(PackageSpec),
     /// Request to remove a package from the system.
-    Remove { 
-        name: String, 
-        backend: String 
-    },
+    Remove { name: String, backend: String },
 }
 
 /// A deterministic record of a single system modification.
-/// 
+///
 /// This structure is the source of truth for the 'linix heal' command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalEntry {
@@ -56,9 +53,9 @@ pub struct JournalEntry {
 }
 
 /// The Mission-Critical Write-Ahead Log (WAL).
-/// 
-/// The Journal ensures LiNix can recover from power failures, OS crashes, 
-/// or process kills mid-transaction. Before any backend is invoked, an 
+///
+/// The Journal ensures LiNix can recover from power failures, OS crashes,
+/// or process kills mid-transaction. Before any backend is invoked, an
 /// 'InProgress' entry is flushed to disk.
 pub struct Journal {
     /// Path to the journal.json file.
@@ -72,7 +69,7 @@ impl Journal {
     pub fn new() -> Result<Self> {
         let path = crate::utils::safe_data_dir().join("journal.json");
         debug!("Journal: Initializing mission-critical WAL at {:?}", path);
-        
+
         let mut journal = Self {
             path,
             entries: HashMap::new(),
@@ -91,7 +88,10 @@ impl Journal {
     /// Note: Usually called during Kernel initialization.
     fn load_sync(&mut self) -> Result<()> {
         let data = std::fs::read_to_string(&self.path).map_err(|e| {
-            Error::Io(format!("Failed to read WAL Journal at {:?}: {}", self.path, e))
+            Error::Io(format!(
+                "Failed to read WAL Journal at {:?}: {}",
+                self.path, e
+            ))
         })?;
 
         if data.trim().is_empty() {
@@ -99,10 +99,16 @@ impl Journal {
         }
 
         self.entries = serde_json::from_str(&data).map_err(|e| {
-            Error::Other(format!("WAL Journal is corrupted and cannot be parsed: {}", e))
+            Error::Other(format!(
+                "WAL Journal is corrupted and cannot be parsed: {}",
+                e
+            ))
         })?;
 
-        debug!("Journal: Successfully loaded {} historical log entries.", self.entries.len());
+        debug!(
+            "Journal: Successfully loaded {} historical log entries.",
+            self.entries.len()
+        );
         Ok(())
     }
 
@@ -110,14 +116,12 @@ impl Journal {
     /// This prevents log corruption during unexpected shutdowns.
     pub fn flush(&self) -> Result<()> {
         trace!("Journal: Initiating atomic WAL flush.");
-        
-        let data = serde_json::to_string_pretty(&self.entries).map_err(|e| {
-            Error::Other(format!("Failed to serialize Journal: {}", e))
-        })?;
 
-        atomic_write(&self.path, &data).map_err(|e| {
-            Error::Persist(format!("Atomic write of WAL Journal failed: {}", e))
-        })
+        let data = serde_json::to_string_pretty(&self.entries)
+            .map_err(|e| Error::Other(format!("Failed to serialize Journal: {}", e)))?;
+
+        atomic_write(&self.path, &data)
+            .map_err(|e| Error::Persist(format!("Atomic write of WAL Journal failed: {}", e)))
     }
 
     /// Generates a unique ID for a journal entry.
@@ -134,7 +138,7 @@ impl Journal {
         };
 
         let id = Self::generate_id(b_name, p_name);
-        
+
         let entry = JournalEntry {
             id: id.clone(),
             action,
@@ -147,7 +151,7 @@ impl Journal {
 
         self.entries.insert(id.clone(), entry);
         self.flush()?;
-        
+
         debug!("Journal: Operation {} marked as InProgress in WAL.", id);
         Ok(id)
     }
@@ -161,7 +165,10 @@ impl Journal {
             self.flush()?;
             trace!("Journal: Operation {} marked as Completed.", id);
         } else {
-            warn!("Journal: Attempted to mark unknown operation {} as successful.", id);
+            warn!(
+                "Journal: Attempted to mark unknown operation {} as successful.",
+                id
+            );
         }
         Ok(())
     }
@@ -173,9 +180,15 @@ impl Journal {
             entry.finished_at_unix = Some(Utc::now().timestamp());
             entry.error = Some(err.to_string());
             self.flush()?;
-            warn!("Journal: Operation {} recorded as Failed in WAL: {}", id, err);
+            warn!(
+                "Journal: Operation {} recorded as Failed in WAL: {}",
+                id, err
+            );
         } else {
-            warn!("Journal: Attempted to record failure for unknown operation {}.", id);
+            warn!(
+                "Journal: Attempted to record failure for unknown operation {}.",
+                id
+            );
         }
         Ok(())
     }
@@ -183,7 +196,8 @@ impl Journal {
     /// Retrieves all entries that did not reach a 'Completed' status.
     /// Used by the 'linix heal' system.
     pub fn get_incomplete_actions(&self) -> Vec<JournalEntry> {
-        self.entries.values()
+        self.entries
+            .values()
             .filter(|e| e.status == ActionStatus::InProgress || e.status == ActionStatus::Failed)
             .cloned()
             .collect()
@@ -192,11 +206,13 @@ impl Journal {
     /// Checks if the WAL contains any actions currently in progress.
     /// If true, LiNix will prompt the user to run 'heal'.
     pub fn needs_recovery(&self) -> bool {
-        self.entries.values().any(|e| e.status == ActionStatus::InProgress)
+        self.entries
+            .values()
+            .any(|e| e.status == ActionStatus::InProgress)
     }
 
     /// Bug Fix 10: Automatic cleanup of historical logs.
-    /// 
+    ///
     /// Removes Completed or Abandoned entries older than the threshold.
     /// InProgress and Failed entries are NEVER purged until they are resolved.
     pub fn cleanup_expired_logs(&mut self, days_threshold: i64) -> Result<()> {
@@ -206,9 +222,9 @@ impl Journal {
         let initial_count = self.entries.len();
 
         self.entries.retain(|id, entry| {
-            let is_terminal = entry.status == ActionStatus::Completed 
-                           || entry.status == ActionStatus::Abandoned;
-            
+            let is_terminal =
+                entry.status == ActionStatus::Completed || entry.status == ActionStatus::Abandoned;
+
             if is_terminal {
                 // Determine the relevant timestamp for age check
                 let terminal_time = entry.finished_at_unix.unwrap_or(entry.started_at_unix);
@@ -222,7 +238,10 @@ impl Journal {
 
         let purged = initial_count - self.entries.len();
         if purged > 0 {
-            info!("Journal: Maintenance complete. Purged {} historical records older than {} days.", purged, days_threshold);
+            info!(
+                "Journal: Maintenance complete. Purged {} historical records older than {} days.",
+                purged, days_threshold
+            );
             self.flush()?;
         }
 
@@ -235,7 +254,7 @@ impl Journal {
         debug!("Journal: Commencing routine maintenance.");
 
         // 1. Transition stale 'InProgress' tasks to 'Abandoned'
-        // If a task started more than 4 hours ago and is still in progress, 
+        // If a task started more than 4 hours ago and is still in progress,
         // we assume the process that created it crashed.
         let stale_limit = Utc::now() - ChronoDuration::hours(4);
         let stale_ts = stale_limit.timestamp();

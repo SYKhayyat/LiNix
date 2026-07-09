@@ -1,21 +1,21 @@
 // src/app/shell/mod.rs
 
-use crate::core::{Result, Error, PackageSpec, StateRegistry};
+use crate::app::diagnostics::FailureDiagnosticEngine;
+use crate::app::sandbox::{Sandbox, SandboxConfig};
+use crate::app::sync::{ChangePlanner, ScopedFilter, StateResolver, SyncEngine};
+use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
-use crate::app::sandbox::{Sandbox, SandboxConfig};
-use crate::app::sync::{SyncEngine, StateResolver, ScopedFilter, ChangePlanner};
-use crate::app::diagnostics::FailureDiagnosticEngine;
-use crate::app::{LuaHooks, MetricsCollector};
+use crate::core::{Error, PackageSpec, Result, StateRegistry};
+use crate::core::{Journal, SnapshotManager};
 use crate::utils::progress::ProgressReporter;
-use crate::core::{SnapshotManager, Journal};
 
+use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::collections::HashMap;
 use tokio::sync::Mutex;
-use tracing::{info, debug, warn, instrument};
+use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 /// Orchestrates ephemeral environments (The Ghost Shell).
@@ -63,7 +63,10 @@ impl GhostShell {
     #[instrument(skip(self, packages))]
     pub async fn enter(&self, packages: &[String]) -> Result<()> {
         let session_id = format!("shell-{}", Uuid::new_v4().simple());
-        info!("GhostShell: Initializing isolated session '{}'...", session_id);
+        info!(
+            "GhostShell: Initializing isolated session '{}'...",
+            session_id
+        );
 
         {
             let mut state_guard = self.state.lock().await;
@@ -85,20 +88,26 @@ impl GhostShell {
         }
 
         let shell_bin = env::var("SHELL").unwrap_or_else(|_| {
-            if cfg!(windows) { "cmd.exe".into() } else { "/bin/bash".into() }
+            if cfg!(windows) {
+                "cmd.exe".into()
+            } else {
+                "/bin/bash".into()
+            }
         });
 
         let can_sandbox = Sandbox::is_available(&self.config.sandbox).await;
 
         if can_sandbox {
             info!("GhostShell: Dropping into hardened sandbox.");
-            self.launch_sandboxed_shell(&shell_bin, &session_id, &store_paths).await?;
+            self.launch_sandboxed_shell(&shell_bin, &session_id, &store_paths)
+                .await?;
         } else if self.config.sandbox.fallback_allowed {
             warn!("GhostShell: Sandbox unavailable. Using PATH-only isolation.");
-            self.spawn_fallback_shell(&shell_bin, &session_id, &store_paths).await?;
+            self.spawn_fallback_shell(&shell_bin, &session_id, &store_paths)
+                .await?;
         } else {
             return Err(Error::UnsupportedPlatform(
-                "Sandbox policy violation: Isolation requested but unavailable.".into()
+                "Sandbox policy violation: Isolation requested but unavailable.".into(),
             ));
         }
 
@@ -115,7 +124,12 @@ impl GhostShell {
         Ok(())
     }
 
-    async fn launch_sandboxed_shell(&self, shell: &str, session_id: &str, store_paths: &[(String, String)]) -> Result<()> {
+    async fn launch_sandboxed_shell(
+        &self,
+        shell: &str,
+        session_id: &str,
+        store_paths: &[(String, String)],
+    ) -> Result<()> {
         let mut mounts = Vec::new();
         let mut internal_path = String::from("/usr/local/bin:/usr/bin:/bin");
 
@@ -139,19 +153,31 @@ impl GhostShell {
 
         tokio::task::spawn_blocking(move || {
             let mut bwrap = Sandbox::wrap(&shell_owned, &[], &sandbox_cfg, &settings_clone)?;
-            bwrap.env("PATH", internal_path)
-                 .env("LINIX_GHOST", "true")
-                 .env("LINIX_SESSION_ID", session_owned)
-                 .env("PROMPT_COMMAND", "echo -n '(linix-ghost) '");
-            let mut handle = bwrap.spawn().map_err(|e| Error::CommandFailed(format!("Sandbox error: {}", e)))?;
-            let _ = handle.wait().map_err(|e| Error::CommandFailed(e.to_string()))?;
+            bwrap
+                .env("PATH", internal_path)
+                .env("LINIX_GHOST", "true")
+                .env("LINIX_SESSION_ID", session_owned)
+                .env("PROMPT_COMMAND", "echo -n '(linix-ghost) '");
+            let mut handle = bwrap
+                .spawn()
+                .map_err(|e| Error::CommandFailed(format!("Sandbox error: {}", e)))?;
+            let _ = handle
+                .wait()
+                .map_err(|e| Error::CommandFailed(e.to_string()))?;
             Ok::<(), Error>(())
-        }).await.map_err(|e| Error::Other(format!("Task Join Panic: {}", e)))??;
+        })
+        .await
+        .map_err(|e| Error::Other(format!("Task Join Panic: {}", e)))??;
 
         Ok(())
     }
 
-    async fn spawn_fallback_shell(&self, shell: &str, session_id: &str, store_paths: &[(String, String)]) -> Result<()> {
+    async fn spawn_fallback_shell(
+        &self,
+        shell: &str,
+        session_id: &str,
+        store_paths: &[(String, String)],
+    ) -> Result<()> {
         let mut new_path_parts = Vec::new();
 
         for (path, _) in store_paths {
@@ -163,27 +189,34 @@ impl GhostShell {
         }
 
         if let Ok(current) = env::var("PATH") {
-            for p in env::split_paths(&current) { new_path_parts.push(p); }
+            for p in env::split_paths(&current) {
+                new_path_parts.push(p);
+            }
         }
 
         let new_path_env = env::join_paths(new_path_parts)
             .map_err(|e| Error::Other(format!("PATH building failed: {}", e)))?;
 
         let mut child = tokio::process::Command::new(shell);
-        child.env("PATH", new_path_env)
-             .env("LINIX_GHOST", "true")
-             .env("LINIX_SESSION_ID", session_id)
-             .stdin(std::process::Stdio::inherit())
-             .stdout(std::process::Stdio::inherit())
-             .stderr(std::process::Stdio::inherit());
+        child
+            .env("PATH", new_path_env)
+            .env("LINIX_GHOST", "true")
+            .env("LINIX_SESSION_ID", session_id)
+            .stdin(std::process::Stdio::inherit())
+            .stdout(std::process::Stdio::inherit())
+            .stderr(std::process::Stdio::inherit());
 
-        let mut handle = child.spawn().map_err(|e| Error::CommandFailed(format!("Shell error: {}", e)))?;
+        let mut handle = child
+            .spawn()
+            .map_err(|e| Error::CommandFailed(format!("Shell error: {}", e)))?;
         let _ = handle.wait().await?;
         Ok(())
     }
 
     pub async fn locate_package_root(&self, spec: &PackageSpec) -> Result<Option<PathBuf>> {
-        let backend = self.registry.get(&spec.backend)
+        let backend = self
+            .registry
+            .get(&spec.backend)
             .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
 
         if let Some(queryable) = backend.as_queryable() {
@@ -203,13 +236,18 @@ impl GhostShell {
 
     /// Logic for provisioning the ephemeral state.
     /// FIXED: Release state lock before calling sync() to prevent deadlock.
-    pub async fn provision_transient_env(&self, requests: &[String], _session_id: &str) -> Result<()> {
+    pub async fn provision_transient_env(
+        &self,
+        requests: &[String],
+        _session_id: &str,
+    ) -> Result<()> {
         let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
 
         let mut transient_desired = HashMap::new();
         for req in requests {
             if let Ok(spec) = resolver.parse_and_probe_spec(req).await {
-                transient_desired.entry(spec.backend.clone())
+                transient_desired
+                    .entry(spec.backend.clone())
                     .or_insert_with(Vec::new)
                     .push(spec);
             }
@@ -236,14 +274,19 @@ impl GhostShell {
             state.get_transient_packages(session_id)
         };
 
-        if to_remove.is_empty() { return Ok(()); }
+        if to_remove.is_empty() {
+            return Ok(());
+        }
 
         let mut graph = petgraph::stable_graph::StableDiGraph::new();
         for (backend, name) in to_remove {
             graph.add_node(crate::core::GraphAction::Remove { name, backend });
         }
 
-        let changes = crate::app::sync::SyncChanges { graph, ..Default::default() };
+        let changes = crate::app::sync::SyncChanges {
+            graph,
+            ..Default::default()
+        };
         let engine = self.create_sync_engine().await;
         engine.sync(changes).await?;
 
@@ -255,21 +298,31 @@ impl GhostShell {
         if tokio::fs::try_exists(local_config).await.unwrap_or(false) {
             info!("GhostShell: Project-local manifest 'linix.txt' found.");
             let content = tokio::fs::read_to_string(local_config).await?;
-            let pkgs: Vec<String> = content.lines()
+            let pkgs: Vec<String> = content
+                .lines()
                 .map(|l| l.trim().to_string())
                 .filter(|l| !l.is_empty() && !l.starts_with('#'))
                 .collect();
-            if !pkgs.is_empty() { self.enter(&pkgs).await?; }
+            if !pkgs.is_empty() {
+                self.enter(&pkgs).await?;
+            }
         }
         Ok(())
     }
 
     async fn create_sync_engine(&self) -> SyncEngine<'_> {
         SyncEngine::new(
-            &self.config, self.registry.clone(), self.executor.duplicate(),
-            self.metrics.clone(), self.progress.clone(), self.hooks.clone(),
-            self.snapshot_manager.clone(), self.journal.clone(), self.state.clone(),
+            &self.config,
+            self.registry.clone(),
+            self.executor.duplicate(),
+            self.metrics.clone(),
+            self.progress.clone(),
+            self.hooks.clone(),
+            self.snapshot_manager.clone(),
+            self.journal.clone(),
+            self.state.clone(),
             self.diagnostics.clone(),
-        ).await
+        )
+        .await
     }
 }

@@ -1,15 +1,15 @@
 // src/backends/appimage.rs
 
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, Error, MetadataProvider
+    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    Queryable, Result,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, debug, warn};
+use tracing::{debug, info, warn};
 
 /// Internal state metadata for a managed AppImage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,23 +29,26 @@ pub struct AppImageBackendCore {
 impl AppImageBackendCore {
     pub fn new(executor: CommandExecutor, install_dir: PathBuf) -> Self {
         let state = install_dir.join("state.json");
-        
-        Self { 
-            executor, 
-            install_dir, 
-            state_file: state 
+
+        Self {
+            executor,
+            install_dir,
+            state_file: state,
         }
     }
 
     async fn ensure_dirs(&self) -> Result<PathBuf> {
-        if !tokio::fs::try_exists(&self.install_dir).await.unwrap_or(false) {
+        if !tokio::fs::try_exists(&self.install_dir)
+            .await
+            .unwrap_or(false)
+        {
             tokio::fs::create_dir_all(&self.install_dir).await?;
         }
         let bin_dir = dirs::home_dir()
             .ok_or_else(|| Error::Other("Could not locate home directory".into()))?
             .join(".local")
             .join("bin");
-        
+
         if !tokio::fs::try_exists(&bin_dir).await.unwrap_or(false) {
             tokio::fs::create_dir_all(&bin_dir).await?;
         }
@@ -53,10 +56,15 @@ impl AppImageBackendCore {
     }
 
     async fn load_state(&self) -> HashMap<String, AppImageState> {
-        if !tokio::fs::try_exists(&self.state_file).await.unwrap_or(false) {
+        if !tokio::fs::try_exists(&self.state_file)
+            .await
+            .unwrap_or(false)
+        {
             return HashMap::new();
         }
-        let data = tokio::fs::read_to_string(&self.state_file).await.unwrap_or_default();
+        let data = tokio::fs::read_to_string(&self.state_file)
+            .await
+            .unwrap_or_default();
         serde_json::from_str(&data).unwrap_or_default()
     }
 
@@ -68,7 +76,9 @@ impl AppImageBackendCore {
 
 #[async_trait]
 impl BackendCore for AppImageBackendCore {
-    fn name(&self) -> &str { "appimage" }
+    fn name(&self) -> &str {
+        "appimage"
+    }
 
     fn is_available(&self) -> bool {
         cfg!(target_os = "linux")
@@ -103,17 +113,22 @@ impl Installable for AppImageInstallable {
             let url = &spec.name;
             let filename = url.split('/').next_back().unwrap_or("app.AppImage");
             let dest_path = self.core.install_dir.join(filename);
-            
+
             info!("AppImage: Downloading {}...", url);
             let response = client.get(url).send().await?;
             if !response.status().is_success() {
-                return Err(Error::Other(format!("Download failed for {}: {}", url, response.status())));
+                return Err(Error::Other(format!(
+                    "Download failed for {}: {}",
+                    url,
+                    response.status()
+                )));
             }
-            
+
             let bytes = response.bytes().await?;
             tokio::fs::write(&dest_path, bytes).await?;
 
-            #[cfg(unix)] {
+            #[cfg(unix)]
+            {
                 use std::os::unix::fs::PermissionsExt;
                 let metadata = tokio::fs::metadata(&dest_path).await?;
                 let mut perms = metadata.permissions();
@@ -121,27 +136,36 @@ impl Installable for AppImageInstallable {
                 tokio::fs::set_permissions(&dest_path, perms).await?;
             }
 
-            let link_name = filename.strip_suffix(".AppImage")
+            let link_name = filename
+                .strip_suffix(".AppImage")
                 .or_else(|| filename.strip_suffix(".appimage"))
                 .unwrap_or(filename);
-            
+
             let link_path = bin_dir.join(link_name);
-            
+
             if tokio::fs::try_exists(&link_path).await.unwrap_or(false) || link_path.is_symlink() {
                 let _ = tokio::fs::remove_file(&link_path).await;
             }
 
-            #[cfg(unix)] {
+            #[cfg(unix)]
+            {
                 // FIX: Use tokio::fs::symlink (correct async symlink API)
                 tokio::fs::symlink(&dest_path, &link_path).await?;
             }
 
-            state.insert(spec.name.clone(), AppImageState {
-                url: url.clone(),
-                local_path: dest_path.to_string_lossy().to_string(),
-                symlink_path: link_path.to_string_lossy().to_string(),
-            });
-            info!("AppImage: Successfully installed {} to {}", link_name, link_path.display());
+            state.insert(
+                spec.name.clone(),
+                AppImageState {
+                    url: url.clone(),
+                    local_path: dest_path.to_string_lossy().to_string(),
+                    symlink_path: link_path.to_string_lossy().to_string(),
+                },
+            );
+            info!(
+                "AppImage: Successfully installed {} to {}",
+                link_name,
+                link_path.display()
+            );
         }
 
         self.core.save_state(&state).await?;
@@ -150,7 +174,7 @@ impl Installable for AppImageInstallable {
 
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
         let mut state = self.core.load_state().await;
-        
+
         for name in names {
             if let Some(info) = state.remove(name) {
                 debug!("AppImage: Removing local files for {}", name);
@@ -161,7 +185,7 @@ impl Installable for AppImageInstallable {
                 warn!("AppImage: No record found for {}, skipping removal.", name);
             }
         }
-        
+
         self.core.save_state(&state).await?;
         Ok(())
     }
@@ -175,10 +199,13 @@ pub struct AppImageQueryable {
 impl Queryable for AppImageQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
         let state = self.core.load_state().await;
-        Ok(state.keys().map(|url| {
-            let name = url.split('/').next_back().unwrap_or(url);
-            Package::new(name, "appimage")
-        }).collect())
+        Ok(state
+            .keys()
+            .map(|url| {
+                let name = url.split('/').next_back().unwrap_or(url);
+                Package::new(name, "appimage")
+            })
+            .collect())
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
@@ -197,10 +224,15 @@ pub fn register(
     exec: &CommandExecutor,
     cfg: &crate::config::Config,
 ) {
-    let core = Arc::new(AppImageBackendCore::new(exec.duplicate(), cfg.appimage_dir.clone()));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(AppImageInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(AppImageQueryable { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    let core = Arc::new(AppImageBackendCore::new(
+        exec.duplicate(),
+        cfg.appimage_dir.clone(),
+    ));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(AppImageInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(AppImageQueryable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }

@@ -1,15 +1,18 @@
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
-use std::io::Write;
 
 /// Atomically writes content to a file.
 /// Implementation for Roadmap Phase 3: Mission-Critical Safety.
 pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
     let dir = path.parent().ok_or_else(|| {
         // Fix E0308: Explicitly convert io::Error to String for Error::Io
-        let err = std::io::Error::new(std::io::ErrorKind::InvalidInput, "Target path has no parent directory");
+        let err = std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Target path has no parent directory",
+        );
         Error::Io(err.to_string())
     })?;
 
@@ -18,7 +21,9 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
     }
 
     let mut temp_file = NamedTempFile::new_in(dir).map_err(Error::from)?;
-    temp_file.write_all(content.as_bytes()).map_err(Error::from)?;
+    temp_file
+        .write_all(content.as_bytes())
+        .map_err(Error::from)?;
     temp_file.flush().map_err(Error::from)?;
     temp_file.as_file().sync_all().map_err(Error::from)?;
     temp_file.persist(path).map_err(Error::from)?;
@@ -39,7 +44,7 @@ pub fn read_lines_filtered(path: &Path) -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    
+
     let content = fs::read_to_string(path).map_err(Error::from)?;
     Ok(content
         .lines()

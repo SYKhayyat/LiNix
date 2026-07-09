@@ -20,7 +20,7 @@ Traditional package managers operate in a “fire and forget” mode. If a trans
 
 &#x20; *Result: super‑fast synchronisations even with hundreds of packages.*
 
-- **Universal Reach (33+ backends)** – From system managers (APT, Pacman, DNF, Winget, Brew) and language tools (Cargo, NPM, Pip, Gem) to specialised resources (GitHub Releases, direct HTTP downloads, AppImages, VS Code extensions, Emacs packages, system services, BTRFS subvolumes, and more).
+- **Universal Reach (38+ backends)** – From system managers (APT, Pacman, DNF, Winget, Brew, MacPorts, pkgsrc) and language tools (Cargo, NPM, Pip, Gem, .NET tools, Conda, PowerShell Gallery) to specialised resources (GitHub Releases, direct HTTP downloads, AppImages, VS Code extensions, Emacs packages, system services, BTRFS subvolumes, and more). Plus an **onboarder** to teach LiNix any CLI manager from a TOML file — no code changes.
 
 - **Imperative → Declarative Bridge** – `linix install` and `linix remove` automatically write to your declarative manifests (`local.txt`). You can start with an empty config, imperatively add packages as you need them, and later run `linix sync` to clean up or replicate the same state elsewhere.
 
@@ -38,7 +38,7 @@ Traditional package managers operate in a “fire and forget” mode. If a trans
 
 - **Cross‑Backend Teleportation** – Move a package from one backend to another (e.g., `apt:ripgrep` → `cargo:ripgrep`) with a single command. LiNix updates both the live system and your declarative manifests.
 
-- **System Profiles** – Switch between different machine identities (e.g., “work”, “gaming”, “server”) with `linix profile`. Each profile can have its own set of group files.
+- **System Profiles** – Named software sets you can turn on and off live, with no reboot: `linix activate work`, `linix deactivate work`. **Several profiles can be active at once** — their package sets are unioned, and deactivating one only removes what no other active profile still needs. Profiles compose **relationally**: a `.profile` file can `include` another profile (the "plus"), `exclude` another profile, or subtract a single package with `-pkg` (the "minus") — e.g. `lean = base + rust - heavy`. `linix profile list/show/create/save/switch` round out management; `linix profile show <name>` prints the resolved set.
 
 - **Imperative‑to‑Declarative Migration** – Already installed a bunch of packages manually? Run `linix migrate` – LiNix discovers all installed packages across every backend and automatically writes them into your declarative manifests, taking ownership without reinstalling.
 
@@ -162,7 +162,9 @@ LiNix will:
 
 | `undo` | Browse the snapshot gallery and roll back the entire system. |
 
-| `profile` | Switch between different system identities (work, home, server). |
+| `activate` / `deactivate` | Turn profiles on/off live (multiple can be active; sets are unioned). |
+
+| `profile` | Manage profiles: `list`, `show`, `create`, `save`, `switch`, `active`. |
 
 | `doctor` | Check backend health, sandbox availability, and system readiness. |
 
@@ -192,7 +194,46 @@ LiNix will:
 
 | `lock` | Pin every managed package to its installed version in `locks.json` for reproducible installs. |
 
+| `init` | Scaffold the LiNix directory structure and a starter manifest on a fresh machine. |
 
+| `audit` | Cross‑ecosystem security scan: check **every** managed package (apt, npm, pip, cargo, gem…) against the OSV.dev vulnerability database in one pass. |
+
+| `sbom` | Emit a single CycloneDX software bill of materials spanning every backend. |
+
+| `why <pkg>` | Explain why a package is installed: its provenance (which manifest/module/imperative action) and what depends on it. |
+
+| `upgrade --canary --test <cmd>` | Health‑gated upgrade: snapshot first, run the test after upgrading, and **auto‑roll‑back** if it fails. |
+
+| `bisect --test <cmd>` | System time‑travel bisect: restore snapshots and run the test to find the change that introduced a regression. |
+
+| `clone <user@host>` | Replicate another machine's installed packages over SSH, translating backends per‑OS. |
+
+| `fleet [hosts…] [--sync]` | Compare many machines over SSH against their manifests, report drift, and optionally reconcile. |
+
+| `policy` | Check the desired state against declarative rules in `policy.toml` (also enforced automatically before `sync`/`upgrade`). |
+
+
+
+## What's new in 6.0.0
+
+- **`audit` — one security scan across every ecosystem.** Checks all managed packages
+  (apt, npm, pip, cargo, gem, go…) against OSV.dev and reports fixed versions. No other
+  tool audits your whole machine across package managers at once.
+- **`sbom`** — a single CycloneDX bill of materials for the entire system.
+- **`why <pkg>`** — provenance (which manifest/module/imperative action pulled it in) plus
+  cross‑package reverse dependencies.
+- **`upgrade --canary --test <cmd>`** — snapshot → upgrade → health‑check → automatic
+  rollback on failure, so a bad upgrade never leaves you broken.
+- **`bisect --test <cmd>`** — binary‑search your snapshots to find the change that broke
+  something.
+- **`clone <user@host>` / `fleet`** — replicate a machine over SSH (translating backends
+  per‑OS), and see/repair drift across many machines.
+- **Policy gate (`policy.toml`)** — declarative rules (`deny_packages`, `allow_backends`,
+  `pinned_only`, `require_snapshot`, `deny_vulnerable`) enforced before any change.
+- **`init`** — scaffold the directory layout + a starter manifest on a fresh machine.
+- **Safer pruning** — `prune_scope` (`managed` default vs whole‑`system`) and
+  `protect_imperative` shield imperative installs; leases are swept on every run; and
+  backends that can't clean orphans now report honestly instead of pretending to.
 
 ## What's new in 5.0.0
 
@@ -228,7 +269,7 @@ Per‑backend version‑pin support (what `--locked` actually enforces):
 |---|---|
 | **Exact version** | apt, apk, zypper (`name=ver`) · dnf (`name-ver`) · pip, pipx (`name==ver`) · npm, pnpm, yarn, bun, mise (`name@ver`) · cargo, gem, winget, choco (flags) · vscode (`ext@ver`) |
 | **Best‑effort** | brew (only formulae with versioned variants, e.g. `python@3.11`) |
-| **Not supported** (model doesn't allow it) | pacman (rolling) · snap (channels) · flatpak (commits) · nix (flake refs) · mas (store latest) · scoop |
+| **Not supported** (model doesn't allow it) | pacman, xbps, yay, paru (rolling) · snap (channels) · flatpak (commits) · nix (flake refs) · mas (store latest) · scoop |
 
 For anything that truly must be reproducible, use the **`nix`** backend for that part and let
 LiNix orchestrate the rest — LiNix doesn't compete with Nix, it can include it.
@@ -255,7 +296,7 @@ LiNix orchestrate the rest — LiNix doesn't compete with Nix, it can include it
 
 
 
-LiNix does not rely only on your declared `requires`. It queries each backend’s native metadata (e.g., `apt-cache depends`, `pacman -Si`, `dnf repoquery`) to build a **complete transitive dependency graph** before any installation begins.
+LiNix does not rely only on your declared `requires`. It queries each backend’s native metadata (e.g., `pacman -Si`, `dnf repoquery`) for a package's **direct** dependencies to order the install graph, then lets the backend resolve and install the full transitive closure itself (which every supported package manager does). LiNix deliberately does not recursively re-derive the entire tree: that is redundant with the backend and, for managers whose dependency query answers from a local cache, pathologically slow.
 
 
 
@@ -303,11 +344,11 @@ LiNix ships with a fully isolated integration suite:
 
 |----------|------------|--------------------|------------------|
 
-| **Linux** | Bubblewrap (bwrap) | BTRFS, Timeshift, ZFS | apt, pacman, dnf, apk, zypper, snap, flatpak, nix, cargo, npm, pip, pipx, bun, yarn, pnpm, gem, go, composer, link, service, github, web, appimage, emacs, vscode, btrfs |
+| **Linux** | Bubblewrap (bwrap) | BTRFS, Timeshift, ZFS | apt, pacman, dnf, apk, zypper, xbps, yay, paru, snap, flatpak, nix, pkgin, conda, cargo, dotnet, npm, pip, pipx, uv, bun, yarn, pnpm, gem, go, composer, link, service, github, web, appimage, emacs, vscode, btrfs |
 
-| **macOS** | `sandbox‑exec` | Time Machine (planned) | brew, mas, cargo, npm, pip, pipx, gem, go, link, service, github, web, emacs, vscode |
+| **macOS** | `sandbox‑exec` | Time Machine (planned) | brew, mas, macports, pkgin, conda, cargo, dotnet, npm, pip, pipx, uv, gem, go, link, service, github, web, emacs, vscode |
 
-| **Windows** | Windows Sandbox + low‑integrity fallback | Windows Restore Points | winget, scoop, choco, cargo, npm, pip, bun, yarn, pnpm, gem, go, link, service, github, web, emacs, vscode |
+| **Windows** | Windows Sandbox + low‑integrity fallback | Windows Restore Points | winget, scoop, choco, psresource, conda, cargo, dotnet, npm, pip, pipx, uv, bun, yarn, pnpm, gem, go, link, service, github, web, emacs, vscode |
 
 
 
@@ -351,7 +392,7 @@ LiNix is open source (MIT license). Contributions are welcome – especially:
 
 
 
-LiNix v5.0.0 is **mission‑critical ready**. It has been hardened with:
+LiNix v6.0.0 is **mission‑critical ready**. It has been hardened with:
 
 - Thousands of lines of async‑safe I/O
 

@@ -1,14 +1,14 @@
-use crate::core::{Result, Error, StateRegistry};
+use crate::app::sync::resolver::StateResolver;
 use crate::backends::BackendRegistry;
 use crate::config::Config;
-use crate::app::sync::resolver::StateResolver;
+use crate::core::{Error, Result, StateRegistry};
+use dialoguer::{theme::ColorfulTheme, Confirm};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{info, debug, warn, trace, instrument};
-use dialoguer::{theme::ColorfulTheme, Confirm};
+use tracing::{debug, info, instrument, trace, warn};
 
 /// Represents a single diagnostic rule for identifying the root cause of build failures.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +31,9 @@ pub struct DiagnosticDb {
 impl DiagnosticDb {
     /// Asynchronously loads the Knowledge Base from the configuration directory.
     pub async fn load(config: &Config) -> Self {
-        let db_path = config.groups_dir.parent()
+        let db_path = config
+            .groups_dir
+            .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
             .join("diagnostics.json");
 
@@ -39,7 +41,11 @@ impl DiagnosticDb {
             match tokio::fs::read_to_string(&db_path).await {
                 Ok(content) => {
                     if let Ok(db) = serde_json::from_str::<Self>(&content) {
-                        debug!("Diagnostics: Loaded {} patterns from {:?}", db.rules.len(), db_path);
+                        debug!(
+                            "Diagnostics: Loaded {} patterns from {:?}",
+                            db.rules.len(),
+                            db_path
+                        );
                         return db;
                     }
                 }
@@ -91,8 +97,8 @@ impl DiagnosticDb {
 }
 
 /// The modernized Failure Diagnostic Engine.
-/// 
-/// Functioning as an autonomous logic processor, this engine provides 
+///
+/// Functioning as an autonomous logic processor, this engine provides
 /// semantic analysis and remediation suggestions for system modifications.
 pub struct FailureDiagnosticEngine {
     db: DiagnosticDb,
@@ -120,7 +126,7 @@ impl FailureDiagnosticEngine {
                             suggestions.push(format!("{}:{}", b, p));
                         }
                     }
-                    break; 
+                    break;
                 }
             }
         }
@@ -130,87 +136,116 @@ impl FailureDiagnosticEngine {
     /// High-level failure orchestrator.
     #[instrument(skip(self, registry, state, config))]
     pub async fn handle_failure(
-        &self, 
-        stderr: &str, 
-        current_backend: &str, 
+        &self,
+        stderr: &str,
+        current_backend: &str,
         registry: Arc<BackendRegistry>,
         state: Arc<Mutex<StateRegistry>>,
         config: &Config,
-        auto_install: bool
+        auto_install: bool,
     ) -> Result<()> {
         let suggestions = self.diagnose(stderr, current_backend);
-        if suggestions.is_empty() { return Ok(()); }
-        
+        if suggestions.is_empty() {
+            return Ok(());
+        }
+
         println!("\n💡 LiNix Insight: Semantic analysis identified a missing dependency.");
-        println!("Identified Issue: {}", self.get_description(stderr).unwrap_or_else(|| "Conflict".into()));
-        
+        println!(
+            "Identified Issue: {}",
+            self.get_description(stderr)
+                .unwrap_or_else(|| "Conflict".into())
+        );
+
         println!("\nRemediation Suggestion:");
-        for s in &suggestions { println!("  - install {}", s); }
-        
+        for s in &suggestions {
+            println!("  - install {}", s);
+        }
+
         if auto_install {
-            self.remediate(&suggestions, registry, state, config).await?;
+            self.remediate(&suggestions, registry, state, config)
+                .await?;
         } else {
             // Resolves E0277: Dialoguer error is now mapped to core::Error via From impl
             let res = tokio::task::spawn_blocking(move || {
                 Confirm::with_theme(&ColorfulTheme::default())
                     .with_prompt("Would you like to execute remediation now?")
-                    .default(false).interact()
-            }).await.map_err(|e| Error::Other(format!("Join error: {}", e)))??;
-            
-            if res { self.remediate(&suggestions, registry, state, config).await?; }
+                    .default(false)
+                    .interact()
+            })
+            .await
+            .map_err(|e| Error::Other(format!("Join error: {}", e)))??;
+
+            if res {
+                self.remediate(&suggestions, registry, state, config)
+                    .await?;
+            }
         }
         Ok(())
     }
-    
+
     /// Executes the remediation plan.
-    /// 
-    /// Resolves E0597: Clones the state registry object before moving it into 
+    ///
+    /// Resolves E0597: Clones the state registry object before moving it into
     /// the background persistence task, ensuring it lives long enough ('static).
     async fn remediate(
-        &self, 
-        suggestions: &[String], 
+        &self,
+        suggestions: &[String],
         registry: Arc<BackendRegistry>,
         state: Arc<Mutex<StateRegistry>>,
-        config: &Config
+        config: &Config,
     ) -> Result<()> {
         let resolver = StateResolver::new(config, registry.clone(), false).await;
 
         for suggestion in suggestions {
-            info!("Diagnostics: Commencing remediation for '{}'...", suggestion);
+            info!(
+                "Diagnostics: Commencing remediation for '{}'...",
+                suggestion
+            );
             let spec = resolver.parse_and_probe_spec(suggestion).await?;
-            
+
             if let Some(b_cap) = registry.get(&spec.backend) {
                 if let Some(installer) = b_cap.as_installable() {
-                    match installer.install(std::slice::from_ref(&spec), b_cap.needs_root()).await {
+                    match installer
+                        .install(std::slice::from_ref(&spec), b_cap.sudo_for_write())
+                        .await
+                    {
                         Ok(_) => {
                             // Bug Fix Resolve E0597: Extract and clone data while under lock
                             let state_snapshot = {
                                 let mut state_guard = state.lock().await;
                                 state_guard.add(
-                                    &spec.backend, &spec.name, None, HashMap::new(), 
-                                    Some("diagnostics".into()), false
+                                    &spec.backend,
+                                    &spec.name,
+                                    None,
+                                    HashMap::new(),
+                                    Some("diagnostics".into()),
+                                    false,
                                 );
                                 // Clone the entire registry for move-safe persistence
                                 state_guard.clone()
                             };
-                            
+
                             // Move the cloned registry (which is owned and 'static) into the task
-                            let _ = tokio::task::spawn_blocking(move || {
-                                state_snapshot.save()
-                            }).await.map_err(|e| Error::Other(format!("Task panic: {}", e)))?;
+                            let _ = tokio::task::spawn_blocking(move || state_snapshot.save())
+                                .await
+                                .map_err(|e| Error::Other(format!("Task panic: {}", e)))?;
                         }
-                        Err(e) => warn!("Diagnostics: Remediation FAILED for {}: {}", suggestion, e),
+                        Err(e) => {
+                            warn!("Diagnostics: Remediation FAILED for {}: {}", suggestion, e)
+                        }
                     }
                 }
             }
         }
         Ok(())
     }
-    
+
     fn get_description(&self, stderr: &str) -> Option<String> {
         for rule in &self.db.rules {
             if let Ok(re) = Regex::new(&rule.pattern) {
-                if re.is_match(stderr) { return Some(rule.description.clone()); }
+                if re.is_match(stderr) {
+                    return Some(rule.description.clone());
+                }
             }
         }
         None
@@ -220,7 +255,10 @@ impl FailureDiagnosticEngine {
     pub fn print_suggestions(&self, stderr: &str, current_backend: &str) {
         let suggestions = self.diagnose(stderr, current_backend);
         if !suggestions.is_empty() {
-            println!("\n💡 LiNix Insight: suggest 'linix install {}'", suggestions.join(", "));
+            println!(
+                "\n💡 LiNix Insight: suggest 'linix install {}'",
+                suggestions.join(", ")
+            );
         }
     }
 }

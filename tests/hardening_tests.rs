@@ -21,7 +21,12 @@ use std::collections::HashMap;
 fn pinned_spec(backend: &str, name: &str, version: &str) -> PackageSpec {
     let mut options = HashMap::new();
     options.insert("version".to_string(), version.to_string());
-    PackageSpec { name: name.into(), backend: backend.into(), options, requires: vec![] }
+    PackageSpec {
+        name: name.into(),
+        backend: backend.into(),
+        options,
+        requires: vec![],
+    }
 }
 
 /// A package listed in a manifest AND pulled in by a module must end up tagged with
@@ -34,8 +39,15 @@ async fn resolver_merges_manifest_and_module_sources() {
     tokio::fs::create_dir_all(&cfg.modules_dir).await.unwrap();
     // base manifest lists the package directly and also references the @dev module,
     // which lists the same package.
-    tokio::fs::write(cfg.groups_dir.join("base.txt"), "cargo:ripgrep\n@module:dev\n").await.unwrap();
-    tokio::fs::write(cfg.modules_dir.join("dev.module.txt"), "cargo:ripgrep\n").await.unwrap();
+    tokio::fs::write(
+        cfg.groups_dir.join("base.txt"),
+        "cargo:ripgrep\n@module:dev\n",
+    )
+    .await
+    .unwrap();
+    tokio::fs::write(cfg.modules_dir.join("dev.module.txt"), "cargo:ripgrep\n")
+        .await
+        .unwrap();
 
     let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
     let desired = resolver.resolve_desired_state().await.unwrap();
@@ -45,10 +57,84 @@ async fn resolver_merges_manifest_and_module_sources() {
         .and_then(|specs| specs.iter().find(|s| s.name == "ripgrep"))
         .expect("ripgrep should be resolved under cargo");
 
-    let source = spec.options.get("__source").expect("__source should be tagged");
+    let source = spec
+        .options
+        .get("__source")
+        .expect("__source should be tagged");
     let segments: Vec<&str> = source.split(';').collect();
-    assert!(segments.contains(&"manifest:base.txt"), "missing manifest origin in {:?}", source);
-    assert!(segments.contains(&"module:dev"), "missing module origin in {:?}", source);
+    assert!(
+        segments.contains(&"manifest:base.txt"),
+        "missing manifest origin in {:?}",
+        source
+    );
+    assert!(
+        segments.contains(&"module:dev"),
+        "missing module origin in {:?}",
+        source
+    );
+}
+
+/// `@module:dev -bat` must drop bat from what the dev module contributes.
+#[tokio::test]
+async fn module_exclusion_drops_package_from_module() {
+    let kernel = TestKernel::new().await;
+    let cfg = &kernel.app.config;
+    tokio::fs::create_dir_all(&cfg.groups_dir).await.unwrap();
+    tokio::fs::create_dir_all(&cfg.modules_dir).await.unwrap();
+    tokio::fs::write(cfg.groups_dir.join("base.txt"), "@module:dev -bat\n")
+        .await
+        .unwrap();
+    tokio::fs::write(
+        cfg.modules_dir.join("dev.module.txt"),
+        "cargo:ripgrep\ncargo:bat\n",
+    )
+    .await
+    .unwrap();
+
+    let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
+    let desired = resolver.resolve_desired_state().await.unwrap();
+
+    let cargo = desired.get("cargo").cloned().unwrap_or_default();
+    assert!(
+        cargo.iter().any(|s| s.name == "ripgrep"),
+        "ripgrep should still be pulled in by dev"
+    );
+    assert!(
+        !cargo.iter().any(|s| s.name == "bat"),
+        "bat was excluded from dev and should be absent"
+    );
+}
+
+/// Exclusion is scoped to the module: if another source independently asks for the same
+/// package, it survives. `@module:dev -bat` + a direct `cargo:bat` line ⇒ bat stays.
+#[tokio::test]
+async fn module_exclusion_is_scoped_not_global() {
+    let kernel = TestKernel::new().await;
+    let cfg = &kernel.app.config;
+    tokio::fs::create_dir_all(&cfg.groups_dir).await.unwrap();
+    tokio::fs::create_dir_all(&cfg.modules_dir).await.unwrap();
+    tokio::fs::write(
+        cfg.groups_dir.join("base.txt"),
+        "@module:dev -bat\ncargo:bat\n",
+    )
+    .await
+    .unwrap();
+    tokio::fs::write(
+        cfg.modules_dir.join("dev.module.txt"),
+        "cargo:ripgrep\ncargo:bat\n",
+    )
+    .await
+    .unwrap();
+
+    let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
+    let desired = resolver.resolve_desired_state().await.unwrap();
+
+    let cargo = desired.get("cargo").cloned().unwrap_or_default();
+    assert!(
+        cargo.iter().any(|s| s.name == "bat"),
+        "bat was requested directly, so the dev-scoped exclusion must not remove it"
+    );
+    assert!(cargo.iter().any(|s| s.name == "ripgrep"));
 }
 
 /// End-to-end: a targeted `upgrade --module dev` must never schedule removals for managed
@@ -59,13 +145,24 @@ async fn scoped_upgrade_is_non_destructive_end_to_end() {
     let cfg = &kernel.app.config;
     tokio::fs::create_dir_all(&cfg.groups_dir).await.unwrap();
     tokio::fs::create_dir_all(&cfg.modules_dir).await.unwrap();
-    tokio::fs::write(cfg.groups_dir.join("base.txt"), "@module:dev\n").await.unwrap();
-    tokio::fs::write(cfg.modules_dir.join("dev.module.txt"), "cargo:ripgrep\n").await.unwrap();
+    tokio::fs::write(cfg.groups_dir.join("base.txt"), "@module:dev\n")
+        .await
+        .unwrap();
+    tokio::fs::write(cfg.modules_dir.join("dev.module.txt"), "cargo:ripgrep\n")
+        .await
+        .unwrap();
 
     // A managed package that is NOT in any manifest/module == drift.
     {
         let mut state = kernel.app.state.lock().await;
-        state.add("cargo", "out-of-scope-pkg", None, HashMap::new(), Some("manifest:other".into()), false);
+        state.add(
+            "cargo",
+            "out-of-scope-pkg",
+            None,
+            HashMap::new(),
+            Some("manifest:other".into()),
+            false,
+        );
     }
 
     let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
@@ -75,9 +172,16 @@ async fn scoped_upgrade_is_non_destructive_end_to_end() {
     let scoped = {
         let state = kernel.app.state.lock().await;
         let planner = ChangePlanner::new(kernel.app.registry.clone(), &state, &kernel.app.config);
-        planner.plan(&desired, ScopedFilter::Module("dev".into())).await.unwrap()
+        planner
+            .plan(&desired, ScopedFilter::Module("dev".into()))
+            .await
+            .unwrap()
     };
-    assert_eq!(scoped.total_remove(), 0, "scoped upgrade must not remove out-of-scope packages");
+    assert_eq!(
+        scoped.total_remove(),
+        0,
+        "scoped upgrade must not remove out-of-scope packages"
+    );
 
     // Unscoped plan: the same drift IS scheduled for removal (proves the guard is what
     // prevents it, not e.g. protection).
@@ -86,7 +190,10 @@ async fn scoped_upgrade_is_non_destructive_end_to_end() {
         let planner = ChangePlanner::new(kernel.app.registry.clone(), &state, &kernel.app.config);
         planner.plan(&desired, ScopedFilter::None).await.unwrap()
     };
-    assert!(unscoped.total_remove() >= 1, "unscoped sync should remove the drift package");
+    assert!(
+        unscoped.total_remove() >= 1,
+        "unscoped sync should remove the drift package"
+    );
 }
 
 /// A backend's RepoManager must issue the backend's real "add source" command.
@@ -95,13 +202,23 @@ async fn repo_manager_dispatches_add_command() {
     let kernel = TestKernel::new().await;
     kernel.mock_executor.set_command_exists("gem", true);
 
-    let gem = kernel.app.registry.get("gem").expect("gem should be registered");
-    let repo = gem.as_repo_manager().expect("gem should support RepoManager");
-    repo.add_repo("myrepo", "https://gems.example.com/", false).await.unwrap();
+    let gem = kernel
+        .app
+        .registry
+        .get("gem")
+        .expect("gem should be registered");
+    let repo = gem
+        .as_repo_manager()
+        .expect("gem should support RepoManager");
+    repo.add_repo("myrepo", "https://gems.example.com/", false)
+        .await
+        .unwrap();
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
-        calls.iter().any(|c| c.contains("sources -a https://gems.example.com/")),
+        calls
+            .iter()
+            .any(|c| c.contains("sources -a https://gems.example.com/")),
         "expected a `gem sources -a <url>` call, got: {:?}",
         calls
     );
@@ -124,14 +241,26 @@ async fn unmanaged_lists_installed_but_unmanaged() {
     // ...but only ripgrep is under management.
     {
         let mut state = kernel.app.state.lock().await;
-        state.add("cargo", "ripgrep", None, HashMap::new(), Some("manifest:base".into()), false);
+        state.add(
+            "cargo",
+            "ripgrep",
+            None,
+            HashMap::new(),
+            Some("manifest:base".into()),
+            false,
+        );
     }
 
     let unmanaged = kernel.app.get_unmanaged_packages().await.unwrap();
     assert!(
-        unmanaged.iter().any(|p| p.backend == "cargo" && p.name == "exa"),
+        unmanaged
+            .iter()
+            .any(|p| p.backend == "cargo" && p.name == "exa"),
         "exa should be reported as unmanaged, got: {:?}",
-        unmanaged.iter().map(|p| (&p.backend, &p.name)).collect::<Vec<_>>()
+        unmanaged
+            .iter()
+            .map(|p| (&p.backend, &p.name))
+            .collect::<Vec<_>>()
     );
     assert!(
         !unmanaged.iter().any(|p| p.name == "ripgrep"),
@@ -148,14 +277,17 @@ async fn pinned_version_reaches_install_command() {
 
     // generic inline pin (pip == syntax)
     let pip = kernel.app.registry.get("pip").expect("pip registered");
-    pip.as_installable().unwrap()
+    pip.as_installable()
+        .unwrap()
         .install(&[pinned_spec("pip", "requests", "2.31.0")], false)
         .await
         .unwrap();
 
     // bespoke flag pin (cargo --version)
     let cargo = kernel.app.registry.get("cargo").expect("cargo registered");
-    cargo.as_installable().unwrap()
+    cargo
+        .as_installable()
+        .unwrap()
         .install(&[pinned_spec("cargo", "ripgrep", "13.0.0")], false)
         .await
         .unwrap();
@@ -163,11 +295,15 @@ async fn pinned_version_reaches_install_command() {
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
         calls.iter().any(|c| c.contains("install requests==2.31.0")),
-        "pip should pin with ==, got: {:?}", calls
+        "pip should pin with ==, got: {:?}",
+        calls
     );
     assert!(
-        calls.iter().any(|c| c.contains("install ripgrep --version 13.0.0")),
-        "cargo should pin with --version, got: {:?}", calls
+        calls
+            .iter()
+            .any(|c| c.contains("install ripgrep --version 13.0.0")),
+        "cargo should pin with --version, got: {:?}",
+        calls
     );
 }
 
@@ -176,13 +312,17 @@ async fn pinned_version_reaches_install_command() {
 async fn floating_version_is_not_pinned() {
     let kernel = TestKernel::new().await;
     let pip = kernel.app.registry.get("pip").unwrap();
-    pip.as_installable().unwrap()
+    pip.as_installable()
+        .unwrap()
         .install(&[pinned_spec("pip", "requests", "latest")], false)
         .await
         .unwrap();
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
-        calls.iter().any(|c| c.contains("install requests") && !c.contains("==")),
-        "latest should install bare name, got: {:?}", calls
+        calls
+            .iter()
+            .any(|c| c.contains("install requests") && !c.contains("==")),
+        "latest should install bare name, got: {:?}",
+        calls
     );
 }

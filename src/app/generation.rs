@@ -1,0 +1,593 @@
+// src/app/generation.rs
+//
+// Generations: an append-only history of realized system states. After each change LiNix
+// records a generation that captures BOTH what was actually installed (the resolved
+// package set, with exact versions) AND a frozen copy of the manifest files that produced
+// it. Rolling back to a generation restores that realized state and its manifests — the
+// same idea as a Nix generation (a saved *result*), plus the small source that expressed
+// it, which Nix does not keep.
+//
+// This store is self-contained: each generation is one JSON file holding its own manifest
+// copies, so retention of generations is fully independent of the (separate) manifest
+// archive and of filesystem snapshots.
+
+use crate::app::sync::planner::SyncChanges;
+use crate::core::retention::{RetentionItem, RetentionPolicy};
+use crate::core::state::ManagedPackage;
+use crate::core::{Error, GraphAction, PackageSpec, Result, StateRegistry};
+use chrono::{DateTime, Utc};
+use petgraph::stable_graph::StableDiGraph;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+/// Read every manifest file (`*.txt`) in `groups_dir` into a filename->body map.
+/// A missing directory yields an empty map (nothing to freeze yet).
+pub async fn read_manifests(groups_dir: &Path) -> Result<HashMap<String, String>> {
+    let mut out = HashMap::new();
+    if !tokio::fs::try_exists(groups_dir).await.unwrap_or(false) {
+        return Ok(out);
+    }
+    let mut entries = tokio::fs::read_dir(groups_dir).await.map_err(Error::from)?;
+    while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
+        let path = entry.path();
+        if path.extension().map(|e| e == "txt").unwrap_or(false) {
+            if let Ok(body) = tokio::fs::read_to_string(&path).await {
+                let fname = path.file_name().unwrap_or_default().to_string_lossy();
+                out.insert(fname.to_string(), body);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Write manifest files back into `groups_dir`, backing up any pre-existing file that
+/// would change to `<file>.linix-backup` (once) so a rollback never silently discards
+/// uncommitted manifest edits.
+pub async fn write_manifests_with_backup(
+    manifests: &HashMap<String, String>,
+    groups_dir: &Path,
+) -> Result<()> {
+    tokio::fs::create_dir_all(groups_dir)
+        .await
+        .map_err(Error::from)?;
+    for (fname, body) in manifests {
+        let target = groups_dir.join(fname);
+        if let Ok(existing) = tokio::fs::read_to_string(&target).await {
+            if existing != *body {
+                let backup = PathBuf::from(format!("{}.linix-backup", target.display()));
+                if !tokio::fs::try_exists(&backup).await.unwrap_or(false) {
+                    let _ = tokio::fs::copy(&target, &backup).await;
+                }
+            }
+        }
+        crate::utils::file::atomic_write(&target, body)?;
+    }
+    Ok(())
+}
+
+/// Compute the changes that make the CURRENT package set match a generation, optionally
+/// scoped to a set of backends and/or a single package (`name` or `backend:name`). Install
+/// nodes carry the generation's recorded version, so pin-capable backends downgrade/upgrade
+/// to exactly that version; others reinstall (their honest limit). The result is a flat
+/// graph handed to the normal transaction engine, so rollback keeps snapshot + WAL safety.
+pub fn plan_rollback(
+    generation: &Generation,
+    current: &[ManagedPackage],
+    backends: Option<&[String]>,
+    package: Option<&str>,
+) -> SyncChanges {
+    let in_scope = |backend: &str, name: &str| -> bool {
+        if let Some(bs) = backends {
+            if !bs.iter().any(|b| b == backend) {
+                return false;
+            }
+        }
+        if let Some(p) = package {
+            if p != name && p != format!("{}:{}", backend, name) {
+                return false;
+            }
+        }
+        true
+    };
+    let key = |b: &str, n: &str| format!("{}:{}", b, n);
+
+    let target: HashMap<String, &ManagedPackage> = generation
+        .packages
+        .iter()
+        .filter(|p| in_scope(&p.backend, &p.name))
+        .map(|p| (key(&p.backend, &p.name), p))
+        .collect();
+    let curr: HashMap<String, &ManagedPackage> = current
+        .iter()
+        .filter(|p| in_scope(&p.backend, &p.name))
+        .map(|p| (key(&p.backend, &p.name), p))
+        .collect();
+
+    let mut graph: StableDiGraph<GraphAction, ()> = StableDiGraph::new();
+
+    // Present in the generation but missing or at a different version now → (re)install.
+    for (k, tp) in &target {
+        let needs = curr.get(k).map(|cp| cp.version != tp.version).unwrap_or(true);
+        if needs {
+            let mut options = HashMap::new();
+            if let Some(v) = &tp.version {
+                options.insert("version".to_string(), v.clone());
+            }
+            graph.add_node(GraphAction::Install(PackageSpec {
+                name: tp.name.clone(),
+                backend: tp.backend.clone(),
+                options,
+                requires: vec![],
+            }));
+        }
+    }
+    // Present now but absent in the generation → remove.
+    for (k, cp) in &curr {
+        if !target.contains_key(k) {
+            graph.add_node(GraphAction::Remove {
+                name: cp.name.clone(),
+                backend: cp.backend.clone(),
+            });
+        }
+    }
+
+    SyncChanges {
+        graph,
+        ..Default::default()
+    }
+}
+
+/// One archived snapshot of the manifest files, independent of generations. This is the
+/// "history of your instructions", kept on its own `[retention.manifests]` budget.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivedManifest {
+    pub id: String,
+    pub timestamp: String,
+    #[serde(default)]
+    pub files: HashMap<String, String>,
+}
+
+/// On-disk archive of manifest snapshots under `<data_dir>/manifest_archive/`.
+pub struct ManifestArchive {
+    dir: PathBuf,
+}
+
+impl ManifestArchive {
+    pub fn new(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
+    fn path_for(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{}.json", id))
+    }
+
+    /// Archive the current manifests. Skips writing when the newest existing entry already
+    /// has identical contents, so an unchanged manifest doesn't spawn duplicate history.
+    pub async fn capture(&self, id: &str, timestamp: &str, groups_dir: &Path) -> Result<bool> {
+        let files = read_manifests(groups_dir).await?;
+        if let Some(latest) = self.list().await?.into_iter().next() {
+            if latest.files == files {
+                return Ok(false);
+            }
+        }
+        let entry = ArchivedManifest {
+            id: id.to_string(),
+            timestamp: timestamp.to_string(),
+            files,
+        };
+        tokio::fs::create_dir_all(&self.dir)
+            .await
+            .map_err(Error::from)?;
+        let json = serde_json::to_string_pretty(&entry)
+            .map_err(|e| Error::Other(format!("manifest archive serialize: {}", e)))?;
+        crate::utils::file::atomic_write(&self.path_for(id), &json)?;
+        Ok(true)
+    }
+
+    /// List archived manifests, newest first.
+    pub async fn list(&self) -> Result<Vec<ArchivedManifest>> {
+        let mut out = Vec::new();
+        if !tokio::fs::try_exists(&self.dir).await.unwrap_or(false) {
+            return Ok(out);
+        }
+        let mut entries = tokio::fs::read_dir(&self.dir).await.map_err(Error::from)?;
+        while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
+            let path = entry.path();
+            if path.extension().map(|e| e == "json").unwrap_or(false) {
+                if let Ok(body) = tokio::fs::read_to_string(&path).await {
+                    if let Ok(a) = serde_json::from_str::<ArchivedManifest>(&body) {
+                        out.push(a);
+                    }
+                }
+            }
+        }
+        out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        Ok(out)
+    }
+
+    /// Apply a retention policy, deleting the archive entries it does not keep.
+    pub async fn prune(
+        &self,
+        policy: &RetentionPolicy,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<String>> {
+        let items: Vec<RetentionItem> = self
+            .list()
+            .await?
+            .into_iter()
+            .map(|a| {
+                let ts = DateTime::parse_from_rfc3339(&a.timestamp)
+                    .map(|t| t.with_timezone(&Utc))
+                    .unwrap_or(now);
+                RetentionItem::new(a.id, ts)
+            })
+            .collect();
+        let doomed = policy.select_deletions(&items, now);
+        for id in &doomed {
+            let _ = tokio::fs::remove_file(self.path_for(id)).await;
+        }
+        Ok(doomed)
+    }
+}
+
+/// A single frozen generation: the realized state plus the manifests that produced it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Generation {
+    pub id: String,
+    /// RFC3339 timestamp.
+    pub timestamp: String,
+    /// Optional human label (for `keep = [...]` pins and readability).
+    #[serde(default)]
+    pub label: String,
+    /// Protects this generation from retention GC when set imperatively.
+    #[serde(default)]
+    pub pinned: bool,
+    /// The exact package set that was managed at capture time.
+    pub packages: Vec<ManagedPackage>,
+    /// A frozen copy of the manifest files (filename -> body) that produced this state.
+    #[serde(default)]
+    pub manifests: HashMap<String, String>,
+}
+
+impl Generation {
+    fn parsed_time(&self) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(&self.timestamp)
+            .map(|t| t.with_timezone(&Utc))
+            .unwrap_or_else(|_| Utc::now())
+    }
+
+    fn retention_item(&self) -> RetentionItem {
+        RetentionItem {
+            id: self.id.clone(),
+            label: self.label.clone(),
+            timestamp: self.parsed_time(),
+            pinned: self.pinned,
+        }
+    }
+}
+
+/// On-disk store of generations under `<data_dir>/generations/`.
+pub struct GenerationStore {
+    dir: PathBuf,
+}
+
+impl GenerationStore {
+    pub fn new(dir: PathBuf) -> Self {
+        Self { dir }
+    }
+
+    /// Default store location under the LiNix data directory.
+    pub fn default_store() -> Self {
+        Self::new(crate::utils::safe_data_dir().join("generations"))
+    }
+
+    fn path_for(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{}.json", id))
+    }
+
+    /// Capture a new generation from the current realized state + manifests and persist it.
+    /// `id` is caller-supplied so it can be tied to a snapshot / timestamp deterministically.
+    pub async fn capture(
+        &self,
+        id: &str,
+        timestamp: &str,
+        label: &str,
+        state: &StateRegistry,
+        groups_dir: &Path,
+    ) -> Result<Generation> {
+        let generation = Generation {
+            id: id.to_string(),
+            timestamp: timestamp.to_string(),
+            label: label.to_string(),
+            pinned: false,
+            packages: state.packages.clone(),
+            manifests: read_manifests(groups_dir).await?,
+        };
+        tokio::fs::create_dir_all(&self.dir)
+            .await
+            .map_err(Error::from)?;
+        let json = serde_json::to_string_pretty(&generation)
+            .map_err(|e| Error::Other(format!("generation serialize: {}", e)))?;
+        crate::utils::file::atomic_write(&self.path_for(id), &json)?;
+        Ok(generation)
+    }
+
+    /// List all stored generations, newest first.
+    pub async fn list(&self) -> Result<Vec<Generation>> {
+        let mut generations = Vec::new();
+        if !tokio::fs::try_exists(&self.dir).await.unwrap_or(false) {
+            return Ok(generations);
+        }
+        let mut entries = tokio::fs::read_dir(&self.dir).await.map_err(Error::from)?;
+        while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
+            let path = entry.path();
+            if path.extension().map(|e| e == "json").unwrap_or(false) {
+                if let Ok(body) = tokio::fs::read_to_string(&path).await {
+                    if let Ok(g) = serde_json::from_str::<Generation>(&body) {
+                        generations.push(g);
+                    }
+                }
+            }
+        }
+        generations.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        Ok(generations)
+    }
+
+    pub async fn load(&self, id: &str) -> Result<Generation> {
+        let body = tokio::fs::read_to_string(self.path_for(id))
+            .await
+            .map_err(|_| Error::Other(format!("generation '{}' not found", id)))?;
+        serde_json::from_str(&body).map_err(|e| Error::Other(format!("generation parse: {}", e)))
+    }
+
+    /// Set or clear a generation's pin (a pinned generation survives retention GC).
+    pub async fn set_pinned(&self, id: &str, pinned: bool) -> Result<()> {
+        let mut g = self.load(id).await?;
+        g.pinned = pinned;
+        let json = serde_json::to_string_pretty(&g)
+            .map_err(|e| Error::Other(format!("generation serialize: {}", e)))?;
+        crate::utils::file::atomic_write(&self.path_for(id), &json)?;
+        Ok(())
+    }
+
+    /// The generation whose timestamp is at or before `when`, closest to it — i.e. the
+    /// state that was current at that moment. Used to pair a snapshot rollback with its
+    /// generation.
+    pub async fn nearest_at_or_before(&self, when: DateTime<Utc>) -> Result<Option<Generation>> {
+        let mut best: Option<Generation> = None;
+        for g in self.list().await? {
+            if g.parsed_time() <= when {
+                // list() is newest-first, so the first match is already the closest.
+                best = Some(g);
+                break;
+            }
+        }
+        Ok(best)
+    }
+
+    /// Apply a retention policy, deleting the generations it does not keep. Returns the
+    /// ids that were removed.
+    pub async fn prune(&self, policy: &RetentionPolicy, now: DateTime<Utc>) -> Result<Vec<String>> {
+        let generations = self.list().await?;
+        let items: Vec<RetentionItem> = generations.iter().map(Generation::retention_item).collect();
+        let doomed = policy.select_deletions(&items, now);
+        for id in &doomed {
+            let _ = tokio::fs::remove_file(self.path_for(id)).await;
+        }
+        Ok(doomed)
+    }
+
+    /// Roll back to a generation: restore its realized package set into `state` and write
+    /// its frozen manifests back into `groups_dir`. Existing manifest files that the
+    /// generation would overwrite are backed up once to `<file>.linix-backup` first, so a
+    /// rollback never silently discards uncommitted manifest edits.
+    pub async fn restore(&self, id: &str, state: &mut StateRegistry, groups_dir: &Path) -> Result<()> {
+        let generation = self.load(id).await?;
+        write_manifests_with_backup(&generation.manifests, groups_dir).await?;
+        // Restore the realized package set as the current managed state.
+        state.packages = generation.packages.clone();
+        state.save()?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap as Map;
+    use tempfile::tempdir;
+
+    fn pkg(name: &str, backend: &str, ver: &str) -> ManagedPackage {
+        ManagedPackage {
+            name: name.into(),
+            backend: backend.into(),
+            version: Some(ver.into()),
+            installed_at: 0,
+            expires_at: None,
+            options: Map::new(),
+            source: None,
+            is_transient: false,
+            session_id: None,
+        }
+    }
+
+    async fn write(dir: &Path, name: &str, body: &str) {
+        tokio::fs::create_dir_all(dir).await.unwrap();
+        tokio::fs::write(dir.join(name), body).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn capture_then_restore_round_trips_state_and_manifests() {
+        let tmp = tempdir().unwrap();
+        let groups = tmp.path().join("groups");
+        write(&groups, "base.txt", "apt:curl\ncargo:ripgrep\n").await;
+
+        let store = GenerationStore::new(tmp.path().join("gens"));
+        let mut state = StateRegistry::new(tmp.path().join("registry.json"));
+        state.packages = vec![pkg("curl", "apt", "8.4.0"), pkg("ripgrep", "cargo", "14.1")];
+
+        let gen = store
+            .capture("gen1", "2026-07-03T00:00:00Z", "", &state, &groups)
+            .await
+            .unwrap();
+        assert_eq!(gen.packages.len(), 2);
+        assert_eq!(gen.manifests.get("base.txt").unwrap(), "apt:curl\ncargo:ripgrep\n");
+
+        // The world moves on: manifest edited, state changed.
+        write(&groups, "base.txt", "apt:curl\n").await;
+        state.packages = vec![pkg("curl", "apt", "9.0.0")];
+
+        // Roll back.
+        store.restore("gen1", &mut state, &groups).await.unwrap();
+
+        // Manifest restored to the captured version (and the newer one backed up).
+        assert_eq!(
+            tokio::fs::read_to_string(groups.join("base.txt")).await.unwrap(),
+            "apt:curl\ncargo:ripgrep\n"
+        );
+        assert!(tokio::fs::try_exists(groups.join("base.txt.linix-backup")).await.unwrap());
+        // Realized state restored (curl back to 8.4.0, ripgrep back).
+        assert_eq!(state.packages.len(), 2);
+        assert!(state.packages.iter().any(|p| p.name == "ripgrep"));
+        assert!(state.packages.iter().any(|p| p.name == "curl" && p.version.as_deref() == Some("8.4.0")));
+    }
+
+    fn gen_with(packages: Vec<ManagedPackage>) -> Generation {
+        Generation {
+            id: "g1".into(),
+            timestamp: "2026-07-01T00:00:00Z".into(),
+            label: String::new(),
+            pinned: false,
+            packages,
+            manifests: Map::new(),
+        }
+    }
+
+    #[test]
+    fn plan_rollback_diffs_installs_downgrades_and_removes() {
+        let generation = gen_with(vec![
+            pkg("curl", "apt", "8.4.0"),     // same as current -> no-op
+            pkg("ripgrep", "cargo", "14.1"), // current has 14.0 -> reinstall to 14.1
+            pkg("bat", "cargo", "0.24"),     // missing now -> install
+        ]);
+        let current = vec![
+            pkg("curl", "apt", "8.4.0"),
+            pkg("ripgrep", "cargo", "14.0"),
+            pkg("fd", "cargo", "9.0"), // extra -> remove
+        ];
+
+        let changes = plan_rollback(&generation, &current, None, None);
+        let installs: Vec<&PackageSpec> = changes
+            .graph
+            .node_weights()
+            .filter_map(|w| match w {
+                GraphAction::Install(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        let removes: Vec<&str> = changes
+            .graph
+            .node_weights()
+            .filter_map(|w| match w {
+                GraphAction::Remove { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(installs.len(), 2, "ripgrep + bat");
+        assert!(installs
+            .iter()
+            .any(|s| s.name == "ripgrep" && s.options.get("version").map(String::as_str) == Some("14.1")));
+        assert!(installs.iter().any(|s| s.name == "bat"));
+        assert_eq!(removes, vec!["fd"]);
+    }
+
+    #[test]
+    fn plan_rollback_respects_package_and_backend_scope() {
+        let generation = gen_with(vec![
+            pkg("curl", "apt", "8.4.0"),
+            pkg("ripgrep", "cargo", "14.1"),
+        ]);
+        let current = vec![
+            pkg("curl", "apt", "8.4.0"),
+            pkg("ripgrep", "cargo", "14.0"),
+            pkg("fd", "cargo", "9.0"),
+        ];
+
+        // Only ripgrep: one reinstall, and fd is out of scope so NOT removed.
+        let scoped = plan_rollback(&generation, &current, None, Some("ripgrep"));
+        assert_eq!(scoped.total_install(), 1);
+        assert_eq!(scoped.total_remove(), 0);
+
+        // Only the apt backend: curl is unchanged, so nothing to do (cargo untouched).
+        let apt_only = plan_rollback(&generation, &current, Some(&["apt".to_string()]), None);
+        assert!(apt_only.is_empty());
+    }
+
+    #[tokio::test]
+    async fn manifest_archive_captures_dedups_and_prunes() {
+        let tmp = tempdir().unwrap();
+        let groups = tmp.path().join("groups");
+        write(&groups, "base.txt", "apt:curl\n").await;
+        let archive = ManifestArchive::new(tmp.path().join("marchive"));
+
+        // First capture writes; an identical re-capture is skipped (dedup).
+        assert!(archive.capture("m1", "2026-07-01T00:00:00Z", &groups).await.unwrap());
+        assert!(!archive.capture("m2", "2026-07-02T00:00:00Z", &groups).await.unwrap());
+
+        // A real edit produces a new archive entry.
+        write(&groups, "base.txt", "apt:curl\ncargo:bat\n").await;
+        assert!(archive.capture("m3", "2026-07-03T00:00:00Z", &groups).await.unwrap());
+
+        assert_eq!(archive.list().await.unwrap().len(), 2); // m1, m3
+
+        let policy = RetentionPolicy { keep_last: 1, ..Default::default() };
+        let now = DateTime::parse_from_rfc3339("2026-07-03T00:00:00Z").unwrap().with_timezone(&Utc);
+        let deleted = archive.prune(&policy, now).await.unwrap();
+        assert_eq!(deleted, vec!["m1".to_string()]);
+        assert_eq!(archive.list().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pin_and_nearest_at_or_before() {
+        let tmp = tempdir().unwrap();
+        let groups = tmp.path().join("groups");
+        write(&groups, "base.txt", "apt:curl\n").await;
+        let store = GenerationStore::new(tmp.path().join("gens"));
+        let state = StateRegistry::new(tmp.path().join("registry.json"));
+        store.capture("g1", "2026-07-01T00:00:00Z", "", &state, &groups).await.unwrap();
+        store.capture("g2", "2026-07-05T00:00:00Z", "", &state, &groups).await.unwrap();
+
+        store.set_pinned("g1", true).await.unwrap();
+        assert!(store.load("g1").await.unwrap().pinned);
+
+        // Nearest at-or-before 2026-07-03 is g1 (g2 is later).
+        let when = DateTime::parse_from_rfc3339("2026-07-03T00:00:00Z").unwrap().with_timezone(&Utc);
+        assert_eq!(store.nearest_at_or_before(when).await.unwrap().unwrap().id, "g1");
+    }
+
+    #[tokio::test]
+    async fn prune_keeps_last_one_and_deletes_older() {
+        let tmp = tempdir().unwrap();
+        let groups = tmp.path().join("groups");
+        write(&groups, "base.txt", "apt:curl\n").await;
+        let store = GenerationStore::new(tmp.path().join("gens"));
+        let state = StateRegistry::new(tmp.path().join("registry.json"));
+
+        store.capture("g1", "2026-07-01T00:00:00Z", "", &state, &groups).await.unwrap();
+        store.capture("g2", "2026-07-02T00:00:00Z", "", &state, &groups).await.unwrap();
+        store.capture("g3", "2026-07-03T00:00:00Z", "", &state, &groups).await.unwrap();
+
+        let policy = RetentionPolicy { keep_last: 1, ..Default::default() };
+        let now = DateTime::parse_from_rfc3339("2026-07-03T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut deleted = store.prune(&policy, now).await.unwrap();
+        deleted.sort();
+        assert_eq!(deleted, vec!["g1", "g2"]);
+        let remaining = store.list().await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, "g3");
+    }
+}

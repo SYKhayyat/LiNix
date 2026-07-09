@@ -1,9 +1,9 @@
-use linix::app::MetricsCollector;
-use linix::core::{PackageSpec, Validator, StateRegistry};
-use linix::core::executor::DryRunOutput;
-use linix::app::sync::planner::{ChangePlanner, ScopedFilter};
-use std::collections::HashMap;
 use chrono::Utc;
+use linix::app::sync::planner::{ChangePlanner, ScopedFilter};
+use linix::app::MetricsCollector;
+use linix::core::executor::DryRunOutput;
+use linix::core::{PackageSpec, StateRegistry, Validator};
+use std::collections::HashMap;
 use tokio::fs;
 
 // Import our authoritative A+ Test Infrastructure
@@ -14,45 +14,66 @@ use mock_providers::TestKernel;
 // KERNEL & BACKEND INTEGRATION
 // ============================================================================
 
-/// Verifies that the Kernel correctly discovers and registers backends 
+/// Verifies that the Kernel correctly discovers and registers backends
 /// in a hermetic, isolated environment.
 #[tokio::test]
 async fn test_app_initialization_v3_assemble() {
     // 1. Initialize hermetic kernel (Async DI bootstrap)
     let kernel = TestKernel::new().await;
     let backends = kernel.app.registry.available();
-    
+
     // 2. Verification: In our TestKernel, we explicitly enabled brew, apt, and cargo
-    assert!(!backends.is_empty(), "No backends discovered in isolated context.");
-    assert!(kernel.app.registry.get("brew").is_some(), "Homebrew backend missing from registry");
-    assert!(kernel.app.registry.get("github").is_some(), "GitHub backend missing from registry");
+    assert!(
+        !backends.is_empty(),
+        "No backends discovered in isolated context."
+    );
+    assert!(
+        kernel.app.registry.get("brew").is_some(),
+        "Homebrew backend missing from registry"
+    );
+    assert!(
+        kernel.app.registry.get("github").is_some(),
+        "GitHub backend missing from registry"
+    );
 }
 
-/// Verifies that backends correctly implement the exhaustive 3.6.0 trait 
+/// Verifies that backends correctly implement the exhaustive 3.6.0 trait
 /// capability matrix.
 #[tokio::test]
 async fn test_backend_capability_discovery_solid_wiring() {
     let kernel = TestKernel::new().await;
-    let github = kernel.app.registry.get("github")
+    let github = kernel
+        .app
+        .registry
+        .get("github")
         .expect("GitHub backend missing from registry");
-    
+
     // Mission-critical capability checks
-    assert!(github.is_installable(), "GitHub must implement the Installable trait");
-    assert!(github.is_queryable(), "GitHub must implement the Queryable trait");
-    assert!(github.is_metadata_provider(), "GitHub must implement the MetadataProvider trait");
+    assert!(
+        github.is_installable(),
+        "GitHub must implement the Installable trait"
+    );
+    assert!(
+        github.is_queryable(),
+        "GitHub must implement the Queryable trait"
+    );
+    assert!(
+        github.is_metadata_provider(),
+        "GitHub must implement the MetadataProvider trait"
+    );
 }
 
 // ============================================================================
 // SECURITY & VALIDATION
 // ============================================================================
 
-/// Verifies that the Security Validator blocks dangerous inputs that could 
+/// Verifies that the Security Validator blocks dangerous inputs that could
 /// lead to escalation or unauthorized system access.
 #[tokio::test]
 async fn test_security_validator_strict_enforcement() {
     // 1. Logic Check: Legitimate names must pass
     assert!(Validator::validate_package_name("valid-pkg-123.stable").is_ok());
-    
+
     // 2. Logic Check: Dangerous patterns must be blocked (Bug Fix 2 & 6 Logic)
     let dangerous_inputs = vec![
         "pkg; rm -rf /",
@@ -61,10 +82,14 @@ async fn test_security_validator_strict_enforcement() {
         "../traversal",
         "\\..\\windows\\system32",
     ];
-    
+
     for input in dangerous_inputs {
         let res = Validator::validate_package_name(input);
-        assert!(res.is_err(), "Security vulnerability: Validator failed to block malicious input: {}", input);
+        assert!(
+            res.is_err(),
+            "Security vulnerability: Validator failed to block malicious input: {}",
+            input
+        );
     }
 }
 
@@ -72,7 +97,7 @@ async fn test_security_validator_strict_enforcement() {
 // TELEMETRY & PERFORMANCE
 // ============================================================================
 
-/// Verifies that the MetricsCollector accurately records parallel task 
+/// Verifies that the MetricsCollector accurately records parallel task
 /// performance data for the transaction summary.
 #[tokio::test]
 async fn test_telemetry_metrics_reporting_accuracy() {
@@ -81,13 +106,13 @@ async fn test_telemetry_metrics_reporting_accuracy() {
 
     // 1. Record a simulated successful operation
     metrics.record_operation(
-        "task-hermetic-1", 
-        "apt", 
-        start, 
-        true,   // Success
-        None,   // No error
-        1,      // 1 attempt
-        1024    // 1KB downloaded
+        "task-hermetic-1",
+        "apt",
+        start,
+        true, // Success
+        None, // No error
+        1,    // 1 attempt
+        1024, // 1KB downloaded
     );
 
     // 2. Record aggregate stats
@@ -102,65 +127,83 @@ async fn test_telemetry_metrics_reporting_accuracy() {
 // PLANNER & TEMPLATE INTEGRATION
 // ============================================================================
 
-/// Verifies that the ChangePlanner correctly identifies when a configuration 
+/// Verifies that the ChangePlanner correctly identifies when a configuration
 /// template needs to be physically updated on the host.
 #[tokio::test]
 async fn test_planner_template_logic_integration() {
     let kernel = TestKernel::new().await;
     let state = StateRegistry::default();
     let planner = ChangePlanner::new(kernel.app.registry.clone(), &state, &kernel.app.config);
-    
+
     // 1. Create a source template file in the test sandbox
     let source_path = kernel.tmp.path().join("nginx.tpl");
     let target_path = kernel.tmp.path().join("nginx.conf");
-    
-    fs::write(&source_path, "worker_processes {{OS_CORES}};").await.unwrap();
-    
+
+    fs::write(&source_path, "worker_processes {{OS_CORES}};")
+        .await
+        .unwrap();
+
     // 2. Setup a spec for the 'link' backend with template logic enabled
     let mut options = HashMap::new();
-    options.insert("target".to_string(), target_path.to_string_lossy().to_string());
+    options.insert(
+        "target".to_string(),
+        target_path.to_string_lossy().to_string(),
+    );
     options.insert("template".to_string(), "true".to_string());
-    
+
     let spec = PackageSpec {
         name: source_path.to_string_lossy().to_string(),
         backend: "link".to_string(),
         options,
         requires: vec![],
     };
-    
+
     // 3. Ensure the 'link' backend binary is "available"
     kernel.mock_executor.set_command_exists("link", true);
-    
+
     let mut desired = HashMap::new();
     desired.insert("link".to_string(), vec![spec]);
-    
+
     // 4. Plan the transition (Global Scope)
     // Resolves E0061: Passing the required ScopedFilter argument
-    let plan = planner.plan(&desired, ScopedFilter::None).await
+    let plan = planner
+        .plan(&desired, ScopedFilter::None)
+        .await
         .expect("Integration Planning Failure: Template logic closure failed.");
 
     // 5. Verification: Since target doesn't exist, planner must schedule an installation
-    assert!(!plan.is_empty(), "Planner logic error: Template creation was not scheduled.");
+    assert!(
+        !plan.is_empty(),
+        "Planner logic error: Template creation was not scheduled."
+    );
 }
 
 // ============================================================================
 // TELEPORTATION CONSISTENCY
 // ============================================================================
 
-/// Verifies that the Teleport API correctly handles edge cases where a package 
+/// Verifies that the Teleport API correctly handles edge cases where a package
 /// is completely missing from all system backends.
 #[tokio::test]
 async fn test_teleport_api_consistency_on_missing_package() {
     let kernel = TestKernel::new().await;
     let teleporter = kernel.app.teleporter();
-    
+
     // 1. Prime mocks to report "Package Not Found" across all queryable backends
-    kernel.mock_executor.set_response("brew info nonexistent-identity", Ok(DryRunOutput::default().into()));
-    kernel.mock_executor.set_response("cargo list", Ok(DryRunOutput::default().into()));
+    kernel.mock_executor.set_response(
+        "brew info nonexistent-identity",
+        Ok(DryRunOutput::default().into()),
+    );
+    kernel
+        .mock_executor
+        .set_response("cargo list", Ok(DryRunOutput::default().into()));
 
     // 2. Execute Teleport
     let result = teleporter.teleport("nonexistent-identity", "cargo").await;
-    
+
     // 3. Verification: Correct error propagation
-    assert!(result.is_err(), "Logic Error: Teleport should have failed for a package that does not exist.");
+    assert!(
+        result.is_err(),
+        "Logic Error: Teleport should have failed for a package that does not exist."
+    );
 }

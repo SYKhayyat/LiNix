@@ -6,7 +6,9 @@ use serde_json::Value;
 /// Supports modern JSON (nix profile list --json) and legacy nix-env formats.
 pub fn parse_list(output: &str) -> Vec<Package> {
     let clean = sanitize(output);
-    if clean.is_empty() { return vec![]; }
+    if clean.is_empty() {
+        return vec![];
+    }
 
     // 1. Attempt JSON parsing (Modern Nix Flakes / Profiles)
     if let Ok(json) = serde_json::from_str::<Value>(&clean) {
@@ -15,21 +17,24 @@ pub fn parse_list(output: &str) -> Vec<Package> {
         // Handle 'nix profile list --json' structure (Roadmap 2.2 support)
         if let Some(elements) = json.get("elements").and_then(|e| e.as_array()) {
             for (i, el) in elements.iter().enumerate() {
-                let attr_path = el.get("attrPath")
+                let attr_path = el
+                    .get("attrPath")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
-                
+
                 // Extract clean name from attribute path
                 let name = attr_path.split('.').next_back().unwrap_or(attr_path);
                 let mut p = Package::new(name, "nix");
-                
+
                 // Track internal indices and paths for deterministic removals
                 p.properties.insert("index".into(), i.to_string());
-                p.properties.insert("full_attr".into(), attr_path.to_string());
+                p.properties
+                    .insert("full_attr".into(), attr_path.to_string());
 
                 if let Some(store_paths) = el.get("storePaths").and_then(|a| a.as_array()) {
                     if let Some(first_path) = store_paths.first().and_then(|p| p.as_str()) {
-                        p.properties.insert("store_path".into(), first_path.to_string());
+                        p.properties
+                            .insert("store_path".into(), first_path.to_string());
                     }
                 }
 
@@ -50,7 +55,8 @@ pub fn parse_list(output: &str) -> Vec<Package> {
 
     // 2. Fallback to standard text parsing (nix-env -q style)
     // Expected format: "name-version"
-    clean.lines()
+    clean
+        .lines()
         .filter_map(|line| {
             let (name, ver) = line.rsplit_once('-')?;
             Some(Package::with_version(name.trim(), ver.trim(), "nix"))
@@ -66,7 +72,7 @@ pub fn parse_search(output: &str) -> Vec<Package> {
             // nix-env -qa format: "attribute-path  name-version"
             let parts: Vec<&str> = line.split_whitespace().collect();
             let full_name = parts.first()?;
-            
+
             if let Some((name, ver)) = full_name.rsplit_once('-') {
                 Some(Package::with_version(name, ver, "nix"))
             } else {

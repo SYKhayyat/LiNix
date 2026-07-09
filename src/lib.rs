@@ -1,6 +1,6 @@
 //! LiNix - Universal Mission-Critical Package Manager
-//! 
-//! A high-performance, Directed Acyclic Graph (DAG) based orchestration engine 
+//!
+//! A high-performance, Directed Acyclic Graph (DAG) based orchestration engine
 //! for managing packages across 33+ backends and multiple platforms.
 
 pub mod app;

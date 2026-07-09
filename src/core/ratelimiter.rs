@@ -1,18 +1,18 @@
 use crate::core::Result;
-use governor::{Quota, RateLimiter as GovRateLimiter, Jitter};
-use governor::state::{InMemoryState, NotKeyed};
 use governor::clock::DefaultClock;
+use governor::state::{InMemoryState, NotKeyed};
+use governor::{Jitter, Quota, RateLimiter as GovRateLimiter};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, warn};
 
 /// A thread-safe, high-performance rate limiter implementation using the governor crate.
-/// 
-/// This implementation provides true backpressure and asynchronous waiting, 
-/// ensuring LiNix respects API quotas for GitHub, VS Code Marketplace, and other 
+///
+/// This implementation provides true backpressure and asynchronous waiting,
+/// ensuring LiNix respects API quotas for GitHub, VS Code Marketplace, and other
 /// remote backends without wasting CPU cycles.
-/// 
+///
 /// Hardened for Phase 1.3: Provides real backpressure for API-driven backends.
 #[derive(Clone)]
 pub struct RateLimiter {
@@ -26,7 +26,7 @@ impl RateLimiter {
         // Ensure we have at least 1 request per minute to avoid division by zero errors
         let rpm = requests_per_minute.max(1);
         let quota = Quota::per_minute(NonZeroU32::new(rpm).expect("RPM is guaranteed > 0"));
-        
+
         Self {
             inner: Arc::new(GovRateLimiter::direct(quota)),
             description: description.to_string(),
@@ -67,7 +67,7 @@ impl RateLimiter {
     {
         // 1. Wait for permit with a small jitter (up to 150ms) to desynchronize parallel workers
         let jitter = Jitter::up_to(Duration::from_millis(150));
-        
+
         self.inner.until_ready_with_jitter(jitter).await;
 
         // 2. Execute the task

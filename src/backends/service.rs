@@ -1,6 +1,6 @@
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec, 
-    Queryable, Result, MetadataProvider
+    BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
+    Result,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ pub struct ServiceBackendCore {
 
 impl ServiceBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
-        Self { 
+        Self {
             executor,
             name: "service".to_string(),
         }
@@ -36,7 +36,9 @@ impl ServiceBackendCore {
 
 #[async_trait]
 impl BackendCore for ServiceBackendCore {
-    fn name(&self) -> &str { &self.name }
+    fn name(&self) -> &str {
+        &self.name
+    }
 
     fn is_available(&self) -> bool {
         if let Some(cmd) = self.get_init_command() {
@@ -68,34 +70,64 @@ pub struct ServiceInstallable {
 impl Installable for ServiceInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         for spec in specs {
-            let status = spec.options.get("status").map(|s| s.as_str()).unwrap_or("running");
-            let enabled = spec.options.get("enabled").map(|s| s == "true").unwrap_or(true);
+            let status = spec
+                .options
+                .get("status")
+                .map(|s| s.as_str())
+                .unwrap_or("running");
+            let enabled = spec
+                .options
+                .get("enabled")
+                .map(|s| s == "true")
+                .unwrap_or(true);
 
             #[cfg(target_os = "linux")]
             {
                 let action = if enabled { "enable" } else { "disable" };
-                self.core.executor.run("systemctl", &[action, &spec.name], sudo).await?;
+                self.core
+                    .executor
+                    .run("systemctl", &[action, &spec.name], sudo)
+                    .await?;
 
                 let state_cmd = if status == "running" { "start" } else { "stop" };
-                self.core.executor.run("systemctl", &[state_cmd, &spec.name], sudo).await?;
+                self.core
+                    .executor
+                    .run("systemctl", &[state_cmd, &spec.name], sudo)
+                    .await?;
             }
 
             #[cfg(target_os = "macos")]
             {
-                let cmd = if status == "running" { "load" } else { "unload" };
-                self.core.executor.run("launchctl", &[cmd, "-w", &spec.name], sudo).await?;
+                let cmd = if status == "running" {
+                    "load"
+                } else {
+                    "unload"
+                };
+                self.core
+                    .executor
+                    .run("launchctl", &[cmd, "-w", &spec.name], sudo)
+                    .await?;
             }
 
             #[cfg(target_os = "windows")]
             {
                 let start_type = if enabled { "auto" } else { "disabled" };
-                self.core.executor.run("sc", &["config", &spec.name, "start=", start_type], sudo).await?;
+                self.core
+                    .executor
+                    .run("sc", &["config", &spec.name, "start=", start_type], sudo)
+                    .await?;
 
                 let state_cmd = if status == "running" { "start" } else { "stop" };
-                self.core.executor.run("sc", &[state_cmd, &spec.name], sudo).await?;
+                self.core
+                    .executor
+                    .run("sc", &[state_cmd, &spec.name], sudo)
+                    .await?;
             }
 
-            info!("Service {}: Set to {} (enabled={})", spec.name, status, enabled);
+            info!(
+                "Service {}: Set to {} (enabled={})",
+                spec.name, status, enabled
+            );
         }
         Ok(())
     }
@@ -104,17 +136,33 @@ impl Installable for ServiceInstallable {
         for name in names {
             #[cfg(target_os = "linux")]
             {
-                let _ = self.core.executor.run("systemctl", &["stop", name], sudo).await;
-                let _ = self.core.executor.run("systemctl", &["disable", name], sudo).await;
+                let _ = self
+                    .core
+                    .executor
+                    .run("systemctl", &["stop", name], sudo)
+                    .await;
+                let _ = self
+                    .core
+                    .executor
+                    .run("systemctl", &["disable", name], sudo)
+                    .await;
             }
             #[cfg(target_os = "macos")]
             {
-                let _ = self.core.executor.run("launchctl", &["unload", "-w", name], sudo).await;
+                let _ = self
+                    .core
+                    .executor
+                    .run("launchctl", &["unload", "-w", name], sudo)
+                    .await;
             }
             #[cfg(target_os = "windows")]
             {
                 let _ = self.core.executor.run("sc", &["stop", name], sudo).await;
-                let _ = self.core.executor.run("sc", &["config", name, "start=", "disabled"], sudo).await;
+                let _ = self
+                    .core
+                    .executor
+                    .run("sc", &["config", name, "start=", "disabled"], sudo)
+                    .await;
             }
         }
         Ok(())
@@ -132,7 +180,20 @@ impl Queryable for ServiceQueryable {
 
         #[cfg(target_os = "linux")]
         {
-            let out = self.core.executor.run_output("systemctl", &["list-units", "--type=service", "--state=running", "--no-legend"], false).await?;
+            let out = self
+                .core
+                .executor
+                .run_output(
+                    "systemctl",
+                    &[
+                        "list-units",
+                        "--type=service",
+                        "--state=running",
+                        "--no-legend",
+                    ],
+                    false,
+                )
+                .await?;
             for line in out.lines() {
                 if let Some(name) = line.split_whitespace().next() {
                     pkgs.push(Package::new(name.trim_end_matches(".service"), "service"));
@@ -142,7 +203,11 @@ impl Queryable for ServiceQueryable {
 
         #[cfg(target_os = "macos")]
         {
-            let out = self.core.executor.run_output("launchctl", &["list"], false).await?;
+            let out = self
+                .core
+                .executor
+                .run_output("launchctl", &["list"], false)
+                .await?;
             for line in out.lines().skip(1) {
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if let Some(label) = parts.get(2) {
@@ -153,7 +218,15 @@ impl Queryable for ServiceQueryable {
 
         #[cfg(target_os = "windows")]
         {
-            let out = self.core.executor.run_output("sc", &["query", "type=", "service", "state=", "active"], false).await?;
+            let out = self
+                .core
+                .executor
+                .run_output(
+                    "sc",
+                    &["query", "type=", "service", "state=", "active"],
+                    false,
+                )
+                .await?;
             for line in out.lines() {
                 if let Some(v) = line.strip_prefix("SERVICE_NAME: ") {
                     pkgs.push(Package::new(v.trim(), "service"));
@@ -168,7 +241,7 @@ impl Queryable for ServiceQueryable {
         self.list_installed().await
     }
 
-    /// FIX: Hardening Phase 5.2. No longer greedy. 
+    /// FIX: Hardening Phase 5.2. No longer greedy.
     /// Verifies existence before returning metadata.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let installed = self.list_installed().await?;
@@ -185,14 +258,24 @@ impl ServiceQueryable {
     async fn fill_platform_metadata(&self, p: &mut Package) -> Result<()> {
         #[cfg(target_os = "linux")]
         {
-            if let Ok(out) = self.core.executor.run_output("systemctl", &["status", &p.name], false).await {
+            if let Ok(out) = self
+                .core
+                .executor
+                .run_output("systemctl", &["status", &p.name], false)
+                .await
+            {
                 p.properties.insert("status_raw".into(), out);
             }
         }
 
         #[cfg(target_os = "windows")]
         {
-            if let Ok(out) = self.core.executor.run_output("sc", &["qc", &p.name], false).await {
+            if let Ok(out) = self
+                .core
+                .executor
+                .run_output("sc", &["qc", &p.name], false)
+                .await
+            {
                 p.properties.insert("config_raw".into(), out);
             }
         }
@@ -208,9 +291,11 @@ pub fn register(
     _cfg: &crate::config::Config,
 ) {
     let core = Arc::new(ServiceBackendCore::new(exec.duplicate()));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(ServiceInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(ServiceQueryable { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(ServiceInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(ServiceQueryable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }

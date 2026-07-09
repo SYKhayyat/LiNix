@@ -1,20 +1,22 @@
 // tests/mock_providers.rs
 #![allow(clippy::field_reassign_with_default, dead_code)]
 
-use linix::core::{Snapshot, SnapshotProvider, Result, Error, PackageSpec, StateRegistry, CommandExecutor};
-use linix::app::App;
-use linix::app::scheduler::TaskProvisioner;
-use linix::config::Config;
-use linix::config::config::ScheduleConfig;
-use linix::core::executor::MockExecutor;
 use async_trait::async_trait;
-use chrono::{Utc, Duration as ChronoDuration};
+use chrono::{Duration as ChronoDuration, Utc};
 use dashmap::DashMap;
+use linix::app::scheduler::TaskProvisioner;
+use linix::app::App;
+use linix::config::config::ScheduleConfig;
+use linix::config::Config;
+use linix::core::executor::MockExecutor;
+use linix::core::{
+    CommandExecutor, Error, PackageSpec, Result, Snapshot, SnapshotProvider, StateRegistry,
+};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use std::collections::HashMap;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 
 #[allow(dead_code)]
 pub struct TestKernel {
@@ -120,8 +122,12 @@ impl MockSnapshotProvider {
 
 #[async_trait]
 impl SnapshotProvider for MockSnapshotProvider {
-    fn name(&self) -> &str { "mock" }
-    async fn is_available(&self) -> bool { true }
+    fn name(&self) -> &str {
+        "mock"
+    }
+    async fn is_available(&self) -> bool {
+        true
+    }
     async fn create(&self, label: &str) -> Result<Snapshot> {
         let s = Snapshot {
             id: format!("snap_{}", Utc::now().timestamp()),
@@ -142,10 +148,15 @@ impl SnapshotProvider for MockSnapshotProvider {
             self.deletions.lock().await.push(id.to_string());
             Ok(())
         } else {
-            Err(Error::Snapshot(format!("Mock Logic Failure: Snapshot {} missing.", id)))
+            Err(Error::Snapshot(format!(
+                "Mock Logic Failure: Snapshot {} missing.",
+                id
+            )))
         }
     }
-    async fn restore(&self, _id: &str) -> Result<()> { Ok(()) }
+    async fn restore(&self, _id: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]
@@ -170,7 +181,12 @@ impl MockTaskProvisioner {
 
 #[async_trait]
 impl TaskProvisioner for MockTaskProvisioner {
-    async fn add_task(&self, _executor: &CommandExecutor, config: &ScheduleConfig, _linix_path: &Path) -> Result<()> {
+    async fn add_task(
+        &self,
+        _executor: &CommandExecutor,
+        config: &ScheduleConfig,
+        _linix_path: &Path,
+    ) -> Result<()> {
         let mut map = self.active_tasks.lock().await;
         map.insert(config.name.clone(), config.clone());
         Ok(())

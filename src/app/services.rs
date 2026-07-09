@@ -1,18 +1,17 @@
 // src/app/services.rs
 
+use crate::app::scheduler::notify::NotificationManager;
+use crate::app::scheduler::SchedulerManager;
 use crate::app::{
-    Migrator, Teleporter, GhostShell, ShimManager, UndoManager, ProfileManager,
-    LuaHooks, MetricsCollector, diagnostics::FailureDiagnosticEngine
-};
-use crate::config::Config;
-use crate::core::{
-    CommandExecutor, PackageCache, StateRegistry, Journal,
-    SnapshotManager, Result, Error
+    diagnostics::FailureDiagnosticEngine, GhostShell, LuaHooks, MetricsCollector, Migrator,
+    ProfileManager, ShimManager, Teleporter, UndoManager,
 };
 use crate::backends::{create_default_registry, BackendRegistry};
+use crate::config::Config;
+use crate::core::{
+    CommandExecutor, Error, Journal, PackageCache, Result, SnapshotManager, StateRegistry,
+};
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
-use crate::app::scheduler::SchedulerManager;
-use crate::app::scheduler::notify::NotificationManager;
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -55,17 +54,13 @@ impl AppServices {
         let shim_manager = ShimManager::new().await?;
 
         Ok(Self {
-            migrator: Migrator::new(
-                app.registry.clone(),
-                app.state.clone(),
-                &app.config
-            ),
+            migrator: Migrator::new(app.registry.clone(), app.state.clone(), &app.config),
             teleporter: Teleporter::new(
                 app.registry.clone(),
                 app.journal.clone(),
                 app.state.clone(),
                 app.diagnostics.clone(),
-                &app.config.groups_dir
+                &app.config.groups_dir,
             ),
             shell: GhostShell::new(
                 app.registry.clone(),
@@ -83,7 +78,8 @@ impl AppServices {
             undo_manager: UndoManager::new(
                 app.snapshot_manager.clone(),
                 app.state.clone(),
-                app.executor.clone()
+                app.executor.clone(),
+                app.config.groups_dir.clone(),
             ),
             profile_manager: ProfileManager::new(
                 app.registry.clone(),
@@ -110,7 +106,8 @@ impl AppCore {
         let executor = CommandExecutor::new(config.dry_run, config.verbose);
         let hooks = Arc::new(LuaHooks::new(&config)?);
 
-        let registry = Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
+        let registry =
+            Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
 
         // Load StateRegistry using the new `load_default()` method.

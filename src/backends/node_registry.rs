@@ -43,7 +43,10 @@ pub async fn registry_search(query: &str, backend: &str, size: usize) -> Result<
         .map_err(Error::from)?;
 
     if !res.status().is_success() {
-        return Err(Error::Other(format!("npm registry search error: {}", res.status())));
+        return Err(Error::Other(format!(
+            "npm registry search error: {}",
+            res.status()
+        )));
     }
 
     let json: serde_json::Value = res.json().await.map_err(Error::from)?;
@@ -57,7 +60,9 @@ pub fn parse_npm_registry(json: &serde_json::Value, backend: &str) -> Vec<Packag
     if let Some(objects) = json.get("objects").and_then(|o| o.as_array()) {
         for obj in objects {
             let pkg = &obj["package"];
-            let Some(name) = pkg["name"].as_str() else { continue };
+            let Some(name) = pkg["name"].as_str() else {
+                continue;
+            };
             let mut p = Package::new(name, backend);
             if let Some(v) = pkg["version"].as_str() {
                 p.version = Some(v.to_string());
@@ -88,7 +93,10 @@ mod tests {
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "express");
         assert_eq!(pkgs[0].version.as_deref(), Some("4.18.2"));
-        assert_eq!(pkgs[0].properties.get("description").map(String::as_str), Some("web framework"));
+        assert_eq!(
+            pkgs[0].properties.get("description").map(String::as_str),
+            Some("web framework")
+        );
         // scoped name preserved; missing description is fine
         assert_eq!(pkgs[1].name, "@types/node");
         assert!(!pkgs[1].properties.contains_key("description"));

@@ -1,7 +1,7 @@
 // tests/backend_tests.rs
 
-use linix::core::{PackageSpec, BackendCapabilities};
 use linix::core::executor::DryRunOutput;
+use linix::core::{BackendCapabilities, PackageSpec};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,11 +15,9 @@ use mock_providers::TestKernel;
 // BACKEND TEST HARNESS
 // ============================================================================
 
-async fn run_capability_test(
-    backend: Arc<BackendCapabilities>,
-    package_name: &str,
-) {
-    let installer = backend.as_installable()
+async fn run_capability_test(backend: Arc<BackendCapabilities>, package_name: &str) {
+    let installer = backend
+        .as_installable()
         .expect("Test Failure: Backend must implement Installable trait for lifecycle testing.");
 
     let spec = PackageSpec {
@@ -30,10 +28,22 @@ async fn run_capability_test(
     };
 
     let inst_res = installer.install(&[spec], backend.needs_root()).await;
-    assert!(inst_res.is_ok(), "Install failed for {}: {:?}", backend.name(), inst_res.err());
+    assert!(
+        inst_res.is_ok(),
+        "Install failed for {}: {:?}",
+        backend.name(),
+        inst_res.err()
+    );
 
-    let rem_res = installer.remove(&[package_name.to_string()], backend.needs_root()).await;
-    assert!(rem_res.is_ok(), "Remove failed for {}: {:?}", backend.name(), rem_res.err());
+    let rem_res = installer
+        .remove(&[package_name.to_string()], backend.needs_root())
+        .await;
+    assert!(
+        rem_res.is_ok(),
+        "Remove failed for {}: {:?}",
+        backend.name(),
+        rem_res.err()
+    );
 }
 
 // ============================================================================
@@ -45,10 +55,15 @@ async fn run_capability_test(
 async fn test_apt_backend_hermetic_logic() {
     let kernel = TestKernel::new().await;
     let backend = kernel.app.registry.get("apt").expect("Missing apt backend");
-    
+
     // Set expected sudo-prefixed responses for Linux
-    kernel.mock_executor.set_response("sudo apt install -y curl", Ok(DryRunOutput::default().into()));
-    kernel.mock_executor.set_response("sudo apt purge -y curl", Ok(DryRunOutput::default().into()));
+    kernel.mock_executor.set_response(
+        "sudo apt install -y curl",
+        Ok(DryRunOutput::default().into()),
+    );
+    kernel
+        .mock_executor
+        .set_response("sudo apt purge -y curl", Ok(DryRunOutput::default().into()));
 
     timeout(Duration::from_secs(5), run_capability_test(backend, "curl"))
         .await
@@ -59,10 +74,20 @@ async fn test_apt_backend_hermetic_logic() {
 #[tokio::test]
 async fn test_pacman_backend_hermetic_logic() {
     let kernel = TestKernel::new().await;
-    let backend = kernel.app.registry.get("pacman").expect("Missing pacman backend");
-    
-    kernel.mock_executor.set_response("sudo pacman -S --noconfirm --needed git", Ok(DryRunOutput::default().into()));
-    kernel.mock_executor.set_response("sudo pacman -Rs --noconfirm git", Ok(DryRunOutput::default().into()));
+    let backend = kernel
+        .app
+        .registry
+        .get("pacman")
+        .expect("Missing pacman backend");
+
+    kernel.mock_executor.set_response(
+        "sudo pacman -S --noconfirm --needed git",
+        Ok(DryRunOutput::default().into()),
+    );
+    kernel.mock_executor.set_response(
+        "sudo pacman -Rs --noconfirm git",
+        Ok(DryRunOutput::default().into()),
+    );
 
     timeout(Duration::from_secs(5), run_capability_test(backend, "git"))
         .await
@@ -73,10 +98,20 @@ async fn test_pacman_backend_hermetic_logic() {
 #[tokio::test]
 async fn test_winget_backend_hermetic_logic() {
     let kernel = TestKernel::new().await;
-    let backend = kernel.app.registry.get("winget").expect("Missing winget backend");
-    
-    kernel.mock_executor.set_response("winget install --silent --accept-source-agreements --accept-package-agreements vim", Ok(DryRunOutput::default().into()));
-    kernel.mock_executor.set_response("winget uninstall --silent vim", Ok(DryRunOutput::default().into()));
+    let backend = kernel
+        .app
+        .registry
+        .get("winget")
+        .expect("Missing winget backend");
+
+    kernel.mock_executor.set_response(
+        "winget install --silent --accept-source-agreements --accept-package-agreements vim",
+        Ok(DryRunOutput::default().into()),
+    );
+    kernel.mock_executor.set_response(
+        "winget uninstall --silent vim",
+        Ok(DryRunOutput::default().into()),
+    );
 
     timeout(Duration::from_secs(5), run_capability_test(backend, "vim"))
         .await
@@ -90,10 +125,18 @@ async fn test_winget_backend_hermetic_logic() {
 #[tokio::test]
 async fn test_brew_backend_hermetic_logic() {
     let kernel = TestKernel::new().await;
-    let backend = kernel.app.registry.get("brew").expect("Missing brew backend");
-    
-    kernel.mock_executor.set_response("brew install htop", Ok(DryRunOutput::default().into()));
-    kernel.mock_executor.set_response("brew uninstall htop", Ok(DryRunOutput::default().into()));
+    let backend = kernel
+        .app
+        .registry
+        .get("brew")
+        .expect("Missing brew backend");
+
+    kernel
+        .mock_executor
+        .set_response("brew install htop", Ok(DryRunOutput::default().into()));
+    kernel
+        .mock_executor
+        .set_response("brew uninstall htop", Ok(DryRunOutput::default().into()));
 
     timeout(Duration::from_secs(5), run_capability_test(backend, "htop"))
         .await
@@ -103,27 +146,48 @@ async fn test_brew_backend_hermetic_logic() {
 #[tokio::test]
 async fn test_cargo_backend_hermetic_logic() {
     let kernel = TestKernel::new().await;
-    let backend = kernel.app.registry.get("cargo").expect("Missing cargo backend");
-    
-    kernel.mock_executor.set_response("cargo install ripgrep", Ok(DryRunOutput::default().into()));
-    kernel.mock_executor.set_response("cargo uninstall ripgrep", Ok(DryRunOutput::default().into()));
+    let backend = kernel
+        .app
+        .registry
+        .get("cargo")
+        .expect("Missing cargo backend");
 
-    timeout(Duration::from_secs(5), run_capability_test(backend, "ripgrep"))
-        .await
-        .expect("Cargo Logic test timed out");
+    kernel
+        .mock_executor
+        .set_response("cargo install ripgrep", Ok(DryRunOutput::default().into()));
+    kernel.mock_executor.set_response(
+        "cargo uninstall ripgrep",
+        Ok(DryRunOutput::default().into()),
+    );
+
+    timeout(
+        Duration::from_secs(5),
+        run_capability_test(backend, "ripgrep"),
+    )
+    .await
+    .expect("Cargo Logic test timed out");
 }
 
 #[tokio::test]
 async fn test_link_backend_vfs_integrity() {
     let kernel = TestKernel::new().await;
-    let backend = kernel.app.registry.get("link").expect("Missing link backend");
+    let backend = kernel
+        .app
+        .registry
+        .get("link")
+        .expect("Missing link backend");
 
     let source_path = kernel.tmp.path().join("source_file.conf");
-    tokio::fs::write(&source_path, "theme: solarized").await.unwrap();
+    tokio::fs::write(&source_path, "theme: solarized")
+        .await
+        .unwrap();
     let target_path = kernel.tmp.path().join("target_link.conf");
 
     let mut options = HashMap::new();
-    options.insert("target".to_string(), target_path.to_string_lossy().to_string());
+    options.insert(
+        "target".to_string(),
+        target_path.to_string_lossy().to_string(),
+    );
 
     let spec = PackageSpec {
         name: source_path.to_string_lossy().to_string(),
@@ -133,16 +197,25 @@ async fn test_link_backend_vfs_integrity() {
     };
 
     let installer = backend.as_installable().unwrap();
-    
-    installer.install(&[spec], false).await.expect("Link creation failed");
-    
-    let vfs_diff = kernel.app.executor.get_vfs_diff();
-    let link_created = vfs_diff.iter().any(|(path, val)| {
-        path == &target_path && val.contains("LINK:")
-    });
-    assert!(link_created, "Link record was not found in the Virtual Filesystem closure.");
 
-    installer.remove(&[target_path.to_string_lossy().to_string()], false).await.expect("Link purge failed");
+    installer
+        .install(&[spec], false)
+        .await
+        .expect("Link creation failed");
+
+    let vfs_diff = kernel.app.executor.get_vfs_diff();
+    let link_created = vfs_diff
+        .iter()
+        .any(|(path, val)| path == &target_path && val.contains("LINK:"));
+    assert!(
+        link_created,
+        "Link record was not found in the Virtual Filesystem closure."
+    );
+
+    installer
+        .remove(&[target_path.to_string_lossy().to_string()], false)
+        .await
+        .expect("Link purge failed");
 }
 
 #[cfg(target_os = "linux")]
@@ -150,19 +223,27 @@ async fn test_link_backend_vfs_integrity() {
 async fn test_metadata_provider_resolution() {
     let kernel = TestKernel::new().await;
     let backend = kernel.app.registry.get("apt").expect("Missing apt backend");
-    
-    let provider = backend.as_metadata_provider()
+
+    let provider = backend
+        .as_metadata_provider()
         .expect("Apt must implement MetadataProvider trait.");
 
     // Mock 'apt depends' command - no sudo needed for read-only query
     let mock_output = "Depends: libc6\nDepends: bash\n";
     kernel.mock_executor.set_response(
-        "apt depends --no-recommends --no-suggests curl", 
-        Ok(DryRunOutput { stdout: mock_output.as_bytes().to_vec(), stderr: vec![] }.into())
+        "apt depends --no-recommends --no-suggests curl",
+        Ok(DryRunOutput {
+            stdout: mock_output.as_bytes().to_vec(),
+            stderr: vec![],
+        }
+        .into()),
     );
 
-    let deps = provider.get_dependencies("curl").await.expect("Dependency resolution failed");
-    
+    let deps = provider
+        .get_dependencies("curl")
+        .await
+        .expect("Dependency resolution failed");
+
     assert!(deps.contains(&"libc6".to_string()));
     assert!(deps.contains(&"bash".to_string()));
     assert_eq!(deps.len(), 2);

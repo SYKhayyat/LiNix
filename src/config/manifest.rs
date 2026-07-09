@@ -1,10 +1,10 @@
 use crate::core::{Error, Result};
 use crate::utils::file::atomic_write;
-use std::path::{PathBuf};
-use walkdir::WalkDir;
-use tokio::fs;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
+use tokio::fs;
+use walkdir::WalkDir;
 
 /// Represents the physical location of a package declaration within a text manifest.
 #[derive(Debug, Clone)]
@@ -51,10 +51,14 @@ impl ManifestEngine {
             WalkDir::new(&groups_dir)
                 .into_iter()
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "txt"))
+                .filter(|e| {
+                    e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "txt")
+                })
                 .map(|e| e.path().to_path_buf())
                 .collect()
-        }).await.map_err(|e| Error::Other(e.to_string()))?;
+        })
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?;
 
         for path in entries {
             let content = fs::read_to_string(&path).await?;
@@ -63,9 +67,9 @@ impl ManifestEngine {
                 if trimmed.is_empty() || trimmed.starts_with('#') {
                     continue;
                 }
-                
+
                 let spec_part = trimmed.split('@').next().unwrap_or(trimmed);
-                
+
                 let is_match = if let Some((_backend, name)) = spec_part.split_once(':') {
                     name.trim() == package_name || spec_part.trim() == package_name
                 } else {
@@ -86,7 +90,10 @@ impl ManifestEngine {
 
     /// Phase 3.1: Loads machine-generated locks from the staging area.
     pub async fn load_locks(&self) -> Result<ManifestLocks> {
-        if !tokio::fs::try_exists(&self.locks_path).await.unwrap_or(false) {
+        if !tokio::fs::try_exists(&self.locks_path)
+            .await
+            .unwrap_or(false)
+        {
             return Ok(ManifestLocks::default());
         }
         let data = fs::read_to_string(&self.locks_path).await?;
@@ -97,41 +104,56 @@ impl ManifestEngine {
     }
 
     /// Phase 3.1: Atomically updates a lock in the staging area.
-    pub async fn update_lock(&self, backend: &str, package: &str, options: HashMap<String, String>) -> Result<()> {
+    pub async fn update_lock(
+        &self,
+        backend: &str,
+        package: &str,
+        options: HashMap<String, String>,
+    ) -> Result<()> {
         let mut locks = self.load_locks().await?;
         let key = format!("{}:{}", backend, package);
         locks.locks.insert(key, options);
-        
+
         let data = serde_json::to_string_pretty(&locks).map_err(Error::from)?;
         let path = self.locks_path.clone();
-        
-        tokio::task::spawn_blocking(move || {
-            atomic_write(&path, &data)
-        }).await.map_err(|e| Error::Other(e.to_string()))??;
-        
+
+        tokio::task::spawn_blocking(move || atomic_write(&path, &data))
+            .await
+            .map_err(|e| Error::Other(e.to_string()))??;
+
         Ok(())
     }
 
     /// Updates a package declaration with a new specification string.
     pub async fn update_package(&self, package_name: &str, new_spec: &str) -> Result<()> {
         let locations = self.find_all_packages(package_name).await?;
-        let loc = locations.first().ok_or_else(|| Error::Config(format!("Package '{}' not found in manifests", package_name)))?;
+        let loc = locations.first().ok_or_else(|| {
+            Error::Config(format!("Package '{}' not found in manifests", package_name))
+        })?;
         self.update_package_at_location(loc, new_spec).await
     }
 
-    async fn update_package_at_location(&self, location: &PackageLocation, new_spec: &str) -> Result<()> {
+    async fn update_package_at_location(
+        &self,
+        location: &PackageLocation,
+        new_spec: &str,
+    ) -> Result<()> {
         let content = fs::read_to_string(&location.file_path).await?;
         let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-        
+
         if lines.len() > location.line_index {
-            let leading_ws: String = location.raw_line.chars().take_while(|c| c.is_whitespace()).collect();
+            let leading_ws: String = location
+                .raw_line
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .collect();
             lines[location.line_index] = format!("{}{}", leading_ws, new_spec);
-            
+
             let output = lines.join("\n") + "\n";
             let path = location.file_path.clone();
-            tokio::task::spawn_blocking(move || {
-                atomic_write(&path, &output)
-            }).await.map_err(|e| Error::Other(e.to_string()))??;
+            tokio::task::spawn_blocking(move || atomic_write(&path, &output))
+                .await
+                .map_err(|e| Error::Other(e.to_string()))??;
         }
         Ok(())
     }
@@ -148,15 +170,15 @@ impl ManifestEngine {
     async fn delete_package_at_location(&self, location: &PackageLocation) -> Result<()> {
         let content = fs::read_to_string(&location.file_path).await?;
         let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-        
+
         if lines.len() > location.line_index {
             lines.remove(location.line_index);
             let output = lines.join("\n").trim_end().to_string() + "\n";
-            
+
             let path = location.file_path.clone();
-            tokio::task::spawn_blocking(move || {
-                atomic_write(&path, &output)
-            }).await.map_err(|e| Error::Other(e.to_string()))??;
+            tokio::task::spawn_blocking(move || atomic_write(&path, &output))
+                .await
+                .map_err(|e| Error::Other(e.to_string()))??;
         }
         Ok(())
     }
@@ -164,8 +186,12 @@ impl ManifestEngine {
     pub async fn add_to_local(&self, spec_str: &str) -> Result<()> {
         let local_path = self.groups_dir.join("local.txt");
         let name_part = spec_str.split('@').next().unwrap_or(spec_str);
-        let clean_name = name_part.split_once(':').map(|(_, n)| n).unwrap_or(name_part).trim();
-        
+        let clean_name = name_part
+            .split_once(':')
+            .map(|(_, n)| n)
+            .unwrap_or(name_part)
+            .trim();
+
         if !self.find_all_packages(clean_name).await?.is_empty() {
             return Ok(());
         }
@@ -175,7 +201,11 @@ impl ManifestEngine {
         }
 
         let mut lines = if tokio::fs::try_exists(&local_path).await.unwrap_or(false) {
-            fs::read_to_string(&local_path).await?.lines().map(|s| s.to_string()).collect()
+            fs::read_to_string(&local_path)
+                .await?
+                .lines()
+                .map(|s| s.to_string())
+                .collect()
         } else {
             vec![
                 "# LiNix Local Manifest".to_string(),
@@ -186,11 +216,11 @@ impl ManifestEngine {
 
         lines.push(spec_str.to_string());
         let output = lines.join("\n") + "\n";
-        
-        tokio::task::spawn_blocking(move || {
-            atomic_write(&local_path, &output)
-        }).await.map_err(|e| Error::Other(e.to_string()))??;
-        
+
+        tokio::task::spawn_blocking(move || atomic_write(&local_path, &output))
+            .await
+            .map_err(|e| Error::Other(e.to_string()))??;
+
         Ok(())
     }
 
@@ -205,10 +235,14 @@ impl ManifestEngine {
             WalkDir::new(&groups_dir)
                 .into_iter()
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "txt"))
+                .filter(|e| {
+                    e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "txt")
+                })
                 .map(|e| e.path().to_path_buf())
                 .collect()
-        }).await.map_err(|e| Error::Other(e.to_string()))?;
+        })
+        .await
+        .map_err(|e| Error::Other(e.to_string()))?;
 
         for path in entries {
             let content = fs::read_to_string(path).await?;

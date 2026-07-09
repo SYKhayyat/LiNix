@@ -1,22 +1,22 @@
-use crate::config::Config;
-use crate::config::parser::{parse_group_file, identify_line, ManifestLine};
-use crate::core::{PackageSpec, Result, Validator, Error};
 use crate::backends::BackendRegistry;
+use crate::config::parser::{identify_line, parse_group_file, ManifestLine};
+use crate::config::Config;
+use crate::core::{Error, PackageSpec, Result, Validator};
+use semver::{Version, VersionReq};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use tracing::{debug, info, warn, trace, instrument};
-use semver::{Version, VersionReq};
-use version_compare::{Cmp, compare as loose_compare};
 use tokio::fs;
+use tracing::{debug, info, instrument, trace, warn};
+use version_compare::{compare as loose_compare, Cmp};
 
 /// Responsible for calculating the "Desired State" of the system.
-/// 
+///
 /// The Resolver orchestrates the expansion of high-level manifest logic:
 /// 1. Profile Expansion: Loading host-specific or global identity files.
 /// 2. Module Expansion: Feature 3 recursive @module loading.
 /// 3. Group Expansion: Unrolling named collections from configuration.
-/// 
-/// It acts as the primary integrity gate, enforcing strict version locking 
+///
+/// It acts as the primary integrity gate, enforcing strict version locking
 /// and validating package names before they reach the planner.
 pub struct StateResolver<'a> {
     /// Reference to the global kernel configuration.
@@ -31,16 +31,19 @@ pub struct StateResolver<'a> {
 
 impl<'a> StateResolver<'a> {
     /// Initializes a new StateResolver asynchronously.
-    /// 
-    /// If `locked` is true, it attempts to load the machine-generated 
+    ///
+    /// If `locked` is true, it attempts to load the machine-generated
     /// `locks.json` from the declarative manifests directory.
     pub async fn new(config: &'a Config, registry: Arc<BackendRegistry>, locked: bool) -> Self {
         let mut locks = HashMap::new();
-        
+
         if locked {
             let lock_path = config.groups_dir.join("locks.json");
-            debug!("Resolver: Locked mode active. Probing for locks at {:?}", lock_path);
-            
+            debug!(
+                "Resolver: Locked mode active. Probing for locks at {:?}",
+                lock_path
+            );
+
             if tokio::fs::try_exists(&lock_path).await.unwrap_or(false) {
                 if let Ok(data) = fs::read_to_string(&lock_path).await {
                     // JSON Structure: {"locks": {"apt:curl": "7.81.0", ...}}
@@ -59,39 +62,49 @@ impl<'a> StateResolver<'a> {
             }
         }
 
-        Self { 
-            config, 
-            registry, 
+        Self {
+            config,
+            registry,
             locked,
             locks,
         }
     }
 
     /// The primary resolution entry point.
-    /// 
+    ///
     /// Performs a breadth-first recursive unrolling of all manifest sources.
-    /// Resolves every @module, group:, and host-specific manifest into a 
+    /// Resolves every @module, group:, and host-specific manifest into a
     /// flat Map of PackageSpecs.
     #[instrument(skip(self))]
     pub async fn resolve_desired_state(&self) -> Result<HashMap<String, Vec<PackageSpec>>> {
         let mut resolved: HashMap<String, Vec<PackageSpec>> = HashMap::new();
-        // Queue stores (Raw Line String, Origin Source Name)
-        let mut raw_inputs: VecDeque<(String, String)> = VecDeque::new(); 
+        // Queue stores (Raw Line String, Origin Source Name, Inherited Exclusions).
+        // Exclusions flow DOWN a module/group subtree: `@module:dev -vim` drops vim from
+        // everything dev pulls in, but not from what another top-level source contributes.
+        let mut raw_inputs: VecDeque<(String, String, HashSet<String>)> = VecDeque::new();
         let mut seen_keys: HashSet<String> = HashSet::new();
-        
+
         let hostname = Config::get_hostname();
-        info!("Resolver: Expanding manifest closure for host '{}'.", hostname);
+        info!(
+            "Resolver: Expanding manifest closure for host '{}'.",
+            hostname
+        );
 
         // --- STEP 1: INITIAL SEEDING ---
 
         // A. Load directory-based .txt manifests
-        if tokio::fs::try_exists(&self.config.groups_dir).await.unwrap_or(false) {
-            let mut entries = fs::read_dir(&self.config.groups_dir).await.map_err(Error::from)?;
-            
+        if tokio::fs::try_exists(&self.config.groups_dir)
+            .await
+            .unwrap_or(false)
+        {
+            let mut entries = fs::read_dir(&self.config.groups_dir)
+                .await
+                .map_err(Error::from)?;
+
             while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
                 let path = entry.path();
                 let fname = path.file_name().unwrap_or_default().to_string_lossy();
-                
+
                 // Process standard .txt files, ignoring recursive .module files
                 if fname.ends_with(".txt") && !fname.ends_with(".module.txt") {
                     // Support host-specific provisioning: "host-WORKSTATION.txt"
@@ -102,7 +115,7 @@ impl<'a> StateResolver<'a> {
                     let source_id = format!("manifest:{}", fname);
                     debug!("Resolver: Seeding from manifest source '{}'", source_id);
                     for line in parse_group_file(&path).await? {
-                        raw_inputs.push_back((line, source_id.clone()));
+                        raw_inputs.push_back((line, source_id.clone(), HashSet::new()));
                     }
                 }
             }
@@ -112,7 +125,7 @@ impl<'a> StateResolver<'a> {
         if let Some(config_pkgs) = self.config.hostname_packages.get(&hostname) {
             let source_id = format!("config:hostname:{}", hostname);
             for p in config_pkgs {
-                raw_inputs.push_back((p.clone(), source_id.clone()));
+                raw_inputs.push_back((p.clone(), source_id.clone(), HashSet::new()));
             }
         }
 
@@ -121,7 +134,7 @@ impl<'a> StateResolver<'a> {
         const MAX_EXPANSION_ITERATIONS: usize = 4096;
         let mut iterations = 0;
 
-        while let Some((line, source)) = raw_inputs.pop_front() {
+        while let Some((line, source, excludes)) = raw_inputs.pop_front() {
             iterations += 1;
             if iterations > MAX_EXPANSION_ITERATIONS {
                 return Err(Error::Transaction(
@@ -131,20 +144,41 @@ impl<'a> StateResolver<'a> {
 
             match identify_line(&line) {
                 // Feature 3: Recursive Reusable Modules
-                ManifestLine::Module(mod_name) => {
-                    let mod_file = self.config.modules_dir.join(format!("{}.module.txt", mod_name));
-                    trace!("Resolver: Expanding @module '{}' requested by {}", mod_name, source);
-                    
+                ManifestLine::Module(mod_spec) => {
+                    // `@module:dev -vim -apt:nano` — the first token is the module name;
+                    // any `-token` after it is an exclusion scoped to this module's whole
+                    // (recursive) expansion, unioned with exclusions inherited from above.
+                    let mut parts = mod_spec.split_whitespace();
+                    let mod_name = parts.next().unwrap_or("").to_string();
+                    let mut child_excludes = excludes.clone();
+                    for tok in parts {
+                        if let Some(name) = tok.strip_prefix('-') {
+                            if !name.is_empty() {
+                                child_excludes.insert(name.to_string());
+                            }
+                        }
+                    }
+
+                    let mod_file = self
+                        .config
+                        .modules_dir
+                        .join(format!("{}.module.txt", mod_name));
+                    trace!(
+                        "Resolver: Expanding @module '{}' requested by {}",
+                        mod_name,
+                        source
+                    );
+
                     if !tokio::fs::try_exists(&mod_file).await.unwrap_or(false) {
                         return Err(Error::Config(format!(
-                            "Missing Dependency: Module '{}' referenced in {} not found at {:?}", 
+                            "Missing Dependency: Module '{}' referenced in {} not found at {:?}",
                             mod_name, source, mod_file
                         )));
                     }
 
                     let mod_id = format!("module:{}", mod_name);
                     for mod_line in parse_group_file(&mod_file).await? {
-                        raw_inputs.push_back((mod_line, mod_id.clone()));
+                        raw_inputs.push_back((mod_line, mod_id.clone(), child_excludes.clone()));
                     }
                 }
 
@@ -154,21 +188,49 @@ impl<'a> StateResolver<'a> {
                     if tokio::fs::try_exists(&group_path).await.unwrap_or(false) {
                         let group_id = format!("group:{}", group_name);
                         for g_line in parse_group_file(&group_path).await? {
-                            raw_inputs.push_back((g_line, group_id.clone()));
+                            raw_inputs.push_back((g_line, group_id.clone(), excludes.clone()));
                         }
                     } else if let Some(pkgs) = self.config.groups.get(&group_name) {
                         let group_id = format!("config:group:{}", group_name);
                         for p in pkgs {
-                            raw_inputs.push_back((p.clone(), group_id.clone()));
+                            raw_inputs.push_back((p.clone(), group_id.clone(), excludes.clone()));
                         }
                     } else {
-                        warn!("Resolver: Unknown group reference '{}' in source '{}'. Skipping.", group_name, source);
+                        warn!(
+                            "Resolver: Unknown group reference '{}' in source '{}'. Skipping.",
+                            group_name, source
+                        );
                     }
                 }
 
                 // Leaf nodes: Actual Package Specification
                 ManifestLine::Package(pkg_str) => {
                     let mut spec = self.parse_and_probe_spec(&pkg_str).await?;
+
+                    // Per-host backend gating: if this host manages only a subset of
+                    // backends, manifest entries for the others are ignored here (not an
+                    // error) — the intended way to keep e.g. npm/cargo out of a server.
+                    if !self.config.is_backend_enabled(&spec.backend) {
+                        debug!(
+                            "Resolver: Skipping '{}:{}' — backend not enabled on host '{}'.",
+                            spec.backend, spec.name, hostname
+                        );
+                        continue;
+                    }
+
+                    // Module/group exclusion: an enclosing `@module:X -pkg` drops this
+                    // package from the subtree. Matches a bare name (`-vim`) or a
+                    // backend-qualified name (`-apt:vim`).
+                    if excludes.contains(&spec.name)
+                        || excludes.contains(&format!("{}:{}", spec.backend, spec.name))
+                    {
+                        debug!(
+                            "Resolver: '{}:{}' excluded by an enclosing module/group.",
+                            spec.backend, spec.name
+                        );
+                        continue;
+                    }
+
                     let unique_id = format!("{}:{}", spec.backend, spec.name);
 
                     // Bug Fix 3: Strict Locking Enforcement
@@ -183,11 +245,13 @@ impl<'a> StateResolver<'a> {
                                 }
                             }
                             // Inject the locked version string into the spec for the planner
-                            spec.options.insert("version".to_string(), locked_ver.clone());
+                            spec.options
+                                .insert("version".to_string(), locked_ver.clone());
                         } else {
                             // A+ Grade Fix: Corrected positional argument count for error format
                             return Err(Error::Validation(format!(
-                                "Locked Mode Error: '{}' is missing from locks.json.", unique_id
+                                "Locked Mode Error: '{}' is missing from locks.json.",
+                                unique_id
                             )));
                         }
                     }
@@ -199,9 +263,15 @@ impl<'a> StateResolver<'a> {
                         // Internal tagging for Feature 4 Targeted Upgrades
                         spec.options.insert("__source".to_string(), source.clone());
 
-                        // Resolve metadata-level dependencies (requires= tag)
+                        // Resolve metadata-level dependencies (requires= tag). Exclusions
+                        // propagate to required packages too, so `@module:dev -vim` also
+                        // suppresses a vim pulled in via a dev package's `requires=`.
                         for req in &spec.requires {
-                            raw_inputs.push_back((req.clone(), format!("dep:{}", spec.name)));
+                            raw_inputs.push_back((
+                                req.clone(),
+                                format!("dep:{}", spec.name),
+                                excludes.clone(),
+                            ));
                         }
 
                         resolved.entry(spec.backend.clone()).or_default().push(spec);
@@ -213,7 +283,8 @@ impl<'a> StateResolver<'a> {
                         // Sources are ';'-joined; the planner's scope matcher splits on ';'.
                         if let Some(specs) = resolved.get_mut(&spec.backend) {
                             if let Some(existing) = specs.iter_mut().find(|s| s.name == spec.name) {
-                                let entry = existing.options.entry("__source".to_string()).or_default();
+                                let entry =
+                                    existing.options.entry("__source".to_string()).or_default();
                                 merge_source_tag(entry, &source);
                             }
                         }
@@ -222,7 +293,34 @@ impl<'a> StateResolver<'a> {
             }
         }
 
-        debug!("Resolver: Desired state calculated successfully in {} expansion steps.", iterations);
+        // Config-declared inline managed files (`[managed_files]`) become `link` specs
+        // that carry their body inline, so they flow through the same install / status /
+        // prune pipeline as everything else. Keyed by target path; a manifest-declared
+        // `link` for the same target (already in `seen_keys`) wins and is not overridden.
+        for (target, content) in &self.config.managed_files {
+            let unique_id = format!("link:{}", target);
+            if !seen_keys.insert(unique_id) {
+                continue;
+            }
+            let mut options = HashMap::new();
+            options.insert("target".to_string(), target.clone());
+            options.insert("content".to_string(), content.clone());
+            options.insert("__source".to_string(), "config:managed_files".to_string());
+            resolved
+                .entry("link".to_string())
+                .or_default()
+                .push(PackageSpec {
+                    name: target.clone(),
+                    backend: "link".to_string(),
+                    options,
+                    requires: vec![],
+                });
+        }
+
+        debug!(
+            "Resolver: Desired state calculated successfully in {} expansion steps.",
+            iterations
+        );
         Ok(resolved)
     }
 
@@ -230,7 +328,7 @@ impl<'a> StateResolver<'a> {
     /// Handles aliasing and priority-based probing.
     pub async fn parse_and_probe_spec(&self, line: &str) -> Result<PackageSpec> {
         // Expected syntax: [backend:]name[@options]
-        
+
         let (b_part, rest) = if let Some((b, r)) = line.split_once(':') {
             (Some(b), r)
         } else {
@@ -239,7 +337,7 @@ impl<'a> StateResolver<'a> {
 
         let (n_part, o_part) = rest.split_once('@').unwrap_or((rest, ""));
         let package_name = n_part.trim();
-        
+
         let mut options = HashMap::new();
         let mut requires = Vec::new();
 
@@ -260,14 +358,21 @@ impl<'a> StateResolver<'a> {
         // Logic for backend determination
         let backend = if let Some(b) = b_part {
             // Priority 1: User-provided backend name with aliasing
-            self.config.aliases.get(b).cloned().unwrap_or_else(|| b.to_string())
+            self.config
+                .aliases
+                .get(b)
+                .cloned()
+                .unwrap_or_else(|| b.to_string())
         } else {
             // Priority 2: Automated discovery across all enabled backends
             let mut detected_backend = None;
             let ver_constraint = options.get("version").map(|s| s.as_str());
 
             for b_priority_name in &self.config.backend_priority {
-                if self.remote_package_exists(b_priority_name, package_name, ver_constraint).await {
+                if self
+                    .remote_package_exists(b_priority_name, package_name, ver_constraint)
+                    .await
+                {
                     detected_backend = Some(b_priority_name.clone());
                     break;
                 }
@@ -275,7 +380,10 @@ impl<'a> StateResolver<'a> {
 
             // Priority 3: Fallback to global default
             detected_backend.unwrap_or_else(|| {
-                self.config.default_backend.clone().unwrap_or_else(|| "apt".to_string())
+                self.config
+                    .default_backend
+                    .clone()
+                    .unwrap_or_else(|| "apt".to_string())
             })
         };
 
@@ -288,9 +396,14 @@ impl<'a> StateResolver<'a> {
     }
 
     /// A+ Grade Logic: Safe, panic-free trait matching for remote discovery.
-    /// 
+    ///
     /// Verifies if a package exists in a remote backend and matches constraints.
-    async fn remote_package_exists(&self, backend_name: &str, package_name: &str, constraint: Option<&str>) -> bool {
+    async fn remote_package_exists(
+        &self,
+        backend_name: &str,
+        package_name: &str,
+        constraint: Option<&str>,
+    ) -> bool {
         let backend_cap = match self.registry.get(backend_name) {
             Some(b) if b.is_available() => b,
             _ => return false,
@@ -313,13 +426,16 @@ impl<'a> StateResolver<'a> {
                 }
                 return true;
             }
-            
+
             // Second: Search-based fallback if remote_has is inconclusive
             if let Ok(results) = searchable.search(package_name).await {
                 return results.iter().any(|pkg| {
                     if pkg.name == package_name {
                         match constraint {
-                            Some(req) => pkg.version.as_deref().is_some_and(|v| self.satisfies_constraint(v, req)),
+                            Some(req) => pkg
+                                .version
+                                .as_deref()
+                                .is_some_and(|v| self.satisfies_constraint(v, req)),
                             None => true,
                         }
                     } else {
@@ -328,7 +444,7 @@ impl<'a> StateResolver<'a> {
                 });
             }
         }
-        
+
         false
     }
 

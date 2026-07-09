@@ -9,7 +9,7 @@ use std::path::PathBuf;
 // Centralize critical utility re-exports
 pub use archive::{extract_archive, is_archive};
 pub use file::{atomic_write, ensure_dir, read_lines_filtered};
-pub use progress::{create_progress_reporter, ProgressReporter, ProgressHandle};
+pub use progress::{create_progress_reporter, ProgressHandle, ProgressReporter};
 pub use retry::{retry, retry_default, RetryConfig};
 
 /// Reliably locates the LiNix data directory across platforms.
@@ -36,7 +36,7 @@ pub fn safe_config_dir() -> PathBuf {
 }
 
 /// Injects a new directory into the current process's PATH environment variable.
-/// Vital for backends that install toolchains (like Mise or Cargo) and need 
+/// Vital for backends that install toolchains (like Mise or Cargo) and need
 /// immediate access to them in hooks.
 pub fn refresh_path(new_path: std::path::PathBuf) {
     if let Some(path) = std::env::var_os("PATH") {

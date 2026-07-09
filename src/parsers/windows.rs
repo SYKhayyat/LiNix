@@ -60,7 +60,11 @@ fn parse_winget_table(output: &str, columns_wanted: &[&str]) -> Vec<Vec<String>>
     let known = ["Name", "Id", "Version", "Available", "Match", "Source"];
     let mut cols: Vec<(usize, &str)> = known
         .iter()
-        .filter_map(|name| header.find(name).map(|b| (header[..b].chars().count(), *name)))
+        .filter_map(|name| {
+            header
+                .find(name)
+                .map(|b| (header[..b].chars().count(), *name))
+        })
         .collect();
     cols.sort_by_key(|c| c.0);
 
@@ -72,19 +76,27 @@ fn parse_winget_table(output: &str, columns_wanted: &[&str]) -> Vec<Vec<String>>
 
     let mut rows = Vec::new();
     for line in lines.iter().skip(hdr_idx + 1) {
-        if line.trim().is_empty() || is_separator(line) { continue; }
+        if line.trim().is_empty() || is_separator(line) {
+            continue;
+        }
         let chars: Vec<char> = strip_cr_spinner(line).chars().collect();
         let values: Vec<String> = columns_wanted
             .iter()
             .map(|want| match col_range(want) {
                 Some((start, end)) if start < chars.len() => {
                     let e = end.unwrap_or(chars.len()).min(chars.len()).max(start);
-                    chars[start..e].iter().collect::<String>().trim().to_string()
+                    chars[start..e]
+                        .iter()
+                        .collect::<String>()
+                        .trim()
+                        .to_string()
                 }
                 _ => String::new(),
             })
             .collect();
-        if values.iter().all(|v| v.is_empty()) { continue; }
+        if values.iter().all(|v| v.is_empty()) {
+            continue;
+        }
         rows.push(values);
     }
     rows
@@ -98,9 +110,13 @@ fn parse_winget_list(output: &str) -> Vec<Package> {
         .into_iter()
         .filter_map(|row| {
             let ident = if !row[0].is_empty() { &row[0] } else { &row[1] };
-            if ident.is_empty() { return None; }
+            if ident.is_empty() {
+                return None;
+            }
             let mut p = Package::new(ident, "winget");
-            if !row[2].is_empty() { p.version = Some(row[2].clone()); }
+            if !row[2].is_empty() {
+                p.version = Some(row[2].clone());
+            }
             Some(p)
         })
         .collect()
@@ -109,25 +125,36 @@ fn parse_winget_list(output: &str) -> Vec<Package> {
 /// Parses output from 'choco list -lo -r' (local only, readable/piped).
 /// Expected input format: "name|version"
 fn parse_choco_list(output: &str) -> Vec<Package> {
-    sanitize(output).lines()
+    sanitize(output)
+        .lines()
         .filter_map(|line| {
             let (name, ver) = line.split_once('|')?;
             Some(Package::with_version(name.trim(), ver.trim(), "choco"))
-        }).collect()
+        })
+        .collect()
 }
 
 /// Parses output from 'scoop list'.
 /// Expected input contains a list of installed apps.
 fn parse_scoop_list(output: &str) -> Vec<Package> {
-    sanitize(output).lines()
+    sanitize(output)
+        .lines()
         .filter(|l| !l.is_empty() && !l.contains("---") && !l.contains("Installed apps"))
         .filter_map(|l| {
             let parts: Vec<&str> = l.split_whitespace().collect();
-            // Scoop list format: Name [0] Version [1] Source [2] Updated [3]
+            // Scoop list format: Name [0] Version [1] Source [2] Updated [3].
+            let name = *parts.first()?;
+            // Skip the column header row so it isn't ingested as a package named "Name".
+            if name == "Name" && parts.get(1) == Some(&"Version") {
+                return None;
+            }
             if parts.len() >= 2 {
-                Some(Package::with_version(parts[0], parts[1], "scoop"))
-            } else { None }
-        }).collect()
+                Some(Package::with_version(name, parts[1], "scoop"))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Parses 'winget search' output table (Name / Id / Version / Match / Source).
@@ -136,9 +163,13 @@ fn parse_winget_search(output: &str) -> Vec<Package> {
         .into_iter()
         .filter_map(|row| {
             let ident = if !row[0].is_empty() { &row[0] } else { &row[1] };
-            if ident.is_empty() { return None; }
+            if ident.is_empty() {
+                return None;
+            }
             let mut p = Package::new(ident, "winget");
-            if !row[2].is_empty() { p.version = Some(row[2].clone()); }
+            if !row[2].is_empty() {
+                p.version = Some(row[2].clone());
+            }
             Some(p)
         })
         .collect()
@@ -146,7 +177,8 @@ fn parse_winget_search(output: &str) -> Vec<Package> {
 
 /// Parses 'choco search' results.
 fn parse_choco_search(output: &str) -> Vec<Package> {
-    sanitize(output).lines()
+    sanitize(output)
+        .lines()
         .filter_map(|line| {
             // Choco search usually returns "name version" on each line
             let parts: Vec<&str> = line.split_whitespace().collect();
@@ -157,24 +189,58 @@ fn parse_choco_search(output: &str) -> Vec<Package> {
                 p.version = Some(v.to_string());
             }
             Some(p)
-        }).collect()
+        })
+        .collect()
 }
 
 /// Parses 'scoop search' results.
 fn parse_scoop_search(output: &str) -> Vec<Package> {
-    sanitize(output).lines()
-        .filter(|l| l.contains('(')) // Scoop search lines usually look like "name (version)"
+    // Modern scoop (0.5+) prints a table:
+    //   Results from local buckets...
+    //
+    //   Name    Version Source Binaries
+    //   ----    ------- ------ --------
+    //   ripgrep 15.1.0  main
+    // So parse `Name Version [Source] [Binaries...]` rows, skipping the chatter, header,
+    // and separator. (Older scoop used "name (version)"; the table is what ships today.)
+    sanitize(output)
+        .lines()
         .filter_map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            // Fix E0277: Dereference &&str
-            let name = parts.first()?;
-            Some(Package::new(*name, "scoop"))
-        }).collect()
+            let t = line.trim();
+            if t.is_empty() || t.starts_with("Results from") {
+                return None;
+            }
+            let parts: Vec<&str> = t.split_whitespace().collect();
+            let name = *parts.first()?;
+            // Skip the separator row ("----") and the column header ("Name Version ...").
+            if name.starts_with('-') || (name == "Name" && parts.get(1) == Some(&"Version")) {
+                return None;
+            }
+            match parts.get(1) {
+                Some(ver) => Some(Package::with_version(name, ver, "scoop")),
+                None => Some(Package::new(name, "scoop")),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scoop_search_parses_modern_table() {
+        // Real `scoop search ripgrep` output (0.5.x).
+        let out = "Results from local buckets...\n\nName    Version Source Binaries\n----    ------- ------ --------\nrga     0.10.9  main   ripgrep-all.exe\nripgrep 15.1.0  main\n";
+        let res = parse_scoop_search(out);
+        let names: Vec<&str> = res.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"ripgrep"), "got {:?}", names);
+        assert!(names.contains(&"rga"));
+        // header/separator/chatter must not leak in as packages
+        assert!(!names.iter().any(|n| n.starts_with('-') || *n == "Name" || *n == "Results"));
+        let rg = res.iter().find(|p| p.name == "ripgrep").unwrap();
+        assert_eq!(rg.version.as_deref(), Some("15.1.0"));
+    }
 
     // Build a fixed-width winget row so the test fixtures match real `winget list`
     // column alignment (the previous fixture used single spaces, which is why it
@@ -188,7 +254,13 @@ mod tests {
         let sep = "-".repeat(110);
         let rows = [
             wrow("7-Zip 25.01 (x64)", "7zip.7zip", "25.01", "26.01", "winget"),
-            wrow("Android Studio", "ARP\\Machine\\X64\\Android Studio", "2025.1", "", ""),
+            wrow(
+                "Android Studio",
+                "ARP\\Machine\\X64\\Android Studio",
+                "2025.1",
+                "",
+                "",
+            ),
             wrow("Git", "Git.Git", "2.54.0", "", "winget"),
         ];
         format!("{}\n{}\n{}\n", header, sep, rows.join("\n"))
@@ -197,20 +269,32 @@ mod tests {
     #[test]
     fn winget_list_uses_columns_not_whitespace() {
         let res = parse_installed("winget", &winget_list_fixture());
-        assert_eq!(res.len(), 3, "should parse exactly 3 rows, no header/garbage");
+        assert_eq!(
+            res.len(),
+            3,
+            "should parse exactly 3 rows, no header/garbage"
+        );
 
         // multi-word display name must NOT corrupt identity/version
-        let sevenz = res.iter().find(|p| p.name == "7zip.7zip").expect("7zip.7zip present");
+        let sevenz = res
+            .iter()
+            .find(|p| p.name == "7zip.7zip")
+            .expect("7zip.7zip present");
         assert_eq!(sevenz.version.as_deref(), Some("25.01"));
 
         // ARP (non-winget) app: Id carries spaces+backslashes, parsed intact
-        let studio = res.iter().find(|p| p.name == "ARP\\Machine\\X64\\Android Studio")
+        let studio = res
+            .iter()
+            .find(|p| p.name == "ARP\\Machine\\X64\\Android Studio")
             .expect("ARP id parsed whole");
         assert_eq!(studio.version.as_deref(), Some("2025.1"));
 
         // none of the old garbage fragments should appear as packages
         for bad in ["Studio", "(x64)", "25.01", "Name", "HDR"] {
-            assert!(!res.iter().any(|p| p.name == bad), "unexpected garbage row: {bad}");
+            assert!(
+                !res.iter().any(|p| p.name == bad),
+                "unexpected garbage row: {bad}"
+            );
         }
     }
 
@@ -228,7 +312,13 @@ mod tests {
     fn winget_search_parses_columns() {
         let header = wrow("Name", "Id", "Version", "Match", "Source");
         let sep = "-".repeat(110);
-        let row = wrow("Visual Studio Code", "Microsoft.VisualStudioCode", "1.85.0", "", "winget");
+        let row = wrow(
+            "Visual Studio Code",
+            "Microsoft.VisualStudioCode",
+            "1.85.0",
+            "",
+            "winget",
+        );
         let input = format!("{}\n{}\n{}\n", header, sep, row);
         let res = parse_search("winget", &input);
         assert_eq!(res.len(), 1);

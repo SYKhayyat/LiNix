@@ -5,7 +5,7 @@ use tokio::process::Command;
 /// Uses 'which' on Unix-like systems and 'where' on Windows.
 pub async fn command_exists(cmd: &str) -> bool {
     let check_bin = if cfg!(windows) { "where" } else { "which" };
-    
+
     match Command::new(check_bin)
         .arg(cmd)
         .stdout(Stdio::null())
@@ -32,11 +32,7 @@ pub fn command_exists_sync(cmd: &str) -> bool {
 
 /// Attempts to retrieve the version of a command by executing it with '--version'.
 pub async fn get_command_version(cmd: &str) -> Option<String> {
-    let output = Command::new(cmd)
-        .arg("--version")
-        .output()
-        .await
-        .ok()?;
+    let output = Command::new(cmd).arg("--version").output().await.ok()?;
 
     if output.status.success() {
         let version_str = String::from_utf8_lossy(&output.stdout).trim().to_string();

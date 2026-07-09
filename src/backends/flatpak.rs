@@ -1,6 +1,6 @@
 use crate::core::{
-    CommandExecutor, Package, Result, PackageSpec,
-    BackendCore, Installable, Queryable, Searchable, Upgradable, MetadataProvider
+    BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
+    Result, Searchable, Upgradable,
 };
 use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
@@ -20,17 +20,22 @@ pub struct FlatpakBackendCore {
 
 impl FlatpakBackendCore {
     pub fn new(executor: CommandExecutor, settings: HashMap<String, String>) -> Self {
-        Self { 
-            executor, 
+        Self {
+            executor,
             name: "flatpak".to_string(),
             available: OnceCell::new(),
-            settings 
+            settings,
         }
     }
 
     /// Helper to determine if the manager should operate in --user or --system scope.
     pub fn scope_args(&self) -> Vec<&str> {
-        if self.settings.get("user").map(|v| v == "true").unwrap_or(false) {
+        if self
+            .settings
+            .get("user")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+        {
             vec!["--user"]
         } else {
             vec!["--system"]
@@ -40,15 +45,23 @@ impl FlatpakBackendCore {
 
 #[async_trait]
 impl BackendCore for FlatpakBackendCore {
-    fn name(&self) -> &str { &self.name }
+    fn name(&self) -> &str {
+        &self.name
+    }
 
     fn is_available(&self) -> bool {
-        *self.available.get_or_init(|| self.executor.command_exists_sync("flatpak"))
+        *self
+            .available
+            .get_or_init(|| self.executor.command_exists_sync("flatpak"))
     }
 
     fn needs_root(&self) -> bool {
         // If the 'user' setting is true, Flatpak does not need root privileges.
-        !self.settings.get("user").map(|v| v == "true").unwrap_or(false)
+        !self
+            .settings
+            .get("user")
+            .map(|v| v == "true")
+            .unwrap_or(false)
     }
 }
 
@@ -61,7 +74,10 @@ impl MetadataProvider for FlatpakBackendCore {
 
         // Flatpak metadata contains a [Extension] or [Runtime] section.
         // We look for 'runtime=' which is the primary transitive dependency.
-        let output = self.executor.run_output("flatpak", &final_args, false).await?;
+        let output = self
+            .executor
+            .run_output("flatpak", &final_args, false)
+            .await?;
         let mut deps = Vec::new();
 
         for line in output.lines() {
@@ -81,22 +97,29 @@ pub struct FlatpakInstallable {
 #[async_trait]
 impl Installable for FlatpakInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
-        if specs.is_empty() { return Ok(()); }
+        if specs.is_empty() {
+            return Ok(());
+        }
 
         let mut args = self.core.scope_args();
         args.extend(["install", "-y", "--noninteractive"]);
-        
+
         let names: Vec<String> = specs.iter().map(|s| s.name.clone()).collect();
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
         args.extend(name_refs);
 
         info!("Flatpak: Installing {} package(s)...", specs.len());
-        self.core.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("flatpak", "flatpak", &args, sudo)
+            .await?;
         Ok(())
     }
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
-        if names.is_empty() { return Ok(()); }
+        if names.is_empty() {
+            return Ok(());
+        }
 
         let mut args = self.core.scope_args();
         args.extend(["uninstall", "-y", "--noninteractive"]);
@@ -104,7 +127,10 @@ impl Installable for FlatpakInstallable {
         args.extend(name_refs);
 
         info!("Flatpak: Removing {} package(s)...", names.len());
-        self.core.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("flatpak", "flatpak", &args, sudo)
+            .await?;
         Ok(())
     }
 }
@@ -116,7 +142,15 @@ pub struct FlatpakQueryable {
 #[async_trait]
 impl Queryable for FlatpakQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let out = self.core.executor.run_output("flatpak", &["list", "--app", "--columns=application,version"], false).await?;
+        let out = self
+            .core
+            .executor
+            .run_output(
+                "flatpak",
+                &["list", "--app", "--columns=application,version"],
+                false,
+            )
+            .await?;
         let mut packages = Vec::new();
 
         for line in sanitize(&out).lines() {
@@ -147,7 +181,11 @@ pub struct FlatpakSearchable {
 #[async_trait]
 impl Searchable for FlatpakSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("flatpak", &["search", query], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("flatpak", &["search", query], false)
+            .await?;
         Ok(parse_flatpak_search(&output))
     }
 }
@@ -158,11 +196,19 @@ impl Searchable for FlatpakSearchable {
 fn parse_flatpak_search(output: &str) -> Vec<Package> {
     let mut results = Vec::new();
     for line in sanitize(output).lines() {
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         let cols: Vec<&str> = line.split('\t').map(|c| c.trim()).collect();
         let display_name = cols.first().copied().unwrap_or("").trim();
-        let app_id = cols.get(2).copied().filter(|s| !s.is_empty()).unwrap_or(display_name);
-        if app_id.is_empty() { continue; }
+        let app_id = cols
+            .get(2)
+            .copied()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(display_name);
+        if app_id.is_empty() {
+            continue;
+        }
         let mut p = Package::new(app_id, "flatpak");
         if let Some(desc) = cols.get(1).filter(|s| !s.is_empty()) {
             p.properties.insert("description".into(), desc.to_string());
@@ -187,7 +233,10 @@ impl Upgradable for FlatpakUpgradable {
         let mut args = self.core.scope_args();
         args.extend(["update", "-y", "--noninteractive"]);
         debug!("Flatpak: Refreshing remotes...");
-        self.core.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("flatpak", "flatpak", &args, sudo)
+            .await?;
         Ok(())
     }
 
@@ -195,7 +244,10 @@ impl Upgradable for FlatpakUpgradable {
         let mut args = self.core.scope_args();
         args.extend(["update", "-y", "--noninteractive"]);
         info!("Flatpak: Upgrading all applications...");
-        self.core.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("flatpak", "flatpak", &args, sudo)
+            .await?;
         Ok(())
     }
 
@@ -203,7 +255,10 @@ impl Upgradable for FlatpakUpgradable {
         let mut args = self.core.scope_args();
         args.extend(["uninstall", "--unused", "-y", "--noninteractive"]);
         info!("Flatpak: Removing unused runtimes and extensions...");
-        self.core.executor.run_exclusive("flatpak", "flatpak", &args, sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("flatpak", "flatpak", &args, sudo)
+            .await?;
         Ok(())
     }
 }
@@ -214,15 +269,21 @@ pub fn register(
     exec: &CommandExecutor,
     cfg: &crate::config::Config,
 ) {
-    let settings = cfg.backend_settings.get("flatpak").cloned().unwrap_or_default();
+    let settings = cfg
+        .backend_settings
+        .get("flatpak")
+        .cloned()
+        .unwrap_or_default();
     let core = Arc::new(FlatpakBackendCore::new(exec.duplicate(), settings));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(FlatpakInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(FlatpakQueryable { core: core.clone() }))
-        .with_searchable(Arc::new(FlatpakSearchable { core: core.clone() }))
-        .with_upgradable(Arc::new(FlatpakUpgradable { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(FlatpakInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(FlatpakQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(FlatpakSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(FlatpakUpgradable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }
 
 #[cfg(test)]
@@ -238,6 +299,9 @@ mod tests {
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "org.blender.Blender");
         assert_eq!(pkgs[0].version.as_deref(), Some("4.0"));
-        assert_eq!(pkgs[0].properties.get("description").map(String::as_str), Some("Free 3D suite"));
+        assert_eq!(
+            pkgs[0].properties.get("description").map(String::as_str),
+            Some("Free 3D suite")
+        );
     }
 }

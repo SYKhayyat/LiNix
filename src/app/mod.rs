@@ -1,18 +1,23 @@
+pub mod bisect;
 pub mod context;
-pub mod hooks;
-pub mod metrics;
-pub mod search;
-pub mod sync;
-pub mod run;
-pub mod migrate;
-pub mod teleport;
-pub mod shim_manager;
-pub mod undo;
 pub mod diagnostics;
+pub mod fleet;
+pub mod generation;
+pub mod hooks;
+pub mod insight;
+pub mod metrics;
+pub mod migrate;
+pub mod policy;
 pub mod profile;
+pub mod run;
 pub mod sandbox;
+pub mod search;
 pub mod services;
+pub mod shim_manager;
+pub mod sync;
+pub mod teleport;
 pub mod ui;
+pub mod undo;
 
 // Feature 5: Native System Automation & Alerts
 pub mod scheduler;

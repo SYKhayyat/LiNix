@@ -1,17 +1,17 @@
-use crate::core::{Result, Package, Error, StateRegistry};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
+use crate::core::{Error, Package, Result, StateRegistry};
 use chrono::Local;
-use tracing::{info, warn, debug, trace, instrument};
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
+use tracing::{debug, info, instrument, trace, warn};
 
 /// The System Ingestion Engine.
-/// 
-/// The Migrator identifies components currently installed on the operating 
-/// system that are not yet managed by LiNix. It generates declarative 
+///
+/// The Migrator identifies components currently installed on the operating
+/// system that are not yet managed by LiNix. It generates declarative
 /// manifests for these components and acquires ownership in the StateRegistry.
 pub struct Migrator {
     /// Registry for capability-based discovery across all backends.
@@ -37,8 +37,8 @@ impl Migrator {
     }
 
     /// Primary entry point: Discovery -> Manifesting -> Acquisition.
-    /// 
-    /// This method performs a non-destructive system crawl to identify 
+    ///
+    /// This method performs a non-destructive system crawl to identify
     /// manual installations and bring them under LiNix control.
     #[instrument(skip(self))]
     pub async fn migrate(&self) -> Result<()> {
@@ -51,22 +51,25 @@ impl Migrator {
         // Query every backend that supports the Queryable trait
         for backend in self.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
-                debug!("Migrator: Probing backend '{}' for unmanaged components...", backend.name());
-                
+                debug!(
+                    "Migrator: Probing backend '{}' for unmanaged components...",
+                    backend.name()
+                );
+
                 // Identify packages explicitly installed by the user
                 match queryable.list_manual().await {
                     Ok(pkgs) => {
                         let state_guard = self.state.lock().await;
                         for pkg in pkgs {
                             let key = format!("{}:{}", pkg.backend, pkg.name);
-                            
+
                             // Candidate Criteria:
                             // 1. Not currently tracked in LiNix state.
                             // 2. Not already identified in this discovery cycle.
                             // 3. Not a core protected system package (sudo, kernel, etc).
-                            if !state_guard.is_managed(&pkg.backend, &pkg.name) 
-                               && seen_keys.insert(key.clone()) 
-                               && !self.config.is_protected(&pkg.name) 
+                            if !state_guard.is_managed(&pkg.backend, &pkg.name)
+                                && seen_keys.insert(key.clone())
+                                && !self.config.is_protected(&pkg.name)
                             {
                                 trace!("Migrator: Candidate identified for ingestion: {}", key);
                                 discovered_packages.push(pkg);
@@ -74,7 +77,11 @@ impl Migrator {
                         }
                     }
                     Err(e) => {
-                        warn!("Migrator: Backend '{}' discovery failed: {}. Continuing crawl.", backend.name(), e);
+                        warn!(
+                            "Migrator: Backend '{}' discovery failed: {}. Continuing crawl.",
+                            backend.name(),
+                            e
+                        );
                     }
                 }
             }
@@ -85,7 +92,10 @@ impl Migrator {
             return Ok(());
         }
 
-        info!("Migrator: Discovered {} candidates for declarative ingestion.", discovered_packages.len());
+        info!(
+            "Migrator: Discovered {} candidates for declarative ingestion.",
+            discovered_packages.len()
+        );
 
         // --- PHASE 2: MANIFEST GENERATION ---
         // Create a new .txt manifest file for the ingested components
@@ -93,26 +103,34 @@ impl Migrator {
         let filename = format!("migrated_{}.txt", timestamp);
         let manifest_path = self.config.groups_dir.join(&filename);
 
-        info!("Migrator: Constructing declarative ingestion manifest: {:?}", manifest_path);
+        info!(
+            "Migrator: Constructing declarative ingestion manifest: {:?}",
+            manifest_path
+        );
 
-        let manifest_lines: Vec<String> = discovered_packages.iter()
+        let manifest_lines: Vec<String> = discovered_packages
+            .iter()
             .map(|p| format!("{}:{}", p.backend, p.name))
             .collect();
 
         // Ensure manifest destination directory exists asynchronously
         if let Some(parent) = manifest_path.parent() {
             if !tokio::fs::try_exists(parent).await.unwrap_or(false) {
-                tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(Error::from)?;
             }
         }
 
         // Atomically create and write the manifest file
-        let mut file = tokio::fs::File::create(&manifest_path).await.map_err(Error::from)?;
+        let mut file = tokio::fs::File::create(&manifest_path)
+            .await
+            .map_err(Error::from)?;
         let header = format!(
-            "# LiNix Ingestion Manifest\n# Timestamp: {}\n# Origin: Automated Migration\n\n", 
+            "# LiNix Ingestion Manifest\n# Timestamp: {}\n# Origin: Automated Migration\n\n",
             Local::now()
         );
-        
+
         file.write_all(header.as_bytes()).await?;
         file.write_all(manifest_lines.join("\n").as_bytes()).await?;
         file.write_all(b"\n").await?;
@@ -128,24 +146,24 @@ impl Migrator {
             for pkg in &discovered_packages {
                 // A+ Hardening: Provide all 6 arguments to modernized state.add
                 state_mut.add(
-                    &pkg.backend, 
-                    &pkg.name, 
-                    pkg.version.clone(), 
+                    &pkg.backend,
+                    &pkg.name,
+                    pkg.version.clone(),
                     HashMap::new(), // Default options for ingested packages
-                    source_meta.clone(), 
-                    false // Ingested packages are permanent (non-transient)
+                    source_meta.clone(),
+                    false, // Ingested packages are permanent (non-transient)
                 );
             }
-            
+
             // Persist ownership records to disk (Offloaded to dedicated task)
             let state_to_persist = state_mut.clone();
-            tokio::task::spawn_blocking(move || {
-                state_to_persist.save()
-            }).await.map_err(|e| Error::Other(format!("State-save thread failure: {}", e)))??;
+            tokio::task::spawn_blocking(move || state_to_persist.save())
+                .await
+                .map_err(|e| Error::Other(format!("State-save thread failure: {}", e)))??;
         }
 
         info!("Migrator: State registry aligned. Migration successful.");
-        
+
         println!("\nIngestion Complete!");
         println!("{:-<60}", "");
         println!("Manifest Created:  {}", manifest_path.display());
@@ -156,9 +174,9 @@ impl Migrator {
         Ok(())
     }
 
-    /// Performs a destructive Discovery cycle without generating files or 
+    /// Performs a destructive Discovery cycle without generating files or
     /// acquiring state.
-    /// 
+    ///
     /// Used by the CLI to show users what LiNix *would* ingest.
     pub async fn audit(&self) -> Result<Vec<Package>> {
         let mut unmanaged = Vec::new();
@@ -170,9 +188,9 @@ impl Migrator {
                 if let Ok(pkgs) = queryable.list_manual().await {
                     for pkg in pkgs {
                         let key = format!("{}:{}", pkg.backend, pkg.name);
-                        if !state_guard.is_managed(backend.name(), &pkg.name) 
-                           && seen.insert(key)
-                           && !self.config.is_protected(&pkg.name)
+                        if !state_guard.is_managed(backend.name(), &pkg.name)
+                            && seen.insert(key)
+                            && !self.config.is_protected(&pkg.name)
                         {
                             unmanaged.push(pkg);
                         }

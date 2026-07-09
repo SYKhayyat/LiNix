@@ -23,7 +23,8 @@ pub fn parse_search(output: &str) -> Vec<Package> {
             // Apt-cache search usually uses " - " as a separator between name and description
             let (name, desc) = line.split_once(" - ")?;
             let mut p = Package::new(name.trim(), "apt");
-            p.properties.insert("description".into(), desc.trim().to_string());
+            p.properties
+                .insert("description".into(), desc.trim().to_string());
             Some(p)
         })
         .collect()
@@ -48,6 +49,9 @@ mod tests {
         let res = parse_search(input);
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "htop");
-        assert_eq!(res[0].properties.get("description").unwrap(), "interactive processes viewer");
+        assert_eq!(
+            res[0].properties.get("description").unwrap(),
+            "interactive processes viewer"
+        );
     }
 }

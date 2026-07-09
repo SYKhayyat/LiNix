@@ -1,7 +1,7 @@
-use crate::core::{Result, Error};
+use crate::core::{Error, Result};
 use std::path::{Path, PathBuf};
-use tracing::{info, debug};
 use tokio::fs;
+use tracing::{debug, info};
 
 /// Manages the deployment of high-performance Rust shims (Point 4 & 6).
 /// Shims act as proxies that invoke 'linix run' with sandboxing.
@@ -48,26 +48,36 @@ impl ShimManager {
             .await
             .map_err(|e| Error::Other(e.to_string()))?
             .map_err(|e| Error::Io(format!("Failed to locate linix binary: {}", e)))?;
-        
+
         // Clean up existing file/link
         if tokio::fs::try_exists(&target_path).await.unwrap_or(false) || target_path.is_symlink() {
             fs::remove_file(&target_path).await.map_err(Error::from)?;
         }
 
-        info!("ShimManager: Deploying shim for '{}' -> {:?}", binary_name, target_path);
+        info!(
+            "ShimManager: Deploying shim for '{}' -> {:?}",
+            binary_name, target_path
+        );
 
         #[cfg(unix)]
         {
-            // A hard link is the highest performance option. 
+            // A hard link is the highest performance option.
             if let Err(e) = fs::hard_link(&current_exe, &target_path).await {
-                debug!("ShimManager: Hard link failed ({}), falling back to copy...", e);
-                fs::copy(&current_exe, &target_path).await.map_err(Error::from)?;
+                debug!(
+                    "ShimManager: Hard link failed ({}), falling back to copy...",
+                    e
+                );
+                fs::copy(&current_exe, &target_path)
+                    .await
+                    .map_err(Error::from)?;
             }
         }
 
         #[cfg(windows)]
         {
-            fs::copy(&current_exe, &target_path).await.map_err(Error::from)?;
+            fs::copy(&current_exe, &target_path)
+                .await
+                .map_err(Error::from)?;
         }
 
         Ok(())
@@ -86,7 +96,7 @@ impl ShimManager {
     pub async fn remove_shim(&self, binary_name: &str) -> Result<()> {
         #[allow(unused_mut)] // mutated only under cfg(windows)
         let mut target_path = self.bin_dir.join(binary_name);
-        
+
         #[cfg(windows)]
         {
             if target_path.extension().is_none() {
@@ -110,11 +120,11 @@ impl ShimManager {
         }
 
         let mut entries = fs::read_dir(&self.bin_dir).await.map_err(Error::from)?;
-        
+
         while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
             let path = entry.path();
             let metadata = entry.metadata().await.map_err(Error::from)?;
-            
+
             if metadata.is_file() {
                 if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
                     // Filter out the main binary and non-shims

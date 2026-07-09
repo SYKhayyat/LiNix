@@ -5,6 +5,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use petgraph::graph::NodeIndex;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
@@ -14,7 +15,6 @@ use ratatui::{
 };
 use std::collections::{HashMap, HashSet};
 use std::io;
-use petgraph::graph::NodeIndex;
 
 /// An interactive TUI for previewing and filtering the execution DAG.
 pub struct TuiPreview<'a> {
@@ -34,10 +34,10 @@ impl<'a> TuiPreview<'a> {
     pub fn new(changes: &'a SyncChanges, alternatives: HashMap<NodeIndex, Vec<String>>) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
-        
+
         // Build mapping from UI position (0..N) to actual NodeIndex
         let ui_index_to_node: Vec<NodeIndex> = changes.graph.node_indices().collect();
-        
+
         Self {
             changes,
             disabled_nodes: HashSet::new(),
@@ -47,7 +47,7 @@ impl<'a> TuiPreview<'a> {
             list_state,
         }
     }
-    
+
     /// Helper to get NodeIndex from current UI selection
     fn get_selected_node(&self) -> Option<NodeIndex> {
         self.list_state
@@ -55,7 +55,7 @@ impl<'a> TuiPreview<'a> {
             .and_then(|i| self.ui_index_to_node.get(i).copied())
     }
 
-    /// Entry point to launch the TUI. 
+    /// Entry point to launch the TUI.
     /// Returns true if the user confirmed the transaction.
     pub fn run(&mut self) -> Result<bool> {
         enable_raw_mode()?;
@@ -116,7 +116,8 @@ impl<'a> TuiPreview<'a> {
         f.render_widget(header, chunks[0]);
 
         // 2. Action List
-        let items: Vec<ListItem> = self.ui_index_to_node
+        let items: Vec<ListItem> = self
+            .ui_index_to_node
             .iter()
             .map(|&node_idx| {
                 let action = &self.changes.graph[node_idx];
@@ -132,7 +133,11 @@ impl<'a> TuiPreview<'a> {
                         } else {
                             Style::default().fg(Color::Green)
                         };
-                        ("[+]", format!("Install {}:{}", b_name, spec.name), base_style)
+                        (
+                            "[+]",
+                            format!("Install {}:{}", b_name, spec.name),
+                            base_style,
+                        )
                     }
                     GraphAction::Remove { name, backend } => {
                         let base_style = if is_disabled {
@@ -154,7 +159,11 @@ impl<'a> TuiPreview<'a> {
             .collect();
 
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Execution Graph"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Execution Graph"),
+            )
             .highlight_style(
                 Style::default()
                     .bg(Color::Rgb(40, 40, 40))
@@ -175,7 +184,11 @@ impl<'a> TuiPreview<'a> {
         let i = match self.list_state.selected() {
             Some(i) => {
                 let total = self.ui_index_to_node.len();
-                if i >= total - 1 { 0 } else { i + 1 }
+                if i >= total - 1 {
+                    0
+                } else {
+                    i + 1
+                }
             }
             None => 0,
         };
@@ -186,7 +199,11 @@ impl<'a> TuiPreview<'a> {
         let i = match self.list_state.selected() {
             Some(i) => {
                 let total = self.ui_index_to_node.len();
-                if i == 0 { total - 1 } else { i - 1 }
+                if i == 0 {
+                    total - 1
+                } else {
+                    i - 1
+                }
             }
             None => 0,
         };
@@ -206,16 +223,18 @@ impl<'a> TuiPreview<'a> {
     fn cycle_backend(&mut self) {
         if let Some(node_idx) = self.get_selected_node() {
             if let Some(alts) = self.alternatives.get(&node_idx) {
-                if alts.len() <= 1 { return; }
+                if alts.len() <= 1 {
+                    return;
+                }
 
                 let current_action = &self.changes.graph[node_idx];
-                let current_backend = self.backend_overrides.get(&node_idx)
+                let current_backend = self
+                    .backend_overrides
+                    .get(&node_idx)
                     .cloned()
-                    .unwrap_or_else(|| {
-                        match current_action {
-                            GraphAction::Install(s) => s.backend.clone(),
-                            _ => String::new(),
-                        }
+                    .unwrap_or_else(|| match current_action {
+                        GraphAction::Install(s) => s.backend.clone(),
+                        _ => String::new(),
                     });
 
                 if let Some(pos) = alts.iter().position(|b| b == &current_backend) {
@@ -226,7 +245,7 @@ impl<'a> TuiPreview<'a> {
             }
         }
     }
-    
+
     pub fn get_filtered_changes(&self) -> SyncChanges {
         let mut filtered = self.changes.clone();
         for idx in &self.disabled_nodes {

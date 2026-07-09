@@ -1,11 +1,11 @@
 use std::env;
-use std::process::{Command, exit};
+use std::process::{exit, Command};
 
 /// LiNix High-Performance Binary Shim (Phase 4.2)
-/// 
-/// This is a tiny, sub-millisecond Rust binary intended to be compiled 
+///
+/// This is a tiny, sub-millisecond Rust binary intended to be compiled
 /// and placed in ~/.local/bin. It replaces slower shell-script shims.
-/// 
+///
 /// It performs:
 /// 1. Zero-cost argument forwarding.
 /// 2. Automatic profile/environment swapping.
@@ -13,7 +13,7 @@ use std::process::{Command, exit};
 fn main() {
     // 1. Collect arguments passed to the shim
     let args: Vec<String> = env::args().collect();
-    
+
     // 2. Identify the intended binary name (the name of this shim)
     let binary_name = env::current_exe()
         .ok()
@@ -22,12 +22,12 @@ fn main() {
 
     // 3. Construct the delegation command: linix run -p <binary_name> -- <binary_name> <args...>
     let mut cmd = Command::new("linix");
-    
+
     cmd.arg("run")
-       .arg("--packages")
-       .arg(&binary_name)
-       .arg("--")
-       .arg(&binary_name);
+        .arg("--packages")
+        .arg(&binary_name)
+        .arg("--")
+        .arg(&binary_name);
 
     // Forward all arguments except the first one (which is the shim path itself)
     if args.len() > 1 {
@@ -35,7 +35,7 @@ fn main() {
     }
 
     // 4. Execute the orchestrator
-    
+
     #[cfg(unix)]
     {
         // On Unix, use exec() to replace the current process image with LiNix,

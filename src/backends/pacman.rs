@@ -1,8 +1,8 @@
 // src/backends/pacman.rs
 
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, Package, PackageSpec,
-    Queryable, Result, Searchable, Upgradable, RepoManager, MetadataProvider, Error
+    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    Queryable, RepoManager, Result, Searchable, Upgradable,
 };
 use crate::parsers::pacman;
 use async_trait::async_trait;
@@ -13,11 +13,16 @@ use tracing::info;
 /// conservative character set.
 fn validate_repo_name(name: &str) -> Result<()> {
     if !name.is_empty()
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     {
         Ok(())
     } else {
-        Err(Error::Other(format!("Invalid pacman repo name: '{}'", name)))
+        Err(Error::Other(format!(
+            "Invalid pacman repo name: '{}'",
+            name
+        )))
     }
 }
 
@@ -25,10 +30,20 @@ fn validate_repo_name(name: &str) -> Result<()> {
 /// command (we write the drop-in file as root via the shell).
 fn validate_repo_url(url: &str) -> Result<()> {
     if url.trim().is_empty() {
-        return Err(Error::Other("pacman add_repo requires a repository URL".into()));
+        return Err(Error::Other(
+            "pacman add_repo requires a repository URL".into(),
+        ));
     }
-    if url.chars().any(|c| matches!(c, '\'' | '"' | '`' | '$' | ';' | '&' | '|' | '<' | '>' | '\n' | '\r' | '\\')) {
-        return Err(Error::Other(format!("Unsafe characters in repo URL: '{}'", url)));
+    if url.chars().any(|c| {
+        matches!(
+            c,
+            '\'' | '"' | '`' | '$' | ';' | '&' | '|' | '<' | '>' | '\n' | '\r' | '\\'
+        )
+    }) {
+        return Err(Error::Other(format!(
+            "Unsafe characters in repo URL: '{}'",
+            url
+        )));
     }
     Ok(())
 }
@@ -50,7 +65,9 @@ impl PacmanBackendCore {
 
 #[async_trait]
 impl BackendCore for PacmanBackendCore {
-    fn name(&self) -> &str { &self.name }
+    fn name(&self) -> &str {
+        &self.name
+    }
 
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("pacman")
@@ -64,7 +81,10 @@ impl BackendCore for PacmanBackendCore {
 #[async_trait]
 impl MetadataProvider for PacmanBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
-        let output = self.executor.run_output("pacman", &["-Si", name], false).await?;
+        let output = self
+            .executor
+            .run_output("pacman", &["-Si", name], false)
+            .await?;
         let mut deps = Vec::new();
         for line in output.lines() {
             if let Some(dep_line) = line.strip_prefix("Depends On     :") {
@@ -88,8 +108,10 @@ pub struct PacmanInstallable {
 #[async_trait]
 impl Installable for PacmanInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
-        if specs.is_empty() { return Ok(()); }
-        
+        if specs.is_empty() {
+            return Ok(());
+        }
+
         let mut args = vec!["-S", "--noconfirm", "--needed"];
         let names: Vec<String> = specs.iter().map(|s| s.name.clone()).collect();
         for name in &names {
@@ -97,20 +119,28 @@ impl Installable for PacmanInstallable {
         }
 
         info!("Pacman: Installing {} package(s)...", specs.len());
-        self.core.executor.run_exclusive("pacman", "pacman", &args, sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("pacman", "pacman", &args, sudo)
+            .await?;
         Ok(())
     }
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
-        if names.is_empty() { return Ok(()); }
-        
+        if names.is_empty() {
+            return Ok(());
+        }
+
         let mut args = vec!["-Rs", "--noconfirm"];
         for name in names {
             args.push(name);
         }
 
         info!("Pacman: Removing {} package(s)...", names.len());
-        self.core.executor.run_exclusive("pacman", "pacman", &args, sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("pacman", "pacman", &args, sudo)
+            .await?;
         Ok(())
     }
 }
@@ -122,12 +152,20 @@ pub struct PacmanQueryable {
 #[async_trait]
 impl Queryable for PacmanQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("pacman", &["-Q"], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("pacman", &["-Q"], false)
+            .await?;
         Ok(pacman::parse_list(&output))
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("pacman", &["-Qe"], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("pacman", &["-Qe"], false)
+            .await?;
         Ok(pacman::parse_list(&output))
     }
 
@@ -144,7 +182,11 @@ pub struct PacmanSearchable {
 #[async_trait]
 impl Searchable for PacmanSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let output = self.core.executor.run_output("pacman", &["-Ss", query], false).await?;
+        let output = self
+            .core
+            .executor
+            .run_output("pacman", &["-Ss", query], false)
+            .await?;
         Ok(pacman::parse_search(&output))
     }
 }
@@ -190,10 +232,16 @@ impl RepoManager for PacmanRepoManager {
 
     /// List configured repositories via `pacman-conf`, resolving each repo's Server.
     async fn list_repos(&self) -> Result<Vec<(String, String)>> {
-        let names = self.core.executor.run_output("pacman-conf", &["--repo-list"], false).await?;
+        let names = self
+            .core
+            .executor
+            .run_output("pacman-conf", &["--repo-list"], false)
+            .await?;
         let mut repos = Vec::new();
         for name in names.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
-            let server = self.core.executor
+            let server = self
+                .core
+                .executor
                 .run_output("pacman-conf", &["-r", name, "Server"], false)
                 .await
                 .ok()
@@ -219,14 +267,21 @@ impl Upgradable for PacmanUpgradable {
 
     async fn upgrade(&self, sudo: bool) -> Result<()> {
         info!("Pacman: Upgrading system packages...");
-        self.core.executor.run_exclusive("pacman", "pacman", &["-Syu", "--noconfirm"], sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("pacman", "pacman", &["-Syu", "--noconfirm"], sudo)
+            .await?;
         Ok(())
     }
 
     async fn clean_orphans(&self, sudo: bool) -> Result<()> {
-        let orphans = self.core.executor.run_output("pacman", &["-Qdtq"], false).await?;
+        let orphans = self
+            .core
+            .executor
+            .run_output("pacman", &["-Qdtq"], false)
+            .await?;
         let orphan_list: Vec<&str> = orphans.lines().filter(|l| !l.is_empty()).collect();
-        
+
         if orphan_list.is_empty() {
             return Ok(());
         }
@@ -234,7 +289,10 @@ impl Upgradable for PacmanUpgradable {
         info!("Pacman: Removing {} orphan packages...", orphan_list.len());
         let mut args = vec!["-Rs", "--noconfirm"];
         args.extend(orphan_list);
-        self.core.executor.run_exclusive("pacman", "pacman", &args, sudo).await?;
+        self.core
+            .executor
+            .run_exclusive("pacman", "pacman", &args, sudo)
+            .await?;
         Ok(())
     }
 }
@@ -246,12 +304,14 @@ pub fn register(
     _cfg: &crate::config::Config,
 ) {
     let core = Arc::new(PacmanBackendCore::new(exec.duplicate()));
-    reg.register(Arc::new(crate::core::BackendCapabilities::builder(core.clone())
-        .with_installable(Arc::new(PacmanInstallable { core: core.clone() }))
-        .with_queryable(Arc::new(PacmanQueryable { core: core.clone() }))
-        .with_searchable(Arc::new(PacmanSearchable { core: core.clone() }))
-        .with_upgradable(Arc::new(PacmanUpgradable { core: core.clone() }))
-        .with_repo_manager(Arc::new(PacmanRepoManager { core: core.clone() }))
-        .with_metadata_provider(core.clone())
-        .build()));
+    reg.register(Arc::new(
+        crate::core::BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(PacmanInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(PacmanQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(PacmanSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(PacmanUpgradable { core: core.clone() }))
+            .with_repo_manager(Arc::new(PacmanRepoManager { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
 }
