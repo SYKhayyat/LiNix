@@ -263,13 +263,25 @@ impl Queryable for GenericQueryable {
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let all = self.list_installed().await?;
-        // winget records the canonical Id (e.g. "jqlang.jq"), but packages are commonly
-        // installed — and thus removed — by their bare moniker ("jq"). Match the trailing
-        // dot-segment for winget so `remove winget:jq` finds "jqlang.jq". Scoped to winget
-        // to avoid mis-matching legitimately dotted names elsewhere (e.g. npm "socket.io").
-        let winget = self.core.name == "winget";
+        // Windows package managers use CASE-INSENSITIVE ids, but their list output frequently
+        // returns a different casing than the install id: choco installs "wget" yet lists the
+        // Title "Wget", so a case-sensitive `p.name == name` misses it and the remove is
+        // silently skipped (package + manifest left behind). Match case-insensitively for
+        // those. winget additionally records a vendor-qualified Id ("jqlang.jq") that is
+        // commonly installed/removed by its bare moniker ("jq"), so also accept the trailing
+        // dot-segment. Kept scoped to Windows managers to avoid mis-matching legitimately
+        // case-distinct or dotted names elsewhere (e.g. npm "socket.io").
+        let b = self.core.name.as_str();
+        let ci = matches!(b, "choco" | "scoop" | "winget");
+        let winget = b == "winget";
         Ok(all.into_iter().find(|p| {
-            p.name == name || (winget && p.name.rsplit('.').next() == Some(name))
+            p.name == name
+                || (ci && p.name.eq_ignore_ascii_case(name))
+                || (winget
+                    && p.name
+                        .rsplit('.')
+                        .next()
+                        .is_some_and(|s| s.eq_ignore_ascii_case(name)))
         }))
     }
 }
