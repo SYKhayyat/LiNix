@@ -120,6 +120,13 @@ augment_scoop_path() {
     for _bin in "$HOME"/scoop/apps/*/current/bin; do
         [ -d "$_bin" ] && case ":$PATH:" in *":$_bin:"*) ;; *) PATH="$PATH:$_bin";; esac
     done
+    # Chocolatey installs to %ProgramData%\chocolatey\bin (a system-PATH entry that a
+    # non-elevated Git Bash spawned from PowerShell may not inherit). Surface it so choco is
+    # detected. NOTE: choco install/remove write under %ProgramData% and require an ELEVATED
+    # shell — run this harness as admin (backend=choco) to exercise its mutation lifecycle.
+    for _cb in /c/ProgramData/chocolatey/bin "$ProgramData"/chocolatey/bin "$ALLUSERSPROFILE"/chocolatey/bin; do
+        [ -d "$_cb" ] && case ":$PATH:" in *":$_cb:"*) ;; *) PATH="$PATH:$_cb";; esac
+    done
     # pnpm on Windows: global bin dir is %PNPM_HOME%\bin. Give pnpm a Windows-style PNPM_HOME
     # and put that bin (bash-form) on PATH so `pnpm add -g` doesn't abort with "not in PATH".
     export PNPM_HOME="${USERPROFILE:-$HOME}\\AppData\\Local\\pnpm"
