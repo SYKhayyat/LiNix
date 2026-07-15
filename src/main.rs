@@ -2314,7 +2314,37 @@ async fn handle_orphans(app: &App) -> Result<()> {
 
 /// Read-only reconciliation report: what `sync` would install, what drift `prune` would
 /// remove, and what's installed-but-unmanaged. Changes nothing.
+/// If a signed `locks.json` exists in the groups dir and a local signing key is present but the
+/// signature no longer verifies, return a human-readable MISMATCH warning. Returns `None` when
+/// there is no lockfile, no signature (legacy/unsigned), no local key (a fresh machine that can't
+/// verify), or the signature is valid. Never errors — a diagnostic must not fail the caller.
+async fn detect_lock_tamper(app: &App) -> Option<String> {
+    let lock_path = app.config.groups_dir.join("locks.json");
+    let data = tokio::fs::read_to_string(&lock_path).await.ok()?;
+    let val: serde_json::Value = serde_json::from_str(&data).ok()?;
+    let obj = val.get("locks").and_then(|l| l.as_object())?;
+    let sig = val.get("sig").and_then(|s| s.as_str())?;
+    let key = linix::core::locksig::read_key(&app.config.groups_dir)?;
+    if linix::core::locksig::verify(&key, obj, sig) {
+        None
+    } else {
+        Some(format!(
+            "⚠  lockfile signature MISMATCH — {} was modified since `linix lock`. Its pinned \
+             versions can no longer be trusted; re-run `linix lock` to re-sign, or restore the file.",
+            lock_path.display()
+        ))
+    }
+}
+
 async fn handle_status(app: &App, json: bool) -> Result<()> {
+    // Lockfile tamper check (read-only diagnostic): a signed locks.json that no longer verifies
+    // against the machine-local key was edited after `linix lock`. The signature is otherwise
+    // only checked under `sync --locked`, so a plain `status` never noticed a hand-edited
+    // lockfile. Surface it on stderr so it appears in both text and `--json` runs without
+    // polluting the JSON payload on stdout.
+    if let Some(msg) = detect_lock_tamper(app).await {
+        eprintln!("{}", msg);
+    }
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
@@ -3859,7 +3889,16 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
         critical,
         reports.len()
     );
-    // Only surface backends that need attention — an OK list of 50 is just noise.
+    // Readiness roster: one `[READY] <backend>` line per healthy backend, printed at column 0
+    // (unindented, uncolored) so it is both human-readable AND machine-greppable —
+    // `linix doctor | grep '^\[READY\]'` enumerates every usable backend on this host. Without
+    // this, a healthy `doctor` printed nothing about which package managers actually work.
+    for (name, r) in &reports {
+        if r.status == HealthStatus::Ok {
+            println!("[READY] {}", name);
+        }
+    }
+    // Then surface only the backends that need attention — a long OK list here would be noise.
     for (name, r) in &reports {
         if r.status != HealthStatus::Ok {
             println!(
