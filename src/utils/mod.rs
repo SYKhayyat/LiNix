@@ -3,6 +3,7 @@ pub mod command;
 pub mod file;
 pub mod progress;
 pub mod retry;
+pub mod style;
 
 use std::path::PathBuf;
 
@@ -15,6 +16,13 @@ pub use retry::{retry, retry_default, RetryConfig};
 /// Reliably locates the LiNix data directory across platforms.
 /// Resolves unresolved import errors in teleport.rs and profile.rs.
 pub fn safe_data_dir() -> PathBuf {
+    // `LINIX_DATA_DIR` overrides the OS data dir outright (used as-is, no `linix` suffix). This
+    // lets a test harness or CI run against a throwaway, isolated state registry so it never
+    // touches — or accumulates in — the user's real global state, and so a system-global
+    // `prune` only ever sees the packages that run installed.
+    if let Some(dir) = std::env::var_os("LINIX_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
     dirs::data_dir()
         .unwrap_or_else(|| {
             // Fallback to current directory if system data dir is unavailable
@@ -25,6 +33,10 @@ pub fn safe_data_dir() -> PathBuf {
 
 /// Reliably locates the LiNix configuration directory.
 pub fn safe_config_dir() -> PathBuf {
+    // `LINIX_CONFIG_DIR` overrides the OS config dir outright (see `safe_data_dir`).
+    if let Some(dir) = std::env::var_os("LINIX_CONFIG_DIR") {
+        return PathBuf::from(dir);
+    }
     dirs::config_dir()
         .unwrap_or_else(|| {
             // Fallback to current directory/.config if system config dir is unavailable

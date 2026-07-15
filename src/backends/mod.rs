@@ -35,6 +35,12 @@ pub mod pnpm;
 pub mod uv;
 pub mod yarn;
 
+// Dedicated backends whose CLI doesn't fit the generic config model (no uninstall verb,
+// filesystem enumeration, or a subcommand-of-another-binary invocation).
+pub mod go;
+pub mod krew;
+pub mod pubdart;
+
 pub use generic::{GenericBackendCore, ManagerConfig};
 pub use registry::{create_default_registry, BackendRegistry};
 

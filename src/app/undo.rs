@@ -84,7 +84,10 @@ impl UndoManager {
             Ok(Some(gen)) => {
                 let mut state = self.state.lock().await;
                 if let Err(e) = store.restore(&gen.id, &mut state, &self.groups_dir).await {
-                    warn!("Undo: could not restore matching generation {}: {}", gen.id, e);
+                    warn!(
+                        "Undo: could not restore matching generation {}: {}",
+                        gen.id, e
+                    );
                 } else {
                     info!(
                         "Undo: also restored generation {} (state + manifests) matching the snapshot.",

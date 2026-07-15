@@ -97,6 +97,12 @@ pub struct Config {
     #[serde(default)]
     pub aliases: HashMap<String, String>,
 
+    /// User-defined CLI command shorthands, e.g. `up = "upgrade --all"`. Expanded before the
+    /// command line is parsed. Distinct from `aliases` (which renames backends). An alias that
+    /// shadows a built-in subcommand is ignored, so shorthands can never mask a real command.
+    #[serde(default)]
+    pub command_aliases: HashMap<String, String>,
+
     #[serde(default)]
     pub groups: HashMap<String, Vec<String>>,
 
@@ -187,6 +193,10 @@ pub struct Config {
 
     #[serde(default)]
     pub verbose: bool,
+
+    /// Suppress non-essential output (flight plan, transaction summary). Errors still print.
+    #[serde(default)]
+    pub quiet: bool,
 
     #[serde(default = "default_cache_ttl")]
     pub cache_ttl: u64,
@@ -361,6 +371,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             aliases: HashMap::new(),
+            command_aliases: HashMap::new(),
             groups: HashMap::new(),
             dry_run: false,
             yes: false,
@@ -384,6 +395,7 @@ impl Default for Config {
             auto_lock_checksums: true,
             show_progress: true,
             verbose: false,
+            quiet: false,
             cache_ttl: 300,
             github_token: None,
             max_parallel: 4,
@@ -524,6 +536,39 @@ impl Config {
             .iter()
             .any(|p| p.to_lowercase() == name_lower)
     }
+
+    /// Path to the user-editable keep-list: a plain manifest (`keep.txt`, in the groups dir)
+    /// of package names that drift removal must never touch — the file-based companion to
+    /// `protected_packages`. It is separate from `local.txt` so "keep this if present" is
+    /// never confused with "install this".
+    pub fn keep_file_path(&self) -> PathBuf {
+        self.groups_dir.join("keep.txt")
+    }
+
+    /// Merge the entries of `keep.txt` (one package name per line; `#` comments and blanks
+    /// ignored) into `protected_packages`, de-duplicated. Idempotent. Call once after the
+    /// groups dir is finalized so all consumers of `is_protected` honor the keep-list.
+    pub fn merge_keep_file(&mut self) {
+        let path = self.keep_file_path();
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            return; // no keep file is fine
+        };
+        let existing: std::collections::HashSet<String> = self
+            .protected_packages
+            .iter()
+            .map(|p| p.to_lowercase())
+            .collect();
+        let mut existing = existing;
+        for line in body.lines() {
+            let name = line.trim();
+            if name.is_empty() || name.starts_with('#') {
+                continue;
+            }
+            if existing.insert(name.to_lowercase()) {
+                self.protected_packages.push(name.to_string());
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -616,5 +661,49 @@ mod tests {
         assert!(!cfg.is_protected("libc-bin"));
         assert!(!cfg.is_protected("aptitude"));
         assert!(!cfg.is_protected("kernelshark"));
+    }
+
+    #[test]
+    fn merge_keep_file_folds_entries_into_protected_set() {
+        let dir = std::env::temp_dir().join(format!("linix-keeptest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let keep = dir.join("keep.txt");
+        std::fs::write(&keep, "# my keeps\nsteam\nnvidia-driver\nsteam\n").unwrap();
+
+        let mut cfg = Config {
+            protected_packages: vec!["libc".into()],
+            groups_dir: dir.clone(),
+            ..Config::default()
+        };
+        cfg.merge_keep_file();
+
+        assert!(cfg.is_protected("steam"));
+        assert!(cfg.is_protected("NVIDIA-DRIVER")); // case-insensitive
+        assert!(cfg.is_protected("libc")); // original preserved
+        // Deduped: "steam" listed twice in the file appears once.
+        let count = cfg
+            .protected_packages
+            .iter()
+            .filter(|p| p.eq_ignore_ascii_case("steam"))
+            .count();
+        assert_eq!(count, 1);
+
+        // Idempotent: a second merge adds nothing.
+        let before = cfg.protected_packages.len();
+        cfg.merge_keep_file();
+        assert_eq!(cfg.protected_packages.len(), before);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn merge_keep_file_is_noop_without_file() {
+        let mut cfg = Config {
+            groups_dir: std::env::temp_dir().join("linix-nonexistent-keepdir-xyz"),
+            protected_packages: vec!["libc".into()],
+            ..Config::default()
+        };
+        cfg.merge_keep_file();
+        assert_eq!(cfg.protected_packages, vec!["libc".to_string()]);
     }
 }

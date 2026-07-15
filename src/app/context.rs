@@ -231,7 +231,7 @@ impl App {
                 continue;
             }
 
-            Validator::validate_package_name(&spec.name)?;
+            Validator::validate_package_name_for(&spec.name, &spec.backend)?;
             for req in &spec.requires {
                 queue.push_back(resolver.parse_and_probe_spec(req).await?);
             }
@@ -349,6 +349,142 @@ impl App {
         }
         self.state.lock().await.save()?;
         Ok(())
+    }
+
+    /// Reinstall a single package by backend + name (best-effort restore). Version is
+    /// intentionally not pinned — restore is reinstall-by-name, and a backend that no
+    /// longer offers the package surfaces as an `Err` the caller can warn-and-move-on.
+    async fn restore_package(&self, backend: &str, name: &str) -> Result<()> {
+        let b = self
+            .registry
+            .get(backend)
+            .ok_or_else(|| Error::BackendNotFound(backend.to_string()))?;
+        let inst = b
+            .as_installable()
+            .ok_or_else(|| Error::Other(format!("Backend '{}' cannot install", backend)))?;
+        let spec = PackageSpec {
+            name: name.to_string(),
+            backend: backend.to_string(),
+            options: std::collections::HashMap::new(),
+            requires: Vec::new(),
+        };
+        inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
+            .await
+    }
+
+    /// Restore any packages whose temporary-uninstall timer has elapsed (the mirror of
+    /// `sweep_expired_leases`). If a package can no longer be installed, we warn and move
+    /// on — the suspension is cleared either way so a permanently-gone package doesn't
+    /// nag on every run. No-op in dry-run mode.
+    pub async fn sweep_due_suspensions(&self) -> Result<()> {
+        if self.config.dry_run {
+            return Ok(());
+        }
+        let due = { self.state.lock().await.get_due_suspensions() };
+        if due.is_empty() {
+            return Ok(());
+        }
+        info!(
+            "Kernel: {} temporary uninstall(s) are due for restoration.",
+            due.len()
+        );
+        for s in due {
+            match self.restore_package(&s.backend, &s.name).await {
+                Ok(()) => {
+                    info!("Restored temporarily-removed {}:{}", s.backend, s.name);
+                    let mut state = self.state.lock().await;
+                    state.add(
+                        &s.backend,
+                        &s.name,
+                        s.version.clone(),
+                        std::collections::HashMap::new(),
+                        Some("imperative".into()),
+                        false,
+                    );
+                    state.clear_suspension(&s.backend, &s.name);
+                }
+                Err(e) => {
+                    warn!(
+                        "Kernel: could not restore {}:{} ({}); dropping the suspension.",
+                        s.backend, s.name, e
+                    );
+                    self.state.lock().await.clear_suspension(&s.backend, &s.name);
+                }
+            }
+        }
+        self.state.lock().await.save()?;
+        Ok(())
+    }
+
+    /// Restore every package suspended under a given ephemeral shell session (called when
+    /// that ghost shell exits). Same warn-and-move-on contract as the timed sweep.
+    pub async fn restore_session_suspensions(&self, session_id: &str) -> Result<()> {
+        let owned = { self.state.lock().await.get_session_suspensions(session_id) };
+        for s in owned {
+            match self.restore_package(&s.backend, &s.name).await {
+                Ok(()) => {
+                    info!(
+                        "Restored session-suspended {}:{} on shell exit",
+                        s.backend, s.name
+                    );
+                    let mut state = self.state.lock().await;
+                    state.add(
+                        &s.backend,
+                        &s.name,
+                        s.version.clone(),
+                        std::collections::HashMap::new(),
+                        Some("imperative".into()),
+                        false,
+                    );
+                    state.clear_suspension(&s.backend, &s.name);
+                }
+                Err(e) => {
+                    warn!(
+                        "Kernel: could not restore session-suspended {}:{} ({}); dropping it.",
+                        s.backend, s.name, e
+                    );
+                    self.state.lock().await.clear_suspension(&s.backend, &s.name);
+                }
+            }
+        }
+        self.state.lock().await.save()?;
+        Ok(())
+    }
+
+    /// A [`GitManager`] scoped to the LiNix config directory (the parent of the groups dir),
+    /// which holds `config.toml`, `groups/`, `modules/`, and `profiles/`.
+    ///
+    /// Safety: this must NEVER resolve to the current working directory. `Path::parent()` of a
+    /// bare relative `groups_dir` (e.g. "groups") returns an *empty* path, which would make git
+    /// operate on `.` — i.e. whatever repo the user happens to be standing in. We therefore
+    /// reject an empty/relative parent and fall back to the canonical config dir instead.
+    pub fn git_manager(&self) -> crate::core::GitManager {
+        let root = self
+            .config
+            .groups_dir
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
+            .map(PathBuf::from)
+            .unwrap_or_else(crate::utils::safe_config_dir);
+        crate::core::GitManager::new(root)
+    }
+
+    /// Auto-commit manifest/config changes IF the config dir is already a git repo. This is
+    /// opt-in: users enable manifest version control by running `linix git init` once; until
+    /// then this is a silent no-op. Never fails a command — a git hiccup is logged, not fatal.
+    pub async fn git_autocommit(&self, message: &str) {
+        if self.config.dry_run {
+            return;
+        }
+        let git = self.git_manager();
+        if !git.is_repo() {
+            return;
+        }
+        match git.commit_all(message) {
+            Ok(Some(hash)) => info!("Git: committed manifest change {} ({})", &hash[..hash.len().min(8)], message),
+            Ok(None) => {} // nothing changed
+            Err(e) => warn!("Git: auto-commit skipped: {}", e),
+        }
     }
 
     pub async fn clean_orphans(&self) -> Result<()> {

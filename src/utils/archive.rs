@@ -46,6 +46,32 @@ pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Compress a directory tree into a single `.tar.gz` file. The archive stores paths relative
+/// to `src_dir` under `root_name/…`, so unpacking recreates one self-contained top folder
+/// (the mirror of [`extract_archive`]). Returns the number of bytes written.
+pub fn create_tar_gz(src_dir: &Path, dest_file: &Path, root_name: &str) -> Result<u64> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+
+    if let Some(parent) = dest_file.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(Error::from)?;
+        }
+    }
+    let out = fs::File::create(dest_file).map_err(Error::from)?;
+    let enc = GzEncoder::new(out, Compression::default());
+    let mut builder = tar::Builder::new(enc);
+    builder
+        .append_dir_all(root_name, src_dir)
+        .map_err(Error::from)?;
+    // Finish the tar, then finish the gzip stream, so all bytes are flushed to disk.
+    let enc = builder.into_inner().map_err(Error::from)?;
+    enc.finish().map_err(Error::from)?;
+    let size = fs::metadata(dest_file).map(|m| m.len()).unwrap_or(0);
+    debug!("Wrote {} bytes to {:?}", size, dest_file);
+    Ok(size)
+}
+
 /// Helper to check if a file is a known archive format.
 pub fn is_archive(path: &Path) -> bool {
     let name = path.to_string_lossy().to_lowercase();

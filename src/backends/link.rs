@@ -25,6 +25,66 @@ impl LinkBackendCore {
         }
     }
 
+    /// Resolve the age identity file: explicit `@identity=`, else `$LINIX_AGE_IDENTITY`,
+    /// else the conventional `~/.config/linix/age.key`.
+    fn age_identity(&self, spec: &PackageSpec) -> Option<PathBuf> {
+        if let Some(id) = spec.options.get("identity") {
+            return Some(PathBuf::from(id));
+        }
+        if let Ok(id) = std::env::var("LINIX_AGE_IDENTITY") {
+            return Some(PathBuf::from(id));
+        }
+        dirs::home_dir().map(|h| h.join(".config").join("linix").join("age.key"))
+    }
+
+    /// Decrypt an encrypted source file to plaintext by shelling out to the `age` or `sops`
+    /// binary. LiNix stays true to its "manager of managers" model: it orchestrates the
+    /// tool the user already trusts rather than embedding crypto. stdout is captured raw
+    /// (never trimmed) so key material survives byte-for-byte.
+    async fn decrypt_secret(&self, tool: &str, source: &Path, spec: &PackageSpec) -> Result<String> {
+        use tokio::process::Command;
+        let mut cmd;
+        match tool {
+            "age" => {
+                let identity = self.age_identity(spec).ok_or_else(|| {
+                    Error::Other(
+                        "age decrypt needs an identity — set @identity=<path> or $LINIX_AGE_IDENTITY"
+                            .into(),
+                    )
+                })?;
+                cmd = Command::new("age");
+                cmd.arg("--decrypt").arg("-i").arg(&identity).arg(source);
+            }
+            "sops" => {
+                cmd = Command::new("sops");
+                cmd.arg("--decrypt").arg(source);
+            }
+            other => {
+                return Err(Error::Other(format!(
+                    "unknown decrypt tool '{}' (use age or sops)",
+                    other
+                )))
+            }
+        }
+        let output = cmd.output().await.map_err(|e| {
+            Error::Other(format!(
+                "could not launch '{}' to decrypt {:?}: {} — is it installed and on PATH?",
+                tool, source, e
+            ))
+        })?;
+        if !output.status.success() {
+            return Err(Error::Other(format!(
+                "{} failed to decrypt {:?}: {}",
+                tool,
+                source,
+                String::from_utf8_lossy(&output.stderr).trim()
+            )));
+        }
+        String::from_utf8(output.stdout).map_err(|e| {
+            Error::Other(format!("decrypted content of {:?} is not valid UTF-8: {}", source, e))
+        })
+    }
+
     /// Renders a configuration file using the Tera engine.
     async fn render_template(&self, source_path: &Path) -> Result<String> {
         let content = self.executor.read_file(source_path).await?;
@@ -92,7 +152,9 @@ impl LinkBackendCore {
         }
         // Only regular files are byte-copied; a directory at the target is left alone
         // rather than silently folded into a single backup file.
-        let meta = tokio::fs::symlink_metadata(target).await.map_err(Error::from)?;
+        let meta = tokio::fs::symlink_metadata(target)
+            .await
+            .map_err(Error::from)?;
         if meta.is_dir() {
             warn!(
                 "Link: {:?} is an existing directory; not auto-backing it up before replacement.",
@@ -100,7 +162,9 @@ impl LinkBackendCore {
             );
             return Ok(());
         }
-        tokio::fs::copy(target, &backup).await.map_err(Error::from)?;
+        tokio::fs::copy(target, &backup)
+            .await
+            .map_err(Error::from)?;
         info!(
             "Link: Existing {:?} was backed up to {:?} before applying the managed version.",
             target, backup
@@ -171,6 +235,32 @@ impl Installable for LinkInstallable {
             }
 
             let source = PathBuf::from(&spec.name);
+
+            // Mode D: Secret — decrypt the source with age/sops and place the plaintext,
+            // locked down to owner-only (0600) on Unix.
+            if let Some(tool) = spec.options.get("decrypt") {
+                if self.core.executor.dry_run {
+                    info!(
+                        "[DRY-RUN] Link: would decrypt {:?} with {} and write to {:?}",
+                        source, tool, target_path
+                    );
+                    continue;
+                }
+                let plaintext = self.core.decrypt_secret(tool, &source, spec).await?;
+                self.core
+                    .apply_managed_content(&target_path, &plaintext)
+                    .await?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = tokio::fs::set_permissions(
+                        &target_path,
+                        std::fs::Permissions::from_mode(0o600),
+                    )
+                    .await;
+                }
+                continue;
+            }
 
             // Mode B: Rendered template read from a source file.
             if spec.options.get("template") == Some(&"true".to_string()) {
@@ -274,7 +364,10 @@ pub fn register(
     exec: &CommandExecutor,
     cfg: &crate::config::Config,
 ) {
-    let core = Arc::new(LinkBackendCore::new(exec.duplicate(), Arc::new(cfg.clone())));
+    let core = Arc::new(LinkBackendCore::new(
+        exec.duplicate(),
+        Arc::new(cfg.clone()),
+    ));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())
             .with_installable(Arc::new(LinkInstallable { core: core.clone() }))
@@ -342,6 +435,51 @@ mod tests {
         );
     }
 
+    fn decrypt_spec(source: &Path, target: &Path, tool: &str) -> PackageSpec {
+        let mut options = HashMap::new();
+        options.insert("target".into(), target.to_string_lossy().to_string());
+        options.insert("decrypt".into(), tool.to_string());
+        PackageSpec {
+            name: source.to_string_lossy().to_string(),
+            backend: "link".into(),
+            options,
+            requires: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn decrypt_dry_run_writes_nothing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("token.age");
+        tokio::fs::write(&source, "ENCRYPTED").await.unwrap();
+        let target = dir.path().join("token");
+
+        // dry_run = true
+        let exec = CommandExecutor::new(true, false);
+        let core = Arc::new(LinkBackendCore::new(exec, Arc::new(Config::default())));
+        let inst = LinkInstallable { core };
+        inst.install(&[decrypt_spec(&source, &target, "age")], false)
+            .await
+            .unwrap();
+        assert!(
+            !tokio::fs::try_exists(&target).await.unwrap(),
+            "dry-run must not decrypt or write the secret"
+        );
+    }
+
+    #[tokio::test]
+    async fn decrypt_unknown_tool_errors() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("s.enc");
+        tokio::fs::write(&source, "x").await.unwrap();
+        let target = dir.path().join("out");
+        let inst = installer(); // real executor
+        let r = inst
+            .install(&[decrypt_spec(&source, &target, "rot13")], false)
+            .await;
+        assert!(r.is_err(), "an unknown decrypt tool must be rejected");
+    }
+
     #[tokio::test]
     async fn no_backup_created_when_target_absent() {
         let dir = tempdir().unwrap();
@@ -351,10 +489,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            tokio::fs::read_to_string(&target).await.unwrap(),
-            "HELLO"
-        );
+        assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "HELLO");
         let backup = PathBuf::from(format!("{}.linix-backup", target.display()));
         assert!(
             !tokio::fs::try_exists(&backup).await.unwrap(),
@@ -366,7 +501,9 @@ mod tests {
     async fn a_users_edit_after_adoption_does_not_clobber_the_original_backup() {
         let dir = tempdir().unwrap();
         let target = dir.path().join("app.conf");
-        tokio::fs::write(&target, "PRISTINE ORIGINAL").await.unwrap();
+        tokio::fs::write(&target, "PRISTINE ORIGINAL")
+            .await
+            .unwrap();
         let inst = installer();
 
         inst.install(&[inline_spec(&target, "v1")], false)

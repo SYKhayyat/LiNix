@@ -114,6 +114,12 @@ impl GhostShell {
         info!("GhostShell: Session terminated. Purging ephemeral state...");
         self.cleanup_transient_env(&session_id).await?;
 
+        // Restore anything the user temporarily uninstalled for the duration of this
+        // session (`remove --temp` with no duration inside a ghost shell).
+        if let Err(e) = self.restore_session_suspensions(&session_id).await {
+            warn!("GhostShell: session suspension restore failed: {}", e);
+        }
+
         {
             let mut state_guard = self.state.lock().await;
             state_guard.active_session_id = None;
@@ -290,6 +296,62 @@ impl GhostShell {
         let engine = self.create_sync_engine().await;
         engine.sync(changes).await?;
 
+        Ok(())
+    }
+
+    /// Reinstall packages the user temporarily uninstalled for the lifetime of this
+    /// ghost-shell session (`remove --temp` with no duration). Best-effort: a package the
+    /// backend can no longer install is warned about and its suspension dropped, matching
+    /// the timed-restore contract in `App::sweep_due_suspensions`.
+    pub async fn restore_session_suspensions(&self, session_id: &str) -> Result<()> {
+        let owned = {
+            let state = self.state.lock().await;
+            state.get_session_suspensions(session_id)
+        };
+        for s in owned {
+            let restored = match self.registry.get(&s.backend) {
+                Some(b) => match b.as_installable() {
+                    Some(inst) => {
+                        let spec = PackageSpec {
+                            name: s.name.clone(),
+                            backend: s.backend.clone(),
+                            options: HashMap::new(),
+                            requires: Vec::new(),
+                        };
+                        inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
+                            .await
+                    }
+                    None => Err(Error::Other(format!(
+                        "Backend '{}' cannot install",
+                        s.backend
+                    ))),
+                },
+                None => Err(Error::BackendNotFound(s.backend.clone())),
+            };
+
+            let mut state = self.state.lock().await;
+            match restored {
+                Ok(()) => {
+                    info!(
+                        "GhostShell: restored session-suspended {}:{}",
+                        s.backend, s.name
+                    );
+                    state.add(
+                        &s.backend,
+                        &s.name,
+                        s.version.clone(),
+                        HashMap::new(),
+                        Some("imperative".into()),
+                        false,
+                    );
+                }
+                Err(e) => warn!(
+                    "GhostShell: could not restore {}:{} ({}); dropping suspension.",
+                    s.backend, s.name, e
+                ),
+            }
+            state.clear_suspension(&s.backend, &s.name);
+        }
         Ok(())
     }
 

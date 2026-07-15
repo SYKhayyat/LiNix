@@ -1,0 +1,37 @@
+# LiNix integration image — Gentoo (Portage / emerge). Opt-in, SMOKE-ONLY.
+#
+# emerge builds packages FROM SOURCE, so a real install-a-package lifecycle would take many
+# minutes to hours per run. Instead this image runs the harness in SMOKE_ONLY mode: discovery
+# + the ecosystem plan-smoke (dry-run install plans, which compile nothing) + read-only
+# checks. That verifies emerge is wired end to end (argv construction, planner, JSON) on a
+# real Portage system without paying a source build.
+#
+#   docker build -f docker/integration/Dockerfile.gentoo -t linix-it-gentoo .
+#   docker run --rm linix-it-gentoo            # SMOKE_ONLY=1 baked in; runs: emerge jq
+#
+# The binary is built on Ubuntu and copied in (both Ubuntu 24.04 and current Gentoo ship
+# glibc >= 2.39 and openssl 3, so the dynamic link resolves). If your Gentoo base is older,
+# build LiNix inside the runtime stage with rustup instead.
+FROM ubuntu:24.04 AS builder
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates build-essential pkg-config libssl-dev git \
+    ; rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+WORKDIR /src
+COPY . /src
+RUN cargo build --release
+
+FROM gentoo/stage3:latest
+# SMOKE-ONLY: no source builds; plan/parse/read-only only.
+ENV SMOKE_ONLY=1
+ENV LINIX=/src/target/release/linix
+COPY --from=builder /src/target/release/linix /src/target/release/linix
+# run-in-container.sh is .dockerignored on purpose (it's bind-mounted at run time by run.sh,
+# so editing it never busts the build cache). Just create the mount-target dir; the runtime
+# `-v …/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro` provides the file.
+RUN mkdir -p /src/docker/integration
+WORKDIR /src
+ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
+CMD ["emerge", "jq"]

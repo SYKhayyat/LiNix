@@ -18,7 +18,10 @@ cd "$REPO_ROOT" || { echo "cannot cd to repo root ($REPO_ROOT)"; exit 1; }
 echo "repo root: $REPO_ROOT"
 
 PKG="${1:-jq}"
-DISTROS="${DISTROS:-ubuntu fedora arch alpine}"
+# `tools` is a broad cross-platform image that sweeps the expansion backends (composer, go,
+# opam, luarocks, nimble, cabal, stack, mix, helm, krew, asdf, pixi, spack) via plan-smoke.
+# `gentoo` (emerge, SMOKE-ONLY) is opt-in — it pulls a large base — via DISTROS="gentoo".
+DISTROS="${DISTROS:-ubuntu fedora arch alpine tools}"
 
 backend_for() {
     case "$1" in
@@ -26,6 +29,8 @@ backend_for() {
         fedora) echo dnf ;;
         arch)   echo pacman ;;
         alpine) echo apk ;;
+        tools)  echo apt ;;     # Ubuntu base; native lifecycle on apt, plan-smoke for the rest
+        gentoo) echo emerge ;;  # SMOKE-ONLY (baked into the image); no source builds
         *)      echo "" ;;
     esac
 }
@@ -42,7 +47,13 @@ for d in $DISTROS; do
     echo "############### RUN $d ($be) ###############"
     # Mount the current test script so edits to it don't require an image rebuild.
     SCRIPT_MOUNT="$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro"
-    if docker run --rm -v "$SCRIPT_MOUNT" "linix-it-$d" "$be" "$PKG"; then
+    # Forward the run-mode toggles into the container: FAST=1 downgrades the heaviest
+    # source-compiling backends to plan-smoke; SMOKE_ONLY=1 skips real mutation entirely.
+    ENVFLAGS=""
+    [ -n "${FAST:-}" ] && ENVFLAGS="$ENVFLAGS -e FAST=$FAST"
+    [ -n "${SMOKE_ONLY:-}" ] && ENVFLAGS="$ENVFLAGS -e SMOKE_ONLY=$SMOKE_ONLY"
+    # shellcheck disable=SC2086
+    if docker run --rm $ENVFLAGS -v "$SCRIPT_MOUNT" "linix-it-$d" "$be" "$PKG"; then
         summary="${summary}\n  ${d} (${be}): PASS"
     else
         summary="${summary}\n  ${d} (${be}): FAIL"; overall=1

@@ -149,6 +149,33 @@ pub async fn create_default_registry(
     register_pkgin(&mut reg, &executor);
     register_dotnet(&mut reg, &executor);
 
+    // --- Ecosystem backends (generic, config-driven; cross-platform, runtime-gated) ---
+    register_composer(&mut reg, &executor);
+    register_opam(&mut reg, &executor);
+    register_luarocks(&mut reg, &executor);
+    register_nimble(&mut reg, &executor);
+    register_pixi(&mut reg, &executor);
+    register_spack(&mut reg, &executor);
+    register_mix(&mut reg, &executor);
+    register_helm(&mut reg, &executor);
+    register_cabal(&mut reg, &executor);
+    register_stack(&mut reg, &executor);
+    register_asdf(&mut reg, &executor);
+
+    // --- Ecosystem backends implemented as dedicated modules (subcommand binary / fs) ---
+    crate::backends::go::register(&mut reg, &executor, config);
+    crate::backends::pubdart::register(&mut reg, &executor, config);
+    crate::backends::krew::register(&mut reg, &executor, config);
+
+    // --- Linux-distro ecosystem backends (Gentoo, Guix, Solus, Slackware) ---
+    #[cfg(target_os = "linux")]
+    {
+        register_guix(&mut reg, &executor);
+        register_emerge(&mut reg, &executor);
+        register_eopkg(&mut reg, &executor);
+        register_slackpkg(&mut reg, &executor);
+    }
+
     // --- User-defined backends (the onboarder). Loaded last so a custom definition
     // can never silently shadow a built-in; collisions are skipped with a warning. ---
     crate::backends::onboarder::load_default_custom_backends(&mut reg, &executor);
@@ -858,6 +885,406 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     ));
 }
 
+// ============================================================================
+// Ecosystem backends (added in the backend-expansion work)
+//
+// These all fit the generic CLI-config model. To cut the 20-field `ManagerConfig`
+// boilerplate, `base_config` fills in inert defaults and each `register_*` overrides only
+// the fields it needs; `register_generic` attaches the requested capability set.
+// ============================================================================
+
+/// A `ManagerConfig` with everything defaulted to "off"; callers set the fields they use.
+fn base_config(name: &str) -> ManagerConfig {
+    ManagerConfig {
+        name: name.into(),
+        install_args: vec![],
+        remove_args: vec![],
+        list_args: vec![],
+        list_manual_args: None,
+        search_args: vec![],
+        search_binary: None,
+        list_binary: None,
+        upgrade_args: vec![],
+        update_args: None,
+        orphan_args: None,
+        repo_add_args: None,
+        repo_remove_args: None,
+        repo_list_args: None,
+        depends_args: None,
+        version_pin: None,
+        needs_root: false,
+        is_exclusive: false,
+        flag_map: HashMap::new(),
+    }
+}
+
+/// Register a generic backend, attaching Installable + MetadataProvider always and the
+/// other capabilities per the boolean flags. Installable is always present (install is the
+/// point); `query`/`search`/`upgrade` are opt-in because not every manager supports them.
+#[allow(clippy::fn_params_excessive_bools)]
+fn register_generic(
+    reg: &mut BackendRegistry,
+    core: Arc<GenericBackendCore>,
+    query: bool,
+    search: bool,
+    upgrade: bool,
+) {
+    let mut builder = BackendCapabilities::builder(core.clone())
+        .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
+        .with_metadata_provider(core.clone());
+    if query {
+        builder = builder.with_queryable(Arc::new(GenericQueryable { core: core.clone() }));
+    }
+    if search {
+        builder = builder.with_searchable(Arc::new(GenericSearchable { core: core.clone() }));
+    }
+    if upgrade {
+        builder = builder.with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }));
+    }
+    reg.register(Arc::new(builder.build()));
+}
+
+/// PHP / Packagist (`composer global ...`). Cross-platform; gated by the `composer` binary.
+fn register_composer(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("composer");
+    cfg.version_pin = Some(VersionPin::Inline("{name}:{version}".into()));
+    cfg.install_args = vec!["global".into(), "require".into()];
+    cfg.remove_args = vec!["global".into(), "remove".into()];
+    cfg.list_args = vec!["global".into(), "show".into(), "--format=json".into()];
+    cfg.search_args = vec!["global".into(), "search".into(), "--format=json".into()];
+    cfg.upgrade_args = vec!["global".into(), "update".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "composer".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::language::parse_installed("composer", o),
+            search_fn: |o| crate::parsers::language::parse_search("composer", o),
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+/// OCaml (`opam`). Cross-platform; gated by the `opam` binary.
+fn register_opam(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("opam");
+    cfg.version_pin = Some(VersionPin::Inline("{name}.{version}".into()));
+    cfg.install_args = vec!["install".into(), "-y".into()];
+    cfg.remove_args = vec!["remove".into(), "-y".into()];
+    cfg.list_args = vec!["list".into(), "--installed".into(), "--short".into()];
+    cfg.search_args = vec!["search".into(), "--short".into()];
+    cfg.upgrade_args = vec!["upgrade".into(), "-y".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "opam".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::names_only(o, "opam"),
+            search_fn: |o| crate::parsers::ecosystem::names_only(o, "opam"),
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+/// Lua (`luarocks`). Cross-platform; gated by the `luarocks` binary. Version is a trailing
+/// positional (`luarocks install <pkg> <version>`).
+fn register_luarocks(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("luarocks");
+    cfg.version_pin = Some(VersionPin::Flag(vec!["{version}".into()]));
+    cfg.install_args = vec!["install".into()];
+    cfg.remove_args = vec!["remove".into()];
+    cfg.list_args = vec!["list".into(), "--porcelain".into()];
+    cfg.search_args = vec!["search".into(), "--porcelain".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "luarocks".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks"),
+            search_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks"),
+        }),
+    });
+    register_generic(reg, core, true, true, false);
+}
+
+/// Nim (`nimble`). Cross-platform; gated by the `nimble` binary. No CLI search/upgrade-all.
+fn register_nimble(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("nimble");
+    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
+    cfg.install_args = vec!["install".into(), "-y".into()];
+    cfg.remove_args = vec!["uninstall".into(), "-y".into()];
+    cfg.list_args = vec!["list".into(), "--installed".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "nimble".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::nimble_list(o, "nimble"),
+            search_fn: |_| vec![],
+        }),
+    });
+    register_generic(reg, core, true, false, false);
+}
+
+/// pixi global environments (`pixi global ...`). Cross-platform; gated by the `pixi` binary.
+fn register_pixi(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("pixi");
+    cfg.version_pin = Some(VersionPin::Inline("{name}={version}".into()));
+    cfg.install_args = vec!["global".into(), "install".into()];
+    // pixi removes a global TOOL with `global uninstall`; `global remove` deletes a package
+    // from an environment and requires `--environment`, so it errors on a bare tool name.
+    cfg.remove_args = vec!["global".into(), "uninstall".into()];
+    cfg.list_args = vec!["global".into(), "list".into()];
+    cfg.search_args = vec!["search".into()];
+    cfg.upgrade_args = vec!["global".into(), "upgrade-all".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "pixi".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::pixi_list(o, "pixi"),
+            search_fn: |o| crate::parsers::ecosystem::names_only(o, "pixi"),
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+/// Spack HPC package manager (`spack`). Cross-platform; gated by the `spack` binary.
+fn register_spack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("spack");
+    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
+    cfg.install_args = vec!["install".into()];
+    cfg.remove_args = vec!["uninstall".into(), "-y".into()];
+    cfg.list_args = vec!["find".into(), "--format".into(), "{name} {version}".into()];
+    cfg.search_args = vec!["list".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "spack".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "spack"),
+            search_fn: |o| crate::parsers::ecosystem::names_only(o, "spack"),
+        }),
+    });
+    register_generic(reg, core, true, true, false);
+}
+
+/// Elixir/Hex archives (`mix archive.*`). Cross-platform; gated by the `mix` binary. This is
+/// the global-archive surface of the Elixir ecosystem; project-scoped hex deps are out of
+/// scope. No CLI search/upgrade-all.
+fn register_mix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("mix");
+    cfg.install_args = vec!["archive.install".into(), "hex".into(), "--force".into()];
+    cfg.remove_args = vec!["archive.uninstall".into()];
+    cfg.list_args = vec!["archive".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "mix".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::mix_archive(o, "mix"),
+            search_fn: |_| vec![],
+        }),
+    });
+    register_generic(reg, core, true, false, false);
+}
+
+/// Helm plugins (`helm plugin ...`). Cross-platform; gated by the `helm` binary. (Chart
+/// releases are a different concept and out of scope here.) No plugin search.
+fn register_helm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("helm");
+    cfg.install_args = vec!["plugin".into(), "install".into()];
+    cfg.remove_args = vec!["plugin".into(), "uninstall".into()];
+    cfg.list_args = vec!["plugin".into(), "list".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "helm".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "helm"),
+            search_fn: |_| vec![],
+        }),
+    });
+    register_generic(reg, core, true, false, false);
+}
+
+/// Haskell (`cabal`). Cross-platform; gated by the `cabal` binary. cabal has no uninstall
+/// verb, so `remove_args` is empty → removal reports Unsupported (see GenericInstallable).
+fn register_cabal(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("cabal");
+    cfg.version_pin = Some(VersionPin::Inline("{name}-{version}".into()));
+    cfg.install_args = vec!["install".into()];
+    cfg.remove_args = vec![]; // no uninstall verb
+    cfg.list_args = vec![
+        "list".into(),
+        "--installed".into(),
+        "--simple-output".into(),
+    ];
+    cfg.search_args = vec!["list".into(), "--simple-output".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "cabal".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "cabal"),
+            search_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "cabal"),
+        }),
+    });
+    register_generic(reg, core, true, true, false);
+}
+
+/// Haskell (`stack`). Cross-platform; gated by the `stack` binary. Like cabal it has no
+/// uninstall verb (empty `remove_args` → Unsupported) and no reliable global install list.
+fn register_stack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("stack");
+    cfg.version_pin = Some(VersionPin::Inline("{name}-{version}".into()));
+    cfg.install_args = vec!["install".into()];
+    cfg.remove_args = vec![]; // no uninstall verb
+    let core = Arc::new(GenericBackendCore {
+        name: "stack".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |_| vec![],
+            search_fn: |_| vec![],
+        }),
+    });
+    register_generic(reg, core, false, false, false);
+}
+
+/// asdf version manager (`asdf`). Cross-platform; gated by the `asdf` binary. A tool/plugin
+/// is the "package"; installing pins a version via the trailing positional.
+fn register_asdf(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("asdf");
+    cfg.version_pin = Some(VersionPin::Flag(vec!["{version}".into()]));
+    cfg.install_args = vec!["install".into()];
+    cfg.remove_args = vec!["uninstall".into()];
+    cfg.list_args = vec!["list".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "asdf".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::asdf_list(o, "asdf"),
+            search_fn: |_| vec![],
+        }),
+    });
+    register_generic(reg, core, true, false, false);
+}
+
+/// GNU Guix (`guix`). Linux-only; gated by the `guix` binary. Per-user, no root needed.
+#[cfg(target_os = "linux")]
+fn register_guix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("guix");
+    cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
+    cfg.install_args = vec!["install".into()];
+    cfg.remove_args = vec!["remove".into()];
+    cfg.list_args = vec!["package".into(), "-I".into()];
+    cfg.search_args = vec!["search".into()];
+    cfg.upgrade_args = vec!["upgrade".into()];
+    let core = Arc::new(GenericBackendCore {
+        name: "guix".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "guix"),
+            search_fn: |o| crate::parsers::ecosystem::guix_search(o, "guix"),
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+/// Gentoo Portage (`emerge`). Linux-only; gated by the `emerge` binary. Installed packages
+/// are listed via `qlist -I` (portage-utils). Needs root and serializes (Portage locks).
+#[cfg(target_os = "linux")]
+fn register_emerge(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("emerge");
+    cfg.install_args = vec!["--ask=n".into(), "--quiet".into()];
+    cfg.remove_args = vec!["--unmerge".into(), "--ask=n".into()];
+    cfg.list_binary = Some("qlist".into());
+    cfg.list_args = vec!["-I".into()];
+    cfg.search_args = vec!["--search".into()];
+    cfg.upgrade_args = vec![
+        "--update".into(),
+        "--deep".into(),
+        "--newuse".into(),
+        "--ask=n".into(),
+        "@world".into(),
+    ];
+    cfg.needs_root = true;
+    cfg.is_exclusive = true;
+    let core = Arc::new(GenericBackendCore {
+        name: "emerge".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::names_only(o, "emerge"),
+            search_fn: |o| crate::parsers::ecosystem::emerge_search(o, "emerge"),
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+/// Solus eopkg (`eopkg`). Linux-only; gated by the `eopkg` binary. Needs root, serializes.
+#[cfg(target_os = "linux")]
+fn register_eopkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("eopkg");
+    cfg.install_args = vec!["install".into(), "-y".into()];
+    cfg.remove_args = vec!["remove".into(), "-y".into()];
+    cfg.list_args = vec!["list-installed".into()];
+    cfg.search_args = vec!["search".into()];
+    cfg.upgrade_args = vec!["upgrade".into(), "-y".into()];
+    cfg.needs_root = true;
+    cfg.is_exclusive = true;
+    let core = Arc::new(GenericBackendCore {
+        name: "eopkg".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::eopkg_list(o, "eopkg"),
+            search_fn: |o| crate::parsers::ecosystem::eopkg_list(o, "eopkg"),
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
+/// Slackware slackpkg (`slackpkg`). Linux-only; gated by the `slackpkg` binary. Installed
+/// packages are read from `/var/log/packages`. Needs root, serializes.
+#[cfg(target_os = "linux")]
+fn register_slackpkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let mut cfg = base_config("slackpkg");
+    cfg.install_args = vec![
+        "-batch=on".into(),
+        "-default_answer=y".into(),
+        "install".into(),
+    ];
+    cfg.remove_args = vec![
+        "-batch=on".into(),
+        "-default_answer=y".into(),
+        "remove".into(),
+    ];
+    cfg.list_binary = Some("ls".into());
+    cfg.list_args = vec!["-1".into(), "/var/log/packages".into()];
+    cfg.search_args = vec!["search".into()];
+    cfg.upgrade_args = vec![
+        "-batch=on".into(),
+        "-default_answer=y".into(),
+        "upgrade-all".into(),
+    ];
+    cfg.needs_root = true;
+    cfg.is_exclusive = true;
+    let core = Arc::new(GenericBackendCore {
+        name: "slackpkg".into(),
+        executor: executor.duplicate(),
+        config: cfg,
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::ecosystem::slackpkg_installed(o, "slackpkg"),
+            search_fn: |o| crate::parsers::ecosystem::slackpkg_search(o, "slackpkg"),
+        }),
+    });
+    register_generic(reg, core, true, true, true);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1029,8 +1456,57 @@ mod tests {
             &["installable", "queryable", "metadata_provider"],
         );
 
+        // Ecosystem backends added in the backend-expansion work.
+        const IQ: &[&str] = &["installable", "queryable", "metadata_provider"];
+        const IQS: &[&str] = &[
+            "installable",
+            "queryable",
+            "searchable",
+            "metadata_provider",
+        ];
+        assert_caps(&reg, "composer", FULL);
+        assert_caps(&reg, "opam", FULL);
+        assert_caps(&reg, "pixi", FULL);
+        assert_caps(&reg, "luarocks", IQS);
+        assert_caps(&reg, "spack", IQS);
+        assert_caps(&reg, "cabal", IQS);
+        assert_caps(&reg, "nimble", IQ);
+        assert_caps(&reg, "mix", IQ);
+        assert_caps(&reg, "helm", IQ);
+        assert_caps(&reg, "asdf", IQ);
+        // stack has no uninstall/list/search: install + metadata only.
+        assert_caps(&reg, "stack", &["installable", "metadata_provider"]);
+        // Dedicated modules.
+        assert_caps(
+            &reg,
+            "go",
+            &[
+                "installable",
+                "queryable",
+                "upgradable",
+                "metadata_provider",
+            ],
+        );
+        assert_caps(
+            &reg,
+            "pub",
+            &[
+                "installable",
+                "queryable",
+                "upgradable",
+                "metadata_provider",
+            ],
+        );
+        assert_caps(&reg, "krew", FULL);
+
         #[cfg(target_os = "linux")]
         {
+            // Linux-distro ecosystem backends.
+            assert_caps(&reg, "guix", FULL);
+            assert_caps(&reg, "emerge", FULL);
+            assert_caps(&reg, "eopkg", FULL);
+            assert_caps(&reg, "slackpkg", FULL);
+
             const SYS: &[&str] = &[
                 "installable",
                 "queryable",

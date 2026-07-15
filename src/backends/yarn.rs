@@ -2,8 +2,8 @@
 
 use crate::backends::node_registry::registry_search;
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec,
-    Queryable, Result, Searchable, Upgradable,
+    BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
+    Result, Searchable, Upgradable,
 };
 use async_trait::async_trait;
 use serde_json::Value;
@@ -81,8 +81,7 @@ impl YarnBackendCore {
         Ok(output.trim().to_string())
     }
 
-    /// Returns the global binary directory.
-    #[allow(dead_code)]
+    /// Returns the global binary directory (`yarn global bin`), where executables are linked.
     async fn get_global_bin(&self) -> Result<String> {
         let output = self
             .executor
@@ -190,9 +189,16 @@ impl Queryable for YarnQueryable {
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let all = self.list_installed().await?;
         if let Some(mut pkg) = all.into_iter().find(|p| p.name == name) {
+            // `yarn global dir` returns the folder CONTAINING node_modules, so the package
+            // lives at `<dir>/node_modules/<name>`.
             let prefix = self.core.get_global_prefix().await?;
-            let install_path = format!("{}/node_modules/{}", prefix, name);
-            pkg.properties.insert("install_path".into(), install_path);
+            pkg.properties.insert(
+                "install_path".into(),
+                format!("{}/node_modules/{}", prefix, name),
+            );
+            if let Ok(bin) = self.core.get_global_bin().await {
+                pkg.properties.insert("bin_path".into(), bin);
+            }
             Ok(Some(pkg))
         } else {
             Ok(None)

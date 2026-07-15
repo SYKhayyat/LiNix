@@ -352,7 +352,12 @@ impl<'a> ChangePlanner<'a> {
             let is_missing = if let Some(q) = b_cap.as_queryable() {
                 match q.info(&spec.name).await {
                     Ok(Some(p)) => {
-                        if let Some(req_v) = spec.options.get("version") {
+                        // A held package that is already installed is frozen: never schedule an
+                        // upgrade/version change for it, even if a manifest asks for a newer
+                        // version. (Hold does not block a first install of an absent package.)
+                        if self.state.is_held(&spec.backend, &spec.name) {
+                            false
+                        } else if let Some(req_v) = spec.options.get("version") {
                             p.version
                                 .as_deref()
                                 .is_none_or(|inst_v| !self.satisfies_constraint(inst_v, req_v))

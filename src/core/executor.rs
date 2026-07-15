@@ -454,7 +454,11 @@ impl CommandExecutor {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let detail = {
             let e = stderr.trim();
-            if e.is_empty() { stdout.trim() } else { e }
+            if e.is_empty() {
+                stdout.trim()
+            } else {
+                e
+            }
         };
         let msg = if detail.is_empty() {
             format!("`{}` failed (exit {})", cmd, code)
@@ -471,7 +475,11 @@ impl CommandExecutor {
     /// Only consulted when output is piped (non-interactive); interactive runs surface the
     /// message to the user directly and are rare in automation.
     fn output_signals_failure(cmd: &str, stdout: &[u8], stderr: &[u8]) -> bool {
-        let base = std::path::Path::new(cmd)
+        // Normalize `\` to `/` before taking the stem: a Windows shim path like
+        // `C:\…\scoop.ps1` only splits on `\` when running ON Windows, so on Linux/CI
+        // `Path::file_stem` would keep the whole string and miss the `scoop` rule.
+        let normalized = cmd.replace('\\', "/");
+        let base = std::path::Path::new(&normalized)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(cmd)
@@ -497,7 +505,9 @@ impl CommandExecutor {
             None => return false, // killed by a signal — never benign
         };
         // Match on the basename so path-qualified or sudo-wrapped invocations still resolve.
-        let base = std::path::Path::new(cmd)
+        // Normalize `\` to `/` first so a Windows shim path resolves on Linux/CI too.
+        let normalized = cmd.replace('\\', "/");
+        let base = std::path::Path::new(&normalized)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(cmd)
@@ -659,7 +669,9 @@ mod exit_status_tests {
             b""
         ));
         // other managers are unaffected by scoop's marker
-        assert!(!CommandExecutor::output_signals_failure("apt-get", out, b""));
+        assert!(!CommandExecutor::output_signals_failure(
+            "apt-get", out, b""
+        ));
     }
 
     #[test]
@@ -696,7 +708,10 @@ mod exit_status_tests {
     fn allowlist_resolves_path_qualified_and_exe_invocations() {
         // Forward slashes are recognized as separators on both Windows and Unix, so this
         // exercises basename + extension stripping portably (the suite may run on Linux CI).
-        assert!(CommandExecutor::is_benign_exit("/opt/chocolatey/bin/choco.exe", Some(3010)));
+        assert!(CommandExecutor::is_benign_exit(
+            "/opt/chocolatey/bin/choco.exe",
+            Some(3010)
+        ));
     }
 
     #[test]

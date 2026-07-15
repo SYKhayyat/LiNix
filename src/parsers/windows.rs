@@ -237,7 +237,9 @@ mod tests {
         assert!(names.contains(&"ripgrep"), "got {:?}", names);
         assert!(names.contains(&"rga"));
         // header/separator/chatter must not leak in as packages
-        assert!(!names.iter().any(|n| n.starts_with('-') || *n == "Name" || *n == "Results"));
+        assert!(!names
+            .iter()
+            .any(|n| n.starts_with('-') || *n == "Name" || *n == "Results"));
         let rg = res.iter().find(|p| p.name == "ripgrep").unwrap();
         assert_eq!(rg.version.as_deref(), Some("15.1.0"));
     }

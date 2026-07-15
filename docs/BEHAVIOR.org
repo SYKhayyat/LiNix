@@ -53,10 +53,15 @@ All are ~global = true~ (valid before or after the subcommand):
 
 ** Imperative
 - ~search <query> [--json]~ — parallel search across searchable backends.
-- ~install <pkg…> [--json]~ — install; tagged "imperative" so drift-prune won't
-  touch it. ~--json~ with ~--dry-run~ emits the plan instead of installing.
-- ~remove <pkg…> [--json]~ — remove if installed under some managed backend;
-  if not found, *warns and exits 0* (a not-installed remove is not an error).
+- ~install <pkg…> [--json] [--temp <dur>]~ — install; tagged "imperative" so drift-prune won't
+  touch it. ~--json~ with ~--dry-run~ emits the plan instead of installing. ~--temp <dur>~ makes
+  it a *temporary install* (leases itself; auto-removed when the duration elapses; kept out of
+  the manifest so ~sync~ won't resurrect it).
+- ~remove <pkg…> [--json] [--temp[=<dur>]]~ — remove if installed under some managed backend;
+  if not found, *warns and exits 0* (a not-installed remove is not an error). ~--temp=<dur>~ is
+  a *temporary uninstall*: the package is restored after ~dur~; bare ~--temp~ inside a
+  ~linix shell~ restores it when that ephemeral session ends. Restore is reinstall-by-name;
+  an unavailable package warns and the suspension is dropped. See ~lease list~.
 - ~list [--backend B] [--json]~ — installed packages (live query per backend).
 - ~info <pkg>~ — metadata (version, description, install path, dependencies).
 - ~run -p <pkg…> <command>~ — run a command in an ephemeral package environment.
@@ -109,10 +114,30 @@ reserved manifest ~<groups_dir>/_active_profiles.txt~, so the ordinary declarati
 (resolve → plan → sync, which prunes managed drift) converges the system in both directions.
 So ~lean = base + rust − heavy~ is expressible, and ~work~ + ~gaming~ can be active together.
 
+** Management modes, hooks, git & cockpit (v7)
+- ~managed strict|linix-only|show~ — set drift scope (~strict~ = prune anything not in the
+  manifests; ~linix-only~ = prune only LiNix-installed packages), or show the current mode.
+- ~managed keep <pkg…>~ / ~managed unkeep <pkg…>~ — edit ~groups/keep.txt~, a keep-list whose
+  entries are folded into the protected set and never auto-removed.
+- ~hooks install|uninstall|status [managers…]~ — native package-manager hooks (pacman, apt,
+  dnf, zypper, apk, xbps, portage, eopkg) that record manual installs into LiNix.
+  ~hooks shell-init <shell>~ prints shell wrappers + an auto-learn helper (~linixlearn~).
+  Local-file installs (~.deb~/~.rpm~/AppImage/…) are recorded imperatively and protected.
+- ~git init|status|log|commit|checkout~ — version-control the config dir. After ~git init~,
+  manifests auto-commit on every command; each generation is stamped with its commit, so
+  ~rollback <gen> --with-config~ (or ~git checkout <commit>~) rolls config + system together.
+- ~cockpit~ (alias ~tui~) — a generation time-travel dashboard: timeline (left), the selected
+  generation's package set + git commit + diff (right), a shell line (bottom); roll back with
+  ~r~ / ~R~.
+
+  Profiles additionally support an ~intersect <name>~ directive and full set expressions with
+  ~|~ / ~&~ / ~\~ and function forms, grouped by parentheses (see ~app::profile_expr~).
+
 ** Inspection & system
 - ~doctor~ — per-backend ~[READY]~/~[OFFLINE]~.
 - ~update~ — refresh repository metadata for all backends.
 - ~unmanaged~ — installed packages not managed by LiNix.
+- ~init [--force] [-i]~ — scaffold the layout; ~-i~ runs guided, interactive setup.
 - ~why <pkg>~ / ~audit [--json]~ / ~sbom~ — provenance, vulnerability audit, SBOM.
 - ~status~/~config~/~repo~/~module~/~lease~/~schedule~/~snapshot~/
   ~teleport~/~shim~/~migrate~/~undo~/~bisect~/~clone~/~fleet~/~policy~/

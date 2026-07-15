@@ -164,8 +164,7 @@ impl Queryable for PsResourceQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
         // Emit "Name Version" lines so parsing is trivial and independent of the
         // NuGetVersion type's JSON shape.
-        let script =
-            r#"Get-InstalledPSResource | ForEach-Object { "$($_.Name) $($_.Version)" }"#;
+        let script = r#"Get-InstalledPSResource | ForEach-Object { "$($_.Name) $($_.Version)" }"#;
         let output = self.core.run_ps(script).await?;
         Ok(parse_simple_list(&output, "psresource"))
     }
@@ -220,11 +219,7 @@ impl Upgradable for PsResourceUpgradable {
 }
 
 /// Build and register the PSResourceGet backend with all its capabilities.
-pub fn register(
-    reg: &mut crate::backends::BackendRegistry,
-    exec: &CommandExecutor,
-    _cfg: &Config,
-) {
+pub fn register(reg: &mut crate::backends::BackendRegistry, exec: &CommandExecutor, _cfg: &Config) {
     let core = Arc::new(PsResourceCore::new(exec.duplicate()));
     reg.register(Arc::new(
         BackendCapabilities::builder(core.clone())

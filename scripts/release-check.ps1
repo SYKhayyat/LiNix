@@ -1,0 +1,109 @@
+# release-check.ps1 - the single "am I ready to ship?" gate for Windows.
+#
+# Runs the hermetic gates then the native Windows integration sweep and prints one go/no-go:
+#   1. cargo clippy -D warnings   (HARD)
+#      cargo test --release        (HARD)
+#      cargo build --release       (HARD)
+#      cargo fmt --check           (informational)
+#   2. scripts/integration-windows.sh - real install/list/remove for every backend installable
+#      on this host (scoop + any bootstrapped ecosystem managers + winget/choco if present),
+#      full feature coverage, and the self-checking coverage audit.
+#
+# Usage (from the repo root, in PowerShell):
+#   ./scripts/release-check.ps1
+#   ./scripts/release-check.ps1 -Backend scoop -Package jq        # choose the primary backend
+#   ./scripts/release-check.ps1 -SkipIntegration                  # hermetic gates only
+#   $env:FAST=1; ./scripts/release-check.ps1                      # downgrade heavy source-compiles
+#
+# The integration step needs Git-Bash (bash), which ships with Git for Windows. Run elevated to
+# exercise choco/winget mutation; scoop alone needs no admin.
+#
+# NOTE: a bare `bash` on PATH is often scoop's *busybox* shim, whose bash cannot run this POSIX
+# script (it fails with "Could not create process"). We therefore locate the real Git-for-Windows
+# bash explicitly and only fall back to a PATH `bash` that is NOT busybox.
+param(
+    [string]$Backend = "scoop",
+    [string]$Package = "jq",
+    [string]$Package2 = "less",
+    [switch]$SkipIntegration
+)
+$ErrorActionPreference = "Continue"
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+Set-Location $RepoRoot
+
+$results = @()
+$hardFail = $false
+function Pass($m) { Write-Host "[PASS] $m" -ForegroundColor Green; $script:results += "  PASS  $m" }
+function Fail($m) { Write-Host "[FAIL] $m" -ForegroundColor Red;   $script:results += "  FAIL  $m"; $script:hardFail = $true }
+function Info($m) { Write-Host "[INFO] $m" -ForegroundColor Yellow; $script:results += "  INFO  $m" }
+function Step($m) { Write-Host "`n############### $m ###############" }
+
+# Find a REAL bash (Git for Windows), never scoop's busybox shim.
+function Find-Bash {
+    $candidates = @(
+        "$env:ProgramFiles\Git\bin\bash.exe",
+        "${env:ProgramFiles(x86)}\Git\bin\bash.exe",
+        "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe",
+        "$HOME\scoop\apps\git\current\bin\bash.exe",
+        "$HOME\scoop\apps\git\current\usr\bin\bash.exe"
+    )
+    foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
+    # Derive it from git.exe's location (…\Git\cmd\git.exe -> …\Git\bin\bash.exe).
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if ($git) {
+        $gitRoot = Split-Path (Split-Path $git.Source -Parent) -Parent
+        $b = Join-Path $gitRoot "bin\bash.exe"
+        if (Test-Path $b) { return $b }
+    }
+    # Last resort: a PATH bash that is NOT the busybox shim.
+    $g = Get-Command bash -ErrorAction SilentlyContinue
+    if ($g -and $g.Source -notmatch 'busybox') { return $g.Source }
+    return $null
+}
+
+# ------------------------------------------------------------------ 1. hermetic
+Step "1. HERMETIC GATES (cargo clippy / test / build / fmt)"
+
+Write-Host "-> cargo fmt --check"
+cargo fmt --check *> $null
+if ($LASTEXITCODE -eq 0) { Pass "cargo fmt --check (formatting clean)" } else { Info "cargo fmt --check reports diffs (non-blocking)" }
+
+Write-Host "-> cargo clippy --all-targets --all-features -- -D warnings"
+cargo clippy --all-targets --all-features -- -D warnings
+if ($LASTEXITCODE -eq 0) { Pass "clippy: no warnings" } else { Fail "clippy reported warnings/errors" }
+
+Write-Host "-> cargo test --release"
+cargo test --release
+if ($LASTEXITCODE -eq 0) { Pass "cargo test: all tests pass" } else { Fail "cargo test: failures" }
+
+Write-Host "-> cargo build --release"
+cargo build --release
+if ($LASTEXITCODE -eq 0) { Pass "release build succeeds" } else { Fail "release build FAILED" }
+
+# ------------------------------------------------------------------ 2. integration
+if ($SkipIntegration) {
+    Info "-SkipIntegration: skipped the native Windows sweep (hermetic gates only)"
+} else {
+    Step "2. NATIVE WINDOWS INTEGRATION SWEEP (real backends via linix)"
+    $bashExe = Find-Bash
+    if ($null -eq $bashExe) {
+        Fail "no real bash found (install Git for Windows): cannot run the integration sweep"
+    } else {
+        Write-Host "Using bash: $bashExe"
+        $env:LINIX = "$RepoRoot/target/release/linix.exe"
+        & $bashExe "scripts/integration-windows.sh" $Backend $Package $Package2
+        if ($LASTEXITCODE -eq 0) { Pass "native Windows integration sweep PASS" } else { Fail "native Windows integration sweep FAILED" }
+    }
+}
+
+# ------------------------------------------------------------------ verdict
+Step "RELEASE VERDICT"
+$results | ForEach-Object { Write-Host $_ }
+Write-Host ""
+if (-not $hardFail) {
+    Write-Host "=====> GO: every hard gate passed. Ready to release." -ForegroundColor Green
+    exit 0
+} else {
+    Write-Host "=====> NO-GO: at least one hard gate failed (see above)." -ForegroundColor Red
+    exit 1
+}

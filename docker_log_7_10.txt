@@ -1,0 +1,2072 @@
+administrator@WINDOWS-1IMTBV2:/mnt/c/Users/Administrator/Videos/Nexus/linix$ ./scripts/release-check.sh
+
+############### 1. HERMETIC GATES (cargo fmt / clippy / test / build) ###############
+[INFO] cargo fmt --check reports diffs (non-blocking; tree not yet fully fmt-clean)
+-> cargo clippy --all-targets --all-features -- -D warnings
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling serde_core v1.0.228
+   Compiling portable-atomic v1.13.1
+   Compiling serde v1.0.228
+   Compiling crossbeam-utils v0.8.21
+   Compiling parking_lot_core v0.9.12
+   Compiling generic-array v0.14.7
+   Compiling rustix v1.1.4
+   Compiling zerocopy v0.8.47
+   Compiling icu_properties_data v2.1.2
+   Compiling icu_normalizer_data v2.1.1
+   Compiling crunchy v0.2.4
+   Compiling tiny-keccak v2.0.2
+   Compiling zstd-sys v2.0.16+zstd.1.5.7
+   Compiling async-io v2.6.0
+    Checking parking_lot v0.12.5
+   Compiling signal-hook v0.3.18
+   Compiling httparse v1.10.1
+    Checking concurrent-queue v2.5.0
+    Checking crossbeam-epoch v0.9.18
+   Compiling rustversion v1.0.22
+   Compiling zmij v1.0.21
+    Checking once_cell v1.21.4
+   Compiling serde_json v1.0.149
+   Compiling libm v0.2.16
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+    Checking inout v0.1.4
+    Checking event-listener v5.4.1
+    Checking crossbeam-deque v0.8.6
+    Checking tracing-core v0.1.36
+    Checking rustls v0.23.40
+    Checking console v0.15.11
+    Checking digest v0.10.7
+    Checking cipher v0.4.4
+   Compiling rustix v0.38.44
+   Compiling const-random-macro v0.1.16
+   Compiling thiserror v1.0.69
+   Compiling paste v1.0.15
+    Checking signal-hook-mio v0.2.5
+   Compiling smartstring v1.0.1
+    Checking async-executor v1.14.0
+    Checking event-listener-strategy v0.5.4
+    Checking syn v2.0.117
+    Checking ignore v0.4.25
+    Checking sha2 v0.10.9
+    Checking hmac v0.12.1
+   Compiling lzma-sys v0.1.20
+    Checking uuid v1.23.1
+    Checking async-channel v2.5.0
+    Checking async-lock v3.4.2
+    Checking async-broadcast v0.7.2
+    Checking dashmap v5.5.3
+    Checking blocking v1.6.2
+    Checking pbkdf2 v0.11.0
+   Compiling anyhow v1.0.102
+    Checking quanta v0.12.6
+    Checking crossterm v0.27.0
+    Checking tracing-log v0.2.0
+    Checking globwalk v0.9.1
+    Checking sha1 v0.10.6
+    Checking aes v0.8.4
+    Checking rayon-core v1.13.0
+    Checking humansize v2.1.3
+    Checking const-random v0.1.18
+    Checking indicatif v0.17.11
+    Checking polling v3.11.0
+    Checking xattr v1.6.1
+    Checking tempfile v3.27.0
+    Checking rayon v1.12.0
+    Checking ppv-lite86 v0.2.21
+    Checking ahash v0.8.12
+    Checking which v6.0.3
+    Checking tar v0.4.45
+    Checking rand_chacha v0.3.1
+    Checking rand v0.8.5
+    Checking async-signal v0.2.14
+    Checking async-process v2.5.0
+   Compiling synstructure v0.13.2
+   Compiling pest_generator v2.8.6
+   Compiling serde_derive v1.0.228
+   Compiling zerofrom-derive v0.1.6
+   Compiling yoke-derive v0.8.1
+   Compiling zerovec-derive v0.11.2
+   Compiling displaydoc v0.2.5
+   Compiling tokio-macros v2.6.1
+   Compiling futures-macro v0.3.32
+   Compiling tracing-attributes v0.1.31
+   Compiling enumflags2_derive v0.7.12
+   Compiling clap_derive v4.6.0
+   Compiling async-trait v0.1.89
+   Compiling strum_macros v0.25.3
+   Compiling serde_repr v0.1.20
+   Compiling thiserror-impl v1.0.69
+   Compiling async-recursion v1.1.1
+   Compiling rhai_codegen v3.1.0
+   Compiling pest_derive v2.8.6
+    Checking tokio v1.50.0
+    Checking futures-util v0.3.32
+    Checking rhai v1.24.0
+    Checking zerofrom v0.1.6
+    Checking tracing v0.1.44
+    Checking strum v0.25.0
+    Checking yoke v0.8.1
+    Checking dialoguer v0.11.0
+    Checking ratatui v0.24.0
+    Checking tracing-subscriber v0.3.23
+    Checking clap v4.6.0
+    Checking zerovec v0.11.5
+    Checking zerotrie v0.2.3
+    Checking clap_complete v4.6.0
+    Checking futures-executor v0.3.32
+    Checking mlua v0.9.9
+    Checking zvariant_utils v3.4.0
+    Checking enumflags2 v0.7.12
+    Checking chrono v0.4.44
+    Checking serde_spanned v0.6.9
+    Checking toml_datetime v0.6.11
+    Checking serde_urlencoded v0.7.1
+    Checking xz2 v0.1.7
+    Checking tinystr v0.8.2
+    Checking potential_utf v0.1.4
+    Checking clap_complete_nushell v4.6.0
+    Checking futures v0.3.32
+    Checking toml_edit v0.22.27
+    Checking governor v0.6.3
+    Checking icu_collections v2.1.1
+    Checking icu_locale_core v2.1.1
+   Compiling zvariant_derive v5.12.0
+    Checking chrono-tz v0.9.0
+    Checking cron v0.12.1
+    Checking tokio-util v0.7.18
+    Checking tokio-rustls v0.24.1
+    Checking tokio-rustls v0.26.4
+    Checking tokio-stream v0.1.18
+    Checking icu_provider v2.1.1
+    Checking tokio-test v0.4.5
+    Checking toml v0.8.23
+   Compiling zstd-safe v5.0.2+zstd.1.5.2
+    Checking icu_properties v2.1.2
+    Checking icu_normalizer v2.1.1
+    Checking h2 v0.3.27
+    Checking zstd v0.11.2+zstd.1.5.2
+    Checking zip v0.6.6
+   Compiling zvariant v5.12.0
+    Checking tera v1.20.1
+    Checking idna_adapter v1.2.1
+    Checking idna v1.1.0
+    Checking url v2.5.8
+    Checking hyper v0.14.32
+    Checking zbus_names v4.3.2
+    Checking lettre v0.11.22
+   Compiling zbus_macros v5.16.0
+    Checking hyper-rustls v0.24.2
+    Checking reqwest v0.11.27
+    Checking zbus v5.16.0
+    Checking notify-rust v4.17.0
+    Checking linix v6.0.0 (/mnt/c/Users/Administrator/Videos/Nexus/linix)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 17s
+[PASS] clippy: no warnings
+-> cargo test --release
+   Compiling crossbeam-utils v0.8.21
+   Compiling serde_core v1.0.228
+   Compiling parking_lot_core v0.9.12
+   Compiling concurrent-queue v2.5.0
+   Compiling typenum v1.19.0
+   Compiling parking_lot v0.12.5
+   Compiling generic-array v0.14.7
+   Compiling tokio v1.50.0
+   Compiling event-listener v5.4.1
+   Compiling crypto-common v0.1.7
+   Compiling event-listener-strategy v0.5.4
+   Compiling block-buffer v0.10.4
+   Compiling crossbeam-epoch v0.9.18
+   Compiling serde v1.0.228
+   Compiling digest v0.10.7
+   Compiling crossbeam-deque v0.8.6
+   Compiling async-io v2.6.0
+   Compiling async-channel v2.5.0
+   Compiling zvariant_utils v3.4.0
+   Compiling enumflags2 v0.7.12
+   Compiling chrono v0.4.44
+   Compiling async-lock v3.4.2
+   Compiling inout v0.1.4
+   Compiling cipher v0.4.4
+   Compiling serde_json v1.0.149
+   Compiling ignore v0.4.25
+   Compiling blocking v1.6.2
+   Compiling toml_datetime v0.6.11
+   Compiling serde_spanned v0.6.9
+   Compiling sha2 v0.10.9
+   Compiling async-signal v0.2.14
+   Compiling hmac v0.12.1
+   Compiling async-executor v1.14.0
+   Compiling uuid v1.23.1
+   Compiling async-broadcast v0.7.2
+   Compiling zvariant_derive v5.12.0
+   Compiling async-process v2.5.0
+   Compiling toml_edit v0.22.27
+   Compiling pbkdf2 v0.11.0
+   Compiling aes v0.8.4
+   Compiling serde_urlencoded v0.7.1
+   Compiling dashmap v5.5.3
+   Compiling quanta v0.12.6
+   Compiling chrono-tz v0.9.0
+   Compiling crossterm v0.27.0
+   Compiling rayon-core v1.13.0
+   Compiling sha1 v0.10.6
+   Compiling strum v0.25.0
+   Compiling globwalk v0.9.1
+   Compiling governor v0.6.3
+   Compiling zip v0.6.6
+   Compiling rayon v1.12.0
+   Compiling cron v0.12.1
+   Compiling anyhow v1.0.102
+   Compiling ratatui v0.24.0
+   Compiling tokio-util v0.7.18
+   Compiling tokio-rustls v0.24.1
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-stream v0.1.18
+   Compiling lettre v0.11.22
+   Compiling tokio-test v0.4.5
+   Compiling zvariant v5.12.0
+   Compiling toml v0.8.23
+   Compiling tera v1.20.1
+   Compiling h2 v0.3.27
+   Compiling zbus_names v4.3.2
+   Compiling zbus_macros v5.16.0
+   Compiling hyper v0.14.32
+   Compiling hyper-rustls v0.24.2
+   Compiling zbus v5.16.0
+   Compiling reqwest v0.11.27
+   Compiling notify-rust v4.17.0
+   Compiling linix v6.0.0 (/mnt/c/Users/Administrator/Videos/Nexus/linix)
+    Finished `release` profile [optimized] target(s) in 9m 47s
+     Running unittests src/lib.rs (target/release/deps/linix-373723703f866edd)
+
+running 152 tests
+test app::bisect::tests::first_bad_empty_is_none ... ok
+test app::bisect::tests::first_bad_is_logarithmic ... ok
+test app::fleet::tests::in_sync_logic ... ok
+test app::bisect::tests::first_bad_all_bad_is_zero ... ok
+test app::bisect::tests::first_bad_finds_transition ... ok
+test app::bisect::tests::first_bad_all_good_is_none ... ok
+test app::insight::tests::purl_and_ecosystem_maps ... ok
+test app::policy::tests::empty_policy_is_noop ... ok
+test app::fleet::tests::parse_status_counts_arrays ... ok
+test app::insight::tests::cyclonedx_has_expected_shape ... ok
+test app::insight::tests::parses_querybatch_ids_aligned ... ok
+test app::insight::tests::extracts_fixed_version_and_summary ... ok
+test app::insight::tests::querybatch_skips_uncovered_and_floating ... ok
+test app::fleet::tests::parse_status_tolerates_missing_keys ... ok
+test app::generation::tests::plan_rollback_respects_package_and_backend_scope ... ok
+test app::sync::planner::tests::scope_match_is_exact_segment ... ok
+test app::policy::tests::pinned_only_requires_concrete_version ... ok
+test app::sync::resolver::tests::merges_and_dedups_sources ... ok
+test app::scheduler::tests::systemd_oncalendar_mapping ... ok
+test app::policy::tests::allow_backends_blocks_others_but_empty_allows_all ... ok
+test app::policy::tests::deny_packages_is_case_insensitive ... ok
+test app::profile::tests::cyclic_includes_terminate ... ok
+test app::profile::tests::relational_plus_and_minus_together ... ok
+test app::profile::tests::unknown_profile_is_empty_not_a_panic ... ok
+test app::profile::tests::exclude_subtracts_another_profiles_packages ... ok
+test app::profile::tests::include_unions_and_dedups_preserving_order ... ok
+test app::generation::tests::plan_rollback_diffs_installs_downgrades_and_removes ... ok
+test app::profile::tests::standalone_profile_lists_its_packages ... ok
+test app::profile::tests::minus_subtracts_a_single_package ... ok
+test backends::generic::tests::concrete_version_rejects_floating ... ok
+test backends::conda::tests::resolve_env_ignores_blank ... ok
+test backends::conda::tests::resolve_env_reads_backend_setting ... ok
+test backends::cargo::tests::cargo_list_skips_indented_binaries ... ok
+test backends::brew::tests::brew_search_skips_section_headers ... ok
+test app::sync::planner::tests::prune_flag_gates_drift_removal ... ok
+test app::sync::planner::tests::scoped_plan_is_non_destructive ... ok
+test app::sync::planner::tests::protect_imperative_shields_imperative_installs_from_drift ... ok
+test backends::conda::tests::resolve_env_defaults_to_base ... ok
+test backends::cargo::tests::cargo_search_parses_name_version_desc ... ok
+test backends::generic::tests::version_pin_renders_native_syntax ... ok
+test backends::go::tests::falls_back_to_path_when_no_mod ... ok
+test backends::mise::tests::mise_registry_filters_by_query ... ok
+test backends::nix::tests::nix_search_parses_json_map ... ok
+test backends::nix::tests::nix_search_empty_is_ok ... ok
+test backends::go::tests::parses_module_and_version_from_mod_line ... ok
+test backends::go::tests::non_go_binary_yields_none ... ok
+test backends::go::tests::binary_name_strips_path_and_version ... ok
+test backends::node_registry::tests::npm_registry_empty_objects ... ok
+test backends::node_registry::tests::parses_npm_registry_objects ... ok
+test backends::generic::tests::remove_reports_unsupported_with_empty_remove_args ... ok
+test backends::generic::tests::clean_orphans_reports_unsupported_without_orphan_args ... ok
+test backends::onboarder::tests::registers_valid_and_skips_collisions_and_bad_names ... ok
+test backends::pip_search::tests::parses_pypi_info ... ok
+test backends::pip_search::tests::pypi_falls_back_to_query_name ... ok
+test backends::uv::tests::ignores_non_package_chatter ... ok
+test backends::uv::tests::parses_uv_tool_list ... ok
+test backends::xbps::tests::parses_bare_pkgver_list ... ok
+test backends::xbps::tests::parses_query_list_with_state_flags ... ok
+test backends::xbps::tests::parses_search_with_install_markers ... ok
+test backends::yarn::tests::ndjson_empty_or_treeless_is_empty_not_error ... ok
+test backends::yarn::tests::ndjson_stream_yields_packages_and_ignores_noise ... ok
+test backends::link::tests::backs_up_preexisting_file_then_writes_managed_content ... ok
+test backends::link::tests::no_backup_created_when_target_absent ... ok
+test backends::yarn::tests::parses_plain_and_scoped_names ... ok
+test config::config::tests::backend_gating_defaults_to_all_enabled ... ok
+test backends::link::tests::a_users_edit_after_adoption_does_not_clobber_the_original_backup ... ok
+test config::config::tests::global_enabled_backends_restricts ... ok
+test config::config::tests::is_protected_is_exact_not_substring ... ok
+test config::parser::removal_target_tests::backend_prefix_scopes_and_strips_to_bare_name ... ok
+test config::parser::removal_target_tests::bare_name_has_no_backend ... ok
+test config::parser::removal_target_tests::options_are_stripped_from_the_name ... ok
+test config::parser::removal_target_tests::unknown_prefix_is_not_treated_as_a_backend ... ok
+test config::config::tests::per_host_override_wins_over_global ... ok
+test config::parser::removal_target_tests::web_url_name_keeps_its_scheme_colon ... ok
+test core::executor::exit_status_tests::allowlist_resolves_path_qualified_and_exe_invocations ... ok
+test core::executor::exit_status_tests::benign_codes_are_scoped_to_their_own_manager ... ok
+test core::executor::exit_status_tests::choco_msi_reboot_codes_are_benign ... ok
+test core::executor::exit_status_tests::ordinary_nonzero_is_never_benign ... ok
+test core::executor::exit_status_tests::scoop_missing_manifest_is_a_failure_despite_exit_zero ... ok
+test config::config::tests::validate_accepts_standard_and_macro_cron ... ok
+test core::executor::exit_status_tests::signal_termination_is_never_benign ... ok
+test core::executor::exit_status_tests::winget_noteworthy_codes_are_benign ... ok
+test core::retention::tests::age_rule_never_wipes_the_last_entry ... ok
+test core::retention::tests::inactive_policy_deletes_nothing ... ok
+test core::retention::tests::keep_last_keeps_newest_n_and_deletes_the_rest ... ok
+test app::generation::tests::capture_then_restore_round_trips_state_and_manifests ... ok
+test core::retention::tests::pins_and_labels_always_survive ... ok
+test core::retention::tests::union_of_count_and_age ... ok
+test core::retention::tests::keep_days_keeps_recent_and_the_floor ... ok
+test app::generation::tests::pin_and_nearest_at_or_before ... ok
+test app::generation::tests::manifest_archive_captures_dedups_and_prunes ... ok
+test app::generation::tests::prune_keeps_last_one_and_deletes_older ... ok
+test core::validator::tests::path_oriented_backends_allow_absolute_paths_but_never_traversal ... ok
+test core::validator::tests::strict_validation_blocks_absolute_paths_for_normal_backends ... ok
+test parsers::dnf::tests::test_dnf_search_parsing ... ok
+test parsers::dnf::tests::test_rpm_qa_parsing ... ok
+test parsers::conda::tests::parses_conda_search_json_newest_build ... ok
+test parsers::brew::tests::test_brew_list_parsing ... ok
+test parsers::dotnet::tests::parses_dotnet_tool_list ... ok
+test parsers::apt::tests::test_apt_search_parsing ... ok
+test parsers::conda::tests::parses_conda_list_json ... ok
+test parsers::brew::tests::test_brew_search_parsing ... ok
+test parsers::ecosystem::tests::emerge_search_extracts_atoms ... ok
+test parsers::dotnet::tests::parses_dotnet_tool_search ... ok
+test parsers::apt::tests::test_apt_list_parsing ... ok
+test parsers::conda::tests::conda_search_error_payload_is_empty ... ok
+test backends::snap::tests::snap_find_parses_rows ... ok
+test backends::onboarder::tests::columns_parser_extracts_name_and_version ... ok
+test parsers::ecosystem::tests::guix_list_via_ws_name_version ... ok
+test parsers::ecosystem::tests::asdf_list_keeps_plugins_skips_versions ... ok
+test parsers::ecosystem::tests::nimble_list_reads_name_and_bracket_version ... ok
+test backends::onboarder::tests::lines_parser_one_name_per_line ... ok
+test backends::onboarder::tests::columns_parser_skips_header_and_prefixes ... ok
+test backends::onboarder::tests::json_parser_array_of_objects_with_path ... ok
+test backends::flatpak::tests::flatpak_search_prefers_app_id ... ok
+test backends::onboarder::tests::json_parser_object_keys_as_names ... ok
+test parsers::ecosystem::tests::guix_search_pairs_name_and_version ... ok
+test parsers::ecosystem::tests::slackpkg_installed_strips_version_arch_build ... ok
+test parsers::ecosystem::tests::mix_archive_splits_name_and_version ... ok
+test parsers::ecosystem::tests::names_only_skips_headers_and_noise ... ok
+test parsers::ecosystem::tests::eopkg_list_takes_name_before_dash ... ok
+test parsers::ecosystem::tests::ws_name_version_parses_and_skips_header ... ok
+test parsers::ecosystem::tests::pixi_list_handles_tree_and_flat ... ok
+test parsers::language::tests::test_bun_list_parsing ... ok
+test parsers::language::tests::test_cargo_list_parsing ... ok
+test parsers::language::tests::test_composer_json_parsing ... ok
+test parsers::language::tests::test_npm_object_and_pnpm_array_both_parse ... ok
+test parsers::macos::tests::test_macports_installed_parsing ... ok
+test parsers::macos::tests::test_macports_search_parsing ... ok
+test parsers::macos::tests::test_mas_list_parsing ... ok
+test parsers::macos::tests::test_mas_search_parsing ... ok
+test parsers::nix::tests::test_nix_profile_json_parsing ... ok
+test parsers::nix::tests::test_nix_text_list_parsing ... ok
+test parsers::pacman::tests::test_pacman_list_parsing ... ok
+test parsers::pacman::tests::test_pacman_search_parsing ... ok
+test backends::onboarder::tests::regex_parser_named_captures ... ok
+test parsers::ecosystem::tests::slackpkg_search_extracts_pkg_field ... ok
+test parsers::pkgsrc::tests::skips_legend_and_status_lines ... ok
+test parsers::pkgsrc::tests::parses_name_and_version_with_dashed_name ... ok
+test parsers::utils::tests::test_sanitize_ansi ... ok
+test parsers::utils::tests::test_split_columns_quoted ... ok
+test parsers::windows::tests::scoop_search_parses_modern_table ... ok
+test parsers::windows::tests::test_choco_list_parsing ... ok
+test parsers::windows::tests::winget_list_handles_cr_spinner_header ... ok
+test parsers::windows::tests::winget_list_uses_columns_not_whitespace ... ok
+test parsers::windows::tests::winget_search_parses_columns ... ok
+test utils::command::tests::test_command_splitter ... ok
+test utils::retry::tests::test_retry_sync_eventual_success ... ok
+test backends::registry::tests::registry_capability_matrix ... ok
+test backends::generic::tests::get_dependencies_parses_names_without_sudo ... ok
+test utils::retry::tests::test_retry_eventual_success ... ok
+test utils::command::tests::test_command_presence ... ok
+
+test result: ok. 152 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.69s
+
+     Running unittests src/main.rs (target/release/deps/linix-a0f71daa56d58d37)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/shim.rs (target/release/deps/shim-767903d688dfb157)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/automation_lifecycle_tests.rs (target/release/deps/automation_lifecycle_tests-315c2b1bdfc64626)
+
+running 4 tests
+test test_snapshot_pruning_respects_dry_run_safety ... ok
+test test_snapshot_pruning_physical_logic ... ok
+test test_scheduler_reboot_mapping_fidelity ... ok
+test test_systemd_oncalendar_translation_logic ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+     Running tests/backend_tests.rs (target/release/deps/backend_tests-d0510ad554a59ed1)
+
+running 6 tests
+test test_link_backend_vfs_integrity ... ok
+test test_metadata_provider_resolution ... FAILED
+test test_cargo_backend_hermetic_logic ... ok
+test test_brew_backend_hermetic_logic ... ok
+test test_pacman_backend_hermetic_logic ... ok
+test test_apt_backend_hermetic_logic ... ok
+
+failures:
+
+---- test_metadata_provider_resolution stdout ----
+
+thread 'test_metadata_provider_resolution' (283058) panicked at tests/backend_tests.rs:247:5:
+assertion failed: deps.contains(&"libc6".to_string())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    test_metadata_provider_resolution
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+error: test failed, to rerun pass `--test backend_tests`
+[FAIL] cargo test: failures
+-> cargo build --release
+   Compiling linix v6.0.0 (/mnt/c/Users/Administrator/Videos/Nexus/linix)
+    Finished `release` profile [optimized] target(s) in 2m 51s
+[PASS] release build succeeds
+
+############### 2. REAL INTEGRATION MATRIX (Docker: every distro + tools + gentoo) ###############
+repo root: /mnt/c/Users/Administrator/Videos/Nexus/linix
+############### BUILD ubuntu (apt) ###############
+[+] Building 360.1s (14/14) FINISHED                                                                     docker:default
+ => [internal] load build definition from Dockerfile.ubuntu                                                        0.1s
+ => => transferring dockerfile: 1.30kB                                                                             0.0s
+ => [internal] load metadata for docker.io/library/ubuntu:24.04                                                    0.4s
+ => [internal] load .dockerignore                                                                                  0.2s
+ => => transferring context: 596B                                                                                  0.1s
+ => [1/9] FROM docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc709  0.0s
+ => => resolve docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc709  0.0s
+ => [internal] load build context                                                                                  1.6s
+ => => transferring context: 216.23kB                                                                              1.6s
+ => CACHED [2/9] RUN apt-get update && apt-get install -y --no-install-recommends     curl ca-certificates build-  0.0s
+ => CACHED [3/9] RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal     0.0s
+ => CACHED [4/9] RUN corepack enable || true                                                                       0.0s
+ => CACHED [5/9] RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true                                       0.0s
+ => CACHED [6/9] RUN curl -fsSL https://bun.sh/install | bash || true                                              0.0s
+ => CACHED [7/9] WORKDIR /src                                                                                      0.0s
+ => [8/9] COPY . /src                                                                                              0.2s
+ => [9/9] RUN cargo build --release                                                                              318.8s
+ => exporting to image                                                                                            38.6s
+ => => exporting layers                                                                                           30.4s
+ => => exporting manifest sha256:4e892e921c93cf238338ce4e905f9a5da3b7cf3de89f074ddbf93fc3b7775f15                  0.0s
+ => => exporting config sha256:8c5232bda756626dd616f5ea66a9360349918cdc8dadac8035caa59ac36bf38c                    0.0s
+ => => exporting attestation manifest sha256:2b172411998761c03659caed9f5331207e8fd1c1438a02624d27f92e7cfbeae8      0.1s
+ => => exporting manifest list sha256:6c922f8ecdd9df9ff07cecc7ce4ea4f283a7a4f8848d8ce92e76b27ba1d330f1             0.0s
+ => => naming to docker.io/library/linix-it-ubuntu:latest                                                          0.0s
+ => => unpacking to docker.io/library/linix-it-ubuntu:latest                                                       8.0s
+############### RUN ubuntu (apt) ###############
+###################################################################
+# LiNix real-world sweep :: native-backend=apt  pkg=jq  pkg2=htop
+# binary=/src/target/release/linix  timeout=90s  SMOKE_ONLY=0  FAST=0
+###################################################################
+
+=========== 1. DISCOVERY (doctor / search / info) ===========
+    [ok]    doctor exits 0
+    [ok]    doctor reports apt READY
+      READY backends:
+        [READY] pipx
+        [READY] web
+        [READY] uv
+        [READY] gem
+        [READY] link
+        [READY] pip
+        [READY] appimage
+        [READY] apt
+        [READY] npm
+        [READY] cargo
+        [READY] github
+    [info]  update (apt) exits 0
+    [ok]    search exits 0
+    [ok]    search returns a apt hit for 'jq'
+    [info]  info 'jq' returned rc=0 / no metadata (may be search-only backend)
+
+=========== 2. DRY-RUN SAFETY (must change nothing) ===========
+    [ok]    clean start: 'jq' absent
+    [ok]    dry-run install exits 0
+    [ok]    dry-run install emits JSON plan
+    [ok]    dry-run left system unchanged
+    [ok]    dry-run left the manifest unchanged
+
+=========== 3. IMPERATIVE INSTALL + LIST + INFO + config coherence ===========
+    [ok]    install 'apt:jq' exits 0
+    [ok]    'jq' on PATH after install
+    [ok]    install recorded 'jq' in the manifest (config stays coherent)
+    [ok]    list shows 'jq' as installed (installed-list parser works)
+
+=========== 4. IDEMPOTENCY (install already-installed) ===========
+    [ok]    re-install of present package exits 0
+
+=========== 5. IMPERATIVE REMOVE + verify gone + config coherence ===========
+    [ok]    remove 'apt:jq' exits 0
+    [ok]    'jq' gone from PATH after remove
+    [ok]    remove cleared 'jq' from the manifest
+    [ok]    list no longer shows 'jq'
+    [ok]    second remove (not installed) exits 0 (warn, not error)
+
+=========== 6. NEGATIVE PATH — failed mutation MUST surface (exit-status enforcement) ===========
+    [ok]    install of nonexistent 'linix-nonexistent-pkg-zzq9x' FAILS with exit=1 (failure not swallowed)
+    [ok]    bogus package not installed (as expected)
+
+=========== 7. DECLARATIVE DIAGNOSTIC (unscoped status — planning across ALL backends) ===========
+    [ok]    unscoped 'status' completed (rc=0) — planning across every backend does not hang
+
+=========== 8. DECLARATIVE ROUNDTRIP — write file -> sync -> installed ; edit file -> prune -> gone ===========
+    [ok]    init scaffolds manifest at /tmp/linix-it-manifests/local.txt
+      -> writing 'apt:jq' into the manifest file, then calling sync
+    [ok]    status (scoped) exits 0
+    [ok]    status shows 'jq' as a pending change
+    [ok]    sync (scoped) exits 0
+    [ok]    sync INSTALLED 'jq' from the manifest file
+    [ok]    lock writes locks.json
+    [info]  generation list exits 0
+      -> removing 'jq' from the manifest file, then converging (prune)
+    [ok]    status flags 'jq' as drift after the manifest edit
+    [ok]    prune (scoped) exits 0
+    [ok]    prune REMOVED 'jq' after it left the manifest file
+
+=========== 9. JSON OUTPUT CONTRACT (stdout only; real JSON parse) ===========
+    [ok]    search --json is valid JSON
+    [ok]    list --json is valid JSON
+    [ok]    status --json is valid JSON
+
+=========== 10. PROFILES — activate/deactivate, MULTIPLE active, RELATIONAL (include / exclude / -pkg) ===========
+    [ok]    activate alpha exits 0
+    [ok]    profile 'alpha' installed 'jq'
+    [ok]    alpha left 'htop' absent
+    [ok]    'alpha' shows as active
+    [ok]    activate bravo exits 0 (two profiles now active)
+    [ok]    MULTIPLE active: 'jq' AND 'htop' both installed
+    [ok]    deactivate alpha exits 0
+    [ok]    deactivate alpha removed 'jq'
+    [ok]    'htop' survived (still provided by bravo — union semantics)
+    [ok]    clean slate: no profile packages installed
+    [ok]    activate lean (relational include+minus) exits 0
+    [ok]    relational 'lean' installed 'htop' (the 'plus')
+    [ok]    relational MINUS works: 'jq' excluded
+    [ok]    profile show lean resolves to {htop} (include + minus applied)
+    [ok]    deactivate lean cleaned up 'htop'
+    [ok]    profile list enumerates defined profiles
+
+=========== 11. REAL MULTI-BACKEND LIFECYCLE — every feasible backend (real install → list → remove) ===========
+      --- backend: npm  (pkg: cowsay, mode: real, timeout: 120s) ---
+    [ok]    [npm] install 'cowsay' exits 0
+    [ok]    [npm] list shows 'cowsay' (installed-list parser works)
+    [ok]    [npm] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [npm] 'cowsay' resolves on PATH
+    [ok]    [npm] remove 'cowsay' exits 0
+    [ok]    [npm] 'cowsay' gone from list after remove
+    [ok]    [npm] remove cleared 'cowsay' from manifest
+    [info]  [yarn] not READY in this image — skipped
+    [info]  [pnpm] not READY in this image — skipped
+    [info]  [bun] not READY in this image — skipped
+      --- backend: pipx  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [pipx] install 'cowsay' exits 0
+    [ok]    [pipx] list shows 'cowsay' (installed-list parser works)
+    [ok]    [pipx] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [pipx] 'cowsay' resolves on PATH
+    [ok]    [pipx] remove 'cowsay' exits 0
+    [ok]    [pipx] 'cowsay' gone from list after remove
+    [ok]    [pipx] remove cleared 'cowsay' from manifest
+      --- backend: uv  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [uv] install 'cowsay' exits 0
+    [ok]    [uv] list shows 'cowsay' (installed-list parser works)
+    [ok]    [uv] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [uv] 'cowsay' resolves on PATH
+    [ok]    [uv] remove 'cowsay' exits 0
+    [ok]    [uv] 'cowsay' gone from list after remove
+    [ok]    [uv] remove cleared 'cowsay' from manifest
+      --- backend: gem  (pkg: colorize, mode: real, timeout: 240s) ---
+    [ok]    [gem] install 'colorize' exits 0
+    [ok]    [gem] list shows 'colorize' (installed-list parser works)
+    [ok]    [gem] install recorded 'colorize' in manifest (coherent)
+    [ok]    [gem] remove 'colorize' exits 0
+    [ok]    [gem] 'colorize' gone from list after remove
+    [ok]    [gem] remove cleared 'colorize' from manifest
+      --- backend: pip  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [info]  [pip] install 'cowsay' rc=1 — ecosystem/network variance (not a hard fail)
+          |
+          | note: If you believe this is a mistake, please contact your Python installation or OS distribution provider. You can override this, at the risk of breaking your Python installation or OS, by passing --break-system-packages.
+          | hint: See PEP 668 for the detailed specification.
+    [info]  [luarocks] not READY in this image — skipped
+    [info]  [pixi] not READY in this image — skipped
+    [info]  [composer] not READY in this image — skipped
+    [info]  [dotnet] not READY in this image — skipped
+    [info]  [pub] not READY in this image — skipped
+    [info]  [nix] not READY in this image — skipped
+    [info]  [krew] not READY in this image — skipped
+    [info]  [mix] not READY in this image — skipped
+    [info]  [conda] not READY in this image — skipped
+      --- backend: cargo  (pkg: ripgrep, mode: real, timeout: 2400s) ---
+    [ok]    [cargo] install 'ripgrep' exits 0
+    [ok]    [cargo] list shows 'ripgrep' (installed-list parser works)
+    [ok]    [cargo] install recorded 'ripgrep' in manifest (coherent)
+    [ok]    [cargo] 'rg' resolves on PATH
+    [ok]    [cargo] remove 'ripgrep' exits 0
+    [ok]    [cargo] 'ripgrep' gone from list after remove
+    [ok]    [cargo] remove cleared 'ripgrep' from manifest
+    [info]  [go] not READY in this image — skipped
+    [info]  [opam] not READY in this image — skipped
+    [info]  [nimble] not READY in this image — skipped
+    [info]  [spack] not READY in this image — skipped
+    [info]  [cabal] not READY in this image — skipped
+    [info]  [helm] not READY in this image — skipped
+    [info]  [flatpak] not READY in this image — skipped
+    [info]  [mise] not READY in this image — skipped
+      --- backend: github  (repo: BurntSushi/ripgrep) ---
+    [ok]    [github] install 'BurntSushi/ripgrep' exits 0 (real release asset downloaded + extracted)
+    [ok]    [github] list shows the installed repo (state parser works)
+    [info]  [github] 'rg' not on PATH (~/.local/bin not exported?)
+    [ok]    [github] remove exits 0
+    [ok]    [github] gone from list after remove
+      --- backend: link  (/tmp/linix-link-src -> /tmp/linix-link-dst) ---
+    [ok]    [link] install exits 0
+    [ok]    [link] created the link at /tmp/linix-link-dst
+    [ok]    [link] remove exits 0
+    [FAIL]  [link] /tmp/linix-link-dst still present after remove
+
+=========== 12. FEATURE COVERAGE — every linix subcommand exercised at least once ===========
+    [ok]    completions bash emits a script
+    [ok]    completions zsh emits a script
+    [ok]    completions fish emits a script
+    [ok]    completions powershell emits a script
+    [ok]    completions elvish emits a script
+    [ok]    completions nushell emits a script
+    [ok]    heal exits 0 on a clean system (no interrupted transaction)
+    [ok]    clean exits 0
+    [ok]    unmanaged exits 0
+    [ok]    orphans exits 0
+    [ok]    audit exits 0
+    [ok]    sbom emits a CycloneDX JSON document
+    [ok]    why 'jq' exits 0
+    [ok]    policy exits 0
+    [ok]    upgrade (scoped) exits 0
+    [info]  canary upgrade rc=1 (tolerated)
+    [info]  repo list rc=1 (tolerated)
+    [info]  repo add rc=1 (needs a real source — tolerated)
+    [ok]    migrate (scoped) exits 0
+    [ok]    teleport (dry-run plan) exits 0
+    [ok]    module list exits 0
+    [info]  module create+show round-trips
+    [ok]    snapshot list exits 0
+    [info]  snapshot prune exits 0
+    [info]  generation pin 1783713036 ok
+    [info]  generation unpin 1783713036 ok
+    [ok]    rollback (dry-run) to 1783713036 exits 0
+    [ok]    lease set exits 0
+    [ok]    lease list shows the leased package
+    [info]  schedule add rc=1 (no systemd/cron in this container — tolerated)
+    [ok]    run executes a command in an ephemeral env
+    [ok]    shim generates a launcher
+
+=========== 13. PLAN-SMOKE — only the backends that cannot run a real lifecycle here ===========
+      --- plan-smoke: web  (pkg: https://example.com/app.tar.gz, mode: soft) ---
+    [ok]    [web] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [web] list --json valid (installed-list parser ok)
+    [info]  [web] search --json valid
+      --- plan-smoke: appimage  (pkg: https://example.com/app.AppImage, mode: soft) ---
+    [ok]    [appimage] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [appimage] list --json valid (installed-list parser ok)
+    [info]  [appimage] search --json valid
+      --- plan-smoke: apt  (pkg: hello, mode: soft) ---
+    [ok]    [apt] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [apt] list --json valid (installed-list parser ok)
+    [info]  [apt] search --json valid
+
+=========== 14. COVERAGE AUDIT — nothing registered or featured is silently untested ===========
+    [ok]    every READY backend was exercised (real lifecycle or plan-smoke)
+    [info]  feature 'shell' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'undo' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'bisect' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'clone' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'fleet' is EXEMPT (interactive or needs a remote host)
+    [ok]    every non-exempt linix subcommand was exercised at least once
+
+=========== 15. READ-ONLY SMOKE (must run without crashing) ===========
+    [info]  `linix config show` exits 0
+    [info]  `linix config path` exits 0
+    [info]  `linix unmanaged` exits 0
+    [info]  `linix orphans` exits 0
+    [info]  `linix audit` exits 0
+    [info]  `linix sbom` exits 0
+    [info]  `linix why jq` exits 0
+    [info]  `linix snapshot list` exits 0
+    [info]  `linix generation list` exits 0
+    [info]  `linix profile list` exits 0
+    [info]  `linix policy` exits 0
+    [info]  config init exits 0
+
+=========== SUMMARY [apt image] ===========
+    HARD pass: 120    HARD fail: 1    soft/info: 56
+    RESULT: FAIL (1 hard check(s) failed)
+############### BUILD fedora (dnf) ###############
+[+] Building 305.9s (14/14) FINISHED                                                                     docker:default
+ => [internal] load build definition from Dockerfile.fedora                                                        0.1s
+ => => transferring dockerfile: 1.24kB                                                                             0.0s
+ => [internal] load metadata for docker.io/library/fedora:41                                                       0.4s
+ => [internal] load .dockerignore                                                                                  0.1s
+ => => transferring context: 596B                                                                                  0.1s
+ => [1/9] FROM docker.io/library/fedora:41@sha256:f1a3fab47bcb3c3ddf3135d5ee7ba8b7b25f2e809a47440936212a3a50957f3  0.1s
+ => => resolve docker.io/library/fedora:41@sha256:f1a3fab47bcb3c3ddf3135d5ee7ba8b7b25f2e809a47440936212a3a50957f3  0.0s
+ => [internal] load build context                                                                                  1.4s
+ => => transferring context: 6.57kB                                                                                1.4s
+ => CACHED [2/9] RUN dnf install -y curl gcc gcc-c++ make pkgconf-pkg-config openssl-devel perl git     nodejs np  0.0s
+ => CACHED [3/9] RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal     0.0s
+ => CACHED [4/9] RUN corepack enable || true                                                                       0.0s
+ => CACHED [5/9] RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true                                       0.0s
+ => CACHED [6/9] RUN curl -fsSL https://bun.sh/install | bash || true                                              0.0s
+ => CACHED [7/9] WORKDIR /src                                                                                      0.0s
+ => [8/9] COPY . /src                                                                                              0.1s
+ => [9/9] RUN cargo build --release                                                                              263.4s
+ => exporting to image                                                                                            40.3s
+ => => exporting layers                                                                                           32.6s
+ => => exporting manifest sha256:d3adadce4f9d65e6467896c53501755671c3335eb682dcde40458b99c908377a                  0.0s
+ => => exporting config sha256:232f56e89862dd0a1375f87df5ef68832fcf80ea3ac4585c31d14ac61d33cc7c                    0.0s
+ => => exporting attestation manifest sha256:97da4122123ebb92b606c43e6376f5d1b8744b64f711790202ef9d5e393778ce      0.1s
+ => => exporting manifest list sha256:5617cca5d43853066f6ef79df9e77567e1a7d90adcd2f61732eeade4f6a1795e             0.0s
+ => => naming to docker.io/library/linix-it-fedora:latest                                                          0.0s
+ => => unpacking to docker.io/library/linix-it-fedora:latest                                                       7.4s
+############### RUN fedora (dnf) ###############
+###################################################################
+# LiNix real-world sweep :: native-backend=dnf  pkg=jq  pkg2=htop
+# binary=/src/target/release/linix  timeout=90s  SMOKE_ONLY=0  FAST=0
+###################################################################
+
+=========== 1. DISCOVERY (doctor / search / info) ===========
+    [ok]    doctor exits 0
+    [ok]    doctor reports dnf READY
+      READY backends:
+        [READY] cargo
+        [READY] link
+        [READY] service
+        [READY] pip
+        [READY] github
+        [READY] bun
+        [READY] appimage
+        [READY] uv
+        [READY] dnf
+        [READY] npm
+        [READY] gem
+        [READY] web
+        [READY] pipx
+    [info]  update (dnf) exits 0
+    [ok]    search exits 0
+    [info]  no dnf-prefixed search hit for 'jq' (index/name variance)
+    [info]  info 'jq' returned rc=0 / no metadata (may be search-only backend)
+
+=========== 2. DRY-RUN SAFETY (must change nothing) ===========
+    [ok]    clean start: 'jq' absent
+    [ok]    dry-run install exits 0
+    [ok]    dry-run install emits JSON plan
+    [ok]    dry-run left system unchanged
+    [ok]    dry-run left the manifest unchanged
+
+=========== 3. IMPERATIVE INSTALL + LIST + INFO + config coherence ===========
+    [ok]    install 'dnf:jq' exits 0
+    [ok]    'jq' on PATH after install
+    [ok]    install recorded 'jq' in the manifest (config stays coherent)
+    [ok]    list shows 'jq' as installed (installed-list parser works)
+
+=========== 4. IDEMPOTENCY (install already-installed) ===========
+    [ok]    re-install of present package exits 0
+
+=========== 5. IMPERATIVE REMOVE + verify gone + config coherence ===========
+    [ok]    remove 'dnf:jq' exits 0
+    [ok]    'jq' gone from PATH after remove
+    [ok]    remove cleared 'jq' from the manifest
+    [ok]    list no longer shows 'jq'
+    [ok]    second remove (not installed) exits 0 (warn, not error)
+
+=========== 6. NEGATIVE PATH — failed mutation MUST surface (exit-status enforcement) ===========
+    [ok]    install of nonexistent 'linix-nonexistent-pkg-zzq9x' FAILS with exit=1 (failure not swallowed)
+    [ok]    bogus package not installed (as expected)
+
+=========== 7. DECLARATIVE DIAGNOSTIC (unscoped status — planning across ALL backends) ===========
+    [ok]    unscoped 'status' completed (rc=0) — planning across every backend does not hang
+
+=========== 8. DECLARATIVE ROUNDTRIP — write file -> sync -> installed ; edit file -> prune -> gone ===========
+    [ok]    init scaffolds manifest at /tmp/linix-it-manifests/local.txt
+      -> writing 'dnf:jq' into the manifest file, then calling sync
+    [ok]    status (scoped) exits 0
+    [ok]    status shows 'jq' as a pending change
+    [ok]    sync (scoped) exits 0
+    [ok]    sync INSTALLED 'jq' from the manifest file
+    [ok]    lock writes locks.json
+    [info]  generation list exits 0
+      -> removing 'jq' from the manifest file, then converging (prune)
+    [ok]    status flags 'jq' as drift after the manifest edit
+    [ok]    prune (scoped) exits 0
+    [ok]    prune REMOVED 'jq' after it left the manifest file
+
+=========== 9. JSON OUTPUT CONTRACT (stdout only; real JSON parse) ===========
+    [ok]    search --json is valid JSON
+    [ok]    list --json is valid JSON
+    [ok]    status --json is valid JSON
+
+=========== 10. PROFILES — activate/deactivate, MULTIPLE active, RELATIONAL (include / exclude / -pkg) ===========
+    [ok]    activate alpha exits 0
+    [ok]    profile 'alpha' installed 'jq'
+    [ok]    alpha left 'htop' absent
+    [ok]    'alpha' shows as active
+    [ok]    activate bravo exits 0 (two profiles now active)
+    [ok]    MULTIPLE active: 'jq' AND 'htop' both installed
+    [ok]    deactivate alpha exits 0
+    [ok]    deactivate alpha removed 'jq'
+    [ok]    'htop' survived (still provided by bravo — union semantics)
+    [ok]    clean slate: no profile packages installed
+    [ok]    activate lean (relational include+minus) exits 0
+    [ok]    relational 'lean' installed 'htop' (the 'plus')
+    [ok]    relational MINUS works: 'jq' excluded
+    [ok]    profile show lean resolves to {htop} (include + minus applied)
+    [ok]    deactivate lean cleaned up 'htop'
+    [ok]    profile list enumerates defined profiles
+
+=========== 11. REAL MULTI-BACKEND LIFECYCLE — every feasible backend (real install → list → remove) ===========
+      --- backend: npm  (pkg: cowsay, mode: real, timeout: 120s) ---
+    [ok]    [npm] install 'cowsay' exits 0
+    [ok]    [npm] list shows 'cowsay' (installed-list parser works)
+    [ok]    [npm] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [npm] 'cowsay' resolves on PATH
+    [ok]    [npm] remove 'cowsay' exits 0
+    [ok]    [npm] 'cowsay' gone from list after remove
+    [ok]    [npm] remove cleared 'cowsay' from manifest
+    [info]  [yarn] not READY in this image — skipped
+    [info]  [pnpm] not READY in this image — skipped
+      --- backend: bun  (pkg: cowsay, mode: real, timeout: 150s) ---
+    [ok]    [bun] install 'cowsay' exits 0
+    [ok]    [bun] list shows 'cowsay' (installed-list parser works)
+    [ok]    [bun] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [bun] 'cowsay' resolves on PATH
+    [ok]    [bun] remove 'cowsay' exits 0
+    [ok]    [bun] 'cowsay' gone from list after remove
+    [ok]    [bun] remove cleared 'cowsay' from manifest
+      --- backend: pipx  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [pipx] install 'cowsay' exits 0
+    [ok]    [pipx] list shows 'cowsay' (installed-list parser works)
+    [ok]    [pipx] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [pipx] 'cowsay' resolves on PATH
+    [ok]    [pipx] remove 'cowsay' exits 0
+    [ok]    [pipx] 'cowsay' gone from list after remove
+    [ok]    [pipx] remove cleared 'cowsay' from manifest
+      --- backend: uv  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [uv] install 'cowsay' exits 0
+    [ok]    [uv] list shows 'cowsay' (installed-list parser works)
+    [ok]    [uv] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [uv] 'cowsay' resolves on PATH
+    [ok]    [uv] remove 'cowsay' exits 0
+    [ok]    [uv] 'cowsay' gone from list after remove
+    [ok]    [uv] remove cleared 'cowsay' from manifest
+      --- backend: gem  (pkg: colorize, mode: real, timeout: 240s) ---
+    [ok]    [gem] install 'colorize' exits 0
+    [ok]    [gem] list shows 'colorize' (installed-list parser works)
+    [ok]    [gem] install recorded 'colorize' in manifest (coherent)
+    [ok]    [gem] remove 'colorize' exits 0
+    [ok]    [gem] 'colorize' gone from list after remove
+    [ok]    [gem] remove cleared 'colorize' from manifest
+      --- backend: pip  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [pip] install 'cowsay' exits 0
+    [ok]    [pip] list shows 'cowsay' (installed-list parser works)
+    [ok]    [pip] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [pip] 'cowsay' resolves on PATH
+    [ok]    [pip] remove 'cowsay' exits 0
+    [ok]    [pip] 'cowsay' gone from list after remove
+    [ok]    [pip] remove cleared 'cowsay' from manifest
+    [info]  [luarocks] not READY in this image — skipped
+    [info]  [pixi] not READY in this image — skipped
+    [info]  [composer] not READY in this image — skipped
+    [info]  [dotnet] not READY in this image — skipped
+    [info]  [pub] not READY in this image — skipped
+    [info]  [nix] not READY in this image — skipped
+    [info]  [krew] not READY in this image — skipped
+    [info]  [mix] not READY in this image — skipped
+    [info]  [conda] not READY in this image — skipped
+      --- backend: cargo  (pkg: ripgrep, mode: real, timeout: 2400s) ---
+    [ok]    [cargo] install 'ripgrep' exits 0
+    [ok]    [cargo] list shows 'ripgrep' (installed-list parser works)
+    [ok]    [cargo] install recorded 'ripgrep' in manifest (coherent)
+    [ok]    [cargo] 'rg' resolves on PATH
+    [ok]    [cargo] remove 'ripgrep' exits 0
+    [ok]    [cargo] 'ripgrep' gone from list after remove
+    [ok]    [cargo] remove cleared 'ripgrep' from manifest
+    [info]  [go] not READY in this image — skipped
+    [info]  [opam] not READY in this image — skipped
+    [info]  [nimble] not READY in this image — skipped
+    [info]  [spack] not READY in this image — skipped
+    [info]  [cabal] not READY in this image — skipped
+    [info]  [helm] not READY in this image — skipped
+    [info]  [flatpak] not READY in this image — skipped
+    [info]  [mise] not READY in this image — skipped
+      --- backend: github  (repo: BurntSushi/ripgrep) ---
+    [ok]    [github] install 'BurntSushi/ripgrep' exits 0 (real release asset downloaded + extracted)
+    [ok]    [github] list shows the installed repo (state parser works)
+    [info]  [github] 'rg' not on PATH (~/.local/bin not exported?)
+    [ok]    [github] remove exits 0
+    [ok]    [github] gone from list after remove
+      --- backend: link  (/tmp/linix-link-src -> /tmp/linix-link-dst) ---
+    [ok]    [link] install exits 0
+    [ok]    [link] created the link at /tmp/linix-link-dst
+    [ok]    [link] remove exits 0
+    [FAIL]  [link] /tmp/linix-link-dst still present after remove
+
+=========== 12. FEATURE COVERAGE — every linix subcommand exercised at least once ===========
+    [ok]    completions bash emits a script
+    [ok]    completions zsh emits a script
+    [ok]    completions fish emits a script
+    [ok]    completions powershell emits a script
+    [ok]    completions elvish emits a script
+    [ok]    completions nushell emits a script
+    [ok]    heal exits 0 on a clean system (no interrupted transaction)
+    [ok]    clean exits 0
+    [ok]    unmanaged exits 0
+    [ok]    orphans exits 0
+    [ok]    audit exits 0
+    [ok]    sbom emits a CycloneDX JSON document
+    [ok]    why 'jq' exits 0
+    [ok]    policy exits 0
+    [ok]    upgrade (scoped) exits 0
+    [info]  canary upgrade rc=1 (tolerated)
+    [ok]    repo list (dnf) exits 0
+    [info]  repo add rc=1 (needs a real source — tolerated)
+    [ok]    migrate (scoped) exits 0
+    [ok]    teleport (dry-run plan) exits 0
+    [ok]    module list exits 0
+    [info]  module create+show round-trips
+    [ok]    snapshot list exits 0
+    [info]  snapshot prune exits 0
+    [info]  generation pin 1783713505 ok
+    [info]  generation unpin 1783713505 ok
+    [ok]    rollback (dry-run) to 1783713505 exits 0
+    [ok]    lease set exits 0
+    [ok]    lease list shows the leased package
+    [info]  schedule add rc=1 (no systemd/cron in this container — tolerated)
+    [ok]    run executes a command in an ephemeral env
+    [ok]    shim generates a launcher
+
+=========== 13. PLAN-SMOKE — only the backends that cannot run a real lifecycle here ===========
+      --- plan-smoke: service  (pkg: cron, mode: soft) ---
+    [ok]    [service] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [service] list --json valid (installed-list parser ok)
+    [info]  [service] search --json valid
+      --- plan-smoke: appimage  (pkg: https://example.com/app.AppImage, mode: soft) ---
+    [ok]    [appimage] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [appimage] list --json valid (installed-list parser ok)
+    [info]  [appimage] search --json valid
+      --- plan-smoke: dnf  (pkg: hello, mode: soft) ---
+    [ok]    [dnf] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [dnf] list --json valid (installed-list parser ok)
+    [info]  [dnf] search --json valid
+      --- plan-smoke: web  (pkg: https://example.com/app.tar.gz, mode: soft) ---
+    [ok]    [web] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [web] list --json valid (installed-list parser ok)
+    [info]  [web] search --json valid
+
+=========== 14. COVERAGE AUDIT — nothing registered or featured is silently untested ===========
+    [ok]    every READY backend was exercised (real lifecycle or plan-smoke)
+    [info]  feature 'shell' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'undo' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'bisect' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'clone' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'fleet' is EXEMPT (interactive or needs a remote host)
+    [ok]    every non-exempt linix subcommand was exercised at least once
+
+=========== 15. READ-ONLY SMOKE (must run without crashing) ===========
+    [info]  `linix config show` exits 0
+    [info]  `linix config path` exits 0
+    [info]  `linix unmanaged` exits 0
+    [info]  `linix orphans` exits 0
+    [info]  `linix audit` exits 0
+    [info]  `linix sbom` exits 0
+    [info]  `linix why jq` exits 0
+    [info]  `linix snapshot list` exits 0
+    [info]  `linix generation list` exits 0
+    [info]  `linix profile list` exits 0
+    [info]  `linix policy` exits 0
+    [info]  config init exits 0
+
+=========== SUMMARY [dnf image] ===========
+    HARD pass: 135    HARD fail: 1    soft/info: 56
+    RESULT: FAIL (1 hard check(s) failed)
+############### BUILD arch (pacman) ###############
+[+] Building 313.7s (13/13) FINISHED                                                                     docker:default
+ => [internal] load build definition from Dockerfile.arch                                                          0.1s
+ => => transferring dockerfile: 1.19kB                                                                             0.0s
+ => [internal] load metadata for docker.io/library/archlinux:latest                                                0.3s
+ => [internal] load .dockerignore                                                                                  0.1s
+ => => transferring context: 596B                                                                                  0.1s
+ => [1/8] FROM docker.io/library/archlinux:latest@sha256:681569955d1d17313ef7134acc8b5cd8adcda2fc24709bed472d95e1  0.0s
+ => => resolve docker.io/library/archlinux:latest@sha256:681569955d1d17313ef7134acc8b5cd8adcda2fc24709bed472d95e1  0.0s
+ => [internal] load build context                                                                                  1.7s
+ => => transferring context: 6.57kB                                                                                1.6s
+ => CACHED [2/8] RUN pacman -Syu --noconfirm     && pacman -S --noconfirm --needed curl gcc make pkgconf openssl   0.0s
+ => CACHED [3/8] RUN corepack enable || true                                                                       0.0s
+ => CACHED [4/8] RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true                                       0.0s
+ => CACHED [5/8] RUN curl -fsSL https://bun.sh/install | bash || true                                              0.0s
+ => CACHED [6/8] WORKDIR /src                                                                                      0.0s
+ => [7/8] COPY . /src                                                                                              0.1s
+ => [8/8] RUN cargo build --release                                                                              275.3s
+ => exporting to image                                                                                            35.8s
+ => => exporting layers                                                                                           28.5s
+ => => exporting manifest sha256:4b265fc260534fd09c8fd83a4338c86496301d9c10cf3736ad97f57d97dfdfea                  0.0s
+ => => exporting config sha256:098f8cc1332ee646dc146d92fd405261c19915e874f7e5f5bf1f37fe3ef7ac46                    0.0s
+ => => exporting attestation manifest sha256:180ef5417258fc12acb36df535279703eec1245c46e9ad54f10deecc969c5c2e      0.1s
+ => => exporting manifest list sha256:129aab9e20a0876ff0154a37e64a796bef629008aaf5dc3087cdbcb2a3bb722b             0.0s
+ => => naming to docker.io/library/linix-it-arch:latest                                                            0.0s
+ => => unpacking to docker.io/library/linix-it-arch:latest                                                         7.1s
+############### RUN arch (pacman) ###############
+###################################################################
+# LiNix real-world sweep :: native-backend=pacman  pkg=jq  pkg2=htop
+# binary=/src/target/release/linix  timeout=90s  SMOKE_ONLY=0  FAST=0
+###################################################################
+
+=========== 1. DISCOVERY (doctor / search / info) ===========
+    [ok]    doctor exits 0
+    [ok]    doctor reports pacman READY
+      READY backends:
+        [READY] link
+        [READY] github
+        [READY] pacman
+        [READY] web
+        [READY] uv
+        [READY] appimage
+        [READY] npm
+        [READY] service
+        [READY] gem
+        [READY] pipx
+        [READY] cargo
+    [info]  update (pacman) exits 0
+    [ok]    search exits 0
+    [ok]    search returns a pacman hit for 'jq'
+    [info]  info 'jq' returned rc=0 / no metadata (may be search-only backend)
+
+=========== 2. DRY-RUN SAFETY (must change nothing) ===========
+    [ok]    clean start: 'jq' absent
+    [ok]    dry-run install exits 0
+    [ok]    dry-run install emits JSON plan
+    [ok]    dry-run left system unchanged
+    [ok]    dry-run left the manifest unchanged
+
+=========== 3. IMPERATIVE INSTALL + LIST + INFO + config coherence ===========
+    [ok]    install 'pacman:jq' exits 0
+    [ok]    'jq' on PATH after install
+    [ok]    install recorded 'jq' in the manifest (config stays coherent)
+    [ok]    list shows 'jq' as installed (installed-list parser works)
+
+=========== 4. IDEMPOTENCY (install already-installed) ===========
+    [ok]    re-install of present package exits 0
+
+=========== 5. IMPERATIVE REMOVE + verify gone + config coherence ===========
+    [ok]    remove 'pacman:jq' exits 0
+    [ok]    'jq' gone from PATH after remove
+    [ok]    remove cleared 'jq' from the manifest
+    [ok]    list no longer shows 'jq'
+    [ok]    second remove (not installed) exits 0 (warn, not error)
+
+=========== 6. NEGATIVE PATH — failed mutation MUST surface (exit-status enforcement) ===========
+    [ok]    install of nonexistent 'linix-nonexistent-pkg-zzq9x' FAILS with exit=1 (failure not swallowed)
+    [ok]    bogus package not installed (as expected)
+
+=========== 7. DECLARATIVE DIAGNOSTIC (unscoped status — planning across ALL backends) ===========
+    [ok]    unscoped 'status' completed (rc=0) — planning across every backend does not hang
+
+=========== 8. DECLARATIVE ROUNDTRIP — write file -> sync -> installed ; edit file -> prune -> gone ===========
+    [ok]    init scaffolds manifest at /tmp/linix-it-manifests/local.txt
+      -> writing 'pacman:jq' into the manifest file, then calling sync
+    [ok]    status (scoped) exits 0
+    [ok]    status shows 'jq' as a pending change
+    [ok]    sync (scoped) exits 0
+    [ok]    sync INSTALLED 'jq' from the manifest file
+    [ok]    lock writes locks.json
+    [info]  generation list exits 0
+      -> removing 'jq' from the manifest file, then converging (prune)
+    [ok]    status flags 'jq' as drift after the manifest edit
+    [ok]    prune (scoped) exits 0
+    [ok]    prune REMOVED 'jq' after it left the manifest file
+
+=========== 9. JSON OUTPUT CONTRACT (stdout only; real JSON parse) ===========
+    [ok]    search --json is valid JSON
+    [ok]    list --json is valid JSON
+    [ok]    status --json is valid JSON
+
+=========== 10. PROFILES — activate/deactivate, MULTIPLE active, RELATIONAL (include / exclude / -pkg) ===========
+    [ok]    activate alpha exits 0
+    [ok]    profile 'alpha' installed 'jq'
+    [ok]    alpha left 'htop' absent
+    [ok]    'alpha' shows as active
+    [ok]    activate bravo exits 0 (two profiles now active)
+    [ok]    MULTIPLE active: 'jq' AND 'htop' both installed
+    [ok]    deactivate alpha exits 0
+    [ok]    deactivate alpha removed 'jq'
+    [ok]    'htop' survived (still provided by bravo — union semantics)
+    [ok]    clean slate: no profile packages installed
+    [ok]    activate lean (relational include+minus) exits 0
+    [ok]    relational 'lean' installed 'htop' (the 'plus')
+    [ok]    relational MINUS works: 'jq' excluded
+    [ok]    profile show lean resolves to {htop} (include + minus applied)
+    [ok]    deactivate lean cleaned up 'htop'
+    [ok]    profile list enumerates defined profiles
+
+=========== 11. REAL MULTI-BACKEND LIFECYCLE — every feasible backend (real install → list → remove) ===========
+      --- backend: npm  (pkg: cowsay, mode: real, timeout: 120s) ---
+    [ok]    [npm] install 'cowsay' exits 0
+    [ok]    [npm] list shows 'cowsay' (installed-list parser works)
+    [ok]    [npm] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [npm] 'cowsay' resolves on PATH
+    [ok]    [npm] remove 'cowsay' exits 0
+    [ok]    [npm] 'cowsay' gone from list after remove
+    [ok]    [npm] remove cleared 'cowsay' from manifest
+    [info]  [yarn] not READY in this image — skipped
+    [info]  [pnpm] not READY in this image — skipped
+    [info]  [bun] not READY in this image — skipped
+      --- backend: pipx  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [pipx] install 'cowsay' exits 0
+    [ok]    [pipx] list shows 'cowsay' (installed-list parser works)
+    [ok]    [pipx] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [pipx] 'cowsay' resolves on PATH
+    [ok]    [pipx] remove 'cowsay' exits 0
+    [ok]    [pipx] 'cowsay' gone from list after remove
+    [ok]    [pipx] remove cleared 'cowsay' from manifest
+      --- backend: uv  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [uv] install 'cowsay' exits 0
+    [ok]    [uv] list shows 'cowsay' (installed-list parser works)
+    [ok]    [uv] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [uv] 'cowsay' resolves on PATH
+    [ok]    [uv] remove 'cowsay' exits 0
+    [ok]    [uv] 'cowsay' gone from list after remove
+    [ok]    [uv] remove cleared 'cowsay' from manifest
+      --- backend: gem  (pkg: colorize, mode: real, timeout: 240s) ---
+    [ok]    [gem] install 'colorize' exits 0
+    [ok]    [gem] list shows 'colorize' (installed-list parser works)
+    [ok]    [gem] install recorded 'colorize' in manifest (coherent)
+    [ok]    [gem] remove 'colorize' exits 0
+    [ok]    [gem] 'colorize' gone from list after remove
+    [ok]    [gem] remove cleared 'colorize' from manifest
+    [info]  [pip] not READY in this image — skipped
+    [info]  [luarocks] not READY in this image — skipped
+    [info]  [pixi] not READY in this image — skipped
+    [info]  [composer] not READY in this image — skipped
+    [info]  [dotnet] not READY in this image — skipped
+    [info]  [pub] not READY in this image — skipped
+    [info]  [nix] not READY in this image — skipped
+    [info]  [krew] not READY in this image — skipped
+    [info]  [mix] not READY in this image — skipped
+    [info]  [conda] not READY in this image — skipped
+      --- backend: cargo  (pkg: ripgrep, mode: real, timeout: 2400s) ---
+    [ok]    [cargo] install 'ripgrep' exits 0
+    [ok]    [cargo] list shows 'ripgrep' (installed-list parser works)
+    [ok]    [cargo] install recorded 'ripgrep' in manifest (coherent)
+    [ok]    [cargo] 'rg' resolves on PATH
+    [ok]    [cargo] remove 'ripgrep' exits 0
+    [ok]    [cargo] 'ripgrep' gone from list after remove
+    [ok]    [cargo] remove cleared 'ripgrep' from manifest
+    [info]  [go] not READY in this image — skipped
+    [info]  [opam] not READY in this image — skipped
+    [info]  [nimble] not READY in this image — skipped
+    [info]  [spack] not READY in this image — skipped
+    [info]  [cabal] not READY in this image — skipped
+    [info]  [helm] not READY in this image — skipped
+    [info]  [flatpak] not READY in this image — skipped
+    [info]  [mise] not READY in this image — skipped
+      --- backend: github  (repo: BurntSushi/ripgrep) ---
+    [ok]    [github] install 'BurntSushi/ripgrep' exits 0 (real release asset downloaded + extracted)
+    [ok]    [github] list shows the installed repo (state parser works)
+    [info]  [github] 'rg' not on PATH (~/.local/bin not exported?)
+    [ok]    [github] remove exits 0
+    [ok]    [github] gone from list after remove
+      --- backend: link  (/tmp/linix-link-src -> /tmp/linix-link-dst) ---
+    [ok]    [link] install exits 0
+    [ok]    [link] created the link at /tmp/linix-link-dst
+    [ok]    [link] remove exits 0
+    [FAIL]  [link] /tmp/linix-link-dst still present after remove
+
+=========== 12. FEATURE COVERAGE — every linix subcommand exercised at least once ===========
+    [ok]    completions bash emits a script
+    [ok]    completions zsh emits a script
+    [ok]    completions fish emits a script
+    [ok]    completions powershell emits a script
+    [ok]    completions elvish emits a script
+    [ok]    completions nushell emits a script
+    [ok]    heal exits 0 on a clean system (no interrupted transaction)
+    [ok]    clean exits 0
+    [ok]    unmanaged exits 0
+    [ok]    orphans exits 0
+    [ok]    audit exits 0
+    [ok]    sbom emits a CycloneDX JSON document
+    [ok]    why 'jq' exits 0
+    [ok]    policy exits 0
+    [ok]    upgrade (scoped) exits 0
+    [info]  canary upgrade rc=1 (tolerated)
+    [ok]    repo list (pacman) exits 0
+    [info]  repo add exits 0
+    [ok]    migrate (scoped) exits 0
+    [ok]    teleport (dry-run plan) exits 0
+    [ok]    module list exits 0
+    [info]  module create+show round-trips
+    [ok]    snapshot list exits 0
+    [info]  snapshot prune exits 0
+    [info]  generation pin 1783713950 ok
+    [info]  generation unpin 1783713950 ok
+    [ok]    rollback (dry-run) to 1783713950 exits 0
+    [ok]    lease set exits 0
+    [ok]    lease list shows the leased package
+    [info]  schedule add rc=1 (no systemd/cron in this container — tolerated)
+    [ok]    run executes a command in an ephemeral env
+    [ok]    shim generates a launcher
+
+=========== 13. PLAN-SMOKE — only the backends that cannot run a real lifecycle here ===========
+      --- plan-smoke: pacman  (pkg: hello, mode: soft) ---
+    [ok]    [pacman] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [pacman] list --json valid (installed-list parser ok)
+    [info]  [pacman] search --json valid
+      --- plan-smoke: web  (pkg: https://example.com/app.tar.gz, mode: soft) ---
+    [ok]    [web] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [web] list --json valid (installed-list parser ok)
+    [info]  [web] search --json valid
+      --- plan-smoke: appimage  (pkg: https://example.com/app.AppImage, mode: soft) ---
+    [ok]    [appimage] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [appimage] list --json valid (installed-list parser ok)
+    [info]  [appimage] search --json valid
+      --- plan-smoke: service  (pkg: cron, mode: soft) ---
+    [ok]    [service] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [service] list --json valid (installed-list parser ok)
+    [info]  [service] search --json valid
+
+=========== 14. COVERAGE AUDIT — nothing registered or featured is silently untested ===========
+    [ok]    every READY backend was exercised (real lifecycle or plan-smoke)
+    [info]  feature 'shell' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'undo' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'bisect' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'clone' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'fleet' is EXEMPT (interactive or needs a remote host)
+    [ok]    every non-exempt linix subcommand was exercised at least once
+
+=========== 15. READ-ONLY SMOKE (must run without crashing) ===========
+    [info]  `linix config show` exits 0
+    [info]  `linix config path` exits 0
+    [info]  `linix unmanaged` exits 0
+    [info]  `linix orphans` exits 0
+    [info]  `linix audit` exits 0
+    [info]  `linix sbom` exits 0
+    [info]  `linix why jq` exits 0
+    [info]  `linix snapshot list` exits 0
+    [info]  `linix generation list` exits 0
+    [info]  `linix profile list` exits 0
+    [info]  `linix policy` exits 0
+    [info]  config init exits 0
+
+=========== SUMMARY [pacman image] ===========
+    HARD pass: 122    HARD fail: 1    soft/info: 57
+    RESULT: FAIL (1 hard check(s) failed)
+############### BUILD alpine (apk) ###############
+[+] Building 473.5s (12/12) FINISHED                                                                     docker:default
+ => [internal] load build definition from Dockerfile.alpine                                                        0.1s
+ => => transferring dockerfile: 1.40kB                                                                             0.0s
+ => [internal] load metadata for docker.io/library/alpine:latest                                                   0.0s
+ => [internal] load .dockerignore                                                                                  0.1s
+ => => transferring context: 596B                                                                                  0.1s
+ => [1/7] FROM docker.io/library/alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec4349  0.0s
+ => => resolve docker.io/library/alpine:latest@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec4349  0.0s
+ => [internal] load build context                                                                                  1.4s
+ => => transferring context: 6.57kB                                                                                1.4s
+ => CACHED [2/7] RUN apk add --no-cache curl build-base pkgconf openssl-dev perl git rustup bash     nodejs npm p  0.0s
+ => CACHED [3/7] RUN corepack enable || true                                                                       0.0s
+ => CACHED [4/7] RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true                                       0.0s
+ => CACHED [5/7] WORKDIR /src                                                                                      0.0s
+ => [6/7] COPY . /src                                                                                              0.1s
+ => [7/7] RUN cargo build --release                                                                              434.5s
+ => exporting to image                                                                                            37.0s
+ => => exporting layers                                                                                           29.8s
+ => => exporting manifest sha256:8f32a3525df86d33cf4b8ff6f889f46743f3728b052de29a5deaeab072f84527                  0.0s
+ => => exporting config sha256:94ed05e7b83349267cb46dcb83f52eb49751957578a07bd989bb3095e448ce30                    0.0s
+ => => exporting attestation manifest sha256:f6461df2af5e2e01a409d9c19d94137a3cae29cf32e1feb915a0e036db04f7e0      0.1s
+ => => exporting manifest list sha256:e8851ee43ec3e8a7e7bbfb003ddf16ba23981cc8a8870452a2434ef59bb60088             0.0s
+ => => naming to docker.io/library/linix-it-alpine:latest                                                          0.0s
+ => => unpacking to docker.io/library/linix-it-alpine:latest                                                       6.9s
+############### RUN alpine (apk) ###############
+###################################################################
+# LiNix real-world sweep :: native-backend=apk  pkg=jq  pkg2=htop
+# binary=/src/target/release/linix  timeout=90s  SMOKE_ONLY=0  FAST=0
+###################################################################
+
+=========== 1. DISCOVERY (doctor / search / info) ===========
+    [ok]    doctor exits 0
+    [ok]    doctor reports apk READY
+      READY backends:
+        [READY] apk
+        [READY] cargo
+        [READY] npm
+        [READY] web
+        [READY] uv
+        [READY] pipx
+        [READY] gem
+        [READY] github
+        [READY] appimage
+        [READY] link
+    [info]  update (apk) exits 0
+    [ok]    search exits 0
+    [ok]    search returns a apk hit for 'jq'
+    [info]  info 'jq' returned rc=0 / no metadata (may be search-only backend)
+
+=========== 2. DRY-RUN SAFETY (must change nothing) ===========
+    [ok]    clean start: 'jq' absent
+    [ok]    dry-run install exits 0
+    [ok]    dry-run install emits JSON plan
+    [ok]    dry-run left system unchanged
+    [ok]    dry-run left the manifest unchanged
+
+=========== 3. IMPERATIVE INSTALL + LIST + INFO + config coherence ===========
+    [ok]    install 'apk:jq' exits 0
+    [ok]    'jq' on PATH after install
+    [ok]    install recorded 'jq' in the manifest (config stays coherent)
+    [ok]    list shows 'jq' as installed (installed-list parser works)
+
+=========== 4. IDEMPOTENCY (install already-installed) ===========
+    [ok]    re-install of present package exits 0
+
+=========== 5. IMPERATIVE REMOVE + verify gone + config coherence ===========
+    [ok]    remove 'apk:jq' exits 0
+    [ok]    'jq' gone from PATH after remove
+    [ok]    remove cleared 'jq' from the manifest
+    [ok]    list no longer shows 'jq'
+    [ok]    second remove (not installed) exits 0 (warn, not error)
+
+=========== 6. NEGATIVE PATH — failed mutation MUST surface (exit-status enforcement) ===========
+    [ok]    install of nonexistent 'linix-nonexistent-pkg-zzq9x' FAILS with exit=1 (failure not swallowed)
+    [ok]    bogus package not installed (as expected)
+
+=========== 7. DECLARATIVE DIAGNOSTIC (unscoped status — planning across ALL backends) ===========
+    [ok]    unscoped 'status' completed (rc=0) — planning across every backend does not hang
+
+=========== 8. DECLARATIVE ROUNDTRIP — write file -> sync -> installed ; edit file -> prune -> gone ===========
+    [ok]    init scaffolds manifest at /tmp/linix-it-manifests/local.txt
+      -> writing 'apk:jq' into the manifest file, then calling sync
+    [ok]    status (scoped) exits 0
+    [ok]    status shows 'jq' as a pending change
+    [ok]    sync (scoped) exits 0
+    [ok]    sync INSTALLED 'jq' from the manifest file
+    [ok]    lock writes locks.json
+    [info]  generation list exits 0
+      -> removing 'jq' from the manifest file, then converging (prune)
+    [ok]    status flags 'jq' as drift after the manifest edit
+    [ok]    prune (scoped) exits 0
+    [ok]    prune REMOVED 'jq' after it left the manifest file
+
+=========== 9. JSON OUTPUT CONTRACT (stdout only; real JSON parse) ===========
+    [ok]    search --json is valid JSON
+    [ok]    list --json is valid JSON
+    [ok]    status --json is valid JSON
+
+=========== 10. PROFILES — activate/deactivate, MULTIPLE active, RELATIONAL (include / exclude / -pkg) ===========
+    [ok]    activate alpha exits 0
+    [ok]    profile 'alpha' installed 'jq'
+    [ok]    alpha left 'htop' absent
+    [ok]    'alpha' shows as active
+    [ok]    activate bravo exits 0 (two profiles now active)
+    [ok]    MULTIPLE active: 'jq' AND 'htop' both installed
+    [ok]    deactivate alpha exits 0
+    [ok]    deactivate alpha removed 'jq'
+    [ok]    'htop' survived (still provided by bravo — union semantics)
+    [ok]    clean slate: no profile packages installed
+    [ok]    activate lean (relational include+minus) exits 0
+    [ok]    relational 'lean' installed 'htop' (the 'plus')
+    [ok]    relational MINUS works: 'jq' excluded
+    [ok]    profile show lean resolves to {htop} (include + minus applied)
+    [ok]    deactivate lean cleaned up 'htop'
+    [ok]    profile list enumerates defined profiles
+
+=========== 11. REAL MULTI-BACKEND LIFECYCLE — every feasible backend (real install → list → remove) ===========
+      --- backend: npm  (pkg: cowsay, mode: real, timeout: 120s) ---
+    [ok]    [npm] install 'cowsay' exits 0
+    [ok]    [npm] list shows 'cowsay' (installed-list parser works)
+    [ok]    [npm] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [npm] 'cowsay' resolves on PATH
+    [ok]    [npm] remove 'cowsay' exits 0
+    [ok]    [npm] 'cowsay' gone from list after remove
+    [ok]    [npm] remove cleared 'cowsay' from manifest
+    [info]  [yarn] not READY in this image — skipped
+    [info]  [pnpm] not READY in this image — skipped
+    [info]  [bun] not READY in this image — skipped
+      --- backend: pipx  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [pipx] install 'cowsay' exits 0
+    [ok]    [pipx] list shows 'cowsay' (installed-list parser works)
+    [ok]    [pipx] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [pipx] 'cowsay' resolves on PATH
+    [ok]    [pipx] remove 'cowsay' exits 0
+    [ok]    [pipx] 'cowsay' gone from list after remove
+    [ok]    [pipx] remove cleared 'cowsay' from manifest
+      --- backend: uv  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [uv] install 'cowsay' exits 0
+    [ok]    [uv] list shows 'cowsay' (installed-list parser works)
+    [ok]    [uv] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [uv] 'cowsay' resolves on PATH
+    [ok]    [uv] remove 'cowsay' exits 0
+    [ok]    [uv] 'cowsay' gone from list after remove
+    [ok]    [uv] remove cleared 'cowsay' from manifest
+      --- backend: gem  (pkg: colorize, mode: real, timeout: 240s) ---
+    [ok]    [gem] install 'colorize' exits 0
+    [ok]    [gem] list shows 'colorize' (installed-list parser works)
+    [ok]    [gem] install recorded 'colorize' in manifest (coherent)
+    [ok]    [gem] remove 'colorize' exits 0
+    [ok]    [gem] 'colorize' gone from list after remove
+    [ok]    [gem] remove cleared 'colorize' from manifest
+    [info]  [pip] not READY in this image — skipped
+    [info]  [luarocks] not READY in this image — skipped
+    [info]  [pixi] not READY in this image — skipped
+    [info]  [composer] not READY in this image — skipped
+    [info]  [dotnet] not READY in this image — skipped
+    [info]  [pub] not READY in this image — skipped
+    [info]  [nix] not READY in this image — skipped
+    [info]  [krew] not READY in this image — skipped
+    [info]  [mix] not READY in this image — skipped
+    [info]  [conda] not READY in this image — skipped
+      --- backend: cargo  (pkg: ripgrep, mode: real, timeout: 2400s) ---
+    [ok]    [cargo] install 'ripgrep' exits 0
+    [ok]    [cargo] list shows 'ripgrep' (installed-list parser works)
+    [ok]    [cargo] install recorded 'ripgrep' in manifest (coherent)
+    [ok]    [cargo] 'rg' resolves on PATH
+    [ok]    [cargo] remove 'ripgrep' exits 0
+    [ok]    [cargo] 'ripgrep' gone from list after remove
+    [ok]    [cargo] remove cleared 'ripgrep' from manifest
+    [info]  [go] not READY in this image — skipped
+    [info]  [opam] not READY in this image — skipped
+    [info]  [nimble] not READY in this image — skipped
+    [info]  [spack] not READY in this image — skipped
+    [info]  [cabal] not READY in this image — skipped
+    [info]  [helm] not READY in this image — skipped
+    [info]  [flatpak] not READY in this image — skipped
+    [info]  [mise] not READY in this image — skipped
+      --- backend: github  (repo: BurntSushi/ripgrep) ---
+    [ok]    [github] install 'BurntSushi/ripgrep' exits 0 (real release asset downloaded + extracted)
+    [ok]    [github] list shows the installed repo (state parser works)
+    [info]  [github] 'rg' not on PATH (~/.local/bin not exported?)
+    [ok]    [github] remove exits 0
+    [ok]    [github] gone from list after remove
+      --- backend: link  (/tmp/linix-link-src -> /tmp/linix-link-dst) ---
+    [ok]    [link] install exits 0
+    [ok]    [link] created the link at /tmp/linix-link-dst
+    [ok]    [link] remove exits 0
+    [FAIL]  [link] /tmp/linix-link-dst still present after remove
+
+=========== 12. FEATURE COVERAGE — every linix subcommand exercised at least once ===========
+    [ok]    completions bash emits a script
+    [ok]    completions zsh emits a script
+    [ok]    completions fish emits a script
+    [ok]    completions powershell emits a script
+    [ok]    completions elvish emits a script
+    [ok]    completions nushell emits a script
+    [ok]    heal exits 0 on a clean system (no interrupted transaction)
+    [ok]    clean exits 0
+    [ok]    unmanaged exits 0
+    [ok]    orphans exits 0
+    [ok]    audit exits 0
+    [ok]    sbom emits a CycloneDX JSON document
+    [ok]    why 'jq' exits 0
+    [ok]    policy exits 0
+    [ok]    upgrade (scoped) exits 0
+    [info]  canary upgrade rc=1 (tolerated)
+    [ok]    repo list (apk) exits 0
+    [info]  repo add rc=1 (needs a real source — tolerated)
+    [ok]    migrate (scoped) exits 0
+    [ok]    teleport (dry-run plan) exits 0
+    [ok]    module list exits 0
+    [info]  module create+show round-trips
+    [ok]    snapshot list exits 0
+    [info]  snapshot prune exits 0
+    [info]  generation pin 1783714568 ok
+    [info]  generation unpin 1783714568 ok
+    [ok]    rollback (dry-run) to 1783714568 exits 0
+    [ok]    lease set exits 0
+    [ok]    lease list shows the leased package
+    [info]  schedule add rc=1 (no systemd/cron in this container — tolerated)
+    [ok]    run executes a command in an ephemeral env
+    [ok]    shim generates a launcher
+
+=========== 13. PLAN-SMOKE — only the backends that cannot run a real lifecycle here ===========
+      --- plan-smoke: apk  (pkg: hello, mode: soft) ---
+    [ok]    [apk] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [apk] list --json valid (installed-list parser ok)
+    [info]  [apk] search --json valid
+      --- plan-smoke: web  (pkg: https://example.com/app.tar.gz, mode: soft) ---
+    [ok]    [web] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [web] list --json valid (installed-list parser ok)
+    [info]  [web] search --json valid
+      --- plan-smoke: appimage  (pkg: https://example.com/app.AppImage, mode: soft) ---
+    [ok]    [appimage] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [appimage] list --json valid (installed-list parser ok)
+    [info]  [appimage] search --json valid
+
+=========== 14. COVERAGE AUDIT — nothing registered or featured is silently untested ===========
+    [ok]    every READY backend was exercised (real lifecycle or plan-smoke)
+    [info]  feature 'shell' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'undo' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'bisect' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'clone' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'fleet' is EXEMPT (interactive or needs a remote host)
+    [ok]    every non-exempt linix subcommand was exercised at least once
+
+=========== 15. READ-ONLY SMOKE (must run without crashing) ===========
+    [info]  `linix config show` exits 0
+    [info]  `linix config path` exits 0
+    [info]  `linix unmanaged` exits 0
+    [info]  `linix orphans` exits 0
+    [info]  `linix audit` exits 0
+    [info]  `linix sbom` exits 0
+    [info]  `linix why jq` exits 0
+    [info]  `linix snapshot list` exits 0
+    [info]  `linix generation list` exits 0
+    [info]  `linix profile list` exits 0
+    [info]  `linix policy` exits 0
+    [info]  config init exits 0
+
+=========== SUMMARY [apk image] ===========
+    HARD pass: 121    HARD fail: 1    soft/info: 55
+    RESULT: FAIL (1 hard check(s) failed)
+############### BUILD tools (apt) ###############
+[+] Building 319.2s (30/30) FINISHED                                                                     docker:default
+ => [internal] load build definition from Dockerfile.tools                                                         0.1s
+ => => transferring dockerfile: 7.46kB                                                                             0.0s
+ => [internal] load metadata for docker.io/library/ubuntu:24.04                                                    0.3s
+ => [internal] load .dockerignore                                                                                  0.1s
+ => => transferring context: 596B                                                                                  0.1s
+ => [ 1/25] FROM docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc7  0.0s
+ => => resolve docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc709  0.0s
+ => [internal] load build context                                                                                  1.2s
+ => => transferring context: 6.57kB                                                                                1.2s
+ => CACHED [ 2/25] RUN apt-get update && apt-get install -y --no-install-recommends         curl ca-certificates   0.0s
+ => CACHED [ 3/25] RUN for p in php-cli composer golang-go opam lua5.4 luarocks nim              ghc cabal-instal  0.0s
+ => CACHED [ 4/25] RUN curl -fsSL https://mise.run | sh || true                                                    0.0s
+ => CACHED [ 5/25] RUN curl -fsSL -o /tmp/mf.sh "https://github.com/conda-forge/miniforge/releases/latest/downloa  0.0s
+ => CACHED [ 6/25] RUN mkdir -p /etc/nix && printf 'experimental-features = nix-command flakes\n' > /etc/nix/nix.  0.0s
+ => CACHED [ 7/25] RUN sh -c 'curl -L https://nixos.org/nix/install | sh -s -- --no-daemon'     && for b in nix n  0.0s
+ => CACHED [ 8/25] RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal   0.0s
+ => CACHED [ 9/25] RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true                                     0.0s
+ => CACHED [10/25] RUN curl -fsSL https://bun.sh/install | bash || true                                            0.0s
+ => CACHED [11/25] RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash || t  0.0s
+ => CACHED [12/25] RUN curl -fsSLo /usr/local/bin/kubectl         "https://dl.k8s.io/release/$(curl -fsSL https:/  0.0s
+ => CACHED [13/25] RUN set -e; cd /tmp     && curl -fsSLO "https://github.com/kubernetes-sigs/krew/releases/lates  0.0s
+ => CACHED [14/25] RUN git clone --branch v0.14.1 --depth 1 https://github.com/asdf-vm/asdf.git /opt/asdf || true  0.0s
+ => CACHED [15/25] RUN curl -fsSL https://dl-ssl.google.com/linux/linux_signing_key.pub         | gpg --dearmor -  0.0s
+ => CACHED [16/25] RUN curl -fsSL https://pixi.sh/install.sh | bash || true                                        0.0s
+ => CACHED [17/25] RUN git clone --depth 1 https://github.com/spack/spack.git /opt/spack || true                   0.0s
+ => CACHED [18/25] RUN opam init --disable-sandboxing --bare -y 2>/dev/null && opam switch create default 2>/dev/  0.0s
+ => CACHED [19/25] RUN (cabal update || true) 2>/dev/null; echo done                                               0.0s
+ => CACHED [20/25] RUN (nimble -y refresh || true) 2>/dev/null; echo done                                          0.0s
+ => CACHED [21/25] RUN (/opt/spack/bin/spack compiler find || true) 2>/dev/null; echo done                         0.0s
+ => CACHED [22/25] RUN (flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo |  0.0s
+ => CACHED [23/25] WORKDIR /src                                                                                    0.0s
+ => [24/25] COPY . /src                                                                                            0.1s
+ => [25/25] RUN cargo build --release                                                                            277.7s
+ => exporting to image                                                                                            39.4s
+ => => exporting layers                                                                                           31.7s
+ => => exporting manifest sha256:188d1e104b35f02c51cff3a24f4bcdb97d6b76b698dca359a40bd868a329c042                  0.0s
+ => => exporting config sha256:f68ed88362829892716f7844ac7690e248345bb30e53ec9636823acbf62a4202                    0.0s
+ => => exporting attestation manifest sha256:cad690bfae0661c3e705d29f7f35eb75842b6fdf24180bccf01de0a3e866b6e7      0.1s
+ => => exporting manifest list sha256:dd31f4b9d447b354df977680d9ac50bf36dd1066d52be51e85f8065dff23f11a             0.0s
+ => => naming to docker.io/library/linix-it-tools:latest                                                           0.0s
+ => => unpacking to docker.io/library/linix-it-tools:latest                                                        7.4s
+############### RUN tools (apt) ###############
+###################################################################
+# LiNix real-world sweep :: native-backend=apt  pkg=jq  pkg2=htop
+# binary=/src/target/release/linix  timeout=90s  SMOKE_ONLY=0  FAST=0
+###################################################################
+
+=========== 1. DISCOVERY (doctor / search / info) ===========
+    [ok]    doctor exits 0
+    [ok]    doctor reports apt READY
+      READY backends:
+        [READY] composer
+        [READY] github
+        [READY] pipx
+        [READY] cabal
+        [READY] gem
+        [READY] helm
+        [READY] asdf
+        [READY] uv
+        [READY] web
+        [READY] link
+        [READY] conda
+        [READY] bun
+        [READY] mise
+        [READY] spack
+        [READY] appimage
+        [READY] pip
+        [READY] flatpak
+        [READY] npm
+        [READY] luarocks
+        [READY] pixi
+        [READY] dotnet
+        [READY] stack
+        [READY] pub
+        [READY] emacs
+        [READY] service
+        [READY] krew
+        [READY] opam
+        [READY] nimble
+        [READY] go
+        [READY] apt
+        [READY] mix
+        [READY] cargo
+    [info]  update (apt) exits 0
+    [ok]    search exits 0
+    [ok]    search returns a apt hit for 'jq'
+    [ok]    info 'jq' returns metadata
+
+=========== 2. DRY-RUN SAFETY (must change nothing) ===========
+    [ok]    clean start: 'jq' absent
+    [ok]    dry-run install exits 0
+    [ok]    dry-run install emits JSON plan
+    [ok]    dry-run left system unchanged
+    [ok]    dry-run left the manifest unchanged
+
+=========== 3. IMPERATIVE INSTALL + LIST + INFO + config coherence ===========
+    [ok]    install 'apt:jq' exits 0
+    [ok]    'jq' on PATH after install
+    [ok]    install recorded 'jq' in the manifest (config stays coherent)
+    [ok]    list shows 'jq' as installed (installed-list parser works)
+
+=========== 4. IDEMPOTENCY (install already-installed) ===========
+    [ok]    re-install of present package exits 0
+
+=========== 5. IMPERATIVE REMOVE + verify gone + config coherence ===========
+    [ok]    remove 'apt:jq' exits 0
+    [ok]    'jq' gone from PATH after remove
+    [ok]    remove cleared 'jq' from the manifest
+    [ok]    list no longer shows 'jq'
+    [ok]    second remove (not installed) exits 0 (warn, not error)
+
+=========== 6. NEGATIVE PATH — failed mutation MUST surface (exit-status enforcement) ===========
+    [ok]    install of nonexistent 'linix-nonexistent-pkg-zzq9x' FAILS with exit=1 (failure not swallowed)
+    [ok]    bogus package not installed (as expected)
+
+=========== 7. DECLARATIVE DIAGNOSTIC (unscoped status — planning across ALL backends) ===========
+    [ok]    unscoped 'status' completed (rc=0) — planning across every backend does not hang
+
+=========== 8. DECLARATIVE ROUNDTRIP — write file -> sync -> installed ; edit file -> prune -> gone ===========
+    [ok]    init scaffolds manifest at /tmp/linix-it-manifests/local.txt
+      -> writing 'apt:jq' into the manifest file, then calling sync
+    [ok]    status (scoped) exits 0
+    [ok]    status shows 'jq' as a pending change
+    [ok]    sync (scoped) exits 0
+    [ok]    sync INSTALLED 'jq' from the manifest file
+    [ok]    lock writes locks.json
+    [info]  generation list exits 0
+      -> removing 'jq' from the manifest file, then converging (prune)
+    [ok]    status flags 'jq' as drift after the manifest edit
+    [ok]    prune (scoped) exits 0
+    [ok]    prune REMOVED 'jq' after it left the manifest file
+
+=========== 9. JSON OUTPUT CONTRACT (stdout only; real JSON parse) ===========
+    [ok]    search --json is valid JSON
+    [ok]    list --json is valid JSON
+    [ok]    status --json is valid JSON
+
+=========== 10. PROFILES — activate/deactivate, MULTIPLE active, RELATIONAL (include / exclude / -pkg) ===========
+    [ok]    activate alpha exits 0
+    [ok]    profile 'alpha' installed 'jq'
+    [ok]    alpha left 'htop' absent
+    [ok]    'alpha' shows as active
+    [ok]    activate bravo exits 0 (two profiles now active)
+    [ok]    MULTIPLE active: 'jq' AND 'htop' both installed
+    [ok]    deactivate alpha exits 0
+    [ok]    deactivate alpha removed 'jq'
+    [ok]    'htop' survived (still provided by bravo — union semantics)
+    [ok]    clean slate: no profile packages installed
+    [ok]    activate lean (relational include+minus) exits 0
+    [ok]    relational 'lean' installed 'htop' (the 'plus')
+    [ok]    relational MINUS works: 'jq' excluded
+    [ok]    profile show lean resolves to {htop} (include + minus applied)
+    [ok]    deactivate lean cleaned up 'htop'
+    [ok]    profile list enumerates defined profiles
+
+=========== 11. REAL MULTI-BACKEND LIFECYCLE — every feasible backend (real install → list → remove) ===========
+      --- backend: npm  (pkg: cowsay, mode: real, timeout: 120s) ---
+    [ok]    [npm] install 'cowsay' exits 0
+    [ok]    [npm] list shows 'cowsay' (installed-list parser works)
+    [ok]    [npm] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [npm] 'cowsay' resolves on PATH
+    [ok]    [npm] remove 'cowsay' exits 0
+    [ok]    [npm] 'cowsay' gone from list after remove
+    [ok]    [npm] remove cleared 'cowsay' from manifest
+    [info]  [yarn] not READY in this image — skipped
+    [info]  [pnpm] not READY in this image — skipped
+      --- backend: bun  (pkg: cowsay, mode: real, timeout: 150s) ---
+    [ok]    [bun] install 'cowsay' exits 0
+    [ok]    [bun] list shows 'cowsay' (installed-list parser works)
+    [ok]    [bun] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [bun] 'cowsay' resolves on PATH
+    [ok]    [bun] remove 'cowsay' exits 0
+    [ok]    [bun] 'cowsay' gone from list after remove
+    [ok]    [bun] remove cleared 'cowsay' from manifest
+      --- backend: pipx  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [pipx] install 'cowsay' exits 0
+    [ok]    [pipx] list shows 'cowsay' (installed-list parser works)
+    [ok]    [pipx] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [pipx] 'cowsay' resolves on PATH
+    [ok]    [pipx] remove 'cowsay' exits 0
+    [ok]    [pipx] 'cowsay' gone from list after remove
+    [ok]    [pipx] remove cleared 'cowsay' from manifest
+      --- backend: uv  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [uv] install 'cowsay' exits 0
+    [ok]    [uv] list shows 'cowsay' (installed-list parser works)
+    [ok]    [uv] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [uv] 'cowsay' resolves on PATH
+    [ok]    [uv] remove 'cowsay' exits 0
+    [ok]    [uv] 'cowsay' gone from list after remove
+    [ok]    [uv] remove cleared 'cowsay' from manifest
+      --- backend: gem  (pkg: colorize, mode: real, timeout: 240s) ---
+    [ok]    [gem] install 'colorize' exits 0
+    [ok]    [gem] list shows 'colorize' (installed-list parser works)
+    [ok]    [gem] install recorded 'colorize' in manifest (coherent)
+    [ok]    [gem] remove 'colorize' exits 0
+    [ok]    [gem] 'colorize' gone from list after remove
+    [ok]    [gem] remove cleared 'colorize' from manifest
+      --- backend: pip  (pkg: cowsay, mode: real, timeout: 240s) ---
+    [ok]    [pip] install 'cowsay' exits 0
+    [ok]    [pip] list shows 'cowsay' (installed-list parser works)
+    [ok]    [pip] install recorded 'cowsay' in manifest (coherent)
+    [ok]    [pip] 'cowsay' resolves on PATH
+    [ok]    [pip] remove 'cowsay' exits 0
+    [ok]    [pip] 'cowsay' gone from list after remove
+    [ok]    [pip] remove cleared 'cowsay' from manifest
+      --- backend: luarocks  (pkg: say, mode: real, timeout: 240s) ---
+    [ok]    [luarocks] install 'say' exits 0
+    [ok]    [luarocks] list shows 'say' (installed-list parser works)
+    [ok]    [luarocks] install recorded 'say' in manifest (coherent)
+    [ok]    [luarocks] remove 'say' exits 0
+    [ok]    [luarocks] 'say' gone from list after remove
+    [ok]    [luarocks] remove cleared 'say' from manifest
+      --- backend: pixi  (pkg: ripgrep, mode: real, timeout: 420s) ---
+    [ok]    [pixi] install 'ripgrep' exits 0
+    [ok]    [pixi] list shows 'ripgrep' (installed-list parser works)
+    [ok]    [pixi] install recorded 'ripgrep' in manifest (coherent)
+    [ok]    [pixi] 'rg' resolves on PATH
+    [ok]    [pixi] remove 'ripgrep' exits 0
+    [ok]    [pixi] 'ripgrep' gone from list after remove
+    [ok]    [pixi] remove cleared 'ripgrep' from manifest
+      --- backend: composer  (pkg: psr/log, mode: real, timeout: 300s) ---
+    [ok]    [composer] install 'psr/log' exits 0
+    [ok]    [composer] list shows 'psr/log' (installed-list parser works)
+    [ok]    [composer] install recorded 'psr/log' in manifest (coherent)
+    [ok]    [composer] remove 'psr/log' exits 0
+    [ok]    [composer] 'psr/log' gone from list after remove
+    [ok]    [composer] remove cleared 'psr/log' from manifest
+      --- backend: dotnet  (pkg: dotnetsay, mode: real, timeout: 420s) ---
+    [ok]    [dotnet] install 'dotnetsay' exits 0
+    [ok]    [dotnet] list shows 'dotnetsay' (installed-list parser works)
+    [ok]    [dotnet] install recorded 'dotnetsay' in manifest (coherent)
+    [ok]    [dotnet] 'dotnetsay' resolves on PATH
+    [ok]    [dotnet] remove 'dotnetsay' exits 0
+    [ok]    [dotnet] 'dotnetsay' gone from list after remove
+    [ok]    [dotnet] remove cleared 'dotnetsay' from manifest
+      --- backend: pub  (pkg: coverage, mode: real, timeout: 420s) ---
+    [ok]    [pub] install 'coverage' exits 0
+    [ok]    [pub] list shows 'coverage' (installed-list parser works)
+    [ok]    [pub] install recorded 'coverage' in manifest (coherent)
+    [ok]    [pub] remove 'coverage' exits 0
+    [ok]    [pub] 'coverage' gone from list after remove
+    [ok]    [pub] remove cleared 'coverage' from manifest
+    [info]  [nix] not READY in this image — skipped
+      --- backend: krew  (pkg: ns, mode: real, timeout: 420s) ---
+    [ok]    [krew] install 'ns' exits 0
+    [ok]    [krew] list shows 'ns' (installed-list parser works)
+    [ok]    [krew] install recorded 'ns' in manifest (coherent)
+    [ok]    [krew] remove 'ns' exits 0
+    [ok]    [krew] 'ns' gone from list after remove
+    [ok]    [krew] remove cleared 'ns' from manifest
+      --- backend: mix  (pkg: phx_new, mode: real, timeout: 420s) ---
+    [info]  [mix] install 'phx_new' rc=1 — ecosystem/network variance (not a hard fail)
+          | 2026-07-10T20:27:32.923730Z  INFO linix::app::context: LiNix Kernel: v6.0.0 kernel initialized successfully.
+          | 2026-07-10T20:27:32.923920Z  INFO linix: LiNix: Installing phx_new via mix...
+          | Error: Command execution failed: `mix` failed (exit 1): ** (Mix) Could not find an SCM for dependency :phx_new from Mix.Local.Installer.MixProject
+      --- backend: conda  (pkg: tqdm, mode: real, timeout: 900s) ---
+    [ok]    [conda] install 'tqdm' exits 0
+    [ok]    [conda] list shows 'tqdm' (installed-list parser works)
+    [ok]    [conda] install recorded 'tqdm' in manifest (coherent)
+    [ok]    [conda] remove 'tqdm' exits 0
+    [ok]    [conda] 'tqdm' gone from list after remove
+    [ok]    [conda] remove cleared 'tqdm' from manifest
+      --- backend: cargo  (pkg: ripgrep, mode: real, timeout: 2400s) ---
+    [ok]    [cargo] install 'ripgrep' exits 0
+    [ok]    [cargo] list shows 'ripgrep' (installed-list parser works)
+    [ok]    [cargo] install recorded 'ripgrep' in manifest (coherent)
+    [ok]    [cargo] 'rg' resolves on PATH
+    [ok]    [cargo] remove 'ripgrep' exits 0
+    [ok]    [cargo] 'ripgrep' gone from list after remove
+    [ok]    [cargo] remove cleared 'ripgrep' from manifest
+      --- backend: go  (pkg: rsc.io/2fa, mode: real, timeout: 900s) ---
+    [ok]    [go] install 'rsc.io/2fa' exits 0
+    [ok]    [go] list shows 'rsc.io/2fa' (installed-list parser works)
+    [ok]    [go] install recorded 'rsc.io/2fa' in manifest (coherent)
+    [ok]    [go] '2fa' resolves on PATH
+    [ok]    [go] remove 'rsc.io/2fa' exits 0
+    [ok]    [go] 'rsc.io/2fa' gone from list after remove
+    [ok]    [go] remove cleared 'rsc.io/2fa' from manifest
+      --- backend: opam  (pkg: csexp, mode: real, timeout: 2400s) ---
+    [info]  [opam] install 'csexp' rc=1 — ecosystem/network variance (not a hard fail)
+          | 2026-07-10T20:29:31.042839Z  INFO linix: LiNix: Installing csexp via opam...
+          | Error: Command execution failed: `opam` failed (exit 50): [WARNING] Running as root is not recommended
+          | [ERROR] No switch is currently set. Please use 'opam switch' to set or install a switch
+      --- backend: nimble  (pkg: checksums, mode: real, timeout: 900s) ---
+    [info]  [nimble] install 'checksums' rc=1 — ecosystem/network variance (not a hard fail)
+          |   Verifying dependencies for checksums@0.2.2
+          |        Tip: 3 messages have been suppressed, use --verbose to show them.
+          |      Error: Unsatisfied dependency: nim (>= 2.0.0)
+      --- backend: spack  (pkg: zlib, mode: real, timeout: 3600s) ---
+    [ok]    [spack] install 'zlib' exits 0
+    [ok]    [spack] list shows 'zlib' (installed-list parser works)
+    [ok]    [spack] install recorded 'zlib' in manifest (coherent)
+    [ok]    [spack] remove 'zlib' exits 0
+    [ok]    [spack] 'zlib' gone from list after remove
+    [ok]    [spack] remove cleared 'zlib' from manifest
+      --- backend: cabal  (pkg: hello, mode: soft, timeout: 2400s) ---
+    [info]  [cabal] install 'hello' exits 0 (tolerant mode: URL/name or remote quirks are non-fatal)
+    [info]  [cabal] list did not show 'hello' (name-vs-id quirk)
+      --- backend: helm  (pkg: https://github.com/databus23/helm-diff, mode: soft, timeout: 420s) ---
+    [info]  [helm] install 'https://github.com/databus23/helm-diff' exits 0 (tolerant mode: URL/name or remote quirks are non-fatal)
+    [info]  [helm] list did not show 'https://github.com/databus23/helm-diff' (name-vs-id quirk)
+      --- backend: flatpak  (pkg: org.gnome.Calculator, mode: soft, timeout: 900s) ---
+    [info]  [flatpak] install 'org.gnome.Calculator' exits 0 (tolerant mode: URL/name or remote quirks are non-fatal)
+    [info]  [flatpak] list shows 'org.gnome.Calculator'
+      --- backend: mise  (pkg: usage, mode: soft, timeout: 900s) ---
+    [info]  [mise] install 'usage' exits 0 (tolerant mode: URL/name or remote quirks are non-fatal)
+    [info]  [mise] list shows 'usage'
+      --- backend: github  (repo: BurntSushi/ripgrep) ---
+    [ok]    [github] install 'BurntSushi/ripgrep' exits 0 (real release asset downloaded + extracted)
+    [ok]    [github] list shows the installed repo (state parser works)
+    [info]  [github] 'rg' not on PATH (~/.local/bin not exported?)
+    [ok]    [github] remove exits 0
+    [ok]    [github] gone from list after remove
+      --- backend: link  (/tmp/linix-link-src -> /tmp/linix-link-dst) ---
+    [ok]    [link] install exits 0
+    [ok]    [link] created the link at /tmp/linix-link-dst
+    [ok]    [link] remove exits 0
+    [FAIL]  [link] /tmp/linix-link-dst still present after remove
+
+=========== 12. FEATURE COVERAGE — every linix subcommand exercised at least once ===========
+    [ok]    completions bash emits a script
+    [ok]    completions zsh emits a script
+    [ok]    completions fish emits a script
+    [ok]    completions powershell emits a script
+    [ok]    completions elvish emits a script
+    [ok]    completions nushell emits a script
+    [ok]    heal exits 0 on a clean system (no interrupted transaction)
+    [ok]    clean exits 0
+    [ok]    unmanaged exits 0
+    [ok]    orphans exits 0
+    [ok]    audit exits 0
+    [ok]    sbom emits a CycloneDX JSON document
+    [ok]    why 'jq' exits 0
+    [ok]    policy exits 0
+    [ok]    upgrade (scoped) exits 0
+    [info]  canary upgrade rc=1 (tolerated)
+    [info]  repo list rc=1 (tolerated)
+    [info]  repo add rc=1 (needs a real source — tolerated)
+    [ok]    migrate (scoped) exits 0
+    [ok]    teleport (dry-run plan) exits 0
+    [ok]    module list exits 0
+    [info]  module create+show round-trips
+    [ok]    snapshot list exits 0
+    [info]  snapshot prune exits 0
+    [info]  generation pin 1783715230 ok
+    [info]  generation unpin 1783715230 ok
+    [info]  rollback rc=1 (tolerated)
+    [ok]    lease set exits 0
+    [ok]    lease list shows the leased package
+    [info]  schedule add rc=1 (no systemd/cron in this container — tolerated)
+    [ok]    run executes a command in an ephemeral env
+    [ok]    shim generates a launcher
+
+=========== 13. PLAN-SMOKE — only the backends that cannot run a real lifecycle here ===========
+      --- plan-smoke: asdf  (pkg: hello, mode: soft) ---
+    [ok]    [asdf] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [asdf] list --json valid (installed-list parser ok)
+    [info]  [asdf] search --json valid
+      --- plan-smoke: web  (pkg: https://example.com/app.tar.gz, mode: soft) ---
+    [ok]    [web] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [web] list --json valid (installed-list parser ok)
+    [info]  [web] search --json valid
+      --- plan-smoke: appimage  (pkg: https://example.com/app.AppImage, mode: soft) ---
+    [ok]    [appimage] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [appimage] list --json valid (installed-list parser ok)
+    [info]  [appimage] search --json valid
+      --- plan-smoke: stack  (pkg: hello, mode: soft) ---
+    [ok]    [stack] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [stack] list --json valid (installed-list parser ok)
+    [info]  [stack] search --json valid
+      --- plan-smoke: emacs  (pkg: hello, mode: soft) ---
+    [ok]    [emacs] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [emacs] list --json valid (installed-list parser ok)
+    [info]  [emacs] search --json valid
+      --- plan-smoke: service  (pkg: cron, mode: soft) ---
+    [ok]    [service] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [service] list --json valid (installed-list parser ok)
+    [info]  [service] search --json valid
+      --- plan-smoke: apt  (pkg: hello, mode: soft) ---
+    [ok]    [apt] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [apt] list --json valid (installed-list parser ok)
+    [info]  [apt] search --json valid
+
+=========== 14. COVERAGE AUDIT — nothing registered or featured is silently untested ===========
+    [ok]    every READY backend was exercised (real lifecycle or plan-smoke)
+    [info]  feature 'shell' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'undo' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'bisect' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'clone' is EXEMPT (interactive or needs a remote host)
+    [info]  feature 'fleet' is EXEMPT (interactive or needs a remote host)
+    [ok]    every non-exempt linix subcommand was exercised at least once
+
+=========== 15. READ-ONLY SMOKE (must run without crashing) ===========
+    [info]  `linix config show` exits 0
+    [info]  `linix config path` exits 0
+    [info]  `linix unmanaged` exits 0
+    [info]  `linix orphans` exits 0
+    [info]  `linix audit` exit=124 (TIMED OUT) (tolerated)
+    [info]  `linix sbom` exit=124 (TIMED OUT) (tolerated)
+    [info]  `linix why jq` exits 0
+    [info]  `linix snapshot list` exits 0
+    [info]  `linix generation list` exits 0
+    [info]  `linix profile list` exits 0
+    [info]  `linix policy` exits 0
+    [info]  config init exits 0
+
+=========== SUMMARY [apt image] ===========
+    HARD pass: 195    HARD fail: 1    soft/info: 57
+    RESULT: FAIL (1 hard check(s) failed)
+############### BUILD gentoo (emerge) ###############
+[+] Building 290.7s (16/16) FINISHED                                                                     docker:default
+ => [internal] load build definition from Dockerfile.gentoo                                                        0.1s
+ => => transferring dockerfile: 2.00kB                                                                             0.0s
+ => [internal] load metadata for docker.io/gentoo/stage3:latest                                                    0.3s
+ => [internal] load metadata for docker.io/library/ubuntu:24.04                                                    0.3s
+ => [internal] load .dockerignore                                                                                  0.1s
+ => => transferring context: 596B                                                                                  0.1s
+ => [builder 1/6] FROM docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9e  0.1s
+ => => resolve docker.io/library/ubuntu:24.04@sha256:4fbb8e6a8395de5a7550b33509421a2bafbc0aab6c06ba2cef9ebffbc709  0.1s
+ => [internal] load build context                                                                                  1.4s
+ => => transferring context: 6.57kB                                                                                1.3s
+ => CACHED [stage-1 1/4] FROM docker.io/gentoo/stage3:latest@sha256:2fb4d12e05d99f54ca805653687d96bc79370ee333e31  0.1s
+ => => resolve docker.io/gentoo/stage3:latest@sha256:2fb4d12e05d99f54ca805653687d96bc79370ee333e314229436bc383e50  0.1s
+ => CACHED [builder 2/6] RUN apt-get update && apt-get install -y --no-install-recommends         curl ca-certifi  0.0s
+ => CACHED [builder 3/6] RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile mi  0.0s
+ => CACHED [builder 4/6] WORKDIR /src                                                                              0.0s
+ => [builder 5/6] COPY . /src                                                                                      0.1s
+ => [builder 6/6] RUN cargo build --release                                                                      286.9s
+ => [stage-1 2/4] COPY --from=builder /src/target/release/linix /src/target/release/linix                          0.1s
+ => [stage-1 3/4] RUN mkdir -p /src/docker/integration                                                             0.3s
+ => [stage-1 4/4] WORKDIR /src                                                                                     0.1s
+ => exporting to image                                                                                             1.1s
+ => => exporting layers                                                                                            0.7s
+ => => exporting manifest sha256:38c5c610dc3bf027a73ae7c35bd800c69a1eebcb8f6203fe674b5e038270ce68                  0.0s
+ => => exporting config sha256:56740c8b635f398c607173729b03452056bf6804938c1d3065434ae34f8d2c5f                    0.0s
+ => => exporting attestation manifest sha256:ec0217fd11bca7d85f04aeb75effca2c5de250a3293390ee28e0a883fb093b51      0.1s
+ => => exporting manifest list sha256:a2ad2af3ec26ee473bd6ab2e998f89c3cf006b9299957563edc05bf3a1d6de47             0.0s
+ => => naming to docker.io/library/linix-it-gentoo:latest                                                          0.0s
+ => => unpacking to docker.io/library/linix-it-gentoo:latest                                                       0.2s
+############### RUN gentoo (emerge) ###############
+###################################################################
+# LiNix real-world sweep :: native-backend=emerge  pkg=jq  pkg2=htop
+# binary=/src/target/release/linix  timeout=90s  SMOKE_ONLY=1  FAST=0
+###################################################################
+
+=========== 1. DISCOVERY (doctor / search / info) ===========
+    [ok]    doctor exits 0
+    [ok]    doctor reports emerge READY
+      READY backends:
+        [READY] web
+        [READY] github
+        [READY] link
+        [READY] appimage
+        [READY] emerge
+        [READY] cargo
+    [info]  update (emerge) exits 0
+    [ok]    search exits 0
+    [info]  no emerge-prefixed search hit for 'jq' (index/name variance)
+    [info]  info 'jq' returned rc=0 / no metadata (may be search-only backend)
+
+=========== SMOKE-ONLY MODE — plan/parse/read-only (native manager builds from source; no real install) ===========
+      --- plan-smoke: emerge  (pkg: jq, mode: hard) ---
+    [ok]    [emerge] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [emerge] list --json valid (installed-list parser ok)
+    [info]  [emerge] search --json valid
+
+=========== 13. PLAN-SMOKE — only the backends that cannot run a real lifecycle here ===========
+      --- plan-smoke: web  (pkg: https://example.com/app.tar.gz, mode: soft) ---
+    [ok]    [web] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [web] list --json valid (installed-list parser ok)
+    [info]  [web] search --json valid
+      --- plan-smoke: github  (pkg: BurntSushi/ripgrep, mode: soft) ---
+    [ok]    [github] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [github] list --json valid (installed-list parser ok)
+    [info]  [github] search --json valid
+      --- plan-smoke: link  (pkg: /tmp/linix-ps-src@target=/tmp/linix-ps-tgt, mode: soft) ---
+    [ok]    [link] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [link] list --json valid (installed-list parser ok)
+    [info]  [link] search --json valid
+      --- plan-smoke: appimage  (pkg: https://example.com/app.AppImage, mode: soft) ---
+    [ok]    [appimage] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [appimage] list --json valid (installed-list parser ok)
+    [info]  [appimage] search --json valid
+      --- plan-smoke: cargo  (pkg: hello, mode: soft) ---
+    [ok]    [cargo] dry-run install emits a JSON plan (argv + planner wired)
+    [info]  [cargo] list --json valid (installed-list parser ok)
+    [info]  [cargo] search --json valid
+
+=========== READ-ONLY SMOKE (must run without crashing) ===========
+    [info]  `linix config show` exits 0
+    [info]  `linix config path` exits 0
+    [info]  `linix unmanaged` exits 0
+    [info]  `linix orphans` exits 0
+    [info]  `linix audit` exits 0
+    [info]  `linix sbom` exits 0
+    [info]  `linix snapshot list` exits 0
+    [info]  `linix profile list` exits 0
+    [info]  `linix policy` exits 0
+    [info]  `linix completions bash` exits 0
+
+=========== SUMMARY [emerge image — SMOKE-ONLY] ===========
+    HARD pass: 9    HARD fail: 0    soft/info: 25
+    RESULT: PASS
+
+===================== SUMMARY =====================
+
+  ubuntu (apt): FAIL
+  fedora (dnf): FAIL
+  arch (pacman): FAIL
+  alpine (apk): FAIL
+  tools (apt): FAIL
+  gentoo (emerge): PASS
+===================================================
+[FAIL] integration matrix (ubuntu fedora arch alpine tools gentoo) had FAILURES
+
+############### RELEASE VERDICT ###############
+
+  INFO  cargo fmt --check reports diffs (non-blocking; tree not yet fully fmt-clean)
+  PASS  clippy: no warnings
+  FAIL  cargo test: failures
+  PASS  release build succeeds
+  FAIL  integration matrix (ubuntu fedora arch alpine tools gentoo) had FAILURES
+
+=====> NO-GO: at least one hard gate failed (see above).

@@ -6,6 +6,129 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
 
+// ============================================================================
+// Pure service-control model (unit tested — no I/O)
+// ============================================================================
+
+/// A service lifecycle action LiNix can request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceAction {
+    /// Enable at boot.
+    Enable,
+    /// Disable at boot.
+    Disable,
+    /// Start now.
+    Start,
+    /// Stop now.
+    Stop,
+    /// Restart now.
+    Restart,
+}
+
+/// The init / service-management system driving the host. This is what lets the one
+/// `service` backend speak systemd, OpenRC, SysVinit, launchd and Windows `sc` alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitSystem {
+    Systemd,
+    OpenRc,
+    SysVinit,
+    Launchd,
+    WindowsSc,
+    Unknown,
+}
+
+/// Pure: the ordered list of `(program, args)` commands that realize `action` for a service
+/// named `name` under a given init system. Empty when the platform can't express the action.
+/// Kept free of I/O so every mapping is unit-testable.
+pub fn plan_service(init: InitSystem, action: ServiceAction, name: &str) -> Vec<(String, Vec<String>)> {
+    let s = name.to_string();
+    let one = |prog: &str, args: &[&str]| {
+        vec![(
+            prog.to_string(),
+            args.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
+        )]
+    };
+    match (init, action) {
+        // ---- systemd ----
+        (InitSystem::Systemd, ServiceAction::Enable) => one("systemctl", &["enable", &s]),
+        (InitSystem::Systemd, ServiceAction::Disable) => one("systemctl", &["disable", &s]),
+        (InitSystem::Systemd, ServiceAction::Start) => one("systemctl", &["start", &s]),
+        (InitSystem::Systemd, ServiceAction::Stop) => one("systemctl", &["stop", &s]),
+        (InitSystem::Systemd, ServiceAction::Restart) => one("systemctl", &["restart", &s]),
+
+        // ---- OpenRC (Alpine, Gentoo) ----
+        (InitSystem::OpenRc, ServiceAction::Enable) => one("rc-update", &["add", &s, "default"]),
+        (InitSystem::OpenRc, ServiceAction::Disable) => one("rc-update", &["del", &s, "default"]),
+        (InitSystem::OpenRc, ServiceAction::Start) => one("rc-service", &[&s, "start"]),
+        (InitSystem::OpenRc, ServiceAction::Stop) => one("rc-service", &[&s, "stop"]),
+        (InitSystem::OpenRc, ServiceAction::Restart) => one("rc-service", &[&s, "restart"]),
+
+        // ---- SysVinit ----
+        (InitSystem::SysVinit, ServiceAction::Enable) => one("update-rc.d", &[&s, "enable"]),
+        (InitSystem::SysVinit, ServiceAction::Disable) => one("update-rc.d", &[&s, "disable"]),
+        (InitSystem::SysVinit, ServiceAction::Start) => one("service", &[&s, "start"]),
+        (InitSystem::SysVinit, ServiceAction::Stop) => one("service", &[&s, "stop"]),
+        (InitSystem::SysVinit, ServiceAction::Restart) => one("service", &[&s, "restart"]),
+
+        // ---- launchd (macOS) ----
+        (InitSystem::Launchd, ServiceAction::Enable) => one("launchctl", &["load", "-w", &s]),
+        (InitSystem::Launchd, ServiceAction::Disable) => one("launchctl", &["unload", "-w", &s]),
+        (InitSystem::Launchd, ServiceAction::Start) => one("launchctl", &["start", &s]),
+        (InitSystem::Launchd, ServiceAction::Stop) => one("launchctl", &["stop", &s]),
+        (InitSystem::Launchd, ServiceAction::Restart) => {
+            vec![
+                ("launchctl".into(), vec!["stop".into(), s.clone()]),
+                ("launchctl".into(), vec!["start".into(), s]),
+            ]
+        }
+
+        // ---- Windows Service Control ----
+        (InitSystem::WindowsSc, ServiceAction::Enable) => {
+            one("sc", &["config", &s, "start=", "auto"])
+        }
+        (InitSystem::WindowsSc, ServiceAction::Disable) => {
+            one("sc", &["config", &s, "start=", "disabled"])
+        }
+        (InitSystem::WindowsSc, ServiceAction::Start) => one("sc", &["start", &s]),
+        (InitSystem::WindowsSc, ServiceAction::Stop) => one("sc", &["stop", &s]),
+        (InitSystem::WindowsSc, ServiceAction::Restart) => {
+            vec![
+                ("sc".into(), vec!["stop".into(), s.clone()]),
+                ("sc".into(), vec!["start".into(), s]),
+            ]
+        }
+
+        (InitSystem::Unknown, _) => Vec::new(),
+    }
+}
+
+/// Pure: translate the declarative `enabled` / `status` options on a spec into the ordered
+/// list of actions to apply. When neither is given, default to "enable + start" (the common
+/// intent of listing a service in a manifest). `status=restarted` maps to Restart.
+pub fn actions_for(enabled: Option<&str>, status: Option<&str>) -> Vec<ServiceAction> {
+    let mut acts = Vec::new();
+    match enabled {
+        Some(v) if v == "true" || v == "yes" || v == "1" => acts.push(ServiceAction::Enable),
+        Some(_) => acts.push(ServiceAction::Disable),
+        None => {}
+    }
+    match status {
+        Some("running") | Some("started") | Some("start") => acts.push(ServiceAction::Start),
+        Some("stopped") | Some("stop") => acts.push(ServiceAction::Stop),
+        Some("restarted") | Some("restart") => acts.push(ServiceAction::Restart),
+        Some(_) | None => {}
+    }
+    if enabled.is_none() && status.is_none() {
+        acts.push(ServiceAction::Enable);
+        acts.push(ServiceAction::Start);
+    }
+    acts
+}
+
+// ============================================================================
+// Backend
+// ============================================================================
+
 /// Core backend implementation for system services across platforms.
 pub struct ServiceBackendCore {
     pub executor: CommandExecutor,
@@ -20,16 +143,45 @@ impl ServiceBackendCore {
         }
     }
 
-    /// Determines the native service management command for the current platform.
-    fn get_init_command(&self) -> Option<&'static str> {
-        if cfg!(target_os = "linux") {
-            Some("systemctl")
+    /// Detect the host's init/service system, probing for the right tool on Linux where
+    /// several coexist across distros.
+    pub fn detect_init(&self) -> InitSystem {
+        if cfg!(target_os = "windows") {
+            InitSystem::WindowsSc
         } else if cfg!(target_os = "macos") {
-            Some("launchctl")
-        } else if cfg!(target_os = "windows") {
-            Some("sc")
+            InitSystem::Launchd
+        } else if cfg!(target_os = "linux") {
+            if self.executor.command_exists_sync("systemctl") {
+                InitSystem::Systemd
+            } else if self.executor.command_exists_sync("rc-service") {
+                InitSystem::OpenRc
+            } else if self.executor.command_exists_sync("service") {
+                InitSystem::SysVinit
+            } else {
+                InitSystem::Unknown
+            }
         } else {
-            None
+            InitSystem::Unknown
+        }
+    }
+
+    /// Run the concrete commands for one action, propagating the first failure.
+    async fn apply(&self, action: ServiceAction, name: &str, sudo: bool) -> Result<()> {
+        let init = self.detect_init();
+        for (prog, args) in plan_service(init, action, name) {
+            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            self.executor.run(&prog, &arg_refs, sudo).await?;
+        }
+        Ok(())
+    }
+
+    /// Best-effort variant used on removal, where a service that is already gone must not
+    /// abort the teardown.
+    async fn apply_lenient(&self, action: ServiceAction, name: &str, sudo: bool) {
+        let init = self.detect_init();
+        for (prog, args) in plan_service(init, action, name) {
+            let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let _ = self.executor.run(&prog, &arg_refs, sudo).await;
         }
     }
 }
@@ -41,11 +193,7 @@ impl BackendCore for ServiceBackendCore {
     }
 
     fn is_available(&self) -> bool {
-        if let Some(cmd) = self.get_init_command() {
-            self.executor.command_exists_sync(cmd)
-        } else {
-            false
-        }
+        self.detect_init() != InitSystem::Unknown
     }
 
     fn needs_root(&self) -> bool {
@@ -70,63 +218,17 @@ pub struct ServiceInstallable {
 impl Installable for ServiceInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         for spec in specs {
-            let status = spec
-                .options
-                .get("status")
-                .map(|s| s.as_str())
-                .unwrap_or("running");
-            let enabled = spec
-                .options
-                .get("enabled")
-                .map(|s| s == "true")
-                .unwrap_or(true);
-
-            #[cfg(target_os = "linux")]
-            {
-                let action = if enabled { "enable" } else { "disable" };
-                self.core
-                    .executor
-                    .run("systemctl", &[action, &spec.name], sudo)
-                    .await?;
-
-                let state_cmd = if status == "running" { "start" } else { "stop" };
-                self.core
-                    .executor
-                    .run("systemctl", &[state_cmd, &spec.name], sudo)
-                    .await?;
+            let enabled = spec.options.get("enabled").map(|s| s.as_str());
+            let status = spec.options.get("status").map(|s| s.as_str());
+            let actions = actions_for(enabled, status);
+            for action in &actions {
+                self.core.apply(*action, &spec.name, sudo).await?;
             }
-
-            #[cfg(target_os = "macos")]
-            {
-                let cmd = if status == "running" {
-                    "load"
-                } else {
-                    "unload"
-                };
-                self.core
-                    .executor
-                    .run("launchctl", &[cmd, "-w", &spec.name], sudo)
-                    .await?;
-            }
-
-            #[cfg(target_os = "windows")]
-            {
-                let start_type = if enabled { "auto" } else { "disabled" };
-                self.core
-                    .executor
-                    .run("sc", &["config", &spec.name, "start=", start_type], sudo)
-                    .await?;
-
-                let state_cmd = if status == "running" { "start" } else { "stop" };
-                self.core
-                    .executor
-                    .run("sc", &[state_cmd, &spec.name], sudo)
-                    .await?;
-            }
-
             info!(
-                "Service {}: Set to {} (enabled={})",
-                spec.name, status, enabled
+                "Service {}: applied {:?} (init={:?})",
+                spec.name,
+                actions,
+                self.core.detect_init()
             );
         }
         Ok(())
@@ -134,36 +236,11 @@ impl Installable for ServiceInstallable {
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
         for name in names {
-            #[cfg(target_os = "linux")]
-            {
-                let _ = self
-                    .core
-                    .executor
-                    .run("systemctl", &["stop", name], sudo)
-                    .await;
-                let _ = self
-                    .core
-                    .executor
-                    .run("systemctl", &["disable", name], sudo)
-                    .await;
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let _ = self
-                    .core
-                    .executor
-                    .run("launchctl", &["unload", "-w", name], sudo)
-                    .await;
-            }
-            #[cfg(target_os = "windows")]
-            {
-                let _ = self.core.executor.run("sc", &["stop", name], sudo).await;
-                let _ = self
-                    .core
-                    .executor
-                    .run("sc", &["config", name, "start=", "disabled"], sudo)
-                    .await;
-            }
+            // Stop then disable; never let a missing service abort the sweep.
+            self.core.apply_lenient(ServiceAction::Stop, name, sudo).await;
+            self.core
+                .apply_lenient(ServiceAction::Disable, name, sudo)
+                .await;
         }
         Ok(())
     }
@@ -178,60 +255,68 @@ impl Queryable for ServiceQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
         let mut pkgs = Vec::new();
 
-        #[cfg(target_os = "linux")]
-        {
-            let out = self
-                .core
-                .executor
-                .run_output(
-                    "systemctl",
-                    &[
-                        "list-units",
-                        "--type=service",
-                        "--state=running",
-                        "--no-legend",
-                    ],
-                    false,
-                )
-                .await?;
-            for line in out.lines() {
-                if let Some(name) = line.split_whitespace().next() {
-                    pkgs.push(Package::new(name.trim_end_matches(".service"), "service"));
+        match self.core.detect_init() {
+            InitSystem::Systemd => {
+                let out = self
+                    .core
+                    .executor
+                    .run_output(
+                        "systemctl",
+                        &[
+                            "list-units",
+                            "--type=service",
+                            "--state=running",
+                            "--no-legend",
+                        ],
+                        false,
+                    )
+                    .await?;
+                for line in out.lines() {
+                    if let Some(name) = line.split_whitespace().next() {
+                        pkgs.push(Package::new(name.trim_end_matches(".service"), "service"));
+                    }
                 }
             }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let out = self
-                .core
-                .executor
-                .run_output("launchctl", &["list"], false)
-                .await?;
-            for line in out.lines().skip(1) {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(label) = parts.get(2) {
-                    pkgs.push(Package::new(*label, "service"));
+            InitSystem::OpenRc => {
+                if let Ok(out) = self
+                    .core
+                    .executor
+                    .run_output("rc-status", &["--servicelist"], false)
+                    .await
+                {
+                    for line in out.lines() {
+                        if let Some(name) = line.split_whitespace().next() {
+                            pkgs.push(Package::new(name, "service"));
+                        }
+                    }
                 }
             }
-        }
-
-        #[cfg(target_os = "windows")]
-        {
-            let out = self
-                .core
-                .executor
-                .run_output(
-                    "sc",
-                    &["query", "type=", "service", "state=", "active"],
-                    false,
-                )
-                .await?;
-            for line in out.lines() {
-                if let Some(v) = line.strip_prefix("SERVICE_NAME: ") {
-                    pkgs.push(Package::new(v.trim(), "service"));
+            InitSystem::Launchd => {
+                let out = self
+                    .core
+                    .executor
+                    .run_output("launchctl", &["list"], false)
+                    .await?;
+                for line in out.lines().skip(1) {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if let Some(label) = parts.get(2) {
+                        pkgs.push(Package::new(*label, "service"));
+                    }
                 }
             }
+            InitSystem::WindowsSc => {
+                let out = self
+                    .core
+                    .executor
+                    .run_output("sc", &["query", "type=", "service", "state=", "active"], false)
+                    .await?;
+                for line in out.lines() {
+                    if let Some(v) = line.strip_prefix("SERVICE_NAME: ") {
+                        pkgs.push(Package::new(v.trim(), "service"));
+                    }
+                }
+            }
+            InitSystem::SysVinit | InitSystem::Unknown => {}
         }
 
         Ok(pkgs)
@@ -241,8 +326,6 @@ impl Queryable for ServiceQueryable {
         self.list_installed().await
     }
 
-    /// FIX: Hardening Phase 5.2. No longer greedy.
-    /// Verifies existence before returning metadata.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let installed = self.list_installed().await?;
         if let Some(mut pkg) = installed.into_iter().find(|p| p.name == name) {
@@ -254,32 +337,17 @@ impl Queryable for ServiceQueryable {
 }
 
 impl ServiceQueryable {
-    #[allow(unused_variables)] // `p` is used only on linux/windows metadata paths
     async fn fill_platform_metadata(&self, p: &mut Package) -> Result<()> {
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(out) = self
-                .core
-                .executor
-                .run_output("systemctl", &["status", &p.name], false)
-                .await
-            {
-                p.properties.insert("status_raw".into(), out);
-            }
+        let (prog, args): (&str, Vec<&str>) = match self.core.detect_init() {
+            InitSystem::Systemd => ("systemctl", vec!["status", &p.name]),
+            InitSystem::OpenRc => ("rc-service", vec![&p.name, "status"]),
+            InitSystem::SysVinit => ("service", vec![&p.name, "status"]),
+            InitSystem::WindowsSc => ("sc", vec!["qc", &p.name]),
+            InitSystem::Launchd | InitSystem::Unknown => return Ok(()),
+        };
+        if let Ok(out) = self.core.executor.run_output(prog, &args, false).await {
+            p.properties.insert("status_raw".into(), out);
         }
-
-        #[cfg(target_os = "windows")]
-        {
-            if let Ok(out) = self
-                .core
-                .executor
-                .run_output("sc", &["qc", &p.name], false)
-                .await
-            {
-                p.properties.insert("config_raw".into(), out);
-            }
-        }
-
         Ok(())
     }
 }
@@ -298,4 +366,76 @@ pub fn register(
             .with_metadata_provider(core.clone())
             .build(),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn systemd_maps_each_action() {
+        assert_eq!(
+            plan_service(InitSystem::Systemd, ServiceAction::Enable, "nginx"),
+            vec![("systemctl".to_string(), vec!["enable".into(), "nginx".into()])]
+        );
+        assert_eq!(
+            plan_service(InitSystem::Systemd, ServiceAction::Restart, "nginx"),
+            vec![("systemctl".to_string(), vec!["restart".into(), "nginx".into()])]
+        );
+    }
+
+    #[test]
+    fn openrc_uses_rc_update_and_rc_service() {
+        assert_eq!(
+            plan_service(InitSystem::OpenRc, ServiceAction::Enable, "sshd"),
+            vec![("rc-update".to_string(), vec!["add".into(), "sshd".into(), "default".into()])]
+        );
+        assert_eq!(
+            plan_service(InitSystem::OpenRc, ServiceAction::Start, "sshd"),
+            vec![("rc-service".to_string(), vec!["sshd".into(), "start".into()])]
+        );
+    }
+
+    #[test]
+    fn windows_restart_is_stop_then_start() {
+        let cmds = plan_service(InitSystem::WindowsSc, ServiceAction::Restart, "W32Time");
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[0].1[0], "stop");
+        assert_eq!(cmds[1].1[0], "start");
+    }
+
+    #[test]
+    fn launchd_restart_is_stop_then_start() {
+        let cmds = plan_service(InitSystem::Launchd, ServiceAction::Restart, "com.foo");
+        assert_eq!(cmds.len(), 2);
+    }
+
+    #[test]
+    fn unknown_init_plans_nothing() {
+        assert!(plan_service(InitSystem::Unknown, ServiceAction::Start, "x").is_empty());
+    }
+
+    #[test]
+    fn options_default_to_enable_and_start() {
+        assert_eq!(
+            actions_for(None, None),
+            vec![ServiceAction::Enable, ServiceAction::Start]
+        );
+    }
+
+    #[test]
+    fn options_are_independent() {
+        // status only -> no enable/disable touched
+        assert_eq!(actions_for(None, Some("running")), vec![ServiceAction::Start]);
+        assert_eq!(actions_for(None, Some("stopped")), vec![ServiceAction::Stop]);
+        // enabled only -> no start/stop
+        assert_eq!(actions_for(Some("true"), None), vec![ServiceAction::Enable]);
+        assert_eq!(actions_for(Some("false"), None), vec![ServiceAction::Disable]);
+        // both
+        assert_eq!(
+            actions_for(Some("true"), Some("running")),
+            vec![ServiceAction::Enable, ServiceAction::Start]
+        );
+        assert_eq!(actions_for(None, Some("restarted")), vec![ServiceAction::Restart]);
+    }
 }

@@ -50,8 +50,29 @@ static FORBIDDEN_PATHS: &[&str] = &[
 pub struct Validator;
 
 impl Validator {
-    /// Validates package names against injection and traversal.
+    /// Backends whose "name" is legitimately a filesystem path (`link`) or a URL / owner-repo
+    /// (`web`, `github`, `appimage`). For these the "looks like an absolute path" guard — a
+    /// leading `/` or `\` — would wrongly reject valid input (e.g. `link:/home/me/.vimrc`).
+    /// They still get every other check: `..` traversal, the character allowlist, and
+    /// shell-injection blocking. Only the leading-separator rule is lifted for them.
+    fn is_path_oriented_backend(backend: &str) -> bool {
+        matches!(backend, "link" | "web" | "github" | "appimage")
+    }
+
+    /// Validates package names against injection and traversal, with no knowledge of the
+    /// backend — the strict rule (a leading path separator is rejected). Prefer
+    /// [`Validator::validate_package_name_for`] when the backend is known.
     pub fn validate_package_name(name: &str) -> Result<()> {
+        Self::validate_package_name_for(name, "")
+    }
+
+    /// Validates a package name for a specific backend. Identical to
+    /// [`Validator::validate_package_name`] except that the "absolute path" guard (a leading
+    /// `/` or `\`) is lifted for the path/URL-oriented backends (see
+    /// [`Validator::is_path_oriented_backend`]), whose names are legitimately paths/URLs.
+    /// Directory traversal (`..`), the character allowlist, and shell-injection blocking
+    /// always apply, for every backend.
+    pub fn validate_package_name_for(name: &str, backend: &str) -> Result<()> {
         if name.is_empty() {
             return Err(Error::Validation("Empty package name".into()));
         }
@@ -59,8 +80,18 @@ impl Validator {
             return Err(Error::Validation("Name too long".into()));
         }
 
-        // Bug 2: Explicitly block directory traversal
-        if name.contains("..") || name.starts_with('/') || name.starts_with('\\') {
+        // Directory traversal is ALWAYS forbidden, regardless of backend.
+        if name.contains("..") {
+            return Err(Error::Validation(format!(
+                "Path traversal detected in name: {}",
+                name
+            )));
+        }
+        // A leading path separator normally signals an absolute-path injection attempt — but
+        // for a path/URL-oriented backend (e.g. `link`, whose name IS a path) it is valid.
+        if !Self::is_path_oriented_backend(backend)
+            && (name.starts_with('/') || name.starts_with('\\'))
+        {
             return Err(Error::Validation(format!(
                 "Path traversal detected in name: {}",
                 name
@@ -164,5 +195,33 @@ impl Validator {
             )));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strict_validation_blocks_absolute_paths_for_normal_backends() {
+        // A leading slash on an ordinary package name is an injection attempt.
+        assert!(Validator::validate_package_name("/etc/passwd").is_err());
+        assert!(Validator::validate_package_name_for("/etc/passwd", "apt").is_err());
+        // Normal names still pass.
+        assert!(Validator::validate_package_name_for("ripgrep", "apt").is_ok());
+        // github owner/repo and web URLs (no leading slash) pass either way.
+        assert!(Validator::validate_package_name_for("BurntSushi/ripgrep", "github").is_ok());
+    }
+
+    #[test]
+    fn path_oriented_backends_allow_absolute_paths_but_never_traversal() {
+        // `link` legitimately names a filesystem path — an absolute path is allowed.
+        assert!(Validator::validate_package_name_for("/home/me/.vimrc", "link").is_ok());
+        assert!(Validator::validate_package_name_for("/tmp/linix-link-src", "link").is_ok());
+        // …but `..` traversal is STILL blocked, for every backend including path-oriented ones.
+        assert!(Validator::validate_package_name_for("/home/../etc/shadow", "link").is_err());
+        assert!(Validator::validate_package_name_for("../secrets", "link").is_err());
+        // …and shell-injection characters are still blocked (backslash, $(), etc.).
+        assert!(Validator::validate_package_name_for("/tmp/$(rm -rf)", "link").is_err());
     }
 }

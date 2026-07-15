@@ -1,26 +1,38 @@
 #!/bin/sh
 # Broad real-world test for a whole distro image, driven entirely through the `linix` binary.
 # Runs INSIDE a disposable container as root, so it can safely install/remove real system
-# packages and scaffold real manifests. This is the release-readiness sweep. It exercises:
+# packages, compile from source, download real release assets, and scaffold real manifests.
+# This is the release-readiness sweep. Its guiding rule (per the release owner):
 #
-#   1. Discovery (doctor/search/info)              7. Declarative diagnostic (unscoped status)
-#   2. Dry-run safety (no mutation)                8. Declarative lifecycle ROUNDTRIP
-#   3. Imperative install + list + coherence          (write file -> sync -> installed;
-#   4. Idempotency                                     edit file  -> prune -> gone)
-#   5. Imperative remove + coherence               9. JSON output contract (real json parse)
-#   6. Negative path (exit-status enforced)       10. PROFILES (activate/deactivate/relational)
-#                                                 11. MULTI-BACKEND sweep (every READY backend)
-#                                                 12. Read-only command smoke
+#   *Everything that CAN physically run on this platform gets a REAL lifecycle — even if it
+#    compiles from source and takes minutes. Only the genuinely-impossible here (a mac-only
+#    backend on Linux, or one needing a daemon/filesystem the container lacks) is plan-smoked,
+#    and each such case is named explicitly so nothing is silently skipped.*
+#
+# Sections:
+#   1.  Discovery (doctor/search/info)             9.  JSON output contract (real json parse)
+#   2.  Dry-run safety (no mutation)              10.  PROFILES (activate/deactivate/relational)
+#   3.  Imperative install + list + coherence     11.  REAL multi-backend lifecycle sweep
+#   4.  Idempotency                                    (every feasible backend, real install→
+#   5.  Imperative remove + coherence                   list→remove; source compiles included)
+#   6.  Negative path (exit-status enforced)      12.  FEATURE COVERAGE (every linix subcommand)
+#   7.  Declarative diagnostic (unscoped status)  13.  PLAN-SMOKE (only the can't-run-here set)
+#   8.  Declarative lifecycle ROUNDTRIP           14.  COVERAGE AUDIT (fails on any gap)
+#                                                 15.  Read-only command smoke
 #
 #   Usage: run-in-container.sh <native-backend> [package] [package2]
 #   e.g.   run-in-container.sh apt jq htop
 #
-# Every check is tallied and the script continues past failures so a single run shows the
-# whole picture; it exits non-zero if any HARD check failed. "soft" checks (network-dependent
-# or backend/ecosystem-optional) are reported but never fail the run.
+# Toggles (env):
+#   SMOKE_ONLY=1  discovery + plan-smoke + read-only only; skip real mutation (source distros)
+#   FAST=1        downgrade the heaviest source-compiling backends (cargo/opam/nimble/spack/
+#                 conda/go) to plan-smoke for a quicker run; everything else still real
 #
-# Every `linix` invocation is wrapped in `timeout` (TIMEOUT secs, default 90): a hang is
-# recorded as a FAILURE (exit 124) and the run continues.
+# Every check is tallied and the script continues past failures so a single run shows the whole
+# picture; it exits non-zero if any HARD check failed. "soft" checks (network-dependent or
+# ecosystem-optional) are reported but never fail the run. Every `linix` invocation is wrapped
+# in `timeout` (per-command ceiling): a hang is recorded as a FAILURE (exit 124) and the run
+# continues.
 #
 # Canary note: the package must NOT be a name busybox provides as a built-in applet (e.g.
 # `tree` on Alpine), or "binary gone after remove" becomes unfalsifiable. `jq`/`htop` are
@@ -32,12 +44,26 @@ PKG2="${3:-htop}"                             # a second native pkg for selectiv
 LINIX="${LINIX:-/src/target/release/linix}"
 BOGUS="linix-nonexistent-pkg-zzq9x"           # a name no real repo carries
 GDIR="${GROUPS_DIR:-/tmp/linix-it-manifests}" # throwaway manifest dir for declarative tests
-TIMEOUT="${TIMEOUT:-90}"                       # per-command wall-clock ceiling (seconds)
+PSDIR="/tmp/linix-it-plansmoke"                # throwaway manifest dir for the plan-smoke sweep
+TIMEOUT="${TIMEOUT:-90}"                       # default per-command wall-clock ceiling (seconds)
+SMOKE_ONLY="${SMOKE_ONLY:-0}"
+FAST="${FAST:-0}"
+
+# Isolate LiNix's GLOBAL state registry to a throwaway dir (honored by safe_data_dir()). This
+# is what makes a system-global `prune`/`activate` safe and deterministic: with a fresh state
+# registry, drift = "packages THIS run installed that aren't in the manifest", so convergence
+# only ever touches this run's packages — never pre-existing system state — and nothing
+# accumulates across runs. (Config dir is intentionally NOT isolated, so the real backend
+# settings still apply.)
+export LINIX_DATA_DIR="/tmp/linix-it-state"
+rm -rf "$LINIX_DATA_DIR"; mkdir -p "$LINIX_DATA_DIR"
 
 # Wrap every linix call in `timeout` when available (GNU coreutils + busybox both accept
 # `timeout SECS CMD…`). A timed-out command exits 124, which our checks treat as failure.
-if command -v timeout >/dev/null 2>&1; then TO="timeout $TIMEOUT"; else TO=""; fi
+if command -v timeout >/dev/null 2>&1; then TO="timeout $TIMEOUT"; HAVE_TO=1; else TO=""; HAVE_TO=0; fi
 lx() { $TO "$LINIX" "$@"; }
+# lxt <secs> <linix-args…>: like lx but with a per-call timeout override (for source compiles).
+lxt() { _t="$1"; shift; if [ "$HAVE_TO" = 1 ]; then timeout "$_t" "$LINIX" "$@"; else "$LINIX" "$@"; fi; }
 
 # Declarative commands (sync/status/prune) get a shorter ceiling and a verbose-capture
 # wrapper so a stall reveals the LAST step before it froze.
@@ -52,10 +78,20 @@ ok()   { echo "    [ok]    $1"; PASS=$((PASS+1)); }
 no()   { echo "    [FAIL]  $1"; FAIL=$((FAIL+1)); }
 soft() { echo "    [info]  $1"; SOFT=$((SOFT+1)); }
 hr()   { echo; echo "=========== $* ==========="; }
-rcnote() { [ "$1" -eq 124 ] && echo " (TIMED OUT after ${TIMEOUT}s)" || echo ""; }
+rcnote() { [ "$1" -eq 124 ] && echo " (TIMED OUT)" || echo ""; }
 rehash() { hash -r 2>/dev/null || true; }
 # present: resolves on PATH AND the file really exists (shell caches stale locations)
 present() { rehash; r="$(command -v "$1" 2>/dev/null || true)"; [ -n "$r" ] && [ -e "$r" ]; }
+
+# --- coverage bookkeeping: every backend we actually exercise is recorded here, and the
+# --- COVERAGE AUDIT (section 14) HARD-fails if any READY backend went untouched. ---
+TOUCHED=" "
+touched() { case "$TOUCHED" in *" $1 "*) ;; *) TOUCHED="$TOUCHED$1 " ;; esac; }
+# --- feature bookkeeping: every linix subcommand we exercise is recorded, and the audit
+# --- reports any command (outside the documented interactive/remote-only EXEMPT set) we missed.
+FEAT=" "
+feat() { for _f in "$@"; do case "$FEAT" in *" $_f "*) ;; *) FEAT="$FEAT$_f " ;; esac; done; }
+
 # is_json: real JSON validation via python3 when available (the images ship it); otherwise a
 # structural fallback. NOTE: pretty-printed JSON is multi-line, so a per-line `cut -c1` check
 # is WRONG — this validates the whole payload. Pick an interpreter that ACTUALLY parses
@@ -90,27 +126,189 @@ manifest_scoped() { grep -Eq "^$2:$3(@|\$)" "$1/local.txt" 2>/dev/null; }
 
 echo "###################################################################"
 echo "# LiNix real-world sweep :: native-backend=$BACKEND  pkg=$PKG  pkg2=$PKG2"
-echo "# binary=$LINIX  timeout=${TIMEOUT}s"
+echo "# binary=$LINIX  timeout=${TIMEOUT}s  SMOKE_ONLY=$SMOKE_ONLY  FAST=$FAST"
 echo "###################################################################"
 [ -x "$LINIX" ] || { echo "FATAL: linix binary not found at $LINIX"; exit 2; }
 rm -rf "$GDIR"; mkdir -p "$GDIR"
 
-# Capture the backend readiness map ONCE; the multi-backend sweep gates on it.
+# Capture the backend readiness map ONCE; the sweep and audit gate on it.
 DOCTOR="$(lx doctor 2>/dev/null)"
 backend_ready() { printf '%s\n' "$DOCTOR" | grep -Eqi "^\[READY\][[:space:]]+$1([[:space:]]|$)"; }
+
+# ============================================================================
+# plan_smoke <backend> <pkg> [hard|soft]: a deterministic, per-backend "is this backend wired
+# end to end?" check that needs NO successful network fetch and NO source compile:
+#   * dry-run install  -> a JSON plan  (proves argv construction + planner wiring)
+#   * list --json      -> valid JSON   (soft: exercises the installed-list parser)
+#   * search --json    -> valid JSON   (soft: network/optional)
+# HARD for package-manager backends; tolerant (soft) for system/special ones whose planner may
+# need facilities a minimal container lacks. Auto-skips (soft) when not READY. Records coverage.
+# ============================================================================
+plan_smoke() {
+    b="$1"; p="$2"; mode="${3:-hard}"
+    if ! backend_ready "$b"; then soft "[$b] not READY — plan-smoke skipped"; return; fi
+    touched "$b"
+    echo "      --- plan-smoke: $b  (pkg: $p, mode: $mode) ---"
+    out=$(lx -g "$PSDIR" -n install "$b:$p" --json 2>/dev/null); rc=$?
+    if [ $rc -eq 0 ] && is_json "$out"; then
+        ok "[$b] dry-run install emits a JSON plan (argv + planner wired)"
+    elif [ "$mode" = hard ]; then
+        no "[$b] dry-run install plan invalid (rc=$rc$(rcnote $rc))"
+    else
+        soft "[$b] dry-run plan n/a in this sandbox (rc=$rc$(rcnote $rc))"
+    fi
+    out=$(lx -b "$b" list --json 2>/dev/null); is_json "$out" \
+        && soft "[$b] list --json valid (installed-list parser ok)" \
+        || soft "[$b] list --json unavailable (tool not initialized?)"
+    out=$(lx -b "$b" search "$p" --json 2>/dev/null); is_json "$out" \
+        && soft "[$b] search --json valid" || soft "[$b] search --json n/a"
+}
+
+# Representative install identifier per backend for plan-smoke. Special-identifier backends
+# (github owner/repo, web/appimage URL, link path, …) need a real-shaped name; dry-run never
+# fetches it, so a not-here name is fine.
+ps_pkg_for() {
+    case "$1" in
+        github)   echo "BurntSushi/ripgrep" ;;
+        web)      echo "https://example.com/app.tar.gz" ;;
+        appimage) echo "https://example.com/app.AppImage" ;;
+        link)     echo "/tmp/linix-ps-src@target=/tmp/linix-ps-tgt" ;;
+        go)       echo "github.com/junegunn/fzf" ;;
+        composer) echo "psr/log" ;;
+        emerge)   echo "app-misc/jq" ;;
+        vscode)   echo "ms-python.python" ;;
+        service)  echo "cron" ;;
+        btrfs)    echo "linix-ps-subvol" ;;
+        *)        echo "hello" ;;
+    esac
+}
+
+# ============================================================================
+# REAL multi-backend lifecycle. Generic contract for ANY package-manager backend:
+#   install -> list(parser) -> manifest coherence -> [bin on PATH] -> remove -> gone -> coherent
+# Install failure is SOFT with a diagnostic (ecosystem/version/network variance is not a
+# core-orchestration bug); EVERYTHING after a successful install is HARD — that is where the
+# real bugs live (wrong remove verb, list-parse drift, stale manifest). This is what caught the
+# pixi `global remove` vs `global uninstall` bug that plan-smoke alone could not.
+#
+#   sweep_backend <backend> <pkg> [verify-bin] [timeout] [mode]
+#     mode real (default): full lifecycle, HARD after install
+#     mode soft          : whole lifecycle tolerant (known ecosystem quirk, e.g. helm URL-vs-name)
+#     mode noremove      : install+list are HARD, then assert `remove` reports a GRACEFUL
+#                          "unsupported" (cabal/stack have no uninstall verb — verifying the
+#                          designed contract, not a missing feature)
+# FAST=1 downgrades backends tagged heavy (see HEAVY) to plan-smoke.
+# ============================================================================
+SGDIR="/tmp/linix-it-sweep"
+HEAVY=" cargo opam nimble spack conda go "   # source-compiling; FAST=1 -> plan-smoke instead
+sweep_backend() {
+    b="$1"; p="$2"; bin="${3:-}"; t="${4:-$TIMEOUT}"; mode="${5:-real}"
+    if ! backend_ready "$b"; then soft "[$b] not READY in this image — skipped"; return; fi
+    if [ "$FAST" = 1 ]; then
+        case "$HEAVY" in *" $b "*) echo "      --- $b: FAST mode -> plan-smoke (source compile skipped) ---"; plan_smoke "$b" "$(ps_pkg_for "$b")" hard; return ;; esac
+    fi
+    touched "$b"
+    echo "      --- backend: $b  (pkg: $p, mode: $mode, timeout: ${t}s) ---"
+    out=$(lxt "$t" -g "$SGDIR" -y install "$b:$p" 2>&1); rc=$?
+    if [ $rc -ne 0 ]; then
+        soft "[$b] install '$p' rc=$rc$(rcnote $rc) — ecosystem/network variance (not a hard fail)"
+        printf '%s\n' "$out" | tail -3 | sed 's/^/          | /'
+        lxt "$t" -g "$SGDIR" -y remove "$b:$p" >/dev/null 2>&1   # best-effort cleanup
+        return
+    fi
+    if [ "$mode" = soft ]; then
+        soft "[$b] install '$p' exits 0 (tolerant mode: URL/name or remote quirks are non-fatal)"
+        lx -b "$b" list 2>/dev/null | grep -qiw "$p" && soft "[$b] list shows '$p'" || soft "[$b] list did not show '$p' (name-vs-id quirk)"
+        lxt "$t" -g "$SGDIR" -y remove "$b:$p" >/dev/null 2>&1
+        return
+    fi
+    ok "[$b] install '$p' exits 0"
+    lx -b "$b" list 2>/dev/null | grep -qiw "$p" && ok "[$b] list shows '$p' (installed-list parser works)" || no "[$b] list does NOT show '$p' after install — parser gap"
+    manifest_scoped "$SGDIR" "$b" "$p" && ok "[$b] install recorded '$p' in manifest (coherent)" || no "[$b] install did NOT record '$p' in manifest"
+    [ -n "$bin" ] && { present "$bin" && ok "[$b] '$bin' resolves on PATH" || soft "[$b] '$bin' not on PATH (global-bin dir not exported)"; }
+    if [ "$mode" = noremove ]; then
+        # cabal/stack: no uninstall verb by design -> remove MUST report a graceful unsupported
+        # (non-zero, but not a panic/timeout), and MUST NOT silently claim success.
+        lxt "$t" -g "$SGDIR" -y remove "$b:$p" >/dev/null 2>&1; rc=$?
+        if [ $rc -ne 0 ] && [ $rc -ne 124 ]; then ok "[$b] remove reports unsupported (rc=$rc) — correct: this tool has no uninstall verb"
+        elif [ $rc -eq 124 ]; then no "[$b] remove TIMED OUT (expected an immediate unsupported error)"
+        else no "[$b] remove returned 0 though '$b' has no uninstall verb — a no-op must not masquerade as success"; fi
+        return
+    fi
+    lxt "$t" -g "$SGDIR" -y remove "$b:$p" >/dev/null 2>&1; rc=$?
+    [ $rc -eq 0 ] && ok "[$b] remove '$p' exits 0" || no "[$b] remove '$p' rc=$rc$(rcnote $rc)"
+    lx -b "$b" list 2>/dev/null | grep -qiw "$p" && no "[$b] list still shows '$p' after remove" || ok "[$b] '$p' gone from list after remove"
+    manifest_scoped "$SGDIR" "$b" "$p" && no "[$b] remove left '$p' in manifest" || ok "[$b] remove cleared '$p' from manifest"
+}
+
+# github: real GitHub-release lifecycle (download latest asset -> symlink into ~/.local/bin ->
+# list -> remove). Bespoke because its "package" is owner/repo and its bin is the repo name.
+sweep_github() {
+    b=github; repo="BurntSushi/ripgrep"; binname="rg"
+    if ! backend_ready "$b"; then soft "[$b] not READY — skipped"; return; fi
+    touched "$b"
+    echo "      --- backend: github  (repo: $repo) ---"
+    out=$(lxt 300 -g "$SGDIR" -y install "$b:$repo" 2>&1); rc=$?
+    if [ $rc -ne 0 ]; then soft "[github] install '$repo' rc=$rc$(rcnote $rc) — network/rate-limit variance"; printf '%s\n' "$out" | tail -3 | sed 's/^/          | /'; return; fi
+    ok "[github] install '$repo' exits 0 (real release asset downloaded + extracted)"
+    lx -b "$b" list 2>/dev/null | grep -qi "ripgrep" && ok "[github] list shows the installed repo (state parser works)" || no "[github] list does NOT show ripgrep after install"
+    present "$binname" && ok "[github] '$binname' resolves on PATH (~/.local/bin symlink)" || soft "[github] '$binname' not on PATH (~/.local/bin not exported?)"
+    lxt 120 -g "$SGDIR" -y remove "$b:$repo" >/dev/null 2>&1; rc=$?
+    [ $rc -eq 0 ] && ok "[github] remove exits 0" || no "[github] remove rc=$rc$(rcnote $rc)"
+    lx -b "$b" list 2>/dev/null | grep -qi "ripgrep" && no "[github] still listed after remove" || ok "[github] gone from list after remove"
+}
+
+# link: real filesystem-link lifecycle. link has no `list` capability, so verify on disk:
+# install creates the symlink at @target; remove deletes it. (Syntax: link:<src>@target=<dst>.)
+# Absolute-path names are permitted for the link backend by the backend-aware name validator
+# (`validate_package_name_for`), which still blocks `..` traversal and shell-injection.
+sweep_link() {
+    b=link
+    if ! backend_ready "$b"; then soft "[$b] not READY — skipped"; return; fi
+    touched "$b"
+    src=/tmp/linix-link-src; dst=/tmp/linix-link-dst
+    printf 'managed by linix\n' > "$src"; rm -f "$dst"
+    echo "      --- backend: link  ($src -> $dst) ---"
+    lx -g "$SGDIR" -y install "$b:$src@target=$dst" >/dev/null 2>&1; rc=$?
+    [ $rc -eq 0 ] && ok "[link] install exits 0" || no "[link] install rc=$rc$(rcnote $rc)"
+    { [ -L "$dst" ] || [ -e "$dst" ]; } && ok "[link] created the link at $dst" || no "[link] did NOT create $dst"
+    lx -g "$SGDIR" -y remove "$b:$dst" >/dev/null 2>&1; rc=$?
+    [ $rc -eq 0 ] && ok "[link] remove exits 0" || no "[link] remove rc=$rc$(rcnote $rc)"
+    { [ -L "$dst" ] || [ -e "$dst" ]; } && no "[link] $dst still present after remove" || ok "[link] $dst gone after remove"
+    rm -f "$src" "$dst"
+}
+
+# Plan-smoke EVERY READY backend the real sweep did NOT already exercise — enumerated from
+# `doctor`, so nothing registered is silently untested and any future backend is auto-included.
+# By design this should now be a SMALL set: only the backends that genuinely cannot run a real
+# lifecycle in this container (a daemon/filesystem/host we don't have). Each is named below.
+run_plan_smokes() {
+    hr "13. PLAN-SMOKE — only the backends that cannot run a real lifecycle here"
+    rm -rf "$PSDIR"; mkdir -p "$PSDIR"
+    # HARD (wiring must be correct even where we can't fully install): the package-manager-like
+    # ones whose native tool/daemon/host is absent in a plain container.
+    hardset=" emerge eopkg slackpkg guix zypper xbps yay paru winget scoop choco psresource macports mas snap "
+    ready=$(printf '%s\n' "$DOCTOR" | grep -E '^\[READY\]' | awk '{print $2}')
+    for b in $ready; do
+        case "$TOUCHED" in *" $b "*) continue ;; esac    # already got a real lifecycle
+        mode=soft
+        case "$hardset" in *" $b "*) mode=hard ;; esac
+        plan_smoke "$b" "$(ps_pkg_for "$b")" "$mode"
+    done
+}
 
 # ------------------------------------------------------------------ discovery
 hr "1. DISCOVERY (doctor / search / info)"
 OUT="$(lx doctor 2>&1)"; RC=$?
-[ $RC -eq 0 ] && ok "doctor exits 0" || no "doctor exit=$RC$(rcnote $RC)"
+[ $RC -eq 0 ] && ok "doctor exits 0" || no "doctor exit=$RC$(rcnote $RC)"; feat doctor
 backend_ready "$BACKEND" && ok "doctor reports $BACKEND READY" || no "doctor does not list $BACKEND as READY"
 echo "      READY backends:"; printf '%s\n' "$DOCTOR" | grep -i "READY" | sed 's/^/        /'
 
 OUT="$(lx --backend "$BACKEND" update 2>&1)"; RC=$?
-[ $RC -eq 0 ] && soft "update ($BACKEND) exits 0" || soft "update ($BACKEND) exit=$RC (network/optional)"
+[ $RC -eq 0 ] && soft "update ($BACKEND) exits 0" || soft "update ($BACKEND) exit=$RC (network/optional)"; feat update
 
 OUT="$(lx search "$PKG" 2>&1)"; RC=$?
-[ $RC -eq 0 ] && ok "search exits 0" || no "search exit=$RC$(rcnote $RC)"
+[ $RC -eq 0 ] && ok "search exits 0" || no "search exit=$RC$(rcnote $RC)"; feat search
 printf '%s\n' "$OUT" | grep -iq "^$BACKEND" && ok "search returns a $BACKEND hit for '$PKG'" \
     || soft "no $BACKEND-prefixed search hit for '$PKG' (index/name variance)"
 
@@ -119,6 +317,25 @@ if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q "Package:"; then
     ok "info '$PKG' returns metadata"
 else
     soft "info '$PKG' returned rc=$RC / no metadata (may be search-only backend)"
+fi
+feat info
+
+# ----------------------------------------- SMOKE-ONLY fast exit (slow/source distros)
+if [ "$SMOKE_ONLY" = "1" ]; then
+    hr "SMOKE-ONLY MODE — plan/parse/read-only (native manager builds from source; no real install)"
+    rm -rf "$PSDIR"; mkdir -p "$PSDIR"
+    plan_smoke "$BACKEND" "$PKG"
+    run_plan_smokes
+    hr "READ-ONLY SMOKE (must run without crashing)"
+    for cmd in "config show" "config path" "unmanaged" "orphans" "audit" "sbom" "snapshot list" "profile list" "policy" "completions bash"; do
+        # shellcheck disable=SC2086
+        lx -b "$BACKEND" $cmd >/dev/null 2>&1; RC=$?
+        [ $RC -eq 0 ] && soft "\`linix $cmd\` exits 0" || soft "\`linix $cmd\` exit=$RC$(rcnote $RC) (tolerated)"
+    done
+    hr "SUMMARY [$BACKEND image — SMOKE-ONLY]"
+    echo "    HARD pass: $PASS    HARD fail: $FAIL    soft/info: $SOFT"
+    [ "$FAIL" -ne 0 ] && { echo "    RESULT: FAIL ($FAIL hard check(s) failed)"; exit 1; }
+    echo "    RESULT: PASS"; exit 0
 fi
 
 # --------------------------------------------------- dry-run safety (no mutation)
@@ -133,7 +350,7 @@ manifest_has "$PKG" && no "dry-run wrote '$PKG' to the manifest (must not!)" || 
 # --------------------------------------------------------- imperative install
 hr "3. IMPERATIVE INSTALL + LIST + INFO + config coherence"
 lx -g "$GDIR" -y install "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "install '$BACKEND:$PKG' exits 0" || no "install exit=$RC$(rcnote $RC)"
+[ $RC -eq 0 ] && ok "install '$BACKEND:$PKG' exits 0" || no "install exit=$RC$(rcnote $RC)"; feat install
 present "$PKG" && ok "'$PKG' on PATH after install" || no "'$PKG' NOT on PATH after install"
 manifest_has "$PKG" && ok "install recorded '$PKG' in the manifest (config stays coherent)" || no "install did NOT record '$PKG' in the manifest — next sync would treat it as drift"
 OUT="$(lx --backend "$BACKEND" list 2>&1)"; RC=$?
@@ -142,6 +359,7 @@ if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -qw "$PKG"; then
 else
     no "list ($BACKEND) does not show '$PKG' (rc=$RC$(rcnote $RC)) — installed-list parse gap"
 fi
+feat list
 
 # ------------------------------------------------------------- idempotency (install)
 hr "4. IDEMPOTENCY (install already-installed)"
@@ -151,7 +369,7 @@ lx -g "$GDIR" -y install "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
 # ----------------------------------------------------------------- imperative remove
 hr "5. IMPERATIVE REMOVE + verify gone + config coherence"
 lx -g "$GDIR" -y remove "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "remove '$BACKEND:$PKG' exits 0" || no "remove exit=$RC$(rcnote $RC)"
+[ $RC -eq 0 ] && ok "remove '$BACKEND:$PKG' exits 0" || no "remove exit=$RC$(rcnote $RC)"; feat remove
 present "$PKG" && no "'$PKG' STILL present after remove" || ok "'$PKG' gone from PATH after remove"
 manifest_has "$PKG" && no "remove left '$PKG' in the manifest (stale config — sync would reinstall it)" || ok "remove cleared '$PKG' from the manifest"
 OUT="$(lx --backend "$BACKEND" list 2>&1)"
@@ -181,12 +399,14 @@ elif [ $RC -eq 124 ]; then
 else
     soft "unscoped 'status' exit=$RC"
 fi
+feat status
 
 # ---------------------------------------- declarative lifecycle ROUNDTRIP (scoped)
 hr "8. DECLARATIVE ROUNDTRIP — write file -> sync -> installed ; edit file -> prune -> gone"
 lx -g "$GDIR" init >/dev/null 2>&1; RC=$?
 MANIFEST="$GDIR/local.txt"
 if [ $RC -eq 0 ] && [ -f "$MANIFEST" ]; then ok "init scaffolds manifest at $MANIFEST"; else no "init rc=$RC$(rcnote $RC), manifest present=$( [ -f "$MANIFEST" ] && echo yes || echo no)"; fi
+feat init
 
 echo "      -> writing '$BACKEND:$PKG' into the manifest file, then calling sync"
 echo "$BACKEND:$PKG" >> "$MANIFEST"
@@ -197,12 +417,14 @@ grep -qw "$PKG" "$LOGF" 2>/dev/null && ok "status shows '$PKG' as a pending chan
 dlx -g "$GDIR" -b "$BACKEND" -y sync; RC=$?
 if [ $RC -eq 0 ]; then ok "sync (scoped) exits 0"; else no "sync exit=$RC$(rcnote $RC)"; tail_log; fi
 present "$PKG" && ok "sync INSTALLED '$PKG' from the manifest file" || no "sync did NOT install '$PKG'"
+feat sync
 
 lx -g "$GDIR" -b "$BACKEND" lock >/dev/null 2>&1; RC=$?
 if [ $RC -eq 0 ] && [ -f "$GDIR/locks.json" ]; then ok "lock writes locks.json"; else soft "lock rc=$RC$(rcnote $RC) / no locks.json"; fi
+feat lock
 
 OUT="$(lx -g "$GDIR" -b "$BACKEND" generation list 2>&1)"; RC=$?
-[ $RC -eq 0 ] && soft "generation list exits 0" || soft "generation list exit=$RC$(rcnote $RC)"
+[ $RC -eq 0 ] && soft "generation list exits 0" || soft "generation list exit=$RC$(rcnote $RC)"; feat generation
 
 echo "      -> removing '$PKG' from the manifest file, then converging (prune)"
 : > "$MANIFEST"
@@ -211,6 +433,7 @@ grep -qw "$PKG" "$LOGF" 2>/dev/null && ok "status flags '$PKG' as drift after th
 dlx -g "$GDIR" -b "$BACKEND" -y prune; RC=$?
 if [ $RC -eq 0 ]; then ok "prune (scoped) exits 0"; else no "prune exit=$RC$(rcnote $RC)"; tail_log; fi
 present "$PKG" && no "prune did NOT remove drift '$PKG'" || ok "prune REMOVED '$PKG' after it left the manifest file"
+feat prune
 
 # ------------------------------------------------------------- JSON contract
 hr "9. JSON OUTPUT CONTRACT (stdout only; real JSON parse)"
@@ -232,10 +455,10 @@ pread() { $TO "$LINIX" -g "$PGDIR" "$@" 2>/dev/null; }                         #
 
 # (a) activate one profile -> only its package
 pcmd activate alpha; RC=$?
-[ $RC -eq 0 ] && ok "activate alpha exits 0" || no "activate alpha rc=$RC$(rcnote $RC)"
+[ $RC -eq 0 ] && ok "activate alpha exits 0" || no "activate alpha rc=$RC$(rcnote $RC)"; feat activate
 present "$PKG"  && ok "profile 'alpha' installed '$PKG'" || no "alpha did not install '$PKG'"
 present "$PKG2" && no "alpha unexpectedly installed '$PKG2'" || ok "alpha left '$PKG2' absent"
-pread profile active | grep -qw alpha && ok "'alpha' shows as active" || no "'alpha' not reported active"
+pread profile active | grep -qw alpha && ok "'alpha' shows as active" || no "'alpha' not reported active"; feat profile
 
 # (b) activate a SECOND profile -> BOTH packages present simultaneously
 pcmd activate bravo; RC=$?
@@ -244,7 +467,7 @@ if present "$PKG" && present "$PKG2"; then ok "MULTIPLE active: '$PKG' AND '$PKG
 
 # (c) deactivate one -> its unique package removed, the shared/other stays
 pcmd deactivate alpha; RC=$?
-[ $RC -eq 0 ] && ok "deactivate alpha exits 0" || no "deactivate alpha rc=$RC$(rcnote $RC)"
+[ $RC -eq 0 ] && ok "deactivate alpha exits 0" || no "deactivate alpha rc=$RC$(rcnote $RC)"; feat deactivate
 present "$PKG"  && no "deactivate alpha did NOT remove '$PKG'" || ok "deactivate alpha removed '$PKG'"
 present "$PKG2" && ok "'$PKG2' survived (still provided by bravo — union semantics)" || no "deactivate alpha wrongly removed '$PKG2'"
 
@@ -269,52 +492,173 @@ pcmd deactivate lean
 present "$PKG2" && no "final deactivate left '$PKG2'" || ok "deactivate lean cleaned up '$PKG2'"
 pread profile list | grep -qw alpha && ok "profile list enumerates defined profiles" || soft "profile list missing entries"
 
-# ------------------------------------------------- MULTI-BACKEND sweep
-hr "11. MULTI-BACKEND SWEEP — every READY language/cross backend"
-SGDIR="/tmp/linix-it-sweep"; rm -rf "$SGDIR"; mkdir -p "$SGDIR"
-# Generic lifecycle for ANY backend: install -> list(parser) -> coherence -> remove. Install
-# failure is SOFT with a diagnostic (ecosystem/version variance — e.g. corepack yarn v4, uv
-# venv rules — is not a core-orchestration bug); everything AFTER a successful install is HARD.
-sweep_backend() {
-    b="$1"; p="$2"; bin="${3:-}"
-    if ! backend_ready "$b"; then soft "[$b] not READY in this image — skipped"; return; fi
-    echo "      --- backend: $b  (pkg: $p) ---"
-    out=$($TO "$LINIX" -g "$SGDIR" -y install "$b:$p" 2>&1); rc=$?
-    if [ $rc -ne 0 ]; then
-        soft "[$b] install '$p' rc=$rc$(rcnote $rc) — ecosystem/network variance (not a hard fail)"
-        printf '%s\n' "$out" | tail -3 | sed 's/^/          | /'
-        $TO "$LINIX" -g "$SGDIR" -y remove "$b:$p" >/dev/null 2>&1   # best-effort cleanup
-        return
-    fi
-    ok "[$b] install '$p' exits 0"
-    lx -b "$b" list 2>/dev/null | grep -qiw "$p" && ok "[$b] list shows '$p' (installed-list parser works)" || no "[$b] list does NOT show '$p' after install — parser gap"
-    manifest_scoped "$SGDIR" "$b" "$p" && ok "[$b] install recorded '$p' in manifest (coherent)" || no "[$b] install did NOT record '$p' in manifest"
-    [ -n "$bin" ] && { present "$bin" && soft "[$b] '$bin' resolves on PATH" || soft "[$b] '$bin' not on PATH (global-bin dir not exported)"; }
-    $TO "$LINIX" -g "$SGDIR" -y remove "$b:$p" >/dev/null 2>&1; rc=$?
-    [ $rc -eq 0 ] && ok "[$b] remove '$p' exits 0" || no "[$b] remove '$p' rc=$rc$(rcnote $rc)"
-    lx -b "$b" list 2>/dev/null | grep -qiw "$p" && no "[$b] list still shows '$p' after remove" || ok "[$b] '$p' gone from list after remove"
-    manifest_scoped "$SGDIR" "$b" "$p" && no "[$b] remove left '$p' in manifest" || ok "[$b] remove cleared '$p' from manifest"
-}
-# Table: <backend> <test-package> [verify-bin]. The same package name is fetched from each
-# ecosystem's own registry, proving that backend end-to-end. Not-READY rows auto-skip.
-sweep_backend npm  cowsay   cowsay
-sweep_backend yarn cowsay   cowsay
-sweep_backend pnpm cowsay   cowsay
-sweep_backend bun  cowsay   cowsay
-sweep_backend pipx cowsay   cowsay
-sweep_backend uv   cowsay   cowsay
-sweep_backend gem  colorize ""
-# cargo is READY (rustup) but `cargo install` COMPILES from source (minutes) — verify only
-# that it plans a build rather than paying the compile in every run.
-if backend_ready cargo; then
-    OUT="$(lx -g "$SGDIR" -n install "cargo:ripgrep" --json 2>/dev/null)"
-    is_json "$OUT" && ok "[cargo] dry-run install produces a JSON plan (compile skipped)" || soft "[cargo] dry-run plan not JSON"
+# ------------------------------------------------- REAL MULTI-BACKEND SWEEP
+hr "11. REAL MULTI-BACKEND LIFECYCLE — every feasible backend (real install → list → remove)"
+rm -rf "$SGDIR"; mkdir -p "$SGDIR"
+# Fast, prebuilt / downloaded ecosystems (each fetched from its own registry).
+sweep_backend npm      cowsay    cowsay    120
+sweep_backend yarn     cowsay    cowsay    150
+sweep_backend pnpm     cowsay    cowsay    150
+sweep_backend bun      cowsay    cowsay    150
+sweep_backend pipx     cowsay    cowsay    240
+sweep_backend uv       cowsay    cowsay    240
+sweep_backend gem      colorize  ""        240
+sweep_backend pip      cowsay    cowsay    240
+sweep_backend luarocks say       ""        240
+sweep_backend pixi     ripgrep   rg        420
+sweep_backend composer psr/log   ""        300
+sweep_backend dotnet   dotnetsay dotnetsay 420
+sweep_backend pub      coverage  ""        420
+sweep_backend nix      hello     hello     900
+sweep_backend krew     ns        ""        420
+sweep_backend mix      phx_new   ""        420
+sweep_backend conda    tqdm      ""        900
+# Source-compiling ecosystems — REAL builds (slow but real). FAST=1 downgrades these.
+sweep_backend cargo    ripgrep   rg        2400
+sweep_backend go       rsc.io/2fa 2fa      900
+sweep_backend opam     csexp     ""        2400
+sweep_backend nimble   checksums ""        900
+sweep_backend spack    zlib      ""        3600
+# cabal: TOLERANT. `cabal install hello` really compiles + installs the exe to ~/.cabal/bin,
+# but `cabal list --installed` reports the LIBRARY db, not installed executables, so the exe
+# never shows there; and cabal has no uninstall verb. So a strict install→list→remove doesn't
+# apply — we still exercise the real compile/install, just report it tolerantly.
+sweep_backend cabal    hello     hello     2400  soft
+# Tolerant (known ecosystem quirk): helm plugin id != install URL; flatpak needs a big remote.
+sweep_backend helm     https://github.com/databus23/helm-diff "" 420 soft
+sweep_backend flatpak  org.gnome.Calculator ""  900 soft
+sweep_backend mise     usage     ""        900 soft
+# Special-identifier backends with real effects.
+sweep_github
+sweep_link
+
+# ------------------------------------------------- FEATURE COVERAGE
+hr "12. FEATURE COVERAGE — every linix subcommand exercised at least once"
+FGDIR="/tmp/linix-it-feat"; rm -rf "$FGDIR"; mkdir -p "$FGDIR"
+lx -g "$FGDIR" init >/dev/null 2>&1
+# completions: every shell must emit a non-empty script and exit 0 (pure, always testable).
+for sh in bash zsh fish powershell elvish nushell; do
+    OUT="$(lx completions "$sh" 2>/dev/null)"; RC=$?
+    { [ $RC -eq 0 ] && [ -n "$OUT" ]; } && ok "completions $sh emits a script" || no "completions $sh rc=$RC / empty"
+done
+feat completions
+# heal: WAL recovery — a clean system has nothing to recover, must exit 0 without crashing.
+lx -g "$FGDIR" heal >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "heal exits 0 on a clean system (no interrupted transaction)" || soft "heal rc=$RC$(rcnote $RC)"; feat heal
+# clean: deep cleanup pass — must run without crashing.
+lx -g "$FGDIR" -y clean >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "clean exits 0" || soft "clean rc=$RC$(rcnote $RC) (tolerated)"; feat clean
+# unmanaged / orphans: read-only inventories.
+lx -b "$BACKEND" unmanaged >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "unmanaged exits 0" || soft "unmanaged rc=$RC (tolerated)"; feat unmanaged
+lx -b "$BACKEND" orphans   >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "orphans exits 0"   || soft "orphans rc=$RC (tolerated)"; feat orphans
+# audit / sbom / why / policy: the 6.0 supply-chain + provenance surface.
+# audit queries OSV.dev once per managed package and sbom enumerates every backend, so both are
+# network-bound and can run for minutes on a many-package image — give them a generous ceiling
+# rather than the default so a slow-but-successful scan isn't mis-timed-out.
+lxt 300 -b "$BACKEND" audit >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "audit exits 0" || soft "audit rc=$RC$(rcnote $RC) (network/OSV latency — tolerated)"; feat audit
+OUT="$(lxt 300 sbom 2>/dev/null)"; RC=$?; { [ $RC -eq 0 ] && is_json "$OUT"; } && ok "sbom emits a CycloneDX JSON document" || soft "sbom rc=$RC$(rcnote $RC) / not JSON (tolerated)"; feat sbom
+lx why "$PKG" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "why '$PKG' exits 0" || soft "why rc=$RC (tolerated)"; feat why
+lx policy >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "policy exits 0" || soft "policy rc=$RC (no policy.toml — tolerated)"; feat policy
+# upgrade (+ canary/self-heal): install a pkg, then upgrade; canary with a passing --test.
+lx -g "$FGDIR" -y install "$BACKEND:$PKG" >/dev/null 2>&1
+lx -g "$FGDIR" -b "$BACKEND" -y upgrade >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "upgrade (scoped) exits 0" || soft "upgrade rc=$RC$(rcnote $RC) (network — tolerated)"
+lxt 120 -g "$FGDIR" -b "$BACKEND" -y upgrade --canary --test "true" >/dev/null 2>&1; RC=$?
+# A canary upgrade takes a pre-upgrade safety snapshot and rolls back if --test fails. A plain
+# container has no snapshot-capable filesystem, so canary correctly FAIL-SAFES (rc!=0) rather
+# than upgrade without a rollback point — so a non-zero here is EXPECTED, not a passing test.
+# (The health-gated rollback logic itself is covered by the hermetic canary/bisect unit tests.)
+[ $RC -eq 0 ] && ok "canary upgrade with a passing --test exits 0 (no rollback)" \
+    || soft "canary upgrade rc=$RC$(rcnote $RC) — expected where no snapshot backend exists (fail-safe); logic covered by unit tests"
+feat upgrade
+lx -g "$FGDIR" -y remove "$BACKEND:$PKG" >/dev/null 2>&1
+# repo: list is read-only + safe; add/remove exercised on the native backend (may need a real
+# URL, so tolerant), proving the repo-manager plumbing end to end.
+lx repo list -b "$BACKEND" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "repo list ($BACKEND) exits 0" || soft "repo list rc=$RC (tolerated)"
+lx -y repo add linix-it-testrepo "https://example.com/linix-it" -b "$BACKEND" >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && soft "repo add exits 0" || soft "repo add rc=$RC (needs a real source — tolerated)"
+lx -y repo remove linix-it-testrepo -b "$BACKEND" >/dev/null 2>&1
+feat repo
+# migrate: ingest OS-installed-but-unmanaged packages into a manifest (scoped + tolerant).
+lxt 120 -g "$FGDIR" -b "$BACKEND" -y migrate >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "migrate (scoped) exits 0" || soft "migrate rc=$RC$(rcnote $RC) (tolerated)"; feat migrate
+# teleport: move a package across backends — exercised as a dry-run plan (no real mutation).
+lx -n teleport "$PKG" "$BACKEND" >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "teleport (dry-run plan) exits 0" || soft "teleport rc=$RC (tolerated)"; feat teleport
+# module: list + create + show a reusable @module.
+lx -g "$FGDIR" module list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "module list exits 0" || soft "module list rc=$RC (tolerated)"
+lx -g "$FGDIR" module create linix-it-mod >/dev/null 2>&1
+lx -g "$FGDIR" module show linix-it-mod >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && soft "module create+show round-trips" || soft "module show rc=$RC (tolerated)"
+feat module
+# snapshot: list + prune (retention). Real filesystem snapshots need a snapshot-capable FS, so
+# these must at least run without crashing.
+lx snapshot list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "snapshot list exits 0" || soft "snapshot list rc=$RC (tolerated)"
+lx -y snapshot prune --force >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && soft "snapshot prune exits 0" || soft "snapshot prune rc=$RC (tolerated)"
+feat snapshot
+# generation: pin/unpin the newest generation if one exists; rollback exercised as a dry-run.
+GID="$(lx -g "$FGDIR" generation list 2>/dev/null | grep -oE '[0-9a-f]{6,}' | head -n1)"
+if [ -n "$GID" ]; then
+    lx -g "$FGDIR" generation pin "$GID"   >/dev/null 2>&1 && soft "generation pin $GID ok"   || soft "generation pin rc=$? (tolerated)"
+    lx -g "$FGDIR" generation unpin "$GID" >/dev/null 2>&1 && soft "generation unpin $GID ok" || soft "generation unpin rc=$? (tolerated)"
+    lx -n -g "$FGDIR" rollback "$GID"      >/dev/null 2>&1 && ok "rollback (dry-run) to $GID exits 0" || soft "rollback rc=$? (tolerated)"
 else
-    soft "[cargo] not READY — skipped"
+    soft "no generation id yet to pin/rollback (fresh manifest)"
 fi
+feat rollback
+# lease: set an expiry on a managed package, then confirm it lists.
+lx -g "$FGDIR" -y install "$BACKEND:$PKG" >/dev/null 2>&1
+lx -g "$FGDIR" lease set "$BACKEND:$PKG" -d 30d >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "lease set exits 0" || soft "lease set rc=$RC (tolerated)"
+lx -g "$FGDIR" lease list 2>/dev/null | grep -qiw "$PKG" && ok "lease list shows the leased package" || soft "lease list did not show '$PKG' (tolerated)"
+lx -g "$FGDIR" -y remove "$BACKEND:$PKG" >/dev/null 2>&1
+feat lease
+# schedule: register a native scheduled task, list it, remove it (needs systemd/cron; tolerant).
+lx schedule add linix-it-task --cron "0 2 * * *" --command "upgrade" >/dev/null 2>&1; RC=$?
+if [ $RC -eq 0 ]; then
+    ok "schedule add exits 0 (native scheduler present)"
+    lx schedule list 2>/dev/null | grep -qw linix-it-task && ok "schedule list shows the task" || soft "schedule list missing the task (tolerated)"
+    lx schedule remove linix-it-task >/dev/null 2>&1
+else
+    soft "schedule add rc=$RC (no systemd/cron in this container — tolerated)"
+fi
+feat schedule
+# run / shim / shell: ephemeral-env + shim generation.
+OUT="$(lxt 120 run -p "$BACKEND:$PKG" "echo LINIX_RUN_OK" 2>/dev/null)"; RC=$?
+printf '%s\n' "$OUT" | grep -q LINIX_RUN_OK && ok "run executes a command in an ephemeral env" || soft "run rc=$RC (ephemeral-env variance — tolerated)"; feat run
+lxt 120 shim linix-it-shim -s "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "shim generates a launcher" || soft "shim rc=$RC$(rcnote $RC) (tolerated)"; feat shim
+feat shell   # `shell` is an interactive ghost-shell (no non-interactive assertion); see EXEMPT
+
+# ------------------------------------------------- plan-smoke the can't-run-here set
+run_plan_smokes
+
+# ------------------------------------------------- COVERAGE AUDIT
+hr "14. COVERAGE AUDIT — nothing registered or featured is silently untested"
+# (a) Every READY backend must have been exercised by a real lifecycle OR a plan-smoke.
+audit_fail=0
+for b in $(printf '%s\n' "$DOCTOR" | grep -E '^\[READY\]' | awk '{print $2}'); do
+    case "$TOUCHED" in
+        *" $b "*) : ;;   # exercised somewhere above
+        *) no "COVERAGE GAP: backend '$b' is READY but was never exercised (add a sweep row)"; audit_fail=1 ;;
+    esac
+done
+[ $audit_fail -eq 0 ] && ok "every READY backend was exercised (real lifecycle or plan-smoke)"
+# The native backend is covered by the detailed sections 2–10.
+touched "$BACKEND"
+# (b) Every linix subcommand must have been exercised, except the documented interactive /
+# remote-SSH ones (no non-interactive assertion is possible in a headless container).
+FEATURES_ALL="sync run shim heal clean unmanaged orphans status prune lock search update upgrade list info install remove repo doctor migrate teleport shell undo activate deactivate profile module snapshot generation rollback lease schedule config init audit sbom why bisect clone fleet policy completions"
+FEATURES_EXEMPT=" shell undo bisect clone fleet "   # interactive gallery / ghost-shell, or need a remote SSH host
+feat config   # exercised in the read-only section below (config show/path/init)
+feat_gap=0
+for f in $FEATURES_ALL; do
+    case "$FEATURES_EXEMPT" in *" $f "*) soft "feature '$f' is EXEMPT (interactive or needs a remote host)"; continue ;; esac
+    case "$FEAT" in *" $f "*) : ;; *) no "FEATURE GAP: '$f' was never exercised"; feat_gap=1 ;; esac
+done
+[ $feat_gap -eq 0 ] && ok "every non-exempt linix subcommand was exercised at least once"
 
 # ------------------------------------------------- read-only smoke (no crashes)
-hr "12. READ-ONLY SMOKE (must run without crashing)"
+hr "15. READ-ONLY SMOKE (must run without crashing)"
 for cmd in "config show" "config path" "unmanaged" "orphans" "audit" "sbom" "why $PKG" \
            "snapshot list" "generation list" "profile list" "policy"; do
     # shellcheck disable=SC2086

@@ -20,7 +20,7 @@ Traditional package managers operate in a “fire and forget” mode. If a trans
 
 &#x20; *Result: super‑fast synchronisations even with hundreds of packages.*
 
-- **Universal Reach (38+ backends)** – From system managers (APT, Pacman, DNF, Winget, Brew, MacPorts, pkgsrc) and language tools (Cargo, NPM, Pip, Gem, .NET tools, Conda, PowerShell Gallery) to specialised resources (GitHub Releases, direct HTTP downloads, AppImages, VS Code extensions, Emacs packages, system services, BTRFS subvolumes, and more). Plus an **onboarder** to teach LiNix any CLI manager from a TOML file — no code changes.
+- **Universal Reach (50+ backends)** – From system managers (APT, Pacman, DNF, Winget, Brew, MacPorts, pkgsrc, Portage/emerge, Guix, eopkg, slackpkg) and language tools (Cargo, NPM, PNPM, Yarn, Bun, Pip, Pipx, uv, Gem, Go, Composer, .NET tools, Conda, opam, LuaRocks, Nimble, mix/Hex, Dart pub, Cabal, Stack, PowerShell Gallery) to dev-environment and specialised resources (asdf, mise, Spack, pixi, Helm plugins, krew, GitHub Releases, direct HTTP downloads, AppImages, VS Code extensions, Emacs packages, system services, BTRFS subvolumes, and more). Plus an **onboarder** to teach LiNix any CLI manager from a TOML file — no code changes.
 
 - **Imperative → Declarative Bridge** – `linix install` and `linix remove` automatically write to your declarative manifests (`local.txt`). You can start with an empty config, imperatively add packages as you need them, and later run `linix sync` to clean up or replicate the same state elsewhere.
 
@@ -32,7 +32,7 @@ Traditional package managers operate in a “fire and forget” mode. If a trans
 
 - **Self‑Healing & Telemetry** – Every operation is logged with retry counts, download sizes, and timings. The engine automatically retries transient failures and rolls back on critical errors.
 
-- **Ephemeral Environments (Ghost Shell)** – Run `linix shell --packages python:3.11 node:20` and get an isolated, one‑off environment with exactly those tools – no pollution, no leftovers.
+- **Ephemeral Environments (Ghost Shell)** – Run `linix shell python:3.11 node:20` and get an isolated, one‑off environment with exactly those tools – no pollution, no leftovers. To execute a single command in a throwaway environment instead of an interactive shell, use `linix run --packages python:3.11 "python script.py"`.
 
 - **High‑Performance Rust Shims** – Deploy sub‑millisecond shims to `~/.local/bin` that act as transparent proxies to sandboxed applications.
 
@@ -212,7 +212,65 @@ LiNix will:
 
 | `policy` | Check the desired state against declarative rules in `policy.toml` (also enforced automatically before `sync`/`upgrade`). |
 
+| `run --packages <pkgs> "<cmd>"` | Run a single command inside an ephemeral environment with those packages, then tear it down. |
 
+| `shell <pkgs…>` | Enter an interactive, isolated ghost shell with the given packages loaded. |
+
+| `list` | List installed/managed packages (`--backend <b>` to filter, `--json` for machine output). |
+
+| `info <pkg>` | Show detailed metadata (version, description, install path, dependencies) for a package. |
+
+| `module list/show/create` | Manage reusable package modules referenced from manifests with the `@module` syntax. |
+
+| `snapshot list/prune` | List system snapshots, or prune old ones per the configured retention policy. |
+
+| `generation list/pin/unpin/rollback` | Manage generations (each records the realized package set plus a frozen copy of the manifests that produced it). |
+
+| `rollback <id>` | Shorthand for `generation rollback`: realize a saved generation on the system. Scope with `--package` / the global `--backend`. |
+
+| `lease list/set` | Manage temporary package leases with expirations (e.g. `lease set apt:foo --duration 30d`); expired leases are swept on each run. |
+
+| `schedule add/list/remove` | Register native scheduled tasks (systemd / launchd / Task Scheduler) that run a LiNix command on a cron expression, with optional desktop/email notifications. |
+
+| `completions <shell>` | Emit a shell completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`, `nushell`). |
+
+
+
+### Global flags
+
+These apply to every subcommand:
+
+| Flag | Meaning |
+|------|---------|
+| `-n`, `--dry-run` | Preview only; make no system changes. |
+| `-y`, `--yes` | Skip confirmation prompts (required for non‑interactive/CI runs). |
+| `-b`, `--backend <name>` | Force a specific backend for the operation. |
+| `-c`, `--config <path>` | Use a custom `config.toml`. |
+| `-g`, `--groups-dir <path>` | Use a custom directory of manifest (`.txt`) files. |
+| `--progress <bool>` | Toggle progress indicators (default `true`). |
+| `-v`, `--verbose` | Enable debug‑level logging (logs go to stderr; stdout stays reserved for `--json`). |
+
+## In development (unreleased, on `main`)
+
+Since 6.0.0, the following have landed in the codebase (see the `[Unreleased]` section of
+[CHANGELOG.md](CHANGELOG.md)):
+
+- **More backends** — MacPorts (`macports`), pkgsrc (`pkgin`), .NET global tools
+  (`dotnet`), Conda (`conda`), PowerShell Gallery (`psresource`), uv (`uv`), XBPS (`xbps`),
+  and the AUR helpers `yay` / `paru` as first‑class backends.
+- **Generations & rollback** — every change records a *generation* (the exact realized
+  package set plus a frozen copy of the manifests). Manage them with
+  `linix generation list|pin|unpin|rollback`, or `linix rollback <id>` (optionally scoped
+  to a single `--package` / `--backend`).
+- **Declarative retention** — independent `keep_last` / `keep_days` / `keep` policies for
+  generations, snapshots, and a manifest archive.
+- **Module/group exclusion** — `@module:dev -vim` includes a module but drops one package
+  from *its* contribution.
+- **Inline managed config files** (`[managed_files]`) — declare a file's body directly in
+  config; it's materialized as a self‑healing `link`, with the original backed up once
+  before any overwrite.
+- **Per‑host backend allow‑lists** (`[hostname_backends]`) — restrict a machine to a
+  subset of backends.
 
 ## What's new in 6.0.0
 
@@ -336,6 +394,35 @@ LiNix ships with a fully isolated integration suite:
 
 
 
+## Building & Testing
+
+LiNix is a standard Cargo project. It builds two binaries: `linix` (the CLI) and `shim`
+(the tiny proxy deployed by `linix shim`).
+
+```bash
+cargo build --release        # optimized build -> target/release/linix
+cargo test                   # run the hermetic unit/integration suite
+```
+
+The suite in `tests/` is **hermetic**: it mocks command execution (`MockExecutor`),
+redirects all filesystem writes to temp directories, and never touches the real network or
+system — so it proves the logic but never mutates your machine. Tests are platform‑gated
+(apt only on Linux, winget only on Windows, etc.).
+
+To exercise the **real** package managers end‑to‑end (search → install → verify → remove),
+use the integration harnesses:
+
+- **Linux** — `docker/integration/run.sh` builds disposable containers for Ubuntu (apt),
+  Fedora (dnf), Arch (pacman), and Alpine (apk) and drives the real `linix` binary against
+  each. Requires Docker. Override the test package (`./docker/integration/run.sh htop`) or
+  the distro set (`DISTROS="ubuntu arch" ./docker/integration/run.sh`).
+- **Windows / macOS** — `scripts/integration-windows.sh` drives the host‑native backends
+  (scoop, winget, choco, brew) directly, since those OSes can't run in a Linux container.
+- **Windows smoke** — `verify.ps1` and `full-test.ps1` are quick PowerShell helpers that
+  build the release binary and run a handful of smoke checks.
+
+See `docker/integration/README.md` for the full integration guide.
+
 ## Platform Support
 
 
@@ -344,11 +431,11 @@ LiNix ships with a fully isolated integration suite:
 
 |----------|------------|--------------------|------------------|
 
-| **Linux** | Bubblewrap (bwrap) | BTRFS, Timeshift, ZFS | apt, pacman, dnf, apk, zypper, xbps, yay, paru, snap, flatpak, nix, pkgin, conda, cargo, dotnet, npm, pip, pipx, uv, bun, yarn, pnpm, gem, go, composer, link, service, github, web, appimage, emacs, vscode, btrfs |
+| **Linux** | Bubblewrap (bwrap) | BTRFS, Timeshift, ZFS | apt, pacman, dnf, apk, zypper, xbps, yay, paru, snap, flatpak, nix, pkgin, conda, cargo, dotnet, npm, pip, pipx, uv, bun, yarn, pnpm, gem, mise, link, service, github, web, appimage, emacs, vscode, btrfs |
 
-| **macOS** | `sandbox‑exec` | Time Machine (planned) | brew, mas, macports, pkgin, conda, cargo, dotnet, npm, pip, pipx, uv, gem, go, link, service, github, web, emacs, vscode |
+| **macOS** | `sandbox‑exec` | Time Machine (planned) | brew, mas, macports, pkgin, conda, cargo, dotnet, npm, pip, pipx, uv, gem, mise, link, service, github, web, emacs, vscode |
 
-| **Windows** | Windows Sandbox + low‑integrity fallback | Windows Restore Points | winget, scoop, choco, psresource, conda, cargo, dotnet, npm, pip, pipx, uv, bun, yarn, pnpm, gem, go, link, service, github, web, emacs, vscode |
+| **Windows** | Windows Sandbox + low‑integrity fallback | Windows Restore Points | winget, scoop, choco, psresource, conda, cargo, dotnet, npm, pip, pipx, uv, bun, yarn, pnpm, gem, mise, link, service, github, web, emacs, vscode |
 
 
 

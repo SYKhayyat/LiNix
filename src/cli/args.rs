@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 /// LiNix - Universal Mission-Critical Package Manager
-/// High-performance, DAG-based orchestration for 33+ backends.
+/// High-performance, DAG-based orchestration for 50+ backends.
 /// Version 6.0.0: cross-ecosystem audit/SBOM, provenance (`why`), health-gated canary
 /// upgrades, snapshot bisect, SSH clone/fleet, a policy gate, and system-scope pruning.
 #[derive(Parser, Debug)]
@@ -42,6 +42,10 @@ pub struct Cli {
     /// Enable debug-level logging
     #[arg(short, long, global = true)]
     pub verbose: bool,
+
+    /// Quiet mode: suppress the flight plan and transaction summary (errors still print)
+    #[arg(short, long, global = true)]
+    pub quiet: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -55,6 +59,27 @@ pub enum Commands {
         /// Output the transition plan as JSON (requires --dry-run)
         #[arg(long)]
         json: bool,
+    },
+
+    /// Continuously reconcile the system to your manifests (GitOps for one machine): on each
+    /// tick, optionally `git pull` the config, then apply any changes automatically. Unattended
+    /// by design — it applies without prompting. Ctrl-C to stop.
+    Watch {
+        /// Seconds between reconcile checks
+        #[arg(long, default_value = "30")]
+        interval: u64,
+
+        /// Only reconcile when a manifest file changed since the last tick (otherwise every tick)
+        #[arg(long)]
+        on_change: bool,
+
+        /// `git pull --ff-only` the config directory before each reconcile
+        #[arg(long)]
+        pull: bool,
+
+        /// Run a single reconcile pass and exit (for cron/testing)
+        #[arg(long)]
+        once: bool,
     },
 
     /// Run a command within an ephemeral package environment
@@ -102,6 +127,25 @@ pub enum Commands {
         json: bool,
     },
 
+    /// Compute what `sync` would do and freeze it to a reviewable file, so the exact plan you
+    /// inspect is the one you later `apply` (Terraform-style plan/apply for packages).
+    Plan {
+        /// Where to write the plan (default: linix-plan.json)
+        #[arg(long, default_value = "linix-plan.json")]
+        out: String,
+    },
+
+    /// Execute a previously saved plan file, applying exactly the captured changes. Warns if
+    /// the system/manifests have drifted since the plan was frozen.
+    Apply {
+        /// Path to a plan file produced by `linix plan`
+        plan: String,
+
+        /// Apply even if the system has drifted from the captured plan
+        #[arg(short, long)]
+        yes: bool,
+    },
+
     /// Record the installed version of every managed package to locks.json, so
     /// `sync --locked` reproduces those exact versions on another machine
     Lock,
@@ -114,13 +158,41 @@ pub enum Commands {
         /// Output results as JSON
         #[arg(long)]
         json: bool,
+
+        /// Only show results that are already installed / managed by LiNix
+        #[arg(long)]
+        installed: bool,
     },
 
     /// Refresh repository metadata for all backends
     Update,
 
-    /// Upgrade managed packages to their latest versions
+    /// Upgrade managed packages to their latest versions.
+    ///
+    /// With no arguments, runs each backend's native batch upgrade (e.g. `apt upgrade`).
+    /// Name one or more PACKAGES to upgrade just those. `--backend` scopes to one manager,
+    /// `--all` forces the native whole-system upgrade, and `--security` upgrades only the
+    /// packages `audit` flags as vulnerable. `--except` subtracts packages from any of these.
     Upgrade {
+        /// Specific package(s) to upgrade (optionally `backend:name`). Empty = whole system.
+        packages: Vec<String>,
+
+        /// Upgrade only packages managed by this backend
+        #[arg(long)]
+        backend: Option<String>,
+
+        /// Native whole-system upgrade across every backend (e.g. `apt upgrade` + `brew upgrade`)
+        #[arg(long)]
+        all: bool,
+
+        /// Upgrade only packages that `linix audit` reports as vulnerable, to their fixed version
+        #[arg(long)]
+        security: bool,
+
+        /// Package name(s) to hold back / exclude from this upgrade (repeatable)
+        #[arg(long, value_name = "PACKAGE")]
+        except: Vec<String>,
+
         /// Limit upgrade to a specific profile
         #[arg(long)]
         profile: Option<String>,
@@ -156,6 +228,10 @@ pub enum Commands {
         /// Output the list in machine-readable JSON format
         #[arg(long)]
         json: bool,
+
+        /// Show only packages with a newer version available (installed vs latest)
+        #[arg(long)]
+        outdated: bool,
     },
 
     /// Fetch detailed metadata and properties for a specific package
@@ -172,6 +248,11 @@ pub enum Commands {
         /// Output the resulting changes as JSON (requires --dry-run)
         #[arg(long)]
         json: bool,
+
+        /// Temporary install: uninstall itself after this duration (e.g. "2h", "30d").
+        /// Equivalent to appending `@lease=<DURATION>` to each package.
+        #[arg(long, value_name = "DURATION")]
+        temp: Option<String>,
     },
 
     /// Imperatively remove one or more packages
@@ -182,13 +263,30 @@ pub enum Commands {
         /// Output the resulting changes as JSON (requires --dry-run)
         #[arg(long)]
         json: bool,
+
+        /// Temporary uninstall: reinstall the package(s) later. With a DURATION
+        /// (e.g. `--temp=2h`) they return when it elapses; bare `--temp` inside a
+        /// `linix shell` restores them when that ephemeral session ends. The duration must
+        /// be attached with `=` so it is never confused with a package name.
+        #[arg(long, value_name = "DURATION", num_args = 0..=1, require_equals = true)]
+        temp: Option<Option<String>>,
     },
 
     /// Manage source repositories (PPA, Taps, Buckets, etc.)
     Repo(RepoArgs),
 
-    /// Perform system health, snapshot, and backend readiness check
-    Doctor,
+    /// Deep system health check: per-backend readiness/severity (via each backend's own
+    /// health probe), config/state integrity, and directory layout. `--fix` repairs what it
+    /// safely can (missing directories, stale metadata).
+    Doctor {
+        /// Attempt to auto-repair fixable problems (create missing dirs, refresh metadata)
+        #[arg(long)]
+        fix: bool,
+
+        /// Emit the full report as JSON
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Ingest manually installed packages into LiNix management
     Migrate,
@@ -209,6 +307,11 @@ pub enum Commands {
 
     /// Interactive snapshot gallery and system rollback
     Undo,
+
+    /// Time-travel cockpit: browse generations (left), inspect a generation's package set and
+    /// config diff (right), and run commands from a shell line (bottom). Roll back from within.
+    #[command(alias = "tui")]
+    Cockpit,
 
     /// Activate one or more profiles: add each to the active set and converge the system.
     /// Several profiles can be active at once — their package sets are unioned. Live; no reboot.
@@ -248,7 +351,15 @@ pub enum Commands {
         /// Only roll back this package (name or backend:name)
         #[arg(long)]
         package: Option<String>,
+        /// Also check out the manifest git commit stamped on this generation, so config and
+        /// system are rolled back together (the "grab the other half" convenience).
+        #[arg(long)]
+        with_config: bool,
     },
+
+    /// Version-control your manifests/config directory with git: init, status, log, commit,
+    /// and checkout (roll the *config* back to a past commit without touching packages).
+    Git(GitArgs),
 
     /// Manage package leases and expirations
     Lease(LeaseArgs),
@@ -265,6 +376,11 @@ pub enum Commands {
         /// Reset the starter manifest even if one already exists
         #[arg(long)]
         force: bool,
+
+        /// Interactive setup: ask about preferred backend, sync/prune behavior, snapshots,
+        /// and starter packages, then write the answers into config.toml and local.txt.
+        #[arg(short, long)]
+        interactive: bool,
     },
 
     /// Scan every managed package across all backends for known security
@@ -278,11 +394,54 @@ pub enum Commands {
     /// Emit a CycloneDX software bill of materials (SBOM) spanning every backend
     Sbom,
 
+    /// Export the managed package set as NATIVE manifests (Brewfile, requirements.txt,
+    /// package.json, Aptfile) — the no-lock-in escape hatch and a way to interop with other
+    /// tools. With no `--format`, writes every applicable file into `--out`.
+    Export {
+        /// One of: brew | pip | npm | apt. Omit to emit all applicable formats.
+        #[arg(long)]
+        format: Option<String>,
+
+        /// Directory to write the manifest file(s) into
+        #[arg(long, default_value = ".")]
+        out: String,
+
+        /// Print a single `--format` to stdout instead of writing a file
+        #[arg(long)]
+        stdout: bool,
+    },
+
+    /// Pack a portable, offline/air-gapped bundle of your declarative config, lockfile and
+    /// resolved package list. With `--artifacts`, also pre-download package files for the
+    /// backends that support offline fetch.
+    Bundle {
+        /// Directory to write the bundle into
+        #[arg(long, default_value = "linix-bundle")]
+        out: String,
+
+        /// Also pre-download package artifacts (apt/dnf/pip/npm/brew/pacman/apk)
+        #[arg(long)]
+        artifacts: bool,
+
+        /// Also pack the bundle into a single portable `<out>.tar.gz` for easy transfer
+        #[arg(long)]
+        archive: bool,
+    },
+
     /// Explain why a package is installed: its provenance and what depends on it
     Why {
         /// Package name (optionally `backend:name`)
         package: String,
+
+        /// Emit the provenance as JSON
+        #[arg(long)]
+        json: bool,
     },
+
+    /// Manage system services declaratively across init systems (systemd, OpenRC, SysVinit,
+    /// launchd, Windows sc). `enable`/`disable` persist to your manifest; `start`/`stop`/
+    /// `restart` are one-shot controls.
+    Service(ServiceArgs),
 
     /// Find which system snapshot first breaks a test command (system time-travel bisect).
     /// Restores snapshots and runs --test to converge on the change that introduced a
@@ -311,6 +470,77 @@ pub enum Commands {
     /// Compare a set of machines over SSH against your manifests and report drift
     Fleet(FleetArgs),
 
+    /// Choose how aggressively LiNix owns the system, and edit the keep-list.
+    /// `strict` prunes ANY package not in your manifests; `linix-only` prunes just
+    /// what LiNix installed. The keep-list (`keep.txt`) is always spared.
+    Managed(ManagedArgs),
+
+    /// Auto-record manual package-manager use into LiNix (native hooks + shell wrappers),
+    /// so `apt install foo` (etc.) updates your declarative state without changing workflow.
+    Hooks(HooksArgs),
+
+    /// Internal: called by an installed native hook to record a transaction's targets.
+    #[command(hide = true)]
+    HookRecord {
+        /// The package manager that ran (e.g. "pacman")
+        #[arg(long)]
+        manager: String,
+        /// "install" or "remove"
+        #[arg(long)]
+        op: String,
+        /// Target package names (or local file paths)
+        targets: Vec<String>,
+    },
+
+    /// Internal: reconcile declarative state by diffing a manager's installed set (for hooks
+    /// that cannot pass explicit targets, e.g. apt/dnf Post-Invoke).
+    #[command(hide = true)]
+    HookReconcile {
+        /// The package manager to reconcile against
+        #[arg(long)]
+        manager: String,
+    },
+
+    /// Internal: observe a wrapped command line (from the shell integration) and record it,
+    /// detecting the operation and targets from the arguments. `--learn` accepts unknown
+    /// managers via the keyword heuristic.
+    #[command(hide = true)]
+    HookObserve {
+        /// The manager name, if known
+        #[arg(long)]
+        manager: Option<String>,
+        /// Learn an unknown manager from keywords in the command line
+        #[arg(long)]
+        learn: bool,
+        /// The full observed command line, after `--`
+        #[arg(last = true)]
+        argv: Vec<String>,
+    },
+
+    /// Hold packages so `upgrade` never bumps them (like `apt-mark hold` / dnf versionlock).
+    /// Run with no names to list current holds. Naming a held package explicitly in
+    /// `upgrade <pkg>` still upgrades it (with a warning) — hold guards bulk/auto upgrades.
+    Hold {
+        /// Package(s) to hold (`name` or `backend:name`). Empty = list current holds.
+        packages: Vec<String>,
+    },
+
+    /// Release a hold so the package can be upgraded again.
+    Unhold {
+        /// Package(s) to unhold (`name` or `backend:name`)
+        #[arg(required = true)]
+        packages: Vec<String>,
+    },
+
+    /// Detect cross-backend conflicts in your desired state: the same tool pinned to different
+    /// versions by different backends, or provided by more than one (a PATH shadowing risk).
+    /// Something no single-backend resolver can see. Read-only.
+    Conflicts {
+        /// Emit the findings as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Check the desired system state against your policy rules (policy.toml)
     Policy,
 
@@ -318,6 +548,18 @@ pub enum Commands {
     Completions {
         /// Target shell
         shell: Shell,
+    },
+
+    /// Update LiNix itself: rebuild and install the latest from source with cargo
+    /// (the same mechanism as the install script). Requires a Rust toolchain.
+    SelfUpgrade {
+        /// Git repository to install from (default: $LINIX_REPO, else the upstream repo)
+        #[arg(long)]
+        git: Option<String>,
+
+        /// Just report the current version and where an upgrade would come from
+        #[arg(long)]
+        check: bool,
     },
 }
 
@@ -339,6 +581,142 @@ pub enum ConfigCommand {
     Path,
     /// Print the active configuration and its source (file or built-in defaults)
     Show,
+    /// Open the config in $VISUAL/$EDITOR (creating it from the template if absent) and
+    /// re-validate it on save, so a typo can't silently break your configuration.
+    Edit,
+}
+
+#[derive(Args, Debug)]
+pub struct HooksArgs {
+    #[command(subcommand)]
+    pub command: HooksCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HooksCommand {
+    /// Install native package-manager hooks (writes to system hook dirs; usually needs root).
+    /// With no managers named, installs every hook LiNix knows and whose manager is present.
+    Install {
+        /// Limit to specific managers (e.g. pacman apt dnf)
+        managers: Vec<String>,
+    },
+    /// Remove LiNix's native hooks.
+    Uninstall {
+        /// Limit to specific managers
+        managers: Vec<String>,
+    },
+    /// Show which managers are hookable and whether their hook is installed.
+    Status,
+    /// Print shell functions to auto-record manual manager use (source from your rc file).
+    ShellInit {
+        /// Target shell (bash or zsh)
+        #[arg(default_value = "bash")]
+        shell: String,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct GitArgs {
+    #[command(subcommand)]
+    pub command: GitCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum GitCommand {
+    /// Initialize the config directory as a git repo (enables manifest auto-commit).
+    Init,
+    /// Show uncommitted manifest/config changes.
+    Status,
+    /// Show recent manifest commits (newest first).
+    Log {
+        /// How many commits to show
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Commit the current manifest/config state now.
+    Commit {
+        /// Commit message
+        #[arg(short, long, default_value = "linix: manual manifest commit")]
+        message: String,
+    },
+    /// Roll the *config* (manifests) back to a past commit WITHOUT touching installed
+    /// packages — the config half of a rollback. Pair with `linix rollback` for the system.
+    Checkout {
+        /// Commit hash or ref to restore the manifests to
+        reference: String,
+    },
+}
+
+#[derive(Args, Debug)]
+pub struct ServiceArgs {
+    #[command(subcommand)]
+    pub command: ServiceCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ServiceCommand {
+    /// Enable at boot and start now; records the service in your manifest so `sync` keeps it.
+    Enable {
+        /// Service name (e.g. nginx, sshd)
+        name: String,
+    },
+    /// Disable at boot and stop now; removes it from your manifest.
+    Disable {
+        /// Service name
+        name: String,
+    },
+    /// Start the service now (does not change its boot setting).
+    Start {
+        /// Service name
+        name: String,
+    },
+    /// Stop the service now (does not change its boot setting).
+    Stop {
+        /// Service name
+        name: String,
+    },
+    /// Restart the service now.
+    Restart {
+        /// Service name
+        name: String,
+    },
+    /// Show a service's current status.
+    Status {
+        /// Service name
+        name: String,
+    },
+    /// List running services this host reports.
+    List,
+}
+
+#[derive(Args, Debug)]
+pub struct ManagedArgs {
+    #[command(subcommand)]
+    pub command: ManagedCommand,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ManagedCommand {
+    /// Strict mode: `prune`/`sync` may remove ANY installed package not in your manifests
+    /// (except the keep-list and protected packages). "Everything is managed."
+    Strict,
+    /// LiNix-only mode (default): drift removal touches only packages LiNix installed.
+    #[command(name = "linix-only", alias = "relaxed")]
+    LinixOnly,
+    /// Show the current management mode and the keep-list.
+    Show,
+    /// Add package name(s) to the keep-list (`keep.txt`) so they are never auto-removed.
+    Keep {
+        /// Package names to protect
+        #[arg(required = true)]
+        packages: Vec<String>,
+    },
+    /// Remove package name(s) from the keep-list.
+    Unkeep {
+        /// Package names to stop protecting
+        #[arg(required = true)]
+        packages: Vec<String>,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -405,6 +783,15 @@ pub enum ModuleCommand {
     Show { name: String },
     /// Create a new module interactively
     Create { name: String },
+    /// Fetch a shared module from a remote source into your local modules, e.g.
+    /// `linix module add github:acme/rust-dev`. Reference it later with `@module:<name>`.
+    Add {
+        /// Source: `github:user/repo[@ref][/path]` or an `https://…` raw URL
+        source: String,
+        /// Save the module under this name (default: derived from the source)
+        #[arg(long)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -453,6 +840,27 @@ pub enum GenerationCommand {
     Unpin {
         /// Generation id
         id: String,
+    },
+    /// Compact history, one line per generation (git-log style). Newest first.
+    Log {
+        /// Ultra-compact: id, package count, and label only
+        #[arg(long)]
+        oneline: bool,
+
+        /// Emit the history as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show what changed between two generations: packages added, removed, and version-changed.
+    /// `from` is the older baseline. Omit `to` to compare `from` against the live system.
+    Diff {
+        /// Older generation id (baseline)
+        from: String,
+        /// Newer generation id (omit to diff against the current live state)
+        to: Option<String>,
+        /// Emit the delta as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -509,9 +917,13 @@ pub struct FleetArgs {
     /// SSH destinations (user@host ...). If omitted, falls back to config `fleet_hosts`.
     pub hosts: Vec<String>,
 
-    /// After reporting drift, run `linix sync` on each machine to reconcile it
+    /// After reporting, run `linix sync` on the machines that DRIFTED to reconcile them
     #[arg(long)]
     pub sync: bool,
+
+    /// Push `linix sync` to EVERY reachable machine, whether or not it drifted (fleet-wide apply)
+    #[arg(long)]
+    pub apply: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, ValueEnum)]
@@ -519,6 +931,10 @@ pub enum Shell {
     Bash,
     Zsh,
     Fish,
+    // clap derives the value name from the variant as kebab-case (`power-shell`), but every
+    // other tool — and every user — spells it `powershell` (one word). Accept the natural
+    // spelling as the canonical value and keep `power-shell` as an alias for back-compat.
+    #[value(name = "powershell", alias = "power-shell")]
     PowerShell,
     Elvish,
     Nushell,

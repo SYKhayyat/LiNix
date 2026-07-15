@@ -228,23 +228,22 @@ async fn test_metadata_provider_resolution() {
         .as_metadata_provider()
         .expect("Apt must implement MetadataProvider trait.");
 
-    // Mock 'apt depends' command - no sudo needed for read-only query
-    let mock_output = "Depends: libc6\nDepends: bash\n";
-    kernel.mock_executor.set_response(
-        "apt depends --no-recommends --no-suggests curl",
-        Ok(DryRunOutput {
-            stdout: mock_output.as_bytes().to_vec(),
-            stderr: vec![],
-        }
-        .into()),
-    );
-
+    // apt DELIBERATELY disables transitive-dependency expansion (`depends_args: None` in the
+    // registry): apt resolves its own dependency closure at `apt-get install` time, and LiNix
+    // re-deriving it caused a recursive `apt depends` fan-out (jq -> libc6 -> libgcc-s1 -> …)
+    // that hung `status`/`sync`. So the provider must return an EMPTY set for apt. Asserting
+    // that here guards against the expansion being silently re-enabled and re-introducing the
+    // hang. (The generic depends-parsing path itself is covered by the backends::generic test
+    // `get_dependencies_parses_names_without_sudo`, which uses a backend that DOES set
+    // `depends_args`.)
     let deps = provider
         .get_dependencies("curl")
         .await
         .expect("Dependency resolution failed");
 
-    assert!(deps.contains(&"libc6".to_string()));
-    assert!(deps.contains(&"bash".to_string()));
-    assert_eq!(deps.len(), 2);
+    assert!(
+        deps.is_empty(),
+        "apt intentionally does not expand dependencies (anti-hang); got {:?}",
+        deps
+    );
 }

@@ -1,7 +1,9 @@
 pub mod cache;
 pub mod error;
 pub mod executor;
+pub mod git;
 pub mod journal;
+pub mod locksig;
 pub mod manager;
 pub mod package;
 pub mod ratelimiter;
@@ -17,6 +19,9 @@ pub use cache::{PackageCache, SmartCache};
 
 // Re-export error and result types
 pub use error::{Error, Result};
+
+// Re-export the git (manifest version-control) wrapper
+pub use git::{GitCommit, GitManager};
 
 // Re-export the high-performance execution pipeline
 pub use executor::{CommandExecutor, ExecutionLayer, RawExecutor};

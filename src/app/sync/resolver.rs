@@ -1,12 +1,12 @@
 use crate::backends::BackendRegistry;
-use crate::config::parser::{identify_line, parse_group_file, ManifestLine};
+use crate::config::parser::{identify_line, parse_group_file, parse_group_str, ManifestLine};
 use crate::config::Config;
 use crate::core::{Error, PackageSpec, Result, Validator};
 use semver::{Version, VersionReq};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::fs;
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, error, info, instrument, trace, warn};
 use version_compare::{compare as loose_compare, Cmp};
 
 /// Responsible for calculating the "Desired State" of the system.
@@ -46,9 +46,46 @@ impl<'a> StateResolver<'a> {
 
             if tokio::fs::try_exists(&lock_path).await.unwrap_or(false) {
                 if let Ok(data) = fs::read_to_string(&lock_path).await {
-                    // JSON Structure: {"locks": {"apt:curl": "7.81.0", ...}}
+                    // JSON Structure: {"locks": {"apt:curl": "7.81.0", ...}, "sig": "<hex>"}
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
                         if let Some(obj) = json.get("locks").and_then(|l| l.as_object()) {
+                            // Tamper check: a lockfile carrying a "sig" must verify against the
+                            // machine-local key. A missing sig is a legacy/unsigned lockfile —
+                            // allowed, with a nudge to re-run `linix lock`.
+                            match json.get("sig").and_then(|s| s.as_str()) {
+                                Some(sig) => match crate::core::locksig::read_key(&config.groups_dir) {
+                                    // A key exists here → this is the origin machine; enforce.
+                                    Some(key) => {
+                                        if crate::core::locksig::verify(&key, obj, sig) {
+                                            debug!("Resolver: locks.json signature verified.");
+                                        } else {
+                                            error!(
+                                                "Resolver: locks.json signature MISMATCH — the \
+                                                 lockfile was modified since `linix lock`. Refusing \
+                                                 to use it. Re-run `linix lock` to re-sign."
+                                            );
+                                            // Fail closed: leave `locks` empty so locked mode does
+                                            // not trust a tampered file.
+                                            return Self {
+                                                config,
+                                                registry,
+                                                locked,
+                                                locks: HashMap::new(),
+                                            };
+                                        }
+                                    }
+                                    // No local key (e.g. a fresh machine restoring a bundle): we
+                                    // can't verify, but refusing would break reproducibility, so
+                                    // proceed with a clear notice.
+                                    None => warn!(
+                                        "Resolver: locks.json is signed but no local key is present \
+                                         to verify it (fresh machine?). Proceeding unverified."
+                                    ),
+                                },
+                                None => warn!(
+                                    "Resolver: locks.json is unsigned (older format). Run `linix lock` to add tamper-evidence."
+                                ),
+                            }
                             for (key, val) in obj {
                                 if let Some(v_str) = val.as_str() {
                                     locks.insert(key.clone(), v_str.to_string());
@@ -68,6 +105,43 @@ impl<'a> StateResolver<'a> {
             locked,
             locks,
         }
+    }
+
+    /// Fetch a remote `include:` manifest over HTTP and parse it into manifest lines (applying
+    /// the same BOM/comment/`when`-conditional handling as a local file). Network failures are
+    /// surfaced to the caller, which downgrades them to a skip-with-warning.
+    async fn fetch_remote_manifest(&self, url: &str) -> Result<Vec<String>> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(
+                self.config.network_timeout_secs.max(10),
+            ))
+            .user_agent("linix-include")
+            .build()
+            .map_err(|e| Error::Http(e.to_string()))?;
+        let resp = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(Error::Http(format!(
+                "include {} returned HTTP {}",
+                url,
+                resp.status()
+            )));
+        }
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| Error::Http(e.to_string()))?;
+        // Guard against pointing at a web page instead of a manifest.
+        if crate::app::module_registry::looks_like_html(&body) {
+            return Err(Error::Config(format!(
+                "include {} looks like an HTML page, not a manifest",
+                url
+            )));
+        }
+        parse_group_str(&body)
     }
 
     /// The primary resolution entry point.
@@ -203,6 +277,48 @@ impl<'a> StateResolver<'a> {
                     }
                 }
 
+                // Inline another manifest file or a remote URL. A local path is resolved
+                // relative to groups_dir (absolute paths honored as-is); an http(s) URL is
+                // fetched. Included lines inherit this source's exclusions and re-enter the
+                // BFS, so includes may themselves contain groups/modules/includes (the
+                // MAX_EXPANSION_ITERATIONS guard above catches include cycles).
+                ManifestLine::Include(target) => {
+                    let included: Vec<String> = if target.starts_with("http://")
+                        || target.starts_with("https://")
+                    {
+                        match self.fetch_remote_manifest(&target).await {
+                            Ok(lines) => lines,
+                            Err(e) => {
+                                warn!(
+                                    "Resolver: include of '{}' (from {}) failed: {}. Skipping.",
+                                    target, source, e
+                                );
+                                Vec::new()
+                            }
+                        }
+                    } else {
+                        let p = std::path::Path::new(&target);
+                        let path = if p.is_absolute() {
+                            p.to_path_buf()
+                        } else {
+                            self.config.groups_dir.join(&target)
+                        };
+                        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                            parse_group_file(&path).await?
+                        } else {
+                            warn!(
+                                "Resolver: include target '{}' (from {}) not found at {:?}. Skipping.",
+                                target, source, path
+                            );
+                            Vec::new()
+                        }
+                    };
+                    let inc_id = format!("include:{}", target);
+                    for inc_line in included {
+                        raw_inputs.push_back((inc_line, inc_id.clone(), excludes.clone()));
+                    }
+                }
+
                 // Leaf nodes: Actual Package Specification
                 ManifestLine::Package(pkg_str) => {
                     let mut spec = self.parse_and_probe_spec(&pkg_str).await?;
@@ -258,7 +374,7 @@ impl<'a> StateResolver<'a> {
 
                     // Feature 4: Scoped Identification & Deduplication
                     if seen_keys.insert(unique_id.clone()) {
-                        Validator::validate_package_name(&spec.name)?;
+                        Validator::validate_package_name_for(&spec.name, &spec.backend)?;
 
                         // Internal tagging for Feature 4 Targeted Upgrades
                         spec.options.insert("__source".to_string(), source.clone());

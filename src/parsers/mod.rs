@@ -4,6 +4,7 @@ pub mod common;
 pub mod conda;
 pub mod dnf;
 pub mod dotnet;
+pub mod ecosystem;
 pub mod language;
 pub mod macos;
 pub mod nix;

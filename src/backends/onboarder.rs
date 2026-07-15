@@ -24,8 +24,8 @@
 // skipped with a warning), so a stray config can't hijack `apt` or `brew`.
 
 use crate::backends::generic::{
-    GenericBackendCore, GenericInstallable, GenericQueryable, GenericSearchable,
-    GenericUpgradable, ManagerConfig, VersionPin,
+    GenericBackendCore, GenericInstallable, GenericQueryable, GenericSearchable, GenericUpgradable,
+    ManagerConfig, VersionPin,
 };
 use crate::backends::BackendRegistry;
 use crate::core::{BackendCapabilities, CommandExecutor, Package};
@@ -124,9 +124,7 @@ impl ParserSpec {
                         return None;
                     }
                     let cols: Vec<&str> = match delimiter {
-                        Some(d) if !d.is_empty() => {
-                            line.split(d.as_str()).map(str::trim).collect()
-                        }
+                        Some(d) if !d.is_empty() => line.split(d.as_str()).map(str::trim).collect(),
                         _ => line.split_whitespace().collect(),
                     };
                     let name = cols.get(*name_col)?.trim();
@@ -205,7 +203,9 @@ impl ParserSpec {
 }
 
 fn starts_with_any(line: &str, prefixes: &[String]) -> bool {
-    prefixes.iter().any(|p| !p.is_empty() && line.starts_with(p))
+    prefixes
+        .iter()
+        .any(|p| !p.is_empty() && line.starts_with(p))
 }
 
 /// Walks a dot-separated path (`a.b.c`) through a JSON document.
@@ -316,9 +316,7 @@ struct CustomBackendsFile {
 /// True for a syntactically valid backend id: non-empty, no whitespace or path
 /// separators (it becomes both a HashMap key and an executed command name).
 fn is_valid_backend_name(name: &str) -> bool {
-    !name.is_empty()
-        && !name.chars().any(|c| c.is_whitespace())
-        && !name.contains(['/', '\\'])
+    !name.is_empty() && !name.chars().any(|c| c.is_whitespace()) && !name.contains(['/', '\\'])
 }
 
 // ============================================================================
@@ -396,10 +394,7 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
     let parser = ConfiguredParser {
         backend: def.name.clone(),
         installed: def.parser.clone().unwrap_or_default(),
-        search: def
-            .search_parser
-            .or(def.parser)
-            .unwrap_or_default(),
+        search: def.search_parser.or(def.parser).unwrap_or_default(),
     };
 
     let config = ManagerConfig {
@@ -431,8 +426,8 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         parser: Arc::new(parser),
     });
 
-    let mut builder = BackendCapabilities::builder(core.clone())
-        .with_metadata_provider(core.clone());
+    let mut builder =
+        BackendCapabilities::builder(core.clone()).with_metadata_provider(core.clone());
     if has_install {
         builder = builder.with_installable(Arc::new(GenericInstallable { core: core.clone() }));
     }
@@ -501,7 +496,8 @@ mod tests {
             name_key: "name".to_string(),
             version_key: Some("version".to_string()),
         };
-        let out = r#"{"results":[{"name":"httpie","version":"3.2"},{"name":"jq","version":"1.7"}]}"#;
+        let out =
+            r#"{"results":[{"name":"httpie","version":"3.2"},{"name":"jq","version":"1.7"}]}"#;
         let pkgs = spec.parse(out, "c");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "httpie");
@@ -563,7 +559,10 @@ mod tests {
         };
 
         let n = register_custom_backends(&mut reg, &exec, vec![good, bad_name, collision]);
-        assert_eq!(n, 1, "only the first valid, non-colliding backend registers");
+        assert_eq!(
+            n, 1,
+            "only the first valid, non-colliding backend registers"
+        );
 
         let caps = reg.get("paru").expect("paru registered");
         assert!(caps.is_installable());

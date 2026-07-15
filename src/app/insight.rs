@@ -71,6 +71,11 @@ fn purl_type(backend: &str) -> Option<&'static str> {
         "pip" | "pipx" => "pypi",
         "gem" => "gem",
         "go" => "golang",
+        "composer" => "composer",
+        "pub" => "pub",
+        "mix" => "hex",
+        "cabal" | "stack" => "hackage",
+        "luarocks" => "luarocks",
         "apt" => "deb",
         "brew" => "brew",
         "nix" => "nix",
@@ -96,6 +101,9 @@ fn osv_ecosystem(backend: &str) -> Option<&'static str> {
         "pip" | "pipx" => "PyPI",
         "gem" => "RubyGems",
         "go" => "Go",
+        "composer" => "Packagist",
+        "pub" => "Pub",
+        "mix" => "Hex",
         "apt" => "Debian",
         _ => return None,
     })
@@ -396,8 +404,110 @@ pub fn print_audit(report: &AuditReport, as_json: bool) -> Result<()> {
 // Why (provenance + reverse dependencies)
 // ============================================================================
 
+/// Turn the structured `__source` provenance tag recorded at install time into a friendly,
+/// specific explanation. Handles `module:X`, `group:X`, `config:group:X`, `imperative`,
+/// `clone`, manifest filenames, and `;`-joined combinations. Pure — unit tested.
+pub fn interpret_source(src: &str) -> String {
+    let one = |s: &str| -> String {
+        let s = s.trim();
+        if let Some(m) = s.strip_prefix("config:group:") {
+            format!("pulled in by config group `{}`", m)
+        } else if let Some(m) = s.strip_prefix("group:") {
+            format!("pulled in by group `{}`", m)
+        } else if let Some(m) = s.strip_prefix("module:") {
+            format!("pulled in by module `{}` (@module:{})", m, m)
+        } else if let Some(m) = s.strip_prefix("profile:") {
+            format!("required by profile `{}`", m)
+        } else if s == "imperative" {
+            "installed imperatively via `linix install`".to_string()
+        } else if s == "clone" {
+            "replicated from another host via `linix clone`".to_string()
+        } else if s.is_empty() {
+            "origin unknown (installed before provenance tracking)".to_string()
+        } else {
+            let base = s.rsplit(['/', '\\']).next().unwrap_or(s);
+            format!("declared in manifest `{}`", base)
+        }
+    };
+    src.split(';')
+        .filter(|s| !s.trim().is_empty())
+        .map(one)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Pure: does a raw manifest line declare the given package? Matches the bare name or a
+/// `backend:name` prefix, ignoring `@options` and leading exclusion markers. Unit tested.
+pub fn line_declares(line: &str, backend: &str, name: &str) -> bool {
+    let l = line.trim();
+    if l.is_empty() || l.starts_with('#') || l.starts_with('-') {
+        return false;
+    }
+    // Structural directives never *declare* a leaf package by name.
+    if l.starts_with("@module:") || l.starts_with("group:") || l.starts_with("when ") || l == "end"
+    {
+        return false;
+    }
+    let head = l.split('@').next().unwrap_or(l).trim();
+    match head.split_once(':') {
+        Some((b, n)) => b == backend && n == name,
+        None => head == name,
+    }
+}
+
+/// Scan every manifest (.txt) and module (.module.txt) under the config dirs for lines that
+/// declare this package, returning human labels like "module: dev" or "manifest: local.txt".
+async fn scan_declarations(app: &App, backend: &str, name: &str) -> Vec<String> {
+    let mut hits = Vec::new();
+
+    // Groups directory (manifests + host files + named groups), scanned recursively.
+    let groups_dir = app.config.groups_dir.clone();
+    if let Ok(mut entries) = tokio::fs::read_dir(&groups_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            let fname = entry.file_name().to_string_lossy().into_owned();
+            if !fname.ends_with(".txt") {
+                continue;
+            }
+            if let Ok(content) = tokio::fs::read_to_string(&path).await {
+                if content.lines().any(|l| line_declares(l, backend, name)) {
+                    hits.push(format!("manifest: {}", fname));
+                }
+            }
+        }
+    }
+
+    // Modules directory.
+    let modules_dir = app.config.modules_dir.clone();
+    if let Ok(mut entries) = tokio::fs::read_dir(&modules_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let fname = entry.file_name().to_string_lossy().into_owned();
+            let Some(mod_name) = fname.strip_suffix(".module.txt") else {
+                continue;
+            };
+            if let Ok(content) = tokio::fs::read_to_string(entry.path()).await {
+                if content.lines().any(|l| line_declares(l, backend, name)) {
+                    hits.push(format!("module: {}", mod_name));
+                }
+            }
+        }
+    }
+
+    // Config-file groups.
+    for (gname, pkgs) in &app.config.groups {
+        if pkgs.iter().any(|p| line_declares(p, backend, name)) {
+            hits.push(format!("config group: {}", gname));
+        }
+    }
+
+    hits.sort();
+    hits.dedup();
+    hits
+}
+
 /// Explain why a package is present: how it entered management, and what depends on it.
-pub async fn why(app: &App, query: &str) -> Result<()> {
+/// With `as_json`, emit the same provenance as a machine-readable array instead of text.
+pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
     // Snapshot the state we need, then release the lock before doing async backend queries.
     #[allow(clippy::type_complexity)]
     let (matches, all_managed): (
@@ -428,34 +538,36 @@ pub async fn why(app: &App, query: &str) -> Result<()> {
     };
 
     if matches.is_empty() {
-        println!("'{}' is not under LiNix management.", query);
+        if as_json {
+            println!("{}", serde_json::json!({ "query": query, "matches": [] }));
+        } else {
+            println!("'{}' is not under LiNix management.", query);
+        }
         return Ok(());
     }
 
+    let mut json_matches: Vec<serde_json::Value> = Vec::new();
+
     for (backend, name, version, source, expires) in matches {
-        let ver = version.map(|v| format!(" @ {}", v)).unwrap_or_default();
-        println!("{}:{}{}", backend, name, ver);
+        // Provenance from the recorded source tag, interpreted into a specific sentence.
+        let prov = interpret_source(source.as_deref().unwrap_or(""));
 
-        // Provenance from the recorded source tag.
-        let prov = match source.as_deref() {
-            Some("imperative") => "installed imperatively via `linix install`".to_string(),
-            Some(s) if !s.is_empty() => format!("declared in {}", s.replace(';', ", ")),
-            _ => "origin unknown (installed before provenance tracking)".to_string(),
-        };
-        println!("  why:         {}", prov);
+        // Live scan of all manifests/modules/groups — surfaces every place the package is
+        // declared, including profiles/modules that the single recorded tag doesn't capture.
+        let declarations = scan_declarations(app, &backend, &name).await;
 
-        if let Some(exp) = expires {
+        let lease = expires.map(|exp| {
             match chrono::DateTime::<chrono::Utc>::from_timestamp(exp as i64, 0) {
-                Some(dt) => println!("  lease:       temporary — expires {}", dt.to_rfc2822()),
-                None => println!("  lease:       temporary — expiry {}", exp),
+                Some(dt) => dt.to_rfc2822(),
+                None => format!("{}", exp),
             }
-        }
+        });
 
         // Reverse dependencies: which other managed packages in the same backend list this
         // one as a native dependency.
+        let mut dependents = Vec::new();
         if let Some(b) = app.registry.get(&backend) {
             if let Some(mp) = b.as_metadata_provider() {
-                let mut dependents = Vec::new();
                 for (qb, qn) in &all_managed {
                     if qb != &backend || qn == &name {
                         continue;
@@ -466,13 +578,44 @@ pub async fn why(app: &App, query: &str) -> Result<()> {
                         }
                     }
                 }
-                if dependents.is_empty() {
-                    println!("  required by: nothing else you manage (safe to remove)");
-                } else {
-                    println!("  required by: {}", dependents.join(", "));
-                }
             }
         }
+
+        if as_json {
+            json_matches.push(serde_json::json!({
+                "backend": backend,
+                "name": name,
+                "version": version,
+                "why": prov,
+                "declared_in": declarations,
+                "lease_expires": lease,
+                "required_by": dependents,
+            }));
+        } else {
+            let ver = version.map(|v| format!(" @ {}", v)).unwrap_or_default();
+            println!("{}:{}{}", backend, name, ver);
+            println!("  why:         {}", prov);
+            if !declarations.is_empty() {
+                println!("  declared in: {}", declarations.join(", "));
+            }
+            if let Some(l) = &lease {
+                println!("  lease:       temporary — expires {}", l);
+            }
+            if dependents.is_empty() {
+                println!("  required by: nothing else you manage (safe to remove)");
+            } else {
+                println!("  required by: {}", dependents.join(", "));
+            }
+        }
+    }
+
+    if as_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "query": query, "matches": json_matches
+            }))?
+        );
     }
     Ok(())
 }
@@ -558,6 +701,44 @@ mod tests {
                 vec![]
             ]
         );
+    }
+
+    #[test]
+    fn interpret_source_maps_structured_tags() {
+        assert_eq!(
+            interpret_source("module:dev"),
+            "pulled in by module `dev` (@module:dev)"
+        );
+        assert_eq!(interpret_source("group:editors"), "pulled in by group `editors`");
+        assert_eq!(
+            interpret_source("config:group:cli"),
+            "pulled in by config group `cli`"
+        );
+        assert_eq!(
+            interpret_source("imperative"),
+            "installed imperatively via `linix install`"
+        );
+        assert_eq!(interpret_source("/home/u/.config/linix/groups/local.txt"),
+            "declared in manifest `local.txt`");
+        // combined
+        assert_eq!(
+            interpret_source("module:dev;imperative"),
+            "pulled in by module `dev` (@module:dev); installed imperatively via `linix install`"
+        );
+    }
+
+    #[test]
+    fn line_declares_matches_name_and_backend() {
+        assert!(line_declares("apt:htop", "apt", "htop"));
+        assert!(line_declares("htop", "apt", "htop"));
+        assert!(line_declares("apt:htop@version=1.0", "apt", "htop"));
+        // wrong backend
+        assert!(!line_declares("brew:htop", "apt", "htop"));
+        // exclusions, comments, directives never declare
+        assert!(!line_declares("-apt:htop", "apt", "htop"));
+        assert!(!line_declares("# apt:htop", "apt", "htop"));
+        assert!(!line_declares("@module:htop", "apt", "htop"));
+        assert!(!line_declares("when os == linux", "apt", "htop"));
     }
 
     #[test]

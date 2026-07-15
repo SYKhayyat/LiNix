@@ -114,10 +114,7 @@ impl UvQueryable {
     fn parse_list(output: &str) -> Vec<Package> {
         let mut packages = Vec::new();
         for line in output.lines() {
-            if line.is_empty()
-                || line.starts_with(char::is_whitespace)
-                || line.starts_with('-')
-            {
+            if line.is_empty() || line.starts_with(char::is_whitespace) || line.starts_with('-') {
                 continue;
             }
             let mut parts = line.split_whitespace();

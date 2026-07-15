@@ -16,9 +16,11 @@ use tracing::{debug, error, info, instrument, warn};
 
 pub mod planner;
 pub mod resolver;
+pub mod saved_plan;
 
 pub use self::planner::{ChangePlanner, ScopedFilter, SyncChanges};
 pub use self::resolver::StateResolver;
+pub use self::saved_plan::{SavedPlan, PLAN_SCHEMA};
 
 /// Interface for system state resolution logic.
 #[async_trait::async_trait]
@@ -139,7 +141,16 @@ impl<'a> SyncEngine<'a> {
             }
 
             let _ = self.hooks.run_after_sync().await;
-            self.metrics.print_summary();
+            if self.config.quiet {
+                self.metrics.print_summary_quiet();
+            } else {
+                self.metrics.print_summary();
+            }
+
+            // Post-apply health probes: verify any freshly-installed package that declared
+            // `@check=…` actually works, so a green install that left a broken service is
+            // surfaced immediately (with the pre-sync snapshot available to revert).
+            self.run_health_probes(&changes).await;
 
             // Record a generation of this realized state (+ a frozen manifest copy), then
             // apply the configured generation-retention policy. Non-fatal: a bookkeeping
@@ -154,6 +165,57 @@ impl<'a> SyncEngine<'a> {
         }
 
         result
+    }
+
+    /// Run the `@check=…` post-install probe for every freshly-installed package that declared
+    /// one. Probes are advisory: a failure is reported loudly (and points at the snapshot for
+    /// recovery) but does not itself undo the commit — the safety snapshot already exists, and
+    /// `--canary`/`rollback` are the explicit auto-revert paths.
+    async fn run_health_probes(&self, changes: &SyncChanges) {
+        let mut probes: Vec<(String, String)> = Vec::new();
+        for w in changes.graph.node_weights() {
+            if let GraphAction::Install(spec) = w {
+                if let Some(check) = spec.options.get("check") {
+                    probes.push((format!("{}:{}", spec.backend, spec.name), check.clone()));
+                }
+            }
+        }
+        if probes.is_empty() {
+            return;
+        }
+        info!("Sync: running {} post-install health probe(s)...", probes.len());
+        let mut failed = Vec::new();
+        for (pkg, check) in &probes {
+            if Self::probe_ok(check).await {
+                info!("  probe OK   {} ({})", pkg, check);
+            } else {
+                warn!("  probe FAIL {} ({})", pkg, check);
+                failed.push(pkg.clone());
+            }
+        }
+        if !failed.is_empty() {
+            warn!(
+                "Sync: {} package(s) failed their @check probe: {}.",
+                failed.len(),
+                failed.join(", ")
+            );
+            if self.snapshot_manager.has_provider() {
+                warn!("A pre-sync snapshot exists — `linix undo` / `linix rollback` can revert if needed.");
+            }
+        }
+    }
+
+    /// Evaluate one probe spec. `port:<n>` succeeds if a TCP connection to localhost:n opens;
+    /// `cmd:<shell>` (or a bare string) succeeds if the shell command exits 0.
+    async fn probe_ok(check: &str) -> bool {
+        if let Some(port) = check.strip_prefix("port:") {
+            return match port.trim().parse::<u16>() {
+                Ok(p) => tokio::net::TcpStream::connect(("127.0.0.1", p)).await.is_ok(),
+                Err(_) => false,
+            };
+        }
+        let cmd = check.strip_prefix("cmd:").unwrap_or(check);
+        crate::app::bisect::run_test(cmd).await
     }
 
     /// Capture a generation (realized state + a frozen copy of the manifests) after a
@@ -186,7 +248,10 @@ impl<'a> SyncEngine<'a> {
                 .capture(&id, &rfc, "", &state, &self.config.groups_dir)
                 .await?;
         }
-        match gen_store.prune(&self.config.retention.generations, ts).await {
+        match gen_store
+            .prune(&self.config.retention.generations, ts)
+            .await
+        {
             Ok(r) if !r.is_empty() => debug!("Sync: pruned {} generation(s).", r.len()),
             Err(e) => warn!("Sync: generation retention prune failed: {}", e),
             _ => {}

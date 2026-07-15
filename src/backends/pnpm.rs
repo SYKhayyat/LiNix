@@ -25,30 +25,21 @@ impl PnpmBackendCore {
         }
     }
 
-    /// Returns the global pnpm store path.
-    #[allow(dead_code)]
-    async fn get_global_store(&self) -> Result<String> {
-        let output = self
-            .executor
-            .run_output("pnpm", &["store", "path"], false)
-            .await
-            .or_else(|_| {
-                let home = dirs::home_dir()
-                    .ok_or_else(|| Error::Other("Could not determine home directory".into()))?;
-                Ok::<String, Error>(
-                    home.join(".local/share/pnpm/store")
-                        .to_string_lossy()
-                        .to_string(),
-                )
-            })?;
-        Ok(output.trim().to_string())
-    }
-
-    /// Returns the global installation prefix (where global binaries are linked).
+    /// Returns the global `node_modules` directory (`pnpm root -g`), which is where each
+    /// global package's own folder lives.
     async fn get_global_prefix(&self) -> Result<String> {
         let output = self
             .executor
             .run_output("pnpm", &["root", "-g"], false)
+            .await?;
+        Ok(output.trim().to_string())
+    }
+
+    /// Returns the global bin directory (`pnpm bin -g`), where executables are linked.
+    async fn get_global_bin(&self) -> Result<String> {
+        let output = self
+            .executor
+            .run_output("pnpm", &["bin", "-g"], false)
             .await?;
         Ok(output.trim().to_string())
     }
@@ -153,9 +144,14 @@ impl Queryable for PnpmQueryable {
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let all = self.list_installed().await?;
         if let Some(mut pkg) = all.into_iter().find(|p| p.name == name) {
+            // `pnpm root -g` already returns the global node_modules dir, so the package's
+            // folder is `<root>/<name>` — appending another `node_modules` was a bug.
             let prefix = self.core.get_global_prefix().await?;
-            let install_path = format!("{}/node_modules/{}", prefix, name);
-            pkg.properties.insert("install_path".into(), install_path);
+            pkg.properties
+                .insert("install_path".into(), format!("{}/{}", prefix, name));
+            if let Ok(bin) = self.core.get_global_bin().await {
+                pkg.properties.insert("bin_path".into(), bin);
+            }
             Ok(Some(pkg))
         } else {
             Ok(None)

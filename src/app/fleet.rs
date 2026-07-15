@@ -166,7 +166,9 @@ fn parse_status(json: &str) -> Result<(usize, usize, usize)> {
 }
 
 /// Query each host's drift versus its manifests and report; optionally reconcile.
-pub async fn fleet(app: &App, hosts: &[String], do_sync: bool) -> Result<()> {
+/// `do_sync` reconciles only the DRIFTED machines; `do_apply` runs `linix sync -y` on EVERY
+/// reachable host regardless of drift (a deliberate fleet-wide push).
+pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -> Result<()> {
     let hosts: Vec<String> = if hosts.is_empty() {
         app.config.fleet_hosts.clone()
     } else {
@@ -232,15 +234,37 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool) -> Result<()> {
         }
     }
 
-    if do_sync {
-        println!("\nReconciling drifted machines with `linix sync -y` ...");
-        for h in report.iter().filter(|h| !h.in_sync() && h.error.is_none()) {
+    // Reconciliation. `--apply` pushes to every reachable host; `--sync` touches only drift.
+    if do_apply || do_sync {
+        let targets: Vec<&HostDrift> = if do_apply {
+            println!("\nApplying `linix sync -y` to all reachable machines ...");
+            report.iter().filter(|h| h.error.is_none()).collect()
+        } else {
+            println!("\nReconciling drifted machines with `linix sync -y` ...");
+            report
+                .iter()
+                .filter(|h| !h.in_sync() && h.error.is_none())
+                .collect()
+        };
+        if targets.is_empty() {
+            println!("  (nothing to do)");
+        }
+        let mut ok = 0usize;
+        let mut failed = 0usize;
+        for h in targets {
             info!("Fleet: syncing {} ...", h.host);
             match ssh_capture(&h.host, "linix sync -y").await {
-                Ok(_) => println!("  {} synced.", h.host),
-                Err(e) => warn!("Fleet: sync failed on {}: {}", h.host, e),
+                Ok(_) => {
+                    println!("  {} synced.", h.host);
+                    ok += 1;
+                }
+                Err(e) => {
+                    warn!("Fleet: sync failed on {}: {}", h.host, e);
+                    failed += 1;
+                }
             }
         }
+        println!("\nApplied to {} host(s), {} failed.", ok, failed);
     }
     Ok(())
 }

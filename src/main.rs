@@ -4,8 +4,9 @@ use linix::app::generation::GenerationStore;
 use linix::app::sync::planner::{ScopedFilter as PlannerScope, ScopedFilter};
 use linix::app::{ui::TuiPreview, App};
 use linix::cli::{
-    Cli, Commands, ConfigCommand, GenerationCommand, LeaseCommand, ModuleCommand, ProfileCommand,
-    RepoCommand, ScheduleCommand, SnapshotCommand,
+    Cli, Commands, ConfigCommand, GenerationCommand, GitCommand, HooksCommand, LeaseCommand,
+    ManagedCommand, ModuleCommand, ProfileCommand, RepoCommand, ScheduleCommand, ServiceCommand,
+    SnapshotCommand,
 };
 use linix::config::parser::{add_package_to_local, remove_package_from_local};
 use std::collections::HashMap;
@@ -53,7 +54,21 @@ async fn main() -> Result<()> {
     }
 
     // 3. CLI & Config Bootstrap
-    let cli = Cli::parse();
+    // Expand user-defined command aliases (config `[command_aliases]`) BEFORE clap parses, so
+    // `linix up` can stand in for `linix upgrade --all`. Built-in subcommands always win.
+    let cli = {
+        let raw_argv: Vec<String> = std::env::args().collect();
+        let cfg_path = config_path_from_argv(&raw_argv);
+        let aliases = linix::config::Config::from_file(&cfg_path)
+            .map(|c| c.command_aliases)
+            .unwrap_or_default();
+        if aliases.is_empty() {
+            Cli::parse()
+        } else {
+            let known = known_subcommands();
+            Cli::parse_from(expand_command_aliases(raw_argv, &aliases, &known))
+        }
+    };
     let config = load_and_merge_config(&cli).await?;
     linix::backends::node_registry::set_http_timeout(config.network_timeout_secs);
 
@@ -63,34 +78,83 @@ async fn main() -> Result<()> {
     // 5. Command Dispatcher (Modular A+ Routing)
     match &cli.command {
         Commands::Sync { locked, json } => handle_sync(&app, *locked, *json).await,
+        Commands::Watch {
+            interval,
+            on_change,
+            pull,
+            once,
+        } => handle_watch(&app, *interval, *on_change, *pull, *once).await,
         Commands::Upgrade {
+            packages,
+            backend,
+            all,
+            security,
+            except,
             profile,
             module,
             group,
             json,
             canary,
             test,
-        } => handle_upgrade(&app, profile, module, group, *json, *canary, test).await,
-        Commands::Install { packages, json } => handle_install(&app, packages, *json).await,
-        Commands::Remove { packages, json } => handle_remove(&app, packages, *json).await,
+        } => {
+            handle_upgrade(
+                &app,
+                UpgradeRequest {
+                    packages,
+                    backend: backend.as_deref(),
+                    all: *all,
+                    security: *security,
+                    except,
+                    profile,
+                    module,
+                    group,
+                    json: *json,
+                    canary: *canary,
+                    test,
+                },
+            )
+            .await
+        }
+        Commands::Install {
+            packages,
+            json,
+            temp,
+        } => handle_install(&app, packages, *json, temp.as_deref()).await,
+        Commands::Remove {
+            packages,
+            json,
+            temp,
+        } => handle_remove(&app, packages, *json, temp.as_ref()).await,
         Commands::Shell { packages } => handle_shell(&app, packages).await,
         Commands::Module(args) => handle_module(&app, &args.command).await,
         Commands::Lease(args) => handle_lease(&app, &args.command).await,
         Commands::Schedule(args) => handle_schedule(&app, &args.command).await,
         Commands::Snapshot(args) => handle_snapshot(&app, &args.command).await,
         Commands::Generation(args) => handle_generation(&app, &args.command).await,
-        Commands::Rollback { id, package } => {
-            handle_rollback(&app, id, package.as_deref()).await
-        }
+        Commands::Rollback {
+            id,
+            package,
+            with_config,
+        } => handle_rollback(&app, id, package.as_deref(), *with_config).await,
+        Commands::Git(args) => handle_git(&app, &args.command).await,
         Commands::Repo(args) => handle_repo(&app, &args.command).await,
-        Commands::Search { query, json } => handle_search(&app, query, *json).await,
-        Commands::List { backend, json } => handle_list(&app, backend.as_deref(), *json).await,
+        Commands::Search {
+            query,
+            json,
+            installed,
+        } => handle_search(&app, query, *json, *installed).await,
+        Commands::List {
+            backend,
+            json,
+            outdated,
+        } => handle_list(&app, backend.as_deref(), *json, *outdated).await,
         Commands::Info { package } => handle_info(&app, package).await,
         Commands::Clean => handle_clean(&app).await,
         Commands::Heal => handle_heal(&app).await,
-        Commands::Doctor => handle_doctor(&app).await,
+        Commands::Doctor { fix, json } => handle_doctor(&app, *fix, *json).await,
         Commands::Migrate => handle_migrate(&app).await,
         Commands::Undo => handle_undo(&app).await,
+        Commands::Cockpit => handle_cockpit(&app).await,
         Commands::Activate { profiles } => handle_activate(&app, profiles).await,
         Commands::Deactivate { profiles } => handle_deactivate(&app, profiles).await,
         Commands::Profile(args) => handle_profile(&app, &args.command).await,
@@ -99,31 +163,197 @@ async fn main() -> Result<()> {
         Commands::Status { json } => handle_status(&app, *json).await,
         Commands::Prune { json } => handle_prune(&app, *json).await,
         Commands::Lock => handle_lock(&app).await,
+        Commands::Plan { out } => handle_plan(&app, out).await,
+        Commands::Apply { plan, yes } => handle_apply(&app, plan, *yes).await,
         Commands::Update => handle_update(&app).await,
         Commands::Unmanaged => handle_unmanaged(&app).await,
         Commands::Teleport { package, to } => handle_teleport(&app, package, to).await,
         Commands::Shim { binary, source } => handle_shim(&app, binary, source).await,
         Commands::Config(args) => handle_config(&app, &args.command).await,
-        Commands::Init { force } => handle_init(&app, *force).await,
+        Commands::Init { force, interactive } => handle_init(&app, *force, *interactive).await,
         Commands::Audit { json } => handle_audit(&app, *json).await,
         Commands::Sbom => handle_sbom(&app).await,
-        Commands::Why { package } => handle_why(&app, package).await,
+        Commands::Export {
+            format,
+            out,
+            stdout,
+        } => handle_export(&app, format.as_deref(), out, *stdout).await,
+        Commands::Bundle {
+            out,
+            artifacts,
+            archive,
+        } => handle_bundle(&app, out, *artifacts, *archive).await,
+        Commands::Why { package, json } => handle_why(&app, package, *json).await,
+        Commands::Service(args) => handle_service(&app, &args.command).await,
         Commands::Bisect { test, yes } => linix::app::bisect::bisect(&app, test, *yes)
             .await
             .map_err(|e| e.into()),
         Commands::Clone { host, dry_run } => linix::app::fleet::clone(&app, host, *dry_run)
             .await
             .map_err(|e| e.into()),
-        Commands::Fleet(args) => linix::app::fleet::fleet(&app, &args.hosts, args.sync)
+        Commands::Fleet(args) => linix::app::fleet::fleet(&app, &args.hosts, args.sync, args.apply)
             .await
             .map_err(|e| e.into()),
+        Commands::Managed(args) => handle_managed(&app, &args.command).await,
+        Commands::Hooks(args) => handle_hooks(&app, &args.command).await,
+        Commands::HookRecord {
+            manager,
+            op,
+            targets,
+        } => handle_hook_record(&app, manager, op, targets).await,
+        Commands::HookReconcile { manager } => handle_hook_reconcile(&app, manager).await,
+        Commands::HookObserve {
+            manager,
+            learn,
+            argv,
+        } => handle_hook_observe(&app, manager.as_deref(), *learn, argv).await,
+        Commands::Hold { packages } => handle_hold(&app, packages).await,
+        Commands::Unhold { packages } => handle_unhold(&app, packages).await,
+        Commands::Conflicts { json } => handle_conflicts(&app, *json).await,
         Commands::Policy => handle_policy(&app).await,
         Commands::Completions { shell } => {
             let mut cmd = <Cli as clap::CommandFactory>::command();
             linix::cli::generate_completions(*shell, &mut cmd);
             Ok(())
         }
+        Commands::SelfUpgrade { git, check } => handle_self_upgrade(git.as_deref(), *check).await,
     }
+}
+
+/// Repository a `self-upgrade` installs from: explicit `--git`, else `$LINIX_REPO`, else the
+/// upstream default (kept in sync with `scripts/install.sh`).
+fn self_upgrade_repo(git: Option<&str>) -> String {
+    git.map(|s| s.to_string())
+        .or_else(|| std::env::var("LINIX_REPO").ok())
+        .unwrap_or_else(|| "https://github.com/OWNER/linix".to_string())
+}
+
+async fn cargo_install_from(repo: &str, locked: bool) -> std::io::Result<std::process::ExitStatus> {
+    let mut cmd = tokio::process::Command::new("cargo");
+    cmd.arg("install").arg("--git").arg(repo).arg("--force");
+    if locked {
+        cmd.arg("--locked");
+    }
+    cmd.status().await
+}
+
+async fn handle_self_upgrade(git: Option<&str>, check: bool) -> Result<()> {
+    let repo = self_upgrade_repo(git);
+    println!("Current version : linix {}", linix::VERSION);
+    if check {
+        println!("Upgrade source  : {}", repo);
+        println!("Run `linix self-upgrade` to rebuild and install the latest from source.");
+        return Ok(());
+    }
+    if which::which("cargo").is_err() {
+        anyhow::bail!(
+            "`cargo` (the Rust toolchain) is required to self-upgrade. Install it from \
+             https://rustup.rs, or re-run the LiNix install script."
+        );
+    }
+    println!("Rebuilding linix from {repo} via cargo — this can take a few minutes...");
+    // Reproducible build first (--locked); fall back to a loose build, exactly like install.sh.
+    let first = cargo_install_from(&repo, true).await;
+    let ok = matches!(&first, Ok(s) if s.success());
+    if !ok {
+        warn!("locked build failed; retrying without --locked...");
+        let second = cargo_install_from(&repo, false)
+            .await
+            .context("running `cargo install`")?;
+        if !second.success() {
+            anyhow::bail!("cargo install failed; linix was not upgraded.");
+        }
+    }
+    println!("Done. Run `linix --version` to confirm the new build.");
+    Ok(())
+}
+
+/// Peek at argv for a `--config`/`-c` override so the pre-parse alias load reads the same
+/// config file the app will. Falls back to the default config location.
+fn config_path_from_argv(argv: &[String]) -> std::path::PathBuf {
+    let mut it = argv.iter();
+    while let Some(a) = it.next() {
+        if a == "-c" || a == "--config" {
+            if let Some(p) = it.next() {
+                return std::path::PathBuf::from(p);
+            }
+        } else if let Some(rest) = a.strip_prefix("--config=") {
+            return std::path::PathBuf::from(rest);
+        }
+    }
+    linix::utils::safe_config_dir().join("config.toml")
+}
+
+/// The set of built-in subcommand names (and their clap aliases), so a user command-alias can
+/// never shadow a real command.
+fn known_subcommands() -> std::collections::HashSet<String> {
+    <Cli as clap::CommandFactory>::command()
+        .get_subcommands()
+        .flat_map(|s| {
+            std::iter::once(s.get_name().to_string())
+                .chain(s.get_all_aliases().map(|a| a.to_string()))
+        })
+        .collect()
+}
+
+/// Global flags that take a separate-argument value (`-c path`); their value must be skipped
+/// when locating the subcommand slot so `linix -c cfg up` still expands the `up` alias.
+const GLOBAL_VALUE_FLAGS: &[&str] = &[
+    "-c",
+    "--config",
+    "-b",
+    "--backend",
+    "-g",
+    "--groups-dir",
+    "--progress",
+];
+
+/// Index of the subcommand token in argv, skipping the program name, leading global flags, and
+/// any values those flags consume. `None` if there is no subcommand (e.g. only `--version`).
+fn find_subcommand_index(argv: &[String]) -> Option<usize> {
+    let mut i = 1;
+    while i < argv.len() {
+        let a = &argv[i];
+        if a == "--" {
+            return if i + 1 < argv.len() { Some(i + 1) } else { None };
+        }
+        if a.starts_with('-') {
+            // `--flag=value` is one token; `-c value` consumes the next token too.
+            if GLOBAL_VALUE_FLAGS.contains(&a.as_str()) {
+                i += 2;
+            } else {
+                i += 1;
+            }
+        } else {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Rewrite argv, expanding a user command-alias in the subcommand slot into its full token
+/// list. Pure and unit-tested. The slot is located past any leading global flags; a name that
+/// matches a built-in subcommand is left untouched (built-ins always win).
+fn expand_command_aliases(
+    argv: Vec<String>,
+    aliases: &HashMap<String, String>,
+    known: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let Some(idx) = find_subcommand_index(&argv) else {
+        return argv;
+    };
+    let cmd = &argv[idx];
+    if known.contains(cmd) {
+        return argv;
+    }
+    if let Some(expansion) = aliases.get(cmd) {
+        let mut out = Vec::with_capacity(argv.len() + 2);
+        out.extend(argv[..idx].iter().cloned());
+        out.extend(expansion.split_whitespace().map(|s| s.to_string()));
+        out.extend(argv[idx + 1..].iter().cloned());
+        return out;
+    }
+    argv
 }
 
 // ============================================================================
@@ -198,28 +428,491 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
     perform_maintenance(app).await
 }
 
-async fn handle_upgrade(
+/// A cheap fingerprint of the manifest directory: (path, size, mtime) for every `*.txt`. If it
+/// changes between ticks, a manifest was edited. Best-effort — errors just yield an empty sig.
+async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u64, i64)> {
+    let mut sig = Vec::new();
+    let Ok(mut rd) = tokio::fs::read_dir(dir).await else {
+        return sig;
+    };
+    while let Ok(Some(entry)) = rd.next_entry().await {
+        let path = entry.path();
+        if path.extension().map(|e| e == "txt").unwrap_or(false) {
+            if let Ok(meta) = entry.metadata().await {
+                let mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                sig.push((path.to_string_lossy().into_owned(), meta.len(), mtime));
+            }
+        }
+    }
+    sig.sort();
+    sig
+}
+
+/// One unattended reconcile pass: resolve desired state, plan, and auto-apply any changes. This
+/// is `sync` without the interactive confirmation gate — `watch` is explicitly unattended.
+async fn watch_reconcile(app: &App) -> Result<usize> {
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let desired = resolver.resolve_desired_state().await?;
+    enforce_policy(app, &desired).await?;
+    let changes = {
+        let state_guard = app.state.lock().await;
+        linix::app::sync::planner::ChangePlanner::new(
+            app.registry.clone(),
+            &state_guard,
+            &app.config,
+        )
+        .with_prune(app.config.prune_on_sync)
+        .plan(&desired, PlannerScope::None)
+        .await?
+    };
+    if changes.is_empty() {
+        return Ok(0);
+    }
+    let n = changes.total_install() + changes.total_remove();
+    print_flight_plan(app, &changes);
+    app.sync_engine().await.sync(changes).await?;
+    perform_maintenance(app).await?;
+    Ok(n)
+}
+
+async fn handle_watch(
     app: &App,
-    profile: &Option<String>,
-    module: &Option<String>,
-    group: &Option<String>,
+    interval: u64,
+    on_change: bool,
+    pull: bool,
+    once: bool,
+) -> Result<()> {
+    let interval = interval.max(1);
+    println!(
+        "linix watch: reconciling {} every {}s{}{}. Ctrl-C to stop.",
+        app.config.groups_dir.display(),
+        interval,
+        if pull { " (git pull each tick)" } else { "" },
+        if on_change { " (on change only)" } else { "" },
+    );
+    let mut last_sig = manifest_signature(&app.config.groups_dir).await;
+    let mut first = true;
+    loop {
+        if pull {
+            let git = app.git_manager();
+            if git.is_repo() {
+                match git.pull() {
+                    Ok(msg) => info!("watch: git pull — {}", msg.lines().last().unwrap_or("")),
+                    Err(e) => warn!("watch: git pull failed: {}", e),
+                }
+            }
+        }
+        let sig = manifest_signature(&app.config.groups_dir).await;
+        let changed = sig != last_sig;
+        // Reconcile on the first pass and whenever something changed; with --on-change we skip
+        // ticks where nothing moved (the manifests and, after a pull, the repo are unchanged).
+        if first || changed || !on_change {
+            if changed && !first {
+                println!("watch: manifests changed — reconciling.");
+            }
+            match watch_reconcile(app).await {
+                Ok(0) => {
+                    if changed || first {
+                        println!("watch: already in sync.");
+                    }
+                }
+                Ok(n) => println!("watch: applied {} change(s).", n),
+                Err(e) => warn!("watch: reconcile failed: {}", e),
+            }
+            last_sig = sig;
+        }
+        first = false;
+        if once {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
+    }
+    Ok(())
+}
+
+/// Everything `handle_upgrade` needs, bundled so the dispatch site stays readable and the
+/// handler doesn't grow an unwieldy positional signature.
+struct UpgradeRequest<'a> {
+    packages: &'a [String],
+    backend: Option<&'a str>,
+    all: bool,
+    security: bool,
+    except: &'a [String],
+    profile: &'a Option<String>,
+    module: &'a Option<String>,
+    group: &'a Option<String>,
     json: bool,
     canary: bool,
-    test: &Option<String>,
+    test: &'a Option<String>,
+}
+
+/// True if `except` names this package, matching either the bare name or `backend:name`.
+fn upgrade_excluded(except: &[String], backend: &str, name: &str) -> bool {
+    let qualified = format!("{}:{}", backend, name);
+    except
+        .iter()
+        .any(|e| e == name || e == &qualified || e.eq_ignore_ascii_case(name))
+}
+
+/// Upgrade a single managed package by routing through the normal install path. When
+/// `version` is `Some`, pin to exactly that version (`options["version"]`, which pin-capable
+/// backends honor) — used by `--security` to land on the fixed version rather than blindly
+/// jumping to latest. `None` means "newest the backend offers".
+async fn upgrade_one(app: &App, backend: &str, name: &str, version: Option<&str>) -> Result<bool> {
+    let spec_str = format!("{}:{}", backend, name);
+    let resolved = app.resolve_spec(&spec_str).await?;
+    let mut acted = false;
+    for mut spec in resolved {
+        if let Some(v) = version {
+            spec.options.insert("version".to_string(), v.to_string());
+        }
+        if let Some(b) = app.registry.get(&spec.backend) {
+            if let Some(inst) = b.as_installable() {
+                info!(
+                    "Upgrading {}:{} to {}...",
+                    spec.backend,
+                    spec.name,
+                    version.unwrap_or("latest")
+                );
+                inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
+                    .await?;
+                acted = true;
+            }
+        }
+    }
+    Ok(acted)
+}
+
+/// Upgrade an explicit set of managed packages (or one backend's worth) to latest.
+async fn upgrade_targeted(
+    app: &App,
+    packages: &[String],
+    backend: Option<&str>,
+    except: &[String],
 ) -> Result<()> {
-    let scope = if let Some(p) = profile {
+    // Snapshot the managed set once so we can resolve names → backends without holding the lock.
+    let managed: Vec<(String, String)> = {
+        let state = app.state.lock().await;
+        state
+            .packages
+            .iter()
+            .map(|p| (p.backend.clone(), p.name.clone()))
+            .collect()
+    };
+
+    // Build the target list.
+    let mut targets: Vec<(String, String)> = Vec::new();
+    if !packages.is_empty() {
+        for req in packages {
+            let (want_backend, want_name) = match req.split_once(':') {
+                Some((b, n)) if app.registry.get(b).is_some() => (Some(b), n),
+                _ => (None, req.as_str()),
+            };
+            let hit = managed.iter().find(|(b, n)| {
+                n == want_name && want_backend.map(|wb| wb == b).unwrap_or(true)
+            });
+            match hit {
+                Some((b, n)) => targets.push((b.clone(), n.clone())),
+                None => {
+                    // Not currently managed — still honor an explicit, backend-qualified
+                    // upgrade by resolving it fresh; otherwise warn and skip.
+                    if let Some(b) = want_backend {
+                        targets.push((b.to_string(), want_name.to_string()));
+                    } else {
+                        eprintln!("upgrade: '{}' is not a managed package — skipping.", req);
+                    }
+                }
+            }
+        }
+    } else if let Some(scope) = backend {
+        for (b, n) in &managed {
+            if b == scope {
+                targets.push((b.clone(), n.clone()));
+            }
+        }
+        if targets.is_empty() {
+            println!("No managed packages under backend '{}'.", scope);
+            return Ok(());
+        }
+    }
+
+    // Apply --backend as a filter even when explicit packages were given, and drop excludes.
+    // Held packages are skipped for a broad (--backend) upgrade, but an EXPLICITLY named
+    // package overrides its hold (with a warning) — naming it is a clear intent to upgrade.
+    let explicit = !packages.is_empty();
+
+    // Dry-run: describe the upgrades (after filters/holds) without touching anything.
+    if app.config.dry_run {
+        println!("[DRY-RUN] would upgrade:");
+        let mut n = 0;
+        for (b, name) in &targets {
+            if let Some(scope) = backend {
+                if b != scope {
+                    continue;
+                }
+            }
+            if upgrade_excluded(except, b, name) {
+                continue;
+            }
+            if !explicit && app.state.lock().await.is_held(b, name) {
+                continue;
+            }
+            println!("  ↑ {}:{}", b, name);
+            n += 1;
+        }
+        if n == 0 {
+            println!("  (nothing)");
+        }
+        return Ok(());
+    }
+
+    let mut upgraded = 0usize;
+    let mut skipped = 0usize;
+    for (b, n) in targets {
+        if let Some(scope) = backend {
+            if b != scope {
+                continue;
+            }
+        }
+        if upgrade_excluded(except, &b, &n) {
+            skipped += 1;
+            continue;
+        }
+        if app.state.lock().await.is_held(&b, &n) {
+            if explicit {
+                eprintln!(
+                    "upgrade: '{}:{}' is held — upgrading anyway because you named it (still held; `linix unhold` to change).",
+                    b, n
+                );
+            } else {
+                println!("upgrade: skipping held {}:{} (`linix unhold` to allow).", b, n);
+                skipped += 1;
+                continue;
+            }
+        }
+        if upgrade_one(app, &b, &n, None).await? {
+            upgraded += 1;
+        }
+    }
+
+    app.state.lock().await.save()?;
+    println!(
+        "Upgraded {} package(s){}.",
+        upgraded,
+        if skipped > 0 {
+            format!(" ({} held back by --except)", skipped)
+        } else {
+            String::new()
+        }
+    );
+    perform_maintenance(app).await
+}
+
+/// Upgrade exactly the packages `audit` reports as vulnerable, to a non-vulnerable version.
+/// Honors `--except`. This is the `audit → upgrade` bridge.
+async fn upgrade_security(app: &App, except: &[String], json: bool) -> Result<()> {
+    let report = linix::app::insight::audit(app).await?;
+    if report.findings.is_empty() {
+        if json {
+            println!("{}", serde_json::json!({ "upgraded": [], "vulnerable": 0 }));
+        } else {
+            println!(
+                "No known vulnerabilities across {} scanned package(s) — nothing to upgrade.",
+                report.scanned
+            );
+        }
+        return Ok(());
+    }
+
+    // Aggregate advisories per package. A package can have several; to be safe from ALL of
+    // them we must reach at least the HIGHEST fixed version across its advisories, so we take
+    // the max `fixed` (not the first). Packages with no reported fix pin to None (→ latest).
+    use version_compare::{compare, Cmp};
+    let held: Vec<String> = app.state.lock().await.held.clone();
+    let is_held = |backend: &str, name: &str| {
+        let q = format!("{}:{}", backend, name);
+        held.iter().any(|k| k == name || k == &q)
+    };
+    let mut order: Vec<String> = Vec::new();
+    let mut agg: std::collections::HashMap<String, (String, String, Option<String>)> =
+        std::collections::HashMap::new();
+    let mut excluded_keys = std::collections::HashSet::new();
+    let mut held_keys = std::collections::HashSet::new();
+    for f in &report.findings {
+        let key = format!("{}:{}", f.backend, f.name);
+        if upgrade_excluded(except, &f.backend, &f.name) {
+            excluded_keys.insert(key);
+            continue;
+        }
+        // A held package is NOT silently remediated — hold is an explicit "don't touch". We
+        // surface it loudly so the user can `unhold` and re-run if they want the fix.
+        if is_held(&f.backend, &f.name) {
+            held_keys.insert(key);
+            continue;
+        }
+        let entry = agg.entry(key.clone()).or_insert_with(|| {
+            order.push(key.clone());
+            (f.backend.clone(), f.name.clone(), None)
+        });
+        if let Some(new_fixed) = &f.fixed {
+            // Keep the larger of the current best and this advisory's fixed version.
+            let keep_current = matches!(&entry.2, Some(cur) if compare(cur, new_fixed) == Ok(Cmp::Ge));
+            if !keep_current {
+                entry.2 = Some(new_fixed.clone());
+            }
+        }
+    }
+    let plan: Vec<(String, String, Option<String>)> =
+        order.into_iter().filter_map(|k| agg.remove(&k)).collect();
+    let seen_total = plan.len() + excluded_keys.len() + held_keys.len();
+    let excepted = excluded_keys.len();
+    if !json {
+        println!(
+            "Security upgrade: {} vulnerable package(s){}.",
+            plan.len(),
+            if excepted > 0 {
+                format!(", {} held back by --except", excepted)
+            } else {
+                String::new()
+            }
+        );
+        // Vulnerable AND held: neither auto-fixed nor silently ignored — call it out.
+        if !held_keys.is_empty() {
+            eprintln!(
+                "warning: {} vulnerable package(s) are HELD and were NOT upgraded: {}. \
+                 `linix unhold <pkg>` then re-run to remediate.",
+                held_keys.len(),
+                {
+                    let mut v: Vec<_> = held_keys.iter().cloned().collect();
+                    v.sort();
+                    v.join(", ")
+                }
+            );
+        }
+    }
+
+    // Dry-run: show the remediation plan without installing.
+    if app.config.dry_run {
+        if !json {
+            println!("[DRY-RUN] would upgrade to remediate:");
+            for (backend, name, fixed) in &plan {
+                match fixed {
+                    Some(v) => println!("  ↑ {}:{} → {}", backend, name, v),
+                    None => println!("  ↑ {}:{} → latest", backend, name),
+                }
+            }
+            if plan.is_empty() {
+                println!("  (nothing)");
+            }
+        }
+        return Ok(());
+    }
+
+    let mut upgraded = Vec::new();
+    for (backend, name, fixed) in plan {
+        // Pin to the fixed version when OSV reports one; pin-capable backends land exactly
+        // there, and those that ignore the pin fall back to latest (still ≥ fixed).
+        match upgrade_one(app, &backend, &name, fixed.as_deref()).await {
+            Ok(true) => upgraded.push(serde_json::json!({
+                "backend": backend, "name": name, "pinned_to": fixed,
+            })),
+            Ok(false) => {}
+            // Per the agreed policy: a package we can't remediate is a warning, not a stop.
+            Err(e) => eprintln!("  warning: could not upgrade {}:{}: {}", backend, name, e),
+        }
+    }
+    app.state.lock().await.save()?;
+
+    if json {
+        let mut held_list: Vec<_> = held_keys.iter().cloned().collect();
+        held_list.sort();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "vulnerable": seen_total,
+                "upgraded": upgraded,
+                "held_unremediated": held_list,
+            }))?
+        );
+    } else {
+        println!("Upgraded {} package(s) to remediate advisories.", upgraded.len());
+    }
+    perform_maintenance(app).await
+}
+
+async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
+    // Canary keeps its own health-gated, scoped path.
+    if req.canary {
+        let scope = if let Some(p) = req.profile {
+            ScopedFilter::Profile(p.clone())
+        } else if let Some(m) = req.module {
+            ScopedFilter::Module(m.clone())
+        } else if let Some(g) = req.group {
+            ScopedFilter::Group(g.clone())
+        } else {
+            ScopedFilter::None
+        };
+        return handle_canary(app, scope, req.test).await;
+    }
+
+    // Mode 1: audit-driven security upgrade.
+    if req.security {
+        return upgrade_security(app, req.except, req.json).await;
+    }
+
+    // Mode 2: explicit packages, or a --backend scope → targeted managed upgrade.
+    if !req.packages.is_empty() || req.backend.is_some() {
+        return upgrade_targeted(app, req.packages, req.backend, req.except).await;
+    }
+
+    // Mode 3: --all, or a bare `upgrade` with no declarative scope → native whole-system
+    // batch upgrade across every backend (this is the path that actually bumps
+    // `latest`-pinned packages, which the constraint-driven planner never touches).
+    if req.all || (req.profile.is_none() && req.module.is_none() && req.group.is_none()) {
+        if !req.except.is_empty() {
+            eprintln!(
+                "note: --except is ignored for the native whole-system upgrade; \
+                 pass package names or use --backend/--security to scope exclusions."
+            );
+        }
+        // Native batch upgrades (`apt upgrade`, `brew upgrade`, …) run inside each manager and
+        // can't be told to skip individual packages, so LiNix holds aren't enforced here. Be
+        // honest about it rather than pretend the hold was respected.
+        let held_count = app.state.lock().await.held.len();
+        if held_count > 0 {
+            eprintln!(
+                "note: {} package hold(s) are NOT enforced by the native whole-system upgrade. \
+                 Use `linix upgrade --backend <b>` or per-package upgrades to honor holds.",
+                held_count
+            );
+        }
+        if app.config.dry_run {
+            println!(
+                "[DRY-RUN] would run each backend's native whole-system upgrade (e.g. `apt upgrade`)."
+            );
+            return Ok(());
+        }
+        return app.upgrade().await.map_err(Into::into);
+    }
+
+    // Mode 4: scoped declarative upgrade (profile/module/group) via the change planner.
+    let scope = if let Some(p) = req.profile {
         ScopedFilter::Profile(p.clone())
-    } else if let Some(m) = module {
+    } else if let Some(m) = req.module {
         ScopedFilter::Module(m.clone())
-    } else if let Some(g) = group {
+    } else if let Some(g) = req.group {
         ScopedFilter::Group(g.clone())
     } else {
         ScopedFilter::None
     };
-
-    if canary {
-        return handle_canary(app, scope, test).await;
-    }
+    let json = req.json;
 
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
@@ -237,11 +930,16 @@ async fn handle_upgrade(
         planner.plan(&desired, scope).await?
     };
 
-    if json && app.config.dry_run {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&changes.generate_report())?
-        );
+    if app.config.dry_run {
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&changes.generate_report())?
+            );
+        } else {
+            print_flight_plan(app, &changes);
+            println!("(dry-run: scoped upgrade previewed; nothing applied.)");
+        }
         return Ok(());
     }
 
@@ -276,17 +974,41 @@ async fn handle_upgrade(
     Ok(())
 }
 
-async fn handle_install(app: &App, packages: &[String], json: bool) -> Result<()> {
-    if json && app.config.dry_run {
+async fn handle_install(
+    app: &App,
+    packages: &[String],
+    json: bool,
+    temp: Option<&str>,
+) -> Result<()> {
+    // A temporary install must never silently become permanent: reject a malformed
+    // duration before touching the system.
+    if let Some(dur) = temp {
+        if linix::core::StateRegistry::parse_duration(dur).is_none() {
+            anyhow::bail!("Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.", dur);
+        }
+    }
+
+    // Dry-run must not mutate the system OR LiNix's own state/manifest. The command executor
+    // already no-ops real installs in dry-run, but the registry/manifest writes below still
+    // would — so short-circuit here for BOTH json and plain output.
+    if app.config.dry_run {
         let mut planned = Vec::new();
         for pkg_str in packages {
             for spec in app.resolve_spec(pkg_str).await? {
                 planned.push(serde_json::json!({
                     "action": "install", "backend": spec.backend, "name": spec.name,
+                    "temporary": temp.is_some(),
                 }));
             }
         }
-        println!("{}", serde_json::to_string_pretty(&planned)?);
+        if json {
+            println!("{}", serde_json::to_string_pretty(&planned)?);
+        } else {
+            println!("[DRY-RUN] would install {} package spec(s):", planned.len());
+            for p in &planned {
+                println!("  + {}:{}", p["backend"].as_str().unwrap_or(""), p["name"].as_str().unwrap_or(""));
+            }
+        }
         return Ok(());
     }
     for pkg_str in packages {
@@ -297,17 +1019,27 @@ async fn handle_install(app: &App, packages: &[String], json: bool) -> Result<()
                 info!("LiNix: Installing {} via {}...", spec.name, spec.backend);
                 inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
                     .await?;
+                // For a temporary install, stamp the lease so the maintenance sweep
+                // reclaims it when time is up.
+                let mut options = spec.options.clone();
+                if let Some(dur) = temp {
+                    options.insert("lease".to_string(), dur.to_string());
+                }
                 // Tag as "imperative" so `protect_imperative` can shield it from drift
                 // pruning even if it never lands in (or is later removed from) a manifest.
                 app.state.lock().await.add(
                     &spec.backend,
                     &spec.name,
                     None,
-                    spec.options.clone(),
+                    options,
                     Some("imperative".into()),
                     false,
                 );
-                let _ = add_package_to_local(&app.config.groups_dir, pkg_str).await;
+                // A temporary install is not declarative desired state — keep it out of
+                // the manifest so `sync` doesn't resurrect it after the lease expires.
+                if temp.is_none() {
+                    let _ = add_package_to_local(&app.config.groups_dir, pkg_str).await;
+                }
             }
         }
     }
@@ -315,8 +1047,33 @@ async fn handle_install(app: &App, packages: &[String], json: bool) -> Result<()
     perform_maintenance(app).await
 }
 
-async fn handle_remove(app: &App, packages: &[String], json: bool) -> Result<()> {
-    if json && app.config.dry_run {
+async fn handle_remove(
+    app: &App,
+    packages: &[String],
+    json: bool,
+    temp: Option<&Option<String>>,
+) -> Result<()> {
+    // Validate the temp-uninstall request before mutating anything.
+    if let Some(inner) = temp {
+        if let Some(dur) = inner {
+            if linix::core::StateRegistry::parse_duration(dur).is_none() {
+                anyhow::bail!("Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.", dur);
+            }
+        } else {
+            // Bare `--temp` (session-scoped) only makes sense with an active ghost shell;
+            // otherwise nothing would ever trigger the restore. Fail loudly instead.
+            let has_session = app.state.lock().await.active_session_id.is_some();
+            if !has_session {
+                anyhow::bail!(
+                    "Bare `--temp` restores on shell exit, but no `linix shell` session is \
+                     active. Give a duration (e.g. --temp=2h) to schedule a timed restore."
+                );
+            }
+        }
+    }
+
+    // Dry-run short-circuit for BOTH json and plain output (no state/manifest mutation).
+    if app.config.dry_run {
         let mut planned = Vec::new();
         for pkg_name in packages {
             for b in app.registry.available() {
@@ -330,7 +1087,14 @@ async fn handle_remove(app: &App, packages: &[String], json: bool) -> Result<()>
                 }
             }
         }
-        println!("{}", serde_json::to_string_pretty(&planned)?);
+        if json {
+            println!("{}", serde_json::to_string_pretty(&planned)?);
+        } else {
+            println!("[DRY-RUN] would remove {} package(s):", planned.len());
+            for p in &planned {
+                println!("  - {}:{}", p["backend"].as_str().unwrap_or(""), p["name"].as_str().unwrap_or(""));
+            }
+        }
         return Ok(());
     }
     // Optional extra guard before destructive removals.
@@ -359,21 +1123,60 @@ async fn handle_remove(app: &App, packages: &[String], json: bool) -> Result<()>
                 continue;
             }
             if let Some(inst) = b.as_installable() {
-                if let Some(q) = b.as_queryable() {
-                    if q.info(&bare_name).await?.is_some() {
-                        info!("LiNix: Purging {} from {}...", bare_name, b.name());
-                        inst.remove(std::slice::from_ref(&bare_name), b.sudo_for_write())
-                            .await?;
-                        app.state.lock().await.remove(b.name(), &bare_name);
+                // Confirm the package is installed when the backend can be queried. A backend
+                // WITHOUT a Queryable (e.g. `link`, whose "package" is a filesystem path) can't
+                // be probed — so honor an EXPLICIT scoped removal (`link:/path`) and attempt it
+                // directly, rather than treating remove as an impossible no-op (which silently
+                // left the symlink in place). Unscoped removal still requires a query hit, so a
+                // bare name never triggers a blind remove across every backend.
+                // Query once: a Queryable backend confirms presence and yields the version
+                // (best-effort, recorded for a temp uninstall). A non-Queryable backend
+                // (e.g. `link`) can't be probed, so honor an explicit scoped removal.
+                let (present, existing_version) = match b.as_queryable() {
+                    Some(q) => match q.info(&bare_name).await? {
+                        Some(p) => (true, p.version),
+                        None => (false, None),
+                    },
+                    None => (scoped_backend.as_deref() == Some(b.name()), None),
+                };
+                if present {
+                    info!("LiNix: Purging {} from {}...", bare_name, b.name());
+                    inst.remove(std::slice::from_ref(&bare_name), b.sudo_for_write())
+                        .await?;
+                    app.state.lock().await.remove(b.name(), &bare_name);
+                    if let Some(inner) = temp {
+                        // Temporary uninstall: schedule a restore instead of editing the
+                        // manifest (a temp removal is a transient state change, not a
+                        // change of declarative intent).
+                        let restored_at = app.state.lock().await.suspend(
+                            b.name(),
+                            &bare_name,
+                            existing_version.clone(),
+                            inner.as_deref(),
+                        )?;
+                        match restored_at {
+                            Some(at) => info!(
+                                "LiNix: {} suspended; will be restored at Unix {}.",
+                                bare_name, at
+                            ),
+                            None => info!(
+                                "LiNix: {} suspended; will be restored when this shell exits.",
+                                bare_name
+                            ),
+                        }
+                    } else {
                         let _ = remove_package_from_local(&app.config.groups_dir, pkg_str).await;
-                        removed = true;
-                        break;
                     }
+                    removed = true;
+                    break;
                 }
             }
         }
         if !removed {
-            warn!("LiNix: '{}' is not installed under any managed backend.", pkg_str);
+            warn!(
+                "LiNix: '{}' is not installed under any managed backend.",
+                pkg_str
+            );
         }
     }
     app.state.lock().await.save()?;
@@ -438,6 +1241,60 @@ async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
             tokio::fs::write(&path, format!("# LiNix Module: {}\n", name)).await?;
             info!("Module '{}' created successfully.", name);
         }
+        ModuleCommand::Add { source, name } => {
+            use linix::app::module_registry;
+            let (url, default_name) = module_registry::resolve_module_source(source)?;
+            let final_name = name.clone().unwrap_or(default_name);
+
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(
+                    app.config.network_timeout_secs.max(10),
+                ))
+                .user_agent("linix-module")
+                .build()?;
+            info!("Fetching module from {}", url);
+            let resp = client.get(&url).send().await?;
+            if !resp.status().is_success() {
+                anyhow::bail!("fetching {} returned HTTP {}", url, resp.status());
+            }
+            let body = resp.text().await?;
+            if module_registry::looks_like_html(&body) {
+                anyhow::bail!(
+                    "response from {} looks like an HTML page, not a LiNix module — check the source",
+                    url
+                );
+            }
+
+            tokio::fs::create_dir_all(&app.config.modules_dir).await.ok();
+            let path = app
+                .config
+                .modules_dir
+                .join(format!("{}.module.txt", final_name));
+            if tokio::fs::try_exists(&path).await.unwrap_or(false)
+                && app.config.confirm_destructive
+                && !app.config.yes
+            {
+                let proceed = dialoguer::Confirm::new()
+                    .with_prompt(format!("Module '{}' already exists. Overwrite?", final_name))
+                    .default(false)
+                    .interact()
+                    .unwrap_or(false);
+                if !proceed {
+                    println!("Kept existing module '{}'.", final_name);
+                    return Ok(());
+                }
+            }
+            tokio::fs::write(&path, &body).await?;
+            let count = module_registry::count_entries(&body);
+            println!(
+                "Added module '{}' ({} entries) from {}\n  saved to {}\n  use it with `@module:{}` in a manifest.",
+                final_name,
+                count,
+                url,
+                path.display(),
+                final_name
+            );
+        }
     }
     Ok(())
 }
@@ -446,20 +1303,38 @@ async fn handle_lease(app: &App, cmd: &LeaseCommand) -> Result<()> {
     match cmd {
         LeaseCommand::List => {
             let state = app.state.lock().await;
-            println!("{:<15} {:<20} {:<20}", "BACKEND", "PACKAGE", "EXPIRATION");
+            let fmt_ts = |ts: u64| match chrono::DateTime::<chrono::Utc>::from_timestamp(ts as i64, 0)
+            {
+                Some(dt) => dt.to_rfc2822(),
+                None => format!("<invalid time: {}>", ts),
+            };
+
+            // Temporary installs (leases): present now, self-removing at EXPIRATION.
+            println!("Temporary installs (auto-remove):");
+            println!("  {:<15} {:<20} {:<20}", "BACKEND", "PACKAGE", "EXPIRATION");
+            let mut any_lease = false;
             for pkg in &state.packages {
                 if let Some(exp) = pkg.expires_at {
-                    // Guard against a corrupt/out-of-range timestamp instead of panicking.
-                    match chrono::DateTime::<chrono::Utc>::from_timestamp(exp as i64, 0) {
-                        Some(dt) => {
-                            println!("{:<15} {:<20} {}", pkg.backend, pkg.name, dt.to_rfc2822())
-                        }
-                        None => println!(
-                            "{:<15} {:<20} <invalid expiry: {}>",
-                            pkg.backend, pkg.name, exp
-                        ),
-                    }
+                    any_lease = true;
+                    println!("  {:<15} {:<20} {}", pkg.backend, pkg.name, fmt_ts(exp));
                 }
+            }
+            if !any_lease {
+                println!("  (none)");
+            }
+
+            // Temporary uninstalls (suspensions): removed now, auto-restoring later.
+            println!("\nTemporary uninstalls (auto-restore):");
+            println!("  {:<15} {:<20} {:<20}", "BACKEND", "PACKAGE", "RESTORE");
+            if state.list_suspensions().is_empty() {
+                println!("  (none)");
+            }
+            for s in state.list_suspensions() {
+                let when = match s.restore_at {
+                    Some(at) => fmt_ts(at),
+                    None => "on shell exit".to_string(),
+                };
+                println!("  {:<15} {:<20} {}", s.backend, s.name, when);
             }
         }
         LeaseCommand::Set { package, duration } => {
@@ -469,6 +1344,453 @@ async fn handle_lease(app: &App, cmd: &LeaseCommand) -> Result<()> {
             app.state.lock().await.update_lease(b, n, duration)?;
             app.state.lock().await.save()?;
         }
+    }
+    Ok(())
+}
+
+async fn handle_managed(app: &App, cmd: &ManagedCommand) -> Result<()> {
+    use linix::config::PruneScope;
+
+    // Persist a prune-scope change to config.toml. We re-read the file fresh (rather than
+    // serializing the in-memory config) so keep.txt entries that were merged into
+    // `protected_packages` at load time are NOT baked into config.toml.
+    async fn set_scope(app: &App, scope: PruneScope) -> Result<()> {
+        let path = app.config.config_file.clone();
+        let mut cfg = {
+            let p = path.clone();
+            tokio::task::spawn_blocking(move || linix::config::Config::from_file(&p)).await??
+        };
+        cfg.prune_scope = scope;
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await.ok();
+        }
+        let body = toml::to_string_pretty(&cfg).context("Failed to serialize config")?;
+        tokio::fs::write(&path, body)
+            .await
+            .with_context(|| format!("Failed to write config to {}", path.display()))?;
+        Ok(())
+    }
+
+    async fn edit_keepfile(
+        app: &App,
+        packages: &[String],
+        adding: bool,
+    ) -> Result<()> {
+        let path = app.config.keep_file_path();
+        let body = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+        let new_body = if adding {
+            keepfile_add(&body, packages)
+        } else {
+            keepfile_remove(&body, packages)
+        };
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await.ok();
+        }
+        tokio::fs::write(&path, new_body)
+            .await
+            .with_context(|| format!("Failed to write keep-list {}", path.display()))?;
+        Ok(())
+    }
+
+    match cmd {
+        ManagedCommand::Strict => {
+            set_scope(app, PruneScope::System).await?;
+            println!(
+                "Management mode: STRICT — `prune`/`sync` may remove any package not in your \
+                 manifests (keep-list and protected packages are always spared)."
+            );
+        }
+        ManagedCommand::LinixOnly => {
+            set_scope(app, PruneScope::Managed).await?;
+            println!(
+                "Management mode: LINIX-ONLY — drift removal touches only packages LiNix installed."
+            );
+        }
+        ManagedCommand::Show => {
+            let mode = match app.config.prune_scope {
+                PruneScope::System => "strict (everything managed)",
+                PruneScope::Managed => "linix-only",
+            };
+            println!("Management mode : {}", mode);
+            println!("prune_on_sync   : {}", app.config.prune_on_sync);
+            println!("protect_imperative: {}", app.config.protect_imperative);
+            let keep_path = app.config.keep_file_path();
+            println!("keep-list       : {}", keep_path.display());
+            match tokio::fs::read_to_string(&keep_path).await {
+                Ok(body) => {
+                    let items: Vec<&str> = body
+                        .lines()
+                        .map(|l| l.trim())
+                        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                        .collect();
+                    if items.is_empty() {
+                        println!("  (empty)");
+                    }
+                    for it in items {
+                        println!("  {}", it);
+                    }
+                }
+                Err(_) => println!("  (no keep.txt yet — add entries with `linix managed keep <pkg>`)"),
+            }
+        }
+        ManagedCommand::Keep { packages } => {
+            edit_keepfile(app, packages, true).await?;
+            println!(
+                "Added {} package(s) to the keep-list ({}).",
+                packages.len(),
+                app.config.keep_file_path().display()
+            );
+        }
+        ManagedCommand::Unkeep { packages } => {
+            edit_keepfile(app, packages, false).await?;
+            println!("Removed {} package(s) from the keep-list.", packages.len());
+        }
+    }
+    Ok(())
+}
+
+/// Apply a service spec (`service:<name>@<opts>`) through the install path.
+async fn service_apply(app: &App, name: &str, opts: &str) -> Result<()> {
+    let spec_str = if opts.is_empty() {
+        format!("service:{}", name)
+    } else {
+        format!("service:{}@{}", name, opts)
+    };
+    let resolved = app.resolve_spec(&spec_str).await?;
+    for spec in resolved {
+        let b = app
+            .registry
+            .get(&spec.backend)
+            .context("service backend unavailable on this host")?;
+        if let Some(inst) = b.as_installable() {
+            inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
+    // Enable/disable/start/stop/restart mutate the system and (enable/disable) the manifest.
+    // Honor --dry-run by describing the action without touching either. Status/List are
+    // read-only and always run.
+    if app.config.dry_run {
+        let action = match cmd {
+            ServiceCommand::Enable { name } => Some(("enable + start", name)),
+            ServiceCommand::Disable { name } => Some(("disable + stop", name)),
+            ServiceCommand::Start { name } => Some(("start", name)),
+            ServiceCommand::Stop { name } => Some(("stop", name)),
+            ServiceCommand::Restart { name } => Some(("restart", name)),
+            ServiceCommand::Status { .. } | ServiceCommand::List => None,
+        };
+        if let Some((what, name)) = action {
+            println!("[DRY-RUN] would {} service '{}'.", what, name);
+            return Ok(());
+        }
+    }
+    match cmd {
+        ServiceCommand::Enable { name } => {
+            service_apply(app, name, "enabled=true,status=running").await?;
+            // Persist so `sync` keeps the service enabled going forward.
+            let _ = add_package_to_local(&app.config.groups_dir, &format!("service:{}", name)).await;
+            println!("Service '{}' enabled and started (recorded in manifest).", name);
+        }
+        ServiceCommand::Disable { name } => {
+            service_apply(app, name, "enabled=false,status=stopped").await?;
+            let _ =
+                remove_package_from_local(&app.config.groups_dir, &format!("service:{}", name))
+                    .await;
+            println!("Service '{}' disabled and stopped (removed from manifest).", name);
+        }
+        ServiceCommand::Start { name } => {
+            service_apply(app, name, "status=running").await?;
+            println!("Service '{}' started.", name);
+        }
+        ServiceCommand::Stop { name } => {
+            service_apply(app, name, "status=stopped").await?;
+            println!("Service '{}' stopped.", name);
+        }
+        ServiceCommand::Restart { name } => {
+            service_apply(app, name, "status=restarted").await?;
+            println!("Service '{}' restarted.", name);
+        }
+        ServiceCommand::Status { name } => {
+            let b = app
+                .registry
+                .get("service")
+                .context("service backend unavailable on this host")?;
+            match b.as_queryable() {
+                Some(q) => match q.info(name).await? {
+                    Some(pkg) => {
+                        println!("{}: running", name);
+                        if let Some(raw) = pkg.properties.get("status_raw") {
+                            println!("{}", raw.trim());
+                        }
+                    }
+                    None => println!("{}: not running (or unknown to this init system)", name),
+                },
+                None => println!("service status is not queryable on this platform"),
+            }
+        }
+        ServiceCommand::List => {
+            let b = app
+                .registry
+                .get("service")
+                .context("service backend unavailable on this host")?;
+            match b.as_queryable() {
+                Some(q) => {
+                    let svcs = q.list_installed().await?;
+                    if svcs.is_empty() {
+                        println!("No running services reported.");
+                    } else {
+                        println!("Running services ({}):", svcs.len());
+                        for s in svcs {
+                            println!("  {}", s.name);
+                        }
+                    }
+                }
+                None => println!("service listing is not available on this platform"),
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
+    use linix::app::pm_hooks;
+
+    // Path to this very binary, so a hook can call back into `linix`.
+    let linix_bin = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "linix".to_string());
+
+    match cmd {
+        HooksCommand::Install { managers } => {
+            let specs = pm_hooks::hook_specs(&linix_bin);
+            let mut wrote = 0usize;
+            for spec in &specs {
+                if !managers.is_empty() && !managers.iter().any(|m| m == spec.manager) {
+                    continue;
+                }
+                // Only install hooks for managers actually present on this system.
+                if app.registry.get(spec.manager).is_none() && !managers.iter().any(|m| m == spec.manager) {
+                    continue;
+                }
+                if let Some(parent) = spec.path.parent() {
+                    if let Err(e) = tokio::fs::create_dir_all(parent).await {
+                        warn!("hooks: cannot create {} ({}). Try with sudo.", parent.display(), e);
+                        continue;
+                    }
+                }
+                match tokio::fs::write(&spec.path, &spec.content).await {
+                    Ok(()) => {
+                        // Make script-style hooks executable on Unix.
+                        #[cfg(unix)]
+                        if spec.content.starts_with("#!") {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = tokio::fs::set_permissions(
+                                &spec.path,
+                                std::fs::Permissions::from_mode(0o755),
+                            )
+                            .await;
+                        }
+                        println!("  installed  {:<8} {}", spec.manager, spec.path.display());
+                        wrote += 1;
+                    }
+                    Err(e) => warn!(
+                        "hooks: failed to write {} ({}). This usually needs root.",
+                        spec.path.display(),
+                        e
+                    ),
+                }
+            }
+            if wrote == 0 {
+                println!(
+                    "No hooks installed. Named managers may be absent, or writing needs sudo.\n\
+                     Hookable managers: {}",
+                    pm_hooks::hookable_manager_names().join(", ")
+                );
+            } else {
+                println!("\nInstalled {wrote} hook file(s). Manual installs now record into LiNix.");
+            }
+        }
+        HooksCommand::Uninstall { managers } => {
+            let specs = pm_hooks::hook_specs(&linix_bin);
+            let mut removed = 0usize;
+            for spec in &specs {
+                if !managers.is_empty() && !managers.iter().any(|m| m == spec.manager) {
+                    continue;
+                }
+                if tokio::fs::try_exists(&spec.path).await.unwrap_or(false) {
+                    match tokio::fs::remove_file(&spec.path).await {
+                        Ok(()) => {
+                            println!("  removed    {:<8} {}", spec.manager, spec.path.display());
+                            removed += 1;
+                        }
+                        Err(e) => warn!("hooks: failed to remove {} ({})", spec.path.display(), e),
+                    }
+                }
+            }
+            println!("Removed {removed} hook file(s).");
+        }
+        HooksCommand::Status => {
+            let specs = pm_hooks::hook_specs(&linix_bin);
+            println!("{:<10} {:<9} {:<9} PATH", "MANAGER", "PRESENT", "HOOKED");
+            for spec in &specs {
+                let present = app.registry.get(spec.manager).is_some();
+                let hooked = tokio::fs::try_exists(&spec.path).await.unwrap_or(false);
+                println!(
+                    "{:<10} {:<9} {:<9} {}",
+                    spec.manager,
+                    if present { "yes" } else { "no" },
+                    if hooked { "yes" } else { "no" },
+                    spec.path.display()
+                );
+            }
+        }
+        HooksCommand::ShellInit { shell } => {
+            print!("{}", pm_hooks::shell_wrappers(&linix_bin, shell));
+        }
+    }
+    Ok(())
+}
+
+/// Shared recording path for a single hooked target. Repo installs become declarative
+/// (recorded + appended to local.txt); local-file installs are recorded imperatively and kept
+/// OUT of the manifest (not reproducible), so drift-prune never removes them.
+async fn record_hooked_target(
+    app: &App,
+    manager: &str,
+    op: linix::app::pm_hooks::HookOp,
+    target: &str,
+) -> Result<()> {
+    use linix::app::pm_hooks::{classify_install_target, local_file_stem, HookOp, InstallKind};
+
+    match op {
+        HookOp::Install => {
+            let kind = classify_install_target(target);
+            let (name, source, declarative) = match kind {
+                InstallKind::Repo => (target.to_string(), format!("hook:{manager}"), true),
+                InstallKind::LocalFile => {
+                    (local_file_stem(target), "local-file".to_string(), false)
+                }
+            };
+            app.state.lock().await.add(
+                manager,
+                &name,
+                None,
+                std::collections::HashMap::new(),
+                Some(source),
+                false,
+            );
+            if declarative {
+                let _ =
+                    add_package_to_local(&app.config.groups_dir, &format!("{manager}:{name}")).await;
+            }
+            info!(
+                "hook: recorded install {}:{} ({})",
+                manager,
+                name,
+                if declarative { "managed" } else { "imperative/local" }
+            );
+        }
+        HookOp::Remove => {
+            app.state.lock().await.remove(manager, target);
+            let _ = remove_package_from_local(&app.config.groups_dir, &format!("{manager}:{target}"))
+                .await;
+            info!("hook: recorded remove {}:{}", manager, target);
+        }
+    }
+    Ok(())
+}
+
+async fn handle_hook_record(
+    app: &App,
+    manager: &str,
+    op: &str,
+    targets: &[String],
+) -> Result<()> {
+    let op = linix::app::pm_hooks::HookOp::parse(op)
+        .ok_or_else(|| anyhow::anyhow!("hook-record: --op must be 'install' or 'remove'"))?;
+    for target in targets {
+        record_hooked_target(app, manager, op, target).await?;
+    }
+    app.state.lock().await.save()?;
+    app.git_autocommit("linix: record hooked package change").await;
+    Ok(())
+}
+
+async fn handle_hook_reconcile(app: &App, manager: &str) -> Result<()> {
+    // Additive reconcile: record packages the manager reports installed that LiNix isn't yet
+    // tracking. We never auto-remove here — a missing package could be a transient query
+    // hiccup, and destructive action from a background hook would be a nasty surprise.
+    let Some(backend) = app.registry.get(manager) else {
+        warn!("hook-reconcile: backend '{}' is not available; skipping.", manager);
+        return Ok(());
+    };
+    let Some(queryable) = backend.as_queryable() else {
+        return Ok(());
+    };
+    let installed = queryable.list_installed().await.unwrap_or_default();
+    let mut newly = 0usize;
+    {
+        let mut state = app.state.lock().await;
+        for pkg in &installed {
+            if !state.is_managed(manager, &pkg.name) {
+                state.add(
+                    manager,
+                    &pkg.name,
+                    pkg.version.clone(),
+                    std::collections::HashMap::new(),
+                    Some(format!("hook:{manager}")),
+                    false,
+                );
+                newly += 1;
+            }
+        }
+        state.save()?;
+    }
+    if newly > 0 {
+        info!("hook-reconcile: adopted {} new {}-installed package(s).", newly, manager);
+        app.git_autocommit("linix: reconcile hooked manager").await;
+    }
+    Ok(())
+}
+
+async fn handle_hook_observe(
+    app: &App,
+    manager: Option<&str>,
+    learn: bool,
+    argv: &[String],
+) -> Result<()> {
+    use linix::app::pm_hooks::{detect_operation, extract_targets};
+
+    let Some(op) = detect_operation(argv) else {
+        // Not an install/remove command (e.g. `apt list`); nothing to record.
+        return Ok(());
+    };
+    // Manager name: explicit, else inferred from argv[0] (the wrapped binary).
+    let manager = manager
+        .map(|m| m.to_string())
+        .or_else(|| argv.first().cloned())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // For a brand-new manager we've never seen, suggest onboarding it properly.
+    if learn && app.registry.get(&manager).is_none() {
+        info!(
+            "Auto-learn: observed unknown manager '{}'. Consider onboarding it with a TOML \
+             definition so LiNix knows its full command set.",
+            manager
+        );
+    }
+
+    let targets = extract_targets(argv);
+    for target in &targets {
+        record_hooked_target(app, &manager, op, target).await?;
+    }
+    if !targets.is_empty() {
+        app.state.lock().await.save()?;
+        app.git_autocommit("linix: observed manual package change").await;
     }
     Ok(())
 }
@@ -541,6 +1863,7 @@ async fn rollback_to(
     store: &GenerationStore,
     id: &str,
     package: Option<&str>,
+    with_config: bool,
 ) -> Result<()> {
     let generation = store.load(id).await?;
     let current = {
@@ -551,14 +1874,44 @@ async fn rollback_to(
     // Backend scope comes from the global `--backend` (via effective enabled backends);
     // package scope from `--package`. Neither ⇒ a full rollback.
     let eff = app.config.effective_enabled_backends();
-    let backends: Option<&[String]> = if eff.is_empty() { None } else { Some(eff.as_slice()) };
+    let backends: Option<&[String]> = if eff.is_empty() {
+        None
+    } else {
+        Some(eff.as_slice())
+    };
     let full_scope = backends.is_none() && package.is_none();
 
-    let changes = linix::app::generation::plan_rollback(&generation, &current, backends, package);
+    let mut changes =
+        linix::app::generation::plan_rollback(&generation, &current, backends, package);
     if changes.is_empty() {
         println!("System already matches generation {id} for the requested scope.");
         return Ok(());
     }
+
+    // Interactive diff-review before a rollback applies: same toggle-to-deselect screen
+    // `sync` uses, so a rollback is never a blind bulk change. Skipped with --yes, in
+    // --dry-run (preview only), and when there's no terminal to drive the TUI.
+    if app.config.dry_run {
+        print_flight_plan(app, &changes);
+        println!("(dry-run: generation {id} rollback previewed; nothing applied.)");
+        return Ok(());
+    }
+    if !app.config.yes {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            let mut preview = TuiPreview::new(&changes, HashMap::new());
+            if !preview.run()? {
+                println!("Rollback cancelled.");
+                return Ok(());
+            }
+            changes = preview.get_filtered_changes();
+            if changes.is_empty() {
+                println!("All changes deselected — nothing to roll back.");
+                return Ok(());
+            }
+        }
+    }
+
     let (installs, removes) = (changes.total_install(), changes.total_remove());
 
     // A full rollback also restores the manifests, so the declarative state matches the
@@ -582,6 +1935,33 @@ async fn rollback_to(
     );
     app.sync_engine().await.sync(changes).await?;
     println!("Rollback complete.");
+
+    // The config half: optionally check the manifests out to the git commit stamped on this
+    // generation, so intent and system are rolled back together. If not requested, and a
+    // stamped commit exists, tell the user how to grab it — they're not in lockstep by design.
+    match (&generation.git_commit, with_config) {
+        (Some(commit), true) => {
+            let git = app.git_manager();
+            if git.is_repo() {
+                git.checkout_files(commit)?;
+                println!(
+                    "Config: manifests checked out to {} to match this generation.",
+                    &commit[..commit.len().min(8)]
+                );
+            } else {
+                println!("Config: --with-config requested but the config dir is not a git repo.");
+            }
+        }
+        (Some(commit), false) => {
+            println!(
+                "Tip: this generation's manifests are at git commit {}. Run \
+                 `linix git checkout {}` to also roll the config back.",
+                &commit[..commit.len().min(8)],
+                &commit[..commit.len().min(8)]
+            );
+        }
+        (None, _) => {}
+    }
     Ok(())
 }
 
@@ -611,7 +1991,7 @@ async fn handle_generation(app: &App, cmd: &GenerationCommand) -> Result<()> {
             }
         }
         GenerationCommand::Rollback { id, package } => {
-            rollback_to(app, &store, id, package.as_deref()).await?
+            rollback_to(app, &store, id, package.as_deref(), false).await?
         }
         GenerationCommand::Pin { id } => {
             store.set_pinned(id, true).await?;
@@ -621,13 +2001,156 @@ async fn handle_generation(app: &App, cmd: &GenerationCommand) -> Result<()> {
             store.set_pinned(id, false).await?;
             println!("Unpinned generation {id}.");
         }
+        GenerationCommand::Log { oneline, json } => {
+            let gens = store.list().await?;
+            if *json {
+                let rows: Vec<_> = gens
+                    .iter()
+                    .map(|g| {
+                        serde_json::json!({
+                            "id": g.id, "timestamp": g.timestamp, "label": g.label,
+                            "pinned": g.pinned, "packages": g.packages.len(),
+                            "git_commit": g.git_commit,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+                return Ok(());
+            }
+            if gens.is_empty() {
+                println!("No generations recorded yet. They are created after each `sync`.");
+            }
+            for g in &gens {
+                let pin = if g.pinned { " 📌" } else { "" };
+                let label = if g.label.is_empty() {
+                    String::new()
+                } else {
+                    format!("  {}", g.label)
+                };
+                if *oneline {
+                    println!("{}  ({} pkgs){}{}", g.id, g.packages.len(), label, pin);
+                } else {
+                    let commit = g
+                        .git_commit
+                        .as_deref()
+                        .map(|c| format!("  git:{}", &c[..c.len().min(8)]))
+                        .unwrap_or_default();
+                    println!(
+                        "{}  {}  ({} pkgs){}{}{}",
+                        g.id,
+                        g.timestamp,
+                        g.packages.len(),
+                        label,
+                        commit,
+                        pin
+                    );
+                }
+            }
+        }
+        GenerationCommand::Diff { from, to, json } => {
+            use linix::app::generation::diff_package_sets;
+            let base = store.load(from).await?;
+            // `to` names another generation; its absence means "the live system now".
+            let (target_pkgs, target_label) = match to {
+                Some(id) => (store.load(id).await?.packages, id.clone()),
+                None => (app.state.lock().await.packages.clone(), "current".to_string()),
+            };
+            let delta = diff_package_sets(&base.packages, &target_pkgs);
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&delta)?);
+                return Ok(());
+            }
+            println!(
+                "Diff {} → {}: +{} / -{} / ~{} (changed)",
+                from,
+                target_label,
+                delta.added.len(),
+                delta.removed.len(),
+                delta.changed.len()
+            );
+            if delta.is_empty() {
+                println!("  (identical package sets)");
+            }
+            for a in &delta.added {
+                println!("  + {}", a);
+            }
+            for r in &delta.removed {
+                println!("  - {}", r);
+            }
+            for (k, from_v, to_v) in &delta.changed {
+                println!("  ~ {} {} → {}", k, from_v, to_v);
+            }
+        }
     }
     Ok(())
 }
 
-async fn handle_rollback(app: &App, id: &str, package: Option<&str>) -> Result<()> {
+async fn handle_rollback(
+    app: &App,
+    id: &str,
+    package: Option<&str>,
+    with_config: bool,
+) -> Result<()> {
     let store = generation_store(app).await;
-    rollback_to(app, &store, id, package).await
+    rollback_to(app, &store, id, package, with_config).await
+}
+
+async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
+    let git = app.git_manager();
+    match cmd {
+        GitCommand::Init => {
+            git.init()?;
+            println!(
+                "Initialized manifest version control at {}.\n\
+                 LiNix will now auto-commit config/manifest changes after each command.",
+                git.root().display()
+            );
+        }
+        GitCommand::Status => {
+            if !git.is_repo() {
+                println!("Not a git repo yet. Run `linix git init` to enable manifest history.");
+                return Ok(());
+            }
+            let status = git.status_porcelain()?;
+            if status.trim().is_empty() {
+                println!("Manifests are clean (no uncommitted changes).");
+            } else {
+                println!("{}", status);
+            }
+        }
+        GitCommand::Log { limit } => {
+            if !git.is_repo() {
+                println!("Not a git repo yet. Run `linix git init` first.");
+                return Ok(());
+            }
+            let commits = git.log(*limit)?;
+            if commits.is_empty() {
+                println!("No commits yet.");
+            }
+            for c in commits {
+                println!("{}  {}  {}", c.short, c.date, c.subject);
+            }
+        }
+        GitCommand::Commit { message } => {
+            git.init().ok(); // ensure a repo exists so `commit` is a one-step action
+            match git.commit_all(message)? {
+                Some(hash) => println!("Committed {} — {}", &hash[..hash.len().min(8)], message),
+                None => println!("Nothing to commit; manifests are already up to date."),
+            }
+        }
+        GitCommand::Checkout { reference } => {
+            if !git.is_repo() {
+                anyhow::bail!("Not a git repo. Run `linix git init` first.");
+            }
+            git.checkout_files(reference)?;
+            println!(
+                "Manifests restored to {}. Installed packages are unchanged — run `linix sync` \
+                 to converge the system to these manifests.",
+                reference
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn handle_shell(app: &App, packages: &[String]) -> Result<()> {
@@ -653,6 +2176,46 @@ async fn handle_undo(app: &App) -> Result<()> {
         .await
         .map_err(|e| e.into())
 }
+async fn handle_cockpit(app: &App) -> Result<()> {
+    use linix::app::ui::{Cockpit, CockpitAction, GenView};
+
+    let store = generation_store(app).await;
+    let gens: Vec<GenView> = store
+        .list()
+        .await?
+        .into_iter()
+        .map(|g| GenView {
+            id: g.id,
+            timestamp: g.timestamp,
+            label: g.label,
+            pinned: g.pinned,
+            packages: g
+                .packages
+                .iter()
+                .map(|p| {
+                    let ver = p.version.as_deref().unwrap_or("");
+                    format!("{}:{} {}", p.backend, p.name, ver).trim().to_string()
+                })
+                .collect(),
+            git_commit: g.git_commit,
+        })
+        .collect();
+
+    if gens.is_empty() {
+        println!("No generations to browse yet. Run `linix sync` to create the first one.");
+        return Ok(());
+    }
+
+    let action = Cockpit::new(gens).run()?;
+    match action {
+        CockpitAction::Quit => Ok(()),
+        CockpitAction::Rollback { id, with_config } => {
+            println!("Rolling back to generation {id}...");
+            rollback_to(app, &store, &id, None, with_config).await
+        }
+    }
+}
+
 async fn handle_activate(app: &App, profiles: &[String]) -> Result<()> {
     app.profile_manager()
         .activate(profiles)
@@ -871,7 +2434,228 @@ async fn handle_prune(app: &App, json: bool) -> Result<()> {
 
 /// Write the currently-installed version of every managed package to locks.json so a
 /// later `sync --locked` reproduces those exact versions (where the backend supports it).
-async fn handle_lock(app: &App) -> Result<()> {
+/// Compute the sync changes for the current desired state (shared by `plan` and `apply`).
+async fn compute_full_changes(app: &App) -> Result<linix::app::sync::SyncChanges> {
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let desired = resolver.resolve_desired_state().await?;
+    enforce_policy(app, &desired).await?;
+    let state_guard = app.state.lock().await;
+    let planner =
+        linix::app::sync::planner::ChangePlanner::new(app.registry.clone(), &state_guard, &app.config);
+    Ok(planner.plan(&desired, ScopedFilter::None).await?)
+}
+
+async fn handle_plan(app: &App, out: &str) -> Result<()> {
+    let changes = compute_full_changes(app).await?;
+    let created_at = chrono::Utc::now().timestamp();
+    let plan = linix::app::sync::SavedPlan::from_changes(&changes, Some(created_at));
+    tokio::fs::write(out, serde_json::to_string_pretty(&plan)?).await?;
+    if plan.is_empty() {
+        println!("Wrote plan to {} — system already matches desired state (no changes).", out);
+    } else {
+        println!(
+            "Wrote plan to {} — {} install(s), {} removal(s).\nReview it, then run `linix apply {}`.",
+            out,
+            plan.installs.len(),
+            plan.removals.len(),
+            out
+        );
+    }
+    Ok(())
+}
+
+/// Rebuild a `SyncChanges` graph from a saved plan's install/removal lists, so the shared
+/// interactive review screen (which operates on a change graph) can also drive `apply`.
+fn saved_plan_to_changes(
+    installs: &[linix::core::PackageSpec],
+    removals: &[linix::app::sync::saved_plan::PlanRemoval],
+) -> linix::app::sync::planner::SyncChanges {
+    use linix::core::GraphAction;
+    let mut graph = petgraph::stable_graph::StableDiGraph::new();
+    for spec in installs {
+        graph.add_node(GraphAction::Install(spec.clone()));
+    }
+    for r in removals {
+        graph.add_node(GraphAction::Remove {
+            name: r.name.clone(),
+            backend: r.backend.clone(),
+        });
+    }
+    linix::app::sync::planner::SyncChanges {
+        graph,
+        ..Default::default()
+    }
+}
+
+/// Collect the `backend:name` keys that survived an interactive review, split into
+/// (install-keys, removal-keys) so the caller can filter the original plan lists.
+fn surviving_keys(
+    changes: &linix::app::sync::planner::SyncChanges,
+) -> (
+    std::collections::HashSet<String>,
+    std::collections::HashSet<String>,
+) {
+    use linix::core::GraphAction;
+    let mut installs = std::collections::HashSet::new();
+    let mut removes = std::collections::HashSet::new();
+    for w in changes.graph.node_weights() {
+        match w {
+            GraphAction::Install(s) => {
+                installs.insert(format!("{}:{}", s.backend, s.name));
+            }
+            GraphAction::Remove { name, backend } => {
+                removes.insert(format!("{}:{}", backend, name));
+            }
+        }
+    }
+    (installs, removes)
+}
+
+async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
+    let raw = tokio::fs::read_to_string(plan_path)
+        .await
+        .with_context(|| format!("reading plan file {}", plan_path))?;
+    let plan: linix::app::sync::SavedPlan =
+        serde_json::from_str(&raw).context("parsing plan file")?;
+
+    if plan.schema != linix::app::sync::PLAN_SCHEMA {
+        anyhow::bail!(
+            "plan schema {} is unsupported (this linix speaks schema {})",
+            plan.schema,
+            linix::app::sync::PLAN_SCHEMA
+        );
+    }
+    // Integrity: refuse a hand-edited plan unless forced.
+    if plan.recomputed_hash() != plan.desired_hash && !yes {
+        anyhow::bail!(
+            "plan file looks modified (content hash mismatch). Re-generate with `linix plan`, \
+             or pass --yes to force."
+        );
+    }
+    if plan.is_empty() {
+        println!("Plan is empty — nothing to apply.");
+        return Ok(());
+    }
+
+    // Drift detection: re-plan against the current world and compare.
+    if let Ok(now_changes) = compute_full_changes(app).await {
+        let current = linix::app::sync::SavedPlan::from_changes(&now_changes, None);
+        if current.desired_hash != plan.desired_hash {
+            if yes {
+                warn!("apply: system has drifted from the captured plan; applying anyway (--yes).");
+            } else {
+                println!(
+                    "WARNING: the system/manifests have drifted since this plan was captured."
+                );
+                let proceed = dialoguer::Confirm::new()
+                    .with_prompt("Apply the captured plan anyway?")
+                    .default(false)
+                    .interact()
+                    .unwrap_or(false);
+                if !proceed {
+                    println!("Aborted. Run `linix plan` to capture a fresh plan.");
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    if app.config.dry_run {
+        println!(
+            "[DRY-RUN] would install {} and remove {} package(s).",
+            plan.installs.len(),
+            plan.removals.len()
+        );
+        return Ok(());
+    }
+
+    // Optional interactive review: the same toggle screen as `sync`/`rollback`, so a captured
+    // plan can still be trimmed at apply time. Skipped with --yes or without a terminal.
+    let mut installs = plan.installs.clone();
+    let mut removals = plan.removals.clone();
+    if !yes && !app.config.yes {
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            let changes = saved_plan_to_changes(&installs, &removals);
+            let mut preview = TuiPreview::new(&changes, HashMap::new());
+            if !preview.run()? {
+                println!("Apply cancelled.");
+                return Ok(());
+            }
+            let (keep_installs, keep_removes) = surviving_keys(&preview.get_filtered_changes());
+            installs.retain(|s| keep_installs.contains(&format!("{}:{}", s.backend, s.name)));
+            removals.retain(|r| keep_removes.contains(&format!("{}:{}", r.backend, r.name)));
+            if installs.is_empty() && removals.is_empty() {
+                println!("All changes deselected — nothing to apply.");
+                return Ok(());
+            }
+        }
+    }
+
+    let session_active = app.state.lock().await.active_session_id.is_some();
+    let mut installed = 0usize;
+    let mut removed = 0usize;
+
+    for spec in &installs {
+        let Some(b) = app.registry.get(&spec.backend) else {
+            warn!("apply: backend '{}' unavailable — skipping {}", spec.backend, spec.name);
+            continue;
+        };
+        if let Some(inst) = b.as_installable() {
+            info!("apply: installing {}:{}", spec.backend, spec.name);
+            if let Err(e) = inst
+                .install(std::slice::from_ref(spec), b.sudo_for_write())
+                .await
+            {
+                warn!("apply: install {}:{} failed: {}", spec.backend, spec.name, e);
+                continue;
+            }
+            let source = spec
+                .options
+                .get("__source")
+                .cloned()
+                .or_else(|| Some("plan".into()));
+            app.state.lock().await.add(
+                &spec.backend,
+                &spec.name,
+                None,
+                spec.options.clone(),
+                source,
+                session_active,
+            );
+            installed += 1;
+        }
+    }
+
+    for r in &removals {
+        let Some(b) = app.registry.get(&r.backend) else {
+            continue;
+        };
+        if let Some(inst) = b.as_installable() {
+            info!("apply: removing {}:{}", r.backend, r.name);
+            if let Err(e) = inst
+                .remove(std::slice::from_ref(&r.name), b.sudo_for_write())
+                .await
+            {
+                warn!("apply: remove {}:{} failed: {}", r.backend, r.name, e);
+                continue;
+            }
+            app.state.lock().await.remove(&r.backend, &r.name);
+            removed += 1;
+        }
+    }
+
+    app.state.lock().await.save()?;
+    println!("Applied plan: {} installed, {} removed.", installed, removed);
+    perform_maintenance(app).await
+}
+
+/// Build and write `locks.json` from the current managed state (live installed versions
+/// preferred, falling back to recorded state). Returns the number of versions pinned. Shared
+/// by `linix lock` and `doctor --fix` (lockfile heal).
+async fn build_and_write_locks(app: &App) -> Result<usize> {
     let mut locks = serde_json::Map::new();
     {
         let state = app.state.lock().await;
@@ -898,18 +2682,37 @@ async fn handle_lock(app: &App) -> Result<()> {
             }
         }
     }
-
     let count = locks.len();
-    let doc = serde_json::json!({ "locks": locks });
-    let path = app.config.groups_dir.join("locks.json");
+    // Tamper-evidence: sign the canonical locks object with the machine-local key so
+    // `sync --locked` can detect an edited lockfile.
     tokio::fs::create_dir_all(&app.config.groups_dir).await.ok();
+    let sig = match linix::core::locksig::machine_key(&app.config.groups_dir) {
+        Ok(key) => Some(linix::core::locksig::sign(
+            &key,
+            &linix::core::locksig::canonical(&locks),
+        )),
+        Err(e) => {
+            warn!("lock: could not create signing key ({}); writing an unsigned lockfile.", e);
+            None
+        }
+    };
+    let doc = match sig {
+        Some(s) => serde_json::json!({ "locks": locks, "sig": s }),
+        None => serde_json::json!({ "locks": locks }),
+    };
+    let path = app.config.groups_dir.join("locks.json");
     tokio::fs::write(&path, serde_json::to_string_pretty(&doc)?)
         .await
         .with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(count)
+}
+
+async fn handle_lock(app: &App) -> Result<()> {
+    let count = build_and_write_locks(app).await?;
     info!(
         "Lock: pinned {} package version(s) to {}",
         count,
-        path.display()
+        app.config.groups_dir.join("locks.json").display()
     );
     Ok(())
 }
@@ -990,6 +2793,15 @@ protect_imperative = true
 # user = "true"
 "#;
 
+/// The editor to fall back to when neither $VISUAL nor $EDITOR is set.
+fn default_editor() -> &'static str {
+    if cfg!(windows) {
+        "notepad"
+    } else {
+        "vi"
+    }
+}
+
 async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
     let path = app.config.config_file.clone();
     match cmd {
@@ -1023,6 +2835,38 @@ async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
                 .await
                 .with_context(|| format!("Failed to write config to {}", path.display()))?;
             info!("Wrote commented default config to {}", path.display());
+        }
+        ConfigCommand::Edit => {
+            // Make sure there's something to open.
+            if !path.exists() {
+                if let Some(parent) = path.parent() {
+                    tokio::fs::create_dir_all(parent).await.ok();
+                }
+                tokio::fs::write(&path, CONFIG_TEMPLATE).await?;
+                println!("Created {} from the default template.", path.display());
+            }
+            let editor = std::env::var("VISUAL")
+                .or_else(|_| std::env::var("EDITOR"))
+                .unwrap_or_else(|_| default_editor().to_string());
+            let status = tokio::process::Command::new(&editor)
+                .arg(&path)
+                .status()
+                .await
+                .with_context(|| format!("launching editor '{}'", editor))?;
+            if !status.success() {
+                anyhow::bail!("editor '{}' exited abnormally; config not re-validated.", editor);
+            }
+            // Re-validate by re-parsing; a broken config is caught here, not at next run.
+            let p = path.clone();
+            let parsed =
+                tokio::task::spawn_blocking(move || linix::config::Config::from_file(&p)).await?;
+            match parsed {
+                Ok(_) => println!("Saved. Config at {} parses cleanly.", path.display()),
+                Err(e) => anyhow::bail!(
+                    "Config no longer parses ({}). Re-run `linix config edit` to fix it.",
+                    e
+                ),
+            }
         }
     }
     Ok(())
@@ -1098,6 +2942,97 @@ async fn handle_canary(app: &App, scope: ScopedFilter, test: &Option<String>) ->
     }
 }
 
+async fn handle_conflicts(app: &App, json: bool) -> Result<()> {
+    use linix::app::conflicts::{detect_conflicts, ConflictKind};
+
+    // Resolve the full desired state (all manifests/modules/groups), flatten to specs.
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let desired = resolver.resolve_desired_state().await?;
+    let specs: Vec<linix::core::PackageSpec> = desired.into_values().flatten().collect();
+    let conflicts = detect_conflicts(&specs);
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&conflicts)?);
+        return Ok(());
+    }
+
+    if conflicts.is_empty() {
+        println!("No cross-backend conflicts detected across {} desired package(s).", specs.len());
+        return Ok(());
+    }
+
+    println!("Cross-backend conflicts ({}):", conflicts.len());
+    for c in &conflicts {
+        let label = match c.kind {
+            ConflictKind::VersionMismatch => "VERSION MISMATCH",
+            ConflictKind::MultipleProviders => "MULTIPLE PROVIDERS",
+        };
+        let providers = c
+            .providers
+            .iter()
+            .map(|(b, v)| match v {
+                Some(v) => format!("{}@{}", b, v),
+                None => b.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("  [{}] {} — provided by: {}", label, c.name, providers);
+    }
+    println!(
+        "\nResolve by removing the duplicate from one backend, or pinning both to the same \
+         version. (Shadowing means whichever is first on PATH wins.)"
+    );
+    Ok(())
+}
+
+async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
+    if packages.is_empty() {
+        let state = app.state.lock().await;
+        let held = state.list_held();
+        if held.is_empty() {
+            println!("No packages are held.");
+        } else {
+            println!("Held packages ({}):", held.len());
+            for h in held {
+                println!("  {}", h);
+            }
+        }
+        return Ok(());
+    }
+    let mut n = 0usize;
+    {
+        let mut state = app.state.lock().await;
+        for p in packages {
+            if state.hold(p) {
+                n += 1;
+            }
+        }
+        state.save()?;
+    }
+    println!(
+        "Held {} package(s). `linix upgrade` will skip them until `linix unhold`.",
+        n
+    );
+    Ok(())
+}
+
+async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> {
+    let mut n = 0usize;
+    {
+        let mut state = app.state.lock().await;
+        for p in packages {
+            if state.unhold(p) {
+                n += 1;
+            }
+        }
+        state.save()?;
+    }
+    println!("Released {} hold(s).", n);
+    Ok(())
+}
+
 /// Enforce policy.toml (if present) against the desired state before any change. Spec rules
 /// are checked purely; snapshot- and vulnerability-based rules use runtime state.
 async fn enforce_policy(
@@ -1145,6 +3080,9 @@ async fn enforce_policy(
 /// A concise pre-flight summary of what a sync/upgrade is about to do. Real download-size
 /// and time estimates are backend-specific and deliberately not faked.
 fn print_flight_plan(app: &App, changes: &linix::app::sync::planner::SyncChanges) {
+    if app.config.quiet {
+        return;
+    }
     let report = changes.generate_report();
     if report.install.is_empty() && report.remove.is_empty() {
         return;
@@ -1224,30 +3162,97 @@ async fn handle_sbom(app: &App) -> Result<()> {
     Ok(())
 }
 
-async fn handle_why(app: &App, package: &str) -> Result<()> {
-    linix::app::insight::why(app, package)
+async fn handle_export(
+    app: &App,
+    format: Option<&str>,
+    out: &str,
+    stdout: bool,
+) -> Result<()> {
+    use linix::app::export::{export, Format};
+    let fmt = match format {
+        Some(s) => Some(
+            Format::parse(s)
+                .with_context(|| format!("unknown export format '{}' (brew|pip|npm|apt)", s))?,
+        ),
+        None => None,
+    };
+    if stdout && fmt.is_none() {
+        anyhow::bail!("--stdout needs a single --format (brew|pip|npm|apt).");
+    }
+    let out_dir = std::path::PathBuf::from(out);
+    let results = export(app, fmt, &out_dir, stdout).await?;
+    for (file, wrote) in &results {
+        if *wrote {
+            println!("  wrote   {}", out_dir.join(file).display());
+        } else {
+            println!("  skipped {} (no matching packages)", file);
+        }
+    }
+    Ok(())
+}
+
+async fn handle_bundle(app: &App, out: &str, artifacts: bool, archive: bool) -> Result<()> {
+    let out_path = std::path::PathBuf::from(out);
+
+    // Freeze a plan so the target can review/apply it offline. Computed up front so it can be
+    // written into the bundle (and captured inside the archive) by create_bundle.
+    let plan_json = match compute_full_changes(app).await {
+        Ok(changes) => {
+            let plan = linix::app::sync::SavedPlan::from_changes(
+                &changes,
+                Some(chrono::Utc::now().timestamp()),
+            );
+            Some(serde_json::to_string_pretty(&plan)?)
+        }
+        Err(_) => None,
+    };
+
+    let report =
+        linix::app::bundle::create_bundle(app, &out_path, artifacts, archive, plan_json.as_deref())
+            .await?;
+
+    println!(
+        "Bundle written to {} — {} config file(s), {} package(s).",
+        report.out.display(),
+        report.files_copied,
+        report.package_count
+    );
+    if artifacts {
+        println!(
+            "Artifacts: {} fetched, {} skipped.",
+            report.artifacts_fetched.len(),
+            report.artifacts_skipped.len()
+        );
+        // Honest reporting: never let a skipped backend read as "bundled everything".
+        for s in &report.artifacts_skipped {
+            println!("  skipped {}", s);
+        }
+    }
+    if let Some((path, size)) = &report.archive {
+        println!(
+            "Archive: {} ({:.1} KiB) — copy this one file to an air-gapped host.",
+            path.display(),
+            *size as f64 / 1024.0
+        );
+    }
+    println!("See {}/RESTORE.md for offline restore steps.", report.out.display());
+    Ok(())
+}
+
+async fn handle_why(app: &App, package: &str, json: bool) -> Result<()> {
+    linix::app::insight::why(app, package, json)
         .await
         .map_err(|e| e.into())
 }
 
 /// Scaffold the on-disk layout LiNix expects and drop a starter manifest so a fresh
 /// machine (or a freshly-cloned checkout) is immediately usable.
-async fn handle_init(app: &App, force: bool) -> Result<()> {
+async fn handle_init(app: &App, force: bool, interactive: bool) -> Result<()> {
     let cfg = &app.config;
-    let dirs: [(&str, &std::path::Path); 6] = [
-        ("groups", &cfg.groups_dir),
-        ("modules", &cfg.modules_dir),
-        ("tmp", &cfg.tmp_dir),
-        ("github", &cfg.github_dir),
-        ("web", &cfg.web_dir),
-        ("appimages", &cfg.appimage_dir),
-    ];
-    println!("Scaffolding LiNix directories:");
-    for (label, path) in dirs {
-        tokio::fs::create_dir_all(path)
-            .await
-            .with_context(|| format!("Failed to create {} directory {}", label, path.display()))?;
-        println!("  created  {:<10} {}", label, path.display());
+    scaffold_dirs(cfg).await?;
+
+    if interactive {
+        return interactive_init(app, force).await;
     }
 
     let local = cfg.groups_dir.join("local.txt");
@@ -1270,7 +3275,240 @@ async fn handle_init(app: &App, force: bool) -> Result<()> {
     }
 
     println!("\nReady. Edit {} then run `linix sync`.", local.display());
-    println!("(Run `linix config init` to also write a commented config.toml.)");
+    println!("(Run `linix config init` to also write a commented config.toml, or `linix init -i` for guided setup.)");
+    Ok(())
+}
+
+/// Create every on-disk directory LiNix expects. Idempotent.
+async fn scaffold_dirs(cfg: &linix::config::Config) -> Result<()> {
+    let dirs: [(&str, &std::path::Path); 6] = [
+        ("groups", &cfg.groups_dir),
+        ("modules", &cfg.modules_dir),
+        ("tmp", &cfg.tmp_dir),
+        ("github", &cfg.github_dir),
+        ("web", &cfg.web_dir),
+        ("appimages", &cfg.appimage_dir),
+    ];
+    println!("Scaffolding LiNix directories:");
+    for (label, path) in dirs {
+        tokio::fs::create_dir_all(path)
+            .await
+            .with_context(|| format!("Failed to create {} directory {}", label, path.display()))?;
+        println!("  created  {:<10} {}", label, path.display());
+    }
+    Ok(())
+}
+
+/// The answers gathered by interactive init — a plain data record so the logic that turns
+/// answers into a `Config`/manifest is pure and unit-testable, independent of any terminal.
+#[derive(Debug, Clone, Default)]
+struct InitAnswers {
+    default_backend: Option<String>,
+    prune_on_sync: bool,
+    prune_scope: linix::config::PruneScope,
+    protect_imperative: bool,
+    auto_prune_snapshots: bool,
+    snapshot_count: Option<u32>,
+    starter_packages: Vec<String>,
+}
+
+/// Pure: layer the interactive answers onto a base config. No I/O, so it can be tested.
+fn apply_init_answers(mut base: linix::config::Config, a: &InitAnswers) -> linix::config::Config {
+    base.default_backend = a.default_backend.clone();
+    base.prune_on_sync = a.prune_on_sync;
+    base.prune_scope = a.prune_scope;
+    base.protect_imperative = a.protect_imperative;
+    base.snapshots.auto_prune = a.auto_prune_snapshots;
+    if let Some(n) = a.snapshot_count {
+        base.snapshots.max_count = n;
+    }
+    base
+}
+
+/// Pure: append packages to a keep-file body, skipping any already present (case-insensitive
+/// on the package name, comments/blanks preserved). Returns the new body.
+fn keepfile_add(body: &str, packages: &[String]) -> String {
+    let mut present: std::collections::HashSet<String> = body
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|l| l.to_lowercase())
+        .collect();
+
+    let header = "# LiNix keep-list — packages here are never auto-removed, even in strict mode.\n";
+    let mut out = if body.trim().is_empty() {
+        String::from(header)
+    } else {
+        let mut s = body.to_string();
+        if !s.ends_with('\n') {
+            s.push('\n');
+        }
+        s
+    };
+    for p in packages {
+        let p = p.trim();
+        if p.is_empty() {
+            continue;
+        }
+        if present.insert(p.to_lowercase()) {
+            out.push_str(p);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Pure: remove packages (case-insensitive) from a keep-file body, preserving comments.
+fn keepfile_remove(body: &str, packages: &[String]) -> String {
+    let drop: std::collections::HashSet<String> =
+        packages.iter().map(|p| p.trim().to_lowercase()).collect();
+    let mut out = String::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        let is_pkg = !trimmed.is_empty() && !trimmed.starts_with('#');
+        if is_pkg && drop.contains(&trimmed.to_lowercase()) {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// Pure: render a starter manifest body from a package list.
+fn render_starter_manifest(packages: &[String]) -> String {
+    let mut out = String::from("# LiNix manifest — one package per line.\n");
+    for pkg in packages {
+        let p = pkg.trim();
+        if !p.is_empty() {
+            out.push_str(p);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// Guided setup: ask the user how they want LiNix to behave, then persist the answers to
+/// config.toml, and any starter packages to local.txt. Refuses to run without a TTY so
+/// CI/pipelines fall back to `linix init` (non-interactive) instead of hanging.
+async fn interactive_init(app: &App, force: bool) -> Result<()> {
+    use dialoguer::{Confirm, Input, Select};
+    use std::io::IsTerminal;
+
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "`init -i` is interactive but stdin is not a terminal. \
+             Run `linix init` (non-interactive) or `linix config init` instead."
+        );
+    }
+
+    let config_path = app.config.config_file.clone();
+    if config_path.exists() && !force {
+        anyhow::bail!(
+            "Config already exists at {}. Re-run `linix init -i --force` to overwrite it.",
+            config_path.display()
+        );
+    }
+
+    println!("\nLet's set up LiNix. Press Enter to accept the [default].\n");
+
+    let defaults = linix::config::Config::default();
+    let mut answers = InitAnswers {
+        protect_imperative: true,
+        auto_prune_snapshots: true,
+        ..Default::default()
+    };
+
+    // 1. Preferred/default backend.
+    let backend: String = Input::new()
+        .with_prompt("Preferred default backend (blank = auto-detect by priority)")
+        .allow_empty(true)
+        .interact_text()?;
+    let backend = backend.trim().to_string();
+    answers.default_backend = (!backend.is_empty()).then_some(backend);
+
+    // 2. Should `sync` also remove drift?
+    answers.prune_on_sync = Confirm::new()
+        .with_prompt("Should `sync` also remove packages no longer in your manifests (drift)?")
+        .default(false)
+        .interact()?;
+
+    // 3. Drift scope — only when pruning is in play.
+    if answers.prune_on_sync {
+        let choices = [
+            "managed  — only remove packages LiNix installed (safe)",
+            "system   — remove ANY installed package not in your manifests (strict)",
+        ];
+        let pick = Select::new()
+            .with_prompt("How aggressive should drift removal be?")
+            .items(&choices)
+            .default(0)
+            .interact()?;
+        answers.prune_scope = if pick == 1 {
+            linix::config::PruneScope::System
+        } else {
+            linix::config::PruneScope::Managed
+        };
+    }
+
+    // 4. Protect imperative installs from pruning.
+    answers.protect_imperative = Confirm::new()
+        .with_prompt("Protect packages you install imperatively (`linix install`) from pruning?")
+        .default(true)
+        .interact()?;
+
+    // 5. Snapshot behavior.
+    answers.auto_prune_snapshots = Confirm::new()
+        .with_prompt("Automatically prune old system snapshots after successful transactions?")
+        .default(true)
+        .interact()?;
+    let keep: String = Input::new()
+        .with_prompt("How many system snapshots to keep")
+        .default(defaults.snapshots.max_count.to_string())
+        .interact_text()?;
+    answers.snapshot_count = keep.trim().parse::<u32>().ok();
+
+    // 6. Starter packages for local.txt.
+    let starter: String = Input::new()
+        .with_prompt("Starter packages for your manifest (comma-separated, blank to skip)")
+        .allow_empty(true)
+        .interact_text()?;
+    answers.starter_packages = starter
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    // Build the config from answers (pure) and persist it.
+    let mut new_cfg = apply_init_answers(defaults, &answers);
+    new_cfg.config_file = config_path.clone();
+    new_cfg.groups_dir = app.config.groups_dir.clone();
+    new_cfg.modules_dir = app.config.modules_dir.clone();
+
+    if let Some(parent) = config_path.parent() {
+        tokio::fs::create_dir_all(parent).await.ok();
+    }
+    let body = toml::to_string_pretty(&new_cfg).context("Failed to serialize config")?;
+    tokio::fs::write(&config_path, body)
+        .await
+        .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
+    println!("\n  wrote    config     {}", config_path.display());
+
+    // Persist local.txt (respecting existing unless --force).
+    let local = app.config.groups_dir.join("local.txt");
+    if !local.exists() || force {
+        tokio::fs::write(&local, render_starter_manifest(&answers.starter_packages))
+            .await
+            .with_context(|| format!("Failed to write manifest {}", local.display()))?;
+        println!("  wrote    manifest   {}", local.display());
+    } else {
+        println!(
+            "  kept     manifest   {} (exists; --force to overwrite)",
+            local.display()
+        );
+    }
+
+    println!("\nDone. Review {} then run `linix sync`.", local.display());
     Ok(())
 }
 /// Render a package as one aligned row: backend, name, version.
@@ -1283,11 +3521,27 @@ fn print_package_row(p: &linix::core::Package) {
     );
 }
 
-async fn handle_search(app: &App, query: &str, json: bool) -> Result<()> {
-    let results = app.search(query).await?;
+async fn handle_search(app: &App, query: &str, json: bool, installed: bool) -> Result<()> {
+    let mut results = app.search(query).await?;
+    if installed {
+        // Keep only results LiNix already manages, so `search --installed foo` answers
+        // "which of my packages match" without a second command.
+        let managed: std::collections::HashSet<(String, String)> = {
+            let state = app.state.lock().await;
+            state
+                .packages
+                .iter()
+                .map(|p| (p.backend.clone(), p.name.clone()))
+                .collect()
+        };
+        results.retain(|p| managed.contains(&(p.backend.clone(), p.name.clone())));
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&results)?);
     } else {
+        if results.is_empty() && installed {
+            println!("No installed package matches '{}'.", query);
+        }
         for p in &results {
             print_package_row(p);
         }
@@ -1295,8 +3549,67 @@ async fn handle_search(app: &App, query: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn handle_list(app: &App, backend: Option<&str>, json: bool) -> Result<()> {
+/// One outdated package: what's installed now vs the newest the backend offers.
+#[derive(serde::Serialize)]
+struct Outdated {
+    backend: String,
+    name: String,
+    installed: String,
+    latest: String,
+}
+
+/// Find managed packages whose backend reports a newer version than what's installed. Backends
+/// without a `Searchable` capability (no "latest" source) are honestly skipped, not guessed at.
+async fn compute_outdated(app: &App, list: &[linix::core::Package]) -> Vec<Outdated> {
+    use version_compare::{compare, Cmp};
+    let mut out = Vec::new();
+    for p in list {
+        let Some(cur) = p.version.as_deref() else {
+            continue;
+        };
+        let Some(b) = app.registry.get(&p.backend) else {
+            continue;
+        };
+        let Some(s) = b.as_searchable() else {
+            continue;
+        };
+        let Ok(Some(remote)) = s.remote_info(&p.name).await else {
+            continue;
+        };
+        let Some(latest) = remote.version.as_deref() else {
+            continue;
+        };
+        // A newer remote version than installed → outdated. Unparseable versions compare
+        // unequal safely and are simply not reported.
+        if compare(latest, cur) == Ok(Cmp::Gt) {
+            out.push(Outdated {
+                backend: p.backend.clone(),
+                name: p.name.clone(),
+                installed: cur.to_string(),
+                latest: latest.to_string(),
+            });
+        }
+    }
+    out
+}
+
+async fn handle_list(app: &App, backend: Option<&str>, json: bool, outdated: bool) -> Result<()> {
     let list = app.list(backend).await?;
+    if outdated {
+        let rows = compute_outdated(app, &list).await;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&rows)?);
+        } else if rows.is_empty() {
+            println!("Everything is up to date (for backends that report a latest version).");
+        } else {
+            println!("{:<12} {:<32} {:<18} LATEST", "BACKEND", "PACKAGE", "INSTALLED");
+            for r in &rows {
+                println!("{:<12} {:<32} {:<18} {}", r.backend, r.name, r.installed, r.latest);
+            }
+            println!("\nUpgrade all: `linix upgrade --all`  ·  one: `linix upgrade <name>`");
+        }
+        return Ok(());
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&list)?);
     } else {
@@ -1348,13 +3661,239 @@ async fn handle_info(app: &App, package: &str) -> Result<()> {
     }
     Ok(())
 }
-async fn handle_doctor(app: &App) -> Result<()> {
+/// Short label for a health status (human output).
+fn status_label(s: linix::core::HealthStatus) -> &'static str {
+    use linix::core::HealthStatus::*;
+    match s {
+        Ok => "OK",
+        Degraded => "WARN",
+        Critical => "FAIL",
+    }
+}
+
+/// The status label, colored for a terminal (green/yellow/red) and plain otherwise / under
+/// NO_COLOR. Centralizing color here keeps the doctor output readable without a color crate.
+fn status_label_colored(s: linix::core::HealthStatus) -> String {
+    use linix::core::HealthStatus::*;
+    use linix::utils::style::{paint, color_enabled, GREEN, RED, YELLOW};
+    let code = match s {
+        Ok => GREEN,
+        Degraded => YELLOW,
+        Critical => RED,
+    };
+    paint(color_enabled(), code, status_label(s))
+}
+
+/// Count backends by status. Pure — unit tested.
+fn doctor_tally(reports: &[(String, linix::core::HealthReport)]) -> (usize, usize, usize) {
+    use linix::core::HealthStatus::*;
+    let mut ok = 0;
+    let mut degraded = 0;
+    let mut critical = 0;
+    for (_, r) in reports {
+        match r.status {
+            Ok => ok += 1,
+            Degraded => degraded += 1,
+            Critical => critical += 1,
+        }
+    }
+    (ok, degraded, critical)
+}
+
+async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
+    use linix::core::{HealthReport, HealthStatus};
+
+    // ---- Per-backend health, via each backend's own probe (not a shallow is_available). ----
+    let mut reports: Vec<(String, HealthReport)> = Vec::new();
     for b in app.registry.all() {
+        let report = match b.core().check_health().await {
+            Ok(r) => r,
+            Err(e) => HealthReport {
+                status: HealthStatus::Critical,
+                message: Some(format!("health probe errored: {}", e)),
+            },
+        };
+        reports.push((b.name().to_string(), report));
+    }
+
+    // ---- System-level checks + optional repair. ----
+    let mut system: Vec<(String, HealthStatus, Option<String>)> = Vec::new();
+    let mut fixes: Vec<String> = Vec::new();
+
+    for (label, dir) in [
+        ("groups dir", app.config.groups_dir.clone()),
+        ("modules dir", app.config.modules_dir.clone()),
+    ] {
+        if dir.exists() {
+            system.push((label.into(), HealthStatus::Ok, None));
+        } else if fix {
+            match tokio::fs::create_dir_all(&dir).await {
+                Ok(_) => {
+                    fixes.push(format!("created {}", dir.display()));
+                    system.push((label.into(), HealthStatus::Ok, Some("created".into())));
+                }
+                Err(e) => system.push((
+                    label.into(),
+                    HealthStatus::Critical,
+                    Some(format!("missing; create failed: {}", e)),
+                )),
+            }
+        } else {
+            system.push((
+                label.into(),
+                HealthStatus::Degraded,
+                Some(format!("missing: {} (run `doctor --fix`)", dir.display())),
+            ));
+        }
+    }
+
+    // ---- Lockfile integrity: does locks.json still match the managed set? ----
+    {
+        let lock_path = app.config.groups_dir.join("locks.json");
+        if !lock_path.exists() {
+            system.push((
+                "lockfile".into(),
+                HealthStatus::Ok,
+                Some("none yet (run `linix lock` to pin versions)".into()),
+            ));
+        } else {
+            let managed: std::collections::HashSet<String> = {
+                let state = app.state.lock().await;
+                state
+                    .packages
+                    .iter()
+                    .map(|p| format!("{}:{}", p.backend, p.name))
+                    .collect()
+            };
+            let locked_keys: std::collections::HashSet<String> =
+                match tokio::fs::read_to_string(&lock_path).await {
+                    Ok(data) => serde_json::from_str::<serde_json::Value>(&data)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("locks")
+                                .and_then(|l| l.as_object())
+                                .map(|o| o.keys().cloned().collect())
+                        })
+                        .unwrap_or_default(),
+                    Err(_) => std::collections::HashSet::new(),
+                };
+            let missing = managed.difference(&locked_keys).count();
+            let stale = locked_keys.difference(&managed).count();
+            if missing == 0 && stale == 0 {
+                system.push(("lockfile".into(), HealthStatus::Ok, None));
+            } else if fix {
+                match build_and_write_locks(app).await {
+                    Ok(n) => {
+                        fixes.push(format!("reconciled locks.json ({} entries)", n));
+                        system.push((
+                            "lockfile".into(),
+                            HealthStatus::Ok,
+                            Some("reconciled".into()),
+                        ));
+                    }
+                    Err(e) => system.push((
+                        "lockfile".into(),
+                        HealthStatus::Degraded,
+                        Some(format!("drifted; heal failed: {}", e)),
+                    )),
+                }
+            } else {
+                system.push((
+                    "lockfile".into(),
+                    HealthStatus::Degraded,
+                    Some(format!(
+                        "drifted: {} unpinned / {} stale (run `doctor --fix` or `linix lock`)",
+                        missing, stale
+                    )),
+                ));
+            }
+        }
+    }
+
+    let (ok, degraded, critical) = doctor_tally(&reports);
+    if ok == 0 {
+        system.push((
+            "package managers".into(),
+            HealthStatus::Critical,
+            Some("no usable backend detected on this host".into()),
+        ));
+    }
+
+    if fix {
+        // Best-effort metadata refresh so a "degraded, stale index" backend recovers.
+        if app.update().await.is_ok() {
+            fixes.push("refreshed backend metadata".into());
+        }
+    }
+
+    // ---- Output ----
+    if json {
+        let backends: Vec<_> = reports
+            .iter()
+            .map(|(n, r)| serde_json::json!({ "backend": n, "status": r.status, "message": r.message }))
+            .collect();
+        let sys: Vec<_> = system
+            .iter()
+            .map(|(n, s, m)| serde_json::json!({ "check": n, "status": s, "message": m }))
+            .collect();
         println!(
-            "[{}] {}",
-            if b.is_available() { "READY" } else { "OFFLINE" },
-            b.name()
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "backends": backends,
+                "system": sys,
+                "summary": { "ok": ok, "degraded": degraded, "critical": critical },
+                "fixes_applied": fixes,
+            }))?
         );
+        return Ok(());
+    }
+
+    println!(
+        "Backends: {} OK, {} degraded, {} critical (of {} total).",
+        ok,
+        degraded,
+        critical,
+        reports.len()
+    );
+    // Only surface backends that need attention — an OK list of 50 is just noise.
+    for (name, r) in &reports {
+        if r.status != HealthStatus::Ok {
+            println!(
+                "  [{}] {}{}",
+                status_label_colored(r.status),
+                name,
+                r.message
+                    .as_deref()
+                    .map(|m| format!(" — {}", m))
+                    .unwrap_or_default()
+            );
+        }
+    }
+
+    println!("\nSystem:");
+    for (name, s, m) in &system {
+        println!(
+            "  [{}] {}{}",
+            status_label_colored(*s),
+            name,
+            m.as_deref().map(|m| format!(" — {}", m)).unwrap_or_default()
+        );
+    }
+
+    if !fixes.is_empty() {
+        println!("\nRepairs applied:");
+        for f in &fixes {
+            println!("  + {}", f);
+        }
+    }
+
+    let sys_critical = system.iter().any(|(_, s, _)| *s == HealthStatus::Critical);
+    if critical > 0 || sys_critical {
+        println!("\nSome checks are CRITICAL. Install the missing tools or re-run with --fix.");
+    } else if degraded > 0 {
+        println!("\nAll critical checks pass; some backends are degraded (see WARN above).");
+    } else {
+        println!("\nAll checks pass. System is healthy.");
     }
     Ok(())
 }
@@ -1398,6 +3937,13 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
         cli.groups_dir.clone(),
         Some(cli.verbose),
     );
+    // --quiet has no config-file merge counterpart; apply it directly (a set flag wins).
+    if cli.quiet {
+        config.quiet = true;
+    }
+    // Fold the user-editable keep-list (groups_dir/keep.txt) into the protected set, now
+    // that groups_dir is final. Every `is_protected` consumer then honors it automatically.
+    config.merge_keep_file();
     Ok(config)
 }
 
@@ -1407,8 +3953,236 @@ async fn perform_maintenance(app: &App) -> Result<()> {
     if let Err(e) = app.sweep_expired_leases().await {
         warn!("Maintenance: lease sweep failed: {}", e);
     }
+    // Restore temporary uninstalls whose timer has elapsed (mirror of the lease sweep).
+    if let Err(e) = app.sweep_due_suspensions().await {
+        warn!("Maintenance: suspension sweep failed: {}", e);
+    }
+    // Version-control the manifests/config if the user opted in via `linix git init`.
+    app.git_autocommit("linix: sync manifest state").await;
     if app.config.snapshots.auto_prune {
         app.prune_snapshots(false).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod doctor_tests {
+    use super::*;
+    use linix::core::{HealthReport, HealthStatus};
+
+    fn rep(status: HealthStatus) -> HealthReport {
+        HealthReport {
+            status,
+            message: None,
+        }
+    }
+
+    #[test]
+    fn tally_counts_each_status() {
+        let reports = vec![
+            ("apt".to_string(), rep(HealthStatus::Ok)),
+            ("brew".to_string(), rep(HealthStatus::Ok)),
+            ("snap".to_string(), rep(HealthStatus::Degraded)),
+            ("nix".to_string(), rep(HealthStatus::Critical)),
+        ];
+        assert_eq!(doctor_tally(&reports), (2, 1, 1));
+    }
+
+    #[test]
+    fn status_labels_are_stable() {
+        assert_eq!(status_label(HealthStatus::Ok), "OK");
+        assert_eq!(status_label(HealthStatus::Degraded), "WARN");
+        assert_eq!(status_label(HealthStatus::Critical), "FAIL");
+    }
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn expands_a_defined_alias_into_tokens() {
+        let mut aliases = HashMap::new();
+        aliases.insert("up".to_string(), "upgrade --all".to_string());
+        let known: HashSet<String> = ["upgrade".to_string()].into_iter().collect();
+
+        let out = expand_command_aliases(argv(&["linix", "up", "--dry-run"]), &aliases, &known);
+        assert_eq!(out, argv(&["linix", "upgrade", "--all", "--dry-run"]));
+    }
+
+    #[test]
+    fn expands_alias_after_leading_global_flags() {
+        let mut aliases = HashMap::new();
+        aliases.insert("up".to_string(), "upgrade --all".to_string());
+        let known: HashSet<String> = ["upgrade".to_string()].into_iter().collect();
+
+        // `-g DIR -c CFG up` → the alias sits after value-consuming global flags.
+        let out = expand_command_aliases(
+            argv(&["linix", "-g", "/d", "-c", "/c.toml", "up"]),
+            &aliases,
+            &known,
+        );
+        assert_eq!(
+            out,
+            argv(&["linix", "-g", "/d", "-c", "/c.toml", "upgrade", "--all"])
+        );
+    }
+
+    #[test]
+    fn subcommand_index_skips_flags_and_their_values() {
+        assert_eq!(find_subcommand_index(&argv(&["linix", "up"])), Some(1));
+        assert_eq!(
+            find_subcommand_index(&argv(&["linix", "-c", "x", "up"])),
+            Some(3)
+        );
+        assert_eq!(
+            find_subcommand_index(&argv(&["linix", "--dry-run", "up"])),
+            Some(2)
+        );
+        assert_eq!(find_subcommand_index(&argv(&["linix", "--version"])), None);
+    }
+
+    #[test]
+    fn builtin_subcommand_is_never_shadowed() {
+        let mut aliases = HashMap::new();
+        aliases.insert("upgrade".to_string(), "install evil".to_string());
+        let known: HashSet<String> = ["upgrade".to_string()].into_iter().collect();
+        // `upgrade` is a real command → alias ignored.
+        let out = expand_command_aliases(argv(&["linix", "upgrade"]), &aliases, &known);
+        assert_eq!(out, argv(&["linix", "upgrade"]));
+    }
+
+    #[test]
+    fn leaves_unknown_and_flag_first_tokens_alone() {
+        let aliases = HashMap::new();
+        let known = HashSet::new();
+        assert_eq!(
+            expand_command_aliases(argv(&["linix", "--version"]), &aliases, &known),
+            argv(&["linix", "--version"])
+        );
+        assert_eq!(
+            expand_command_aliases(argv(&["linix", "notanalias"]), &aliases, &known),
+            argv(&["linix", "notanalias"])
+        );
+    }
+}
+
+#[cfg(test)]
+mod init_tests {
+    use super::*;
+
+    #[test]
+    fn answers_layer_onto_config() {
+        let base = linix::config::Config::default();
+        let answers = InitAnswers {
+            default_backend: Some("dnf".into()),
+            prune_on_sync: true,
+            prune_scope: linix::config::PruneScope::System,
+            protect_imperative: false,
+            auto_prune_snapshots: false,
+            snapshot_count: Some(42),
+            starter_packages: vec![],
+        };
+        let cfg = apply_init_answers(base, &answers);
+        assert_eq!(cfg.default_backend.as_deref(), Some("dnf"));
+        assert!(cfg.prune_on_sync);
+        assert_eq!(cfg.prune_scope, linix::config::PruneScope::System);
+        assert!(!cfg.protect_imperative);
+        assert!(!cfg.snapshots.auto_prune);
+        assert_eq!(cfg.snapshots.max_count, 42);
+    }
+
+    #[test]
+    fn omitted_snapshot_count_keeps_base_default() {
+        let base = linix::config::Config::default();
+        let base_count = base.snapshots.max_count;
+        let answers = InitAnswers {
+            snapshot_count: None,
+            ..Default::default()
+        };
+        let cfg = apply_init_answers(base, &answers);
+        assert_eq!(cfg.snapshots.max_count, base_count);
+    }
+
+    #[test]
+    fn config_from_answers_round_trips_through_toml() {
+        // The interactive config must serialize to valid TOML and load back identically —
+        // otherwise `init -i` would write a file `linix` can't read.
+        let answers = InitAnswers {
+            default_backend: Some("brew".into()),
+            prune_on_sync: true,
+            prune_scope: linix::config::PruneScope::Managed,
+            protect_imperative: true,
+            auto_prune_snapshots: true,
+            snapshot_count: Some(7),
+            starter_packages: vec![],
+        };
+        let cfg = apply_init_answers(linix::config::Config::default(), &answers);
+        let toml_str = toml::to_string_pretty(&cfg).expect("serializes");
+        let back: linix::config::Config = toml::from_str(&toml_str).expect("parses back");
+        assert_eq!(back.default_backend.as_deref(), Some("brew"));
+        assert!(back.prune_on_sync);
+        assert_eq!(back.snapshots.max_count, 7);
+    }
+
+    #[test]
+    fn manifest_renders_and_trims_and_skips_blanks() {
+        let pkgs = vec![
+            "  ripgrep ".to_string(),
+            "".to_string(),
+            "cargo:exa".to_string(),
+        ];
+        let body = render_starter_manifest(&pkgs);
+        assert!(body.starts_with("# LiNix manifest"));
+        assert!(body.contains("\nripgrep\n"));
+        assert!(body.contains("\ncargo:exa\n"));
+        // No blank package line slipped through.
+        assert!(!body.contains("\n\n"));
+    }
+
+    #[test]
+    fn empty_manifest_is_just_the_header() {
+        let body = render_starter_manifest(&[]);
+        assert_eq!(body, "# LiNix manifest — one package per line.\n");
+    }
+
+    #[test]
+    fn keepfile_add_to_empty_writes_header_and_entries() {
+        let body = keepfile_add("", &["nvidia-driver".into(), "steam".into()]);
+        assert!(body.starts_with("# LiNix keep-list"));
+        assert!(body.contains("\nnvidia-driver\n"));
+        assert!(body.contains("\nsteam\n"));
+    }
+
+    #[test]
+    fn keepfile_add_is_idempotent_case_insensitive() {
+        let start = keepfile_add("", &["Steam".into()]);
+        let again = keepfile_add(&start, &["steam".into(), "STEAM".into()]);
+        let count = again.lines().filter(|l| l.to_lowercase().trim() == "steam").count();
+        assert_eq!(count, 1, "no duplicate entries regardless of case");
+    }
+
+    #[test]
+    fn keepfile_remove_deletes_matching_and_keeps_comments() {
+        let body = "# my keep list\nsteam\nnvidia-driver\n";
+        let out = keepfile_remove(body, &["STEAM".into()]);
+        assert!(out.contains("# my keep list"));
+        assert!(!out.lines().any(|l| l.trim() == "steam"));
+        assert!(out.lines().any(|l| l.trim() == "nvidia-driver"));
+    }
+
+    #[test]
+    fn keepfile_add_preserves_existing_body_without_double_header() {
+        let body = "# header\nfoo\n";
+        let out = keepfile_add(body, &["bar".into()]);
+        assert_eq!(out.matches("# header").count(), 1);
+        assert!(out.contains("\nbar\n"));
+        // No second keep-list header injected onto a non-empty file.
+        assert!(!out.contains("# LiNix keep-list"));
+    }
 }

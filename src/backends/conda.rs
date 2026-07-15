@@ -125,11 +125,7 @@ impl Queryable for CondaQueryable {
         let output = self
             .core
             .executor
-            .run_output(
-                "conda",
-                &["list", "-n", &self.core.env, "--json"],
-                false,
-            )
+            .run_output("conda", &["list", "-n", &self.core.env, "--json"], false)
             .await?;
         Ok(parse_conda_list(&output))
     }
@@ -173,7 +169,10 @@ impl Upgradable for CondaUpgradable {
     }
 
     async fn upgrade(&self, _sudo: bool) -> Result<()> {
-        info!("Conda: Upgrading all packages in env '{}'...", self.core.env);
+        info!(
+            "Conda: Upgrading all packages in env '{}'...",
+            self.core.env
+        );
         self.core
             .executor
             .run_exclusive(
@@ -205,11 +204,7 @@ fn resolve_env(config: &Config) -> String {
 }
 
 /// Build and register the Conda backend with all its capabilities.
-pub fn register(
-    reg: &mut crate::backends::BackendRegistry,
-    exec: &CommandExecutor,
-    cfg: &Config,
-) {
+pub fn register(reg: &mut crate::backends::BackendRegistry, exec: &CommandExecutor, cfg: &Config) {
     let env = resolve_env(cfg);
     let core = Arc::new(CondaBackendCore::new(exec.duplicate(), env));
     reg.register(Arc::new(

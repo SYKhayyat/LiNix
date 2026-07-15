@@ -54,7 +54,7 @@ impl Runner {
             }
 
             // Mission-Critical Security: Validate name integrity
-            Validator::validate_package_name(&spec.name)?;
+            Validator::validate_package_name_for(&spec.name, &spec.backend)?;
 
             // Expand meta-dependencies (requires=... tags)
             for req in &spec.requires {

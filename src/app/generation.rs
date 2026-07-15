@@ -108,7 +108,10 @@ pub fn plan_rollback(
 
     // Present in the generation but missing or at a different version now → (re)install.
     for (k, tp) in &target {
-        let needs = curr.get(k).map(|cp| cp.version != tp.version).unwrap_or(true);
+        let needs = curr
+            .get(k)
+            .map(|cp| cp.version != tp.version)
+            .unwrap_or(true);
         if needs {
             let mut options = HashMap::new();
             if let Some(v) = &tp.version {
@@ -136,6 +139,65 @@ pub fn plan_rollback(
         graph,
         ..Default::default()
     }
+}
+
+/// The package-level delta between two generations: what was added, removed, or changed
+/// version. Pure data so it can be rendered as text or JSON and unit-tested without I/O.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct GenerationDelta {
+    /// Packages present in the newer set but not the older one ("backend:name version").
+    pub added: Vec<String>,
+    /// Packages present in the older set but not the newer one.
+    pub removed: Vec<String>,
+    /// Packages in both sets whose version changed: (backend:name, from, to).
+    pub changed: Vec<(String, String, String)>,
+}
+
+impl GenerationDelta {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.changed.is_empty()
+    }
+}
+
+/// Render a version for display, mapping an unknown/unpinned version to `-`.
+fn ver(v: &Option<String>) -> String {
+    v.clone().unwrap_or_else(|| "-".to_string())
+}
+
+/// Diff two realized package sets (`from` = older/baseline, `to` = newer). Keyed by
+/// `backend:name`, so the same package moving version shows up as a single `changed` entry
+/// rather than an add + a remove. Ordered for stable output (added/removed sorted by key).
+pub fn diff_package_sets(from: &[ManagedPackage], to: &[ManagedPackage]) -> GenerationDelta {
+    let key = |p: &ManagedPackage| format!("{}:{}", p.backend, p.name);
+    let from_map: HashMap<String, &ManagedPackage> = from.iter().map(|p| (key(p), p)).collect();
+    let to_map: HashMap<String, &ManagedPackage> = to.iter().map(|p| (key(p), p)).collect();
+
+    let mut delta = GenerationDelta::default();
+    for (k, tp) in &to_map {
+        match from_map.get(k) {
+            None => delta.added.push(format!("{} {}", k, ver(&tp.version))),
+            Some(fp) if fp.version != tp.version => {
+                delta
+                    .changed
+                    .push((k.clone(), ver(&fp.version), ver(&tp.version)));
+            }
+            Some(_) => {}
+        }
+    }
+    for (k, fp) in &from_map {
+        if !to_map.contains_key(k) {
+            delta.removed.push(format!("{} {}", k, ver(&fp.version)));
+        }
+    }
+    delta.added.sort();
+    delta.removed.sort();
+    delta.changed.sort();
+    delta
+}
+
+/// Diff two whole generations (convenience wrapper over [`diff_package_sets`]).
+pub fn diff_generations(from: &Generation, to: &Generation) -> GenerationDelta {
+    diff_package_sets(&from.packages, &to.packages)
 }
 
 /// One archived snapshot of the manifest files, independent of generations. This is the
@@ -207,11 +269,7 @@ impl ManifestArchive {
     }
 
     /// Apply a retention policy, deleting the archive entries it does not keep.
-    pub async fn prune(
-        &self,
-        policy: &RetentionPolicy,
-        now: DateTime<Utc>,
-    ) -> Result<Vec<String>> {
+    pub async fn prune(&self, policy: &RetentionPolicy, now: DateTime<Utc>) -> Result<Vec<String>> {
         let items: Vec<RetentionItem> = self
             .list()
             .await?
@@ -248,6 +306,12 @@ pub struct Generation {
     /// A frozen copy of the manifest files (filename -> body) that produced this state.
     #[serde(default)]
     pub manifests: HashMap<String, String>,
+    /// The git commit of the manifest repo at capture time, if the config dir is a git repo.
+    /// This ties a realized generation to the exact *intent* commit that produced it, so a
+    /// system rollback can optionally also restore the matching manifests via git (and vice
+    /// versa). `None` when git isn't in use. `#[serde(default)]` keeps old generations valid.
+    #[serde(default)]
+    pub git_commit: Option<String>,
 }
 
 impl Generation {
@@ -296,6 +360,14 @@ impl GenerationStore {
         state: &StateRegistry,
         groups_dir: &Path,
     ) -> Result<Generation> {
+        // Stamp the generation with the manifest repo's current commit, when git is in use.
+        // The repo root is the config dir (parent of groups_dir).
+        let git_commit = groups_dir
+            .parent()
+            .map(crate::core::GitManager::new)
+            .filter(|g| g.is_repo())
+            .and_then(|g| g.head().ok().flatten());
+
         let generation = Generation {
             id: id.to_string(),
             timestamp: timestamp.to_string(),
@@ -303,6 +375,7 @@ impl GenerationStore {
             pinned: false,
             packages: state.packages.clone(),
             manifests: read_manifests(groups_dir).await?,
+            git_commit,
         };
         tokio::fs::create_dir_all(&self.dir)
             .await
@@ -370,7 +443,8 @@ impl GenerationStore {
     /// ids that were removed.
     pub async fn prune(&self, policy: &RetentionPolicy, now: DateTime<Utc>) -> Result<Vec<String>> {
         let generations = self.list().await?;
-        let items: Vec<RetentionItem> = generations.iter().map(Generation::retention_item).collect();
+        let items: Vec<RetentionItem> =
+            generations.iter().map(Generation::retention_item).collect();
         let doomed = policy.select_deletions(&items, now);
         for id in &doomed {
             let _ = tokio::fs::remove_file(self.path_for(id)).await;
@@ -382,7 +456,12 @@ impl GenerationStore {
     /// its frozen manifests back into `groups_dir`. Existing manifest files that the
     /// generation would overwrite are backed up once to `<file>.linix-backup` first, so a
     /// rollback never silently discards uncommitted manifest edits.
-    pub async fn restore(&self, id: &str, state: &mut StateRegistry, groups_dir: &Path) -> Result<()> {
+    pub async fn restore(
+        &self,
+        id: &str,
+        state: &mut StateRegistry,
+        groups_dir: &Path,
+    ) -> Result<()> {
         let generation = self.load(id).await?;
         write_manifests_with_backup(&generation.manifests, groups_dir).await?;
         // Restore the realized package set as the current managed state.
@@ -432,7 +511,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(gen.packages.len(), 2);
-        assert_eq!(gen.manifests.get("base.txt").unwrap(), "apt:curl\ncargo:ripgrep\n");
+        assert_eq!(
+            gen.manifests.get("base.txt").unwrap(),
+            "apt:curl\ncargo:ripgrep\n"
+        );
 
         // The world moves on: manifest edited, state changed.
         write(&groups, "base.txt", "apt:curl\n").await;
@@ -443,14 +525,21 @@ mod tests {
 
         // Manifest restored to the captured version (and the newer one backed up).
         assert_eq!(
-            tokio::fs::read_to_string(groups.join("base.txt")).await.unwrap(),
+            tokio::fs::read_to_string(groups.join("base.txt"))
+                .await
+                .unwrap(),
             "apt:curl\ncargo:ripgrep\n"
         );
-        assert!(tokio::fs::try_exists(groups.join("base.txt.linix-backup")).await.unwrap());
+        assert!(tokio::fs::try_exists(groups.join("base.txt.linix-backup"))
+            .await
+            .unwrap());
         // Realized state restored (curl back to 8.4.0, ripgrep back).
         assert_eq!(state.packages.len(), 2);
         assert!(state.packages.iter().any(|p| p.name == "ripgrep"));
-        assert!(state.packages.iter().any(|p| p.name == "curl" && p.version.as_deref() == Some("8.4.0")));
+        assert!(state
+            .packages
+            .iter()
+            .any(|p| p.name == "curl" && p.version.as_deref() == Some("8.4.0")));
     }
 
     fn gen_with(packages: Vec<ManagedPackage>) -> Generation {
@@ -461,6 +550,7 @@ mod tests {
             pinned: false,
             packages,
             manifests: Map::new(),
+            git_commit: None,
         }
     }
 
@@ -498,7 +588,8 @@ mod tests {
         assert_eq!(installs.len(), 2, "ripgrep + bat");
         assert!(installs
             .iter()
-            .any(|s| s.name == "ripgrep" && s.options.get("version").map(String::as_str) == Some("14.1")));
+            .any(|s| s.name == "ripgrep"
+                && s.options.get("version").map(String::as_str) == Some("14.1")));
         assert!(installs.iter().any(|s| s.name == "bat"));
         assert_eq!(removes, vec!["fd"]);
     }
@@ -533,20 +624,70 @@ mod tests {
         let archive = ManifestArchive::new(tmp.path().join("marchive"));
 
         // First capture writes; an identical re-capture is skipped (dedup).
-        assert!(archive.capture("m1", "2026-07-01T00:00:00Z", &groups).await.unwrap());
-        assert!(!archive.capture("m2", "2026-07-02T00:00:00Z", &groups).await.unwrap());
+        assert!(archive
+            .capture("m1", "2026-07-01T00:00:00Z", &groups)
+            .await
+            .unwrap());
+        assert!(!archive
+            .capture("m2", "2026-07-02T00:00:00Z", &groups)
+            .await
+            .unwrap());
 
         // A real edit produces a new archive entry.
         write(&groups, "base.txt", "apt:curl\ncargo:bat\n").await;
-        assert!(archive.capture("m3", "2026-07-03T00:00:00Z", &groups).await.unwrap());
+        assert!(archive
+            .capture("m3", "2026-07-03T00:00:00Z", &groups)
+            .await
+            .unwrap());
 
         assert_eq!(archive.list().await.unwrap().len(), 2); // m1, m3
 
-        let policy = RetentionPolicy { keep_last: 1, ..Default::default() };
-        let now = DateTime::parse_from_rfc3339("2026-07-03T00:00:00Z").unwrap().with_timezone(&Utc);
+        let policy = RetentionPolicy {
+            keep_last: 1,
+            ..Default::default()
+        };
+        let now = DateTime::parse_from_rfc3339("2026-07-03T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         let deleted = archive.prune(&policy, now).await.unwrap();
         assert_eq!(deleted, vec!["m1".to_string()]);
         assert_eq!(archive.list().await.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn legacy_generation_without_git_commit_field_loads() {
+        // A generation written before git stamping existed must still deserialize.
+        let json = r#"{"id":"g1","timestamp":"2026-07-01T00:00:00Z","packages":[]}"#;
+        let g: Generation = serde_json::from_str(json).expect("legacy generation loads");
+        assert!(g.git_commit.is_none());
+        assert!(g.manifests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn capture_stamps_git_commit_when_config_dir_is_a_repo() {
+        if !crate::core::GitManager::git_available() {
+            eprintln!("skipping: git not installed");
+            return;
+        }
+        let tmp = tempdir().unwrap();
+        let root = tmp.path(); // config root = parent of groups
+        let groups = root.join("groups");
+        write(&groups, "base.txt", "apt:curl\n").await;
+
+        // Make the config root a git repo with one commit.
+        let git = crate::core::GitManager::new(root);
+        git.init().unwrap();
+        git.commit_all("initial").unwrap();
+        let head = git.head().unwrap().unwrap();
+
+        let store = GenerationStore::new(root.join("gens"));
+        let state = StateRegistry::new(root.join("registry.json"));
+        let gen = store
+            .capture("g1", "2026-07-03T00:00:00Z", "", &state, &groups)
+            .await
+            .unwrap();
+
+        assert_eq!(gen.git_commit.as_deref(), Some(head.as_str()));
     }
 
     #[tokio::test]
@@ -556,15 +697,26 @@ mod tests {
         write(&groups, "base.txt", "apt:curl\n").await;
         let store = GenerationStore::new(tmp.path().join("gens"));
         let state = StateRegistry::new(tmp.path().join("registry.json"));
-        store.capture("g1", "2026-07-01T00:00:00Z", "", &state, &groups).await.unwrap();
-        store.capture("g2", "2026-07-05T00:00:00Z", "", &state, &groups).await.unwrap();
+        store
+            .capture("g1", "2026-07-01T00:00:00Z", "", &state, &groups)
+            .await
+            .unwrap();
+        store
+            .capture("g2", "2026-07-05T00:00:00Z", "", &state, &groups)
+            .await
+            .unwrap();
 
         store.set_pinned("g1", true).await.unwrap();
         assert!(store.load("g1").await.unwrap().pinned);
 
         // Nearest at-or-before 2026-07-03 is g1 (g2 is later).
-        let when = DateTime::parse_from_rfc3339("2026-07-03T00:00:00Z").unwrap().with_timezone(&Utc);
-        assert_eq!(store.nearest_at_or_before(when).await.unwrap().unwrap().id, "g1");
+        let when = DateTime::parse_from_rfc3339("2026-07-03T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            store.nearest_at_or_before(when).await.unwrap().unwrap().id,
+            "g1"
+        );
     }
 
     #[tokio::test]
@@ -575,11 +727,23 @@ mod tests {
         let store = GenerationStore::new(tmp.path().join("gens"));
         let state = StateRegistry::new(tmp.path().join("registry.json"));
 
-        store.capture("g1", "2026-07-01T00:00:00Z", "", &state, &groups).await.unwrap();
-        store.capture("g2", "2026-07-02T00:00:00Z", "", &state, &groups).await.unwrap();
-        store.capture("g3", "2026-07-03T00:00:00Z", "", &state, &groups).await.unwrap();
+        store
+            .capture("g1", "2026-07-01T00:00:00Z", "", &state, &groups)
+            .await
+            .unwrap();
+        store
+            .capture("g2", "2026-07-02T00:00:00Z", "", &state, &groups)
+            .await
+            .unwrap();
+        store
+            .capture("g3", "2026-07-03T00:00:00Z", "", &state, &groups)
+            .await
+            .unwrap();
 
-        let policy = RetentionPolicy { keep_last: 1, ..Default::default() };
+        let policy = RetentionPolicy {
+            keep_last: 1,
+            ..Default::default()
+        };
         let now = DateTime::parse_from_rfc3339("2026-07-03T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -589,5 +753,46 @@ mod tests {
         let remaining = store.list().await.unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, "g3");
+    }
+
+    #[test]
+    fn diff_classifies_added_removed_and_version_changed() {
+        let from = vec![
+            pkg("curl", "apt", "8.4.0"),   // stays same
+            pkg("ripgrep", "cargo", "14.0"), // version changes
+            pkg("fd", "cargo", "9.0"),       // removed
+        ];
+        let to = vec![
+            pkg("curl", "apt", "8.4.0"),
+            pkg("ripgrep", "cargo", "14.1"),
+            pkg("bat", "cargo", "0.24"), // added
+        ];
+
+        let d = diff_package_sets(&from, &to);
+        assert_eq!(d.added, vec!["cargo:bat 0.24".to_string()]);
+        assert_eq!(d.removed, vec!["cargo:fd 9.0".to_string()]);
+        assert_eq!(
+            d.changed,
+            vec![(
+                "cargo:ripgrep".to_string(),
+                "14.0".to_string(),
+                "14.1".to_string()
+            )]
+        );
+        assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn diff_of_identical_sets_is_empty() {
+        let set = vec![pkg("curl", "apt", "8.4.0"), pkg("bat", "cargo", "0.24")];
+        assert!(diff_package_sets(&set, &set).is_empty());
+    }
+
+    #[test]
+    fn diff_renders_unknown_version_as_dash() {
+        let mut p = pkg("mystery", "web", "0");
+        p.version = None;
+        let d = diff_package_sets(&[], std::slice::from_ref(&p));
+        assert_eq!(d.added, vec!["web:mystery -".to_string()]);
     }
 }
