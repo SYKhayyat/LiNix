@@ -50,10 +50,14 @@ pub fn offline_fetch_command(
 
 /// Recursively copy a directory tree, returning the number of files copied. Missing sources
 /// are a no-op (return 0), not an error.
-async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<usize> {
+async fn copy_dir_recursive(src: &Path, dst: &Path, skip: Option<&Path>) -> Result<usize> {
     if !src.exists() {
         return Ok(0);
     }
+    // Canonicalize the skip target once so we can recognize it no matter how it's spelled. This
+    // is what stops `bundle --out <dir-inside-config>` from copying the bundle into itself (a
+    // runaway recursion): the output dir lives under `src`, so we must not descend into it.
+    let skip_canon = skip.and_then(|p| std::fs::canonicalize(p).ok());
     let mut count = 0;
     let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
     while let Some((s, d)) = stack.pop() {
@@ -65,6 +69,13 @@ async fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<usize> {
             // Never ship the machine-local lock-signing secret into a portable bundle — the
             // target verifies-or-proceeds without it (see core::locksig).
             if entry.file_name() == ".linix-lock.key" {
+                continue;
+            }
+            // Skip the bundle output dir if it happens to sit inside the source tree.
+            if ft.is_dir()
+                && skip_canon.is_some()
+                && std::fs::canonicalize(&from).ok() == skip_canon
+            {
                 continue;
             }
             let to = d.join(entry.file_name());
@@ -108,8 +119,10 @@ pub async fn create_bundle(
     };
 
     // 1. Declarative config: groups/ (local.txt, host-*.txt, locks.json, keep.txt) + modules/.
-    report.files_copied += copy_dir_recursive(&app.config.groups_dir, &out.join("groups")).await?;
-    report.files_copied += copy_dir_recursive(&app.config.modules_dir, &out.join("modules")).await?;
+    report.files_copied +=
+        copy_dir_recursive(&app.config.groups_dir, &out.join("groups"), Some(out)).await?;
+    report.files_copied +=
+        copy_dir_recursive(&app.config.modules_dir, &out.join("modules"), Some(out)).await?;
     if let Some(parent) = app.config.groups_dir.parent() {
         let cfg = parent.join("config.toml");
         if cfg.exists() {
@@ -248,10 +261,28 @@ mod tests {
 
     #[tokio::test]
     async fn copy_dir_recursive_handles_missing_source() {
-        let n = copy_dir_recursive(Path::new("/nonexistent/xyz"), Path::new("/tmp/whatever"))
+        let n = copy_dir_recursive(Path::new("/nonexistent/xyz"), Path::new("/tmp/whatever"), None)
             .await
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    #[tokio::test]
+    async fn copy_dir_recursive_skips_nested_output_dir() {
+        // src contains a file AND the destination dir (out) nested inside it. Without the skip,
+        // copying src -> out/groups would recurse into out forever. With it, only the real file
+        // is copied and the run terminates.
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("cfg");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("local.txt"), "apt:curl\n").unwrap();
+        let out = src.join("bundle"); // output dir lives INSIDE src
+        std::fs::create_dir_all(&out).unwrap();
+
+        let n = copy_dir_recursive(&src, &out.join("groups"), Some(&out))
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "only local.txt should be copied, never the nested out dir");
     }
 
     #[test]

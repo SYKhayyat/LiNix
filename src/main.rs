@@ -2400,14 +2400,18 @@ async fn handle_prune(app: &App, json: bool) -> Result<()> {
         changes.removals_only()
     };
 
-    if removals.is_empty() {
-        info!("Prune: no drift packages to remove.");
+    let report = removals.generate_report();
+
+    // `--json` is a plan-only contract (see the arg doc: "output the removal plan as JSON without
+    // removing anything"): always emit VALID JSON — even when there's no drift — and never mutate,
+    // independent of the global --dry-run. This keeps the machine-readable output parseable.
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
 
-    let report = removals.generate_report();
-    if json && app.config.dry_run {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+    if removals.is_empty() {
+        info!("Prune: no drift packages to remove.");
         return Ok(());
     }
 
