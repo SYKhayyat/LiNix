@@ -16,8 +16,9 @@
 #   4.  Idempotency                                    (every feasible backend, real install→
 #   5.  Imperative remove + coherence                   list→remove; source compiles included)
 #   6.  Negative path (exit-status enforced)      12.  FEATURE COVERAGE (every linix subcommand)
-#   7.  Declarative diagnostic (unscoped status)  13.  PLAN-SMOKE (only the can't-run-here set)
-#   8.  Declarative lifecycle ROUNDTRIP           14.  COVERAGE AUDIT (fails on any gap)
+#   7.  Declarative diagnostic (unscoped status)  12b. v6-v9 COMMAND & FLAG COVERAGE (newer surface)
+#   8.  Declarative lifecycle ROUNDTRIP           13.  PLAN-SMOKE (only the can't-run-here set)
+#   8b. Manifest DIRECTIVES (include/when/@check)  14.  COVERAGE AUDIT (fails on any gap)
 #                                                 15.  Read-only command smoke
 #
 #   Usage: run-in-container.sh <native-backend> [package] [package2]
@@ -435,6 +436,41 @@ if [ $RC -eq 0 ]; then ok "prune (scoped) exits 0"; else no "prune exit=$RC$(rcn
 present "$PKG" && no "prune did NOT remove drift '$PKG'" || ok "prune REMOVED '$PKG' after it left the manifest file"
 feat prune
 
+# ------------------------------------------------- MANIFEST DIRECTIVES
+hr "8b. MANIFEST DIRECTIVES — include / when host-conditionals / @check / exclusion"
+# Exercise the declarative grammar the v8/v9 waves added: `include:` (splice another file),
+# `when os == … end` host conditionals, and `@check=` post-install health probes. Read-only
+# `status` proves the resolver wires them; only @check does a real sync. (`@module:` and `group:`
+# resolve against the separate modules_dir / config [groups] and are covered by their own commands.)
+DGDIR="/tmp/linix-it-directives"; rm -rf "$DGDIR"; mkdir -p "$DGDIR"
+lx -g "$DGDIR" init >/dev/null 2>&1
+DM="$DGDIR/local.txt"
+printf '%s\n' "$BACKEND:$PKG2" > "$DGDIR/base.txt"                  # include: -> PKG2
+{
+    echo "include: ./base.txt"                                     # splice PKG2 in place
+    echo "when os == linux"                                        # matching guard -> emitted
+    echo "  $BACKEND:$PKG"
+    echo "end"
+    echo "when os == plan9"                                        # non-matching guard -> skipped
+    echo "  $BACKEND:linix-should-not-appear-zzq"
+    echo "end"
+} > "$DM"
+dlx -g "$DGDIR" -b "$BACKEND" status; RC=$?
+[ $RC -eq 0 ] && ok "status resolves include/when directives (rc=0)" || { no "directive status rc=$RC$(rcnote $RC)"; tail_log; }
+grep -qw "$PKG2" "$LOGF" 2>/dev/null && ok "include: spliced in '$PKG2' from base.txt" || soft "status did not name '$PKG2' (already satisfied?)"
+grep -qw "$PKG" "$LOGF" 2>/dev/null && ok "when os==linux block contributed '$PKG'" || soft "status did not name '$PKG' (already satisfied?)"
+grep -q "linix-should-not-appear-zzq" "$LOGF" 2>/dev/null && no "non-matching 'when' block leaked its package" || ok "non-matching 'when os==plan9' block correctly excluded"
+feat sync status
+# @check= post-install probe (advisory): a declarative sync installs a package that declares one.
+CHKDIR="/tmp/linix-it-check"; rm -rf "$CHKDIR"; mkdir -p "$CHKDIR"
+printf '%s\n' "$BACKEND:$PKG@check=cmd:true" > "$CHKDIR/local.txt"  # `sh -c true` always exits 0
+dlx -g "$CHKDIR" -b "$BACKEND" -y sync; RC=$?
+if [ $RC -eq 0 ]; then
+    ok "sync of an @check=… package exits 0 (probe is advisory)"
+    grep -qiE 'probe (OK|FAIL)|health probe' "$LOGF" 2>/dev/null && ok "@check post-install probe ran" || soft "no probe line surfaced (timing/verbosity)"
+else soft "@check sync rc=$RC$(rcnote $RC) (ecosystem/network variance)"; fi
+dlx -g "$CHKDIR" -b "$BACKEND" -y prune >/dev/null 2>&1
+
 # ------------------------------------------------------------- JSON contract
 hr "9. JSON OUTPUT CONTRACT (stdout only; real JSON parse)"
 OUT="$(lx search "$PKG" --json 2>/dev/null)"; is_json "$OUT" && ok "search --json is valid JSON" || no "search --json not JSON"
@@ -629,6 +665,141 @@ lxt 120 shim linix-it-shim -s "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
 [ $RC -eq 0 ] && ok "shim generates a launcher" || soft "shim rc=$RC$(rcnote $RC) (tolerated)"; feat shim
 feat shell   # `shell` is an interactive ghost-shell (no non-interactive assertion); see EXEMPT
 
+# ------------------------------------------------- v6-v9 COMMAND & FLAG COVERAGE
+hr "12b. v6-v9 COMMAND & FLAG COVERAGE — every newer subcommand + new flags"
+# Everything the v7/v8/v9 waves added that the coverage audit now tracks. Deterministic wiring
+# checks are HARD; anything network/ecosystem-dependent is soft. All scoped to throwaway dirs.
+NGDIR="/tmp/linix-it-newcmds"; rm -rf "$NGDIR"; mkdir -p "$NGDIR"
+lx -g "$NGDIR" init >/dev/null 2>&1
+NM="$NGDIR/local.txt"
+
+# --- plan / apply (Terraform-style freeze-then-apply) ---
+echo "$BACKEND:$PKG" >> "$NM"
+PLANF="$NGDIR/plan.json"
+lx -g "$NGDIR" -b "$BACKEND" plan --out "$PLANF" >/dev/null 2>&1; RC=$?
+{ [ $RC -eq 0 ] && [ -f "$PLANF" ] && is_json "$(cat "$PLANF")"; } && ok "plan writes a JSON plan file" || no "plan rc=$RC / no JSON plan at $PLANF"
+feat plan
+lxt 180 -g "$NGDIR" -b "$BACKEND" apply "$PLANF" -y >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "apply executes a saved plan (rc=0)" || soft "apply rc=$RC$(rcnote $RC) (ecosystem variance)"
+feat apply
+lx -g "$NGDIR" -b "$BACKEND" -y remove "$BACKEND:$PKG" >/dev/null 2>&1
+
+# --- conflicts (cross-backend, read-only) ---
+lx -g "$NGDIR" conflicts >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "conflicts exits 0" || no "conflicts rc=$RC$(rcnote $RC)"
+OUT="$(lx -g "$NGDIR" conflicts --json 2>/dev/null)"; is_json "$OUT" && ok "conflicts --json is valid JSON" || no "conflicts --json not JSON"
+feat conflicts
+
+# --- hold / unhold (bulk-upgrade guard) ---
+lx -g "$NGDIR" hold "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "hold exits 0" || no "hold rc=$RC"
+lx -g "$NGDIR" hold 2>/dev/null | grep -qi "$PKG" && ok "hold (no args) lists the held package" || no "hold list missing '$PKG'"
+lx -g "$NGDIR" unhold "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "unhold exits 0" || no "unhold rc=$RC"
+lx -g "$NGDIR" hold 2>/dev/null | grep -qi "$PKG" && no "package still held after unhold" || ok "unhold cleared the hold"
+feat hold unhold
+
+# --- export to native manifests (Brewfile/requirements.txt/package.json/Aptfile) ---
+lx -g "$NGDIR" export --format pip --stdout >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "export --format pip --stdout exits 0" || soft "export stdout rc=$RC"
+EXPD="$NGDIR/exports"; mkdir -p "$EXPD"
+lx -g "$NGDIR" export --out "$EXPD" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "export --out writes native manifest(s)" || soft "export --out rc=$RC"
+feat export
+
+# --- bundle (offline/air-gapped) + tar.gz archive ---
+# The output dir MUST live OUTSIDE the groups dir: bundle copies groups/ into <out>/groups, so an
+# <out> nested under the groups dir would copy the bundle into itself (runaway recursion).
+BND="/tmp/linix-it-bundle"; rm -rf "$BND" "$BND-ar" "$BND-ar.tar.gz"
+lx -g "$NGDIR" bundle --out "$BND" >/dev/null 2>&1; RC=$?
+{ [ $RC -eq 0 ] && [ -d "$BND" ]; } && ok "bundle writes an offline bundle dir" || soft "bundle rc=$RC / no dir"
+lx -g "$NGDIR" bundle --out "$BND-ar" --archive >/dev/null 2>&1; RC=$?
+{ [ $RC -eq 0 ] && [ -f "$BND-ar.tar.gz" ]; } && ok "bundle --archive produces a portable .tar.gz" || soft "bundle --archive rc=$RC / no tarball"
+feat bundle
+
+# --- watch (single reconcile pass over an empty manifest -> already in sync) ---
+WGD="/tmp/linix-it-watch"; rm -rf "$WGD"; mkdir -p "$WGD"; lx -g "$WGD" init >/dev/null 2>&1
+lxt 60 -g "$WGD" -b "$BACKEND" watch --once >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "watch --once runs a single reconcile and exits" || soft "watch --once rc=$RC$(rcnote $RC)"
+feat watch
+
+# --- git (version-control the manifests) — SCOPED to a throwaway dir, NEVER the real repo ---
+GGD="/tmp/linix-it-git"; rm -rf "$GGD"; mkdir -p "$GGD"; lx -g "$GGD" init >/dev/null 2>&1
+lx -g "$GGD" git init >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "git init makes the config dir a repo" || soft "git init rc=$RC"
+lx -g "$GGD" git status >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "git status exits 0" || soft "git status rc=$RC"
+lx -g "$GGD" git commit -m "linix-it commit" >/dev/null 2>&1
+lx -g "$GGD" git log >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "git log exits 0" || soft "git log rc=$RC"
+feat git
+
+# --- managed (ownership mode + keep-list) ---
+lx -g "$NGDIR" managed show >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "managed show exits 0" || soft "managed show rc=$RC"
+lx -g "$NGDIR" managed keep "$PKG" >/dev/null 2>&1; lx -g "$NGDIR" managed unkeep "$PKG" >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "managed keep/unkeep round-trips" || soft "managed keep/unkeep rc=$RC"
+feat managed
+
+# --- hooks (auto-record; read-only status + shell-init emitter) ---
+lx hooks status >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "hooks status exits 0" || soft "hooks status rc=$RC"
+OUT="$(lx hooks shell-init bash 2>/dev/null)"; [ -n "$OUT" ] && ok "hooks shell-init bash prints shell functions" || soft "hooks shell-init empty"
+feat hooks
+
+# --- service (declarative services; read-only surface) ---
+lx service list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "service list exits 0" || soft "service list rc=$RC (no init system?)"
+feat service
+
+# --- self-upgrade --check (report only; NEVER actually rebuilds/installs) ---
+lx self-upgrade --check >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "self-upgrade --check reports version/source" || soft "self-upgrade --check rc=$RC"
+feat self-upgrade
+
+# --- config edit (non-interactive: a no-op editor that exits 0) ---
+TMPCFG="/tmp/linix-it-cfg.toml"; rm -f "$TMPCFG"
+EDITOR=true VISUAL=true lxt 30 -c "$TMPCFG" config edit >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "config edit re-validates after a no-op edit" || soft "config edit rc=$RC$(rcnote $RC)"
+feat config
+
+# --- generation log / diff (v9) ---
+GID2="$(lx -g "$FGDIR" generation list 2>/dev/null | grep -oE '[0-9a-f]{6,}' | head -n1)"
+lx -g "$FGDIR" generation log >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "generation log exits 0" || soft "generation log rc=$RC"
+OUT="$(lx -g "$FGDIR" generation log --json 2>/dev/null)"; is_json "$OUT" && ok "generation log --json valid" || soft "generation log --json n/a (no generations yet)"
+lx -g "$FGDIR" generation log --oneline >/dev/null 2>&1
+if [ -n "$GID2" ]; then lx -g "$FGDIR" generation diff "$GID2" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "generation diff exits 0" || soft "generation diff rc=$RC"; else soft "generation diff skipped (no generation id)"; fi
+feat generation
+
+# --- module add (remote registry) — tolerant (needs network) ---
+lxt 90 -g "$FGDIR" module add "github:BurntSushi/ripgrep" --name linix-it-remote >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "module add fetches a remote module" || soft "module add rc=$RC$(rcnote $RC) (network — tolerated)"
+feat module
+
+# --- NEW FLAGS on existing commands ---
+lx -q -b "$BACKEND" list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "global --quiet exits 0" || no "--quiet rc=$RC"
+lx -b "$BACKEND" list --outdated >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "list --outdated exits 0" || soft "list --outdated rc=$RC"
+lx search "$PKG" --installed >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "search --installed exits 0" || soft "search --installed rc=$RC"
+OUT="$(lx why "$PKG" --json 2>/dev/null)"; is_json "$OUT" && ok "why --json valid JSON" || soft "why --json n/a"
+lx doctor --fix >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "doctor --fix exits 0" || soft "doctor --fix rc=$RC"
+OUT="$(lx doctor --json 2>/dev/null)"; is_json "$OUT" && ok "doctor --json valid JSON" || soft "doctor --json not JSON"
+OUT="$(lx -g "$NGDIR" -b "$BACKEND" prune --json 2>/dev/null)"; is_json "$OUT" && ok "prune --json valid JSON" || soft "prune --json n/a"
+OUT="$(lxt 300 -b "$BACKEND" audit --json 2>/dev/null)"; is_json "$OUT" && ok "audit --json valid JSON" || soft "audit --json n/a (network)"
+lxt 120 -b "$BACKEND" -y upgrade --security >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "upgrade --security exits 0" || soft "upgrade --security rc=$RC$(rcnote $RC) (OSV/network)"
+lx -n -b "$BACKEND" upgrade --all --except "$PKG" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "upgrade --all --except (dry-run) exits 0" || soft "upgrade --all --except rc=$RC"
+lx -n install "$BACKEND:$PKG" --temp 1h --json >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "install --temp (dry-run lease) exits 0" || soft "install --temp rc=$RC"
+
+# --- command aliases ([command_aliases] in config, expanded before clap) ---
+ACFG="/tmp/linix-it-alias.toml"
+printf '%s\n' '[command_aliases]' 'inv = "list"' > "$ACFG"
+lx -c "$ACFG" -b "$BACKEND" inv >/dev/null 2>&1; RC=$?
+[ $RC -eq 0 ] && ok "command alias 'inv' expands to 'list' (pre-clap)" || no "command alias expansion rc=$RC$(rcnote $RC)"
+
+# --- tamper-evident lockfile (sign on lock; refuse a modified lockfile) ---
+LKDIR="/tmp/linix-it-lock"; rm -rf "$LKDIR"; mkdir -p "$LKDIR"; lx -g "$LKDIR" init >/dev/null 2>&1
+echo "$BACKEND:$PKG" >> "$LKDIR/local.txt"
+dlx -g "$LKDIR" -b "$BACKEND" -y sync >/dev/null 2>&1
+lx -g "$LKDIR" -b "$BACKEND" lock >/dev/null 2>&1
+if [ -f "$LKDIR/locks.json" ] && grep -q '"sig"' "$LKDIR/locks.json"; then
+    ok "lock signs locks.json (tamper-evident)"
+    sed -i 's/"sig": *"[0-9a-f]/"sig": "0/' "$LKDIR/locks.json" 2>/dev/null
+    OUT="$(timeout 30 "$LINIX" -g "$LKDIR" -b "$BACKEND" -v status 2>&1)"
+    printf '%s\n' "$OUT" | grep -qi "MISMATCH" && ok "a modified lockfile is detected (signature MISMATCH) and refused" || no "tampered lockfile was NOT flagged"
+else
+    soft "lock did not produce a signed locks.json (backend has no lockable versions?)"
+fi
+lx -g "$LKDIR" -b "$BACKEND" -y prune >/dev/null 2>&1
+feat lock
+
 # ------------------------------------------------- plan-smoke the can't-run-here set
 run_plan_smokes
 
@@ -647,8 +818,8 @@ done
 touched "$BACKEND"
 # (b) Every linix subcommand must have been exercised, except the documented interactive /
 # remote-SSH ones (no non-interactive assertion is possible in a headless container).
-FEATURES_ALL="sync run shim heal clean unmanaged orphans status prune lock search update upgrade list info install remove repo doctor migrate teleport shell undo activate deactivate profile module snapshot generation rollback lease schedule config init audit sbom why bisect clone fleet policy completions"
-FEATURES_EXEMPT=" shell undo bisect clone fleet "   # interactive gallery / ghost-shell, or need a remote SSH host
+FEATURES_ALL="sync watch run shim heal clean unmanaged orphans status prune plan apply lock search update upgrade list info install remove repo doctor migrate teleport shell undo cockpit activate deactivate profile module snapshot generation rollback git lease schedule config init audit sbom export bundle why service bisect clone fleet managed hooks hold unhold conflicts policy completions self-upgrade"
+FEATURES_EXEMPT=" shell undo cockpit bisect clone fleet "   # interactive TUIs (ghost-shell / undo gallery / cockpit), or need a remote SSH host
 feat config   # exercised in the read-only section below (config show/path/init)
 feat_gap=0
 for f in $FEATURES_ALL; do
