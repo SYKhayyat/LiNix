@@ -35,6 +35,13 @@ For ~remove~, a recognized ~backend:~ prefix scopes the removal to that backend;
 otherwise every backend is searched. The backend queries/removes by the *bare*
 name (the ~backend:~ prefix is stripped before it reaches the backend).
 
+Manifest files also accept non-package directives: ~@module:<name>~ (splice a reusable module),
+~group:<name>~ (splice a named group), ~include: <path|url>~ (splice another manifest file or a
+remote URL in place), ~when <os|arch|host> == <v>~ … ~end~ host-conditional blocks (also ~!=~,
+~in [a, b]~, and inline ~when … then <line>~), and ~-<pkg>~ exclusions. A package may carry
+~@check=port:N~ or ~@check=cmd:…~ to be probed after install (a failure is reported, with the
+pre-sync snapshot available to revert).
+
 * Global flags
 
 All are ~global = true~ (valid before or after the subcommand):
@@ -47,7 +54,12 @@ All are ~global = true~ (valid before or after the subcommand):
 | ~--config PATH~   | ~-c~  | use an alternate ~config.toml~                              |
 | ~--groups-dir DIR~| ~-g~  | read manifests from DIR (overrides the default location)    |
 | ~--verbose~       | ~-v~  | debug-level logging                                         |
+| ~--quiet~         | ~-q~  | suppress flight plan + transaction summary (errors still print) |
 | ~--progress~      |       | toggle progress indicators (default on)                     |
+
+User-defined command shorthands live in ~config.toml~ under ~[command_aliases]~ (e.g.
+~up = "upgrade --all"~); they are expanded before parsing and can never shadow a built-in
+subcommand.
 
 * Command surface
 
@@ -62,8 +74,18 @@ All are ~global = true~ (valid before or after the subcommand):
   a *temporary uninstall*: the package is restored after ~dur~; bare ~--temp~ inside a
   ~linix shell~ restores it when that ephemeral session ends. Restore is reinstall-by-name;
   an unavailable package warns and the suspension is dropped. See ~lease list~.
-- ~list [--backend B] [--json]~ — installed packages (live query per backend).
+- ~list [--backend B] [--json] [--outdated]~ — installed packages (live query per backend);
+  ~--outdated~ shows only those with a newer version available (installed vs latest).
+- ~search <query> [--json] [--installed]~ — parallel search; ~--installed~ filters to what you
+  already manage.
 - ~info <pkg>~ — metadata (version, description, install path, dependencies).
+- ~hold <pkg…>~ / ~unhold <pkg…>~ — freeze packages so ~upgrade~ never bumps them (bare ~hold~
+  lists current holds); honored by targeted upgrades and the planner.
+- ~export [--format brew|pip|npm|apt] [--out DIR] [--stdout]~ — emit native manifests
+  (Brewfile, requirements.txt, package.json, Aptfile) from the managed set.
+- ~conflicts [--json]~ — cross-backend conflict detection (same tool at different versions, or
+  provided by more than one backend).
+- ~self-upgrade [--git URL] [--check]~ — rebuild+install the latest LiNix from source via cargo.
 - ~run -p <pkg…> <command>~ — run a command in an ephemeral package environment.
 - ~shell -p <pkg…>~ — enter an ephemeral environment.
 
@@ -78,12 +100,26 @@ All are ~global = true~ (valid before or after the subcommand):
 - ~prune [--json]~ — remove drift (managed packages no longer in manifests).
   Scope from ~prune_scope~: ~"managed"~ (default) or ~"system"~.
 - ~lock~ — pin each managed package's installed version into ~locks.json~ so
-  ~sync --locked~ reproduces those versions where the backend supports it.
-- ~upgrade [--profile|--module|--group] [--canary --test CMD] [--json]~ — upgrade;
-  ~--canary~ snapshots, upgrades, runs a health check, and auto-rolls-back on failure.
-- ~generation list|rollback <id> [--package P]|pin <id>|unpin <id>~ — manage
-  generations (created around ~sync~); rollback restores a prior state.
-- ~rollback <id> [--package P]~ — shorthand for ~generation rollback~.
+  ~sync --locked~ reproduces those versions where the backend supports it. The lockfile is
+  *signed* with a machine-local key; ~sync --locked~ refuses a locally-edited lockfile
+  (fails closed). A fresh machine with no key (e.g. restoring a bundle) proceeds unverified.
+- ~watch [--interval N] [--on-change] [--pull] [--once]~ — continuously reconcile to manifests
+  (GitOps for one machine); ~--pull~ does ~git pull --ff-only~ first, then applies unattended.
+- ~upgrade [pkgs…] [--all] [--backend B] [--security] [--except P] [--profile|--module|--group]
+  [--canary --test CMD] [--json]~ — bare/~--all~ runs each backend's native whole-system upgrade;
+  named packages / ~--backend~ scope it; ~--security~ upgrades exactly what ~audit~ flags,
+  pinned to the highest fixed version; ~--except~ holds packages back; ~--canary~ snapshots,
+  upgrades, health-checks, and auto-rolls-back on failure.
+- ~plan [--out FILE]~ / ~apply <file>~ — freeze what ~sync~ would do to a reviewable file, then
+  apply exactly that; ~apply~ warns on drift and offers an interactive toggle-review.
+- ~service enable|disable|start|stop|restart|status|list~ — declarative services across systemd,
+  OpenRC, SysVinit, launchd, and Windows ~sc~; ~enable~/~disable~ persist to the manifest.
+- ~bundle [--out DIR] [--artifacts] [--archive]~ — portable offline bundle; ~--archive~ packs a
+  single ~.tar.gz~.
+- ~generation list|log [--oneline] [--json]|diff <from> [<to>] [--json]|rollback <id> [--package P]|
+  pin <id>|unpin <id>~ — manage/inspect generations; ~diff~ shows packages added/removed/
+  version-changed between two generations (omit ~<to>~ to diff against the live system).
+- ~rollback <id> [--package P]~ — shorthand for ~generation rollback~ (with interactive review).
 - ~clean~ / ~heal~ — deep cleanup / recover an interrupted transaction (WAL).
 
 ** Profiles (identities)
@@ -134,13 +170,19 @@ So ~lean = base + rust − heavy~ is expressible, and ~work~ + ~gaming~ can be a
   ~|~ / ~&~ / ~\~ and function forms, grouped by parentheses (see ~app::profile_expr~).
 
 ** Inspection & system
-- ~doctor~ — per-backend ~[READY]~/~[OFFLINE]~.
+- ~doctor [--fix] [--json]~ — deep health: per-backend readiness/severity, config/state
+  integrity, directory layout, and lockfile drift. ~--fix~ creates missing dirs, refreshes
+  metadata, and reconciles a drifted lockfile.
 - ~update~ — refresh repository metadata for all backends.
 - ~unmanaged~ — installed packages not managed by LiNix.
 - ~init [--force] [-i]~ — scaffold the layout; ~-i~ runs guided, interactive setup.
-- ~why <pkg>~ / ~audit [--json]~ / ~sbom~ — provenance, vulnerability audit, SBOM.
+- ~why <pkg> [--json]~ / ~audit [--json]~ / ~sbom~ — provenance, vulnerability audit, SBOM.
+- ~config edit~ — open the config in ~$EDITOR~/~$VISUAL~ and re-validate on save.
+- ~fleet [hosts…] [--sync] [--apply]~ — report drift across machines; ~--sync~ reconciles the
+  drifted ones, ~--apply~ pushes ~sync~ to every reachable host.
+- ~module add <github:user/repo|url>~ — fetch a shared module into the local modules dir.
 - ~status~/~config~/~repo~/~module~/~lease~/~schedule~/~snapshot~/
-  ~teleport~/~shim~/~migrate~/~undo~/~bisect~/~clone~/~fleet~/~policy~/
+  ~teleport~/~shim~/~migrate~/~undo~/~bisect~/~clone~/~policy~/
   ~completions~ — see ~linix <cmd> --help~.
 
 * Exit-code & failure contract

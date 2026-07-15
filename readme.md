@@ -96,6 +96,19 @@ web:https://example.com/app.tar.gz' > ~/.config/linix/groups/local.txt
 
 ```
 
+A manifest line is `[backend:]name[@k=v,…]`. Beyond plain packages, these directives are
+recognised:
+
+| Directive | Meaning |
+|-----------|---------|
+| `@module:<name>` | Splice in a reusable module (`modules/<name>.module.txt`); `@module:dev -vim` drops one package from *its* contribution. |
+| `group:<name>` | Include a named group (`groups/<name>.txt` or a config `[groups]` entry). |
+| `include: <path\|url>` | Splice in another manifest file **or a remote URL** in place — compose a shared base with per‑role overlays. |
+| `when <os\|arch\|host> == <v>` … `end` | Host‑conditional block (also `!=` and `in [a, b]`, and an inline `when … then <line>`), so one manifest serves a mixed fleet. |
+| `<pkg>@check=port:5432` / `@check=cmd:pg_isready` | Post‑install **health probe**: after the package installs, LiNix verifies it (TCP port or shell command) and flags a failure, with the pre‑sync snapshot available to revert. |
+| `<pkg>@version=…`, `@lease=<dur>`, `service:<name>@enabled=true` | Version pin, self‑removing temporary install, and declarative service, respectively. |
+| `-<pkg>` | Exclude a package contributed by an included module/group. |
+
 
 
 ### Or Start Imperatively
@@ -166,13 +179,13 @@ LiNix will:
 
 | `profile` | Manage profiles: `list`, `show`, `create`, `save`, `switch`, `active`. |
 
-| `doctor` | Check backend health, sandbox availability, and system readiness. |
+| `doctor [--fix] [--json]` | Deep health check: per‑backend readiness/severity, config/state integrity, directory layout, and lockfile drift. `--fix` repairs missing dirs, stale metadata, and a drifted lockfile. |
 
 | `heal` | Recover from a failed or interrupted transaction (WAL replay). |
 
-| `search` | Parallel, cross‑backend search (e.g., `linix search ripgrep`). |
+| `search` | Parallel, cross‑backend search (e.g., `linix search ripgrep`). `--installed` filters to packages you already manage. |
 
-| `update` / `upgrade` | Refresh metadata and upgrade all managed packages. |
+| `update` / `upgrade` | Refresh metadata / upgrade managed packages. `upgrade` spans every granularity: bare/`--all` (native whole‑system), `upgrade <pkg>…`, `--backend <b>`, and `--security` (upgrade exactly what `audit` flags as vulnerable, pinned to the fixed version); `--except <pkg>` holds packages back. |
 
 | `clean` | Remove orphans, clear caches, and purge temporary files. |
 
@@ -192,7 +205,7 @@ LiNix will:
 
 | `prune` | Remove drift (installed but no longer in your manifests). Separate from `sync`. |
 
-| `lock` | Pin every managed package to its installed version in `locks.json` for reproducible installs. |
+| `lock` | Pin every managed package to its installed version in `locks.json` for reproducible installs — now **signed** with a machine‑local key so `sync --locked` refuses a tampered lockfile. |
 
 | `init` | Scaffold the LiNix directory structure and a starter manifest on a fresh machine. |
 
@@ -200,7 +213,7 @@ LiNix will:
 
 | `sbom` | Emit a single CycloneDX software bill of materials spanning every backend. |
 
-| `why <pkg>` | Explain why a package is installed: its provenance (which manifest/module/imperative action) and what depends on it. |
+| `why <pkg>` | Explain why a package is installed: its provenance (which manifest/module/imperative action) and what depends on it. `--json` for machine output. |
 
 | `upgrade --canary --test <cmd>` | Health‑gated upgrade: snapshot first, run the test after upgrading, and **auto‑roll‑back** if it fails. |
 
@@ -208,7 +221,7 @@ LiNix will:
 
 | `clone <user@host>` | Replicate another machine's installed packages over SSH, translating backends per‑OS. |
 
-| `fleet [hosts…] [--sync]` | Compare many machines over SSH against their manifests, report drift, and optionally reconcile. |
+| `fleet [hosts…] [--sync] [--apply]` | Compare many machines over SSH against their manifests and report drift; `--sync` reconciles the drifted ones, `--apply` pushes `sync` to every reachable host. |
 
 | `policy` | Check the desired state against declarative rules in `policy.toml` (also enforced automatically before `sync`/`upgrade`). |
 
@@ -216,7 +229,7 @@ LiNix will:
 
 | `shell <pkgs…>` | Enter an interactive, isolated ghost shell with the given packages loaded. |
 
-| `list` | List installed/managed packages (`--backend <b>` to filter, `--json` for machine output). |
+| `list` | List installed/managed packages (`--backend <b>` to filter, `--json` for machine output, `--outdated` to show only packages with a newer version available). |
 
 | `info <pkg>` | Show detailed metadata (version, description, install path, dependencies) for a package. |
 
@@ -234,6 +247,28 @@ LiNix will:
 
 | `completions <shell>` | Emit a shell completion script (`bash`, `zsh`, `fish`, `powershell`, `elvish`, `nushell`). |
 
+| `conflicts` | **Cross‑backend conflict detection**: the same tool pinned to different versions by two backends, or provided by more than one (PATH‑shadowing risk) — something no single‑backend resolver can see. `--json` for machine output. |
+
+| `watch [--interval N] [--on-change] [--pull] [--once]` | Continuously reconcile the system to your manifests (GitOps for one machine); optionally `git pull --ff-only` each tick, then apply changes unattended. |
+
+| `hold <pkgs…>` / `unhold <pkgs…>` | Freeze packages so `upgrade` never bumps them (like `apt-mark hold`); run `hold` with no args to list. Honored by targeted upgrades and the planner; naming a held package explicitly still upgrades it. |
+
+| `export [--format brew\|pip\|npm\|apt] [--out DIR] [--stdout]` | Emit **native** manifests (Brewfile, requirements.txt, package.json, Aptfile) from your managed set — the no‑lock‑in escape hatch. |
+
+| `service enable/disable/start/stop/restart/status/list` | Declarative service management across systemd, OpenRC, SysVinit, launchd, and Windows `sc`; `enable`/`disable` persist to your manifest. |
+
+| `bundle [--out DIR] [--artifacts] [--archive]` | Pack a portable, offline/air‑gapped bundle of your config, lockfile, and resolved package list; `--artifacts` pre‑downloads packages, `--archive` packs a single `.tar.gz`. |
+
+| `plan [--out FILE]` / `apply <file>` | Freeze what `sync` would do to a reviewable file, then apply exactly that (Terraform‑style); `apply` warns on drift and offers an interactive review. |
+
+| `generation log/diff` | `log [--oneline] [--json]` prints history git‑log style; `diff <from> [<to>]` shows packages added/removed/version‑changed between two generations (omit `<to>` to diff against the live system). |
+
+| `self-upgrade [--git URL] [--check]` | Rebuild and install the latest LiNix from source with cargo (same mechanism as the install script). |
+
+| `config edit` | Open the config in `$EDITOR`/`$VISUAL` and re‑validate on save. |
+
+| `module add <source>` | Fetch a shared module from `github:user/repo` or a raw URL into your local modules. |
+
 
 
 ### Global flags
@@ -249,6 +284,7 @@ These apply to every subcommand:
 | `-g`, `--groups-dir <path>` | Use a custom directory of manifest (`.txt`) files. |
 | `--progress <bool>` | Toggle progress indicators (default `true`). |
 | `-v`, `--verbose` | Enable debug‑level logging (logs go to stderr; stdout stays reserved for `--json`). |
+| `-q`, `--quiet` | Suppress the flight plan and transaction summary (errors still print). |
 
 ## In development (unreleased, on `main`)
 
@@ -271,6 +307,28 @@ Since 6.0.0, the following have landed in the codebase (see the `[Unreleased]` s
   before any overwrite.
 - **Per‑host backend allow‑lists** (`[hostname_backends]`) — restrict a machine to a
   subset of backends.
+
+## What's new (unreleased feature wave)
+
+- **Cross‑backend conflict detection (`conflicts`).** Finds clashes no single‑backend resolver
+  can see — the same tool pinned to different versions by two backends (`apt:nodejs@18` vs
+  `nix:node@20`), or provided by more than one (a PATH‑shadowing risk).
+- **`watch` daemon.** GitOps for one machine: continuously reconcile to your manifests,
+  optionally `git pull --ff-only` first, applying changes unattended.
+- **Package holds (`hold`/`unhold`).** Freeze packages so `upgrade` never bumps them — honored
+  by targeted upgrades and the declarative planner.
+- **Tamper‑evident lockfiles.** `linix lock` signs `locks.json` with a machine‑local key;
+  `sync --locked` refuses a locally‑edited lockfile (fails closed). A fresh machine with no key
+  proceeds unverified rather than breaking reproducibility.
+- **`export` to native manifests.** Emit Brewfile / requirements.txt / package.json / Aptfile —
+  the no‑lock‑in escape hatch and a way to interop with other tools.
+- **Exact‑version security remediation.** `upgrade --security` pins each vulnerable package to
+  the highest fixed version OSV reports (clearing all its advisories) instead of jumping to latest.
+- **Generation `log`/`diff`, interactive rollback/apply review, `list --outdated`,
+  `search --installed`, `why --json`, command aliases (`[command_aliases]`), `config edit`,
+  `self-upgrade`, `bundle --archive` (`.tar.gz`), `doctor --fix` lockfile heal, per‑backend timing,
+  `--quiet`, colored doctor output, `@check=` post‑install health probes, and manifest
+  `include:` (local path or URL).** See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## What's new in 6.0.0
 
