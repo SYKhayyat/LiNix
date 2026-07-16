@@ -2917,9 +2917,6 @@ nix_gc_age = "30d"
 # Require confirmation before destructive (removal) operations unless `yes = true`.
 confirm_destructive = false
 
-# Remove packages found in the bloatware file during sync.
-remove_bloatware = false
-
 # ---------------------------------------------------------------------------
 # Removal guard — what LiNix refuses to delete.
 #

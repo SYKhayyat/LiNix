@@ -160,34 +160,6 @@ impl<'a> ChangePlanner<'a> {
         // running removal here would delete every package OUTSIDE the scope. A targeted
         // upgrade must be non-destructive — skip all removal planning when scoped.
         if scope.is_none() {
-            // Preload bloatware set if enabled
-            let bloatware_set: HashSet<String> = if self.config.remove_bloatware {
-                if let Ok(bloat) = self.load_bloatware().await {
-                    bloat
-                        .into_iter()
-                        .map(|entry| {
-                            entry
-                                .split_once(':')
-                                .map(|(b, n)| format!("{}:{}", b, n))
-                                .unwrap_or_else(|| {
-                                    format!(
-                                        "{}:{}",
-                                        self.config
-                                            .default_backend
-                                            .clone()
-                                            .unwrap_or_else(|| "apt".into()),
-                                        entry
-                                    )
-                                })
-                        })
-                        .collect()
-                } else {
-                    HashSet::new()
-                }
-            } else {
-                HashSet::new()
-            };
-
             // Single pass over all managed packages to schedule removals
             for pkg in &self.state.packages {
                 let key = format!("{}:{}", pkg.backend, pkg.name);
@@ -226,13 +198,6 @@ impl<'a> ChangePlanner<'a> {
                         "Planner: Lease for '{}' expired, not in desired. Scheduling removal.",
                         key
                     );
-                    changes.removal_tracker.insert(key.clone());
-                    changes.graph.add_node(GraphAction::Remove {
-                        name: pkg.name.clone(),
-                        backend: pkg.backend.clone(),
-                    });
-                } else if bloatware_set.contains(&key) {
-                    debug!("Planner: Scheduling bloatware removal: {}", key);
                     changes.removal_tracker.insert(key.clone());
                     changes.graph.add_node(GraphAction::Remove {
                         name: pkg.name.clone(),
@@ -522,22 +487,6 @@ impl<'a> ChangePlanner<'a> {
             (Ok(s), Ok(t)) => s != t,
             _ => true,
         }
-    }
-
-    async fn load_bloatware(&self) -> Result<Vec<String>> {
-        if !tokio::fs::try_exists(&self.config.bloatware_file)
-            .await
-            .unwrap_or(false)
-        {
-            return Ok(Vec::new());
-        }
-        let content = tokio::fs::read_to_string(&self.config.bloatware_file).await?;
-        Ok(content
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(|l| l.to_string())
-            .collect())
     }
 
     fn now() -> u64 {

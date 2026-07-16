@@ -221,12 +221,6 @@ pub struct Config {
     #[serde(default)]
     pub retention: crate::core::RetentionConfig,
 
-    #[serde(default = "default_bloatware_file")]
-    pub bloatware_file: PathBuf,
-
-    #[serde(default)]
-    pub remove_bloatware: bool,
-
     /// Whether `sync` removes drift (packages installed but no longer in the manifests).
     /// Default false: `sync` only installs/upgrades, and drift removal is an explicit,
     /// separate step (`linix prune`). Set true to fold pruning back into `sync`.
@@ -343,9 +337,6 @@ fn default_groups_dir() -> PathBuf {
 }
 fn default_modules_dir() -> PathBuf {
     safe_config_dir().join("modules")
-}
-fn default_bloatware_file() -> PathBuf {
-    safe_config_dir().join("bloatware.txt")
 }
 fn default_btrfs_path() -> String {
     "/.snapshots".to_string()
@@ -495,8 +486,6 @@ impl Default for Config {
             hooks: HashMap::new(),
             hostname_backends: HashMap::new(),
             retention: crate::core::RetentionConfig::default(),
-            bloatware_file: default_bloatware_file(),
-            remove_bloatware: false,
             prune_on_sync: false,
             prune_scope: PruneScope::default(),
             protect_imperative: true,

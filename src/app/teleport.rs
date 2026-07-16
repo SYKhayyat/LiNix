@@ -2,12 +2,11 @@ use crate::app::diagnostics::FailureDiagnosticEngine; // Modernized: DI Import
 use crate::backends::BackendRegistry;
 use crate::config::manifest::ManifestEngine;
 use crate::core::{
-    Error, GhostMetadata, GraphAction, Journal, PackageSpec, Result, StateRegistry, Transaction,
+    Error, GraphAction, Journal, PackageSpec, Result, StateRegistry, Transaction,
 };
-use crate::utils::safe_data_dir;
 use petgraph::stable_graph::StableDiGraph;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 pub use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument, trace};
@@ -27,7 +26,6 @@ pub struct Teleporter {
     /// Mission-critical system state.
     state: Arc<Mutex<StateRegistry>>,
     /// Path to the ghost metadata storage.
-    ghost_path: PathBuf,
     /// Engine for modifying declarative .txt files.
     manifest_engine: ManifestEngine,
     /// Modernized v3.6.0: Injected diagnostic engine.
@@ -44,12 +42,10 @@ impl Teleporter {
         global_dir: &Path,
         wish_dirs: Vec<std::path::PathBuf>,
     ) -> Self {
-        let ghost_path = safe_data_dir().join("ghosts.json");
         Self {
             registry,
             journal,
             state,
-            ghost_path,
             manifest_engine: ManifestEngine::new(global_dir, wish_dirs),
             diagnostics,
         }
@@ -94,16 +90,7 @@ impl Teleporter {
             return Ok(());
         }
 
-        // --- 2. ARCHIVAL ---
-        self.save_ghost(
-            package_name,
-            src_backend_name,
-            &src_pkg.properties,
-            target_backend_name,
-        )
-        .await?;
-
-        // --- 3. TRANSACTION ---
+        // --- 2. TRANSACTION ---
         let mut graph = StableDiGraph::new();
 
         let remove_node = graph.add_node(GraphAction::Remove {
@@ -178,123 +165,4 @@ impl Teleporter {
         }
     }
 
-    /// Internal logic for ghost metadata archival.
-    async fn save_ghost(
-        &self,
-        name: &str,
-        backend: &str,
-        props: &HashMap<String, String>,
-        target: &str,
-    ) -> Result<()> {
-        let mut ghosts: HashMap<String, GhostMetadata> = if tokio::fs::try_exists(&self.ghost_path)
-            .await
-            .unwrap_or(false)
-        {
-            let data = tokio::fs::read_to_string(&self.ghost_path)
-                .await
-                .map_err(Error::from)?;
-            serde_json::from_str(&data).unwrap_or_default()
-        } else {
-            HashMap::new()
-        };
-
-        ghosts.insert(
-            name.to_string(),
-            GhostMetadata {
-                backend: backend.to_string(),
-                options: HashMap::new(),
-                properties: props.clone(),
-                requires: vec![],
-                removed_at: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs(),
-                teleported_to: Some(target.to_string()),
-            },
-        );
-
-        let data = serde_json::to_string_pretty(&ghosts).map_err(Error::from)?;
-        let path = self.ghost_path.clone();
-
-        tokio::task::spawn_blocking(move || crate::utils::file::atomic_write(&path, &data))
-            .await
-            .map_err(|e| Error::Other(e.to_string()))??;
-
-        debug!("Teleporter: Snapshot metadata archived for '{}'.", name);
-        Ok(())
-    }
-
-    /// Restores a package from a ghost record.
-    pub async fn restore(&self, name: &str) -> Result<()> {
-        if !tokio::fs::try_exists(&self.ghost_path)
-            .await
-            .unwrap_or(false)
-        {
-            return Err(Error::PackageNotFound("No ghost records exist.".into()));
-        }
-
-        let data = tokio::fs::read_to_string(&self.ghost_path)
-            .await
-            .map_err(Error::from)?;
-        let mut ghosts: HashMap<String, GhostMetadata> =
-            serde_json::from_str(&data).unwrap_or_default();
-
-        let ghost = ghosts
-            .get(name)
-            .ok_or_else(|| Error::PackageNotFound(format!("No ghost record for '{}'.", name)))?
-            .clone();
-
-        info!(
-            "Teleporter: Restoring '{}' from archival ghost record.",
-            name
-        );
-
-        let spec = PackageSpec {
-            name: name.to_string(),
-            backend: ghost.backend.clone(),
-            options: ghost.options.clone(),
-            requires: ghost.requires.clone(),
-        };
-
-        let b_cap = self
-            .registry
-            .get(&spec.backend)
-            .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
-
-        if let Some(installer) = b_cap.as_installable() {
-            installer.install(&[spec], b_cap.sudo_for_write()).await?;
-
-            let mut state = self.state.lock().await;
-
-            // Resolves E0061: Supplies 6 arguments
-            state.add(
-                &ghost.backend,
-                name,
-                None,
-                ghost.options.clone(),
-                Some("restore".into()),
-                false,
-            );
-
-            let state_clone = state.clone();
-            tokio::task::spawn_blocking(move || state_clone.save())
-                .await
-                .map_err(|e| Error::Other(format!("State save panic: {}", e)))??;
-
-            ghosts.remove(name);
-            let updated = serde_json::to_string_pretty(&ghosts).map_err(Error::from)?;
-            let path = self.ghost_path.clone();
-            tokio::task::spawn_blocking(move || crate::utils::file::atomic_write(&path, &updated))
-                .await
-                .map_err(|e| Error::Other(e.to_string()))??;
-
-            info!("Teleporter: Restoration complete for '{}'.", name);
-            Ok(())
-        } else {
-            Err(Error::Transaction(format!(
-                "Backend '{}' is not installable.",
-                ghost.backend
-            )))
-        }
-    }
 }
