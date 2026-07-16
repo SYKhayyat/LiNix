@@ -29,7 +29,6 @@ fn escape_lisp_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Core backend implementation for Emacs packages via 'package.el'.
 pub struct EmacsBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -43,7 +42,6 @@ impl EmacsBackendCore {
         }
     }
 
-    /// Internal helper to execute arbitrary Emacs Lisp code in batch mode.
     async fn run_lisp(&self, lisp: &str) -> Result<String> {
         self.executor
             .run_output("emacs", &["--batch", "--eval", lisp], false)
@@ -249,7 +247,6 @@ impl Upgradable for EmacsUpgradable {
     }
 }
 
-/// Build and register the Emacs package backend.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

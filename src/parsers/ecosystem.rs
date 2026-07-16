@@ -1,11 +1,7 @@
-// src/parsers/ecosystem.rs
-//
-// Output parsers for the "ecosystem" package managers added in the backend-expansion
-// work (guix, eopkg, slackpkg, opam, luarocks, nimble, pixi, spack, mix, helm, asdf,
-// emerge, cabal, krew, pub). Each parser takes the raw stdout plus the backend id (so a
-// single implementation can be reused by several managers whose output shares a shape)
-// and returns structured `Package`s. They are wired to backends via non-capturing
-// closures in `backends/registry.rs`, e.g. `|o| ecosystem::ws_name_version(o, "guix")`.
+// Each parser takes the raw stdout plus the backend id, so a single implementation can be
+// reused by several managers whose output shares a shape. They are wired to backends via
+// non-capturing closures in `backends/registry.rs`, e.g.
+// `|o| ecosystem::ws_name_version(o, "guix")`.
 //
 // Kept deliberately lenient: package-manager output drifts across versions, so parsers
 // skip blank lines, obvious table headers, and decorative rows rather than erroring.

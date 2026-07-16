@@ -1,5 +1,3 @@
-// src/backends/web.rs
-
 use crate::core::{
     security::verify_checksum, BackendCore, CommandExecutor, Error, Installable, MetadataProvider,
     Package, PackageSpec, Queryable, Result,
@@ -13,7 +11,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
-/// Internal state metadata for resources managed via the 'web' backend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WebState {
     url: String,
@@ -23,7 +20,6 @@ struct WebState {
     last_modified: Option<String>,
 }
 
-/// Core backend implementation for direct HTTP/HTTPS downloads.
 pub struct WebBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -225,7 +221,6 @@ impl Installable for WebInstallable {
                         tokio::fs::set_permissions(&src_path, perms)
                             .await
                             .map_err(Error::from)?;
-                        // FIX: Use tokio::fs::symlink (correct async symlink API)
                         tokio::fs::symlink(&src_path, &bin_dest)
                             .await
                             .map_err(Error::from)?;
@@ -299,7 +294,6 @@ impl Queryable for WebQueryable {
     }
 }
 
-/// Build and register the Web download backend.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

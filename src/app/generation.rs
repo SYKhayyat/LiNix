@@ -22,21 +22,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
-/// Read every manifest file (`*.txt`) across `wish_dirs` into a map of
-/// *full path* -> body. A missing directory contributes nothing.
+/// Every `*.txt` manifest, keyed by *full path* -> body.
 ///
 /// Keyed by full path, not filename, so a generation records where each file came from and
-/// `rollback` can put it back there. Two wish-list folders may hold a `local.txt` each, and
-/// keying by name would silently drop one of them and restore the survivor over both.
-///
-/// `keep.txt` is excluded: it is a protection list, not something to freeze as intent.
-pub async fn read_manifests(wish_dirs: &[PathBuf]) -> Result<HashMap<String, String>> {
+/// `rollback` can put it back there.
+pub async fn read_manifests(groups_dir: &Path) -> Result<HashMap<String, String>> {
     let mut out = HashMap::new();
-    for dir in wish_dirs {
-        if !tokio::fs::try_exists(dir).await.unwrap_or(false) {
-            continue;
-        }
-        let mut entries = tokio::fs::read_dir(dir).await.map_err(Error::from)?;
+    if tokio::fs::try_exists(groups_dir).await.unwrap_or(false) {
+        let mut entries = tokio::fs::read_dir(groups_dir).await.map_err(Error::from)?;
         while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
             let path = entry.path();
             if !path.extension().map(|e| e == "txt").unwrap_or(false) {
@@ -310,13 +303,10 @@ impl GenerationStore {
         timestamp: &str,
         label: &str,
         state: &StateRegistry,
-        global_dir: &Path,
-        wish_dirs: &[PathBuf],
+        groups_dir: &Path,
     ) -> Result<Generation> {
-        // Stamp the generation with the manifest repo's current commit, when git is in use.
-        // The repo root is the config dir (parent of the GLOBAL groups dir) — the manifest
-        // repo is a property of the machine, not of whichever -g was passed.
-        let git_commit = global_dir
+        // The manifest repo's root is the config dir, i.e. the parent of the groups dir.
+        let git_commit = groups_dir
             .parent()
             .map(crate::core::GitManager::new)
             .filter(|g| g.is_repo())
@@ -328,7 +318,7 @@ impl GenerationStore {
             label: label.to_string(),
             pinned: false,
             packages: state.packages.clone(),
-            manifests: read_manifests(wish_dirs).await?,
+            manifests: read_manifests(groups_dir).await?,
             git_commit,
         };
         tokio::fs::create_dir_all(&self.dir)
@@ -417,10 +407,10 @@ impl GenerationStore {
         global_dir: &Path,
     ) -> Result<()> {
         let generation = self.load(id).await?;
-        // Each manifest goes back to the folder it was captured from; `global_dir` is only
-        // the fallback for generations written before paths were recorded.
+        // Each manifest goes back to the folder it was captured from. `global_dir` is not a
+        // fallback for generations recorded without full paths — those are refused outright,
+        // since guessing a destination would write manifests to the wrong folder.
         write_manifests_with_backup(&generation.manifests, global_dir).await?;
-        // Restore the realized package set as the current managed state.
         state.packages = generation.packages.clone();
         state.save()?;
         Ok(())
@@ -469,7 +459,6 @@ mod tests {
                 "",
                 &state,
                 &groups,
-                std::slice::from_ref(&groups),
             )
             .await
             .unwrap();
@@ -618,7 +607,6 @@ mod tests {
                 "",
                 &state,
                 &groups,
-                std::slice::from_ref(&groups),
             )
             .await
             .unwrap();
@@ -640,7 +628,6 @@ mod tests {
                 "",
                 &state,
                 &groups,
-                std::slice::from_ref(&groups),
             )
             .await
             .unwrap();
@@ -651,7 +638,6 @@ mod tests {
                 "",
                 &state,
                 &groups,
-                std::slice::from_ref(&groups),
             )
             .await
             .unwrap();
@@ -684,7 +670,6 @@ mod tests {
                 "",
                 &state,
                 &groups,
-                std::slice::from_ref(&groups),
             )
             .await
             .unwrap();
@@ -695,7 +680,6 @@ mod tests {
                 "",
                 &state,
                 &groups,
-                std::slice::from_ref(&groups),
             )
             .await
             .unwrap();
@@ -706,7 +690,6 @@ mod tests {
                 "",
                 &state,
                 &groups,
-                std::slice::from_ref(&groups),
             )
             .await
             .unwrap();

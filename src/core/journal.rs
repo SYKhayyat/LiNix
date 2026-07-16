@@ -7,65 +7,45 @@ use std::path::PathBuf;
 use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
-/// Represents the lifecycle stage of a specific system modification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActionStatus {
-    /// The action has been planned but not yet started.
     Pending,
-    /// The backend is currently executing this modification.
     InProgress,
-    /// The modification was successful.
     Completed,
-    /// The modification failed and may require manual intervention or heal.
     Failed,
-    /// The modification was interrupted by a crash and is no longer being tracked.
+    /// A crash `cleanup` has given up on: no longer healable.
     Abandoned,
 }
 
-/// Represents the specific intent recorded in the WAL.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum JournalAction {
-    /// Request to install or upgrade a package.
     Install(PackageSpec),
-    /// Request to remove a package from the system.
     Remove { name: String, backend: String },
 }
 
-/// A deterministic record of a single system modification.
-///
-/// This structure is the source of truth for the 'linix heal' command.
+/// The source of truth for the 'linix heal' command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JournalEntry {
-    /// Globally unique identifier for this specific operation.
     pub id: String,
-    /// The action being performed (Install/Remove).
     pub action: JournalAction,
-    /// Current status of the operation.
     pub status: ActionStatus,
-    /// Unix timestamp when the operation was first recorded.
     pub started_at_unix: i64,
-    /// Unix timestamp when the operation reached a terminal state (Completed/Failed).
+    /// Set only on reaching a terminal state; `None` while Pending or InProgress.
     pub finished_at_unix: Option<i64>,
-    /// If Failed, contains the error message returned by the backend.
     pub error: Option<String>,
-    /// Metadata intended to be merged into the StateRegistry upon success.
+    /// Merged into the StateRegistry only once the action succeeds.
     pub staged_properties: HashMap<String, String>,
 }
 
-/// The Mission-Critical Write-Ahead Log (WAL).
-///
-/// The Journal ensures LiNix can recover from power failures, OS crashes,
-/// or process kills mid-transaction. Before any backend is invoked, an
-/// 'InProgress' entry is flushed to disk.
+/// Recovery from power failure, OS crash, or a kill mid-transaction depends on an
+/// 'InProgress' entry being flushed to disk before any backend is invoked. A backend
+/// called ahead of that flush is a modification `heal` cannot see or undo.
 pub struct Journal {
-    /// Path to the journal.json file.
     path: PathBuf,
-    /// In-memory cache of the journal entries.
     pub entries: HashMap<String, JournalEntry>,
 }
 
 impl Journal {
-    /// Initializes the Journal by loading existing records from the data directory.
     pub fn new() -> Result<Self> {
         let path = crate::utils::safe_data_dir().join("journal.json");
         debug!("Journal: Initializing mission-critical WAL at {:?}", path);
@@ -84,8 +64,6 @@ impl Journal {
         Ok(journal)
     }
 
-    /// Synchronously loads the journal from disk.
-    /// Note: Usually called during Kernel initialization.
     fn load_sync(&mut self) -> Result<()> {
         let data = std::fs::read_to_string(&self.path).map_err(|e| {
             Error::Io(format!(
@@ -112,8 +90,7 @@ impl Journal {
         Ok(())
     }
 
-    /// Atomically flushes the current state of all entries to disk.
-    /// This prevents log corruption during unexpected shutdowns.
+    /// Atomic because a torn write of the WAL loses the record of an in-flight action.
     pub fn flush(&self) -> Result<()> {
         trace!("Journal: Initiating atomic WAL flush.");
 
@@ -124,13 +101,11 @@ impl Journal {
             .map_err(|e| Error::Persist(format!("Atomic write of WAL Journal failed: {}", e)))
     }
 
-    /// Generates a unique ID for a journal entry.
     fn generate_id(backend: &str, package: &str) -> String {
         format!("{}:{}:{}", backend, package, Uuid::new_v4().simple())
     }
 
-    /// Records the intent to start a modification.
-    /// This MUST be called and flushed before calling any backend commands.
+    /// MUST be called and flushed before invoking any backend command.
     pub fn record_start(&mut self, action: JournalAction) -> Result<String> {
         let (b_name, p_name) = match &action {
             JournalAction::Install(s) => (&s.backend, &s.name),
@@ -156,7 +131,6 @@ impl Journal {
         Ok(id)
     }
 
-    /// Marks an operation as successfully completed and stores result metadata.
     pub fn record_success(&mut self, id: &str, properties: HashMap<String, String>) -> Result<()> {
         if let Some(entry) = self.entries.get_mut(id) {
             entry.status = ActionStatus::Completed;
@@ -173,7 +147,6 @@ impl Journal {
         Ok(())
     }
 
-    /// Marks an operation as failed with an error record.
     pub fn record_failure(&mut self, id: &str, err: &str) -> Result<()> {
         if let Some(entry) = self.entries.get_mut(id) {
             entry.status = ActionStatus::Failed;
@@ -207,17 +180,13 @@ impl Journal {
             .collect()
     }
 
-    /// Checks if the WAL contains any actions currently in progress.
-    /// If true, LiNix will prompt the user to run 'heal'.
+    /// True makes `sync` run `heal` on its own, without asking.
     pub fn needs_recovery(&self) -> bool {
         self.entries
             .values()
             .any(|e| e.status == ActionStatus::InProgress)
     }
 
-    /// Bug Fix 10: Automatic cleanup of historical logs.
-    ///
-    /// Removes Completed or Abandoned entries older than the threshold.
     /// InProgress and Failed entries are NEVER purged until they are resolved.
     pub fn cleanup_expired_logs(&mut self, days_threshold: i64) -> Result<()> {
         let cutoff = Utc::now() - ChronoDuration::days(days_threshold);
@@ -230,14 +199,13 @@ impl Journal {
                 entry.status == ActionStatus::Completed || entry.status == ActionStatus::Abandoned;
 
             if is_terminal {
-                // Determine the relevant timestamp for age check
                 let terminal_time = entry.finished_at_unix.unwrap_or(entry.started_at_unix);
                 if terminal_time < cutoff_ts {
                     trace!("Journal: Pruning expired log record: {}", id);
-                    return false; // Evict from map
+                    return false;
                 }
             }
-            true // Keep in map
+            true
         });
 
         let purged = initial_count - self.entries.len();
@@ -252,14 +220,11 @@ impl Journal {
         Ok(())
     }
 
-    /// Unified Maintenance Entry Point.
-    /// Resolves compiler error: "no method named cleanup found for struct tokio::sync::MutexGuard<'_, Journal>"
     pub fn cleanup(&mut self) -> Result<()> {
         debug!("Journal: Commencing routine maintenance.");
 
-        // 1. Transition stale 'InProgress' tasks to 'Abandoned'
-        // If a task started more than 4 hours ago and is still in progress,
-        // we assume the process that created it crashed.
+        // An InProgress entry older than this is read as a crashed process, not a slow one:
+        // the wrong call either abandons a live install or waits forever on a dead one.
         let stale_limit = Utc::now() - ChronoDuration::hours(4);
         let stale_ts = stale_limit.timestamp();
 
@@ -271,10 +236,8 @@ impl Journal {
             }
         }
 
-        // 2. Perform Bug Fix 10 pruning (7-day retention)
         self.cleanup_expired_logs(7)?;
 
-        // 3. Maintenance: If the journal is now empty, delete the file to save disk space
         if self.entries.is_empty() && self.path.exists() {
             trace!("Journal: WAL is empty. Removing journal file.");
             let _ = std::fs::remove_file(&self.path);

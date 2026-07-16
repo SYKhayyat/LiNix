@@ -1,5 +1,3 @@
-// src/backends/appimage.rs
-
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, Result,
@@ -11,7 +9,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-/// Internal state metadata for a managed AppImage.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AppImageState {
     url: String,
@@ -19,7 +16,6 @@ struct AppImageState {
     symlink_path: String,
 }
 
-/// Core backend implementation for standalone Linux AppImages.
 pub struct AppImageBackendCore {
     pub executor: CommandExecutor,
     pub install_dir: PathBuf,
@@ -149,7 +145,6 @@ impl Installable for AppImageInstallable {
 
             #[cfg(unix)]
             {
-                // FIX: Use tokio::fs::symlink (correct async symlink API)
                 tokio::fs::symlink(&dest_path, &link_path).await?;
             }
 
@@ -218,7 +213,6 @@ impl Queryable for AppImageQueryable {
     }
 }
 
-/// Build and register the AppImage backend.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

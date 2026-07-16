@@ -1,5 +1,3 @@
-// src/app/pm_hooks.rs
-//
 // Package-manager INTERCEPTION — so `apt install`, `pacman -S`, `dnf install`, run by hand
 // or by a script, are automatically recorded into LiNix. "You don't have to use LiNix to use
 // LiNix": keep your muscle memory, and your declarative state still tracks reality.
@@ -8,8 +6,8 @@
 // used together (the user picked "both"):
 //
 //   1. NATIVE hooks — a file dropped into the manager's own hook directory that runs
-//      `linix hook-record ...` after every transaction. Robust: fires no matter how the
-//      manager was invoked. One generator per manager; we support as many as have a stable
+//      `linix hook-record ...` after every transaction. Fires no matter how the manager
+//      was invoked. One generator per manager; we support as many as have a stable
 //      hook mechanism (pacman, apt/dpkg, dnf/dnf5, zypper, apk, xbps, portage, eopkg).
 //
 //   2. SHELL wrappers — shell functions that shadow the manager commands, forward to the
@@ -75,7 +73,7 @@ pub struct HookSpec {
 pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
     let mut specs = Vec::new();
 
-    // --- pacman (Arch): drop-in .hook files; targets arrive on stdin (NeedsTargets). ---
+    // pacman targets arrive on STDIN (hence NeedsTargets + xargs), not as arguments.
     for (op, pac_ops) in [
         (HookOp::Install, &["Install", "Upgrade"][..]),
         (HookOp::Remove, &["Remove"][..]),
@@ -103,8 +101,8 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
         });
     }
 
-    // --- apt/dpkg (Debian/Ubuntu): a dpkg Post-Invoke reconcile. dpkg doesn't hand per-pkg
-    // targets to Post-Invoke, so we reconcile by diffing the installed set (autolearn mode). ---
+    // dpkg does not hand per-package targets to Post-Invoke, so apt can only reconcile by
+    // diffing the installed set — it cannot record specific packages like pacman does.
     specs.push(HookSpec {
         manager: "apt",
         path: PathBuf::from("/etc/apt/apt.conf.d/99linix"),
@@ -115,8 +113,6 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
         needs_root: true,
     });
 
-    // --- dnf / dnf5 (Fedora/RHEL): a shell reconcile via a libdnf-style post-transaction
-    // action file. dnf5 reads /etc/dnf/plugins and actions; we use a simple reconcile. ---
     specs.push(HookSpec {
         manager: "dnf",
         path: PathBuf::from("/etc/dnf/plugins/post-transaction-actions.d/linix.action"),
@@ -127,7 +123,6 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
         needs_root: true,
     });
 
-    // --- zypper (openSUSE): plugin-style reconcile. ---
     specs.push(HookSpec {
         manager: "zypper",
         path: PathBuf::from("/usr/lib/zypp/plugins/commit/linix"),
@@ -138,7 +133,7 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
         needs_root: true,
     });
 
-    // --- apk (Alpine): no target passing; reconcile via a trigger script. ---
+    // apk passes no targets to commit hooks, so this can only reconcile.
     specs.push(HookSpec {
         manager: "apk",
         path: PathBuf::from("/etc/apk/commit_hooks.d/linix.sh"),
@@ -149,7 +144,6 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
         needs_root: true,
     });
 
-    // --- xbps (Void): transaction hooks live in /etc/xbps.d via alternatives; reconcile. ---
     specs.push(HookSpec {
         manager: "xbps",
         path: PathBuf::from("/etc/xbps.d/linix-hook.sh"),
@@ -160,7 +154,6 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
         needs_root: true,
     });
 
-    // --- portage (Gentoo): post-emerge hook in /etc/portage/postsync.d-style bashrc. ---
     specs.push(HookSpec {
         manager: "portage",
         path: PathBuf::from("/etc/portage/env/linix-record.sh"),
@@ -171,7 +164,6 @@ pub fn hook_specs(linix_bin: &str) -> Vec<HookSpec> {
         needs_root: true,
     });
 
-    // --- eopkg (Solus): reconcile helper. ---
     specs.push(HookSpec {
         manager: "eopkg",
         path: PathBuf::from("/usr/libexec/linix-eopkg-hook.sh"),

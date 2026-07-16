@@ -113,7 +113,6 @@ pub async fn create_bundle(
         ..Default::default()
     };
 
-    // 1. Declarative config: groups/ (local.txt, host-*.txt, locks.json, keep.txt) + modules/.
     report.files_copied +=
         copy_dir_recursive(&app.config.groups_dir, &out.join("groups"), Some(out)).await?;
     report.files_copied +=
@@ -126,7 +125,6 @@ pub async fn create_bundle(
         }
     }
 
-    // 2. Resolved managed package list.
     let managed: Vec<(String, String, Option<String>)> = {
         let state = app.state.lock().await;
         state
@@ -147,7 +145,6 @@ pub async fn create_bundle(
     .await
     .map_err(Error::from)?;
 
-    // 3. Optional artifact pre-download for air-gapped installs.
     if include_artifacts {
         let dest_root = out.join("artifacts");
         tokio::fs::create_dir_all(&dest_root)
@@ -177,7 +174,6 @@ pub async fn create_bundle(
         }
     }
 
-    // 4. Human restore instructions.
     let restore = format!(
         "# LiNix offline bundle\n\n\
          Packages: {}\nConfig files: {}\nArtifacts pre-fetched: {}\n\n\
@@ -210,8 +206,8 @@ pub async fn create_bundle(
             .map_err(Error::from)?;
     }
 
-    // 5. Optional single-file archive for easy transfer to an air-gapped host. The tar stores
-    // everything under one top folder named after the bundle dir, so it unpacks cleanly.
+    // The tar stores everything under one top folder named after the bundle dir; without
+    // that prefix it would unpack loose files into the extractor's cwd.
     if archive {
         let root_name = out
             .file_name()

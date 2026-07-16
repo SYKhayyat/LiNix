@@ -1,5 +1,3 @@
-// src/core/state.rs
-
 use crate::core::{Error, Result};
 use crate::utils::file::atomic_write;
 use crate::utils::safe_data_dir;
@@ -7,11 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, info, trace}; // removed unused `warn`
-
-// ============================================================================
-// GhostMetadata (unchanged)
-// ============================================================================
+use tracing::{debug, error, info, trace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GhostMetadata {
@@ -22,10 +16,6 @@ pub struct GhostMetadata {
     pub removed_at: u64,
     pub teleported_to: Option<String>,
 }
-
-// ============================================================================
-// ManagedPackage (unchanged)
-// ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManagedPackage {
@@ -40,7 +30,6 @@ pub struct ManagedPackage {
     pub session_id: Option<String>,
 }
 
-// ============================================================================
 // Suspension — the mirror image of a lease.
 //
 // A lease is a *temporary install*: a package present now that removes itself
@@ -50,7 +39,6 @@ pub struct ManagedPackage {
 // suspensions are only ever created by an explicit `remove --temp`. Version is
 // best-effort: recorded if the backend surfaced one, but restore never depends
 // on it (reinstall-by-name is enough, per the product decision).
-// ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Suspension {
@@ -66,20 +54,15 @@ pub struct Suspension {
     pub suspended_at: u64,
 }
 
-// ============================================================================
-// StateRegistry (now path‑aware, no static test path)
-// ============================================================================
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateRegistry {
-    /// Path to the registry file on disk.
+    /// Skipped by serde, so a deserialized registry carries an empty path until the loader
+    /// restores it — saving before that would write to the wrong place.
     #[serde(skip)]
     pub path: PathBuf,
-    /// List of all packages under LiNix management.
     pub packages: Vec<ManagedPackage>,
-    /// Historical archive of removed packages.
+    /// Removed packages, kept as a record after uninstall.
     pub ghosts: HashMap<String, GhostMetadata>,
-    /// ID of the currently active ephemeral shell session.
     pub active_session_id: Option<String>,
     /// Packages temporarily uninstalled that are awaiting restoration. `#[serde(default)]`
     /// keeps registries written by older versions loadable (the field is simply empty).
@@ -93,7 +76,6 @@ pub struct StateRegistry {
 }
 
 impl StateRegistry {
-    /// Creates a new empty registry associated with a specific file path.
     pub fn new(path: PathBuf) -> Self {
         Self {
             path,
@@ -115,7 +97,6 @@ impl StateRegistry {
         true
     }
 
-    /// Release a hold. Returns false if nothing matched.
     pub fn unhold(&mut self, key: &str) -> bool {
         let before = self.held.len();
         self.held.retain(|k| k != key);
@@ -128,12 +109,10 @@ impl StateRegistry {
         self.held.iter().any(|k| k == name || k == &qualified)
     }
 
-    /// All active holds, as recorded.
     pub fn list_held(&self) -> &[String] {
         &self.held
     }
 
-    /// Loads a registry from the given path.
     pub fn load_from(path: &Path) -> Result<Self> {
         debug!(
             "StateRegistry: Loading mission-critical state from {:?}",
@@ -159,7 +138,8 @@ impl StateRegistry {
         let mut registry: Self = serde_json::from_str(&data)
             .map_err(|e| Error::Other(format!("Registry Corruption at {:?}: {}", path, e)))?;
 
-        // Ensure the loaded registry has the correct path.
+        // `path` is #[serde(skip)], so it comes back empty and must be restored here or the
+        // next save writes to "".
         registry.path = path.to_path_buf();
 
         debug!(
@@ -170,14 +150,11 @@ impl StateRegistry {
         Ok(registry)
     }
 
-    /// Loads the registry from the default data directory.
-    /// This replaces the old static `load()` method.
     pub fn load_default() -> Result<Self> {
         let default_path = safe_data_dir().join("registry.json");
         Self::load_from(&default_path)
     }
 
-    /// Saves the registry to its associated file path.
     pub fn save(&self) -> Result<()> {
         trace!("StateRegistry: Initiating atomic save to {:?}", self.path);
 
@@ -196,7 +173,6 @@ impl StateRegistry {
             .map_err(|e| Error::Persist(format!("Atomic write failed for state registry: {}", e)))
     }
 
-    /// Adds a package to management with full metadata.
     pub fn add(
         &mut self,
         backend: &str,
@@ -249,12 +225,10 @@ impl StateRegistry {
         );
     }
 
-    /// Convenience wrapper for simple imperative installs.
     pub fn add_simple(&mut self, backend: &str, name: &str, version: Option<String>) {
         self.add(backend, name, version, HashMap::new(), None, false);
     }
 
-    /// Updates an existing lease.
     pub fn update_lease(&mut self, backend: &str, name: &str, duration_str: &str) -> Result<()> {
         let expiry = Self::parse_duration(duration_str).ok_or_else(|| {
             Error::Validation(format!(
@@ -285,7 +259,6 @@ impl StateRegistry {
         }
     }
 
-    /// Removes a package and archives it as a ghost.
     pub fn remove(&mut self, backend: &str, name: &str) {
         if let Some(pos) = self
             .packages
@@ -343,7 +316,6 @@ impl StateRegistry {
         }
     }
 
-    /// Returns packages whose leases have expired.
     pub fn get_expired_packages(&self) -> Vec<(String, String)> {
         let now = Self::now();
         self.packages
@@ -353,7 +325,6 @@ impl StateRegistry {
             .collect()
     }
 
-    /// Returns transient packages for a given session ID.
     pub fn get_transient_packages(&self, session_id: &str) -> Vec<(String, String)> {
         trace!(
             "StateRegistry: Scanning for transient packages in session '{}'",
@@ -420,7 +391,6 @@ impl StateRegistry {
             .collect()
     }
 
-    /// Returns suspensions owned by a given ephemeral shell session.
     pub fn get_session_suspensions(&self, session_id: &str) -> Vec<Suspension> {
         self.suspensions
             .iter()
@@ -438,26 +408,22 @@ impl StateRegistry {
         self.suspensions.len() != before
     }
 
-    /// All currently suspended packages (for `remove --temp` listing / status).
     pub fn list_suspensions(&self) -> &[Suspension] {
         &self.suspensions
     }
 
-    /// Checks if a package is managed.
     pub fn is_managed(&self, backend: &str, name: &str) -> bool {
         self.packages
             .iter()
             .any(|p| p.backend == backend && p.name == name)
     }
 
-    /// Returns a reference to a managed package if present.
     pub fn get_package(&self, backend: &str, name: &str) -> Option<&ManagedPackage> {
         self.packages
             .iter()
             .find(|p| p.backend == backend && p.name == name)
     }
 
-    /// Parses a duration string (e.g., "30d", "2h") into a future Unix timestamp.
     /// Public so callers can validate a user-supplied duration up front (a malformed
     /// `--temp` must fail loudly, never silently degrade into a permanent action).
     pub fn parse_duration(duration_str: &str) -> Option<u64> {
@@ -477,7 +443,6 @@ impl StateRegistry {
         Some(Self::now() + seconds)
     }
 
-    /// Returns current Unix timestamp in seconds.
     fn now() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -486,20 +451,12 @@ impl StateRegistry {
     }
 }
 
-// ============================================================================
-// Default implementation (uses default data directory)
-// ============================================================================
-
 impl Default for StateRegistry {
     fn default() -> Self {
         let default_path = safe_data_dir().join("registry.json");
         Self::new(default_path)
     }
 }
-
-// ============================================================================
-// Tests — suspension (temporary uninstall) logic and serde back-compat.
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -557,7 +514,6 @@ mod tests {
     #[test]
     fn due_suspensions_are_only_past_deadline() {
         let mut r = reg();
-        // One already due (restore_at in the past), one not.
         r.suspensions.push(Suspension {
             backend: "apt".into(),
             name: "due".into(),
@@ -606,9 +562,9 @@ mod tests {
         let mut r = StateRegistry::new(PathBuf::from("/tmp/x"));
         assert!(r.hold("cargo:ripgrep"));
         assert!(!r.hold("cargo:ripgrep"), "no duplicate");
-        assert!(r.hold("curl")); // bare name
+        assert!(r.hold("curl"));
 
-        assert!(r.is_held("cargo", "ripgrep")); // qualified match
+        assert!(r.is_held("cargo", "ripgrep"));
         assert!(r.is_held("apt", "curl")); // bare-name match across any backend
         assert!(!r.is_held("cargo", "bat"));
 

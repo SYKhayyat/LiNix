@@ -1,5 +1,3 @@
-// src/backends/pacman.rs
-
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, RepoManager, Result, Searchable, Upgradable,
@@ -48,7 +46,6 @@ fn validate_repo_url(url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Core backend implementation for Pacman (Arch Linux).
 pub struct PacmanBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -297,7 +294,6 @@ impl Upgradable for PacmanUpgradable {
     }
 }
 
-/// Build and register the Pacman backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

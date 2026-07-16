@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-/// Represents the performance data of a single package operation.
-/// Hardened for Phase 2.5: Includes retry counts and bandwidth telemetry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationMetrics {
     pub name: String,
@@ -13,15 +11,12 @@ pub struct OperationMetrics {
     pub duration_ms: u64,
     pub success: bool,
     pub error: Option<String>,
-    /// Number of times the operation was retried before succeeding or giving up.
     pub retry_count: u32,
-    /// Number of bytes downloaded during this specific operation.
     pub bytes_downloaded: u64,
 }
 
 #[derive(Default)]
 struct MetricsInner {
-    /// List of all operations executed during the session.
     operations: Vec<OperationMetrics>,
     packages_installed: u64,
     packages_removed: u64,
@@ -30,15 +25,12 @@ struct MetricsInner {
     start_time: Option<Instant>,
 }
 
-/// A thread-safe metrics collector for high-performance parallel execution.
-/// Fulfills Phase 2.5: Comprehensive system telemetry.
 #[derive(Clone)]
 pub struct MetricsCollector {
     inner: Arc<Mutex<MetricsInner>>,
 }
 
 impl MetricsCollector {
-    /// Initializes a new collector with a monotonic start clock.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(MetricsInner {
@@ -52,7 +44,6 @@ impl MetricsCollector {
         }
     }
 
-    /// Records a completed operation from a DAG node.
     #[allow(clippy::too_many_arguments)]
     pub fn record_operation(
         &self,
@@ -100,7 +91,6 @@ impl MetricsCollector {
             .push((context.to_string(), message.to_string()));
     }
 
-    /// Generates a summary report for the user.
     pub fn print_summary(&self) {
         self.print_summary_opts(true)
     }

@@ -3,10 +3,7 @@ use std::fs;
 use std::path::Path;
 use tracing::debug;
 
-/// A robust, cross-platform archive extraction utility.
-/// Supports .zip, .tar.gz, .tar.xz, and .tar.bz2 formats.
 pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<()> {
-    // Ensure destination exists
     if !dest_dir.exists() {
         fs::create_dir_all(dest_dir).map_err(Error::from)?;
     }
@@ -72,7 +69,6 @@ pub fn create_tar_gz(src_dir: &Path, dest_file: &Path, root_name: &str) -> Resul
     Ok(size)
 }
 
-/// Helper to check if a file is a known archive format.
 pub fn is_archive(path: &Path) -> bool {
     let name = path.to_string_lossy().to_lowercase();
     [".zip", ".tar.gz", ".tgz", ".tar.xz", ".tar.bz2"]

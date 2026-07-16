@@ -1,8 +1,6 @@
 use std::process::Stdio;
 use tokio::process::Command;
 
-/// Asynchronously checks if a command exists in the system PATH.
-/// Uses 'which' on Unix-like systems and 'where' on Windows.
 pub async fn command_exists(cmd: &str) -> bool {
     let check_bin = if cfg!(windows) { "where" } else { "which" };
 
@@ -18,7 +16,6 @@ pub async fn command_exists(cmd: &str) -> bool {
     }
 }
 
-/// Synchronous version for use in non-async contexts.
 pub fn command_exists_sync(cmd: &str) -> bool {
     let check_bin = if cfg!(windows) { "where" } else { "which" };
     std::process::Command::new(check_bin)
@@ -30,7 +27,6 @@ pub fn command_exists_sync(cmd: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Attempts to retrieve the version of a command by executing it with '--version'.
 pub async fn get_command_version(cmd: &str) -> Option<String> {
     let output = Command::new(cmd).arg("--version").output().await.ok()?;
 
@@ -46,7 +42,6 @@ pub async fn get_command_version(cmd: &str) -> Option<String> {
     }
 }
 
-/// Splits a raw command string into a command binary and its arguments.
 pub fn split_command(cmd_str: &str) -> Option<(String, Vec<String>)> {
     let parts: Vec<&str> = cmd_str.split_whitespace().collect();
     if parts.is_empty() {

@@ -1,5 +1,3 @@
-// src/backends/uv.rs
-
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, Result, Upgradable,
@@ -8,9 +6,6 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
 
-/// Core backend implementation for `uv tool` (Astral's fast Python application
-/// installer — the modern successor to pipx).
-///
 /// Scope note: this manages **`uv tool`** installs, which are the system-inventory
 /// surface of uv (globally-available CLI applications in isolated environments).
 /// Project/venv-scoped `uv pip` packages are deliberately out of scope, exactly as
@@ -29,7 +24,6 @@ impl UvBackendCore {
         }
     }
 
-    /// Returns the base directory where `uv` stores its tool environments.
     async fn get_tools_dir(&self) -> Result<String> {
         let output = self
             .executor
@@ -190,7 +184,6 @@ impl Upgradable for UvUpgradable {
     }
 }
 
-/// Build and register the uv backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

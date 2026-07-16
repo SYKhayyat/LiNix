@@ -4,8 +4,8 @@ use regex::Regex;
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
-/// Strict regex for package names.
-/// Allows alphanumeric, dots, underscores, @ scopes, and slashes for github.
+/// The allowlist must stay wide enough for names that are legitimately not bare words:
+/// npm `@scope`, github `owner/repo`, versioned `pkg:1.2+build`.
 static PACKAGE_NAME_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._@:+/-]+$").unwrap());
 
@@ -25,7 +25,6 @@ static DESTRUCTIVE_PATTERNS: &[&str] = &[
     "mv / /dev/null",
 ];
 
-/// Bug 6: Expanded trusted paths for Windows and Linux.
 static TRUSTED_BIN_PATHS: &[&str] = &[
     "/usr/bin",
     "/bin",
@@ -114,7 +113,6 @@ impl Validator {
         Ok(())
     }
 
-    /// Hardened command validation.
     pub fn validate_command(cmd: &str, args: &[&str]) -> Result<()> {
         let full = format!("{} {}", cmd, args.join(" ")).to_lowercase();
 
@@ -133,7 +131,8 @@ impl Validator {
 
         let cmd_path = Path::new(cmd);
         if cmd_path.is_absolute() {
-            // Bug 6: Use canonical path matching for binary origins
+            // Canonicalize before the prefix check: a symlink or `..` in an untrusted
+            // location would otherwise present a trusted-looking prefix.
             let canonical_cmd = cmd_path
                 .canonicalize()
                 .unwrap_or_else(|_| cmd_path.to_path_buf());
@@ -153,21 +152,21 @@ impl Validator {
         Ok(())
     }
 
-    /// Bug 2: Strict Canonical Path Validation.
-    /// Replaces substring "contains" checks with prefix matching on resolved paths.
+    /// Forbidden zones are matched as path prefixes on the *resolved* path, never as
+    /// substrings: a substring test both misses `/etc/../etc/shadow` and rejects innocent
+    /// names that merely contain a forbidden one. A path that does not exist is returned
+    /// unresolved and unchecked — callers must not treat this as proof it is allowed.
     pub async fn validate_path(path: &Path) -> Result<PathBuf> {
         if !tokio::fs::try_exists(path).await.unwrap_or(false) {
             return Ok(path.to_path_buf());
         }
 
         let path_owned = path.to_path_buf();
-        // Resolve symlinks and ".."
         let canonical = tokio::task::spawn_blocking(move || path_owned.canonicalize())
             .await
             .map_err(|e| Error::Other(e.to_string()))?
             .map_err(|e| Error::Validation(format!("Path resolution failed: {}", e)))?;
 
-        // Use strict prefix matching against forbidden zones
         for forbidden in FORBIDDEN_PATHS {
             let f_path = Path::new(forbidden);
             if canonical.starts_with(f_path) {
@@ -182,7 +181,6 @@ impl Validator {
         Ok(canonical)
     }
 
-    /// Ensures backend names are alphanumeric safely.
     pub fn validate_backend_name(name: &str) -> Result<()> {
         if name.is_empty()
             || !name
@@ -207,7 +205,6 @@ mod tests {
         // A leading slash on an ordinary package name is an injection attempt.
         assert!(Validator::validate_package_name("/etc/passwd").is_err());
         assert!(Validator::validate_package_name_for("/etc/passwd", "apt").is_err());
-        // Normal names still pass.
         assert!(Validator::validate_package_name_for("ripgrep", "apt").is_ok());
         // github owner/repo and web URLs (no leading slash) pass either way.
         assert!(Validator::validate_package_name_for("BurntSushi/ripgrep", "github").is_ok());

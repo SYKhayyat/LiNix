@@ -7,7 +7,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 
-/// Core backend implementation for Nix (via 'nix profile').
 pub struct NixBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -41,7 +40,6 @@ impl BackendCore for NixBackendCore {
     }
 }
 
-/// Phase 1.1: MetadataProvider for Nix.
 #[async_trait]
 impl MetadataProvider for NixBackendCore {
     async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
@@ -85,7 +83,6 @@ impl Installable for NixInstallable {
         let mut indexed: Vec<(usize, &str)> = Vec::new();
         let mut by_name: Vec<&str> = Vec::new();
         for name in names {
-            // not installed => nothing to remove
             if let Some(pkg) = installed.iter().find(|p| p.name == *name) {
                 match pkg
                     .properties
@@ -229,7 +226,6 @@ impl Upgradable for NixUpgradable {
 }
 
 impl NixBackendCore {
-    /// Internal helper to parse the complex JSON output of 'nix profile list'.
     async fn list_installed_internal(&self) -> Result<Vec<Package>> {
         let output = self
             .executor
@@ -272,7 +268,6 @@ impl NixBackendCore {
     }
 }
 
-/// Build and register the Nix backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

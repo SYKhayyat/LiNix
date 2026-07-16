@@ -1,5 +1,3 @@
-// src/backends/pip_search.rs
-//
 // Search capability for pip. The legacy `pip search` command was disabled upstream
 // (PyPI removed the XML-RPC search endpoint due to abuse) and PyPI exposes no public
 // search API. We therefore implement `search` as an EXACT-NAME lookup against the

@@ -7,7 +7,6 @@ use serde_json::json;
 use std::sync::Arc;
 use tracing::info;
 
-/// Core backend implementation for Visual Studio Code extensions.
 pub struct VscodeBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -78,12 +77,10 @@ impl BackendCore for VscodeBackendCore {
     fn needs_root(&self) -> bool {
         false
     }
-    // NOTE: previously this overrode check_health to always-Ok, masking a missing `code`
-    // binary. We rely on the default `BackendCore::check_health`, which reports Critical
-    // when the backend is unavailable.
+    // Deliberately no `check_health` override: the default reports Critical when the
+    // backend is unavailable, and an always-Ok override here masks a missing `code` binary.
 }
 
-/// Phase 1.1: MetadataProvider for VSCode.
 #[async_trait]
 impl MetadataProvider for VscodeBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
@@ -263,7 +260,6 @@ impl Searchable for VscodeSearchable {
     }
 }
 
-/// Build and register the VS Code extensions backend.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

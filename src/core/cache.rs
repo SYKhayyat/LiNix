@@ -4,8 +4,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
-/// A generic thread-safe cache with TTL (Time-To-Live) support.
-/// Utilizes RwLock for high-concurrency read access.
 pub struct SmartCache<K, V>
 where
     K: Eq + Hash + Clone,
@@ -25,7 +23,6 @@ where
     K: Eq + Hash + Clone,
     V: Clone,
 {
-    /// Create a new cache with specified TTL.
     pub fn new(ttl: Duration) -> Self {
         Self {
             store: Arc::new(RwLock::new(HashMap::new())),
@@ -33,7 +30,6 @@ where
         }
     }
 
-    /// Get a value from the cache if it hasn't expired.
     pub async fn get(&self, key: &K) -> Option<V> {
         let store = self.store.read().await;
 
@@ -46,7 +42,6 @@ where
         None
     }
 
-    /// Insert a value into the cache.
     pub async fn set(&self, key: K, value: V) {
         let mut store = self.store.write().await;
 
@@ -59,19 +54,16 @@ where
         );
     }
 
-    /// Remove a value from the cache.
     pub async fn remove(&self, key: &K) {
         let mut store = self.store.write().await;
         store.remove(key);
     }
 
-    /// Clear all entries from the cache.
     pub async fn clear(&self) {
         let mut store = self.store.write().await;
         store.clear();
     }
 
-    /// Explicitly remove expired entries from the cache.
     pub async fn cleanup(&self) {
         let mut store = self.store.write().await;
         let now = Instant::now();
@@ -79,13 +71,13 @@ where
         store.retain(|_, entry| entry.expires_at > now);
     }
 
-    /// Get the number of entries in the cache.
+    /// Counts expired-but-uncleaned entries too, so a non-zero len does not mean a `get`
+    /// will hit.
     pub async fn len(&self) -> usize {
         let store = self.store.read().await;
         store.len()
     }
 
-    /// Returns true if the cache holds no entries.
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
     }
@@ -105,19 +97,13 @@ where
     }
 }
 
-/// Specialized cache for package-related data.
-/// Used by the App context to speed up repeat lookups during resolution and search.
 pub struct PackageCache {
-    /// Cache for installed packages by backend.
     installed: SmartCache<String, Vec<crate::core::Package>>,
-    /// Cache for cross-backend search results.
     search: SmartCache<String, Vec<crate::core::Package>>,
-    /// Cache for package metadata.
     info: SmartCache<String, crate::core::Package>,
 }
 
 impl PackageCache {
-    /// Initializes the package cache with default TTLs (5-10 minutes).
     pub fn new() -> Self {
         Self {
             installed: SmartCache::new(Duration::from_secs(300)),

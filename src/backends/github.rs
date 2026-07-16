@@ -1,5 +1,3 @@
-// src/backends/github.rs
-
 use crate::core::{
     security::verify_checksum, BackendCore, CommandExecutor, Error, HealthReport, HealthStatus,
     Installable, MetadataProvider, Package, PackageSpec, Queryable, RateLimiter, Result,
@@ -14,7 +12,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-/// Internal state for a GitHub-managed package.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct GithubState {
     repo: String,
@@ -37,7 +34,6 @@ struct GithubRelease {
     assets: Vec<GithubAsset>,
 }
 
-/// Core backend implementation for GitHub releases.
 pub struct GithubBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -325,7 +321,6 @@ impl Installable for GithubInstallable {
                             .await
                             .map_err(Error::from)?;
                     }
-                    // FIX: Use tokio::fs::symlink (correct async symlink API)
                     tokio::fs::symlink(&src_path, &bin_dest)
                         .await
                         .map_err(Error::from)?;
@@ -389,7 +384,6 @@ impl Queryable for GithubQueryable {
     }
 }
 
-/// Build and register the GitHub Releases backend.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

@@ -83,8 +83,6 @@ impl ProfileManager {
         }
     }
 
-    // ---------------------------------------------------------------- paths
-
     fn profile_file(&self, name: &str) -> PathBuf {
         self.profiles_dir.join(format!("{name}.profile"))
     }
@@ -97,8 +95,6 @@ impl ProfileManager {
             .await
             .unwrap_or(false)
     }
-
-    // ----------------------------------------------------- public lifecycle
 
     /// Activate one or more profiles: add each to the active set, then converge the system
     /// to the union of all active profiles. Idempotent — activating an already-active
@@ -171,9 +167,6 @@ impl ProfileManager {
         self.sync_now().await
     }
 
-    // --------------------------------------------------------- introspection
-
-    /// Every defined profile (new `.profile` files and legacy directories), sorted.
     pub async fn list_profiles(&self) -> Result<Vec<String>> {
         let mut profiles: HashSet<String> = HashSet::new();
         if tokio::fs::try_exists(&self.profiles_dir)
@@ -270,8 +263,6 @@ impl ProfileManager {
         Ok(())
     }
 
-    // ------------------------------------------------------------- internals
-
     async fn load_active(&self) -> Result<Vec<String>> {
         let path = self.active_file();
         if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
@@ -300,10 +291,8 @@ impl ProfileManager {
         Ok(())
     }
 
-    /// Read every profile definition under `profiles_dir` into a name → raw-lines map:
-    /// `<name>.profile` files, and (legacy) `<name>/` directories of concatenated `.txt`
-    /// manifests. Reading the whole set once keeps the composition algorithm pure/sync and
-    /// unit-testable (see [`compose`]).
+    /// Reading the whole set at once is what keeps [`compose`] pure and sync, and therefore
+    /// unit-testable without a filesystem. Resolve nothing lazily from in here.
     async fn load_all_definitions(&self) -> Result<HashMap<String, Vec<String>>> {
         let mut defs: HashMap<String, Vec<String>> = HashMap::new();
         if !tokio::fs::try_exists(&self.profiles_dir)

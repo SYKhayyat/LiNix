@@ -9,11 +9,6 @@ use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tracing::{debug, info};
 
-/// Manages the execution of scripting hooks for package lifecycle events.
-/// Supports Lua, Rhai, and any language with a system shebang.
-///
-/// Hardened for Phase 3.3: Correctly handles mlua thread-safety by initializing
-/// the interpreter within the execution context, ensuring the closure is Send.
 pub struct LuaHooks {
     rhai_engine: Engine,
     pub hooks: HashMap<String, HashMap<String, String>>,
@@ -30,7 +25,6 @@ impl LuaHooks {
         })
     }
 
-    /// The Polyglot Bridge: Detects shebangs and executes via system interpreter.
     async fn run_external_polyglot(&self, code: &str, hook: &str, pkg: &str) -> Result<()> {
         debug!("Hooks: Launching Polyglot Bridge for {}/{}", hook, pkg);
 
@@ -75,7 +69,8 @@ impl LuaHooks {
         Ok(())
     }
 
-    /// Executes a specific hook trigger for a package.
+    /// A package-specific hook shadows the `*` catch-all rather than running in addition
+    /// to it — a script registered for one package silently disables the global one.
     pub async fn run_hook(&self, hook_name: &str, package_name: &str) -> Result<()> {
         let script = if let Some(category) = self.hooks.get(hook_name) {
             category.get(package_name).or_else(|| category.get("*"))
@@ -109,8 +104,8 @@ impl LuaHooks {
         Ok(())
     }
 
-    /// Runs a Lua hook within a fresh interpreter instance inside a blocking task.
-    /// This ensures thread-safety since mlua::Lua is !Send.
+    /// The Lua interpreter must be constructed INSIDE the blocking closure: `mlua::Lua` is
+    /// !Send, so holding one across this boundary will not compile.
     async fn run_lua(&self, code: &str, hook: &str, pkg: &str) -> Result<()> {
         let code_owned = code.to_string();
         let hook_owned = hook.to_string();
@@ -161,7 +156,6 @@ impl LuaHooks {
         engine.register_fn("print", |msg: &str| info!("[Rhai] {}", msg));
     }
 
-    /// Renders a template using a localized Lua instance.
     pub fn render_template(&self, template: &str) -> String {
         let lua = Lua::new();
         if let Err(e) = Self::setup_lua_sandbox(&lua) {

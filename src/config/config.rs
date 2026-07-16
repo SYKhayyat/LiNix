@@ -583,10 +583,6 @@ impl Config {
             .unwrap_or_else(safe_config_dir)
     }
 
-    pub fn wish_dirs(&self) -> Vec<PathBuf> {
-        vec![self.groups_dir.clone()]
-    }
-
     pub fn merge_cli_overrides(
         &mut self,
         dry_run: Option<bool>,

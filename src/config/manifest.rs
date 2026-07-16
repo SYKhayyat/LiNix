@@ -14,8 +14,8 @@ pub struct PackageLocation {
     pub raw_line: String,
 }
 
-/// Phase 3.1: Machine-generated lock data to avoid race conditions and manifest corruption.
-/// This separates user-intent (.txt) from machine-verified state (locks.json).
+/// Machine-generated lock data. Separates user intent (.txt) from machine-verified
+/// state (locks.json).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ManifestLocks {
     /// Maps "backend:package" to a map of verified options (like sha256).
@@ -23,52 +23,29 @@ pub struct ManifestLocks {
 }
 
 /// Reads and writes the declarative `.txt` manifests and the lock-staging area.
-///
-/// It holds two directories, not one, because it does two jobs that stopped being the same
-/// thing when `-g` became additive:
-///
-/// - `global_dir` is where LiNix's own files live and where writes land. There is one.
-/// - `wish_dirs` are every folder whose manifests are READ: global, then each `-g`.
-///
-/// Collapsing them is the bug this split exists to prevent: a search that only looked in
-/// the global folder would not see a `-g` folder's declarations, and a write that followed
-/// `-g` would scatter `local.txt` across scratch directories.
 pub struct ManifestEngine {
-    /// The folder LiNix owns: locks.json, local.txt. Writes go here.
-    global_dir: PathBuf,
-    /// Every folder read for declarations, in order: global first, then each `-g`.
-    wish_dirs: Vec<PathBuf>,
+    groups_dir: PathBuf,
     locks_path: PathBuf,
 }
 
 impl ManifestEngine {
-    /// Build from config — the normal path, and the one that gets the overlay right.
     pub fn from_config(config: &crate::config::Config) -> Self {
-        Self::new(&config.groups_dir, config.wish_dirs())
+        Self::new(&config.groups_dir)
     }
 
-    pub fn new(global_dir: impl Into<PathBuf>, wish_dirs: Vec<PathBuf>) -> Self {
-        let dir = global_dir.into();
+    pub fn new(groups_dir: impl Into<PathBuf>) -> Self {
+        let dir = groups_dir.into();
         let locks_path = dir.join("locks.json");
-        // A caller with no wish dirs means "just the global folder"; an empty search set
-        // would silently report every package as undeclared.
-        let wish_dirs = if wish_dirs.is_empty() {
-            vec![dir.clone()]
-        } else {
-            wish_dirs
-        };
         Self {
-            global_dir: dir,
-            wish_dirs,
+            groups_dir: dir,
             locks_path,
         }
     }
 
-    /// Every `.txt` manifest across the wish-list folders, deduplicated and in a stable
-    /// order. `read_dir`/`WalkDir` yield filesystem order, which differs between machines
-    /// holding identical files.
+    /// Sorted, not `WalkDir` order: filesystem order differs between machines holding
+    /// identical files, and later lines override earlier ones.
     async fn manifest_files(&self) -> Result<Vec<PathBuf>> {
-        let dirs = self.wish_dirs.clone();
+        let dirs = vec![self.groups_dir.clone()];
         let mut entries: Vec<PathBuf> = tokio::task::spawn_blocking(move || {
             let mut out: Vec<PathBuf> = Vec::new();
             for dir in dirs {
@@ -235,7 +212,7 @@ impl ManifestEngine {
         // imperatively on this machine — one machine, one record. Following `-g` would
         // scatter it across scratch folders, and a scratch folder that later goes away
         // takes the only evidence those packages were wanted with it.
-        let local_path = self.global_dir.join("local.txt");
+        let local_path = self.groups_dir.join("local.txt");
         let name_part = spec_str.split('@').next().unwrap_or(spec_str);
         let clean_name = name_part
             .split_once(':')
@@ -247,8 +224,8 @@ impl ManifestEngine {
             return Ok(());
         }
 
-        if !self.global_dir.exists() {
-            fs::create_dir_all(&self.global_dir).await?;
+        if !self.groups_dir.exists() {
+            fs::create_dir_all(&self.groups_dir).await?;
         }
 
         let mut lines = if tokio::fs::try_exists(&local_path).await.unwrap_or(false) {

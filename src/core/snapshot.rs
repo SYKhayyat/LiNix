@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command as StdCommand;
-use tracing::{debug, info}; // Modernized: Removed unused 'warn', 'error', 'trace', 'instrument'
+use tracing::{debug, info};
 
-/// Represents a system-level restorable state in the Snapshot Gallery.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub id: String,
@@ -18,7 +17,6 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// Attempts to parse the internal timestamp for lifecycle comparison.
     pub fn parse_time(&self) -> Option<DateTime<Utc>> {
         DateTime::parse_from_rfc3339(&self.timestamp)
             .map(|dt| dt.with_timezone(&Utc))
@@ -26,7 +24,6 @@ impl Snapshot {
     }
 }
 
-/// Abstract interface for platform-native system snapshots.
 #[async_trait]
 pub trait SnapshotProvider: Send + Sync {
     fn name(&self) -> &str;
@@ -36,10 +33,6 @@ pub trait SnapshotProvider: Send + Sync {
     async fn delete(&self, id: &str) -> Result<()>;
     async fn restore(&self, id: &str) -> Result<()>;
 }
-
-// ============================================================================
-// PROVIDER IMPLEMENTATIONS
-// ============================================================================
 
 pub struct BtrfsProvider {
     pub executor: CommandExecutor,
@@ -240,7 +233,6 @@ impl SnapshotProvider for TimeshiftProvider {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        // Resolves E0308: Map Output to ()
         self.executor
             .run("timeshift", &["--delete", "--snapshot", id], true)
             .await
@@ -248,7 +240,6 @@ impl SnapshotProvider for TimeshiftProvider {
     }
 
     async fn restore(&self, id: &str) -> Result<()> {
-        // Resolves E0308: Map Output to ()
         self.executor
             .run(
                 "timeshift",
@@ -337,16 +328,11 @@ impl SnapshotProvider for WindowsRestoreProvider {
     }
 }
 
-// ============================================================================
-// SNAPSHOT MANAGER
-// ============================================================================
-
 pub struct SnapshotManager {
     provider: Option<Box<dyn SnapshotProvider>>,
 }
 
 impl SnapshotManager {
-    /// Modernized DI: Allows the injection of a custom provider (Exhaustive Fix).
     pub fn with_provider(provider: Box<dyn SnapshotProvider>) -> Self {
         Self {
             provider: Some(provider),
@@ -464,9 +450,8 @@ impl SnapshotManager {
         }
     }
 
-    /// Prune snapshots per a declarative [`RetentionPolicy`] (the `[retention.snapshots]`
-    /// block). Only ever deletes LiNix-created snapshots (labeled `linix_`). Returns the
-    /// ids removed. Inactive policy or no provider = no-op.
+    /// Only ever deletes snapshots whose id contains "linix", so retention cannot reap a
+    /// user's or another tool's snapshots. Inactive policy or no provider = no-op.
     pub async fn prune_with_policy(
         &self,
         policy: &crate::core::RetentionPolicy,
@@ -480,8 +465,6 @@ impl SnapshotManager {
         if !policy.is_active() {
             return Ok(vec![]);
         }
-        // Restrict to snapshots LiNix owns, so retention never reaps a user's or another
-        // tool's snapshots.
         let list: Vec<Snapshot> = p
             .list()
             .await?

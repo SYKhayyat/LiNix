@@ -8,9 +8,7 @@ pub fn parse_mas_list(output: &str) -> Vec<Package> {
     sanitize(output)
         .lines()
         .filter_map(|line| {
-            // We use rsplit_once to isolate the version part inside parentheses
             let (id_name, ver_part) = line.rsplit_once(' ')?;
-            // Split the identifier and the human-readable name
             let (id, name) = id_name.split_once(' ')?;
 
             let mut p = Package::with_version(
@@ -39,9 +37,7 @@ pub fn parse_mas_search(output: &str) -> Vec<Package> {
                 return None;
             }
 
-            // First part is the App Store numeric ID
             let id = parts[0];
-            // The rest is the App name
             let name = parts[1..].join(" ");
 
             let mut p = Package::new(id, "mas");

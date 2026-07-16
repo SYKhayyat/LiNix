@@ -1,5 +1,3 @@
-// src/backends/yarn.rs
-
 use crate::backends::node_registry::registry_search;
 use crate::core::{
     BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
@@ -57,7 +55,6 @@ fn parse_yarn_json_stream(output: &str) -> Vec<Package> {
     packages
 }
 
-/// Core backend implementation for Yarn (Node.js package manager alternative).
 #[derive(Clone)]
 pub struct YarnBackendCore {
     pub executor: CommandExecutor,
@@ -72,7 +69,6 @@ impl YarnBackendCore {
         }
     }
 
-    /// Returns the global installation prefix (where global packages are stored).
     async fn get_global_prefix(&self) -> Result<String> {
         let output = self
             .executor
@@ -256,7 +252,6 @@ impl YarnBackendCore {
     }
 }
 
-/// Build and register the Yarn backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

@@ -3,10 +3,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// Represents the health status of a specific backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HealthStatus {
-    /// Backend is available and fully functional.
     Ok,
     /// Backend is present but requires attention (e.g. out of date, missing optional deps).
     Degraded,
@@ -14,36 +12,22 @@ pub enum HealthStatus {
     Critical,
 }
 
-/// A structured report for system diagnostics used by the 'Doctor' command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HealthReport {
     pub status: HealthStatus,
     pub message: Option<String>,
 }
 
-// ============================================================================
-// Capability Traits (ISP-Compliant)
-// ============================================================================
-
-/// Core trait that every package management backend must implement.
-///
-/// This trait defines the identity and system-level availability of the backend.
 #[async_trait]
 pub trait BackendCore: Send + Sync {
-    /// Returns the unique identifier for the backend (e.g., "apt", "cargo").
     fn name(&self) -> &str;
 
-    /// Checks if the underlying tool binary is available in the system PATH.
     fn is_available(&self) -> bool;
 
-    /// Phase 2.2: Returns true if the backend requires root/sudo privileges
-    /// for modification (Install/Remove/Upgrade).
-    ///
-    /// System managers (apt, dnf) return true.
-    /// User managers (cargo, npm, scoop) return false.
+    /// System managers (apt, dnf) return true. User managers (cargo, npm, scoop) return
+    /// false.
     fn needs_root(&self) -> bool;
 
-    /// Performs a diagnostic check to verify if the backend is healthy.
     async fn check_health(&self) -> Result<HealthReport> {
         if self.is_available() {
             Ok(HealthReport {
@@ -59,21 +43,16 @@ pub trait BackendCore: Send + Sync {
     }
 }
 
-/// Capability trait for backends that can modify the system state (Write Access).
 #[async_trait]
 pub trait Installable: Send + Sync {
-    /// Installs a set of packages according to the provided specifications.
     /// The `sudo` parameter is provided by the execution engine based on `needs_root()`.
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()>;
 
-    /// Purges a set of packages from the system by name.
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()>;
 }
 
-/// Capability trait for backends that can inspect local system state (Read Access).
 #[async_trait]
 pub trait Queryable: Send + Sync {
-    /// Returns a list of every package currently installed via this backend.
     async fn list_installed(&self) -> Result<Vec<Package>>;
 
     /// Returns only packages explicitly requested by the user (non-dependencies).
@@ -110,72 +89,51 @@ pub trait Queryable: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Fetches rich metadata (version, install path, etc.) for a specific package.
     async fn info(&self, name: &str) -> Result<Option<Package>>;
 }
 
-/// Capability trait for backends that can search remote repositories.
 #[async_trait]
 pub trait Searchable: Send + Sync {
-    /// Performs a remote query and returns a list of matching available packages.
     async fn search(&self, query: &str) -> Result<Vec<Package>>;
 
-    /// Checks if a specific package exists in the remote repository.
     async fn remote_has(&self, name: &str) -> Result<bool> {
         let results = self.search(name).await?;
         Ok(results.iter().any(|p| p.name == name))
     }
 
-    /// Gets detailed remote information for a package without installing it.
     async fn remote_info(&self, name: &str) -> Result<Option<Package>> {
         let results = self.search(name).await?;
         Ok(results.into_iter().find(|p| p.name == name))
     }
 }
 
-/// Capability trait for backends that support maintenance and batch upgrades.
 #[async_trait]
 pub trait Upgradable: Send + Sync {
-    /// Refreshes local metadata, cache, or package indices (e.g. 'apt update').
     async fn update(&self, sudo: bool) -> Result<()>;
 
-    /// Upgrades all packages managed by this backend to their latest compatible versions.
     async fn upgrade(&self, sudo: bool) -> Result<()>;
 
-    /// identifies and removes unused or orphaned dependencies.
     async fn clean_orphans(&self, sudo: bool) -> Result<()>;
 }
 
-/// Capability trait for backends that support source/repository management.
 #[async_trait]
 pub trait RepoManager: Send + Sync {
-    /// Adds a new package source (e.g., PPA, Tap, or Bucket).
     async fn add_repo(&self, name: &str, url: &str, sudo: bool) -> Result<()>;
-    /// Removes an existing package source.
     async fn remove_repo(&self, name: &str, sudo: bool) -> Result<()>;
-    /// Lists all configured repositories/sources.
     async fn list_repos(&self) -> Result<Vec<(String, String)>>;
 }
 
-/// Phase 1.1: Capability trait for providing backend-native dependency metadata.
-///
-/// This is used by the `ChangePlanner` to perform recursive expansion of the system
-/// dependency graph. The names returned must be the package names used natively
-/// by the underlying package manager.
+/// The `ChangePlanner` expands the returned names recursively against the same backend,
+/// so they must be the names that backend itself uses — a normalized or display name
+/// re-enters the graph as an unresolvable node.
 #[async_trait]
 pub trait MetadataProvider: Send + Sync {
-    /// Returns a list of native package names that are direct dependencies for the given package.
+    /// Direct dependencies only; the caller handles transitive expansion.
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>>;
 }
 
-// ============================================================================
-// Capability Aggregation (Composition over Inheritance)
-// ============================================================================
-
-/// A container that aggregates a backend's core identity and its optional capabilities.
-///
-/// This structure allows the LiNix engine to query backends for specific
-/// functionalities (ISP) without requiring every backend to implement every trait.
+/// Lets the engine query a backend for one capability without every backend having to
+/// implement every trait.
 pub struct BackendCapabilities {
     core: Arc<dyn BackendCore>,
     installable: Option<Arc<dyn Installable>>,
@@ -187,7 +145,6 @@ pub struct BackendCapabilities {
 }
 
 impl BackendCapabilities {
-    /// Initializes the capability builder for a backend.
     pub fn builder(core: Arc<dyn BackendCore>) -> BackendCapabilitiesBuilder {
         BackendCapabilitiesBuilder::new(core)
     }
@@ -263,7 +220,6 @@ impl BackendCapabilities {
     }
 }
 
-/// Builder for constructing BackendCapabilities with a fluent interface.
 pub struct BackendCapabilitiesBuilder {
     core: Arc<dyn BackendCore>,
     installable: Option<Arc<dyn Installable>>,

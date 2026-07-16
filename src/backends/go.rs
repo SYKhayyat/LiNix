@@ -1,5 +1,3 @@
-// src/backends/go.rs
-//
 // The Go toolchain as a LiNix backend. Go is a poor fit for the generic CLI-config model:
 // `go install pkg@version` installs a binary, but there is no `go uninstall`, no command
 // that lists globally-installed binaries with their module paths, and no CLI search
@@ -288,8 +286,7 @@ impl Upgradable for GoUpgradable {
     }
 }
 
-/// Build and register the Go backend. Search is intentionally omitted (Go has no CLI
-/// package search).
+/// Search is intentionally omitted: Go has no CLI package search (pkg.go.dev is web-only).
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

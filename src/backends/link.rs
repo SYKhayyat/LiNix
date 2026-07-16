@@ -6,10 +6,8 @@ use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tera::{Context, Tera};
-#[allow(unused_imports)] // `warn` is used only under cfg(windows)
 use tracing::{debug, info, warn};
 
-/// Core backend implementation for filesystem links and configuration templating.
 pub struct LinkBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -93,7 +91,6 @@ impl LinkBackendCore {
         })
     }
 
-    /// Renders a configuration file using the Tera engine.
     async fn render_template(&self, source_path: &Path) -> Result<String> {
         let content = self.executor.read_file(source_path).await?;
 
@@ -201,7 +198,7 @@ impl BackendCore for LinkBackendCore {
     }
 }
 
-/// Phase 1.1: MetadataProvider for Link (Filesystem objects have no native transitive deps).
+/// Filesystem objects have no native transitive deps.
 #[async_trait]
 impl MetadataProvider for LinkBackendCore {
     async fn get_dependencies(&self, _name: &str) -> Result<Vec<String>> {
@@ -215,9 +212,9 @@ pub struct LinkInstallable {
 
 #[async_trait]
 impl Installable for LinkInstallable {
-    /// Aligns the target file with the source (Link or Rendered Template).
-    /// Hardened for Phase 1.1 Correction: Uses the abstracted executor.symlink()
-    /// to ensure dry-run VFS recording.
+    /// Must go through `executor.symlink()` rather than `tokio::fs` directly: only the
+    /// executor records into the dry-run VFS, so a direct call would touch the real
+    /// filesystem during a dry run.
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         for spec in specs {
             let target_str = spec
@@ -316,7 +313,8 @@ impl Installable for LinkInstallable {
 
             info!("Link: Creating link {:?} -> {:?}", source, target_path);
 
-            // Fulfills Phase 1.1 Correction: Delegate to executor to allow VFS recording in tests.
+            // Delegate to the executor so the dry-run VFS records this instead of the
+            // real filesystem being touched.
             #[cfg(target_os = "windows")]
             {
                 let source_abs = source.canonicalize().unwrap_or_else(|_| source.clone());
@@ -328,7 +326,6 @@ impl Installable for LinkInstallable {
                         .await
                         .map_err(Error::from)?;
                 } else {
-                    // This now handles dry-run automatically via VFS
                     self.core.executor.symlink(&source, &target_path).await?;
                 }
             }
@@ -461,7 +458,6 @@ mod tests {
         tokio::fs::write(&source, "ENCRYPTED").await.unwrap();
         let target = dir.path().join("token");
 
-        // dry_run = true
         let exec = CommandExecutor::new(true, false);
         let core = Arc::new(LinkBackendCore::new(exec, Arc::new(Config::default())));
         let inst = LinkInstallable { core };

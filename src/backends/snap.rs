@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-/// Core backend implementation for Ubuntu Snap packages.
 pub struct SnapBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -232,7 +231,6 @@ impl Upgradable for SnapUpgradable {
     }
 }
 
-/// Build and register the Snap backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

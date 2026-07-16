@@ -1,5 +1,3 @@
-// src/backends/krew.rs
-//
 // krew, the kubectl plugin manager, exposed as the `krew` backend. Its commands are
 // subcommands of `kubectl` (`kubectl krew install ...`), so it is a small dedicated
 // backend rather than a generic config entry. Runtime-gated on the `kubectl` binary.
@@ -143,7 +141,6 @@ pub struct KrewUpgradable {
 #[async_trait]
 impl Upgradable for KrewUpgradable {
     async fn update(&self, _sudo: bool) -> Result<()> {
-        // Refresh the plugin index.
         self.core
             .executor
             .run("kubectl", &["krew", "update"], false)
@@ -165,7 +162,6 @@ impl Upgradable for KrewUpgradable {
     }
 }
 
-/// Build and register the krew (kubectl plugin) backend.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

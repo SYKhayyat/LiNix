@@ -1,5 +1,3 @@
-// src/backends/pubdart.rs
-//
 // Dart/Flutter global packages (pub.dev), exposed as the `pub` backend. The user-facing
 // command is a subcommand of the `dart` binary (`dart pub global ...`), so this is a small
 // dedicated backend rather than a generic config entry (whose invoked binary must equal
@@ -162,7 +160,7 @@ impl Upgradable for PubUpgradable {
     }
 }
 
-/// Build and register the pub (Dart) backend. Search is omitted (no CLI search).
+/// Search is omitted: pub.dev has no CLI search.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

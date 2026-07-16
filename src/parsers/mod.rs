@@ -15,14 +15,9 @@ pub mod windows;
 
 use crate::core::Package;
 
-/// The Strategy Interface for all backend output parsing.
-/// This allows the Registry to treat every parser as an interchangeable object,
-/// supporting the SOLID Open/Closed principle for new package manager support.
 pub trait OutputParser: Send + Sync {
-    /// Parses a raw string of installed packages into structured Package objects.
     fn parse_installed(&self, output: &str) -> Vec<Package>;
 
-    /// Parses raw search results into structured Package objects.
     fn parse_search(&self, output: &str) -> Vec<Package>;
 
     /// Parses a manager's listing of packages the OS itself treats as essential — the

@@ -22,30 +22,23 @@ pub struct SandboxConfig {
     pub environment: Vec<(String, String)>,
 }
 
-/// A wrapper for sandboxing that works across platforms.
-///
-/// Hardened for Phase 3.1 Final:
-/// - Linux: bwrap with fallback.
-/// - macOS: Strict sandbox-exec profiles.
-/// - Windows: True hardware-virtualized isolation via Windows Sandbox (.wsb).
 pub struct Sandbox;
 
 impl Sandbox {
-    /// Checks if sandboxing is supported based on system binaries.
+    /// Whether this platform has a sandbox mechanism at all — NOT whether one is usable
+    /// here. Windows answers yes unconditionally: the Windows Sandbox feature is optional
+    /// and can only be detected by an async PowerShell query this sync fn cannot make. A
+    /// caller that needs to know a sandbox will actually run must use `is_available`.
     pub fn is_supported() -> bool {
         if cfg!(target_os = "linux") {
             Self::bwrap_available()
         } else if cfg!(target_os = "macos") {
             Self::sandbox_exec_available()
-        } else if cfg!(target_os = "windows") {
-            // Windows support is checked dynamically via PowerShell feature detection.
-            true
         } else {
-            false
+            cfg!(target_os = "windows")
         }
     }
 
-    /// Async check if a usable sandbox mechanism exists considering user fallback preferences.
     pub async fn is_available(settings: &SandboxSettings) -> bool {
         if cfg!(target_os = "linux") {
             Self::bwrap_available() || settings.fallback_allowed
@@ -318,14 +311,12 @@ impl Sandbox {
             return Ok(command);
         }
 
-        // Phase 3.1 Hardening: If true sandbox is required but missing, check config
         if settings.windows_require_sandbox {
             return Err(Error::UnsupportedPlatform(
                 "Windows Sandbox feature is required by configuration but not enabled on this system.".into()
             ));
         }
 
-        // Best-effort fallback
         debug!(
             "Sandboxing (Windows): Windows Sandbox unavailable. Using integrity-level fallback."
         );

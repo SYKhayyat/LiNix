@@ -1,5 +1,3 @@
-// src/backends/brew.rs
-
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, Result, Searchable, Upgradable,
@@ -9,7 +7,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 
-/// Core backend implementation for Homebrew.
 pub struct BrewBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -121,7 +118,7 @@ impl Queryable for BrewQueryable {
             .collect())
     }
 
-    /// Enhanced info: uses `brew info --json=v1` to get install path.
+    /// Uses `brew info --json=v1`, the only form that reports the install path.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let output = self
             .core
@@ -222,7 +219,6 @@ impl Upgradable for BrewUpgradable {
     }
 }
 
-/// Build and register the Homebrew backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

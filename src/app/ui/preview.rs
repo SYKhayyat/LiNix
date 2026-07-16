@@ -35,7 +35,8 @@ impl<'a> TuiPreview<'a> {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
 
-        // Build mapping from UI position (0..N) to actual NodeIndex
+        // NodeIndex is not the list position: the graph is sparse, so the UI keeps its own
+        // dense index and must map back through this table before touching the graph.
         let ui_index_to_node: Vec<NodeIndex> = changes.graph.node_indices().collect();
 
         Self {
@@ -48,14 +49,12 @@ impl<'a> TuiPreview<'a> {
         }
     }
 
-    /// Helper to get NodeIndex from current UI selection
     fn get_selected_node(&self) -> Option<NodeIndex> {
         self.list_state
             .selected()
             .and_then(|i| self.ui_index_to_node.get(i).copied())
     }
 
-    /// Entry point to launch the TUI.
     /// Returns true if the user confirmed the transaction.
     pub fn run(&mut self) -> Result<bool> {
         enable_raw_mode()?;
@@ -110,12 +109,10 @@ impl<'a> TuiPreview<'a> {
             )
             .split(f.size());
 
-        // 1. Header
         let header = Paragraph::new("LiNix Transaction Preview - Confirm System Changes")
             .block(Block::default().borders(Borders::ALL).title("Status"));
         f.render_widget(header, chunks[0]);
 
-        // 2. Action List
         let items: Vec<ListItem> = self
             .ui_index_to_node
             .iter()
@@ -173,7 +170,6 @@ impl<'a> TuiPreview<'a> {
 
         f.render_stateful_widget(list, chunks[1], &mut self.list_state);
 
-        // 3. Footer / Help
         let footer = Paragraph::new(
             " [SPACE] Toggle Task | [b] Cycle Backend (if available) \n [ENTER/Y] Commit Transaction | [ESC/Q] Cancel "
         ).block(Block::default().borders(Borders::ALL).title("Controls"));

@@ -23,7 +23,6 @@ pub use self::planner::{ChangePlanner, Scope, SyncChanges};
 pub use self::resolver::StateResolver;
 pub use self::saved_plan::{SavedPlan, PLAN_SCHEMA};
 
-/// Interface for system state resolution logic.
 #[async_trait::async_trait]
 pub trait Resolver: Send + Sync {
     async fn resolve_desired_state(
@@ -31,7 +30,6 @@ pub trait Resolver: Send + Sync {
     ) -> Result<std::collections::HashMap<String, Vec<PackageSpec>>>;
 }
 
-/// Interface for transaction planning logic.
 #[async_trait::async_trait]
 pub trait Planner: Send + Sync {
     async fn plan(
@@ -41,11 +39,6 @@ pub trait Planner: Send + Sync {
     ) -> Result<SyncChanges>;
 }
 
-/// Primary entry point for parallel system synchronization.
-///
-/// The SyncEngine manages the full lifecycle of a system transformation,
-/// ensuring that safety snapshots are taken before modifications and that
-/// system state is correctly consolidated in the registry.
 pub struct SyncEngine<'a> {
     pub config: &'a Config,
     pub registry: Arc<BackendRegistry>,
@@ -61,7 +54,6 @@ pub struct SyncEngine<'a> {
 }
 
 impl<'a> SyncEngine<'a> {
-    /// Initializes the engine with the full kernel context.
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         config: &'a Config,
@@ -91,8 +83,6 @@ impl<'a> SyncEngine<'a> {
         }
     }
 
-    /// Primary execution driver. Translates SyncChanges into OS-level modifications.
-    ///
     /// `scope` names the command that asked, so the removal guard can be enforced here —
     /// at the one point every drift-removal path funnels through — rather than at each
     /// caller, where it only takes one forgotten site to purge a system.
@@ -116,12 +106,11 @@ impl<'a> SyncEngine<'a> {
         )
         .await?;
 
-        // 1. Capture atomic safety snapshot (Feature 2). This is a safety NET, not a
-        //    precondition: a Windows System Restore checkpoint needs admin (and System
-        //    Restore enabled), and btrfs/timeshift may be unavailable — none of which
-        //    should abort a package sync. Policies that TRULY require a snapshot gate on
-        //    `has_provider()` upstream; here we warn and proceed so a missing restore
-        //    point never blocks the actual work.
+        // The pre-sync snapshot is a safety NET, not a precondition: a Windows System
+        // Restore checkpoint needs admin (and System Restore enabled), and btrfs/timeshift
+        // may be unavailable — none of which should abort a package sync. Policies that
+        // TRULY require a snapshot gate on `has_provider()` upstream; here we warn and
+        // proceed so a missing restore point never blocks the actual work.
         if let Err(e) = self.snapshot_manager.auto_snapshot("pre_sync").await {
             warn!(
                 "Sync: pre-sync safety snapshot unavailable ({}); proceeding without a restore point.",
@@ -129,13 +118,11 @@ impl<'a> SyncEngine<'a> {
             );
         }
 
-        // 2. Execute Transaction
         let result = {
             let mut state_guard = self.state.lock().await;
             self.execute_transaction(&changes, &mut state_guard).await
         };
 
-        // 3. Post-Transaction Consolidation
         if result.is_ok() {
             debug!("Sync: Finalizing transaction state and persistence.");
 
@@ -174,7 +161,6 @@ impl<'a> SyncEngine<'a> {
                 warn!("Sync: could not record generation: {}", e);
             }
 
-            // Maintenance: Cleanup the WAL Journal (Bug Fix 10)
             let mut j = self.journal.lock().await;
             let _ = j.cleanup();
         }
@@ -238,8 +224,6 @@ impl<'a> SyncEngine<'a> {
         crate::app::bisect::run_test(cmd).await
     }
 
-    /// Capture a generation (realized state + a frozen copy of the manifests) after a
-    /// successful change, then prune generations per `retention.generations`.
     async fn record_generation(&self) -> Result<()> {
         // A preview never writes history.
         if self.config.dry_run {
@@ -260,7 +244,6 @@ impl<'a> SyncEngine<'a> {
                 .unwrap_or_else(crate::utils::safe_data_dir)
         };
 
-        // 1. Generation: realized state + a frozen manifest copy.
         let gen_store = crate::app::generation::GenerationStore::new(base.join("generations"));
         {
             let state = self.state.lock().await;
@@ -271,7 +254,6 @@ impl<'a> SyncEngine<'a> {
                     "",
                     &state,
                     &self.config.groups_dir,
-                    &self.config.wish_dirs(),
                 )
                 .await?;
         }
@@ -284,7 +266,6 @@ impl<'a> SyncEngine<'a> {
             _ => {}
         }
 
-        // 2. Filesystem snapshots: prune LiNix-owned ones per their own policy.
         match self
             .snapshot_manager
             .prune_with_policy(&self.config.retention.snapshots, ts, false)
@@ -298,15 +279,14 @@ impl<'a> SyncEngine<'a> {
         Ok(())
     }
 
-    /// Internal orchestrator for the DAG execution.
     async fn execute_transaction(
         &self,
         changes: &SyncChanges,
         state: &mut StateRegistry,
     ) -> Result<()> {
-        // Honor the user-configured parallelism (`max_parallel`) for the install/remove
-        // engine. Previously this hardcoded `patient()` (max_concurrent = 4), so the
-        // documented `max_parallel` knob only affected `search`. Floor at 1.
+        // `max_parallel` is the user's knob for this engine, so it must be read here and
+        // not left at the `patient()` default — a hardcoded default silently narrows the
+        // setting's reach to `search` alone. Floor at 1: zero would stall the transaction.
         let mut tx_config = TransactionConfig::patient();
         tx_config.max_concurrent = self.config.max_parallel.max(1);
 
@@ -373,7 +353,6 @@ impl<'a> SyncEngine<'a> {
         Ok(())
     }
 
-    /// Extended auto-lock logic (Bug Fix 7: AppImage support).
     async fn attempt_auto_lock(&self, spec: &PackageSpec) {
         if let Some(backend_cap) = self.registry.get(&spec.backend) {
             if let Some(queryable) = backend_cap.as_queryable() {
@@ -411,7 +390,6 @@ impl<'a> SyncEngine<'a> {
         }
     }
 
-    /// Feature 4/6: High-performance parallel shim reconciliation.
     async fn reconcile_all_shims(&self, state: &StateRegistry) -> Result<()> {
         let shim_mgr = Arc::new(ShimManager::new().await?);
         let mut worker_set = JoinSet::new();
@@ -441,10 +419,6 @@ impl<'a> SyncEngine<'a> {
         Ok(())
     }
 
-    /// System-wide self-healing logic. Resolves incomplete WAL records.
-    ///
-    /// Resolves Critical Path Failure: Correctly updates Journal entry status
-    /// after remediation to ensure system reports a clean state.
     pub async fn heal(&self) -> Result<()> {
         let incomplete_actions = {
             let j = self.journal.lock().await;
@@ -474,7 +448,8 @@ impl<'a> SyncEngine<'a> {
                 if let Some(handler) = backend_cap.as_installable() {
                     let sudo = backend_cap.sudo_for_write();
                     let remediation_res = if is_install {
-                        // Re-attempting installation sequence
+                        // Remove before reinstalling: the interrupted install may have left a
+                        // half-written package that a plain install would refuse or skip.
                         let _ = handler.remove(std::slice::from_ref(&package), sudo).await;
                         if let crate::core::journal::JournalAction::Install(spec) = &entry.action {
                             handler.install(std::slice::from_ref(spec), sudo).await
@@ -482,11 +457,9 @@ impl<'a> SyncEngine<'a> {
                             Ok(())
                         }
                     } else {
-                        // Re-attempting removal
                         handler.remove(std::slice::from_ref(&package), sudo).await
                     };
 
-                    // Logic Fix: Update the WAL record once physically resolved
                     if remediation_res.is_ok() {
                         let mut j = self.journal.lock().await;
                         let _ = j.record_success(&entry.id, std::collections::HashMap::new());
@@ -505,7 +478,6 @@ impl<'a> SyncEngine<'a> {
             }
         }
 
-        // Finalize the WAL maintenance
         let mut j = self.journal.lock().await;
         let _ = j.cleanup();
         Ok(())

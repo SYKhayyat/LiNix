@@ -2,9 +2,6 @@ use crate::core::Package;
 use crate::parsers::utils::sanitize;
 use serde_json::Value;
 
-/// Multi-backend dispatcher for language-specific package manager formats.
-/// Follows the Open/Closed Principle: new language tools can be added by
-/// implementing a specific parser function and adding it to this dispatcher.
 pub fn parse_installed(backend: &str, output: &str) -> Vec<Package> {
     let clean = sanitize(output);
     if clean.is_empty() {
@@ -29,7 +26,6 @@ pub fn parse_installed(backend: &str, output: &str) -> Vec<Package> {
     }
 }
 
-/// Dispatches search result parsing for language-specific repositories.
 pub fn parse_search(backend: &str, output: &str) -> Vec<Package> {
     let clean = sanitize(output);
     match backend {

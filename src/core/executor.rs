@@ -1,5 +1,3 @@
-// src/core/executor.rs
-
 use crate::core::{Error, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -14,10 +12,6 @@ use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::info;
-
-// ============================================================================
-// Dry-run output mock
-// ============================================================================
 
 #[derive(Debug, Clone, Default)]
 pub struct DryRunOutput {
@@ -51,10 +45,6 @@ impl From<DryRunOutput> for StdOutput {
     }
 }
 
-// ============================================================================
-// ExecutionLayer trait
-// ============================================================================
-
 #[async_trait]
 pub trait ExecutionLayer: Send + Sync {
     async fn execute(
@@ -66,10 +56,6 @@ pub trait ExecutionLayer: Send + Sync {
     fn check_command(&self, cmd: &str) -> bool;
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()>;
 }
-
-// ============================================================================
-// RawExecutor
-// ============================================================================
 
 pub struct RawExecutor;
 
@@ -204,10 +190,6 @@ impl ExecutionLayer for RawExecutor {
     }
 }
 
-// ============================================================================
-// DryRunExecutor
-// ============================================================================
-
 pub struct DryRunExecutor {
     vfs: Arc<DashMap<PathBuf, String>>,
 }
@@ -235,16 +217,11 @@ impl ExecutionLayer for DryRunExecutor {
     }
 
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
-        // Changed marker to "LINK:" for test compatibility
         let val = format!("LINK:{}", src.display());
         self.vfs.insert(dst.to_path_buf(), val);
         Ok(())
     }
 }
-
-// ============================================================================
-// MockExecutor
-// ============================================================================
 
 pub struct MockExecutor {
     pub responses: DashMap<String, Result<StdOutput>>,
@@ -303,16 +280,11 @@ impl ExecutionLayer for MockExecutor {
     }
 
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
-        // Changed marker to "LINK:" for test compatibility
         let val = format!("LINK:{}", src.display());
         self.vfs.insert(dst.to_path_buf(), val);
         Ok(())
     }
 }
-
-// ============================================================================
-// CommandExecutor
-// ============================================================================
 
 #[derive(Clone)]
 pub struct CommandExecutor {
@@ -614,8 +586,6 @@ mod windows_shim_tests {
         assert_eq!(prog, "powershell");
         assert!(args.contains(&"-Command".to_string()));
         let command = args.last().unwrap();
-        // Bare-name invocation (so scoop formats), single-quoted args, Out-String capture,
-        // and exit-code passthrough.
         assert!(command.starts_with("$o = (scoop 'search' 'ripgrep' | Out-String"));
         assert!(command.contains("exit $LASTEXITCODE"));
     }

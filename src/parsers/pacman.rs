@@ -35,7 +35,7 @@ pub fn parse_search_for(output: &str, backend: &str) -> Vec<Package> {
     let mut lines = clean.lines().peekable();
 
     while let Some(line) = lines.next() {
-        // Skip empty lines or leading whitespace lines (usually part of descriptions)
+        // An indented line is a description continuation, not a package.
         if line.starts_with(' ') || line.is_empty() {
             continue;
         }
@@ -43,16 +43,13 @@ pub fn parse_search_for(output: &str, backend: &str) -> Vec<Package> {
         let parts: Vec<&str> = line.split_whitespace().collect();
         // Format is usually: core/bash 5.1.016-1 (base) [installed]
         if let Some(repo_name) = parts.first() {
-            // Strip the repository prefix (e.g., "core/")
             let name = repo_name.split('/').next_back().unwrap_or(repo_name);
             let mut p = Package::new(name, backend);
 
-            // Second part is usually the version
             if let Some(version) = parts.get(1) {
                 p.version = Some(version.to_string());
             }
 
-            // Check the next line for the indented description
             if let Some(desc_line) = lines.peek() {
                 if desc_line.starts_with("    ") {
                     p.properties

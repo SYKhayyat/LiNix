@@ -10,11 +10,10 @@ pub fn parse_list(output: &str) -> Vec<Package> {
         return vec![];
     }
 
-    // 1. Attempt JSON parsing (Modern Nix Flakes / Profiles)
     if let Ok(json) = serde_json::from_str::<Value>(&clean) {
         let mut packages = Vec::new();
 
-        // Handle 'nix profile list --json' structure (Roadmap 2.2 support)
+        // Handle 'nix profile list --json' structure.
         if let Some(elements) = json.get("elements").and_then(|e| e.as_array()) {
             for (i, el) in elements.iter().enumerate() {
                 let attr_path = el
@@ -22,11 +21,11 @@ pub fn parse_list(output: &str) -> Vec<Package> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
 
-                // Extract clean name from attribute path
                 let name = attr_path.split('.').next_back().unwrap_or(attr_path);
                 let mut p = Package::new(name, "nix");
 
-                // Track internal indices and paths for deterministic removals
+                // `nix profile remove` addresses entries by index, not name, so the index
+                // and full attr path must survive parsing or a removal cannot be issued.
                 p.properties.insert("index".into(), i.to_string());
                 p.properties
                     .insert("full_attr".into(), attr_path.to_string());
@@ -53,8 +52,7 @@ pub fn parse_list(output: &str) -> Vec<Package> {
         }
     }
 
-    // 2. Fallback to standard text parsing (nix-env -q style)
-    // Expected format: "name-version"
+    // Fallback: `nix-env -q` text, "name-version".
     clean
         .lines()
         .filter_map(|line| {

@@ -1,6 +1,4 @@
-// src/utils/style.rs
-//
-// Minimal, dependency-free terminal styling. Color is only emitted to a real terminal and is
+// Color is only emitted to a real terminal and is
 // suppressed when the standard `NO_COLOR` env var is set, so piped/redirected output stays
 // clean. The `paint` core is pure so it can be unit-tested without a TTY.
 
@@ -16,7 +14,6 @@ pub fn color_enabled() -> bool {
     std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
 }
 
-/// Wrap `text` in an ANSI SGR code when `enabled`; otherwise return it unchanged. Pure.
 pub fn paint(enabled: bool, code: &str, text: &str) -> String {
     if enabled {
         format!("\u{1b}[{}m{}\u{1b}[0m", code, text)

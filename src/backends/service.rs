@@ -6,22 +6,13 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
 
-// ============================================================================
-// Pure service-control model (unit tested — no I/O)
-// ============================================================================
 
-/// A service lifecycle action LiNix can request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceAction {
-    /// Enable at boot.
     Enable,
-    /// Disable at boot.
     Disable,
-    /// Start now.
     Start,
-    /// Stop now.
     Stop,
-    /// Restart now.
     Restart,
 }
 
@@ -53,28 +44,24 @@ pub fn plan_service(
         )]
     };
     match (init, action) {
-        // ---- systemd ----
         (InitSystem::Systemd, ServiceAction::Enable) => one("systemctl", &["enable", &s]),
         (InitSystem::Systemd, ServiceAction::Disable) => one("systemctl", &["disable", &s]),
         (InitSystem::Systemd, ServiceAction::Start) => one("systemctl", &["start", &s]),
         (InitSystem::Systemd, ServiceAction::Stop) => one("systemctl", &["stop", &s]),
         (InitSystem::Systemd, ServiceAction::Restart) => one("systemctl", &["restart", &s]),
 
-        // ---- OpenRC (Alpine, Gentoo) ----
         (InitSystem::OpenRc, ServiceAction::Enable) => one("rc-update", &["add", &s, "default"]),
         (InitSystem::OpenRc, ServiceAction::Disable) => one("rc-update", &["del", &s, "default"]),
         (InitSystem::OpenRc, ServiceAction::Start) => one("rc-service", &[&s, "start"]),
         (InitSystem::OpenRc, ServiceAction::Stop) => one("rc-service", &[&s, "stop"]),
         (InitSystem::OpenRc, ServiceAction::Restart) => one("rc-service", &[&s, "restart"]),
 
-        // ---- SysVinit ----
         (InitSystem::SysVinit, ServiceAction::Enable) => one("update-rc.d", &[&s, "enable"]),
         (InitSystem::SysVinit, ServiceAction::Disable) => one("update-rc.d", &[&s, "disable"]),
         (InitSystem::SysVinit, ServiceAction::Start) => one("service", &[&s, "start"]),
         (InitSystem::SysVinit, ServiceAction::Stop) => one("service", &[&s, "stop"]),
         (InitSystem::SysVinit, ServiceAction::Restart) => one("service", &[&s, "restart"]),
 
-        // ---- launchd (macOS) ----
         (InitSystem::Launchd, ServiceAction::Enable) => one("launchctl", &["load", "-w", &s]),
         (InitSystem::Launchd, ServiceAction::Disable) => one("launchctl", &["unload", "-w", &s]),
         (InitSystem::Launchd, ServiceAction::Start) => one("launchctl", &["start", &s]),
@@ -86,7 +73,6 @@ pub fn plan_service(
             ]
         }
 
-        // ---- Windows Service Control ----
         (InitSystem::WindowsSc, ServiceAction::Enable) => {
             one("sc", &["config", &s, "start=", "auto"])
         }
@@ -129,11 +115,7 @@ pub fn actions_for(enabled: Option<&str>, status: Option<&str>) -> Vec<ServiceAc
     acts
 }
 
-// ============================================================================
-// Backend
-// ============================================================================
 
-/// Core backend implementation for system services across platforms.
 pub struct ServiceBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -362,7 +344,6 @@ impl ServiceQueryable {
     }
 }
 
-/// Build and register the system-service backend.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

@@ -1,5 +1,3 @@
-// src/backends/xbps.rs
-
 use crate::core::{
     BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
     Result, Searchable, Upgradable,
@@ -21,8 +19,6 @@ fn split_pkgver(tok: &str) -> Option<(&str, &str)> {
     }
 }
 
-/// Core backend implementation for XBPS (the X Binary Package System, Void Linux).
-///
 /// XBPS spreads its operations across three binaries (`xbps-install`, `xbps-remove`,
 /// `xbps-query`), so it is a specialized backend rather than a single-binary generic one.
 pub struct XbpsBackendCore {
@@ -231,7 +227,6 @@ impl Upgradable for XbpsUpgradable {
     }
 }
 
-/// Build and register the XBPS backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

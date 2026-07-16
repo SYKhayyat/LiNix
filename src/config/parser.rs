@@ -320,17 +320,14 @@ pub async fn remove_package_from_local(groups_dir: &Path, package_name: &str) ->
 /// declared in `migrated_<stamp>.txt`, and leaving that line in place means the next
 /// `sync` re-adopts what the user just asked LiNix to forget — a command that silently
 /// undoes itself.
-/// Edits EVERY wish-list folder, not only the global one. Cleaning global alone would leave
-/// a `-g` folder still declaring the package, so it would stay wanted and `unmanage` would
-/// silently fail to do the one thing its name promises.
 pub async fn remove_package_from_manifests(
-    wish_dirs: &[PathBuf],
+    groups_dir: &Path,
     package_name: &str,
 ) -> Result<Vec<(PathBuf, String)>> {
     let mut dropped = Vec::new();
-    for groups_dir in wish_dirs {
+    {
         let Ok(mut entries) = fs::read_dir(groups_dir).await else {
-            continue;
+            return Ok(dropped);
         };
 
         while let Ok(Some(entry)) = entries.next_entry().await {

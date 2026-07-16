@@ -1,5 +1,3 @@
-// src/backends/psresource.rs
-//
 // PowerShell modules from the PowerShell Gallery, via the modern PSResourceGet module
 // (Install-PSResource / Get-InstalledPSResource / ...). Unlike the other backends the
 // "binary" is PowerShell itself and the package manager is a set of cmdlets, so this
@@ -41,7 +39,6 @@ impl PsResourceCore {
         }
     }
 
-    /// Runs a PowerShell command string, returning trimmed stdout.
     async fn run_ps(&self, script: &str) -> Result<String> {
         self.executor
             .run_output(
@@ -218,7 +215,6 @@ impl Upgradable for PsResourceUpgradable {
     }
 }
 
-/// Build and register the PSResourceGet backend with all its capabilities.
 pub fn register(reg: &mut crate::backends::BackendRegistry, exec: &CommandExecutor, _cfg: &Config) {
     let core = Arc::new(PsResourceCore::new(exec.duplicate()));
     reg.register(Arc::new(

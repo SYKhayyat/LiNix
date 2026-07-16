@@ -9,7 +9,6 @@ use notify_rust::{Hint, Notification, Timeout};
 use std::sync::Arc;
 use tracing::{debug, error, info, trace, warn};
 
-/// Represents the severity of a LiNix system event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationLevel {
     Info,

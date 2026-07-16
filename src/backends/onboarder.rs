@@ -1,5 +1,3 @@
-// src/backends/onboarder.rs
-//
 // The "onboarder": let users teach LiNix a new CLI package manager entirely from
 // config, with no source changes. A built-in backend is just a `ManagerConfig` (the
 // argv templates) plus an `OutputParser` (Rust code). The onboarder makes BOTH data:
@@ -39,9 +37,6 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::warn;
 
-// ============================================================================
-// Declarative parser
-// ============================================================================
 
 fn default_name_key() -> String {
     "name".to_string()
@@ -99,7 +94,6 @@ impl Default for ParserSpec {
 }
 
 impl ParserSpec {
-    /// Interprets `output` into packages tagged with `backend`.
     pub fn parse(&self, output: &str, backend: &str) -> Vec<Package> {
         match self {
             ParserSpec::Lines { skip_prefixes } => sanitize(output)
@@ -255,9 +249,6 @@ impl OutputParser for ConfiguredParser {
     }
 }
 
-// ============================================================================
-// Config-file schema
-// ============================================================================
 
 /// A user's version-pin choice, mirrored for `serde` (the runtime [`VersionPin`] is not
 /// `Deserialize`).
@@ -319,9 +310,6 @@ fn is_valid_backend_name(name: &str) -> bool {
     !name.is_empty() && !name.chars().any(|c| c.is_whitespace()) && !name.contains(['/', '\\'])
 }
 
-// ============================================================================
-// Registration
-// ============================================================================
 
 /// Loads and registers custom backends from the default config path, if the file
 /// exists. Never fails the program: a missing file is normal, and a malformed one is

@@ -8,7 +8,6 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-/// Core backend implementation for managing BTRFS filesystem resources.
 pub struct BtrfsBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -22,7 +21,6 @@ impl BtrfsBackendCore {
         }
     }
 
-    /// Helper to ensure quota groups (qgroups) are enabled.
     async fn ensure_qgroups(&self, path: &str, sudo: bool) -> Result<()> {
         debug!("BTRFS: Ensuring qgroups are enabled for {}", path);
         self.executor
@@ -31,7 +29,6 @@ impl BtrfsBackendCore {
         Ok(())
     }
 
-    /// Discovers the UUID of the filesystem containing the given path.
     async fn get_fs_uuid(&self, path: &str) -> Result<String> {
         let output = self
             .executor
@@ -219,7 +216,6 @@ impl Queryable for BtrfsQueryable {
     }
 }
 
-/// Build and register the BTRFS subvolume backend.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

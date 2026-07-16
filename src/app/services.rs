@@ -1,5 +1,3 @@
-// src/app/services.rs
-
 use crate::app::scheduler::notify::NotificationManager;
 use crate::app::scheduler::SchedulerManager;
 use crate::app::{
@@ -17,7 +15,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
-/// Core kernel dependencies shared across all high-level logic engines.
 #[derive(Clone)]
 pub struct AppCore {
     pub config: Arc<Config>,
@@ -35,7 +32,6 @@ pub struct AppCore {
     pub diagnostics: Arc<FailureDiagnosticEngine>,
 }
 
-/// Container for the "Logic Layer" orchestrators.
 pub struct AppServices {
     pub migrator: Migrator,
     pub teleporter: Teleporter,
@@ -47,7 +43,6 @@ pub struct AppServices {
 }
 
 impl AppServices {
-    /// Initializes the logic layer orchestrators by destructuring the App kernel.
     pub async fn new(app: &crate::App) -> Result<Self> {
         debug!("AppServices: Assembling logic engines from kernel context.");
 
@@ -61,7 +56,6 @@ impl AppServices {
                 app.state.clone(),
                 app.diagnostics.clone(),
                 &app.config.groups_dir,
-                app.config.wish_dirs(),
             ),
             shell: GhostShell::new(
                 app.registry.clone(),
@@ -100,7 +94,6 @@ impl AppServices {
 }
 
 impl AppCore {
-    /// High-performance asynchronous bootstrapper for the LiNix kernel.
     pub async fn from_config(config: Config) -> Result<Self> {
         info!("AppCore: Initializing LiNix v3.6.0 mission-critical kernel.");
 
@@ -111,7 +104,6 @@ impl AppCore {
             Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
 
-        // Load StateRegistry using the new `load_default()` method.
         let state_val = tokio::task::spawn_blocking(StateRegistry::load_default)
             .await
             .map_err(|e| Error::Other(format!("Kernel panic during state load: {}", e)))??;

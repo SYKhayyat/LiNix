@@ -1,8 +1,6 @@
 use crate::core::Package;
 use crate::parsers::utils::sanitize;
 
-/// Unified dispatcher for Windows-specific installed package parsing.
-/// Supports Winget, Chocolatey, and Scoop.
 pub fn parse_installed(backend: &str, output: &str) -> Vec<Package> {
     match backend {
         "winget" => parse_winget_list(output),
@@ -12,7 +10,6 @@ pub fn parse_installed(backend: &str, output: &str) -> Vec<Package> {
     }
 }
 
-/// Unified dispatcher for Windows-specific search result parsing.
 pub fn parse_search(backend: &str, output: &str) -> Vec<Package> {
     match backend {
         "winget" => parse_winget_search(output),
@@ -182,7 +179,6 @@ fn parse_choco_search(output: &str) -> Vec<Package> {
         .filter_map(|line| {
             // Choco search usually returns "name version" on each line
             let parts: Vec<&str> = line.split_whitespace().collect();
-            // Fix E0277: Dereference &&str
             let name = parts.first()?;
             let mut p = Package::new(*name, "choco");
             if let Some(v) = parts.get(1) {

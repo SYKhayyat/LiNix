@@ -1,5 +1,3 @@
-// src/backends/npm.rs
-
 use crate::backends::node_registry::registry_search;
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
@@ -10,7 +8,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 
-/// Core backend implementation for npm (Node.js package manager).
 #[derive(Clone)]
 pub struct NpmBackendCore {
     pub executor: CommandExecutor,
@@ -25,7 +22,6 @@ impl NpmBackendCore {
         }
     }
 
-    /// Returns the global npm prefix (installation root).
     async fn get_global_prefix(&self) -> Result<String> {
         let output = self
             .executor
@@ -194,7 +190,6 @@ impl NpmBackendCore {
     }
 }
 
-/// Build and register the npm backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

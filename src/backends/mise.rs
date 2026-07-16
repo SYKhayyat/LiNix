@@ -1,5 +1,3 @@
-// src/backends/mise.rs
-
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, Result, Searchable, Upgradable,
@@ -263,7 +261,6 @@ impl Upgradable for MiseUpgradable {
     }
 }
 
-/// Build and register the mise backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

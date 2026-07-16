@@ -2,18 +2,14 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Defines the capabilities for a system-wide progress reporter.
-/// Supports both deterministic bars and indeterminate spinners.
 pub trait ProgressReporter: Send + Sync {
-    /// Starts a progress bar with a known total count.
     fn start(&self, total: u64, message: &str) -> Box<dyn ProgressHandle>;
-    /// Starts an indeterminate spinner for tasks with unknown duration.
     fn spinner(&self, message: &str) -> Box<dyn ProgressHandle>;
-    /// Prints a message to the console without interfering with active progress bars.
+    /// Prints without interfering with active progress bars; a bare `println!` races the
+    /// bar's own redraws and corrupts the display.
     fn println(&self, message: &str);
 }
 
-/// A handle for interacting with an active progress indicator.
 pub trait ProgressHandle: Send + Sync {
     fn set_position(&self, pos: u64);
     fn inc(&self, delta: u64);
@@ -22,8 +18,6 @@ pub trait ProgressHandle: Send + Sync {
     fn finish_with_message(&self, message: &str);
 }
 
-/// A professional console-based progress reporter using the 'indicatif' crate.
-/// Manages multiple progress bars simultaneously for parallel transactions.
 pub struct ConsoleProgress {
     multi: Arc<MultiProgress>,
     enabled: bool,
@@ -107,7 +101,6 @@ impl ProgressHandle for IndicatifHandle {
     }
 }
 
-/// A no-op implementation used when progress reporting is disabled.
 pub struct SilentProgress;
 
 impl ProgressReporter for SilentProgress {
@@ -130,7 +123,6 @@ impl ProgressHandle for SilentHandle {
     fn finish_with_message(&self, _: &str) {}
 }
 
-/// Factory function to create the appropriate reporter based on configuration.
 pub fn create_progress_reporter(enabled: bool) -> Arc<dyn ProgressReporter> {
     if enabled {
         Arc::new(ConsoleProgress::new(true))

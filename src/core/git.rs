@@ -1,5 +1,3 @@
-// src/core/git.rs
-//
 // Version control for LiNix's *intent* — the manifest/config directory.
 //
 // LiNix already versions the *effect* of a change two ways: generations (the realized
@@ -37,17 +35,14 @@ pub struct GitManager {
 }
 
 impl GitManager {
-    /// Wrap the given directory as the repo root.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
 
-    /// The repo root directory.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// Is `git` available on this machine at all?
     pub fn git_available() -> bool {
         std::process::Command::new("git")
             .arg("--version")
@@ -56,14 +51,12 @@ impl GitManager {
             .unwrap_or(false)
     }
 
-    /// Is the root already a git repository?
     pub fn is_repo(&self) -> bool {
         self.root.join(".git").exists()
     }
 
-    /// Run a git subcommand in the root, returning the raw `Output`. Identity and signing
-    /// flags are injected on every call so commits never fail on a machine that hasn't set
-    /// `user.name`/`user.email` or that has commit signing globally enabled.
+    /// Identity and signing flags are injected on every call so commits never fail on a
+    /// machine that hasn't set `user.name`/`user.email` or that has signing globally on.
     fn run(&self, args: &[&str]) -> Result<Output> {
         let mut cmd = std::process::Command::new("git");
         cmd.arg("-C").arg(&self.root);
@@ -81,7 +74,6 @@ impl GitManager {
             .map_err(|e| Error::CommandFailed(format!("git {:?} failed to spawn: {}", args, e)))
     }
 
-    /// Like [`run`], but treats a non-zero exit as an error carrying git's stderr.
     fn run_checked(&self, args: &[&str]) -> Result<String> {
         let out = self.run(args)?;
         if !out.status.success() {
@@ -94,16 +86,14 @@ impl GitManager {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
-    /// Pull the latest manifests from the tracking remote (`git pull --ff-only`). Used by
-    /// `watch --pull` to reconcile against a remote GitOps manifest repo. Returns git's
-    /// summary line; a non-fast-forward or missing remote surfaces as an error the caller
-    /// can downgrade to a warning.
+    /// A non-fast-forward or missing remote surfaces as an error the caller can downgrade
+    /// to a warning — `watch --pull` must not abort a sync because a remote moved.
     pub fn pull(&self) -> Result<String> {
         self.run_checked(&["pull", "--ff-only"])
     }
 
-    /// Initialize the config directory as a git repo and write a sensible `.gitignore`
-    /// (ignoring the per-file backups LiNix drops during rollbacks). Idempotent.
+    /// Idempotent. The written `.gitignore` excludes the per-file backups LiNix drops
+    /// during rollbacks, which would otherwise be committed as manifest content.
     pub fn init(&self) -> Result<()> {
         if !Self::git_available() {
             return Err(Error::Other(
@@ -199,7 +189,6 @@ impl GitManager {
     }
 }
 
-/// Pure: parse `git log` output in our `%H\x1f%h\x1f%cs\x1f%s` format into commits.
 fn parse_log(raw: &str) -> Vec<GitCommit> {
     raw.lines()
         .filter(|l| !l.trim().is_empty())
@@ -257,14 +246,12 @@ mod tests {
         assert!(git.is_repo());
         assert!(git.head().unwrap().is_none(), "no commits yet");
 
-        // Nothing but the .gitignore init wrote — commit it.
         std::fs::write(tmp.path().join("local.txt"), "apt:curl\n").unwrap();
         let first = git.commit_all("add curl").unwrap();
         assert!(first.is_some());
         let head = git.head().unwrap().unwrap();
         assert_eq!(head, first.unwrap());
 
-        // A clean tree commits to nothing.
         assert!(git.commit_all("noop").unwrap().is_none());
 
         let log = git.log(10).unwrap();

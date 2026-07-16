@@ -1,5 +1,3 @@
-// src/backends/generic.rs
-
 use crate::core::{
     BackendCore, CommandExecutor, HealthReport, HealthStatus, Installable, MetadataProvider,
     Package, PackageSpec, Queryable, RepoManager, Result, Searchable, Upgradable,
@@ -115,7 +113,6 @@ pub struct ManagerConfig {
     pub flag_map: HashMap<String, String>,
 }
 
-/// Core backend implementation for generic CLI-based managers.
 pub struct GenericBackendCore {
     pub name: String,
     pub executor: CommandExecutor,
@@ -398,7 +395,6 @@ impl Searchable for GenericSearchable {
             .map(|s| s.as_str())
             .collect();
         args.push(query);
-        // Use search_binary if specified, otherwise fallback to the backend name
         let bin = self
             .core
             .config
@@ -644,7 +640,6 @@ mod tests {
         assert_eq!(deps, vec!["libc6".to_string(), "bash".to_string()]);
     }
 
-    /// Build a queryable over `manual`, with apt's real list/manual commands wired up.
     fn queryable_with(
         manual: ManualListing,
         mock: Arc<MockExecutor>,

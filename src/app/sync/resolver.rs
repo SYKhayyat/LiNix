@@ -11,23 +11,13 @@ use tokio::fs;
 use tracing::{debug, info, instrument, trace, warn};
 use version_compare::{compare as loose_compare, Cmp};
 
-/// Responsible for calculating the "Desired State" of the system.
-///
-/// The Resolver orchestrates the expansion of high-level manifest logic:
-/// 1. Profile Expansion: Loading host-specific or global identity files.
-/// 2. Module Expansion: Feature 3 recursive @module loading.
-/// 3. Group Expansion: Unrolling named collections from configuration.
-///
-/// It acts as the primary integrity gate, enforcing strict version locking
-/// and validating package names before they reach the planner.
 pub struct StateResolver<'a> {
-    /// Reference to the global kernel configuration.
     config: &'a Config,
-    /// Shared access to all registered backends.
     registry: Arc<BackendRegistry>,
-    /// If true, the resolver enforces strict equality with locks.json.
+    /// When true, a package with no entry in locks.json is an error rather than a free
+    /// resolve — the whole point of a locked run is that nothing floats.
     locked: bool,
-    /// Maps "backend:package" to a verified version string.
+    /// "backend:package" -> version.
     locks: HashMap<String, String>,
 }
 
@@ -67,11 +57,6 @@ impl<'a> StateResolver<'a> {
         }
     }
 
-    /// The primary resolution entry point.
-    ///
-    /// Performs a breadth-first recursive unrolling of all manifest sources.
-    /// Resolves every @module, group:, and host-specific manifest into a
-    /// flat Map of PackageSpecs.
     #[instrument(skip(self))]
     pub async fn resolve_desired_state(&self) -> Result<HashMap<String, Vec<PackageSpec>>> {
         let mut resolved: HashMap<String, Vec<PackageSpec>> = HashMap::new();
@@ -84,27 +69,14 @@ impl<'a> StateResolver<'a> {
             hostname
         );
 
-        // --- STEP 1: INITIAL SEEDING ---
-
-        // A. Load directory-based .txt manifests, from every wish-list folder: the global
-        // one first, then each `-g` in the order given.
-        for dir in self.config.wish_dirs() {
-            if !tokio::fs::try_exists(&dir).await.unwrap_or(false) {
-                debug!(
-                    "Resolver: wish-list folder {:?} does not exist, skipping.",
-                    dir
-                );
-                continue;
-            }
-
-            // Collected and sorted rather than streamed. `read_dir` yields whatever order
-            // the filesystem feels like — hash order on ext4, B-tree order on NTFS — and
-            // this order is load-bearing: later lines override earlier ones, so with two
-            // files pinning different versions of the same package, the winner was decided
-            // by the filesystem and could differ between two machines holding identical
-            // files. Sorted by name, it is a rule someone can predict and rely on.
+        let dir = &self.config.groups_dir;
+        if tokio::fs::try_exists(dir).await.unwrap_or(false) {
+            // Sorted, not `read_dir` order: the filesystem yields hash order on ext4 and
+            // B-tree order on NTFS, and this order is load-bearing — later lines override
+            // earlier ones, so two files pinning one package would be resolved by the disk
+            // and could differ between machines holding identical files.
             let mut names: Vec<String> = Vec::new();
-            let mut entries = fs::read_dir(&dir).await.map_err(Error::from)?;
+            let mut entries = fs::read_dir(dir).await.map_err(Error::from)?;
             while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
                 names.push(entry.file_name().to_string_lossy().into_owned());
             }
@@ -114,27 +86,17 @@ impl<'a> StateResolver<'a> {
                 if !fname.ends_with(".txt") || fname.ends_with(".module.txt") {
                     continue;
                 }
-                // LiNix's own files live in this folder too, and they are not wish lists.
-                // `keep.txt` is the one that bit: it means "never remove these", but it
-                // ends in .txt, so it was read as a manifest and every name in it became a
-                // package to INSTALL. Asking to keep something you had not installed
-                // installed it.
+                // LiNix's own files live in this folder too and are not wish lists.
                 if is_reserved_manifest(&fname) {
-                    debug!(
-                        "Resolver: {} is a LiNix file, not a wish list — skipping.",
-                        fname
-                    );
                     continue;
                 }
                 let source_id = format!("manifest:{}", fname);
-                debug!("Resolver: Seeding from manifest source '{}'", source_id);
                 for line in parse_group_file(&dir.join(&fname)).await? {
                     raw_inputs.push_back((line, source_id.clone()));
                 }
             }
         }
 
-        // --- STEP 2: RECURSIVE EXPANSION ---
 
         const MAX_EXPANSION_ITERATIONS: usize = 4096;
         let mut iterations = 0;
@@ -173,7 +135,6 @@ impl<'a> StateResolver<'a> {
                     }
                 }
 
-                // Leaf nodes: Actual Package Specification
                 ManifestLine::Package(pkg_str) => {
                     let mut spec = self.parse_and_probe_spec(&pkg_str).await?;
 
@@ -190,7 +151,6 @@ impl<'a> StateResolver<'a> {
 
                     let unique_id = format!("{}:{}", spec.backend, spec.name);
 
-                    // Bug Fix 3: Strict Locking Enforcement
                     if self.locked {
                         if let Some(locked_ver) = self.locks.get(&unique_id) {
                             if let Some(manifest_ver) = spec.options.get("version") {
@@ -201,11 +161,9 @@ impl<'a> StateResolver<'a> {
                                     )));
                                 }
                             }
-                            // Inject the locked version string into the spec for the planner
                             spec.options
                                 .insert("version".to_string(), locked_ver.clone());
                         } else {
-                            // A+ Grade Fix: Corrected positional argument count for error format
                             return Err(Error::Validation(format!(
                                 "Locked Mode Error: '{}' is missing from locks.json.",
                                 unique_id
@@ -213,11 +171,9 @@ impl<'a> StateResolver<'a> {
                         }
                     }
 
-                    // Feature 4: Scoped Identification & Deduplication
                     if seen_keys.insert(unique_id.clone()) {
                         Validator::validate_package_name_for(&spec.name, &spec.backend)?;
 
-                        // Internal tagging for Feature 4 Targeted Upgrades
                         spec.options.insert("__source".to_string(), source.clone());
 
                         for req in &spec.requires {
@@ -251,11 +207,9 @@ impl<'a> StateResolver<'a> {
         Ok(resolved)
     }
 
-    /// Translates a raw package string into a structured PackageSpec.
-    /// Handles aliasing and priority-based probing.
+    /// Accepted syntax: `[backend:]name[@key=val,key2=val2]`, where `requires` is the one
+    /// option whose value is a `;`-separated list rather than a scalar.
     pub async fn parse_and_probe_spec(&self, line: &str) -> Result<PackageSpec> {
-        // Expected syntax: [backend:]name[@options]
-
         let (b_part, rest) = if let Some((b, r)) = line.split_once(':') {
             (Some(b), r)
         } else {
@@ -268,30 +222,25 @@ impl<'a> StateResolver<'a> {
         let mut options = HashMap::new();
         let mut requires = Vec::new();
 
-        // Parse CSV options segment (@key=val,key2=val2)
         for pair in o_part.split(',').filter(|s| !s.is_empty()) {
             let (k, v) = pair.split_once('=').unwrap_or((pair, "true"));
             let key = k.trim().to_string();
             let val = v.trim().to_string();
 
             if key == "requires" {
-                // Meta-dependencies are semicolon separated inside the value
                 requires = val.split(';').map(|s| s.to_string()).collect();
             } else {
                 options.insert(key, val);
             }
         }
 
-        // Logic for backend determination
         let backend = if let Some(b) = b_part {
-            // Priority 1: User-provided backend name with aliasing
             self.config
                 .aliases
                 .get(b)
                 .cloned()
                 .unwrap_or_else(|| b.to_string())
         } else {
-            // Priority 2: Automated discovery across all enabled backends
             let mut detected_backend = None;
             let ver_constraint = options.get("version").map(|s| s.as_str());
 
@@ -305,7 +254,6 @@ impl<'a> StateResolver<'a> {
                 }
             }
 
-            // Priority 3: Fallback to global default
             detected_backend.unwrap_or_else(|| {
                 self.config
                     .default_backend
@@ -322,9 +270,6 @@ impl<'a> StateResolver<'a> {
         })
     }
 
-    /// A+ Grade Logic: Safe, panic-free trait matching for remote discovery.
-    ///
-    /// Verifies if a package exists in a remote backend and matches constraints.
     async fn remote_package_exists(
         &self,
         backend_name: &str,
@@ -336,12 +281,9 @@ impl<'a> StateResolver<'a> {
             _ => return false,
         };
 
-        // Panic-free Trait Check (A+ Hardened)
         if let Some(searchable) = backend_cap.as_searchable() {
-            // First: Attempt fast existence check if supported
             if let Ok(true) = searchable.remote_has(package_name).await {
                 if let Some(req) = constraint {
-                    // If version is specific, perform deeper metadata check
                     match searchable.remote_info(package_name).await {
                         Ok(Some(pkg)) => {
                             if let Some(ver) = pkg.version.as_deref() {
@@ -354,7 +296,8 @@ impl<'a> StateResolver<'a> {
                 return true;
             }
 
-            // Second: Search-based fallback if remote_has is inconclusive
+            // `remote_has` returning false is not proof of absence — a backend may not
+            // implement it — so an inconclusive answer falls through to a real search.
             if let Ok(results) = searchable.search(package_name).await {
                 return results.iter().any(|pkg| {
                     if pkg.name == package_name {
@@ -375,25 +318,23 @@ impl<'a> StateResolver<'a> {
         false
     }
 
-    /// Version comparison logic supporting strict SemVer and fuzzy strings.
     fn satisfies_constraint(&self, version: &str, constraint: &str) -> bool {
         if constraint == "latest" || constraint == "*" || constraint.is_empty() {
             return true;
         }
 
-        // Attempt strict SemVer resolution
+        // SemVer first, then literal, then loose: package managers ship versions SemVer
+        // cannot parse (epochs, distro suffixes), and those must still be comparable.
         if let Ok(req) = VersionReq::parse(constraint) {
             if let Ok(ver) = Version::parse(version) {
                 return req.matches(&ver);
             }
         }
 
-        // Fallback to literal matching
         if version == constraint {
             return true;
         }
 
-        // Fallback to loose comparative matching (e.g. ">1.0")
         match loose_compare(version, constraint) {
             Ok(Cmp::Eq) => true,
             Ok(Cmp::Gt) if constraint.starts_with('>') => true,

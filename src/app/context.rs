@@ -1,5 +1,3 @@
-// src/app/context.rs
-
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::migrate::Migrator;
 use crate::app::profile::ProfileManager;
@@ -27,38 +25,23 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 
-/// The unified Application Context for LiNix v3.6.0.
 pub struct App {
-    /// Global application configuration.
     pub config: Arc<Config>,
-    /// Thread-safe metadata and search cache.
     pub cache: Arc<PackageCache>,
-    /// Registry of all discovered and available package manager backends.
     pub registry: Arc<BackendRegistry>,
-    /// Low-level orchestrator for system commands and file I/O.
     pub executor: CommandExecutor,
-    /// Transactional telemetry and performance collector.
     pub metrics: MetricsCollector,
-    /// Thread-safe interface for terminal progress bars and spinners.
     pub progress: Arc<dyn ProgressReporter>,
-    /// Multi-engine scripting controller (Lua / Rhai).
     pub hooks: Arc<LuaHooks>,
-    /// The mission-critical system state registry (Single Source of Truth).
     pub state: Arc<Mutex<StateRegistry>>,
-    /// Orchestrator for atomic system-level snapshots and recovery.
     pub snapshot_manager: Arc<SnapshotManager>,
-    /// Write-Ahead Log (WAL) for transaction integrity.
     pub journal: Arc<Mutex<Journal>>,
-    /// Modernized Failure Diagnosis Engine.
     pub diagnostics: Arc<FailureDiagnosticEngine>,
-    /// Feature 5: Native background task automation engine.
     pub scheduler: Arc<SchedulerManager>,
-    /// Feature 5: Multi-channel alert and notification dispatcher.
     pub notifications: Arc<NotificationManager>,
 }
 
 impl App {
-    /// Modernized DI Factory: Initializes the kernel with a specific executor and optional state path.
     pub async fn new_with_executor_and_state_path(
         config: Config,
         executor: CommandExecutor,
@@ -68,12 +51,10 @@ impl App {
 
         let hooks = Arc::new(LuaHooks::new(&config)?);
 
-        // Discover backends on the host
         let registry =
             Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
 
-        // Load the persistent state registry using the provided path or default.
         let state_registry = if let Some(path) = state_path {
             tokio::task::spawn_blocking(move || StateRegistry::load_from(&path))
                 .await
@@ -89,16 +70,13 @@ impl App {
         }?;
         let state = Arc::new(Mutex::new(state_registry));
 
-        // Detect snapshot providers and load transaction journal
         let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate(), &config).await);
         let journal = Arc::new(Mutex::new(Journal::new()?));
 
-        // Feature 5/3.6.0 Managers
         let scheduler = Arc::new(SchedulerManager::new()?);
         let config_arc = Arc::new(config);
         let notifications = Arc::new(NotificationManager::new(config_arc.clone()));
 
-        // Asynchronously initialize the Failure Diagnosis Engine
         let diagnostics = Arc::new(FailureDiagnosticEngine::init(&config_arc).await);
 
         info!("LiNix Kernel: v6.0.0 kernel initialized successfully.");
@@ -120,20 +98,14 @@ impl App {
         })
     }
 
-    /// Modernized DI Factory: Initializes the kernel with a specific executor (uses default state path).
     pub async fn new_with_executor(config: Config, executor: CommandExecutor) -> Result<Self> {
         Self::new_with_executor_and_state_path(config, executor, None).await
     }
 
-    /// Standard entry point using the default system executors and default state path.
     pub async fn new(config: Config) -> Result<Self> {
         let executor = CommandExecutor::new(config.dry_run, config.verbose);
         Self::new_with_executor_and_state_path(config, executor, None).await
     }
-
-    // ========================================================================
-    // Orchestrator Factories (Service Provider Pattern)
-    // ========================================================================
 
     pub fn migrator(&self) -> Migrator {
         Migrator::new(self.registry.clone(), self.state.clone(), &self.config)
@@ -146,7 +118,6 @@ impl App {
             self.state.clone(),
             self.diagnostics.clone(),
             &self.config.groups_dir,
-            self.config.wish_dirs(),
         )
     }
 
@@ -212,10 +183,6 @@ impl App {
         )
         .await
     }
-
-    // ========================================================================
-    // Global Kernel Operations
-    // ========================================================================
 
     #[instrument(skip(self))]
     pub async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {

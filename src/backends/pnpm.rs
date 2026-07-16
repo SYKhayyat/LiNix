@@ -1,5 +1,3 @@
-// src/backends/pnpm.rs
-
 use crate::backends::node_registry::registry_search;
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
@@ -10,7 +8,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 
-/// Core backend implementation for pnpm (fast, disk-efficient Node.js package manager).
 #[derive(Clone)]
 pub struct PnpmBackendCore {
     pub executor: CommandExecutor,
@@ -145,7 +142,8 @@ impl Queryable for PnpmQueryable {
         let all = self.list_installed().await?;
         if let Some(mut pkg) = all.into_iter().find(|p| p.name == name) {
             // `pnpm root -g` already returns the global node_modules dir, so the package's
-            // folder is `<root>/<name>` — appending another `node_modules` was a bug.
+            // folder is `<root>/<name>`; appending another `node_modules` yields a path
+            // that does not exist.
             let prefix = self.core.get_global_prefix().await?;
             pkg.properties
                 .insert("install_path".into(), format!("{}/{}", prefix, name));
@@ -213,7 +211,6 @@ impl PnpmBackendCore {
     }
 }
 
-/// Build and register the pnpm backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

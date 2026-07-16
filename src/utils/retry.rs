@@ -3,8 +3,6 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, warn};
 
-/// Configuration for exponential backoff retry behavior.
-/// Used to handle transient network failures in GitHub, Web, and Marketplace backends.
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
     pub max_attempts: u32,
@@ -35,7 +33,6 @@ impl RetryConfig {
     }
 }
 
-/// Retries a fallible async operation with exponential backoff.
 pub async fn retry<F, Fut, T, E>(config: RetryConfig, mut operation: F) -> std::result::Result<T, E>
 where
     F: FnMut() -> Fut,
@@ -80,7 +77,6 @@ where
     }
 }
 
-/// Convenience wrapper for retrying with default settings.
 pub async fn retry_default<F, Fut, T, E>(operation: F) -> std::result::Result<T, E>
 where
     F: FnMut() -> Fut,
@@ -90,7 +86,7 @@ where
     retry(RetryConfig::default(), operation).await
 }
 
-/// Synchronous retry logic for non-async system calls.
+/// Unlike [`retry`], attempts are back-to-back with no delay or backoff.
 pub fn retry_sync<F, T, E>(max_attempts: u32, mut operation: F) -> std::result::Result<T, E>
 where
     F: FnMut() -> std::result::Result<T, E>,

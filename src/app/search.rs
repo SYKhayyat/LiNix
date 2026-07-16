@@ -6,29 +6,16 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, instrument, trace, warn};
-/// A high-performance search orchestrator that queries multiple backends in parallel.
-///
-/// Modernized for v3.6.0: This implementation utilizes an asynchronous
-/// worker-pool pattern with backpressure governed by a Semaphore. It is
-/// entirely panic-free and handles concurrent I/O failures gracefully.
 pub struct UniversalSearch<'a> {
-    /// Registry containing all package backends.
     registry: &'a BackendRegistry,
-    /// Kernel configuration for parallel task limits.
     config: &'a Config,
 }
 
 impl<'a> UniversalSearch<'a> {
-    /// Initializes the search orchestrator.
     pub fn new(registry: &'a BackendRegistry, config: &'a Config) -> Self {
         Self { registry, config }
     }
 
-    /// Performs a cross-backend search and returns a deduplicated, sorted result set.
-    ///
-    /// This method is exhaustive: it filters for searchable backends, respects
-    /// concurrency limits via semaphores, and performs high-fidelity
-    /// deduplication based on the "backend:name" identity key.
     #[instrument(skip(self, query))]
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
         info!(
@@ -36,7 +23,6 @@ impl<'a> UniversalSearch<'a> {
             query
         );
 
-        // 1. Discovery: Identify all available backends that support searching
         let effective = self.config.effective_enabled_backends();
         let searchable_backends: Vec<_> = if effective.is_empty() {
             self.registry.available()
@@ -52,9 +38,8 @@ impl<'a> UniversalSearch<'a> {
             return Ok(vec![]);
         }
 
-        // 2. Worker Pool Initialization
-        // We use a Semaphore to ensure we never exceed config.max_parallel
-        // concurrent network requests.
+        // The semaphore caps concurrent NETWORK requests at `max_parallel`; without it a
+        // wide registry would open one remote query per backend at once.
         let semaphore = Arc::new(Semaphore::new(self.config.max_parallel));
         let mut worker_pool: JoinSet<Result<Vec<Package>>> = JoinSet::new();
 
@@ -64,15 +49,12 @@ impl<'a> UniversalSearch<'a> {
             let b = backend.clone();
 
             worker_pool.spawn(async move {
-                // A+ Grade Fix: Replace .unwrap() with fallible mapping
-                // This prevents a panic if the semaphore is closed.
                 let _permit = sem_ref.acquire().await.map_err(|e| {
                     Error::Transaction(format!("Search concurrency semaphore failure: {}", e))
                 })?;
 
                 debug!("Search: Querying backend '{}'...", b.name());
 
-                // A+ Grade Fix: Panic-free trait access
                 if let Some(searchable) = b.as_searchable() {
                     match searchable.search(&query_string).await {
                         Ok(results) => {
@@ -93,7 +75,6 @@ impl<'a> UniversalSearch<'a> {
             });
         }
 
-        // 3. Collection & Deduplication
         let mut all_packages = Vec::new();
         let mut seen_keys = HashSet::new();
         let mut failed_backends: Vec<String> = Vec::new();
@@ -102,7 +83,8 @@ impl<'a> UniversalSearch<'a> {
             match task_result {
                 Ok(Ok(packages)) => {
                     for pkg in packages {
-                        // Unique Identity: "backend:name"
+                        // Identity is backend-qualified: the same name from two backends is
+                        // two distinct results, not a duplicate to collapse.
                         let key = format!("{}:{}", pkg.backend, pkg.name);
                         if seen_keys.insert(key) {
                             all_packages.push(pkg);
@@ -120,7 +102,8 @@ impl<'a> UniversalSearch<'a> {
             }
         }
 
-        // 4. Final Polish: Lexicographical sorting for consistent UI
+        // Sorted because JoinSet completion order is arbitrary — without this the same
+        // query prints in a different order run to run.
         all_packages.sort_by_key(|p| p.name.to_lowercase());
 
         // User-visible summary of backends that errored (distinct from "0 results").

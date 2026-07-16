@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
 
-/// Core backend implementation for Flatpak applications.
 pub struct FlatpakBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
@@ -28,7 +27,6 @@ impl FlatpakBackendCore {
         }
     }
 
-    /// Helper to determine if the manager should operate in --user or --system scope.
     pub fn scope_args(&self) -> Vec<&str> {
         if self
             .settings
@@ -263,7 +261,6 @@ impl Upgradable for FlatpakUpgradable {
     }
 }
 
-/// Build and register the Flatpak backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

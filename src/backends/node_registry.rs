@@ -1,5 +1,3 @@
-// src/backends/node_registry.rs
-//
 // Shared package-search helper for the Node.js managers (npm / pnpm / yarn).
 //
 // None of these ship a reliable CLI search: `npm search` is slow and output-unstable,
@@ -20,7 +18,6 @@ pub fn set_http_timeout(secs: u64) {
     let _ = HTTP_TIMEOUT_SECS.set(secs.max(1));
 }
 
-/// The configured HTTP timeout as a `Duration` (15s default).
 pub fn http_timeout() -> Duration {
     Duration::from_secs(*HTTP_TIMEOUT_SECS.get().unwrap_or(&15))
 }

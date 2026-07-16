@@ -9,10 +9,6 @@ use tokio::fs;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-/// Manages the Snapshot Gallery and System Time Travel (Point 12).
-///
-/// Hardened for Phase 4.1: Decoupled from the global App object. Now receives
-/// specific trait-based dependencies, enabling isolated testing of the rollback logic.
 pub struct UndoManager {
     snapshot_manager: Arc<SnapshotManager>,
     state: Arc<Mutex<StateRegistry>>,
@@ -28,7 +24,9 @@ struct StateDiff {
     changed: Vec<(ManagedPackage, ManagedPackage)>, // (Current, Snapshot)
 }
 
-/// Allowed snapshot directories (whitelist approach for security)
+/// Snapshot roots `validate_snapshot_path` will read from. Enforced only on the read path
+/// (mounting a snapshot to diff its registry); `execute_restore` hands the snapshot to
+/// btrfs/timeshift, which write over `/` without consulting this list.
 const ALLOWED_SNAPSHOT_PREFIXES: &[&str] = &[
     "/.snapshots/",
     "/run/timeshift/",
@@ -37,7 +35,9 @@ const ALLOWED_SNAPSHOT_PREFIXES: &[&str] = &[
     "/.zfs/snapshot/",
 ];
 
-/// Paths that are NEVER allowed to be accessed
+/// Paths `validate_snapshot_path` refuses to read a snapshot registry out of. This does not
+/// constrain `execute_restore`, which restores over `/` — and therefore over every path
+/// listed here. Adding an entry protects the diff path only.
 const FORBIDDEN_PATHS: &[&str] = &[
     "/etc/shadow",
     "/etc/sudoers",
@@ -49,7 +49,6 @@ const FORBIDDEN_PATHS: &[&str] = &[
 ];
 
 impl UndoManager {
-    /// Creates a new UndoManager with explicit dependency injection.
     pub fn new(
         snapshot_manager: Arc<SnapshotManager>,
         state: Arc<Mutex<StateRegistry>>,
@@ -100,7 +99,6 @@ impl UndoManager {
         }
     }
 
-    /// Entry point for 'linix undo'.
     pub async fn run_interactive(&self) -> Result<()> {
         info!("UndoManager: Querying available system snapshots...");
 
@@ -141,7 +139,6 @@ impl UndoManager {
         Ok(())
     }
 
-    /// Validates that a path is safe to access.
     async fn validate_snapshot_path(&self, path: &Path, snapshot_backend: &str) -> Result<PathBuf> {
         let path_owned = path.to_path_buf();
         let canonical = tokio::task::spawn_blocking(move || path_owned.canonicalize())

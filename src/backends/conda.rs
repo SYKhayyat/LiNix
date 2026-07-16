@@ -1,5 +1,3 @@
-// src/backends/conda.rs
-//
 // Conda is env-scoped: every operation targets a named environment. Which env is a
 // user choice, so it can't be expressed by the generic (arg-list) backend — this
 // specialized backend injects `-n <env>` into each command. The env is read from
@@ -16,7 +14,6 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
 
-/// Default Conda environment when the user hasn't chosen one.
 const DEFAULT_ENV: &str = "base";
 
 #[derive(Clone)]
@@ -222,7 +219,6 @@ fn resolve_env(config: &Config) -> String {
         .unwrap_or_else(|| DEFAULT_ENV.to_string())
 }
 
-/// Build and register the Conda backend with all its capabilities.
 pub fn register(reg: &mut crate::backends::BackendRegistry, exec: &CommandExecutor, cfg: &Config) {
     let env = resolve_env(cfg);
     let core = Arc::new(CondaBackendCore::new(exec.duplicate(), env));

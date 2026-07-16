@@ -1,5 +1,3 @@
-// src/core/retention.rs
-//
 // Declarative retention policy shared by the three histories LiNix keeps: archived
 // manifests, generations, and filesystem snapshots. Each history configures its own
 // policy independently (they cost wildly different amounts of disk), but they all apply
@@ -150,7 +148,6 @@ mod tests {
         ];
         let mut del = p.select_deletions(&items, now());
         del.sort();
-        // Keep g5, g4 (newest 2); delete g3, g2, g1.
         assert_eq!(del, vec!["g1", "g2", "g3"]);
     }
 

@@ -10,26 +10,20 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, trace, warn};
 
-/// Represents a single diagnostic rule for identifying the root cause of build failures.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiagnosticRule {
-    /// The regular expression pattern used to scan stderr output.
     pub pattern: String,
-    /// Mapping of backend identifiers to the specific packages required for remediation.
+    /// backend id -> the package that fixes this failure on that backend.
     pub suggestions: HashMap<String, String>,
-    /// A high-fidelity human-readable description of the identified failure.
     pub description: String,
 }
 
-/// The dynamic Knowledge Base for the LiNix Failure Diagnostic Engine.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DiagnosticDb {
-    /// The collection of failure patterns and remediation strategies.
     pub rules: Vec<DiagnosticRule>,
 }
 
 impl DiagnosticDb {
-    /// Asynchronously loads the Knowledge Base from the configuration directory.
     pub async fn load(config: &Config) -> Self {
         let db_path = config.config_root().join("diagnostics.json");
 
@@ -53,7 +47,6 @@ impl DiagnosticDb {
         Self::seed()
     }
 
-    /// Provides a robust initial set of failure patterns for bootstrapping.
     fn seed() -> Self {
         let mut rules = Vec::new();
 
@@ -92,23 +85,17 @@ impl DiagnosticDb {
     }
 }
 
-/// The modernized Failure Diagnostic Engine.
-///
-/// Functioning as an autonomous logic processor, this engine provides
-/// semantic analysis and remediation suggestions for system modifications.
 pub struct FailureDiagnosticEngine {
     db: DiagnosticDb,
 }
 
 impl FailureDiagnosticEngine {
-    /// Modernized constructor: Asynchronously initializes the Knowledge Base.
     pub async fn init(config: &Config) -> Self {
         Self {
             db: DiagnosticDb::load(config).await,
         }
     }
 
-    /// Scans a block of text for known failure patterns.
     pub fn diagnose(&self, stderr: &str, current_backend: &str) -> Vec<String> {
         let mut suggestions = Vec::new();
         for rule in &self.db.rules {
@@ -129,7 +116,6 @@ impl FailureDiagnosticEngine {
         suggestions
     }
 
-    /// High-level failure orchestrator.
     #[instrument(skip(self, registry, state, config))]
     pub async fn handle_failure(
         &self,
@@ -161,7 +147,6 @@ impl FailureDiagnosticEngine {
             self.remediate(&suggestions, registry, state, config)
                 .await?;
         } else {
-            // Resolves E0277: Dialoguer error is now mapped to core::Error via From impl
             let res = tokio::task::spawn_blocking(move || {
                 Confirm::with_theme(&ColorfulTheme::default())
                     .with_prompt("Would you like to execute remediation now?")
@@ -179,10 +164,6 @@ impl FailureDiagnosticEngine {
         Ok(())
     }
 
-    /// Executes the remediation plan.
-    ///
-    /// Resolves E0597: Clones the state registry object before moving it into
-    /// the background persistence task, ensuring it lives long enough ('static).
     async fn remediate(
         &self,
         suggestions: &[String],
@@ -206,7 +187,9 @@ impl FailureDiagnosticEngine {
                         .await
                     {
                         Ok(_) => {
-                            // Bug Fix Resolve E0597: Extract and clone data while under lock
+                            // The save runs on a blocking thread and so needs an owned,
+                            // 'static value: clone under the lock and drop it before the
+                            // spawn, rather than holding the guard across an await.
                             let state_snapshot = {
                                 let mut state_guard = state.lock().await;
                                 state_guard.add(
@@ -217,11 +200,9 @@ impl FailureDiagnosticEngine {
                                     Some("diagnostics".into()),
                                     false,
                                 );
-                                // Clone the entire registry for move-safe persistence
                                 state_guard.clone()
                             };
 
-                            // Move the cloned registry (which is owned and 'static) into the task
                             let _ = tokio::task::spawn_blocking(move || state_snapshot.save())
                                 .await
                                 .map_err(|e| Error::Other(format!("Task panic: {}", e)))?;
@@ -247,7 +228,6 @@ impl FailureDiagnosticEngine {
         None
     }
 
-    /// Provides a non-interactive suggestion print.
     pub fn print_suggestions(&self, stderr: &str, current_backend: &str) {
         let suggestions = self.diagnose(stderr, current_backend);
         if !suggestions.is_empty() {

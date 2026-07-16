@@ -1,5 +1,3 @@
-// src/backends/dnf.rs
-
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, RepoManager, Result, Searchable, Upgradable,
@@ -264,7 +262,6 @@ impl Upgradable for DnfUpgradable {
     }
 }
 
-/// Build and register the DNF backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

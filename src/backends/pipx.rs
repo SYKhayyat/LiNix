@@ -1,5 +1,3 @@
-// src/backends/pipx.rs
-
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, Result, Upgradable,
@@ -9,7 +7,6 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::info;
 
-/// Core backend implementation for pipx (Python application installer in isolated environments).
 #[derive(Clone)]
 pub struct PipxBackendCore {
     pub executor: CommandExecutor,
@@ -24,7 +21,6 @@ impl PipxBackendCore {
         }
     }
 
-    /// Returns the base directory where pipx stores its venvs.
     async fn get_pipx_home(&self) -> Result<String> {
         let output = self
             .executor
@@ -167,7 +163,6 @@ impl Upgradable for PipxUpgradable {
     }
 }
 
-/// Build and register the pipx backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

@@ -51,7 +51,6 @@ pub struct Discovery {
 }
 
 impl Migrator {
-    /// Initializes a new Migrator with explicit kernel dependencies.
     pub fn new(
         registry: Arc<BackendRegistry>,
         state: Arc<Mutex<StateRegistry>>,

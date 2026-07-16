@@ -7,14 +7,11 @@ pub mod style;
 
 use std::path::PathBuf;
 
-// Centralize critical utility re-exports
 pub use archive::{extract_archive, is_archive};
 pub use file::{atomic_write, ensure_dir, read_lines_filtered};
 pub use progress::{create_progress_reporter, ProgressHandle, ProgressReporter};
 pub use retry::{retry, retry_default, RetryConfig};
 
-/// Reliably locates the LiNix data directory across platforms.
-/// Resolves unresolved import errors in teleport.rs and profile.rs.
 pub fn safe_data_dir() -> PathBuf {
     // `LINIX_DATA_DIR` overrides the OS data dir outright (used as-is, no `linix` suffix). This
     // lets a test harness or CI run against a throwaway, isolated state registry so it never
@@ -25,13 +22,11 @@ pub fn safe_data_dir() -> PathBuf {
     }
     dirs::data_dir()
         .unwrap_or_else(|| {
-            // Fallback to current directory if system data dir is unavailable
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         })
         .join("linix")
 }
 
-/// Reliably locates the LiNix configuration directory.
 pub fn safe_config_dir() -> PathBuf {
     // `LINIX_CONFIG_DIR` overrides the OS config dir outright (see `safe_data_dir`).
     if let Some(dir) = std::env::var_os("LINIX_CONFIG_DIR") {
@@ -39,7 +34,6 @@ pub fn safe_config_dir() -> PathBuf {
     }
     dirs::config_dir()
         .unwrap_or_else(|| {
-            // Fallback to current directory/.config if system config dir is unavailable
             std::env::current_dir()
                 .unwrap_or_else(|_| PathBuf::from("."))
                 .join(".config")
@@ -47,9 +41,9 @@ pub fn safe_config_dir() -> PathBuf {
         .join("linix")
 }
 
-/// Injects a new directory into the current process's PATH environment variable.
-/// Vital for backends that install toolchains (like Mise or Cargo) and need
-/// immediate access to them in hooks.
+/// Backends that install a toolchain (mise, cargo) must call this before running hooks
+/// that invoke it: the freshly installed binary is not on the PATH this process inherited,
+/// and hooks are spawned from it.
 pub fn refresh_path(new_path: std::path::PathBuf) {
     if let Some(path) = std::env::var_os("PATH") {
         let mut paths = std::env::split_paths(&path).collect::<Vec<_>>();

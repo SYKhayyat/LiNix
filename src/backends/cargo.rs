@@ -1,5 +1,3 @@
-// src/backends/cargo.rs
-
 use crate::core::{
     BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, Result, Searchable, Upgradable,
@@ -8,7 +6,6 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::info;
 
-/// Core backend implementation for Cargo (Rust package manager).
 #[derive(Clone)]
 pub struct CargoBackendCore {
     pub executor: CommandExecutor,
@@ -23,7 +20,6 @@ impl CargoBackendCore {
         }
     }
 
-    /// Returns the path to Cargo's global installation directory.
     async fn get_cargo_root(&self) -> Result<String> {
         match std::env::var("CARGO_HOME") {
             Ok(home) => Ok(home),
@@ -242,7 +238,6 @@ impl CargoBackendCore {
     }
 }
 
-/// Build and register the Cargo backend with all its capabilities.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

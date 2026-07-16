@@ -1,5 +1,3 @@
-// src/app/insight.rs
-//
 // Cross-backend "insight" commands that are only possible because LiNix sits above
 // every ecosystem at once:
 //
@@ -58,12 +56,8 @@ async fn resolve_managed(app: &App) -> Vec<ResolvedPkg> {
     out
 }
 
-// ============================================================================
-// Ecosystem / package-URL mapping (pure — unit tested)
-// ============================================================================
-
-/// Map a LiNix backend to a Package-URL (purl) type for SBOM output.
-/// Returns None for backends with no standardized purl type.
+/// Returns None for backends with no standardized purl type — those must be omitted from
+/// SBOM output rather than guessed at.
 fn purl_type(backend: &str) -> Option<&'static str> {
     Some(match backend {
         "cargo" => "cargo",
@@ -114,10 +108,6 @@ fn is_concrete(v: &str) -> bool {
     !v.is_empty() && v != "latest" && v != "*" && v != "unknown"
 }
 
-// ============================================================================
-// SBOM (CycloneDX)
-// ============================================================================
-
 /// Build a CycloneDX 1.5 document from resolved packages. Pure — unit tested.
 fn build_cyclonedx(pkgs: &[ResolvedPkg]) -> Value {
     let components: Vec<Value> = pkgs
@@ -156,9 +146,6 @@ pub async fn sbom(app: &App) -> Result<String> {
     serde_json::to_string_pretty(&doc).map_err(|e| Error::Json(e.to_string()))
 }
 
-// ============================================================================
-// Audit (OSV.dev)
-// ============================================================================
 
 const OSV_BATCH_URL: &str = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL: &str = "https://api.osv.dev/v1/vulns";
@@ -400,9 +387,6 @@ pub fn print_audit(report: &AuditReport, as_json: bool) -> Result<()> {
     Ok(())
 }
 
-// ============================================================================
-// Why (provenance + reverse dependencies)
-// ============================================================================
 
 /// Turn the structured `__source` provenance tag recorded at install time into a friendly,
 /// specific explanation. `;`-joined tags mean a package has more than one origin.
@@ -452,14 +436,7 @@ pub fn line_declares(line: &str, backend: &str, name: &str) -> bool {
 async fn scan_declarations(app: &App, backend: &str, name: &str) -> Vec<String> {
     let mut hits = Vec::new();
 
-    // Every wish-list folder (manifests + host files + named groups). Scanning only the
-    // global one would report a package as undeclared while a -g manifest is the exact
-    // reason it is installed — `why` answering "nothing wants this" about a package
-    // something plainly wants.
-    for groups_dir in app.config.wish_dirs() {
-        let Ok(mut entries) = tokio::fs::read_dir(&groups_dir).await else {
-            continue;
-        };
+    if let Ok(mut entries) = tokio::fs::read_dir(&app.config.groups_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             let fname = entry.file_name().to_string_lossy().into_owned();

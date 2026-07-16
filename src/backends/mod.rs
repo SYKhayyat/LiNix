@@ -4,7 +4,6 @@ pub mod onboarder;
 pub mod pip_search;
 pub mod registry;
 
-// Specialized backends
 pub mod appimage;
 pub mod btrfs;
 pub mod conda;
@@ -22,11 +21,9 @@ pub mod vscode;
 pub mod web;
 pub mod xbps;
 
-// Windows-only specialized backends
 #[cfg(target_os = "windows")]
 pub mod psresource;
 
-// New specialized backends with install path support
 pub mod brew;
 pub mod cargo;
 pub mod npm;

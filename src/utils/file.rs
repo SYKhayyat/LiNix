@@ -4,11 +4,8 @@ use std::io::Write;
 use std::path::Path;
 use tempfile::NamedTempFile;
 
-/// Atomically writes content to a file.
-/// Implementation for Roadmap Phase 3: Mission-Critical Safety.
 pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
     let dir = path.parent().ok_or_else(|| {
-        // Fix E0308: Explicitly convert io::Error to String for Error::Io
         let err = std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "Target path has no parent directory",
@@ -31,7 +28,6 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-/// Utility to ensure a directory exists, creating all parents if necessary.
 pub fn ensure_dir(path: &Path) -> Result<()> {
     if !path.exists() {
         fs::create_dir_all(path).map_err(Error::from)?;
@@ -39,7 +35,6 @@ pub fn ensure_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Reads a file and returns a list of non-comment, non-empty lines.
 pub fn read_lines_filtered(path: &Path) -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(vec![]);
@@ -54,7 +49,6 @@ pub fn read_lines_filtered(path: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Securely removes a file or directory if it exists.
 pub fn force_remove(path: &Path) -> Result<()> {
     if path.exists() {
         if path.is_dir() {

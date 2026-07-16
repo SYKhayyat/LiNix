@@ -6,39 +6,28 @@ use cron::Schedule;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use tracing::{debug, info, trace, warn}; // Modernized: Required for trait-level async
+use tracing::{debug, info, trace, warn};
 
-/// Feature 5: Multi-channel alerting engine.
 pub mod notify;
 
-/// Represents the platform-native capability to schedule background tasks.
-///
-/// A+ Grade Architecture: This trait is asynchronous to support the non-blocking
-/// LiNix kernel executor and high-fidelity call-log mocking.
 #[async_trait]
 pub trait TaskProvisioner: Send + Sync {
-    /// Registers a new background task with the host operating system.
     async fn add_task(
         &self,
         executor: &CommandExecutor,
         config: &ScheduleConfig,
         linix_path: &Path,
     ) -> Result<()>;
-    /// Removes an existing background task from the host operating system.
     async fn remove_task(&self, executor: &CommandExecutor, name: &str) -> Result<()>;
-    /// Checks if a task is currently active in the system scheduler.
     async fn is_task_active(&self, executor: &CommandExecutor, name: &str) -> bool;
 }
 
-/// The high-level orchestrator for background LiNix automation.
 pub struct SchedulerManager {
     provisioner: Box<dyn TaskProvisioner>,
     linix_bin_path: PathBuf,
 }
 
 impl SchedulerManager {
-    /// Initializes the manager by detecting the host OS and selecting the
-    /// appropriate native provisioner.
     pub fn new() -> Result<Self> {
         debug!("Scheduler: Detecting system-native task runner.");
 
@@ -63,7 +52,6 @@ impl SchedulerManager {
         })
     }
 
-    /// Provisions a new schedule in the system and persists it to the configuration.
     pub async fn add_schedule(
         &self,
         executor: &CommandExecutor,
@@ -78,10 +66,10 @@ impl SchedulerManager {
             name, cron
         );
 
-        // 1. Immediate validation of the cron string. Standard cron is 5-field
-        //    (min hour dom month dow); the `cron` crate expects a 6-field form with
-        //    seconds, so normalize 5-field expressions by prepending "0". `@`-macros
-        //    (@reboot, @daily, ...) are handled by the systemd/launchd mapping below.
+        // Standard cron is 5-field (min hour dom month dow); the `cron` crate expects a
+        // 6-field form with seconds, so 5-field expressions must be normalized by
+        // prepending "0" or they are rejected as invalid. `@`-macros (@reboot, @daily, ...)
+        // never reach the parser — the systemd/launchd mapping below handles them.
         if !cron.starts_with('@') {
             let normalized = if cron.split_whitespace().count() == 5 {
                 format!("0 {}", cron)
@@ -104,12 +92,12 @@ impl SchedulerManager {
             last_synced: None,
         };
 
-        // 2. Delegate to OS-Specific Provisioner (Now awaited)
+        // The OS registration must succeed before the config is written: persisting first
+        // would leave a schedule the user can see but the system will never run.
         self.provisioner
             .add_task(executor, &schedule_entry, &self.linix_bin_path)
             .await?;
 
-        // 3. Persist to configuration
         config_mut.schedules.retain(|s| s.name != name);
         config_mut.schedules.push(schedule_entry);
         config_mut.save()?;
@@ -121,7 +109,6 @@ impl SchedulerManager {
         Ok(())
     }
 
-    /// Purges a schedule from both the system and the LiNix configuration.
     pub async fn remove_schedule(
         &self,
         executor: &CommandExecutor,
@@ -138,7 +125,6 @@ impl SchedulerManager {
         Ok(())
     }
 
-    /// Ensures consistency between the configuration and the native OS timers.
     pub async fn sync_schedules(&self, executor: &CommandExecutor, config: &Config) -> Result<()> {
         trace!("Scheduler: Verifying OS registry for configured tasks.");
         for schedule in &config.schedules {
@@ -160,10 +146,6 @@ impl SchedulerManager {
         Ok(())
     }
 }
-
-// ============================================================================
-// LINUX: Systemd Timers Implementation
-// ============================================================================
 
 struct LinuxSystemdProvisioner;
 
@@ -190,7 +172,6 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
 
         let use_boot_timer = config.cron == "@reboot";
 
-        // Use executor.write_atomic (Awaited)
         let service_content = format!(
             "[Unit]\nDescription=LiNix Job: {name}\n\n\
              [Service]\nType=oneshot\nExecStart={bin} {cmd}\n\
@@ -355,10 +336,6 @@ impl LinuxSystemdProvisioner {
     }
 }
 
-// ============================================================================
-// MACOS: Launchd Implementation
-// ============================================================================
-
 struct MacLaunchdProvisioner;
 
 #[async_trait]
@@ -464,10 +441,6 @@ impl MacLaunchdProvisioner {
     }
 }
 
-// ============================================================================
-// WINDOWS: Task Scheduler Implementation
-// ============================================================================
-
 struct WindowsTaskProvisioner;
 
 #[async_trait]
@@ -497,7 +470,6 @@ impl TaskProvisioner for WindowsTaskProvisioner {
             args.extend(["/ST", &st]);
         }
 
-        // Now correctly awaited
         executor.run("schtasks", &args, true).await?;
         Ok(())
     }

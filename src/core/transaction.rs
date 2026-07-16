@@ -14,7 +14,6 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
-/// Configuration for transaction execution profiles.
 #[derive(Debug, Clone)]
 pub struct TransactionConfig {
     pub max_concurrent: usize,
@@ -33,7 +32,6 @@ impl Default for TransactionConfig {
 }
 
 impl TransactionConfig {
-    /// Resilient Profile: Optimized for mixed remote and system-level operations.
     pub fn patient() -> Self {
         Self {
             max_concurrent: 4,
@@ -47,14 +45,12 @@ impl TransactionConfig {
     }
 }
 
-/// Represents a discrete modification unit within the DAG.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum GraphAction {
     Install(PackageSpec),
     Remove { name: String, backend: String },
 }
 
-/// Comprehensive telemetry for a completed (or failed) node operation.
 #[derive(Debug, Clone)]
 pub struct TaskResult {
     pub node_index: NodeIndex,
@@ -68,7 +64,6 @@ pub struct TaskResult {
     pub result: Result<()>,
 }
 
-/// The High-Performance Mission-Critical Execution Engine.
 pub struct Transaction {
     pub graph: StableDiGraph<GraphAction, ()>,
     registry: Arc<BackendRegistry>,
@@ -84,7 +79,6 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    /// Initializes a new Transaction with default configuration.
     pub fn new(
         graph: StableDiGraph<GraphAction, ()>,
         registry: Arc<BackendRegistry>,
@@ -100,7 +94,6 @@ impl Transaction {
         )
     }
 
-    /// Initializes a new Transaction with a specific performance profile.
     pub fn with_config(
         graph: StableDiGraph<GraphAction, ()>,
         registry: Arc<BackendRegistry>,
@@ -121,15 +114,13 @@ impl Transaction {
         }
     }
 
-    /// Attach lifecycle hooks so `before_install`/`after_install` fire per package.
-    /// Packages with no configured hook (and no `*` wildcard) incur only a cheap
-    /// map lookup, so this is safe to always set.
+    /// Packages with no configured hook (and no `*` wildcard) incur only a cheap map
+    /// lookup, so this is safe to always set.
     pub fn with_hooks(mut self, hooks: Arc<LuaHooks>) -> Self {
         self.hooks = Some(hooks);
         self
     }
 
-    /// Primary execution driver. Implements the global transaction timeout.
     pub async fn execute_with_telemetry(&mut self) -> Result<Vec<TaskResult>> {
         let total_timeout = self.config.total_timeout;
         let start_time = Instant::now();
@@ -164,12 +155,10 @@ impl Transaction {
         }
     }
 
-    /// Simplified execution entry point.
     pub async fn execute(&mut self) -> Result<()> {
         self.execute_with_telemetry().await.map(|_| ())
     }
 
-    /// The parallel execution loop.
     async fn execute_internal(&mut self) -> Result<Vec<TaskResult>> {
         let total_nodes = self.graph.node_count();
         let mut in_progress = HashSet::new();
@@ -234,7 +223,7 @@ impl Transaction {
                 let task_data = finished_task
                     .map_err(|e| Error::Transaction(format!("Worker Panic: {}", e)))?;
 
-                // Ownership Guard: Determine failure status before moving data
+                // Must be read before `task_data` is moved into `telemetry_results` below.
                 let is_failure = task_data.result.is_err();
 
                 if !is_failure {

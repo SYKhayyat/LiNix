@@ -445,14 +445,11 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
 /// changes between ticks, a manifest was edited. Best-effort — errors just yield an empty sig.
 /// A fingerprint of every wish-list manifest, so `watch` notices an edit.
 ///
-/// Covers ALL wish-list folders, not just the global one: `watch -g /scratch` that only
-/// fingerprinted global would sit there ignoring every edit to the folder the user pointed
-/// it at — a watcher that watches the wrong thing and reports no changes.
-async fn manifest_signature(dirs: &[std::path::PathBuf]) -> Vec<(String, u64, i64)> {
+async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u64, i64)> {
     let mut sig = Vec::new();
-    for dir in dirs {
+    {
         let Ok(mut rd) = tokio::fs::read_dir(dir).await else {
-            continue;
+            return sig;
         };
         while let Ok(Some(entry)) = rd.next_entry().await {
             let path = entry.path();
@@ -524,7 +521,7 @@ async fn handle_watch(
         if pull { " (git pull each tick)" } else { "" },
         if on_change { " (on change only)" } else { "" },
     );
-    let mut last_sig = manifest_signature(&app.config.wish_dirs()).await;
+    let mut last_sig = manifest_signature(&app.config.groups_dir).await;
     let mut first = true;
     loop {
         if pull {
@@ -536,7 +533,7 @@ async fn handle_watch(
                 }
             }
         }
-        let sig = manifest_signature(&app.config.wish_dirs()).await;
+        let sig = manifest_signature(&app.config.groups_dir).await;
         let changed = sig != last_sig;
         // Reconcile on the first pass and whenever something changed; with --on-change we skip
         // ticks where nothing moved (the manifests and, after a pull, the repo are unchanged).
@@ -2703,7 +2700,7 @@ async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<(
         }
 
         let dropped =
-            linix::config::parser::remove_package_from_manifests(&app.config.wish_dirs(), spec)
+            linix::config::parser::remove_package_from_manifests(&app.config.groups_dir, spec)
                 .await?;
 
         results.push(serde_json::json!({
