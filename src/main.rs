@@ -290,21 +290,34 @@ fn known_subcommands() -> std::collections::HashSet<String> {
         .collect()
 }
 
-/// Global flags that take a separate-argument value (`-c path`); their value must be skipped
-/// when locating the subcommand slot so `linix -c cfg up` still expands the `up` alias.
-const GLOBAL_VALUE_FLAGS: &[&str] = &[
-    "-c",
-    "--config",
-    "-b",
-    "--backend",
-    "-g",
-    "--groups-dir",
-    "--progress",
-];
+/// Global flags that take a separate-argument value (`-c path`), asked of clap rather than
+/// hand-listed. A hand-written list is a second copy of a fact clap already owns, and it
+/// silently rotted: it named `-b`/`-g` after both were deleted, and `--progress`, which is
+/// a `bool` and consumes nothing — so `linix --progress up` skipped past `up` and the alias
+/// never expanded.
+fn global_value_flags() -> std::collections::HashSet<String> {
+    let mut out = std::collections::HashSet::new();
+    for a in <Cli as clap::CommandFactory>::command().get_arguments() {
+        if !matches!(
+            a.get_action(),
+            clap::ArgAction::Set | clap::ArgAction::Append
+        ) {
+            continue;
+        }
+        if let Some(l) = a.get_long() {
+            out.insert(format!("--{}", l));
+        }
+        if let Some(c) = a.get_short() {
+            out.insert(format!("-{}", c));
+        }
+    }
+    out
+}
 
 /// Index of the subcommand token in argv, skipping the program name, leading global flags, and
 /// any values those flags consume. `None` if there is no subcommand (e.g. only `--version`).
 fn find_subcommand_index(argv: &[String]) -> Option<usize> {
+    let value_flags = global_value_flags();
     let mut i = 1;
     while i < argv.len() {
         let a = &argv[i];
@@ -317,7 +330,7 @@ fn find_subcommand_index(argv: &[String]) -> Option<usize> {
         }
         if a.starts_with('-') {
             // `--flag=value` is one token; `-c value` consumes the next token too.
-            if GLOBAL_VALUE_FLAGS.contains(&a.as_str()) {
+            if value_flags.contains(a.as_str()) {
                 i += 2;
             } else {
                 i += 1;
@@ -4173,21 +4186,44 @@ mod alias_tests {
     }
 
     #[test]
-    fn expands_alias_after_leading_global_flags() {
+    fn expands_alias_after_a_value_taking_global_flag() {
         let mut aliases = HashMap::new();
         aliases.insert("up".to_string(), "upgrade --all".to_string());
         let known: HashSet<String> = ["upgrade".to_string()].into_iter().collect();
 
-        // `-g DIR -c CFG up` → the alias sits after value-consuming global flags.
-        let out = expand_command_aliases(
-            argv(&["linix", "-g", "/d", "-c", "/c.toml", "up"]),
-            &aliases,
-            &known,
-        );
-        assert_eq!(
-            out,
-            argv(&["linix", "-g", "/d", "-c", "/c.toml", "upgrade", "--all"])
-        );
+        let out = expand_command_aliases(argv(&["linix", "-c", "/c.toml", "up"]), &aliases, &known);
+        assert_eq!(out, argv(&["linix", "-c", "/c.toml", "upgrade", "--all"]));
+    }
+
+    #[test]
+    fn expands_alias_after_a_valueless_global_flag() {
+        // `--progress` is a bool: clap gives it SetTrue, so it consumes no value. The old
+        // hand-written flag list claimed it took one, so `i += 2` walked past `up` and the
+        // alias silently never expanded.
+        let mut aliases = HashMap::new();
+        aliases.insert("up".to_string(), "upgrade --all".to_string());
+        let known: HashSet<String> = ["upgrade".to_string()].into_iter().collect();
+
+        let out = expand_command_aliases(argv(&["linix", "--progress", "up"]), &aliases, &known);
+        assert_eq!(out, argv(&["linix", "--progress", "upgrade", "--all"]));
+    }
+
+    #[test]
+    fn value_flags_are_exactly_what_clap_says_take_a_value() {
+        let flags = global_value_flags();
+        assert!(flags.contains("--config") && flags.contains("-c"));
+        // Every bool global: named here, they would each eat the following token.
+        for valueless in ["--progress", "--dry-run", "-y", "--yes", "-v", "-q"] {
+            assert!(
+                !flags.contains(valueless),
+                "{} takes no value; listing it skips a real token",
+                valueless
+            );
+        }
+        // Deleted flags cannot linger: the list is derived, not maintained.
+        for gone in ["-g", "--groups-dir", "-b", "--backend", "--no-global"] {
+            assert!(!flags.contains(gone), "{} was deleted", gone);
+        }
     }
 
     #[test]
