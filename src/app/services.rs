@@ -61,6 +61,7 @@ impl AppServices {
                 app.state.clone(),
                 app.diagnostics.clone(),
                 &app.config.groups_dir,
+                app.config.wish_dirs(),
             ),
             shell: GhostShell::new(
                 app.registry.clone(),

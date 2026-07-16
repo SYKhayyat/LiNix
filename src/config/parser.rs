@@ -164,6 +164,24 @@ pub async fn parse_group_file(path: &Path) -> Result<Vec<String>> {
 /// Parse manifest text (already in memory) the same way [`parse_group_file`] parses a file:
 /// strip a UTF-8 BOM, drop blank/comment lines, then apply host `when` conditionals. Used for
 /// remote `include:` targets fetched over HTTP.
+/// Files that live in a groups folder, end in `.txt`, and are NOT wish lists.
+///
+/// LiNix keeps its own bookkeeping in the same folder as your manifests, and anything
+/// ending in `.txt` there was read as a list of packages to install. `keep.txt` is the one
+/// that mattered: it means "never remove these", and being read as a wish list turned it
+/// into "install these" — so asking to keep a package you did not have installed it, and a
+/// keep list was quietly also an install list.
+///
+/// `locks.json`, `policy.toml` and `.linix-lock.key` were spared only by their extensions.
+/// `_active_profiles.txt` is deliberately absent from this list: it is a real wish list,
+/// written by `profile activate`.
+const RESERVED_MANIFEST_NAMES: &[&str] = &["keep.txt"];
+
+/// Whether `filename` is one of LiNix's own files rather than a wish list.
+pub fn is_reserved_manifest(filename: &str) -> bool {
+    RESERVED_MANIFEST_NAMES.contains(&filename)
+}
+
 pub fn parse_group_str(content: &str) -> Result<Vec<String>> {
     // Strip a leading UTF-8 BOM so a manifest saved by a Windows editor doesn't turn the
     // first entry's backend into "\u{feff}cargo".
@@ -314,49 +332,56 @@ pub async fn remove_package_from_local(groups_dir: &Path, package_name: &str) ->
 /// declared in `migrated_<stamp>.txt`, and leaving that line in place means the next
 /// `sync` re-adopts what the user just asked LiNix to forget — a command that silently
 /// undoes itself.
+/// Edits EVERY wish-list folder, not only the global one. Cleaning global alone would leave
+/// a `-g` folder still declaring the package, so it would stay wanted and `unmanage` would
+/// silently fail to do the one thing its name promises.
 pub async fn remove_package_from_manifests(
-    groups_dir: &Path,
+    wish_dirs: &[PathBuf],
     package_name: &str,
 ) -> Result<Vec<(PathBuf, String)>> {
     let mut dropped = Vec::new();
-    let Ok(mut entries) = fs::read_dir(groups_dir).await else {
-        return Ok(dropped);
-    };
-
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        let fname = entry.file_name().to_string_lossy().to_string();
-        if !fname.ends_with(".txt") {
-            continue;
-        }
-        let Ok(content) = fs::read_to_string(&path).await else {
+    for groups_dir in wish_dirs {
+        let Ok(mut entries) = fs::read_dir(groups_dir).await else {
             continue;
         };
 
-        let mut kept: Vec<String> = Vec::new();
-        let mut found = false;
-        for line in content.lines() {
-            let trimmed = line.trim();
-            // Comments and blanks are structure, not declarations — never touch them, so a
-            // sectioned manifest keeps its headings after an entry is dropped.
-            if trimmed.is_empty() || trimmed.starts_with('#') {
-                kept.push(line.to_string());
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            let fname = entry.file_name().to_string_lossy().to_string();
+            // keep.txt is a protection list. Dropping a name from it would turn "stop
+            // managing this" into "stop protecting this", which is the opposite of intent.
+            if !fname.ends_with(".txt") || is_reserved_manifest(&fname) {
                 continue;
             }
-            if line_declares(trimmed, package_name) {
-                found = true;
-                dropped.push((path.clone(), trimmed.to_string()));
+            let Ok(content) = fs::read_to_string(&path).await else {
                 continue;
-            }
-            kept.push(line.to_string());
-        }
+            };
 
-        if found {
-            let new_content = kept.join("\n") + "\n";
-            let path_owned = path.clone();
-            tokio::task::spawn_blocking(move || atomic_write(&path_owned, &new_content))
-                .await
-                .map_err(|e| Error::Other(e.to_string()))??;
+            let mut kept: Vec<String> = Vec::new();
+            let mut found = false;
+            for line in content.lines() {
+                let trimmed = line.trim();
+                // Comments and blanks are structure, not declarations — never touch them, so
+                // a sectioned manifest keeps its headings after an entry is dropped.
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    kept.push(line.to_string());
+                    continue;
+                }
+                if line_declares(trimmed, package_name) {
+                    found = true;
+                    dropped.push((path.clone(), trimmed.to_string()));
+                    continue;
+                }
+                kept.push(line.to_string());
+            }
+
+            if found {
+                let new_content = kept.join("\n") + "\n";
+                let path_owned = path.clone();
+                tokio::task::spawn_blocking(move || atomic_write(&path_owned, &new_content))
+                    .await
+                    .map_err(|e| Error::Other(e.to_string()))??;
+            }
         }
     }
     Ok(dropped)
@@ -566,6 +591,34 @@ mod conditional_tests {
             .unwrap();
         let lines = parse_group_file(&path).await.unwrap();
         assert_eq!(lines, vec!["cargo:ripgrep", "apt:htop"]);
+    }
+}
+
+#[cfg(test)]
+mod reserved_manifest_tests {
+    use super::is_reserved_manifest;
+
+    #[test]
+    fn keep_txt_is_not_a_wish_list() {
+        // keep.txt lives in the groups folder and ends in .txt, so every manifest reader
+        // slurped it as a list of packages to install. `linix managed keep firefox` means
+        // "never remove firefox"; it also quietly meant "install firefox". A protection
+        // list doubling as an install list is the exact opposite of its job.
+        assert!(is_reserved_manifest("keep.txt"));
+    }
+
+    #[test]
+    fn real_wish_lists_are_not_reserved() {
+        for name in [
+            "local.txt",
+            "base.txt",
+            "migrated_20260716_120000.txt",
+            // Written by `profile activate`. It IS a wish list, deliberately.
+            "_active_profiles.txt",
+            "host-workstation.txt",
+        ] {
+            assert!(!is_reserved_manifest(name), "{} must still be read", name);
+        }
     }
 }
 

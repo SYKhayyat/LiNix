@@ -1,5 +1,7 @@
 use crate::backends::BackendRegistry;
-use crate::config::parser::{identify_line, parse_group_file, parse_group_str, ManifestLine};
+use crate::config::parser::{
+    identify_line, is_reserved_manifest, parse_group_file, parse_group_str, ManifestLine,
+};
 use crate::config::Config;
 use crate::core::{Error, PackageSpec, Result, Validator};
 use semver::{Version, VersionReq};
@@ -30,10 +32,23 @@ pub struct StateResolver<'a> {
 }
 
 impl<'a> StateResolver<'a> {
+    /// Find `filename` in the wish-list folders, in read order: global, then each `-g`.
+    /// First match wins. `None` if no folder has it.
+    async fn find_in_wish_dirs(&self, filename: &str) -> Option<std::path::PathBuf> {
+        for dir in self.config.wish_dirs() {
+            let candidate = dir.join(filename);
+            if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
     /// Initializes a new StateResolver asynchronously.
     ///
-    /// If `locked` is true, it attempts to load the machine-generated
-    /// `locks.json` from the declarative manifests directory.
+    /// If `locked` is true, it attempts to load the machine-generated `locks.json`.
+    /// The lockfile lives in the GLOBAL groups folder, not in a `-g` folder: a lock is a
+    /// statement about what this machine has pinned, and there is one of those.
     pub async fn new(config: &'a Config, registry: Arc<BackendRegistry>, locked: bool) -> Self {
         let mut locks = HashMap::new();
 
@@ -163,31 +178,55 @@ impl<'a> StateResolver<'a> {
 
         // --- STEP 1: INITIAL SEEDING ---
 
-        // A. Load directory-based .txt manifests
-        if tokio::fs::try_exists(&self.config.groups_dir)
-            .await
-            .unwrap_or(false)
-        {
-            let mut entries = fs::read_dir(&self.config.groups_dir)
-                .await
-                .map_err(Error::from)?;
+        // A. Load directory-based .txt manifests, from every wish-list folder: the global
+        // one first, then each `-g` in the order given.
+        for dir in self.config.wish_dirs() {
+            if !tokio::fs::try_exists(&dir).await.unwrap_or(false) {
+                debug!(
+                    "Resolver: wish-list folder {:?} does not exist, skipping.",
+                    dir
+                );
+                continue;
+            }
 
+            // Collected and sorted rather than streamed. `read_dir` yields whatever order
+            // the filesystem feels like — hash order on ext4, B-tree order on NTFS — and
+            // this order is load-bearing: later lines override earlier ones, so with two
+            // files pinning different versions of the same package, the winner was decided
+            // by the filesystem and could differ between two machines holding identical
+            // files. Sorted by name, it is a rule someone can predict and rely on.
+            let mut names: Vec<String> = Vec::new();
+            let mut entries = fs::read_dir(&dir).await.map_err(Error::from)?;
             while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
-                let path = entry.path();
-                let fname = path.file_name().unwrap_or_default().to_string_lossy();
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+            names.sort();
 
-                // Process standard .txt files, ignoring recursive .module files
-                if fname.ends_with(".txt") && !fname.ends_with(".module.txt") {
-                    // Support host-specific provisioning: "host-WORKSTATION.txt"
-                    if fname.starts_with("host-") && fname != format!("host-{}.txt", hostname) {
-                        continue;
-                    }
+            for fname in names {
+                if !fname.ends_with(".txt") || fname.ends_with(".module.txt") {
+                    continue;
+                }
+                // LiNix's own files live in this folder too, and they are not wish lists.
+                // `keep.txt` is the one that bit: it means "never remove these", but it
+                // ends in .txt, so it was read as a manifest and every name in it became a
+                // package to INSTALL. Asking to keep something you had not installed
+                // installed it.
+                if is_reserved_manifest(&fname) {
+                    debug!(
+                        "Resolver: {} is a LiNix file, not a wish list — skipping.",
+                        fname
+                    );
+                    continue;
+                }
+                // Support host-specific provisioning: "host-WORKSTATION.txt"
+                if fname.starts_with("host-") && fname != format!("host-{}.txt", hostname) {
+                    continue;
+                }
 
-                    let source_id = format!("manifest:{}", fname);
-                    debug!("Resolver: Seeding from manifest source '{}'", source_id);
-                    for line in parse_group_file(&path).await? {
-                        raw_inputs.push_back((line, source_id.clone(), HashSet::new()));
-                    }
+                let source_id = format!("manifest:{}", fname);
+                debug!("Resolver: Seeding from manifest source '{}'", source_id);
+                for line in parse_group_file(&dir.join(&fname)).await? {
+                    raw_inputs.push_back((line, source_id.clone(), HashSet::new()));
                 }
             }
         }
@@ -255,8 +294,12 @@ impl<'a> StateResolver<'a> {
 
                 // Traditional named groups (manifest files or config.toml groups)
                 ManifestLine::Group(group_name) => {
-                    let group_path = self.config.groups_dir.join(format!("{}.txt", group_name));
-                    if tokio::fs::try_exists(&group_path).await.unwrap_or(false) {
+                    // Searched across every wish-list folder, in the same order they are
+                    // read: global, then each -g. First match wins, so a -g folder can
+                    // shadow a global group of the same name — the one place `-g` gets to
+                    // override rather than only add.
+                    let group_path = self.find_in_wish_dirs(&format!("{}.txt", group_name)).await;
+                    if let Some(group_path) = group_path {
                         let group_id = format!("group:{}", group_name);
                         for g_line in parse_group_file(&group_path).await? {
                             raw_inputs.push_back((g_line, group_id.clone(), excludes.clone()));
@@ -280,36 +323,42 @@ impl<'a> StateResolver<'a> {
                 // BFS, so includes may themselves contain groups/modules/includes (the
                 // MAX_EXPANSION_ITERATIONS guard above catches include cycles).
                 ManifestLine::Include(target) => {
-                    let included: Vec<String> = if target.starts_with("http://")
-                        || target.starts_with("https://")
-                    {
-                        match self.fetch_remote_manifest(&target).await {
-                            Ok(lines) => lines,
-                            Err(e) => {
-                                warn!(
-                                    "Resolver: include of '{}' (from {}) failed: {}. Skipping.",
-                                    target, source, e
-                                );
-                                Vec::new()
+                    let included: Vec<String> =
+                        if target.starts_with("http://") || target.starts_with("https://") {
+                            match self.fetch_remote_manifest(&target).await {
+                                Ok(lines) => lines,
+                                Err(e) => {
+                                    warn!(
+                                        "Resolver: include of '{}' (from {}) failed: {}. Skipping.",
+                                        target, source, e
+                                    );
+                                    Vec::new()
+                                }
                             }
-                        }
-                    } else {
-                        let p = std::path::Path::new(&target);
-                        let path = if p.is_absolute() {
-                            p.to_path_buf()
                         } else {
-                            self.config.groups_dir.join(&target)
+                            let p = std::path::Path::new(&target);
+                            let path = if p.is_absolute() {
+                                Some(p.to_path_buf())
+                            } else {
+                                // Searched across the wish-list folders, same order, first
+                                // match wins — so `include: base.txt` from a -g folder finds
+                                // its neighbour rather than only ever looking in global.
+                                self.find_in_wish_dirs(&target).await
+                            };
+                            match path {
+                                Some(path) => parse_group_file(&path).await?,
+                                None => {
+                                    warn!(
+                                        "Resolver: include target '{}' (from {}) not found in any \
+                                     wish-list folder ({:?}). Skipping.",
+                                        target,
+                                        source,
+                                        self.config.wish_dirs()
+                                    );
+                                    Vec::new()
+                                }
+                            }
                         };
-                        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-                            parse_group_file(&path).await?
-                        } else {
-                            warn!(
-                                "Resolver: include target '{}' (from {}) not found at {:?}. Skipping.",
-                                target, source, path
-                            );
-                            Vec::new()
-                        }
-                    };
                     let inc_id = format!("include:{}", target);
                     for inc_line in included {
                         raw_inputs.push_back((inc_line, inc_id.clone(), excludes.clone()));
@@ -600,6 +649,163 @@ fn merge_source_tag(existing: &mut String, source: &str) {
     } else {
         existing.push(';');
         existing.push_str(source);
+    }
+}
+
+#[cfg(test)]
+mod wish_list_tests {
+    use crate::backends::BackendRegistry;
+    use crate::config::Config;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    /// Resolve against real files on disk and return the flat `backend:name` set. Goes
+    /// through the real `resolve_desired_state`, so it exercises the directory walk that
+    /// the overlay changed rather than a re-implementation of it.
+    async fn resolved(cfg: &Config) -> Vec<String> {
+        let reg = Arc::new(BackendRegistry::new());
+        let resolver = super::StateResolver::new(cfg, reg, false).await;
+        let by_backend = resolver.resolve_desired_state().await.unwrap();
+        let mut out: Vec<String> = by_backend
+            .into_iter()
+            .flat_map(|(b, specs)| {
+                specs
+                    .into_iter()
+                    .map(move |s| format!("{}:{}", b, s.name))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn write(dir: &std::path::Path, name: &str, body: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(name), body).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_g_folder_adds_to_the_global_wish_list_instead_of_replacing_it() {
+        // The whole bug in one test. Before the overlay, `-g scratch` made global's
+        // packages vanish from the wish list while managed state still owned them —
+        // which is what turned them into drift and then into removals.
+        let tmp = tempdir().unwrap();
+        let global = tmp.path().join("global");
+        let scratch = tmp.path().join("scratch");
+        write(&global, "base.txt", "apt:curl\n");
+        write(&scratch, "extra.txt", "apt:jq\n");
+
+        let mut cfg = Config {
+            groups_dir: global.clone(),
+            ..Config::default()
+        };
+        cfg.extra_group_dirs = vec![scratch.clone()];
+
+        assert_eq!(resolved(&cfg).await, vec!["apt:curl", "apt:jq"]);
+    }
+
+    #[tokio::test]
+    async fn no_global_reads_only_the_g_folder() {
+        let tmp = tempdir().unwrap();
+        let global = tmp.path().join("global");
+        let scratch = tmp.path().join("scratch");
+        write(&global, "base.txt", "apt:curl\n");
+        write(&scratch, "extra.txt", "apt:jq\n");
+
+        let mut cfg = Config {
+            groups_dir: global.clone(),
+            ..Config::default()
+        };
+        cfg.extra_group_dirs = vec![scratch.clone()];
+        cfg.no_global = true;
+
+        assert_eq!(resolved(&cfg).await, vec!["apt:jq"]);
+    }
+
+    #[tokio::test]
+    async fn global_wins_when_a_g_folder_pins_the_same_package_differently() {
+        // The consequence of global-first + first-wins, stated as a rule: `-g` can ADD to
+        // your wish list but cannot quietly re-pin something global already decided. A
+        // scratch folder that could silently downgrade a globally pinned package would be
+        // a supply-chain footgun wearing a convenience flag.
+        let tmp = tempdir().unwrap();
+        let global = tmp.path().join("global");
+        let scratch = tmp.path().join("scratch");
+        write(&global, "base.txt", "apt:curl@version=1.0\n");
+        write(&scratch, "base.txt", "apt:curl@version=9.9\n");
+
+        let mut cfg = Config {
+            groups_dir: global.clone(),
+            ..Config::default()
+        };
+        cfg.extra_group_dirs = vec![scratch.clone()];
+
+        let reg = Arc::new(BackendRegistry::new());
+        let resolver = super::StateResolver::new(&cfg, reg, false).await;
+        let by_backend = resolver.resolve_desired_state().await.unwrap();
+        let curl = by_backend
+            .get("apt")
+            .and_then(|v| v.iter().find(|s| s.name == "curl"))
+            .expect("curl resolved");
+        assert_eq!(
+            curl.options.get("version").map(String::as_str),
+            Some("1.0"),
+            "a -g folder must not override a pin the global folder already made"
+        );
+    }
+
+    #[tokio::test]
+    async fn keep_txt_is_a_protection_list_not_an_install_list() {
+        // C14. keep.txt sits in the groups folder and ends in .txt, so the manifest walk
+        // read it as a wish list: `managed keep firefox` meant "never remove firefox" AND,
+        // silently, "install firefox".
+        let tmp = tempdir().unwrap();
+        let global = tmp.path().join("global");
+        write(&global, "base.txt", "apt:curl\n");
+        write(&global, "keep.txt", "firefox\n");
+
+        let cfg = Config {
+            groups_dir: global.clone(),
+            ..Config::default()
+        };
+        let got = resolved(&cfg).await;
+        assert_eq!(got, vec!["apt:curl"]);
+        assert!(
+            !got.iter().any(|s| s.contains("firefox")),
+            "a keep-list entry was turned into a package to install: {:?}",
+            got
+        );
+    }
+
+    #[tokio::test]
+    async fn manifests_are_read_in_sorted_order_not_filesystem_order() {
+        // C4. `read_dir` yields whatever order the filesystem feels like, and the FIRST
+        // declaration of a package wins — so with two files pinning one package, the winner
+        // was decided by the filesystem and could differ between two machines holding
+        // byte-identical files. Sorted by name, it is a rule someone can predict.
+        let tmp = tempdir().unwrap();
+        let global = tmp.path().join("global");
+        // Created in reverse order on purpose: creation order must not decide the winner.
+        write(&global, "z-last.txt", "apt:curl@version=2.0\n");
+        write(&global, "a-first.txt", "apt:curl@version=1.0\n");
+
+        let cfg = Config {
+            groups_dir: global.clone(),
+            ..Config::default()
+        };
+        let reg = Arc::new(BackendRegistry::new());
+        let resolver = super::StateResolver::new(&cfg, reg, false).await;
+        let by_backend = resolver.resolve_desired_state().await.unwrap();
+        let curl = by_backend
+            .get("apt")
+            .and_then(|v| v.iter().find(|s| s.name == "curl"))
+            .expect("curl resolved");
+        // a-first.txt sorts before z-last.txt, and the first declaration wins.
+        assert_eq!(
+            curl.options.get("version").map(String::as_str),
+            Some("1.0"),
+            "sorted read order must decide the winner, not the filesystem"
+        );
     }
 }
 

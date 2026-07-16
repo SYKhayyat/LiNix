@@ -41,7 +41,8 @@ impl Teleporter {
         journal: Arc<Mutex<Journal>>,
         state: Arc<Mutex<StateRegistry>>,
         diagnostics: Arc<FailureDiagnosticEngine>, // Added 4th DI component
-        groups_dir: &Path,
+        global_dir: &Path,
+        wish_dirs: Vec<std::path::PathBuf>,
     ) -> Self {
         let ghost_path = safe_data_dir().join("ghosts.json");
         Self {
@@ -49,7 +50,7 @@ impl Teleporter {
             journal,
             state,
             ghost_path,
-            manifest_engine: ManifestEngine::new(groups_dir),
+            manifest_engine: ManifestEngine::new(global_dir, wish_dirs),
             diagnostics,
         }
     }

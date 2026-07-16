@@ -31,9 +31,24 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
 
-    /// Directory containing package group files (.txt)
-    #[arg(short, long, global = true)]
-    pub groups_dir: Option<PathBuf>,
+    /// Also read package group files (.txt) from this directory. Repeatable.
+    ///
+    /// ADDS to your global groups folder rather than replacing it, so packages you manage
+    /// globally stay wanted. `-g a -g b` reads global, then a, then b, in that order.
+    ///
+    /// It used to replace, which is what made a mis-scoped command dangerous: your global
+    /// folder went unread, every package in it looked unwanted, and unwanted means removed.
+    /// Use --no-global for the isolated-sandbox behaviour, deliberately.
+    #[arg(short, long, global = true, value_name = "DIR")]
+    pub groups_dir: Vec<PathBuf>,
+
+    /// Read ONLY the -g directories, ignoring your global groups folder.
+    ///
+    /// Requires at least one -g. This makes every globally managed package look unwanted,
+    /// which for `prune`/`apply`/`sync` means scheduled for removal — so it is a separate,
+    /// explicit flag rather than something -g does quietly on your behalf.
+    #[arg(long, global = true)]
+    pub no_global: bool,
 
     /// Carry out a removal the guard refuses: one over `max_removals`, or touching a
     /// protected/essential package. Global because every command that can delete needs

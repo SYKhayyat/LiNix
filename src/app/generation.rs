@@ -20,39 +20,80 @@ use petgraph::stable_graph::StableDiGraph;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
-/// Read every manifest file (`*.txt`) in `groups_dir` into a filename->body map.
-/// A missing directory yields an empty map (nothing to freeze yet).
-pub async fn read_manifests(groups_dir: &Path) -> Result<HashMap<String, String>> {
+/// Read every manifest file (`*.txt`) across `wish_dirs` into a map of
+/// *full path* -> body. A missing directory contributes nothing.
+///
+/// Keyed by full path, not filename, so a generation records where each file came from and
+/// `rollback` can put it back there. Two wish-list folders may hold a `local.txt` each, and
+/// keying by name would silently drop one of them and restore the survivor over both.
+///
+/// `keep.txt` is excluded: it is a protection list, not something to freeze as intent.
+pub async fn read_manifests(wish_dirs: &[PathBuf]) -> Result<HashMap<String, String>> {
     let mut out = HashMap::new();
-    if !tokio::fs::try_exists(groups_dir).await.unwrap_or(false) {
-        return Ok(out);
-    }
-    let mut entries = tokio::fs::read_dir(groups_dir).await.map_err(Error::from)?;
-    while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
-        let path = entry.path();
-        if path.extension().map(|e| e == "txt").unwrap_or(false) {
+    for dir in wish_dirs {
+        if !tokio::fs::try_exists(dir).await.unwrap_or(false) {
+            continue;
+        }
+        let mut entries = tokio::fs::read_dir(dir).await.map_err(Error::from)?;
+        while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
+            let path = entry.path();
+            if !path.extension().map(|e| e == "txt").unwrap_or(false) {
+                continue;
+            }
+            let fname = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if crate::config::parser::is_reserved_manifest(&fname) {
+                continue;
+            }
             if let Ok(body) = tokio::fs::read_to_string(&path).await {
-                let fname = path.file_name().unwrap_or_default().to_string_lossy();
-                out.insert(fname.to_string(), body);
+                out.insert(path.to_string_lossy().into_owned(), body);
             }
         }
     }
     Ok(out)
 }
 
-/// Write manifest files back into `groups_dir`, backing up any pre-existing file that
+/// Write manifest files back where they came from, backing up any pre-existing file that
 /// would change to `<file>.linix-backup` (once) so a rollback never silently discards
 /// uncommitted manifest edits.
+///
+/// Keys are full paths (see `read_manifests`). A bare filename means the generation predates
+/// path-keying, and restores into `global_dir` — which is where every manifest lived when
+/// those generations were written, so the old behaviour is preserved exactly.
 pub async fn write_manifests_with_backup(
     manifests: &HashMap<String, String>,
-    groups_dir: &Path,
+    global_dir: &Path,
 ) -> Result<()> {
-    tokio::fs::create_dir_all(groups_dir)
+    tokio::fs::create_dir_all(global_dir)
         .await
         .map_err(Error::from)?;
-    for (fname, body) in manifests {
-        let target = groups_dir.join(fname);
+    for (key, body) in manifests {
+        let recorded = Path::new(key);
+        let target = if recorded.is_absolute() {
+            // The folder may be gone — a `-g` scratch dir that was cleaned up since. Recreate
+            // it rather than dropping the file: the generation is a promise to restore what
+            // was captured, and a silent partial restore is worse than an unexpected mkdir.
+            if let Some(parent) = recorded.parent() {
+                if !tokio::fs::try_exists(parent).await.unwrap_or(false) {
+                    warn!(
+                        "Rollback: recreating {:?} — it held manifests when this generation \
+                         was captured, and has since gone away.",
+                        parent
+                    );
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(Error::from)?;
+                }
+            }
+            recorded.to_path_buf()
+        } else {
+            global_dir.join(key)
+        };
         if let Ok(existing) = tokio::fs::read_to_string(&target).await {
             if existing != *body {
                 let backup = PathBuf::from(format!("{}.linix-backup", target.display()));
@@ -226,8 +267,8 @@ impl ManifestArchive {
 
     /// Archive the current manifests. Skips writing when the newest existing entry already
     /// has identical contents, so an unchanged manifest doesn't spawn duplicate history.
-    pub async fn capture(&self, id: &str, timestamp: &str, groups_dir: &Path) -> Result<bool> {
-        let files = read_manifests(groups_dir).await?;
+    pub async fn capture(&self, id: &str, timestamp: &str, wish_dirs: &[PathBuf]) -> Result<bool> {
+        let files = read_manifests(wish_dirs).await?;
         if let Some(latest) = self.list().await?.into_iter().next() {
             if latest.files == files {
                 return Ok(false);
@@ -358,11 +399,13 @@ impl GenerationStore {
         timestamp: &str,
         label: &str,
         state: &StateRegistry,
-        groups_dir: &Path,
+        global_dir: &Path,
+        wish_dirs: &[PathBuf],
     ) -> Result<Generation> {
         // Stamp the generation with the manifest repo's current commit, when git is in use.
-        // The repo root is the config dir (parent of groups_dir).
-        let git_commit = groups_dir
+        // The repo root is the config dir (parent of the GLOBAL groups dir) — the manifest
+        // repo is a property of the machine, not of whichever -g was passed.
+        let git_commit = global_dir
             .parent()
             .map(crate::core::GitManager::new)
             .filter(|g| g.is_repo())
@@ -374,7 +417,7 @@ impl GenerationStore {
             label: label.to_string(),
             pinned: false,
             packages: state.packages.clone(),
-            manifests: read_manifests(groups_dir).await?,
+            manifests: read_manifests(wish_dirs).await?,
             git_commit,
         };
         tokio::fs::create_dir_all(&self.dir)
@@ -460,10 +503,12 @@ impl GenerationStore {
         &self,
         id: &str,
         state: &mut StateRegistry,
-        groups_dir: &Path,
+        global_dir: &Path,
     ) -> Result<()> {
         let generation = self.load(id).await?;
-        write_manifests_with_backup(&generation.manifests, groups_dir).await?;
+        // Each manifest goes back to the folder it was captured from; `global_dir` is only
+        // the fallback for generations written before paths were recorded.
+        write_manifests_with_backup(&generation.manifests, global_dir).await?;
         // Restore the realized package set as the current managed state.
         state.packages = generation.packages.clone();
         state.save()?;
@@ -507,12 +552,23 @@ mod tests {
         state.packages = vec![pkg("curl", "apt", "8.4.0"), pkg("ripgrep", "cargo", "14.1")];
 
         let gen = store
-            .capture("gen1", "2026-07-03T00:00:00Z", "", &state, &groups)
+            .capture(
+                "gen1",
+                "2026-07-03T00:00:00Z",
+                "",
+                &state,
+                &groups,
+                std::slice::from_ref(&groups),
+            )
             .await
             .unwrap();
         assert_eq!(gen.packages.len(), 2);
+        // Keyed by full path, not bare filename: with -g there can be several folders in
+        // play, each with its own base.txt, and a name-keyed map silently keeps one.
         assert_eq!(
-            gen.manifests.get("base.txt").unwrap(),
+            gen.manifests
+                .get(groups.join("base.txt").to_string_lossy().as_ref())
+                .unwrap(),
             "apt:curl\ncargo:ripgrep\n"
         );
 
@@ -625,18 +681,18 @@ mod tests {
 
         // First capture writes; an identical re-capture is skipped (dedup).
         assert!(archive
-            .capture("m1", "2026-07-01T00:00:00Z", &groups)
+            .capture("m1", "2026-07-01T00:00:00Z", std::slice::from_ref(&groups))
             .await
             .unwrap());
         assert!(!archive
-            .capture("m2", "2026-07-02T00:00:00Z", &groups)
+            .capture("m2", "2026-07-02T00:00:00Z", std::slice::from_ref(&groups))
             .await
             .unwrap());
 
         // A real edit produces a new archive entry.
         write(&groups, "base.txt", "apt:curl\ncargo:bat\n").await;
         assert!(archive
-            .capture("m3", "2026-07-03T00:00:00Z", &groups)
+            .capture("m3", "2026-07-03T00:00:00Z", std::slice::from_ref(&groups))
             .await
             .unwrap());
 
@@ -683,7 +739,14 @@ mod tests {
         let store = GenerationStore::new(root.join("gens"));
         let state = StateRegistry::new(root.join("registry.json"));
         let gen = store
-            .capture("g1", "2026-07-03T00:00:00Z", "", &state, &groups)
+            .capture(
+                "g1",
+                "2026-07-03T00:00:00Z",
+                "",
+                &state,
+                &groups,
+                std::slice::from_ref(&groups),
+            )
             .await
             .unwrap();
 
@@ -698,11 +761,25 @@ mod tests {
         let store = GenerationStore::new(tmp.path().join("gens"));
         let state = StateRegistry::new(tmp.path().join("registry.json"));
         store
-            .capture("g1", "2026-07-01T00:00:00Z", "", &state, &groups)
+            .capture(
+                "g1",
+                "2026-07-01T00:00:00Z",
+                "",
+                &state,
+                &groups,
+                std::slice::from_ref(&groups),
+            )
             .await
             .unwrap();
         store
-            .capture("g2", "2026-07-05T00:00:00Z", "", &state, &groups)
+            .capture(
+                "g2",
+                "2026-07-05T00:00:00Z",
+                "",
+                &state,
+                &groups,
+                std::slice::from_ref(&groups),
+            )
             .await
             .unwrap();
 
@@ -728,15 +805,36 @@ mod tests {
         let state = StateRegistry::new(tmp.path().join("registry.json"));
 
         store
-            .capture("g1", "2026-07-01T00:00:00Z", "", &state, &groups)
+            .capture(
+                "g1",
+                "2026-07-01T00:00:00Z",
+                "",
+                &state,
+                &groups,
+                std::slice::from_ref(&groups),
+            )
             .await
             .unwrap();
         store
-            .capture("g2", "2026-07-02T00:00:00Z", "", &state, &groups)
+            .capture(
+                "g2",
+                "2026-07-02T00:00:00Z",
+                "",
+                &state,
+                &groups,
+                std::slice::from_ref(&groups),
+            )
             .await
             .unwrap();
         store
-            .capture("g3", "2026-07-03T00:00:00Z", "", &state, &groups)
+            .capture(
+                "g3",
+                "2026-07-03T00:00:00Z",
+                "",
+                &state,
+                &groups,
+                std::slice::from_ref(&groups),
+            )
             .await
             .unwrap();
 

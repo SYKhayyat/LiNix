@@ -31,11 +31,7 @@ pub struct DiagnosticDb {
 impl DiagnosticDb {
     /// Asynchronously loads the Knowledge Base from the configuration directory.
     pub async fn load(config: &Config) -> Self {
-        let db_path = config
-            .groups_dir
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join("diagnostics.json");
+        let db_path = config.config_root().join("diagnostics.json");
 
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
             match tokio::fs::read_to_string(&db_path).await {

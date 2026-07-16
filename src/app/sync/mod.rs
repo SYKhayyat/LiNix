@@ -75,7 +75,7 @@ impl<'a> SyncEngine<'a> {
         state: Arc<Mutex<StateRegistry>>,
         diagnostics: Arc<FailureDiagnosticEngine>,
     ) -> Self {
-        let manifest_engine = ManifestEngine::new(&config.groups_dir);
+        let manifest_engine = ManifestEngine::from_config(config);
         Self {
             config,
             registry,
@@ -265,7 +265,14 @@ impl<'a> SyncEngine<'a> {
         {
             let state = self.state.lock().await;
             gen_store
-                .capture(&id, &rfc, "", &state, &self.config.groups_dir)
+                .capture(
+                    &id,
+                    &rfc,
+                    "",
+                    &state,
+                    &self.config.groups_dir,
+                    &self.config.wish_dirs(),
+                )
                 .await?;
         }
         match gen_store
@@ -279,7 +286,7 @@ impl<'a> SyncEngine<'a> {
 
         // 2. Manifest archive: independent history of the instructions.
         let archive = crate::app::generation::ManifestArchive::new(base.join("manifest_archive"));
-        if let Err(e) = archive.capture(&id, &rfc, &self.config.groups_dir).await {
+        if let Err(e) = archive.capture(&id, &rfc, &self.config.wish_dirs()).await {
             warn!("Sync: manifest archive capture failed: {}", e);
         }
         match archive.prune(&self.config.retention.manifests, ts).await {

@@ -22,43 +22,90 @@ pub struct ManifestLocks {
     pub locks: HashMap<String, HashMap<String, String>>,
 }
 
-/// The ManifestEngine coordinates reads and writes to declarative .txt files and the lock-staging area.
-/// Hardened for Phase 3.1: Implements non-blocking I/O and staging-aware updates.
+/// Reads and writes the declarative `.txt` manifests and the lock-staging area.
+///
+/// It holds two directories, not one, because it does two jobs that stopped being the same
+/// thing when `-g` became additive:
+///
+/// - `global_dir` is where LiNix's own files live and where writes land. There is one.
+/// - `wish_dirs` are every folder whose manifests are READ: global, then each `-g`.
+///
+/// Collapsing them is the bug this split exists to prevent: a search that only looked in
+/// the global folder would not see a `-g` folder's declarations, and a write that followed
+/// `-g` would scatter `local.txt` across scratch directories.
 pub struct ManifestEngine {
-    groups_dir: PathBuf,
+    /// The folder LiNix owns: locks.json, local.txt. Writes go here.
+    global_dir: PathBuf,
+    /// Every folder read for declarations, in order: global first, then each `-g`.
+    wish_dirs: Vec<PathBuf>,
     locks_path: PathBuf,
 }
 
 impl ManifestEngine {
-    pub fn new(groups_dir: impl Into<PathBuf>) -> Self {
-        let dir = groups_dir.into();
+    /// Build from config — the normal path, and the one that gets the overlay right.
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self::new(&config.groups_dir, config.wish_dirs())
+    }
+
+    pub fn new(global_dir: impl Into<PathBuf>, wish_dirs: Vec<PathBuf>) -> Self {
+        let dir = global_dir.into();
         let locks_path = dir.join("locks.json");
+        // A caller with no wish dirs means "just the global folder"; an empty search set
+        // would silently report every package as undeclared.
+        let wish_dirs = if wish_dirs.is_empty() {
+            vec![dir.clone()]
+        } else {
+            wish_dirs
+        };
         Self {
-            groups_dir: dir,
+            global_dir: dir,
+            wish_dirs,
             locks_path,
         }
     }
 
-    /// Recursively scans the groups directory for all declarations of a package.
-    pub async fn find_all_packages(&self, package_name: &str) -> Result<Vec<PackageLocation>> {
-        let mut locations = Vec::new();
-        if !self.groups_dir.exists() {
-            return Ok(locations);
-        }
-
-        let groups_dir = self.groups_dir.clone();
-        let entries: Vec<PathBuf> = tokio::task::spawn_blocking(move || {
-            WalkDir::new(&groups_dir)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "txt")
-                })
-                .map(|e| e.path().to_path_buf())
-                .collect()
+    /// Every `.txt` manifest across the wish-list folders, deduplicated and in a stable
+    /// order. `read_dir`/`WalkDir` yield filesystem order, which differs between machines
+    /// holding identical files.
+    async fn manifest_files(&self) -> Result<Vec<PathBuf>> {
+        let dirs = self.wish_dirs.clone();
+        let mut entries: Vec<PathBuf> = tokio::task::spawn_blocking(move || {
+            let mut out: Vec<PathBuf> = Vec::new();
+            for dir in dirs {
+                if !dir.exists() {
+                    continue;
+                }
+                out.extend(
+                    WalkDir::new(&dir)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                        .filter(|e| {
+                            e.path().is_file()
+                                && e.path().extension().is_some_and(|ext| ext == "txt")
+                        })
+                        .filter(|e| {
+                            // keep.txt is a protection list, not a wish list. See
+                            // `is_reserved_manifest`.
+                            !e.file_name()
+                                .to_str()
+                                .is_some_and(crate::config::parser::is_reserved_manifest)
+                        })
+                        .map(|e| e.path().to_path_buf()),
+                );
+            }
+            out
         })
         .await
         .map_err(|e| Error::Other(e.to_string()))?;
+        entries.sort();
+        entries.dedup();
+        Ok(entries)
+    }
+
+    /// Scans every wish-list folder for all declarations of a package.
+    pub async fn find_all_packages(&self, package_name: &str) -> Result<Vec<PackageLocation>> {
+        let mut locations = Vec::new();
+        let entries = self.manifest_files().await?;
 
         for path in entries {
             let content = fs::read_to_string(&path).await?;
@@ -184,7 +231,11 @@ impl ManifestEngine {
     }
 
     pub async fn add_to_local(&self, spec_str: &str) -> Result<()> {
-        let local_path = self.groups_dir.join("local.txt");
+        // Always the GLOBAL folder. `local.txt` is the record of what you installed
+        // imperatively on this machine — one machine, one record. Following `-g` would
+        // scatter it across scratch folders, and a scratch folder that later goes away
+        // takes the only evidence those packages were wanted with it.
+        let local_path = self.global_dir.join("local.txt");
         let name_part = spec_str.split('@').next().unwrap_or(spec_str);
         let clean_name = name_part
             .split_once(':')
@@ -196,8 +247,8 @@ impl ManifestEngine {
             return Ok(());
         }
 
-        if !self.groups_dir.exists() {
-            fs::create_dir_all(&self.groups_dir).await?;
+        if !self.global_dir.exists() {
+            fs::create_dir_all(&self.global_dir).await?;
         }
 
         let mut lines = if tokio::fs::try_exists(&local_path).await.unwrap_or(false) {
@@ -226,25 +277,7 @@ impl ManifestEngine {
 
     pub async fn list_all_specs(&self) -> Result<Vec<String>> {
         let mut specs = Vec::new();
-        if !self.groups_dir.exists() {
-            return Ok(specs);
-        }
-
-        let groups_dir = self.groups_dir.clone();
-        let entries: Vec<PathBuf> = tokio::task::spawn_blocking(move || {
-            WalkDir::new(&groups_dir)
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "txt")
-                })
-                .map(|e| e.path().to_path_buf())
-                .collect()
-        })
-        .await
-        .map_err(|e| Error::Other(e.to_string()))?;
-
-        for path in entries {
+        for path in self.manifest_files().await? {
             let content = fs::read_to_string(path).await?;
             for line in content.lines() {
                 let trimmed = line.trim();

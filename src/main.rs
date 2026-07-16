@@ -438,22 +438,33 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
 
 /// A cheap fingerprint of the manifest directory: (path, size, mtime) for every `*.txt`. If it
 /// changes between ticks, a manifest was edited. Best-effort — errors just yield an empty sig.
-async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u64, i64)> {
+/// A fingerprint of every wish-list manifest, so `watch` notices an edit.
+///
+/// Covers ALL wish-list folders, not just the global one: `watch -g /scratch` that only
+/// fingerprinted global would sit there ignoring every edit to the folder the user pointed
+/// it at — a watcher that watches the wrong thing and reports no changes.
+async fn manifest_signature(dirs: &[std::path::PathBuf]) -> Vec<(String, u64, i64)> {
     let mut sig = Vec::new();
-    let Ok(mut rd) = tokio::fs::read_dir(dir).await else {
-        return sig;
-    };
-    while let Ok(Some(entry)) = rd.next_entry().await {
-        let path = entry.path();
-        if path.extension().map(|e| e == "txt").unwrap_or(false) {
-            if let Ok(meta) = entry.metadata().await {
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                sig.push((path.to_string_lossy().into_owned(), meta.len(), mtime));
+    for dir in dirs {
+        let Ok(mut rd) = tokio::fs::read_dir(dir).await else {
+            continue;
+        };
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let path = entry.path();
+            let fname = entry.file_name().to_string_lossy().into_owned();
+            if linix::config::parser::is_reserved_manifest(&fname) {
+                continue;
+            }
+            if path.extension().map(|e| e == "txt").unwrap_or(false) {
+                if let Ok(meta) = entry.metadata().await {
+                    let mtime = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+                    sig.push((path.to_string_lossy().into_owned(), meta.len(), mtime));
+                }
             }
         }
     }
@@ -508,7 +519,7 @@ async fn handle_watch(
         if pull { " (git pull each tick)" } else { "" },
         if on_change { " (on change only)" } else { "" },
     );
-    let mut last_sig = manifest_signature(&app.config.groups_dir).await;
+    let mut last_sig = manifest_signature(&app.config.wish_dirs()).await;
     let mut first = true;
     loop {
         if pull {
@@ -520,7 +531,7 @@ async fn handle_watch(
                 }
             }
         }
-        let sig = manifest_signature(&app.config.groups_dir).await;
+        let sig = manifest_signature(&app.config.wish_dirs()).await;
         let changed = sig != last_sig;
         // Reconcile on the first pass and whenever something changed; with --on-change we skip
         // ticks where nothing moved (the manifests and, after a pull, the repo are unchanged).
@@ -2934,7 +2945,7 @@ async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<(
         }
 
         let dropped =
-            linix::config::parser::remove_package_from_manifests(&app.config.groups_dir, spec)
+            linix::config::parser::remove_package_from_manifests(&app.config.wish_dirs(), spec)
                 .await?;
 
         results.push(serde_json::json!({
@@ -4384,15 +4395,18 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
         cli.backend.clone(),
         None,
         cli.groups_dir.clone(),
+        cli.no_global,
         Some(cli.verbose),
         Some(cli.allow_mass_removal),
-    );
+    )?;
     // --quiet has no config-file merge counterpart; apply it directly (a set flag wins).
     if cli.quiet {
         config.quiet = true;
     }
-    // Fold the user-editable keep-list (groups_dir/keep.txt) into the protected set, now
-    // that groups_dir is final. Every `is_protected` consumer then honors it automatically.
+    // Fold the user-editable keep-list into the protected set. It lives in the GLOBAL
+    // groups folder, which `-g` no longer moves — previously `-g /tmp/foo` made this look
+    // for /tmp/foo/keep.txt, found nothing, returned early, and every keep-list protection
+    // silently evaporated for that command. Every `is_protected` consumer honors it.
     config.merge_keep_file();
     Ok(config)
 }

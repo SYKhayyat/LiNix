@@ -460,13 +460,18 @@ pub fn line_declares(line: &str, backend: &str, name: &str) -> bool {
 async fn scan_declarations(app: &App, backend: &str, name: &str) -> Vec<String> {
     let mut hits = Vec::new();
 
-    // Groups directory (manifests + host files + named groups), scanned recursively.
-    let groups_dir = app.config.groups_dir.clone();
-    if let Ok(mut entries) = tokio::fs::read_dir(&groups_dir).await {
+    // Every wish-list folder (manifests + host files + named groups). Scanning only the
+    // global one would report a package as undeclared while a -g manifest is the exact
+    // reason it is installed — `why` answering "nothing wants this" about a package
+    // something plainly wants.
+    for groups_dir in app.config.wish_dirs() {
+        let Ok(mut entries) = tokio::fs::read_dir(&groups_dir).await else {
+            continue;
+        };
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             let fname = entry.file_name().to_string_lossy().into_owned();
-            if !fname.ends_with(".txt") {
+            if !fname.ends_with(".txt") || crate::config::parser::is_reserved_manifest(&fname) {
                 continue;
             }
             if let Ok(content) = tokio::fs::read_to_string(&path).await {

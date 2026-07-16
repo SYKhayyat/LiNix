@@ -73,6 +73,22 @@ rm -rf "$LINIX_CONFIG_DIR"; mkdir -p "$LINIX_CONFIG_DIR"
 GLOBAL_GDIR="$LINIX_CONFIG_DIR/groups"   # where LiNix looks when nobody passes -g
 mkdir -p "$GLOBAL_GDIR"
 
+# A section that makes LiNix WRITE into its global folder (migrate is the one that matters:
+# it adopts real packages) needs its own config dir, or what it writes leaks into every
+# later section's wish list and silently becomes "packages the user wants". `-g` used to
+# provide this isolation for free; now that it only ADDS folders, isolation has to be asked
+# for. That is the whole point of the change, so the harness says it out loud.
+push_config_dir() {
+    _PREV_CFG="$LINIX_CONFIG_DIR"
+    export LINIX_CONFIG_DIR="$1"
+    rm -rf "$LINIX_CONFIG_DIR"; mkdir -p "$LINIX_CONFIG_DIR/groups"
+    GLOBAL_GDIR="$LINIX_CONFIG_DIR/groups"
+}
+pop_config_dir() {
+    export LINIX_CONFIG_DIR="$_PREV_CFG"
+    GLOBAL_GDIR="$LINIX_CONFIG_DIR/groups"
+}
+
 # Wrap every linix call in `timeout` when available (GNU coreutils + busybox both accept
 # `timeout SECS CMD…`). A timed-out command exits 124, which our checks treat as failure.
 if command -v timeout >/dev/null 2>&1; then TO="timeout $TIMEOUT"; HAVE_TO=1; else TO=""; HAVE_TO=0; fi
@@ -451,8 +467,12 @@ feat status
 
 # ---------------------------------------- declarative lifecycle ROUNDTRIP (scoped)
 hr "8. DECLARATIVE ROUNDTRIP — write file -> sync -> installed ; edit file -> prune -> gone"
+# local.txt is LiNix's own file and lives in the GLOBAL groups folder — `-g` adds a folder
+# to READ, it no longer relocates LiNix's bookkeeping. That split is the point of the
+# overlay: the ownership registry never moved either, and the two disagreeing is what
+# turned every globally managed package into drift.
 lx -g "$GDIR" init >/dev/null 2>&1; RC=$?
-MANIFEST="$GDIR/local.txt"
+MANIFEST="$GLOBAL_GDIR/local.txt"
 if [ $RC -eq 0 ] && [ -f "$MANIFEST" ]; then okf init "init scaffolds manifest at $MANIFEST"; else no "init rc=$RC$(rcnote $RC), manifest present=$( [ -f "$MANIFEST" ] && echo yes || echo no)"; fi
 feat init
 
@@ -468,7 +488,8 @@ present "$PKG" && okf sync "sync INSTALLED '$PKG' from the manifest file" || no 
 feat sync
 
 lx -g "$GDIR" -b "$BACKEND" lock >/dev/null 2>&1; RC=$?
-if [ $RC -eq 0 ] && [ -f "$GDIR/locks.json" ]; then okf lock "lock writes locks.json"; else soft "lock rc=$RC$(rcnote $RC) / no locks.json"; fi
+# locks.json is anchored to global too — one machine, one set of pins.
+if [ $RC -eq 0 ] && [ -f "$GLOBAL_GDIR/locks.json" ]; then okf lock "lock writes locks.json in the global folder, not the -g one"; else soft "lock rc=$RC$(rcnote $RC) / no locks.json"; fi
 feat lock
 
 OUT="$(lx -g "$GDIR" -b "$BACKEND" generation list 2>&1)"; RC=$?
@@ -526,7 +547,7 @@ OUT="$(lx -b "$BACKEND" status --json 2>/dev/null)"; is_json "$OUT" && ok "statu
 
 # ------------------------------------------------- PROFILES lifecycle
 hr "10. PROFILES — activate/deactivate, MULTIPLE active, RELATIONAL (include / exclude / -pkg)"
-PGDIR="/tmp/linix-it-prof"; PROFDIR="/tmp/profiles"   # profiles_dir = parent(groups_dir)/profiles
+PGDIR="/tmp/linix-it-prof"; PROFDIR="$LINIX_CONFIG_DIR/profiles"   # profiles_dir = parent(GLOBAL groups_dir)/profiles
 rm -rf "$PGDIR" "$PROFDIR"; mkdir -p "$PGDIR" "$PROFDIR"
 # Define profiles as files: two atomic ones, a "plus" composition, and a "minus" relational one.
 printf '%s\n' "$BACKEND:$PKG"  > "$PROFDIR/alpha.profile"
@@ -662,7 +683,11 @@ lx -y repo add linix-it-testrepo "https://example.com/linix-it" -b "$BACKEND" >/
 [ $RC -eq 0 ] && soft "repo add exits 0" || soft "repo add rc=$RC (needs a real source — tolerated)"
 lx -y repo remove linix-it-testrepo -b "$BACKEND" >/dev/null 2>&1
 feat repo
-# migrate: ingest OS-installed-but-unmanaged packages into a manifest (scoped + tolerant).
+# migrate: adopt OS-installed-but-unmanaged packages into a manifest.
+# Its own config dir: migrate writes into the GLOBAL groups folder (adoption is a fact
+# about this machine, and the ownership registry it feeds is global too), so without this
+# every package it adopts would join the wish list of every section that follows.
+push_config_dir "/tmp/linix-it-cfg-migrate"
 lxt 120 -g "$FGDIR" -b "$BACKEND" -y migrate >/dev/null 2>&1; RC=$?
 [ $RC -eq 0 ] && okf migrate "migrate (scoped) exits 0" || soft "migrate rc=$RC$(rcnote $RC) (tolerated)"; feat migrate
 
@@ -670,7 +695,7 @@ lxt 120 -g "$FGDIR" -b "$BACKEND" -y migrate >/dev/null 2>&1; RC=$?
 # said nothing about this: apt adopted all 579 installed packages instead of the 103 in
 # `apt-mark showmanual`, which then made every dependency look like drift and purged the
 # system. These assertions are what would have caught it.
-MIGF="$(ls "$FGDIR"/migrated_*.txt 2>/dev/null | head -1)"
+MIGF="$(ls "$GLOBAL_GDIR"/migrated_*.txt 2>/dev/null | head -1)"
 if [ -n "$MIGF" ]; then
     ADOPTED=$(grep -cvE '^\s*(#|$)' "$MIGF" 2>/dev/null || echo 0)
     if [ "$BACKEND" = "apt" ]; then
@@ -721,41 +746,67 @@ else
     soft "migrate wrote no manifest (nothing adoptable on this image)"
 fi
 
-# THE REGRESSION THAT STARTED ALL THIS. migrate records ownership in the GLOBAL state
-# registry, which `-g` does not scope. A command later pointed at a DIFFERENT -g therefore
-# sees every adopted package as drift and schedules it for removal — that is what purged
-# python3 and blew the time limit.
+# THE REGRESSION THAT STARTED ALL THIS, and the test that proves the overlay fixed it.
 #
-# DRY-RUN ONLY, on purpose. A real prune here removes those packages for real: on Alpine
-# that is 14 (git, nodejs, ruby, rustup, pipx…), which took python3's stdlib with it and
-# made every later --json assertion fail. Running the disaster is not a test of it.
+# migrate records ownership in the GLOBAL state registry, which `-g` cannot move. It writes
+# the matching manifest into the GLOBAL groups folder. Before the overlay, `-g` REPLACED the
+# wish list, so a later command pointed at a different -g read neither of those: every
+# adopted package was owned, unwished, and therefore drift — scheduled for removal. That is
+# what purged python3 and blew the time limit.
 #
-# Note what this does and does NOT prove. The guard caps the blast radius; it does not fix
-# the -g/global-state split (that is the groups-dir overlay work). So on a large system the
-# plan is refused outright, while on a small one it stays under max_removals and is allowed
-# — correctly, by today's rules. What must hold EVERYWHERE is that no protected/system
-# package is ever scheduled.
+# Now `-g` ADDS. The global folder is still read, the migrate manifest is still in it, so
+# the adopted packages are still wanted and NOTHING is drift. The evidence and the
+# accusation can no longer be separated by a flag.
+#
+# Still dry-run: if this ever regresses, a real prune removes those packages for real (on
+# Alpine that is git, nodejs, ruby, rustup, pipx…, which takes python3's stdlib with it).
+# Running the disaster is not a test of it.
 PGDIR2="/tmp/linix-it-postmigrate"; rm -rf "$PGDIR2"; mkdir -p "$PGDIR2"
 echo "$BACKEND:$PKG" > "$PGDIR2/local.txt"
 OUT="$(lxt 120 -g "$PGDIR2" -b "$BACKEND" -n prune 2>&1)"; RC=$?
-case "$BACKEND" in
-    apt)
-        # ~84 adopted, far over max_removals=20 → must be refused outright.
-        [ $RC -ne 0 ] && ok "post-migrate prune under a different -g is refused (guard held)" \
-                      || no "post-migrate prune under a different -g was NOT refused"
-        ;;
-    *)
-        [ $RC -ne 0 ] && ok "post-migrate prune under a different -g is refused (guard held)" \
-                      || soft "post-migrate prune under a different -g is allowed (under max_removals; the -g/global-state split is not fixed yet)"
-        ;;
-esac
-# Whatever the count, the guard's job is that system-critical packages are never scheduled.
+
+# The real fix: adopted packages stay wanted, so a prune under a different -g has nothing to
+# remove and exits cleanly. Previously this was either refused by the guard (apt: 84 adopted,
+# over max_removals) or silently ALLOWED to purge (alpine: 14, under the limit). The guard
+# capped the blast radius; it never fixed the cause. This is the cause being fixed.
+if [ -n "$MIGF" ]; then
+    ADOPTED_ONE="$(grep -vE '^\s*(#|$)' "$MIGF" 2>/dev/null | head -1 | cut -d: -f2-)"
+    if [ -n "$ADOPTED_ONE" ]; then
+        printf '%s' "$OUT" | grep -qw "$ADOPTED_ONE" \
+            && no "prune under a different -g still schedules adopted package '$ADOPTED_ONE' — the global folder was not read" \
+            || ok "prune under a different -g does NOT touch migrate's adopted packages (global still vouches for them)"
+    else
+        soft "post-migrate prune: nothing was adopted, nothing to check"
+    fi
+fi
+[ $RC -eq 0 ] && ok "post-migrate prune under a different -g exits 0 (no phantom drift)" \
+             || soft "post-migrate prune rc=$RC$(rcnote $RC)"
+
+# And the guard's own job, independent of the overlay: system-critical packages are never
+# scheduled, whatever the count. Belt and braces — this held even before the overlay.
 BADHIT=""
 for p in busybox alpine-baselayout apk-tools bash dpkg apt libc6 glibc python3 systemd coreutils; do
     printf '%s' "$OUT" | grep -qE "^\s*[^[:alnum:]]*\[[a-z]+\s*\]\s+$p\b" && BADHIT="$BADHIT $p"
 done
 [ -z "$BADHIT" ] && ok "post-migrate prune schedules no protected/system package" \
                  || no "post-migrate prune scheduled protected package(s):$BADHIT"
+
+# --no-global re-arms the old behaviour, deliberately and explicitly. It must still be
+# guarded: the escape valve is not a way around the guard.
+OUT="$(lxt 120 --no-global -g "$PGDIR2" -b "$BACKEND" -n prune 2>&1)"; RC=$?
+BADHIT2=""
+for p in busybox alpine-baselayout apk-tools bash dpkg apt libc6 glibc python3 systemd coreutils; do
+    printf '%s' "$OUT" | grep -qE "^\s*[^[:alnum:]]*\[[a-z]+\s*\]\s+$p\b" && BADHIT2="$BADHIT2 $p"
+done
+[ -z "$BADHIT2" ] && ok "--no-global still refuses to schedule protected/system packages" \
+                  || no "--no-global bypassed protection for:$BADHIT2"
+
+# --no-global with no -g would mean "read nothing", i.e. "remove everything managed".
+lx --no-global -b "$BACKEND" -n prune >/dev/null 2>&1; RC=$?
+[ $RC -ne 0 ] && ok "--no-global without any -g is refused (it would mean 'want nothing')" \
+              || no "--no-global with no -g was accepted — that reads as 'remove everything'"
+
+pop_config_dir
 
 # `protected`: the guard is only trustworthy if you can see what it protects, so this is a
 # real contract, not a smoke test. It must answer for humans AND machines, and its answer
@@ -976,9 +1027,9 @@ LKDIR="/tmp/linix-it-lock"; rm -rf "$LKDIR"; mkdir -p "$LKDIR"; lx -g "$LKDIR" i
 echo "$BACKEND:$PKG" >> "$LKDIR/local.txt"
 dlx -g "$LKDIR" -b "$BACKEND" -y sync >/dev/null 2>&1
 lx -g "$LKDIR" -b "$BACKEND" lock >/dev/null 2>&1
-if [ -f "$LKDIR/locks.json" ] && grep -q '"sig"' "$LKDIR/locks.json"; then
+if [ -f "$GLOBAL_GDIR/locks.json" ] && grep -q '"sig"' "$GLOBAL_GDIR/locks.json"; then
     ok "lock signs locks.json (tamper-evident)"
-    sed -i 's/"sig": *"[0-9a-f]/"sig": "0/' "$LKDIR/locks.json" 2>/dev/null
+    sed -i 's/"sig": *"[0-9a-f]/"sig": "0/' "$GLOBAL_GDIR/locks.json" 2>/dev/null
     OUT="$(timeout 30 "$LINIX" -g "$LKDIR" -b "$BACKEND" -v status 2>&1)"
     printf '%s\n' "$OUT" | grep -qi "MISMATCH" && ok "a modified lockfile is detected (signature MISMATCH) and refused" || no "tampered lockfile was NOT flagged"
 else

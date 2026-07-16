@@ -188,8 +188,36 @@ pub struct Config {
     #[serde(skip)]
     pub allow_mass_removal: bool,
 
+    /// Your groups folder: the one LiNix owns. It holds the manifests you keep permanently,
+    /// and it is where LiNix's own files live — `locks.json`, `keep.txt`, `local.txt`,
+    /// `policy.toml`, and (as a sibling) `profiles/`.
+    ///
+    /// This is the *global* folder, and `-g` does not move it. It used to: `-g` overwrote
+    /// this field outright, which meant one flag silently relocated the lockfile, the keep
+    /// list and the record of your imperative installs — all of which then read as missing.
+    /// Meanwhile the ownership registry, which `-g` cannot move, still claimed every
+    /// package. Everything owned but unwished is drift, and drift gets removed. That is the
+    /// whole bug: `-g` moved the evidence and left the accusation standing.
     #[serde(default = "default_groups_dir")]
     pub groups_dir: PathBuf,
+
+    /// Extra folders to read manifests from, from `-g`. Additive — the global `groups_dir`
+    /// is still read — and repeatable, so `-g a -g b` reads global plus both.
+    ///
+    /// Not persistable: this is a per-invocation view, and a permanent one belongs in
+    /// `groups_dir`.
+    #[serde(skip)]
+    pub extra_group_dirs: Vec<PathBuf>,
+
+    /// `--no-global`: read only the `-g` folders, ignoring `groups_dir`.
+    ///
+    /// The release valve for the one thing the additive model costs you: with `-g` alone
+    /// you can add to your wish list but never subtract from it, so a truly isolated
+    /// sandbox needs a way to say "just this folder". It is deliberately a separate,
+    /// explicit flag, because it re-arms the exact footgun: it makes every globally
+    /// managed package look unwished, and unwished means removable.
+    #[serde(skip)]
+    pub no_global: bool,
 
     /// Feature 3: Directory containing reusable .module.txt files.
     #[serde(default = "default_modules_dir")]
@@ -512,6 +540,8 @@ impl Default for Config {
             yes: false,
             allow_mass_removal: false,
             groups_dir: default_groups_dir(),
+            extra_group_dirs: Vec::new(),
+            no_global: false,
             modules_dir: default_modules_dir(),
             config_file: safe_config_dir().join("config.toml"),
             enabled_backends: Vec::new(),
@@ -612,16 +642,53 @@ impl Config {
         effective.is_empty() || effective.iter().any(|b| b == backend)
     }
 
+    /// The directory LiNix's non-manifest data hangs off: the parent of the global groups
+    /// folder. `profiles/`, `diagnostics.json`, `config.toml` and the manifest git repo all
+    /// live here.
+    ///
+    /// It NEVER resolves to the current working directory. `Path::parent()` of a bare
+    /// relative `groups_dir` (e.g. `"groups"`) returns an *empty* path, and joining onto
+    /// that silently targets `.` — whatever directory or git repo the user happens to be
+    /// standing in. One of the five call sites had noticed and guarded; the other four
+    /// hand-rolled `unwrap_or(Path::new("."))`, which is that bug spelled out as if it
+    /// were the intent. They all call this now.
+    pub fn config_root(&self) -> PathBuf {
+        self.groups_dir
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
+            .map(PathBuf::from)
+            .unwrap_or_else(safe_config_dir)
+    }
+
+    /// Every folder whose `.txt` manifests contribute to the wish list, in read order:
+    /// global first, then each `-g` in the order given.
+    ///
+    /// The order is defined rather than incidental because later files can override an
+    /// earlier version pin, and "which one wins" must not be decided by the filesystem.
+    pub fn wish_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        if !self.no_global {
+            dirs.push(self.groups_dir.clone());
+        }
+        for d in &self.extra_group_dirs {
+            if !dirs.contains(d) {
+                dirs.push(d.clone());
+            }
+        }
+        dirs
+    }
+
     pub fn merge_cli_overrides(
         &mut self,
         dry_run: Option<bool>,
         yes: Option<bool>,
         backend: Option<String>,
         config_path: Option<PathBuf>,
-        groups_dir: Option<PathBuf>,
+        groups_dirs: Vec<PathBuf>,
+        no_global: bool,
         verbose: Option<bool>,
         allow_mass_removal: Option<bool>,
-    ) {
+    ) -> Result<()> {
         if let Some(dr) = dry_run {
             self.dry_run = dr;
         }
@@ -637,12 +704,29 @@ impl Config {
         if let Some(cp) = config_path {
             self.config_file = cp;
         }
-        if let Some(gd) = groups_dir {
-            self.groups_dir = gd;
+        // `-g` ADDS folders; it does not replace the global one. See `groups_dir`.
+        self.extra_group_dirs = groups_dirs;
+        self.no_global = no_global;
+
+        // `--no-global` with no `-g` asks LiNix to read no manifests at all. Read
+        // literally, that means "I want nothing installed", and the honest execution of it
+        // is to remove every managed package on the machine. Nobody means that. Refusing is
+        // the only safe reading, and refusing loudly beats guessing which of the two
+        // opposite things they meant.
+        if self.no_global && self.extra_group_dirs.is_empty() {
+            return Err(Error::Config(
+                "--no-global tells LiNix to ignore your global groups folder, but no -g \
+                 folder was given, so there would be nothing left to read. Every managed \
+                 package would count as unwanted. Pass at least one -g <dir>, or drop \
+                 --no-global."
+                    .into(),
+            ));
         }
+
         if let Some(v) = verbose {
             self.verbose = v;
         }
+        Ok(())
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -765,6 +849,102 @@ mod tests {
         assert!(cfg.is_backend_enabled("apt"));
         assert!(cfg.is_backend_enabled("cargo"));
         assert!(cfg.effective_enabled_backends().is_empty());
+    }
+
+    /// Apply `-g dirs` (and optionally --no-global) to a config anchored at `global`.
+    fn with_g(global: &str, dirs: &[&str], no_global: bool) -> Result<Config> {
+        let mut cfg = Config {
+            groups_dir: PathBuf::from(global),
+            ..Config::default()
+        };
+        cfg.merge_cli_overrides(
+            None,
+            None,
+            None,
+            None,
+            dirs.iter().map(PathBuf::from).collect(),
+            no_global,
+            None,
+            None,
+        )?;
+        Ok(cfg)
+    }
+
+    #[test]
+    fn g_adds_a_folder_and_does_not_replace_the_global_one() {
+        // THE root-cause fix. `-g` used to overwrite groups_dir outright, so the global
+        // folder went unread while the ownership registry — which `-g` cannot move — still
+        // claimed every package in it. Owned but unwished is drift, and drift gets removed.
+        let cfg = with_g("/cfg/groups", &["/scratch"], false).unwrap();
+        assert_eq!(
+            cfg.wish_dirs(),
+            vec![PathBuf::from("/cfg/groups"), PathBuf::from("/scratch")],
+            "global must still be read, and must be read first"
+        );
+    }
+
+    #[test]
+    fn g_is_repeatable_and_keeps_the_order_given() {
+        // Order is a contract: later files override an earlier version pin, so "which one
+        // wins" must be predictable rather than a property of the filesystem.
+        let cfg = with_g("/cfg/groups", &["/a", "/b"], false).unwrap();
+        assert_eq!(
+            cfg.wish_dirs(),
+            vec![
+                PathBuf::from("/cfg/groups"),
+                PathBuf::from("/a"),
+                PathBuf::from("/b"),
+            ]
+        );
+    }
+
+    #[test]
+    fn g_does_not_move_the_lockfile_the_keep_list_or_local() {
+        // The anchor must not follow -g. When it did, one flag relocated the lockfile, the
+        // keep list and the record of imperative installs — all of which then read as
+        // missing, so `merge_keep_file` returned early and every keep protection silently
+        // evaporated for that command.
+        let cfg = with_g("/cfg/groups", &["/scratch"], false).unwrap();
+        assert_eq!(cfg.groups_dir, PathBuf::from("/cfg/groups"));
+        assert_eq!(cfg.keep_file_path(), PathBuf::from("/cfg/groups/keep.txt"));
+    }
+
+    #[test]
+    fn no_global_reads_only_the_g_folders() {
+        let cfg = with_g("/cfg/groups", &["/scratch"], true).unwrap();
+        assert_eq!(cfg.wish_dirs(), vec![PathBuf::from("/scratch")]);
+        // ...but the anchor still does not move: an isolated wish list is not a reason to
+        // lose the keep list.
+        assert_eq!(cfg.keep_file_path(), PathBuf::from("/cfg/groups/keep.txt"));
+    }
+
+    #[test]
+    fn no_global_without_any_g_folder_is_refused() {
+        // Read literally it means "read no manifests", i.e. "I want nothing installed",
+        // whose honest execution is removing every managed package. Nobody means that.
+        let err = with_g("/cfg/groups", &[], true).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("--no-global"), "{}", msg);
+        assert!(
+            msg.contains("-g"),
+            "the message must say how to fix it: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn a_repeated_g_folder_is_only_read_once() {
+        let cfg = with_g("/cfg/groups", &["/a", "/a"], false).unwrap();
+        assert_eq!(
+            cfg.wish_dirs(),
+            vec![PathBuf::from("/cfg/groups"), PathBuf::from("/a")]
+        );
+    }
+
+    #[test]
+    fn passing_the_global_folder_to_g_does_not_read_it_twice() {
+        let cfg = with_g("/cfg/groups", &["/cfg/groups"], false).unwrap();
+        assert_eq!(cfg.wish_dirs(), vec![PathBuf::from("/cfg/groups")]);
     }
 
     #[test]

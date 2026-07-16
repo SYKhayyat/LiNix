@@ -43,14 +43,53 @@ FAST="${FAST:-0}"
 # `prune`/profile convergence only ever reconciles packages THIS run installed. Critical on a
 # real machine: without it, `prune` would consider every linix-managed package on the box as
 # drift. Git-Bash only path-converts argv (not env vars), so convert to a Windows path via
-# cygpath; bash creates the same physical dir via the POSIX form. Config dir is left alone so
-# your real backend settings still apply.
+# cygpath; bash creates the same physical dir via the POSIX form.
 _state_posix="${TMPDIR:-/tmp}/linix-it-state"
 rm -rf "$_state_posix"; mkdir -p "$_state_posix"
+
+# The CONFIG dir must be isolated too, and on this harness that is a SAFETY requirement, not
+# tidiness: this script runs against your real machine, not a container.
+#
+# The old comment here said the config dir was left alone "so your real backend settings
+# still apply". That was survivable only while `-g` REPLACED the wish list, which meant your
+# real groups folder went unread. Now `-g` ADDS, and the global folder is always read — so
+# leaving this pointed at your real config would put every package you actually manage into
+# this run's wish list. `sync` would install them and `prune` would weigh them as drift.
+# The harness would be operating your real machine.
+_cfg_posix="${TMPDIR:-/tmp}/linix-it-config"
+rm -rf "$_cfg_posix"; mkdir -p "$_cfg_posix/groups"
+GLOBAL_GDIR="$_cfg_posix/groups"   # where LiNix looks when nobody passes -g
+
+# A section that makes LiNix WRITE into its global folder (migrate adopts real packages)
+# needs its own config dir, or what it writes joins every later section's wish list. `-g`
+# used to isolate this for free; now that it only ADDS folders, isolation is explicit.
+push_config_dir() {
+    _PREV_CFG_POSIX="$_cfg_posix"
+    _cfg_posix="$1"
+    rm -rf "$_cfg_posix"; mkdir -p "$_cfg_posix/groups"
+    GLOBAL_GDIR="$_cfg_posix/groups"
+    if command -v cygpath >/dev/null 2>&1; then
+        export LINIX_CONFIG_DIR="$(cygpath -w "$_cfg_posix")"
+    else
+        export LINIX_CONFIG_DIR="$_cfg_posix"
+    fi
+}
+pop_config_dir() {
+    _cfg_posix="$_PREV_CFG_POSIX"
+    GLOBAL_GDIR="$_cfg_posix/groups"
+    if command -v cygpath >/dev/null 2>&1; then
+        export LINIX_CONFIG_DIR="$(cygpath -w "$_cfg_posix")"
+    else
+        export LINIX_CONFIG_DIR="$_cfg_posix"
+    fi
+}
+
 if command -v cygpath >/dev/null 2>&1; then
     export LINIX_DATA_DIR="$(cygpath -w "$_state_posix")"
+    export LINIX_CONFIG_DIR="$(cygpath -w "$_cfg_posix")"
 else
     export LINIX_DATA_DIR="$_state_posix"
+    export LINIX_CONFIG_DIR="$_cfg_posix"
 fi
 
 if command -v timeout >/dev/null 2>&1; then TO="timeout $TIMEOUT"; HAVE_TO=1; else TO=""; HAVE_TO=0; fi
@@ -294,14 +333,14 @@ else no "bogus install returned 0 — failure SWALLOWED"; fi
 
 hr "7. DECLARATIVE ROUNDTRIP — write file -> sync -> installed ; edit file -> prune -> gone"
 lx -g "$GDIR" init >/dev/null 2>&1; RC=$?
-MANIFEST="$GDIR/local.txt"
+MANIFEST="$GLOBAL_GDIR/local.txt"   # local.txt is anchored to global; -g no longer moves it
 { [ $RC -eq 0 ] && [ -f "$MANIFEST" ]; } && ok "init scaffolds $MANIFEST" || no "init rc=$RC$(rcnote $RC) / no manifest"; feat init
 echo "$BACKEND:$PKG" >> "$MANIFEST"
 lx -g "$GDIR" -b "$BACKEND" -y sync >/dev/null 2>&1; RC=$?
 [ $RC -eq 0 ] && ok "sync (scoped) exits 0" || no "sync exit=$RC$(rcnote $RC)"; feat sync status
 lx --backend "$BACKEND" list 2>/dev/null | grep -qiw "$PKG" && ok "sync installed '$PKG' from the manifest file" || soft "sync ran but list does not show '$PKG'"
 lx -g "$GDIR" -b "$BACKEND" lock >/dev/null 2>&1; RC=$?
-{ [ $RC -eq 0 ] && [ -f "$GDIR/locks.json" ]; } && ok "lock writes locks.json" || soft "lock rc=$RC$(rcnote $RC) / no locks.json"; feat lock
+{ [ $RC -eq 0 ] && [ -f "$GLOBAL_GDIR/locks.json" ]; } && ok "lock writes locks.json in the global folder" || soft "lock rc=$RC$(rcnote $RC) / no locks.json"; feat lock
 : > "$MANIFEST"
 lx -g "$GDIR" -b "$BACKEND" -y prune >/dev/null 2>&1; RC=$?
 [ $RC -eq 0 ] && ok "prune (scoped) exits 0" || no "prune exit=$RC$(rcnote $RC)"; feat prune
@@ -351,7 +390,7 @@ json_valid --backend "$BACKEND" list && ok "list --json valid"   || no "list --j
 json_valid -b "$BACKEND" status    && ok "status --json valid" || no "status --json not JSON"
 
 hr "9. PROFILES — activate/deactivate, MULTIPLE active, RELATIONAL (verified via list/show)"
-PGDIR="${TMPDIR:-/tmp}/linix-it-prof"; PROFDIR="$(dirname "$PGDIR")/profiles"
+PGDIR="${TMPDIR:-/tmp}/linix-it-prof"; PROFDIR="$_cfg_posix/profiles"   # profiles_dir = parent(GLOBAL groups_dir)/profiles
 rm -rf "$PGDIR" "$PROFDIR"; mkdir -p "$PGDIR" "$PROFDIR"
 printf '%s\n' "$BACKEND:$PKG"  > "$PROFDIR/alpha.profile"
 printf '%s\n' "$BACKEND:$PKG2" > "$PROFDIR/bravo.profile"
@@ -426,13 +465,23 @@ lx -g "$FGDIR" -b "$BACKEND" -y upgrade >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] &&
 lxt 120 -g "$FGDIR" -b "$BACKEND" -y upgrade --canary --test "cmd /c exit 0" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "canary upgrade with a passing --test exits 0" || soft "canary rc=$RC$(rcnote $RC)"; feat upgrade
 lx -g "$FGDIR" -y remove "$BACKEND:$PKG" >/dev/null 2>&1
 lx repo list -b "$BACKEND" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "repo list ($BACKEND) exits 0" || soft "repo list rc=$RC"; feat repo
+# Own config dir: migrate writes its manifest into the GLOBAL groups folder, so without
+# this every package it adopts would join the wish list of every section that follows.
+push_config_dir "${TMPDIR:-/tmp}/linix-it-cfg-migrate"
 lxt 120 -g "$FGDIR" -b "$BACKEND" -y migrate >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "migrate (scoped) exits 0" || soft "migrate rc=$RC$(rcnote $RC)"; feat migrate
 # The Windows backends (winget/scoop/choco) install no dependencies, so everything they list
 # really was user-chosen — migrate SHOULD adopt here. That is the other half of the apt fix:
 # "adopt nothing when unsure" must not become "adopt nothing, ever".
-MIGF="$(ls "$FGDIR"/migrated_*.txt 2>/dev/null | head -1)"
+MIGF="$(ls "$GLOBAL_GDIR"/migrated_*.txt 2>/dev/null | head -1)"
 [ -n "$MIGF" ] && ok "migrate wrote a manifest ($(grep -cvE '^\s*(#|$)' "$MIGF") package(s))" \
                || soft "migrate wrote no manifest (nothing unmanaged on this host)"
+if [ -n "$MIGF" ]; then
+    grep -q "THIS IS AN ESTIMATE" "$MIGF" && ok "migrate manifest warns that it is an estimate" \
+                                          || no "migrate manifest does not warn that it is an estimate"
+    grep -q "linix unmanage" "$MIGF" && ok "migrate manifest points at 'linix unmanage'" \
+                                     || no "migrate manifest offers no way to keep a package unmanaged"
+fi
+pop_config_dir
 # The removal guard: same contract as the Linux harness.
 OUT="$(lx protected 2>/dev/null)"; printf '%s' "$OUT" | grep -q "Guarded commands" \
     && ok "protected lists the guarded commands" || no "protected does not show what is guarded"
@@ -447,7 +496,9 @@ if [ $RC -eq 0 ]; then
     ok "unmanage exits 0"
     present "$PKG" && ok "unmanage left the package installed" \
                    || no "unmanage UNINSTALLED the package — it must only forget it"
-    manifest_has_in "$UMD" "$PKG" && no "unmanage left the declaration behind" \
+    # local.txt is written to the GLOBAL folder, not the -g one — checking $UMD would pass
+    # vacuously, since the declaration was never there to begin with.
+    manifest_has_in "$GLOBAL_GDIR" "$PKG" && no "unmanage left the declaration behind" \
                                   || ok "unmanage removed the declaration too"
 else
     soft "unmanage rc=$RC (tolerated)"

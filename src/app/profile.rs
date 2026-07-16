@@ -65,11 +65,9 @@ impl ProfileManager {
         config: Arc<Config>,
         diagnostics: Arc<FailureDiagnosticEngine>,
     ) -> Self {
-        let profiles_dir = config
-            .groups_dir
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join("profiles");
+        // config_root(), not a hand-rolled parent(): a relative groups_dir made this
+        // resolve to ./profiles, i.e. profiles scattered wherever the user was standing.
+        let profiles_dir = config.config_root().join("profiles");
 
         Self {
             registry,

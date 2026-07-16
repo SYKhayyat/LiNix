@@ -146,6 +146,7 @@ impl App {
             self.state.clone(),
             self.diagnostics.clone(),
             &self.config.groups_dir,
+            self.config.wish_dirs(),
         )
     }
 
@@ -507,14 +508,7 @@ impl App {
     /// operate on `.` — i.e. whatever repo the user happens to be standing in. We therefore
     /// reject an empty/relative parent and fall back to the canonical config dir instead.
     pub fn git_manager(&self) -> crate::core::GitManager {
-        let root = self
-            .config
-            .groups_dir
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
-            .map(PathBuf::from)
-            .unwrap_or_else(crate::utils::safe_config_dir);
-        crate::core::GitManager::new(root)
+        crate::core::GitManager::new(self.config.config_root())
     }
 
     /// Auto-commit manifest/config changes IF the config dir is already a git repo. This is
