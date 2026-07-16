@@ -1,4 +1,3 @@
-use crate::core::Result;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -91,22 +90,6 @@ where
         self.len().await == 0
     }
 
-    /// Get or insert a value using a provided async function.
-    /// This pattern is vital for the parallel discovery engine to avoid duplicate IO.
-    pub async fn get_or_insert_with<F, Fut>(&self, key: K, f: F) -> Result<V>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<V>>,
-    {
-        if let Some(value) = self.get(&key).await {
-            return Ok(value);
-        }
-
-        let value = f().await?;
-        self.set(key, value.clone()).await;
-
-        Ok(value)
-    }
 }
 
 impl<K, V> Clone for SmartCache<K, V>

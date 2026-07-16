@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 
-/// Represents an actual package discovered on the system or found in a repository.
-/// Identity is defined by its name, backend, and version.
+/// An actual package discovered on the system or found in a repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Package {
     /// The unique name of the package within its backend (e.g. "ripgrep").
@@ -16,16 +14,7 @@ pub struct Package {
     pub properties: HashMap<String, String>,
 }
 
-/// Manual Hash implementation to bypass non-hashable HashMap.
-impl Hash for Package {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
-        self.backend.hash(state);
-        self.version.hash(state);
-    }
-}
-
-/// Represents the intent to have a package installed with specific metadata.
+/// The intent to have a package installed with specific metadata.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageSpec {
     /// The name of the package.
@@ -36,15 +25,6 @@ pub struct PackageSpec {
     pub options: HashMap<String, String>,
     /// A list of other package identifiers this package depends on.
     pub requires: Vec<String>,
-}
-
-/// Manual Hash implementation to bypass non-hashable HashMap.
-impl Hash for PackageSpec {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.name.hash(state);
-        self.backend.hash(state);
-        self.requires.hash(state);
-    }
 }
 
 impl Package {

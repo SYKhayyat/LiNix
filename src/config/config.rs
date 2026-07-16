@@ -638,9 +638,10 @@ impl Config {
         Ok(())
     }
 
-    /// True only on an EXACT (case-insensitive) match against a protected entry.
-    /// Substring matching was a bug: protecting `libc`/`apt`/`kernel` also shielded
-    /// `libc-bin`, `aptitude`, `kernelshark`, etc. from removal.
+    /// Case-insensitive. An entry matches exactly, or as a prefix if it ends in `*`
+    /// (`libperl*`); it is never a substring match. Substring matching was a bug:
+    /// protecting `libc`/`apt`/`kernel` also shielded `libc-bin`, `aptitude` and
+    /// `kernelshark` from removal.
     pub fn is_protected(&self, package_name: &str) -> bool {
         self.protection_rule(package_name).is_some()
     }
@@ -772,4 +773,18 @@ mod tests {
         assert!(!cfg.is_protected("kernelshark"));
     }
 
+    #[test]
+    fn a_trailing_star_protects_by_prefix() {
+        // `is_protected` was documented as "EXACT only" while the code has always honoured
+        // `*`, and the shipped defaults rely on it (`libperl*`). Believing the doc means
+        // hand-expanding the wildcard and losing protection for whatever the list misses.
+        let cfg = Config {
+            protected_packages: vec!["libperl*".into(), "libc".into()],
+            ..Config::default()
+        };
+        assert!(cfg.is_protected("libperl5.38t64"));
+        assert!(cfg.is_protected("LIBPERL-BASE"));
+        // A bare entry stays exact: the wildcard has to be asked for.
+        assert!(!cfg.is_protected("libc-bin"));
+    }
 }

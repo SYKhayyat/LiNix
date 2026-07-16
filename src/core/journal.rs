@@ -193,8 +193,12 @@ impl Journal {
         Ok(())
     }
 
-    /// Retrieves all entries that did not reach a 'Completed' status.
-    /// Used by the 'linix heal' system.
+    /// `InProgress` and `Failed` only — what `heal` can still act on.
+    ///
+    /// Deliberately not "everything that isn't Completed": `Pending` never touched the
+    /// system, and `Abandoned` is a crash `cleanup` has already given up on (4h). That
+    /// means a crash left unhealed for 4 hours stops being healable, because `cleanup`
+    /// reclassifies it out of this set.
     pub fn get_incomplete_actions(&self) -> Vec<JournalEntry> {
         self.entries
             .values()
