@@ -54,10 +54,24 @@ FAST="${FAST:-0}"
 # is what makes a system-global `prune`/`activate` safe and deterministic: with a fresh state
 # registry, drift = "packages THIS run installed that aren't in the manifest", so convergence
 # only ever touches this run's packages — never pre-existing system state — and nothing
-# accumulates across runs. (Config dir is intentionally NOT isolated, so the real backend
-# settings still apply.)
+# accumulates across runs.
 export LINIX_DATA_DIR="/tmp/linix-it-state"
 rm -rf "$LINIX_DATA_DIR"; mkdir -p "$LINIX_DATA_DIR"
+
+# Isolate the CONFIG dir too (honored by safe_config_dir()). The old comment here said this
+# was deliberately NOT isolated "so the real backend settings still apply" — but a fresh
+# container has no real settings to apply, so that bought nothing while leaving the run free
+# to write into whatever config dir the image happens to have. Several commands (`repo add`,
+# `shim`, `doctor --fix`, `config init`) ignore -g and write there regardless.
+#
+# It matters for what comes next: the GLOBAL wish-list folder is derived from this dir, and
+# the -g overlay is about to make that folder always-read. Isolating it now — while -g still
+# REPLACES and nothing depends on global — is a deliberate no-op, so a green run here proves
+# the harness change is sound before the semantics move underneath it.
+export LINIX_CONFIG_DIR="/tmp/linix-it-config"
+rm -rf "$LINIX_CONFIG_DIR"; mkdir -p "$LINIX_CONFIG_DIR"
+GLOBAL_GDIR="$LINIX_CONFIG_DIR/groups"   # where LiNix looks when nobody passes -g
+mkdir -p "$GLOBAL_GDIR"
 
 # Wrap every linix call in `timeout` when available (GNU coreutils + busybox both accept
 # `timeout SECS CMD…`). A timed-out command exits 124, which our checks treat as failure.
@@ -76,6 +90,10 @@ tail_log() { echo "      --- last log lines before stall (linix -v) ---"; tail -
 
 PASS=0; FAIL=0; SOFT=0
 ok()   { echo "    [ok]    $1"; PASS=$((PASS+1)); }
+# okf <feature> <text>: a hard pass that ALSO credits <feature> as proven. Coverage is a
+# consequence of an assertion passing — never a separate claim that can be made on a line
+# where nothing was asserted. That separation is what made the coverage audit vacuous.
+okf()  { _f="$1"; shift; ok "$*"; _rec FEATV "$_f"; }
 no()   { echo "    [FAIL]  $1"; FAIL=$((FAIL+1)); }
 soft() { echo "    [info]  $1"; SOFT=$((SOFT+1)); }
 hr()   { echo; echo "=========== $* ==========="; }
@@ -88,10 +106,25 @@ present() { rehash; r="$(command -v "$1" 2>/dev/null || true)"; [ -n "$r" ] && [
 # --- COVERAGE AUDIT (section 14) HARD-fails if any READY backend went untouched. ---
 TOUCHED=" "
 touched() { case "$TOUCHED" in *" $1 "*) ;; *) TOUCHED="$TOUCHED$1 " ;; esac; }
-# --- feature bookkeeping: every linix subcommand we exercise is recorded, and the audit
-# --- reports any command (outside the documented interactive/remote-only EXEMPT set) we missed.
-FEAT=" "
-feat() { for _f in "$@"; do case "$FEAT" in *" $_f "*) ;; *) FEAT="$FEAT$_f " ;; esac; done; }
+# --- feature bookkeeping. TWO tiers, deliberately separate:
+# ---   feat  <name…>  the command RAN. Nothing about the result was proven.
+# ---   featv <name…>  a HARD assertion PROVED the command works. Call only where `ok` fired.
+# ---
+# --- They used to be one function, called unconditionally on the same line as the assertion:
+# ---
+# ---   [ $RC -eq 0 ] && ok "teleport …" || soft "teleport rc=$RC (tolerated)"; feat teleport
+# ---
+# --- `feat teleport` ran whether teleport passed, softly failed, or was never meaningfully
+# --- invoked. So the COVERAGE AUDIT asserted that this script MENTIONS a feature, not that the
+# --- feature works: a checksum over its own source text, incapable of failing. One call site
+# --- even read `feat shell` with a comment saying shell cannot be asserted at all.
+FEAT=" "    # exercised
+FEATV=" "   # exercised AND proven
+_rec() { _v="$1"; shift; for _f in "$@"; do
+    eval "case \"\$$_v\" in *\" \$_f \"*) ;; *) $_v=\"\$$_v\$_f \" ;; esac"
+done; }
+feat()  { _rec FEAT  "$@"; }
+featv() { _rec FEATV "$@"; _rec FEAT "$@"; }
 
 # is_json: real JSON validation via python3 when available (the images ship it); otherwise a
 # structural fallback. NOTE: pretty-printed JSON is multi-line, so a per-line `cut -c1` check
@@ -315,7 +348,7 @@ run_plan_smokes() {
 # ------------------------------------------------------------------ discovery
 hr "1. DISCOVERY (doctor / search / info)"
 OUT="$(lx doctor 2>&1)"; RC=$?
-[ $RC -eq 0 ] && ok "doctor exits 0" || no "doctor exit=$RC$(rcnote $RC)"; feat doctor
+[ $RC -eq 0 ] && okf doctor "doctor exits 0" || no "doctor exit=$RC$(rcnote $RC)"; feat doctor
 backend_ready "$BACKEND" && ok "doctor reports $BACKEND READY" || no "doctor does not list $BACKEND as READY"
 echo "      READY backends:"; printf '%s\n' "$DOCTOR" | grep -i "READY" | sed 's/^/        /'
 
@@ -323,13 +356,13 @@ OUT="$(lx --backend "$BACKEND" update 2>&1)"; RC=$?
 [ $RC -eq 0 ] && soft "update ($BACKEND) exits 0" || soft "update ($BACKEND) exit=$RC (network/optional)"; feat update
 
 OUT="$(lx search "$PKG" 2>&1)"; RC=$?
-[ $RC -eq 0 ] && ok "search exits 0" || no "search exit=$RC$(rcnote $RC)"; feat search
+[ $RC -eq 0 ] && okf search "search exits 0" || no "search exit=$RC$(rcnote $RC)"; feat search
 printf '%s\n' "$OUT" | grep -iq "^$BACKEND" && ok "search returns a $BACKEND hit for '$PKG'" \
     || soft "no $BACKEND-prefixed search hit for '$PKG' (index/name variance)"
 
 OUT="$(lx info "$PKG" 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -q "Package:"; then
-    ok "info '$PKG' returns metadata"
+    okf info "info '$PKG' returns metadata"
 else
     soft "info '$PKG' returned rc=$RC / no metadata (may be search-only backend)"
 fi
@@ -365,12 +398,12 @@ manifest_has "$PKG" && no "dry-run wrote '$PKG' to the manifest (must not!)" || 
 # --------------------------------------------------------- imperative install
 hr "3. IMPERATIVE INSTALL + LIST + INFO + config coherence"
 lx -g "$GDIR" -y install "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "install '$BACKEND:$PKG' exits 0" || no "install exit=$RC$(rcnote $RC)"; feat install
+[ $RC -eq 0 ] && okf install "install '$BACKEND:$PKG' exits 0" || no "install exit=$RC$(rcnote $RC)"; feat install
 present "$PKG" && ok "'$PKG' on PATH after install" || no "'$PKG' NOT on PATH after install"
 manifest_has "$PKG" && ok "install recorded '$PKG' in the manifest (config stays coherent)" || no "install did NOT record '$PKG' in the manifest — next sync would treat it as drift"
 OUT="$(lx --backend "$BACKEND" list 2>&1)"; RC=$?
 if [ $RC -eq 0 ] && printf '%s\n' "$OUT" | grep -qw "$PKG"; then
-    ok "list shows '$PKG' as installed (installed-list parser works)"
+    okf list "list shows '$PKG' as installed (installed-list parser works)"
 else
     no "list ($BACKEND) does not show '$PKG' (rc=$RC$(rcnote $RC)) — installed-list parse gap"
 fi
@@ -384,7 +417,7 @@ lx -g "$GDIR" -y install "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
 # ----------------------------------------------------------------- imperative remove
 hr "5. IMPERATIVE REMOVE + verify gone + config coherence"
 lx -g "$GDIR" -y remove "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "remove '$BACKEND:$PKG' exits 0" || no "remove exit=$RC$(rcnote $RC)"; feat remove
+[ $RC -eq 0 ] && okf remove "remove '$BACKEND:$PKG' exits 0" || no "remove exit=$RC$(rcnote $RC)"; feat remove
 present "$PKG" && no "'$PKG' STILL present after remove" || ok "'$PKG' gone from PATH after remove"
 manifest_has "$PKG" && no "remove left '$PKG' in the manifest (stale config — sync would reinstall it)" || ok "remove cleared '$PKG' from the manifest"
 OUT="$(lx --backend "$BACKEND" list 2>&1)"
@@ -420,7 +453,7 @@ feat status
 hr "8. DECLARATIVE ROUNDTRIP — write file -> sync -> installed ; edit file -> prune -> gone"
 lx -g "$GDIR" init >/dev/null 2>&1; RC=$?
 MANIFEST="$GDIR/local.txt"
-if [ $RC -eq 0 ] && [ -f "$MANIFEST" ]; then ok "init scaffolds manifest at $MANIFEST"; else no "init rc=$RC$(rcnote $RC), manifest present=$( [ -f "$MANIFEST" ] && echo yes || echo no)"; fi
+if [ $RC -eq 0 ] && [ -f "$MANIFEST" ]; then okf init "init scaffolds manifest at $MANIFEST"; else no "init rc=$RC$(rcnote $RC), manifest present=$( [ -f "$MANIFEST" ] && echo yes || echo no)"; fi
 feat init
 
 echo "      -> writing '$BACKEND:$PKG' into the manifest file, then calling sync"
@@ -431,11 +464,11 @@ grep -qw "$PKG" "$LOGF" 2>/dev/null && ok "status shows '$PKG' as a pending chan
 
 dlx -g "$GDIR" -b "$BACKEND" -y sync; RC=$?
 if [ $RC -eq 0 ]; then ok "sync (scoped) exits 0"; else no "sync exit=$RC$(rcnote $RC)"; tail_log; fi
-present "$PKG" && ok "sync INSTALLED '$PKG' from the manifest file" || no "sync did NOT install '$PKG'"
+present "$PKG" && okf sync "sync INSTALLED '$PKG' from the manifest file" || no "sync did NOT install '$PKG'"
 feat sync
 
 lx -g "$GDIR" -b "$BACKEND" lock >/dev/null 2>&1; RC=$?
-if [ $RC -eq 0 ] && [ -f "$GDIR/locks.json" ]; then ok "lock writes locks.json"; else soft "lock rc=$RC$(rcnote $RC) / no locks.json"; fi
+if [ $RC -eq 0 ] && [ -f "$GDIR/locks.json" ]; then okf lock "lock writes locks.json"; else soft "lock rc=$RC$(rcnote $RC) / no locks.json"; fi
 feat lock
 
 OUT="$(lx -g "$GDIR" -b "$BACKEND" generation list 2>&1)"; RC=$?
@@ -447,7 +480,7 @@ dlx -g "$GDIR" -b "$BACKEND" status
 grep -qw "$PKG" "$LOGF" 2>/dev/null && ok "status flags '$PKG' as drift after the manifest edit" || soft "status did not flag '$PKG' as drift"
 dlx -g "$GDIR" -b "$BACKEND" -y prune; RC=$?
 if [ $RC -eq 0 ]; then ok "prune (scoped) exits 0"; else no "prune exit=$RC$(rcnote $RC)"; tail_log; fi
-present "$PKG" && no "prune did NOT remove drift '$PKG'" || ok "prune REMOVED '$PKG' after it left the manifest file"
+present "$PKG" && no "prune did NOT remove drift '$PKG'" || okf prune "prune REMOVED '$PKG' after it left the manifest file"
 feat prune
 
 # ------------------------------------------------- MANIFEST DIRECTIVES
@@ -470,7 +503,7 @@ printf '%s\n' "$BACKEND:$PKG2" > "$DGDIR/base.txt"                  # include: -
     echo "end"
 } > "$DM"
 dlx -g "$DGDIR" -b "$BACKEND" status; RC=$?
-[ $RC -eq 0 ] && ok "status resolves include/when directives (rc=0)" || { no "directive status rc=$RC$(rcnote $RC)"; tail_log; }
+[ $RC -eq 0 ] && okf status "status resolves include/when directives (rc=0)" || { no "directive status rc=$RC$(rcnote $RC)"; tail_log; }
 grep -qw "$PKG2" "$LOGF" 2>/dev/null && ok "include: spliced in '$PKG2' from base.txt" || soft "status did not name '$PKG2' (already satisfied?)"
 grep -qw "$PKG" "$LOGF" 2>/dev/null && ok "when os==linux block contributed '$PKG'" || soft "status did not name '$PKG' (already satisfied?)"
 grep -q "linix-should-not-appear-zzq" "$LOGF" 2>/dev/null && no "non-matching 'when' block leaked its package" || ok "non-matching 'when os==plan9' block correctly excluded"
@@ -505,10 +538,10 @@ pread() { $TO "$LINIX" -g "$PGDIR" "$@" 2>/dev/null; }                         #
 
 # (a) activate one profile -> only its package
 pcmd activate alpha; RC=$?
-[ $RC -eq 0 ] && ok "activate alpha exits 0" || no "activate alpha rc=$RC$(rcnote $RC)"; feat activate
+[ $RC -eq 0 ] && okf activate "activate alpha exits 0" || no "activate alpha rc=$RC$(rcnote $RC)"; feat activate
 present "$PKG"  && ok "profile 'alpha' installed '$PKG'" || no "alpha did not install '$PKG'"
 present "$PKG2" && no "alpha unexpectedly installed '$PKG2'" || ok "alpha left '$PKG2' absent"
-pread profile active | grep -qw alpha && ok "'alpha' shows as active" || no "'alpha' not reported active"; feat profile
+pread profile active | grep -qw alpha && okf profile "'alpha' shows as active" || no "'alpha' not reported active"; feat profile
 
 # (b) activate a SECOND profile -> BOTH packages present simultaneously
 pcmd activate bravo; RC=$?
@@ -517,7 +550,7 @@ if present "$PKG" && present "$PKG2"; then ok "MULTIPLE active: '$PKG' AND '$PKG
 
 # (c) deactivate one -> its unique package removed, the shared/other stays
 pcmd deactivate alpha; RC=$?
-[ $RC -eq 0 ] && ok "deactivate alpha exits 0" || no "deactivate alpha rc=$RC$(rcnote $RC)"; feat deactivate
+[ $RC -eq 0 ] && okf deactivate "deactivate alpha exits 0" || no "deactivate alpha rc=$RC$(rcnote $RC)"; feat deactivate
 present "$PKG"  && no "deactivate alpha did NOT remove '$PKG'" || ok "deactivate alpha removed '$PKG'"
 present "$PKG2" && ok "'$PKG2' survived (still provided by bravo — union semantics)" || no "deactivate alpha wrongly removed '$PKG2'"
 
@@ -589,26 +622,26 @@ lx -g "$FGDIR" init >/dev/null 2>&1
 # completions: every shell must emit a non-empty script and exit 0 (pure, always testable).
 for sh in bash zsh fish powershell elvish nushell; do
     OUT="$(lx completions "$sh" 2>/dev/null)"; RC=$?
-    { [ $RC -eq 0 ] && [ -n "$OUT" ]; } && ok "completions $sh emits a script" || no "completions $sh rc=$RC / empty"
+    { [ $RC -eq 0 ] && [ -n "$OUT" ]; } && okf completions "completions $sh emits a script" || no "completions $sh rc=$RC / empty"
 done
 feat completions
 # heal: WAL recovery — a clean system has nothing to recover, must exit 0 without crashing.
 lx -g "$FGDIR" heal >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "heal exits 0 on a clean system (no interrupted transaction)" || soft "heal rc=$RC$(rcnote $RC)"; feat heal
+[ $RC -eq 0 ] && okf heal "heal exits 0 on a clean system (no interrupted transaction)" || soft "heal rc=$RC$(rcnote $RC)"; feat heal
 # clean: deep cleanup pass — must run without crashing.
 lx -g "$FGDIR" -y clean >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "clean exits 0" || soft "clean rc=$RC$(rcnote $RC) (tolerated)"; feat clean
+[ $RC -eq 0 ] && okf clean "clean exits 0" || soft "clean rc=$RC$(rcnote $RC) (tolerated)"; feat clean
 # unmanaged / orphans: read-only inventories.
-lx -b "$BACKEND" unmanaged >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "unmanaged exits 0" || soft "unmanaged rc=$RC (tolerated)"; feat unmanaged
-lx -b "$BACKEND" orphans   >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "orphans exits 0"   || soft "orphans rc=$RC (tolerated)"; feat orphans
+lx -b "$BACKEND" unmanaged >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf unmanaged "unmanaged exits 0" || soft "unmanaged rc=$RC (tolerated)"; feat unmanaged
+lx -b "$BACKEND" orphans   >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf orphans "orphans exits 0"   || soft "orphans rc=$RC (tolerated)"; feat orphans
 # audit / sbom / why / policy: the 6.0 supply-chain + provenance surface.
 # audit queries OSV.dev once per managed package and sbom enumerates every backend, so both are
 # network-bound and can run for minutes on a many-package image — give them a generous ceiling
 # rather than the default so a slow-but-successful scan isn't mis-timed-out.
-lxt 300 -b "$BACKEND" audit >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "audit exits 0" || soft "audit rc=$RC$(rcnote $RC) (network/OSV latency — tolerated)"; feat audit
-OUT="$(lxt 300 sbom 2>/dev/null)"; RC=$?; { [ $RC -eq 0 ] && is_json "$OUT"; } && ok "sbom emits a CycloneDX JSON document" || soft "sbom rc=$RC$(rcnote $RC) / not JSON (tolerated)"; feat sbom
-lx why "$PKG" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "why '$PKG' exits 0" || soft "why rc=$RC (tolerated)"; feat why
-lx policy >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "policy exits 0" || soft "policy rc=$RC (no policy.toml — tolerated)"; feat policy
+lxt 300 -b "$BACKEND" audit >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf audit "audit exits 0" || soft "audit rc=$RC$(rcnote $RC) (network/OSV latency — tolerated)"; feat audit
+OUT="$(lxt 300 sbom 2>/dev/null)"; RC=$?; { [ $RC -eq 0 ] && is_json "$OUT"; } && okf sbom "sbom emits a CycloneDX JSON document" || soft "sbom rc=$RC$(rcnote $RC) / not JSON (tolerated)"; feat sbom
+lx why "$PKG" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf why "why '$PKG' exits 0" || soft "why rc=$RC (tolerated)"; feat why
+lx policy >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf policy "policy exits 0" || soft "policy rc=$RC (no policy.toml — tolerated)"; feat policy
 # upgrade (+ canary/self-heal): install a pkg, then upgrade; canary with a passing --test.
 lx -g "$FGDIR" -y install "$BACKEND:$PKG" >/dev/null 2>&1
 lx -g "$FGDIR" -b "$BACKEND" -y upgrade >/dev/null 2>&1; RC=$?
@@ -618,20 +651,20 @@ lxt 120 -g "$FGDIR" -b "$BACKEND" -y upgrade --canary --test "true" >/dev/null 2
 # container has no snapshot-capable filesystem, so canary correctly FAIL-SAFES (rc!=0) rather
 # than upgrade without a rollback point — so a non-zero here is EXPECTED, not a passing test.
 # (The health-gated rollback logic itself is covered by the hermetic canary/bisect unit tests.)
-[ $RC -eq 0 ] && ok "canary upgrade with a passing --test exits 0 (no rollback)" \
+[ $RC -eq 0 ] && okf upgrade "canary upgrade with a passing --test exits 0 (no rollback)" \
     || soft "canary upgrade rc=$RC$(rcnote $RC) — expected where no snapshot backend exists (fail-safe); logic covered by unit tests"
 feat upgrade
 lx -g "$FGDIR" -y remove "$BACKEND:$PKG" >/dev/null 2>&1
 # repo: list is read-only + safe; add/remove exercised on the native backend (may need a real
 # URL, so tolerant), proving the repo-manager plumbing end to end.
-lx repo list -b "$BACKEND" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "repo list ($BACKEND) exits 0" || soft "repo list rc=$RC (tolerated)"
+lx repo list -b "$BACKEND" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf repo "repo list ($BACKEND) exits 0" || soft "repo list rc=$RC (tolerated)"
 lx -y repo add linix-it-testrepo "https://example.com/linix-it" -b "$BACKEND" >/dev/null 2>&1; RC=$?
 [ $RC -eq 0 ] && soft "repo add exits 0" || soft "repo add rc=$RC (needs a real source — tolerated)"
 lx -y repo remove linix-it-testrepo -b "$BACKEND" >/dev/null 2>&1
 feat repo
 # migrate: ingest OS-installed-but-unmanaged packages into a manifest (scoped + tolerant).
 lxt 120 -g "$FGDIR" -b "$BACKEND" -y migrate >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "migrate (scoped) exits 0" || soft "migrate rc=$RC$(rcnote $RC) (tolerated)"; feat migrate
+[ $RC -eq 0 ] && okf migrate "migrate (scoped) exits 0" || soft "migrate rc=$RC$(rcnote $RC) (tolerated)"; feat migrate
 
 # migrate must adopt only what the USER chose, never the dependency graph. An exit code of 0
 # said nothing about this: apt adopted all 579 installed packages instead of the 103 in
@@ -651,7 +684,38 @@ if [ -n "$MIGF" ]; then
             && no "migrate adopted a pure dependency (libperl*) — the dependency graph leaked in" \
             || ok "migrate did not adopt pure dependencies (libperl* absent)"
     else
-        [ "$ADOPTED" -ge 0 ] && ok "migrate wrote a manifest ($ADOPTED package(s))"
+        # Not `-ge 0`: a count is always >= 0, so that asserted nothing at all. What must
+        # hold on every backend is that adoption is a SUBSET of what is installed — the
+        # property whose violation purged the container.
+        INST=$(lx -b "$BACKEND" list 2>/dev/null | grep -cvE '^\s*$' || echo 0)
+        if [ "$INST" -gt 0 ]; then
+            if [ "$ADOPTED" -le "$INST" ]; then
+                ok "migrate adopted $ADOPTED of $INST installed ($BACKEND)"
+            else
+                no "migrate adopted $ADOPTED, MORE than $BACKEND reports installed ($INST)"
+            fi
+        else
+            soft "migrate: $BACKEND reported no installed packages to compare against"
+        fi
+    fi
+
+    # The manifest asks the user to trust an estimate, and warns that deleting a line
+    # uninstalls. Both facts are load-bearing: a reader who takes this file for a plain
+    # inventory and trims it is reproducing the original disaster by hand. The words are
+    # asserted here, not just unit-tested, because this is the file a real user opens.
+    grep -q "THIS IS AN ESTIMATE" "$MIGF" \
+        && ok "migrate manifest warns that it is an estimate" \
+        || no "migrate manifest does not warn that it is an estimate"
+    grep -q "UNINSTALLS" "$MIGF" \
+        && ok "migrate manifest warns that deleting a line uninstalls" \
+        || no "migrate manifest does not warn what deleting a line does"
+    grep -q "linix unmanage" "$MIGF" \
+        && ok "migrate manifest points at 'linix unmanage'" \
+        || no "migrate manifest offers no way to keep a package without managing it"
+    if [ "$BACKEND" = "apt" ]; then
+        grep -q "apt-mark showmanual" "$MIGF" \
+            && ok "migrate manifest names the source of its estimate" \
+            || no "migrate manifest hides where its estimate came from"
     fi
 else
     soft "migrate wrote no manifest (nothing adoptable on this image)"
@@ -711,7 +775,7 @@ if [ "$BACKEND" = "apt" ]; then
         || no "protected does not protect apt:python3 (the package this bug purged)"
     # And the guard must agree with that report: removing it is refused.
     lx -y remove apt:python3 >/dev/null 2>&1; RC=$?
-    [ $RC -ne 0 ] && ok "remove of a protected package is refused (even with -y)" \
+    [ $RC -ne 0 ] && okf protected "remove of a protected package is refused (even with -y)" \
                   || no "remove purged a protected package"
     present python3 && ok "python3 survived the run" || no "python3 was purged"
 fi
@@ -739,19 +803,19 @@ else
     soft "unmanage: skipped (install of $PKG did not land, nothing to forget)"
 fi
 OUT="$(lx -g "$UMD" unmanage --json "$BACKEND:$PKG" 2>/dev/null)"
-is_json "$OUT" && ok "unmanage --json is JSON" || no "unmanage --json is not JSON"
+is_json "$OUT" && okf unmanage "unmanage --json is JSON" || no "unmanage --json is not JSON"
 feat unmanage
 # teleport: move a package across backends — exercised as a dry-run plan (no real mutation).
 lx -n teleport "$PKG" "$BACKEND" >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "teleport (dry-run plan) exits 0" || soft "teleport rc=$RC (tolerated)"; feat teleport
+[ $RC -eq 0 ] && okf teleport "teleport (dry-run plan) exits 0" || soft "teleport rc=$RC (tolerated)"; feat teleport
 # module: list + create + show a reusable @module.
-lx -g "$FGDIR" module list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "module list exits 0" || soft "module list rc=$RC (tolerated)"
+lx -g "$FGDIR" module list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf module "module list exits 0" || soft "module list rc=$RC (tolerated)"
 lx -g "$FGDIR" module create linix-it-mod >/dev/null 2>&1
 lx -g "$FGDIR" module show linix-it-mod >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && soft "module create+show round-trips" || soft "module show rc=$RC (tolerated)"
 feat module
 # snapshot: list + prune (retention). Real filesystem snapshots need a snapshot-capable FS, so
 # these must at least run without crashing.
-lx snapshot list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "snapshot list exits 0" || soft "snapshot list rc=$RC (tolerated)"
+lx snapshot list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf snapshot "snapshot list exits 0" || soft "snapshot list rc=$RC (tolerated)"
 lx -y snapshot prune --force >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && soft "snapshot prune exits 0" || soft "snapshot prune rc=$RC (tolerated)"
 feat snapshot
 # generation: pin/unpin the newest generation if one exists; rollback exercised as a dry-run.
@@ -759,7 +823,7 @@ GID="$(lx -g "$FGDIR" generation list 2>/dev/null | grep -oE '[0-9a-f]{6,}' | he
 if [ -n "$GID" ]; then
     lx -g "$FGDIR" generation pin "$GID"   >/dev/null 2>&1 && soft "generation pin $GID ok"   || soft "generation pin rc=$? (tolerated)"
     lx -g "$FGDIR" generation unpin "$GID" >/dev/null 2>&1 && soft "generation unpin $GID ok" || soft "generation unpin rc=$? (tolerated)"
-    lx -n -g "$FGDIR" rollback "$GID"      >/dev/null 2>&1 && ok "rollback (dry-run) to $GID exits 0" || soft "rollback rc=$? (tolerated)"
+    lx -n -g "$FGDIR" rollback "$GID"      >/dev/null 2>&1 && okf rollback "rollback (dry-run) to $GID exits 0" || soft "rollback rc=$? (tolerated)"
 else
     soft "no generation id yet to pin/rollback (fresh manifest)"
 fi
@@ -767,7 +831,7 @@ feat rollback
 # lease: set an expiry on a managed package, then confirm it lists.
 lx -g "$FGDIR" -y install "$BACKEND:$PKG" >/dev/null 2>&1
 lx -g "$FGDIR" lease set "$BACKEND:$PKG" -d 30d >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "lease set exits 0" || soft "lease set rc=$RC (tolerated)"
+[ $RC -eq 0 ] && okf lease "lease set exits 0" || soft "lease set rc=$RC (tolerated)"
 lx -g "$FGDIR" lease list 2>/dev/null | grep -qiw "$PKG" && ok "lease list shows the leased package" || soft "lease list did not show '$PKG' (tolerated)"
 lx -g "$FGDIR" -y remove "$BACKEND:$PKG" >/dev/null 2>&1
 feat lease
@@ -783,9 +847,9 @@ fi
 feat schedule
 # run / shim / shell: ephemeral-env + shim generation.
 OUT="$(lxt 120 run -p "$BACKEND:$PKG" "echo LINIX_RUN_OK" 2>/dev/null)"; RC=$?
-printf '%s\n' "$OUT" | grep -q LINIX_RUN_OK && ok "run executes a command in an ephemeral env" || soft "run rc=$RC (ephemeral-env variance — tolerated)"; feat run
+printf '%s\n' "$OUT" | grep -q LINIX_RUN_OK && okf run "run executes a command in an ephemeral env" || soft "run rc=$RC (ephemeral-env variance — tolerated)"; feat run
 lxt 120 shim linix-it-shim -s "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "shim generates a launcher" || soft "shim rc=$RC$(rcnote $RC) (tolerated)"; feat shim
+[ $RC -eq 0 ] && okf shim "shim generates a launcher" || soft "shim rc=$RC$(rcnote $RC) (tolerated)"; feat shim
 feat shell   # `shell` is an interactive ghost-shell (no non-interactive assertion); see EXEMPT
 
 # ------------------------------------------------- v6-v9 COMMAND & FLAG COVERAGE
@@ -800,22 +864,22 @@ NM="$NGDIR/local.txt"
 echo "$BACKEND:$PKG" >> "$NM"
 PLANF="$NGDIR/plan.json"
 lx -g "$NGDIR" -b "$BACKEND" plan --out "$PLANF" >/dev/null 2>&1; RC=$?
-{ [ $RC -eq 0 ] && [ -f "$PLANF" ] && is_json "$(cat "$PLANF")"; } && ok "plan writes a JSON plan file" || no "plan rc=$RC / no JSON plan at $PLANF"
+{ [ $RC -eq 0 ] && [ -f "$PLANF" ] && is_json "$(cat "$PLANF")"; } && okf plan "plan writes a JSON plan file" || no "plan rc=$RC / no JSON plan at $PLANF"
 feat plan
 lxt 180 -g "$NGDIR" -b "$BACKEND" apply "$PLANF" -y >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "apply executes a saved plan (rc=0)" || soft "apply rc=$RC$(rcnote $RC) (ecosystem variance)"
+[ $RC -eq 0 ] && okf apply "apply executes a saved plan (rc=0)" || soft "apply rc=$RC$(rcnote $RC) (ecosystem variance)"
 feat apply
 lx -g "$NGDIR" -b "$BACKEND" -y remove "$BACKEND:$PKG" >/dev/null 2>&1
 
 # --- conflicts (cross-backend, read-only) ---
-lx -g "$NGDIR" conflicts >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "conflicts exits 0" || no "conflicts rc=$RC$(rcnote $RC)"
+lx -g "$NGDIR" conflicts >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf conflicts "conflicts exits 0" || no "conflicts rc=$RC$(rcnote $RC)"
 OUT="$(lx -g "$NGDIR" conflicts --json 2>/dev/null)"; is_json "$OUT" && ok "conflicts --json is valid JSON" || no "conflicts --json not JSON"
 feat conflicts
 
 # --- hold / unhold (bulk-upgrade guard) ---
-lx -g "$NGDIR" hold "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "hold exits 0" || no "hold rc=$RC"
+lx -g "$NGDIR" hold "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf hold "hold exits 0" || no "hold rc=$RC"
 lx -g "$NGDIR" hold 2>/dev/null | grep -qi "$PKG" && ok "hold (no args) lists the held package" || no "hold list missing '$PKG'"
-lx -g "$NGDIR" unhold "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "unhold exits 0" || no "unhold rc=$RC"
+lx -g "$NGDIR" unhold "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf unhold "unhold exits 0" || no "unhold rc=$RC"
 lx -g "$NGDIR" hold 2>/dev/null | grep -qi "$PKG" && no "package still held after unhold" || ok "unhold cleared the hold"
 feat hold unhold
 
@@ -823,7 +887,7 @@ feat hold unhold
 lx -g "$NGDIR" export --format pip --stdout >/dev/null 2>&1; RC=$?
 [ $RC -eq 0 ] && ok "export --format pip --stdout exits 0" || soft "export stdout rc=$RC"
 EXPD="$NGDIR/exports"; mkdir -p "$EXPD"
-lx -g "$NGDIR" export --out "$EXPD" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "export --out writes native manifest(s)" || soft "export --out rc=$RC"
+lx -g "$NGDIR" export --out "$EXPD" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf export "export --out writes native manifest(s)" || soft "export --out rc=$RC"
 feat export
 
 # --- bundle (offline/air-gapped) + tar.gz archive ---
@@ -831,7 +895,7 @@ feat export
 # <out> nested under the groups dir would copy the bundle into itself (runaway recursion).
 BND="/tmp/linix-it-bundle"; rm -rf "$BND" "$BND-ar" "$BND-ar.tar.gz"
 lx -g "$NGDIR" bundle --out "$BND" >/dev/null 2>&1; RC=$?
-{ [ $RC -eq 0 ] && [ -d "$BND" ]; } && ok "bundle writes an offline bundle dir" || soft "bundle rc=$RC / no dir"
+{ [ $RC -eq 0 ] && [ -d "$BND" ]; } && okf bundle "bundle writes an offline bundle dir" || soft "bundle rc=$RC / no dir"
 lx -g "$NGDIR" bundle --out "$BND-ar" --archive >/dev/null 2>&1; RC=$?
 { [ $RC -eq 0 ] && [ -f "$BND-ar.tar.gz" ]; } && ok "bundle --archive produces a portable .tar.gz" || soft "bundle --archive rc=$RC / no tarball"
 feat bundle
@@ -839,45 +903,45 @@ feat bundle
 # --- watch (single reconcile pass over an empty manifest -> already in sync) ---
 WGD="/tmp/linix-it-watch"; rm -rf "$WGD"; mkdir -p "$WGD"; lx -g "$WGD" init >/dev/null 2>&1
 lxt 60 -g "$WGD" -b "$BACKEND" watch --once >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "watch --once runs a single reconcile and exits" || soft "watch --once rc=$RC$(rcnote $RC)"
+[ $RC -eq 0 ] && okf watch "watch --once runs a single reconcile and exits" || soft "watch --once rc=$RC$(rcnote $RC)"
 feat watch
 
 # --- git (version-control the manifests) — SCOPED to a throwaway dir, NEVER the real repo ---
 GGD="/tmp/linix-it-git"; rm -rf "$GGD"; mkdir -p "$GGD"; lx -g "$GGD" init >/dev/null 2>&1
-lx -g "$GGD" git init >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "git init makes the config dir a repo" || soft "git init rc=$RC"
+lx -g "$GGD" git init >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf git "git init makes the config dir a repo" || soft "git init rc=$RC"
 lx -g "$GGD" git status >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "git status exits 0" || soft "git status rc=$RC"
 lx -g "$GGD" git commit -m "linix-it commit" >/dev/null 2>&1
 lx -g "$GGD" git log >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "git log exits 0" || soft "git log rc=$RC"
 feat git
 
 # --- managed (ownership mode + keep-list) ---
-lx -g "$NGDIR" managed show >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "managed show exits 0" || soft "managed show rc=$RC"
+lx -g "$NGDIR" managed show >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf managed "managed show exits 0" || soft "managed show rc=$RC"
 lx -g "$NGDIR" managed keep "$PKG" >/dev/null 2>&1; lx -g "$NGDIR" managed unkeep "$PKG" >/dev/null 2>&1; RC=$?
 [ $RC -eq 0 ] && ok "managed keep/unkeep round-trips" || soft "managed keep/unkeep rc=$RC"
 feat managed
 
 # --- hooks (auto-record; read-only status + shell-init emitter) ---
-lx hooks status >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "hooks status exits 0" || soft "hooks status rc=$RC"
+lx hooks status >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf hooks "hooks status exits 0" || soft "hooks status rc=$RC"
 OUT="$(lx hooks shell-init bash 2>/dev/null)"; [ -n "$OUT" ] && ok "hooks shell-init bash prints shell functions" || soft "hooks shell-init empty"
 feat hooks
 
 # --- service (declarative services; read-only surface) ---
-lx service list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "service list exits 0" || soft "service list rc=$RC (no init system?)"
+lx service list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf service "service list exits 0" || soft "service list rc=$RC (no init system?)"
 feat service
 
 # --- self-upgrade --check (report only; NEVER actually rebuilds/installs) ---
-lx self-upgrade --check >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "self-upgrade --check reports version/source" || soft "self-upgrade --check rc=$RC"
+lx self-upgrade --check >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf self-upgrade "self-upgrade --check reports version/source" || soft "self-upgrade --check rc=$RC"
 feat self-upgrade
 
 # --- config edit (non-interactive: a no-op editor that exits 0) ---
 TMPCFG="/tmp/linix-it-cfg.toml"; rm -f "$TMPCFG"
 EDITOR=true VISUAL=true lxt 30 -c "$TMPCFG" config edit >/dev/null 2>&1; RC=$?
-[ $RC -eq 0 ] && ok "config edit re-validates after a no-op edit" || soft "config edit rc=$RC$(rcnote $RC)"
+[ $RC -eq 0 ] && okf config "config edit re-validates after a no-op edit" || soft "config edit rc=$RC$(rcnote $RC)"
 feat config
 
 # --- generation log / diff (v9) ---
 GID2="$(lx -g "$FGDIR" generation list 2>/dev/null | grep -oE '[0-9a-f]{6,}' | head -n1)"
-lx -g "$FGDIR" generation log >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "generation log exits 0" || soft "generation log rc=$RC"
+lx -g "$FGDIR" generation log >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && okf generation "generation log exits 0" || soft "generation log rc=$RC"
 OUT="$(lx -g "$FGDIR" generation log --json 2>/dev/null)"; is_json "$OUT" && ok "generation log --json valid" || soft "generation log --json n/a (no generations yet)"
 lx -g "$FGDIR" generation log --oneline >/dev/null 2>&1
 if [ -n "$GID2" ]; then lx -g "$FGDIR" generation diff "$GID2" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "generation diff exits 0" || soft "generation diff rc=$RC"; else soft "generation diff skipped (no generation id)"; fi
@@ -943,13 +1007,38 @@ touched "$BACKEND"
 # remote-SSH ones (no non-interactive assertion is possible in a headless container).
 FEATURES_ALL="sync watch run shim heal clean unmanaged orphans status prune plan apply lock search update upgrade list info install remove repo doctor migrate teleport shell undo cockpit activate deactivate profile module snapshot generation rollback git lease schedule config init audit sbom export bundle why service bisect clone fleet managed hooks hold unhold conflicts policy completions self-upgrade protected unmanage"
 FEATURES_EXEMPT=" shell undo cockpit bisect clone fleet "   # interactive TUIs (ghost-shell / undo gallery / cockpit), or need a remote SSH host
-feat config   # exercised in the read-only section below (config show/path/init)
+
+# A DEBT REGISTER, not a config knob. Every name here ships without proof on this image:
+# the command runs, but no hard assertion establishes that it did anything. Adding a name is
+# a decision to ship something unverified; removing one is progress. The audit fails if a
+# feature is unproven and NOT listed here, so the list cannot silently grow.
+#
+#   update    — hits the network; a failure here is the mirror's, not ours
+#   schedule  — needs systemd or cron; neither exists in these containers
+FEATURES_UNVERIFIED=" update schedule "
+
 feat_gap=0
 for f in $FEATURES_ALL; do
     case "$FEATURES_EXEMPT" in *" $f "*) soft "feature '$f' is EXEMPT (interactive or needs a remote host)"; continue ;; esac
-    case "$FEAT" in *" $f "*) : ;; *) no "FEATURE GAP: '$f' was never exercised"; feat_gap=1 ;; esac
+    # Tier 1: did it run at all?
+    case "$FEAT" in
+        *" $f "*) : ;;
+        *) no "FEATURE GAP: '$f' was never exercised"; feat_gap=1; continue ;;
+    esac
+    # Tier 2: did a hard assertion prove it works?
+    case "$FEATV" in *" $f "*) continue ;; esac
+    case "$FEATURES_UNVERIFIED" in
+        *" $f "*) soft "feature '$f' ran, but nothing proved it works (known debt)" ;;
+        *) no "UNPROVEN: '$f' ran but no hard assertion proved it works — prove it, or add it to FEATURES_UNVERIFIED with a reason"; feat_gap=1 ;;
+    esac
 done
-[ $feat_gap -eq 0 ] && ok "every non-exempt linix subcommand was exercised at least once"
+# The ratchet: a feature that outgrew the debt register must be taken off it, or the register
+# rots into a permanent excuse. Informational rather than hard, because proof is
+# image-dependent — a feature can be proven on ubuntu and unprovable on alpine.
+for f in $FEATURES_UNVERIFIED; do
+    case "$FEATV" in *" $f "*) soft "STALE DEBT: '$f' is on FEATURES_UNVERIFIED but was proven here — consider removing it" ;; esac
+done
+[ $feat_gap -eq 0 ] && ok "every non-exempt subcommand ran, and every one not on the debt register was PROVEN"
 
 # ------------------------------------------------- read-only smoke (no crashes)
 hr "15. READ-ONLY SMOKE (must run without crashing)"
