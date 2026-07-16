@@ -77,9 +77,29 @@ pub trait Queryable: Send + Sync {
     async fn list_installed(&self) -> Result<Vec<Package>>;
 
     /// Returns only packages explicitly requested by the user (non-dependencies).
-    /// If a backend does not support tracking manual intent, this should return
-    /// a list filtered against the LiNix state registry.
+    /// Backends whose installed set is user-requested by nature (`cargo install`, and
+    /// every manager with no dependency concept) may return `list_installed` verbatim.
+    /// A backend that cannot tell the two apart must report `tracks_manual() == false`
+    /// and return an empty list — never the whole installed set.
     async fn list_manual(&self) -> Result<Vec<Package>>;
+
+    /// Whether `list_manual` reflects real user intent rather than a guess.
+    ///
+    /// Adoption (`migrate`) writes what it discovers into the global state registry, and
+    /// anything in that registry is a removal candidate on the next sync. So a backend
+    /// that answers "everything installed" when it means "I don't know" gets a system's
+    /// entire dependency graph adopted and then purged. Defaults to true, which is right
+    /// for managers that install no dependencies; managers with a real dependency graph
+    /// and no way to query intent must override it to false.
+    fn tracks_manual(&self) -> bool {
+        true
+    }
+
+    /// Names the OS itself marks as essential — packages automated removal must refuse to
+    /// touch regardless of what a manifest declares. Default: empty (no such concept).
+    async fn essential(&self) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
 
     /// Fetches rich metadata (version, install path, etc.) for a specific package.
     async fn info(&self, name: &str) -> Result<Option<Package>>;

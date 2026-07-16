@@ -35,6 +35,73 @@ impl Default for SandboxSettings {
     }
 }
 
+/// Which commands the removal guard is enforced on.
+///
+/// Every command that can delete a package is listed explicitly rather than implied, so
+/// the whole surface is visible in one place — a guard nobody can enumerate is a guard
+/// nobody can trust. All default to `true`; set one to `false` to opt that command out.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EnforceOn {
+    /// `linix apply` — executing a saved plan.
+    #[serde(default = "default_true")]
+    pub apply: bool,
+    /// `linix prune` — the dedicated drift-removal command.
+    #[serde(default = "default_true")]
+    pub prune: bool,
+    /// `linix sync`, when `prune_on_sync` is enabled.
+    #[serde(default = "default_true")]
+    pub sync: bool,
+    /// `linix watch` — reconciles unattended, so nobody is present to notice.
+    #[serde(default = "default_true")]
+    pub watch: bool,
+    /// `linix upgrade`.
+    #[serde(default = "default_true")]
+    pub upgrade: bool,
+    /// `linix rollback` — reverting to an earlier generation removes packages.
+    #[serde(default = "default_true")]
+    pub rollback: bool,
+    /// `linix canary`.
+    #[serde(default = "default_true")]
+    pub canary: bool,
+    /// `linix remove` — the direct, imperative uninstall.
+    #[serde(default = "default_true")]
+    pub remove: bool,
+    /// Ghost-shell exit, which force-removes transient packages.
+    /// Spelled `shell-exit` in config.toml to match how the command reads in prose and in
+    /// `linix protected`; the underscore form is accepted too so neither spelling is a
+    /// silently-ignored typo.
+    #[serde(default = "default_true", rename = "shell-exit", alias = "shell_exit")]
+    pub shell_exit: bool,
+    /// Expired-lease sweeps, which run after every state-changing command.
+    #[serde(default = "default_true")]
+    pub leases: bool,
+}
+
+impl Default for EnforceOn {
+    fn default() -> Self {
+        Self {
+            apply: true,
+            prune: true,
+            sync: true,
+            watch: true,
+            upgrade: true,
+            rollback: true,
+            canary: true,
+            remove: true,
+            shell_exit: true,
+            leases: true,
+        }
+    }
+}
+
+/// Settings for the removal guard — the check that refuses to delete too much, or to
+/// delete something the system needs.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct GuardSettings {
+    #[serde(default)]
+    pub enforce_on: EnforceOn,
+}
+
 /// Feature 2: Settings for automatic system snapshot management.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SnapshotSettings {
@@ -111,6 +178,15 @@ pub struct Config {
 
     #[serde(default)]
     pub yes: bool,
+
+    /// Carry out a removal the guard would refuse (over `max_removals`, or touching a
+    /// protected/essential package). CLI-only by design — `serde(skip)` keeps it out of
+    /// config.toml, because a permanently-on "yes, purge anything" switch is exactly the
+    /// setting this guard exists to make impossible. Deliberately distinct from `yes`:
+    /// scripts and CI pass `-y` universally, and an unattended run is the one that cannot
+    /// notice a system being dismantled.
+    #[serde(skip)]
+    pub allow_mass_removal: bool,
 
     #[serde(default = "default_groups_dir")]
     pub groups_dir: PathBuf,
@@ -227,8 +303,27 @@ pub struct Config {
     #[serde(default)]
     pub default_backend: Option<String>,
 
+    /// Names removal must never touch. An entry is matched exactly (case-insensitively),
+    /// or as a prefix if it ends in `*` — `libpam*` covers `libpam0g`, while `libc` still
+    /// does not cover `libc-bin`. User entries add to the built-in defaults.
     #[serde(default = "default_protected_packages")]
     pub protected_packages: Vec<String>,
+
+    /// Names that are NOT protected even if a default (or an essential flag reported by
+    /// the OS) says otherwise. Same matching rules as `protected_packages`, and it wins
+    /// over both — the escape hatch for "I really do manage this one myself".
+    #[serde(default)]
+    pub unprotected_packages: Vec<String>,
+
+    /// Refuse a plan that removes more than this many packages unless it is explicitly
+    /// opted into. Guards against a mis-scoped manifest quietly purging a system. `0`
+    /// disables the check.
+    #[serde(default = "default_max_removals")]
+    pub max_removals: usize,
+
+    /// Which commands the removal guard is enforced on. See `EnforceOn`.
+    #[serde(default)]
+    pub guard: GuardSettings,
 
     #[serde(default = "default_btrfs_path")]
     pub btrfs_path: String,
@@ -329,26 +424,66 @@ fn default_priority() -> Vec<String> {
     ]
 }
 
+/// Refuse a plan removing more than this many packages without an explicit opt-in.
+/// Twenty is comfortably above a routine cleanup and far below the ~100 that adopting a
+/// stock Ubuntu's manual set produces.
+fn default_max_removals() -> usize {
+    20
+}
+
 fn default_protected_packages() -> Vec<String> {
     let mut packages = vec!["sudo".into(), "bash".into(), "linix".into()];
     #[cfg(target_os = "linux")]
     {
+        // These are packages whose removal breaks the machine (or LiNix's own ability to
+        // run and repair it), and which a manifest is unlikely to ever declare. Prefix
+        // entries (`libpam*`) are deliberate: the library families ship under versioned
+        // names (libpam0g, libperl5.38t64) no fixed list could keep up with.
+        //
+        // Note this list is not redundant with the OS's own essential flags: on Ubuntu,
+        // `python3` and `libpam0g` are `Priority: optional` and NOT `Essential`, yet both
+        // appear in `apt-mark showmanual` and purging either wrecks the system.
         packages.extend(vec![
             "linux-image".into(),
             "linux-headers".into(),
             "kernel".into(),
             "systemd".into(),
+            "init".into(),
             "libc6".into(),
             "libc".into(),
+            "libc-bin".into(),
             "glibc".into(),
             "grub".into(),
             "grub2".into(),
             "coreutils".into(),
+            "util-linux".into(),
             "filesystem".into(),
+            "dash".into(),
+            "login".into(),
+            "passwd".into(),
+            "base-files".into(),
+            "base-passwd".into(),
+            "busybox".into(),
+            "alpine-baselayout".into(),
+            "apk-tools".into(),
             "apt".into(),
+            "dpkg".into(),
             "pacman".into(),
             "dnf".into(),
+            "yum".into(),
             "rpm".into(),
+            "libpam*".into(),
+            "openssl".into(),
+            "ca-certificates".into(),
+            "perl-base".into(),
+            "libperl*".into(),
+            // The interpreter itself, not the family: `python3*` would also cover
+            // python3-pip, python3-dev and every apt-packaged python library, which
+            // people legitimately manage. Removing `python3` breaks the machine;
+            // removing `python3-requests` is a Tuesday.
+            "python3".into(),
+            "python3-minimal".into(),
+            "libpython3*".into(),
         ]);
     }
     #[cfg(target_os = "windows")]
@@ -375,6 +510,7 @@ impl Default for Config {
             groups: HashMap::new(),
             dry_run: false,
             yes: false,
+            allow_mass_removal: false,
             groups_dir: default_groups_dir(),
             modules_dir: default_modules_dir(),
             config_file: safe_config_dir().join("config.toml"),
@@ -405,6 +541,9 @@ impl Default for Config {
             backend_settings: HashMap::new(),
             default_backend: None,
             protected_packages: default_protected_packages(),
+            unprotected_packages: Vec::new(),
+            max_removals: default_max_removals(),
+            guard: GuardSettings::default(),
             btrfs_path: default_btrfs_path(),
             timeshift_path: default_timeshift_path(),
             zfs_dataset: None,
@@ -481,12 +620,16 @@ impl Config {
         config_path: Option<PathBuf>,
         groups_dir: Option<PathBuf>,
         verbose: Option<bool>,
+        allow_mass_removal: Option<bool>,
     ) {
         if let Some(dr) = dry_run {
             self.dry_run = dr;
         }
         if let Some(y) = yes {
             self.yes = y;
+        }
+        if let Some(a) = allow_mass_removal {
+            self.allow_mass_removal = a;
         }
         if let Some(b) = backend {
             self.enabled_backends = vec![b];
@@ -531,10 +674,40 @@ impl Config {
     /// Substring matching was a bug: protecting `libc`/`apt`/`kernel` also shielded
     /// `libc-bin`, `aptitude`, `kernelshark`, etc. from removal.
     pub fn is_protected(&self, package_name: &str) -> bool {
+        self.protection_rule(package_name).is_some()
+    }
+
+    /// The `protected_packages` entry that protects `package_name`, or `None` if nothing
+    /// does. Returning the rule rather than a bare bool lets a refusal say *why*.
+    pub fn protection_rule(&self, package_name: &str) -> Option<&str> {
         let name_lower = package_name.to_lowercase();
-        self.protected_packages
+        // An explicit unprotect entry always wins, including over a package the OS itself
+        // flags as essential. Nothing overrides the user's stated intent.
+        if Self::first_match(&self.unprotected_packages, &name_lower).is_some() {
+            return None;
+        }
+        Self::first_match(&self.protected_packages, &name_lower)
+    }
+
+    /// The `unprotected_packages` entry exempting `package_name`, if any.
+    pub fn unprotect_rule(&self, package_name: &str) -> Option<&str> {
+        Self::first_match(&self.unprotected_packages, &package_name.to_lowercase())
+    }
+
+    /// The first pattern matching `name_lower`: exact (case-insensitive), or a prefix when
+    /// the pattern ends in `*`. Bare entries stay exact so `libc` never silently swallows
+    /// `libc-bin` — the wildcard has to be asked for.
+    fn first_match<'a>(patterns: &'a [String], name_lower: &str) -> Option<&'a str> {
+        patterns
             .iter()
-            .any(|p| p.to_lowercase() == name_lower)
+            .find(|p| {
+                let p = p.to_lowercase();
+                match p.strip_suffix('*') {
+                    Some(prefix) => name_lower.starts_with(prefix),
+                    None => name_lower == p,
+                }
+            })
+            .map(|s| s.as_str())
     }
 
     /// Path to the user-editable keep-list: a plain manifest (`keep.txt`, in the groups dir)

@@ -3,8 +3,11 @@
 use crate::app::LuaHooks;
 use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericRepoManager,
-    GenericSearchable, GenericUpgradable, ManagerConfig, VersionPin,
+    GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing, VersionPin,
 };
+// Only the distro/macOS backends have a manual-list command to describe.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::backends::generic::ManualFormat;
 use crate::backends::pip_search::PipSearchable;
 use crate::config::Config;
 use crate::core::{BackendCapabilities, CommandExecutor};
@@ -198,11 +201,24 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["install".into(), "-y".into()],
             remove_args: vec!["purge".into(), "-y".into()],
             // apt lists installed packages via the SEPARATE `dpkg-query` binary, not
-            // `apt dpkg-query`. `apt-mark showmanual` (a third binary) would need its own
-            // list binary; until that exists, manual-listing falls back to all-installed.
+            // `apt dpkg-query`.
             list_binary: Some("dpkg-query".into()),
             list_args: vec!["-W".into(), "-f=${Package} ${Version}\\n".into()],
-            list_manual_args: None,
+            // `dpkg-query -W` reports the entire dependency graph (579 packages on a stock
+            // Ubuntu image, of which only 103 were user-chosen), so it cannot answer "what
+            // did the user ask for?". `apt-mark` can — a third binary again, and one that
+            // prints bare names with no versions, hence BareNames.
+            manual: ManualListing::Command {
+                binary: Some("apt-mark".into()),
+                args: vec!["showmanual".into()],
+                format: ManualFormat::BareNames,
+            },
+            // dpkg records which packages the system refuses to lose. Ask it, rather than
+            // maintaining a per-release name list by hand.
+            essential_args: Some(vec![
+                "-W".into(),
+                "-f=${Essential} ${Priority} ${Package}\\n".into(),
+            ]),
             search_args: vec!["search".into()],
             search_binary: Some("apt-cache".into()),
             upgrade_args: vec!["dist-upgrade".into(), "-y".into()],
@@ -233,10 +249,7 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             is_exclusive: true,
             flag_map: HashMap::new(),
         },
-        parser: Arc::new(LambdaParser {
-            installed_fn: crate::parsers::apt::parse_list,
-            search_fn: crate::parsers::apt::parse_search,
-        }),
+        parser: Arc::new(crate::parsers::apt::AptParser),
     });
     reg.register(Arc::new(
         BackendCapabilities::builder(core.clone())
@@ -273,7 +286,15 @@ fn register_aur_helper(
             install_args: vec!["-S".into(), "--noconfirm".into(), "--needed".into()],
             remove_args: vec!["-Rs".into(), "--noconfirm".into()],
             list_args: vec!["-Q".into()],
-            list_manual_args: Some(vec!["-Qe".into()]),
+            // `-Qe` = explicitly installed only (11 of 173 on the arch test image).
+            manual: ManualListing::Command {
+                binary: None,
+                args: vec!["-Qe".into()],
+                format: ManualFormat::SameAsInstalled,
+            },
+            // pacman has no per-package essential flag: `base` is a convention and HoldPkg
+            // is user config, so there is nothing authoritative to query.
+            essential_args: None,
             search_args: vec!["-Ss".into()],
             search_binary: None,
             list_binary: None,
@@ -317,7 +338,17 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["add".into()],
             remove_args: vec!["del".into()],
             list_args: vec!["info".into(), "-v".into()],
-            list_manual_args: Some(vec!["world".into()]),
+            // apk's explicit set IS the world file — `apk add`/`del` are edits to it. The
+            // `apk world` subcommand only exists in apk 3.x (it errors on Alpine's 2.x, so
+            // this silently reported nothing), but the file is stable and documented.
+            // Entries may carry a version constraint or repo tag, which BareNames strips.
+            manual: ManualListing::Command {
+                binary: Some("cat".into()),
+                args: vec!["/etc/apk/world".into()],
+                format: ManualFormat::BareNames,
+            },
+            // apk has no essential concept; `alpine-base` is a meta-package convention.
+            essential_args: None,
             search_args: vec!["search".into(), "-v".into()],
             search_binary: None,
             list_binary: None,
@@ -381,7 +412,12 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["install".into(), "-y".into()],
             remove_args: vec!["remove".into(), "-y".into()],
             list_args: vec!["search".into(), "--installed-only".into()],
-            list_manual_args: None,
+            // zypper resolves dependencies, so its installed set is not the user's set.
+            // `zypper packages --userinstalled` would answer this, but it emits a
+            // pipe-delimited table no parser here handles and no test image covers it —
+            // so decline to adopt rather than guess.
+            manual: ManualListing::Unsupported,
+            essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
             list_binary: None,
@@ -432,7 +468,9 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             ],
             remove_args: vec!["uninstall".into(), "--silent".into()],
             list_args: vec!["list".into()],
-            list_manual_args: None,
+            // winget installs no dependencies of its own: everything listed was asked for.
+            manual: ManualListing::AllInstalled,
+            essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
             list_binary: None,
@@ -487,7 +525,9 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
             list_args: vec!["list".into()],
-            list_manual_args: None,
+            // scoop apps are each installed on request; it tracks no dependency graph.
+            manual: ManualListing::AllInstalled,
+            essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
             list_binary: None,
@@ -537,7 +577,9 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["install".into(), "-y".into()],
             remove_args: vec!["uninstall".into(), "-y".into()],
             list_args: vec!["list".into(), "-lo".into(), "-r".into()],
-            list_manual_args: None,
+            // `choco list -lo` reports locally-installed packages, all user-requested.
+            manual: ManualListing::AllInstalled,
+            essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
             list_binary: None,
@@ -593,7 +635,9 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
             list_args: vec!["list".into()],
-            list_manual_args: None,
+            // Every App Store app was installed by a person clicking Get.
+            manual: ManualListing::AllInstalled,
+            essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
             list_binary: None,
@@ -636,7 +680,11 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into(), "-y".into()],
             list_args: vec!["list".into(), "--format=json".into()],
-            list_manual_args: None,
+            // `pip list` includes every pulled-in dependency and pip keeps no record of
+            // which distributions a person actually asked for. (`--not-required` reports
+            // leaves, which is a different question: a leaf may still be a dependency.)
+            manual: ManualListing::Unsupported,
+            essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
             list_binary: None,
@@ -676,7 +724,10 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
             list_args: vec!["list".into(), "--local".into()],
-            list_manual_args: None,
+            // `gem list --local` mixes user-installed gems with their dependencies, and
+            // RubyGems records no explicit-install marker.
+            manual: ManualListing::Unsupported,
+            essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
             list_binary: None,
@@ -717,7 +768,10 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["add".into(), "-g".into()],
             remove_args: vec!["remove".into(), "-g".into()],
             list_args: vec!["pm".into(), "ls".into(), "-g".into()],
-            list_manual_args: None,
+            // `bun pm ls -g` lists the top-level global installs (dependencies only appear
+            // under `--all`), so what it reports is what was asked for.
+            manual: ManualListing::AllInstalled,
+            essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
             list_binary: None,
@@ -759,7 +813,13 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
             list_args: vec!["installed".into()],
-            list_manual_args: Some(vec!["installed".into(), "requested".into()]),
+            // `port installed requested` = ports the user asked for, not pulled-in deps.
+            manual: ManualListing::Command {
+                binary: None,
+                args: vec!["installed".into(), "requested".into()],
+                format: ManualFormat::SameAsInstalled,
+            },
+            essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
             list_binary: None,
@@ -802,7 +862,10 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["-y".into(), "install".into()],
             remove_args: vec!["-y".into(), "remove".into()],
             list_args: vec!["list".into()],
-            list_manual_args: None,
+            // pkgin installs dependencies and `pkgin list` reports them all; its
+            // automatic-install marker is not exposed through a stable listing command.
+            manual: ManualListing::Unsupported,
+            essential_args: None,
             search_args: vec!["search".into()],
             search_binary: None,
             list_binary: None,
@@ -849,7 +912,9 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             install_args: vec!["tool".into(), "install".into(), "--global".into()],
             remove_args: vec!["tool".into(), "uninstall".into(), "--global".into()],
             list_args: vec!["tool".into(), "list".into(), "--global".into()],
-            list_manual_args: None,
+            // Global .NET tools are installed one by one, on request.
+            manual: ManualListing::AllInstalled,
+            essential_args: None,
             search_args: vec!["tool".into(), "search".into()],
             search_binary: None,
             list_binary: None,
@@ -900,7 +965,12 @@ fn base_config(name: &str) -> ManagerConfig {
         install_args: vec![],
         remove_args: vec![],
         list_args: vec![],
-        list_manual_args: None,
+        // Default to the safe answer, not the convenient one: an unlabelled backend is one
+        // nobody has confirmed can separate user-chosen packages from dependencies, so
+        // `migrate` adopts nothing from it. A backend whose installed set really is all
+        // user-chosen says so with `ManualListing::AllInstalled`.
+        manual: ManualListing::Unsupported,
+        essential_args: None,
         search_args: vec![],
         search_binary: None,
         list_binary: None,
@@ -947,6 +1017,10 @@ fn register_generic(
 /// PHP / Packagist (`composer global ...`). Cross-platform; gated by the `composer` binary.
 fn register_composer(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("composer");
+    // `composer global show` lists the whole solved tree. `--direct` would report just
+    // the requested packages, but no test image covers composer, so decline to adopt
+    // rather than ship an unverified guess.
+    cfg.manual = ManualListing::Unsupported;
     cfg.version_pin = Some(VersionPin::Inline("{name}:{version}".into()));
     cfg.install_args = vec!["global".into(), "require".into()];
     cfg.remove_args = vec!["global".into(), "remove".into()];
@@ -968,6 +1042,10 @@ fn register_composer(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// OCaml (`opam`). Cross-platform; gated by the `opam` binary.
 fn register_opam(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("opam");
+    // opam installs dependencies as packages. `opam list --installed --roots` reports
+    // the root (explicitly-installed) set and would be the right wiring; unverified here,
+    // so adopt nothing.
+    cfg.manual = ManualListing::Unsupported;
     cfg.version_pin = Some(VersionPin::Inline("{name}.{version}".into()));
     cfg.install_args = vec!["install".into(), "-y".into()];
     cfg.remove_args = vec!["remove".into(), "-y".into()];
@@ -990,6 +1068,9 @@ fn register_opam(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// positional (`luarocks install <pkg> <version>`).
 fn register_luarocks(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("luarocks");
+    // luarocks installs a rock's dependencies alongside it and records no explicit
+    // marker to tell them apart.
+    cfg.manual = ManualListing::Unsupported;
     cfg.version_pin = Some(VersionPin::Flag(vec!["{version}".into()]));
     cfg.install_args = vec!["install".into()];
     cfg.remove_args = vec!["remove".into()];
@@ -1010,6 +1091,8 @@ fn register_luarocks(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// Nim (`nimble`). Cross-platform; gated by the `nimble` binary. No CLI search/upgrade-all.
 fn register_nimble(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("nimble");
+    // nimble installs dependencies and `list --installed` reports them all.
+    cfg.manual = ManualListing::Unsupported;
     cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
     cfg.install_args = vec!["install".into(), "-y".into()];
     cfg.remove_args = vec!["uninstall".into(), "-y".into()];
@@ -1029,6 +1112,9 @@ fn register_nimble(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// pixi global environments (`pixi global ...`). Cross-platform; gated by the `pixi` binary.
 fn register_pixi(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("pixi");
+    // `pixi global` installs one requested tool per entry; dependencies live inside each
+    // tool's own environment and are never listed here.
+    cfg.manual = ManualListing::AllInstalled;
     cfg.version_pin = Some(VersionPin::Inline("{name}={version}".into()));
     cfg.install_args = vec!["global".into(), "install".into()];
     // pixi removes a global TOOL with `global uninstall`; `global remove` deletes a package
@@ -1052,6 +1138,9 @@ fn register_pixi(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// Spack HPC package manager (`spack`). Cross-platform; gated by the `spack` binary.
 fn register_spack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("spack");
+    // spack installs dependencies as first-class packages, so `spack find` is the whole
+    // closure. `spack find --explicit` is the right answer; unverified here.
+    cfg.manual = ManualListing::Unsupported;
     cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
     cfg.install_args = vec!["install".into()];
     cfg.remove_args = vec!["uninstall".into(), "-y".into()];
@@ -1074,6 +1163,8 @@ fn register_spack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// scope. No CLI search/upgrade-all.
 fn register_mix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("mix");
+    // Mix archives are installed one by one, on request.
+    cfg.manual = ManualListing::AllInstalled;
     cfg.install_args = vec!["archive.install".into(), "hex".into(), "--force".into()];
     cfg.remove_args = vec!["archive.uninstall".into()];
     cfg.list_args = vec!["archive".into()];
@@ -1093,6 +1184,8 @@ fn register_mix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// releases are a different concept and out of scope here.) No plugin search.
 fn register_helm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("helm");
+    // Helm plugins are installed individually and pull in no plugin dependencies.
+    cfg.manual = ManualListing::AllInstalled;
     cfg.install_args = vec!["plugin".into(), "install".into()];
     cfg.remove_args = vec!["plugin".into(), "uninstall".into()];
     cfg.list_args = vec!["plugin".into(), "list".into()];
@@ -1112,6 +1205,8 @@ fn register_helm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// verb, so `remove_args` is empty → removal reports Unsupported (see GenericInstallable).
 fn register_cabal(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("cabal");
+    // cabal installs a package's dependency closure into the store and lists it back.
+    cfg.manual = ManualListing::Unsupported;
     cfg.version_pin = Some(VersionPin::Inline("{name}-{version}".into()));
     cfg.install_args = vec!["install".into()];
     cfg.remove_args = vec![]; // no uninstall verb
@@ -1137,6 +1232,8 @@ fn register_cabal(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// uninstall verb (empty `remove_args` → Unsupported) and no reliable global install list.
 fn register_stack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("stack");
+    // stack resolves and installs dependencies; nothing distinguishes them on listing.
+    cfg.manual = ManualListing::Unsupported;
     cfg.version_pin = Some(VersionPin::Inline("{name}-{version}".into()));
     cfg.install_args = vec!["install".into()];
     cfg.remove_args = vec![]; // no uninstall verb
@@ -1156,6 +1253,8 @@ fn register_stack(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// is the "package"; installing pins a version via the trailing positional.
 fn register_asdf(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("asdf");
+    // asdf lists the tool versions someone explicitly installed; it has no dep concept.
+    cfg.manual = ManualListing::AllInstalled;
     cfg.version_pin = Some(VersionPin::Flag(vec!["{version}".into()]));
     cfg.install_args = vec!["install".into()];
     cfg.remove_args = vec!["uninstall".into()];
@@ -1176,6 +1275,9 @@ fn register_asdf(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 #[cfg(target_os = "linux")]
 fn register_guix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("guix");
+    // `guix package -I` lists the profile's manifest — what was explicitly installed —
+    // not the store closure behind it.
+    cfg.manual = ManualListing::AllInstalled;
     cfg.version_pin = Some(VersionPin::Inline("{name}@{version}".into()));
     cfg.install_args = vec!["install".into()];
     cfg.remove_args = vec!["remove".into()];
@@ -1199,6 +1301,10 @@ fn register_guix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 #[cfg(target_os = "linux")]
 fn register_emerge(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("emerge");
+    // Portage's @world file (/var/lib/portage/world) is the explicit set; `emerge -I`
+    // lists the whole tree (306 packages vs an empty world on the gentoo test image).
+    // Wiring the world file is the right fix; until it is verified, adopt nothing.
+    cfg.manual = ManualListing::Unsupported;
     cfg.install_args = vec!["--ask=n".into(), "--quiet".into()];
     cfg.remove_args = vec!["--unmerge".into(), "--ask=n".into()];
     cfg.list_binary = Some("qlist".into());
@@ -1229,6 +1335,8 @@ fn register_emerge(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 #[cfg(target_os = "linux")]
 fn register_eopkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("eopkg");
+    // eopkg installs dependencies and `list-installed` reports them all.
+    cfg.manual = ManualListing::Unsupported;
     cfg.install_args = vec!["install".into(), "-y".into()];
     cfg.remove_args = vec!["remove".into(), "-y".into()];
     cfg.list_args = vec!["list-installed".into()];
@@ -1253,6 +1361,8 @@ fn register_eopkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 #[cfg(target_os = "linux")]
 fn register_slackpkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("slackpkg");
+    // Slackware does no dependency resolution: every installed package was chosen.
+    cfg.manual = ManualListing::AllInstalled;
     cfg.install_args = vec![
         "-batch=on".into(),
         "-default_answer=y".into(),

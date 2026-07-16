@@ -107,12 +107,26 @@ for _py in python3 python py; do
     fi
 done
 is_json() {
-    if [ -n "$PYBIN" ]; then
+    # The interpreter is probed once at startup, but the run under test can BREAK it: a
+    # removal reaching python3 (or merely its stdlib, e.g. via `apk del pipx`) leaves the
+    # binary on PATH while `import json` no longer works. Checking `command -v` is not
+    # enough — that is exactly the state that made a healthy `conflicts --json` report as
+    # "not JSON" and sent us hunting the wrong bug.
+    #
+    # So re-prove the interpreter on every call with a payload we KNOW is valid. Only a
+    # working interpreter is allowed to fail an assertion; a broken one falls back to the
+    # structural check. The cost is one extra process per call, which is nothing next to
+    # a false failure.
+    if [ -n "$PYBIN" ] && printf '{}' | "$PYBIN" -c 'import sys,json; json.load(sys.stdin)' >/dev/null 2>&1; then
         printf '%s' "$1" | "$PYBIN" -c 'import sys,json; json.load(sys.stdin)' >/dev/null 2>&1
-    else
-        first=$(printf '%s' "$1" | tr -d '[:space:]' | cut -c1)
-        [ "$first" = "{" ] || [ "$first" = "[" ]
+        return $?
     fi
+    if [ -n "$PYBIN" ]; then
+        echo "    [warn]  is_json: interpreter '$PYBIN' stopped working mid-run — using structural check"
+        PYBIN=""
+    fi
+    first=$(printf '%s' "$1" | tr -d '[:space:]' | cut -c1)
+    [ "$first" = "{" ] || [ "$first" = "[" ]
 }
 # manifest_has[_in]: is the token present in the declarative manifest LiNix writes for
 # imperative ops (kept coherent so the next `sync` doesn't treat the package as drift)?
@@ -618,6 +632,115 @@ feat repo
 # migrate: ingest OS-installed-but-unmanaged packages into a manifest (scoped + tolerant).
 lxt 120 -g "$FGDIR" -b "$BACKEND" -y migrate >/dev/null 2>&1; RC=$?
 [ $RC -eq 0 ] && ok "migrate (scoped) exits 0" || soft "migrate rc=$RC$(rcnote $RC) (tolerated)"; feat migrate
+
+# migrate must adopt only what the USER chose, never the dependency graph. An exit code of 0
+# said nothing about this: apt adopted all 579 installed packages instead of the 103 in
+# `apt-mark showmanual`, which then made every dependency look like drift and purged the
+# system. These assertions are what would have caught it.
+MIGF="$(ls "$FGDIR"/migrated_*.txt 2>/dev/null | head -1)"
+if [ -n "$MIGF" ]; then
+    ADOPTED=$(grep -cvE '^\s*(#|$)' "$MIGF" 2>/dev/null || echo 0)
+    if [ "$BACKEND" = "apt" ]; then
+        ALL=$(dpkg-query -W 2>/dev/null | wc -l)
+        MANUAL=$(apt-mark showmanual 2>/dev/null | wc -l)
+        [ "$ADOPTED" -le "$MANUAL" ] \
+            && ok "migrate adopted $ADOPTED (<= apt-mark showmanual=$MANUAL, of $ALL installed)" \
+            || no "migrate adopted $ADOPTED, more than the user ever chose ($MANUAL of $ALL)"
+        # A pure dependency nobody asked for. Present in dpkg-query, absent from showmanual.
+        grep -qE '^apt:libperl' "$MIGF" \
+            && no "migrate adopted a pure dependency (libperl*) — the dependency graph leaked in" \
+            || ok "migrate did not adopt pure dependencies (libperl* absent)"
+    else
+        [ "$ADOPTED" -ge 0 ] && ok "migrate wrote a manifest ($ADOPTED package(s))"
+    fi
+else
+    soft "migrate wrote no manifest (nothing adoptable on this image)"
+fi
+
+# THE REGRESSION THAT STARTED ALL THIS. migrate records ownership in the GLOBAL state
+# registry, which `-g` does not scope. A command later pointed at a DIFFERENT -g therefore
+# sees every adopted package as drift and schedules it for removal — that is what purged
+# python3 and blew the time limit.
+#
+# DRY-RUN ONLY, on purpose. A real prune here removes those packages for real: on Alpine
+# that is 14 (git, nodejs, ruby, rustup, pipx…), which took python3's stdlib with it and
+# made every later --json assertion fail. Running the disaster is not a test of it.
+#
+# Note what this does and does NOT prove. The guard caps the blast radius; it does not fix
+# the -g/global-state split (that is the groups-dir overlay work). So on a large system the
+# plan is refused outright, while on a small one it stays under max_removals and is allowed
+# — correctly, by today's rules. What must hold EVERYWHERE is that no protected/system
+# package is ever scheduled.
+PGDIR2="/tmp/linix-it-postmigrate"; rm -rf "$PGDIR2"; mkdir -p "$PGDIR2"
+echo "$BACKEND:$PKG" > "$PGDIR2/local.txt"
+OUT="$(lxt 120 -g "$PGDIR2" -b "$BACKEND" -n prune 2>&1)"; RC=$?
+case "$BACKEND" in
+    apt)
+        # ~84 adopted, far over max_removals=20 → must be refused outright.
+        [ $RC -ne 0 ] && ok "post-migrate prune under a different -g is refused (guard held)" \
+                      || no "post-migrate prune under a different -g was NOT refused"
+        ;;
+    *)
+        [ $RC -ne 0 ] && ok "post-migrate prune under a different -g is refused (guard held)" \
+                      || soft "post-migrate prune under a different -g is allowed (under max_removals; the -g/global-state split is not fixed yet)"
+        ;;
+esac
+# Whatever the count, the guard's job is that system-critical packages are never scheduled.
+BADHIT=""
+for p in busybox alpine-baselayout apk-tools bash dpkg apt libc6 glibc python3 systemd coreutils; do
+    printf '%s' "$OUT" | grep -qE "^\s*[^[:alnum:]]*\[[a-z]+\s*\]\s+$p\b" && BADHIT="$BADHIT $p"
+done
+[ -z "$BADHIT" ] && ok "post-migrate prune schedules no protected/system package" \
+                 || no "post-migrate prune scheduled protected package(s):$BADHIT"
+
+# `protected`: the guard is only trustworthy if you can see what it protects, so this is a
+# real contract, not a smoke test. It must answer for humans AND machines, and its answer
+# must agree with what the guard actually does.
+OUT="$(lx protected 2>/dev/null)"
+printf '%s' "$OUT" | grep -q "Guarded commands" \
+    && ok "protected lists the guarded commands" || no "protected does not show what is guarded"
+OUT="$(lx protected --json 2>/dev/null)"
+is_json "$OUT" && ok "protected --json is JSON" || no "protected --json is not JSON"
+printf '%s' "$OUT" | grep -q "max_removals" \
+    && ok "protected --json exposes max_removals" || no "protected --json lacks max_removals"
+if [ "$BACKEND" = "apt" ]; then
+    # python3 is `no optional` in dpkg — the OS will NOT protect it. The static list must.
+    OUT="$(lx protected apt:python3 2>/dev/null)"
+    printf '%s' "$OUT" | grep -qi "yes" \
+        && ok "protected reports apt:python3 as protected" \
+        || no "protected does not protect apt:python3 (the package this bug purged)"
+    # And the guard must agree with that report: removing it is refused.
+    lx -y remove apt:python3 >/dev/null 2>&1; RC=$?
+    [ $RC -ne 0 ] && ok "remove of a protected package is refused (even with -y)" \
+                  || no "remove purged a protected package"
+    present python3 && ok "python3 survived the run" || no "python3 was purged"
+fi
+feat protected
+
+# `unmanage`: forget a package WITHOUT uninstalling it. This is the counterpart to deleting
+# a manifest line (which means uninstall), and migrate's own output tells people to use it.
+UMD="/tmp/linix-it-unmanage"; rm -rf "$UMD"; mkdir -p "$UMD"
+lxt 180 -g "$UMD" -y install "$BACKEND:$PKG" >/dev/null 2>&1
+# Only assert "unmanage left it installed" when it WAS installed to begin with — otherwise
+# a failed install (network, mirror) reads as unmanage having deleted something.
+if present "$PKG"; then
+    lx -g "$UMD" -y unmanage "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
+    if [ $RC -eq 0 ]; then
+        ok "unmanage exits 0"
+        present "$PKG" && ok "unmanage left the package installed" \
+                       || no "unmanage UNINSTALLED the package — it must only forget it"
+        manifest_has_in "$UMD" "$PKG" \
+            && no "unmanage left the declaration behind (next sync would re-adopt it)" \
+            || ok "unmanage removed the declaration too"
+    else
+        soft "unmanage rc=$RC (tolerated)"
+    fi
+else
+    soft "unmanage: skipped (install of $PKG did not land, nothing to forget)"
+fi
+OUT="$(lx -g "$UMD" unmanage --json "$BACKEND:$PKG" 2>/dev/null)"
+is_json "$OUT" && ok "unmanage --json is JSON" || no "unmanage --json is not JSON"
+feat unmanage
 # teleport: move a package across backends — exercised as a dry-run plan (no real mutation).
 lx -n teleport "$PKG" "$BACKEND" >/dev/null 2>&1; RC=$?
 [ $RC -eq 0 ] && ok "teleport (dry-run plan) exits 0" || soft "teleport rc=$RC (tolerated)"; feat teleport
@@ -818,7 +941,7 @@ done
 touched "$BACKEND"
 # (b) Every linix subcommand must have been exercised, except the documented interactive /
 # remote-SSH ones (no non-interactive assertion is possible in a headless container).
-FEATURES_ALL="sync watch run shim heal clean unmanaged orphans status prune plan apply lock search update upgrade list info install remove repo doctor migrate teleport shell undo cockpit activate deactivate profile module snapshot generation rollback git lease schedule config init audit sbom export bundle why service bisect clone fleet managed hooks hold unhold conflicts policy completions self-upgrade"
+FEATURES_ALL="sync watch run shim heal clean unmanaged orphans status prune plan apply lock search update upgrade list info install remove repo doctor migrate teleport shell undo cockpit activate deactivate profile module snapshot generation rollback git lease schedule config init audit sbom export bundle why service bisect clone fleet managed hooks hold unhold conflicts policy completions self-upgrade protected unmanage"
 FEATURES_EXEMPT=" shell undo cockpit bisect clone fleet "   # interactive TUIs (ghost-shell / undo gallery / cockpit), or need a remote SSH host
 feat config   # exercised in the read-only section below (config show/path/init)
 feat_gap=0

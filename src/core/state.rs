@@ -319,6 +319,30 @@ impl StateRegistry {
         }
     }
 
+    /// Drops a package from management WITHOUT recording a removal. Returns true if it was
+    /// managed.
+    ///
+    /// Distinct from `remove`, which archives a Ghost stamped `removed_at` — that is the
+    /// right record when a package was actually uninstalled, and a false one here: after
+    /// `linix unmanage` the package is still installed and LiNix has merely stopped
+    /// claiming it. Writing a ghost would tell every later reader it was deleted.
+    pub fn forget(&mut self, backend: &str, name: &str) -> bool {
+        if let Some(pos) = self
+            .packages
+            .iter()
+            .position(|p| p.backend == backend && p.name == name)
+        {
+            self.packages.remove(pos);
+            debug!(
+                "StateRegistry: Package {}:{} forgotten (left installed).",
+                backend, name
+            );
+            true
+        } else {
+            false
+        }
+    }
+
     /// Returns packages whose leases have expired.
     pub fn get_expired_packages(&self) -> Vec<(String, String)> {
         let now = Self::now();

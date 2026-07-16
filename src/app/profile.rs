@@ -426,7 +426,9 @@ impl ProfileManager {
             return Ok(());
         }
 
-        engine.sync(changes).await?;
+        engine
+            .sync(changes, crate::app::sync::guard::GuardScope::Sync)
+            .await?;
         Ok(())
     }
 }

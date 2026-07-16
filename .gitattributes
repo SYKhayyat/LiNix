@@ -1,0 +1,11 @@
+# Shell scripts must keep LF endings even on Windows checkouts.
+#
+# They run inside Linux containers, where /bin/sh is dash. A CRLF file makes dash read
+# line 1 as `set -u<CR>` and abort with "set: Illegal option -" before a single test runs.
+# Windows sets core.autocrlf=true by default, which rewrites text files to CRLF on
+# checkout — so without this, the integration harness is broken on any Windows clone.
+*.sh text eol=lf
+
+# Same reasoning: these are read by Linux tooling inside the images.
+Dockerfile* text eol=lf
+*.bash text eol=lf

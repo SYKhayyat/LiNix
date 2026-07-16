@@ -26,6 +26,8 @@ Traditional package managers operate in a “fire and forget” mode. If a trans
 
 - **Safe Drift Handling** – Packages no longer present in your manifests are reported as "drift" by `linix status` and removed only when you run `linix prune` (or by `sync` if you opt in with `prune_on_sync = true`). `sync` never removes anything by default.
 
+- **Removal Guard** – Drift is derived from managed state, and managed state can be wrong (a mis-scoped manifest, a state file from another machine). So every command that can delete — `apply`, `prune`, `sync`, `watch`, `upgrade`, `rollback`, `canary`, `remove`, ghost-shell exit, lease expiry — refuses a removal that exceeds `max_removals` (default 20) or touches a protected package. Protection comes from a built-in list, anything you add, **and** the OS's own "essential" flags where it has them (`dpkg`'s `Essential`/`Priority: required`). Run `linix protected` to see the effective rules. The only override is `--allow-mass-removal`; **`--yes` is deliberately not one**, because every script and CI job passes `-y`, and an unattended run is exactly the one that cannot notice a system being dismantled.
+
 - **Time Travel (Snapshots)** – Built‑in support for BTRFS, ZFS, Timeshift, and Windows Restore Points. Create an automatic snapshot before every `sync` or `upgrade`, and roll back your entire system with `linix undo`.
 
 - **Sandboxing & Security** – Hardened execution using Bubblewrap (Linux), `sandbox‑exec` (macOS), and Windows Sandbox (with fallback). Define sandbox policies declaratively per package.
@@ -196,6 +198,10 @@ LiNix will:
 | `orphans` | **List** drift/orphaned packages (non‑destructive; `clean` performs removal). |
 
 | `unmanaged` | List installed packages not under LiNix management. |
+
+| `unmanage <pkg>` | Stop managing a package **without uninstalling it**. Deleting a manifest line means "uninstall this"; this is how you say "forget this, leave it alone". |
+
+| `protected [pkg]` | Show what the removal guard refuses to delete, and why. `--json` for machines. |
 
 | `repo add/remove/list` | Manage source repositories (winget/dnf/pacman/apt/scoop/choco…). |
 

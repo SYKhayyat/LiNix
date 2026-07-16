@@ -306,6 +306,81 @@ pub async fn remove_package_from_local(groups_dir: &Path, package_name: &str) ->
     Ok(())
 }
 
+/// Removes every line declaring `package_name` from EVERY `.txt` manifest in `groups_dir`,
+/// returning the files changed and the exact lines dropped.
+///
+/// `remove_package_from_local` only touches `local.txt`, which is right for undoing a
+/// `linix install`. Forgetting a package needs more: a package adopted by `migrate` is
+/// declared in `migrated_<stamp>.txt`, and leaving that line in place means the next
+/// `sync` re-adopts what the user just asked LiNix to forget — a command that silently
+/// undoes itself.
+pub async fn remove_package_from_manifests(
+    groups_dir: &Path,
+    package_name: &str,
+) -> Result<Vec<(PathBuf, String)>> {
+    let mut dropped = Vec::new();
+    let Ok(mut entries) = fs::read_dir(groups_dir).await else {
+        return Ok(dropped);
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let fname = entry.file_name().to_string_lossy().to_string();
+        if !fname.ends_with(".txt") {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path).await else {
+            continue;
+        };
+
+        let mut kept: Vec<String> = Vec::new();
+        let mut found = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            // Comments and blanks are structure, not declarations — never touch them, so a
+            // sectioned manifest keeps its headings after an entry is dropped.
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                kept.push(line.to_string());
+                continue;
+            }
+            if line_declares(trimmed, package_name) {
+                found = true;
+                dropped.push((path.clone(), trimmed.to_string()));
+                continue;
+            }
+            kept.push(line.to_string());
+        }
+
+        if found {
+            let new_content = kept.join("\n") + "\n";
+            let path_owned = path.clone();
+            tokio::task::spawn_blocking(move || atomic_write(&path_owned, &new_content))
+                .await
+                .map_err(|e| Error::Other(e.to_string()))??;
+        }
+    }
+    Ok(dropped)
+}
+
+/// Whether a manifest line declares `target`, which may be `backend:name` or a bare name.
+/// Options (`@...`) and an `-` exclusion prefix are ignored for matching.
+fn line_declares(line: &str, target: &str) -> bool {
+    let line = line.strip_prefix('-').unwrap_or(line);
+    let strip_opts = |s: &str| s.split('@').next().unwrap_or(s).trim().to_string();
+    let line_bare = strip_opts(line);
+    let target_bare = strip_opts(target);
+    if line_bare == target_bare {
+        return true;
+    }
+    // A bare target matches any backend's entry for that name; a qualified target matches
+    // only its own backend.
+    match (line_bare.split_once(':'), target_bare.split_once(':')) {
+        (Some((_, ln)), None) => ln == target_bare,
+        (None, Some((_, tn))) => line_bare == tn,
+        _ => false,
+    }
+}
+
 /// Returns the path to the user's primary local manifest.
 pub async fn get_user_group_file(groups_dir: &Path) -> PathBuf {
     if !tokio::fs::try_exists(groups_dir).await.unwrap_or(false) {

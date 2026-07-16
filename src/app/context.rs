@@ -325,6 +325,45 @@ impl App {
         if expired.is_empty() {
             return Ok(());
         }
+
+        // A lease is a promise to remove something later; it is not a promise to remove
+        // something the system needs. Drop protected packages from the sweep rather than
+        // failing: this runs as maintenance after every state-changing command, so a hard
+        // error here would break unrelated commands. The package simply stays, and its
+        // lease stays expired, which is the safe direction.
+        let backends: std::collections::HashSet<String> =
+            expired.iter().map(|(b, _)| b.clone()).collect();
+        let os_essential =
+            crate::app::sync::guard::essential_names(&self.registry, &backends).await;
+        let (protected, expired): (Vec<_>, Vec<_>) = expired.into_iter().partition(|(b, n)| {
+            crate::app::sync::guard::protection_of(&self.config, b, n, &os_essential).is_some()
+        });
+        for (backend, name) in &protected {
+            warn!(
+                "Kernel: lease on {}:{} expired, but it is protected — leaving it installed. \
+                 Run `linix protected {}:{}` to see why.",
+                backend, name, backend, name
+            );
+        }
+        if expired.is_empty() {
+            return Ok(());
+        }
+
+        // The count check still applies: a state file that expires hundreds of packages at
+        // once is a bug, not an intention.
+        let pairs: Vec<(String, String)> = expired.clone();
+        if let Err(e) = crate::app::sync::guard::enforce(
+            &self.config,
+            &self.registry,
+            &pairs,
+            crate::app::sync::guard::GuardScope::Leases,
+        )
+        .await
+        {
+            warn!("Kernel: expired-lease sweep refused, leaving them installed.\n{}", e);
+            return Ok(());
+        }
+
         info!(
             "Kernel: {} package(s) have expired leases — reclaiming.",
             expired.len()

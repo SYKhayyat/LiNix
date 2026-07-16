@@ -25,7 +25,7 @@
 
 use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericSearchable, GenericUpgradable,
-    ManagerConfig, VersionPin,
+    ManagerConfig, ManualListing, VersionPin,
 };
 use crate::backends::BackendRegistry;
 use crate::core::{BackendCapabilities, CommandExecutor, Package};
@@ -402,7 +402,11 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         install_args: def.install_args,
         remove_args: def.remove_args,
         list_args: def.list_args,
-        list_manual_args: None,
+        // A user-defined backend describes an install/remove/list command set; nothing in
+        // that definition says whether its lister reports dependencies too. Don't assume —
+        // `migrate` skips custom backends rather than risk adopting a dependency graph.
+        manual: ManualListing::Unsupported,
+        essential_args: None,
         search_args: def.search_args,
         search_binary: None,
         list_binary: None,

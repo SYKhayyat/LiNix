@@ -130,8 +130,20 @@ impl Queryable for CondaQueryable {
         Ok(parse_conda_list(&output))
     }
 
+    /// `conda list` returns the env's whole solved closure, so it cannot answer "what did
+    /// the user ask for?". `conda env export --from-history` can: it reports only the
+    /// specs someone actually requested (4 of 88 on a stock `base` env).
     async fn list_manual(&self) -> Result<Vec<Package>> {
-        self.list_installed().await
+        let output = self
+            .core
+            .executor
+            .run_output(
+                "conda",
+                &["env", "export", "-n", &self.core.env, "--from-history", "--json"],
+                false,
+            )
+            .await?;
+        Ok(crate::parsers::conda::parse_conda_history(&output))
     }
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {

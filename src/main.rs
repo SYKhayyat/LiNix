@@ -167,6 +167,8 @@ async fn main() -> Result<()> {
         Commands::Apply { plan, yes } => handle_apply(&app, plan, *yes).await,
         Commands::Update => handle_update(&app).await,
         Commands::Unmanaged => handle_unmanaged(&app).await,
+        Commands::Protected { packages, json } => handle_protected(&app, packages, *json).await,
+        Commands::Unmanage { packages, json } => handle_unmanage(&app, packages, *json).await,
         Commands::Teleport { package, to } => handle_teleport(&app, package, to).await,
         Commands::Shim { binary, source } => handle_shim(&app, binary, source).await,
         Commands::Config(args) => handle_config(&app, &args.command).await,
@@ -424,7 +426,7 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
         changes = preview.get_filtered_changes();
     }
 
-    engine.sync(changes).await?;
+    engine.sync(changes, linix::app::sync::guard::GuardScope::Sync).await?;
     perform_maintenance(app).await
 }
 
@@ -477,7 +479,7 @@ async fn watch_reconcile(app: &App) -> Result<usize> {
     }
     let n = changes.total_install() + changes.total_remove();
     print_flight_plan(app, &changes);
-    app.sync_engine().await.sync(changes).await?;
+    app.sync_engine().await.sync(changes, linix::app::sync::guard::GuardScope::Watch).await?;
     perform_maintenance(app).await?;
     Ok(n)
 }
@@ -968,7 +970,7 @@ async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     }
 
     if !changes.is_empty() {
-        app.sync_engine().await.sync(changes).await?;
+        app.sync_engine().await.sync(changes, linix::app::sync::guard::GuardScope::Upgrade).await?;
         perform_maintenance(app).await?;
     }
     Ok(())
@@ -1140,6 +1142,16 @@ async fn handle_remove(
                     None => (scoped_backend.as_deref() == Some(b.name()), None),
                 };
                 if present {
+                    // `remove` is deliberate, but "I typed it" is not the same as "I meant
+                    // to delete libc6". This is the most direct way to uninstall anything,
+                    // so it gets the same guard as every other removal path.
+                    linix::app::sync::guard::enforce(
+                        &app.config,
+                        &app.registry,
+                        &[(b.name().to_string(), bare_name.clone())],
+                        linix::app::sync::guard::GuardScope::Remove,
+                    )
+                    .await?;
                     info!("LiNix: Purging {} from {}...", bare_name, b.name());
                     inst.remove(std::slice::from_ref(&bare_name), b.sudo_for_write())
                         .await?;
@@ -1933,7 +1945,7 @@ async fn rollback_to(
             " (scoped)".to_string()
         }
     );
-    app.sync_engine().await.sync(changes).await?;
+    app.sync_engine().await.sync(changes, linix::app::sync::guard::GuardScope::Rollback).await?;
     println!("Rollback complete.");
 
     // The config half: optionally check the manifests out to the git commit stamped on this
@@ -2462,7 +2474,7 @@ async fn handle_prune(app: &App, json: bool) -> Result<()> {
         }
     }
 
-    app.sync_engine().await.sync(removals).await?;
+    app.sync_engine().await.sync(removals, linix::app::sync::guard::GuardScope::Prune).await?;
     perform_maintenance(app).await
 }
 
@@ -2496,6 +2508,22 @@ async fn handle_plan(app: &App, out: &str) -> Result<()> {
             plan.removals.len(),
             out
         );
+        // Writing a plan changes nothing, so this warns rather than refuses — but say it
+        // here, where there is still time to fix the manifest, rather than letting the
+        // refusal be a surprise at apply time.
+        let removal_pairs: Vec<(String, String)> = plan
+            .removals
+            .iter()
+            .map(|r| (r.backend.clone(), r.name.clone()))
+            .collect();
+        let report =
+            linix::app::sync::guard::inspect(&app.config, &app.registry, &removal_pairs).await;
+        if !report.is_empty() {
+            println!(
+                "\nWARNING: `linix apply` will refuse this plan.\n{}",
+                report.message(linix::app::sync::guard::GuardScope::Apply)
+            );
+        }
     }
     Ok(())
 }
@@ -2627,6 +2655,21 @@ async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
             }
         }
     }
+
+    // `apply` executes its removals directly rather than through SyncEngine::sync, so it
+    // needs its own call to the same guard. Placed after the interactive trim, so
+    // deselecting the dangerous removals clears the guard honestly.
+    let removal_pairs: Vec<(String, String)> = removals
+        .iter()
+        .map(|r| (r.backend.clone(), r.name.clone()))
+        .collect();
+    linix::app::sync::guard::enforce(
+        &app.config,
+        &app.registry,
+        &removal_pairs,
+        linix::app::sync::guard::GuardScope::Apply,
+    )
+    .await?;
 
     let session_active = app.state.lock().await.active_session_id.is_some();
     let mut installed = 0usize;
@@ -2768,6 +2811,225 @@ async fn handle_unmanaged(app: &App) -> Result<()> {
     Ok(())
 }
 
+/// Stop managing packages without uninstalling them.
+///
+/// This exists because deleting a manifest line means "uninstall this", not "stop managing
+/// this" — so the obvious way to trim `migrate`'s output (keep 15 lines, delete 85) is in
+/// fact an order to purge 85 packages. Forgetting has to be its own verb.
+///
+/// It drops the package from managed state AND from any manifest that declares it. Doing
+/// only the first would be undone by the next `sync`, which would see the declaration and
+/// re-adopt it.
+async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<()> {
+    let mut results = Vec::new();
+
+    for spec in packages {
+        let (backend, name) = linix::config::parser::split_removal_target(spec, |b| {
+            app.registry.get(b).is_some()
+        });
+
+        // Forget every backend's copy when the target is unqualified, mirroring how
+        // `remove` searches all backends for a bare name.
+        let mut forgotten = Vec::new();
+        {
+            let mut state = app.state.lock().await;
+            let managed: Vec<(String, String)> = state
+                .packages
+                .iter()
+                .filter(|p| p.name == name)
+                .filter(|p| backend.as_deref().is_none_or(|b| b == p.backend))
+                .map(|p| (p.backend.clone(), p.name.clone()))
+                .collect();
+            for (b, n) in managed {
+                if state.forget(&b, &n) {
+                    forgotten.push(format!("{}:{}", b, n));
+                }
+            }
+        }
+
+        let dropped =
+            linix::config::parser::remove_package_from_manifests(&app.config.groups_dir, spec)
+                .await?;
+
+        results.push(serde_json::json!({
+            "package": spec,
+            "forgotten": forgotten,
+            "manifest_lines_removed": dropped
+                .iter()
+                .map(|(p, l)| serde_json::json!({ "file": p.display().to_string(), "line": l }))
+                .collect::<Vec<_>>(),
+            "still_installed": true,
+        }));
+    }
+
+    app.state.lock().await.save()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&results)?);
+        return Ok(());
+    }
+
+    for r in &results {
+        let spec = r["package"].as_str().unwrap_or_default();
+        let forgotten = r["forgotten"].as_array().map(|a| a.len()).unwrap_or(0);
+        let lines = r["manifest_lines_removed"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(0);
+        if forgotten == 0 && lines == 0 {
+            println!("{}: not managed and not declared — nothing to forget.", spec);
+            continue;
+        }
+        println!("{}: no longer managed by LiNix. It is still installed.", spec);
+        for f in r["forgotten"].as_array().into_iter().flatten() {
+            println!("  dropped from managed state: {}", f.as_str().unwrap_or(""));
+        }
+        for l in r["manifest_lines_removed"].as_array().into_iter().flatten() {
+            println!(
+                "  removed declaration `{}` from {}",
+                l["line"].as_str().unwrap_or(""),
+                l["file"].as_str().unwrap_or("")
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Show what the removal guard will refuse to touch. The guard is only trustworthy if its
+/// rules are inspectable, so this reports the effective rules — and, given package names,
+/// answers the question people actually have ("will this be protected?") along with the
+/// rule that decides it.
+async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<()> {
+    let cfg = &app.config;
+
+    if !packages.is_empty() {
+        // Query mode. This MUST reach the same answer as a real removal, so it calls the
+        // guard's own decision function rather than re-implementing the rules — an
+        // inspector that contradicts the enforcer is worse than none, because it is
+        // believed. "backend:name" consults that backend's essential list; a bare name is
+        // checked against the config rules only.
+        let mut rows = Vec::new();
+        for spec in packages {
+            let (backend, name) = linix::config::parser::split_removal_target(spec, |b| {
+                app.registry.get(b).is_some()
+            });
+            let backend = backend.unwrap_or_default();
+            let os_essential = if backend.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                let mut set = std::collections::HashSet::new();
+                set.insert(backend.clone());
+                linix::app::sync::guard::essential_names(&app.registry, &set).await
+            };
+            let (protected, reason) =
+                match linix::app::sync::guard::protection_of(cfg, &backend, &name, &os_essential) {
+                    Some(p) => (true, p.reason()),
+                    None => match cfg.unprotect_rule(&name) {
+                        Some(rule) => (
+                            false,
+                            format!("exempted by unprotected_packages rule `{}`", rule),
+                        ),
+                        None => (false, "no rule matches".into()),
+                    },
+                };
+            rows.push((spec.clone(), protected, reason));
+        }
+        if json {
+            let out: Vec<_> = rows
+                .iter()
+                .map(|(p, prot, why)| {
+                    serde_json::json!({ "package": p, "protected": prot, "reason": why })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&out)?);
+        } else {
+            println!("{:<30} {:<10} REASON", "PACKAGE", "PROTECTED");
+            for (p, prot, why) in rows {
+                println!("{:<30} {:<10} {}", p, if prot { "yes" } else { "no" }, why);
+            }
+        }
+        return Ok(());
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "protected_packages": cfg.protected_packages,
+                "unprotected_packages": cfg.unprotected_packages,
+                "max_removals": cfg.max_removals,
+                "enforce_on": cfg.guard.enforce_on,
+            }))?
+        );
+        return Ok(());
+    }
+
+    println!("Removal guard — what LiNix refuses to remove.\n");
+    println!("Protected packages ({}):", cfg.protected_packages.len());
+    for p in &cfg.protected_packages {
+        match p.strip_suffix('*') {
+            Some(prefix) => println!("  {:<24} (any name starting with '{}')", p, prefix),
+            None => println!("  {}", p),
+        }
+    }
+    if cfg.unprotected_packages.is_empty() {
+        println!("\nExemptions: none.");
+    } else {
+        println!(
+            "\nExemptions ({}) — these override the list above:",
+            cfg.unprotected_packages.len()
+        );
+        for p in &cfg.unprotected_packages {
+            println!("  {}", p);
+        }
+    }
+    match cfg.max_removals {
+        0 => println!("\nMaximum removals in one command: unlimited (max_removals = 0)."),
+        n => println!("\nMaximum removals in one command: {} (max_removals).", n),
+    }
+
+    // Which commands are guarded is configurable, so it has to be visible: a guard you
+    // cannot enumerate is a guard you cannot rely on.
+    let e = &cfg.guard.enforce_on;
+    let commands = [
+        ("apply", e.apply),
+        ("prune", e.prune),
+        ("sync", e.sync),
+        ("watch", e.watch),
+        ("upgrade", e.upgrade),
+        ("rollback", e.rollback),
+        ("canary", e.canary),
+        ("remove", e.remove),
+        ("shell-exit", e.shell_exit),
+        ("leases", e.leases),
+    ];
+    let off: Vec<&str> = commands
+        .iter()
+        .filter(|(_, on)| !*on)
+        .map(|(n, _)| *n)
+        .collect();
+    println!("\nGuarded commands ([guard.enforce_on]):");
+    if off.is_empty() {
+        println!("  all {} of them — nothing is opted out.", commands.len());
+    } else {
+        println!(
+            "  NOT guarded: {} — these can remove anything, without limit.",
+            off.join(", ")
+        );
+    }
+
+    println!(
+        "\nPackages the OS itself reports as essential are also refused, on top of this list.\n\
+         Edit `protected_packages`, `unprotected_packages`, `max_removals` or \
+         `[guard.enforce_on]` in {}.\n\
+         Check one package:      linix protected apt:python3\n\
+         Machine-readable:       linix protected --json\n\
+         Let one removal through: linix <command> --allow-mass-removal",
+        cfg.config_file.display()
+    );
+    Ok(())
+}
+
 async fn handle_teleport(app: &App, package: &str, to: &str) -> Result<()> {
     app.teleporter()
         .teleport(package, to)
@@ -2794,11 +3056,48 @@ nix_gc_age = "30d"
 # Require confirmation before destructive (removal) operations unless `yes = true`.
 confirm_destructive = false
 
-# Seconds to cache backend query results.
-cache_ttl = 300
-
 # Remove packages found in the bloatware file during sync.
 remove_bloatware = false
+
+# ---------------------------------------------------------------------------
+# Removal guard — what LiNix refuses to delete.
+#
+# Drift removal is derived from managed state, and managed state can be wrong: a
+# mis-scoped manifest, a bad `migrate`, or a state file from another machine can
+# make hundreds of working packages look unwanted. The guard is the check that
+# refuses those. `linix protected` shows the effective rules.
+# ---------------------------------------------------------------------------
+
+# Refuse any single command that would remove more than this many packages.
+# 0 disables the check entirely (not recommended).
+max_removals = 20
+
+# Names removal must never touch, ADDED to the built-in list (`linix protected`
+# prints the full effective set). Matching is exact and case-insensitive, or a
+# prefix if the entry ends in `*` — so `libpam*` covers libpam0g, while `libc`
+# still does not cover `libc-bin`.
+# protected_packages = ["steam", "nvidia-driver", "libfoo*"]
+
+# Names that are NOT protected even if a built-in rule (or the OS's own
+# "essential" flag) says otherwise. This wins over everything. Use it when you
+# genuinely manage something LiNix would otherwise refuse to touch.
+# unprotected_packages = ["python3-pip"]
+
+# Which commands the guard is enforced on. Every command that can delete is
+# listed, so the whole surface is visible here rather than implied. Set one to
+# false to opt it out — an unguarded command can remove anything, without limit.
+[guard.enforce_on]
+apply      = true
+prune      = true
+sync       = true
+watch      = true
+upgrade    = true
+rollback   = true
+canary     = true
+remove     = true
+shell-exit = true   # ghost-shell exit, which force-removes transient packages
+leases     = true   # expired-lease sweeps, which run after every command
+
 
 # Whether `sync` removes drift (packages no longer in your manifests). Default false:
 # `sync` only installs/upgrades, and `linix prune` removes drift explicitly. Set true to
@@ -2956,7 +3255,7 @@ async fn handle_canary(app: &App, scope: ScopedFilter, test: &Option<String>) ->
         .await?
         .ok_or_else(|| anyhow::anyhow!("failed to create pre-canary snapshot"))?;
     info!("Canary: snapshot {} taken; applying upgrade...", snap.id);
-    app.sync_engine().await.sync(changes).await?;
+    app.sync_engine().await.sync(changes, linix::app::sync::guard::GuardScope::Canary).await?;
 
     info!("Canary: running health check: {}", test);
     if linix::app::bisect::run_test(&test).await {
@@ -3979,6 +4278,7 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
         None,
         cli.groups_dir.clone(),
         Some(cli.verbose),
+        Some(cli.allow_mass_removal),
     );
     // --quiet has no config-file merge counterpart; apply it directly (a set flag wins).
     if cli.quiet {
@@ -4217,6 +4517,35 @@ mod init_tests {
         assert!(out.contains("# my keep list"));
         assert!(!out.lines().any(|l| l.trim() == "steam"));
         assert!(out.lines().any(|l| l.trim() == "nvidia-driver"));
+    }
+
+    #[test]
+    fn config_template_actually_parses_and_matches_the_defaults() {
+        // `linix config init` writes this file verbatim. A template that does not parse
+        // hands every new user a broken config, and a template whose keys don't match the
+        // struct silently documents settings that do nothing (as `cache_ttl` did).
+        let cfg: linix::config::Config =
+            toml::from_str(CONFIG_TEMPLATE).expect("CONFIG_TEMPLATE must be valid config.toml");
+
+        // The guard section must land on the real fields — `shell-exit` is hyphenated in
+        // TOML but `shell_exit` in Rust, exactly the kind of mismatch serde accepts by
+        // silently defaulting.
+        assert!(cfg.guard.enforce_on.shell_exit);
+        assert!(cfg.guard.enforce_on.leases);
+        assert!(cfg.guard.enforce_on.prune);
+        assert_eq!(cfg.max_removals, 20);
+    }
+
+    #[test]
+    fn config_template_guard_keys_are_not_silently_ignored() {
+        // Flipping a value in the file must reach the struct. If a key were misspelled,
+        // serde's default would keep reporting `true` and the opt-out would do nothing.
+        let toml_src = CONFIG_TEMPLATE.replace("shell-exit = true", "shell-exit = false");
+        let cfg: linix::config::Config = toml::from_str(&toml_src).unwrap();
+        assert!(
+            !cfg.guard.enforce_on.shell_exit,
+            "the shell-exit key in the template does not reach EnforceOn::shell_exit"
+        );
     }
 
     #[test]

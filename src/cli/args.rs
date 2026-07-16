@@ -35,6 +35,14 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub groups_dir: Option<PathBuf>,
 
+    /// Carry out a removal the guard refuses: one over `max_removals`, or touching a
+    /// protected/essential package. Global because every command that can delete needs
+    /// it. Deliberately NOT implied by --yes: scripts and CI pass -y everywhere, and an
+    /// unattended run is the one that cannot notice a system being dismantled.
+    /// See `linix protected` for what is guarded and why.
+    #[arg(long, global = true)]
+    pub allow_mass_removal: bool,
+
     /// Toggle progress indicators
     #[arg(long, global = true, default_value = "true")]
     pub progress: bool,
@@ -108,6 +116,31 @@ pub enum Commands {
 
     /// Identify all packages installed on the OS but not managed by LiNix
     Unmanaged,
+
+    /// Stop managing a package WITHOUT uninstalling it. LiNix forgets it exists; the
+    /// package stays on your system. This is the counterpart to deleting a manifest line,
+    /// which means "uninstall this" — not "stop managing it"
+    Unmanage {
+        /// Packages to forget ("apt:jq", or a bare name to search every backend)
+        #[arg(required = true)]
+        packages: Vec<String>,
+
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show what the removal guard protects: the packages removal will refuse to touch,
+    /// your exemptions, and the maximum removal count
+    Protected {
+        /// Check specific packages instead of listing the rules ("apt:python3" or "jq"),
+        /// reporting whether each is protected and which rule decides it
+        packages: Vec<String>,
+
+        /// Emit JSON
+        #[arg(long)]
+        json: bool,
+    },
 
     /// List and remove orphaned dependencies across all backends
     Orphans,

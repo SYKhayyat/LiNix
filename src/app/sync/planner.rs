@@ -196,6 +196,24 @@ impl<'a> ChangePlanner<'a> {
                     continue;
                 }
 
+                // Respect per-host and `-b` backend gating. Without this, `linix -b cargo
+                // prune` still removed apt drift: `-b` narrows which backend a command
+                // acts on everywhere else, so a removal loop that ignores it is scoped by
+                // nothing. The system-scope loop below already checked this; this one did
+                // not.
+                if !self.config.is_backend_enabled(&pkg.backend) {
+                    continue;
+                }
+
+                // Protection applies to EVERY removal reason, not only drift. A lease
+                // expiring on `apt:dpkg`, or a bloatware file naming it, is a mistake in
+                // the input — not a licence to remove it. Checked once here rather than
+                // per-branch, which is how the lease and bloatware paths came to skip it.
+                if self.config.is_protected(&pkg.name) {
+                    debug!("Planner: '{}' is protected — never scheduling removal.", key);
+                    continue;
+                }
+
                 // Check for expired lease
                 let is_expired = pkg.expires_at.is_some_and(|exp| Self::now() >= exp);
 
@@ -217,12 +235,12 @@ impl<'a> ChangePlanner<'a> {
                         backend: pkg.backend.clone(),
                     });
                 } else if self.prune
-                    && !self.config.is_protected(&pkg.name)
                     && !(self.config.protect_imperative
                         && pkg.source.as_deref() == Some("imperative"))
                 {
-                    // Drift removal (only when pruning is enabled, not protected, and — when
-                    // protect_imperative is on — not an imperatively-installed package).
+                    // Drift removal (only when pruning is enabled and — when
+                    // protect_imperative is on — not an imperatively-installed package;
+                    // protection was already applied to every branch above).
                     debug!("Planner: Scheduling drift removal: {}", key);
                     changes.removal_tracker.insert(key.clone());
                     changes.graph.add_node(GraphAction::Remove {

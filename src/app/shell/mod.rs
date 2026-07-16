@@ -268,7 +268,9 @@ impl GhostShell {
 
         if !changes.is_empty() {
             let engine = self.create_sync_engine().await;
-            engine.sync(changes).await?;
+            engine
+                .sync(changes, crate::app::sync::guard::GuardScope::Sync)
+                .await?;
         }
 
         Ok(())
@@ -294,7 +296,9 @@ impl GhostShell {
             ..Default::default()
         };
         let engine = self.create_sync_engine().await;
-        engine.sync(changes).await?;
+        engine
+            .sync(changes, crate::app::sync::guard::GuardScope::ShellExit)
+            .await?;
 
         Ok(())
     }

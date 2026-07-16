@@ -427,6 +427,34 @@ lxt 120 -g "$FGDIR" -b "$BACKEND" -y upgrade --canary --test "cmd /c exit 0" >/d
 lx -g "$FGDIR" -y remove "$BACKEND:$PKG" >/dev/null 2>&1
 lx repo list -b "$BACKEND" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "repo list ($BACKEND) exits 0" || soft "repo list rc=$RC"; feat repo
 lxt 120 -g "$FGDIR" -b "$BACKEND" -y migrate >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "migrate (scoped) exits 0" || soft "migrate rc=$RC$(rcnote $RC)"; feat migrate
+# The Windows backends (winget/scoop/choco) install no dependencies, so everything they list
+# really was user-chosen — migrate SHOULD adopt here. That is the other half of the apt fix:
+# "adopt nothing when unsure" must not become "adopt nothing, ever".
+MIGF="$(ls "$FGDIR"/migrated_*.txt 2>/dev/null | head -1)"
+[ -n "$MIGF" ] && ok "migrate wrote a manifest ($(grep -cvE '^\s*(#|$)' "$MIGF") package(s))" \
+               || soft "migrate wrote no manifest (nothing unmanaged on this host)"
+# The removal guard: same contract as the Linux harness.
+OUT="$(lx protected 2>/dev/null)"; printf '%s' "$OUT" | grep -q "Guarded commands" \
+    && ok "protected lists the guarded commands" || no "protected does not show what is guarded"
+OUT="$(lx protected --json 2>/dev/null)"; is_json "$OUT" \
+    && ok "protected --json is JSON" || no "protected --json is not JSON"
+feat protected
+# unmanage: forget without uninstalling.
+UMD="${TMPDIR:-/tmp}/linix-it-unmanage"; rm -rf "$UMD"; mkdir -p "$UMD"
+lx -g "$UMD" -y install "$BACKEND:$PKG" >/dev/null 2>&1
+lx -g "$UMD" -y unmanage "$BACKEND:$PKG" >/dev/null 2>&1; RC=$?
+if [ $RC -eq 0 ]; then
+    ok "unmanage exits 0"
+    present "$PKG" && ok "unmanage left the package installed" \
+                   || no "unmanage UNINSTALLED the package — it must only forget it"
+    manifest_has_in "$UMD" "$PKG" && no "unmanage left the declaration behind" \
+                                  || ok "unmanage removed the declaration too"
+else
+    soft "unmanage rc=$RC (tolerated)"
+fi
+OUT="$(lx -g "$UMD" unmanage --json "$BACKEND:$PKG" 2>/dev/null)"; is_json "$OUT" \
+    && ok "unmanage --json is JSON" || no "unmanage --json is not JSON"
+feat unmanage
 lx -n teleport "$PKG" "$BACKEND" >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "teleport (dry-run plan) exits 0" || soft "teleport rc=$RC"; feat teleport
 lx -g "$FGDIR" module list >/dev/null 2>&1; RC=$?; [ $RC -eq 0 ] && ok "module list exits 0" || soft "module list rc=$RC"
 lx -g "$FGDIR" module create linix-it-mod >/dev/null 2>&1; lx -g "$FGDIR" module show linix-it-mod >/dev/null 2>&1; feat module
@@ -594,7 +622,7 @@ for b in $(printf '%s\n' "$DOCTOR" | grep -E '^\[READY\]' | awk '{print $2}'); d
 done
 [ $audit_fail -eq 0 ] && ok "every READY backend was exercised (real lifecycle or plan-smoke)"
 touched "$BACKEND"
-FEATURES_ALL="sync watch run shim heal clean unmanaged orphans status prune plan apply lock search update upgrade list info install remove repo doctor migrate teleport shell undo cockpit activate deactivate profile module snapshot generation rollback git lease schedule config init audit sbom export bundle why service bisect clone fleet managed hooks hold unhold conflicts policy completions self-upgrade"
+FEATURES_ALL="sync watch run shim heal clean unmanaged orphans status prune plan apply lock search update upgrade list info install remove repo doctor migrate teleport shell undo cockpit activate deactivate profile module snapshot generation rollback git lease schedule config init audit sbom export bundle why service bisect clone fleet managed hooks hold unhold conflicts policy completions self-upgrade protected unmanage"
 # EXEMPT = no non-interactive assertion is possible: interactive TUIs (shell ghost-shell, undo
 # gallery, cockpit) or commands that need a remote SSH host (bisect/clone/fleet).
 FEATURES_EXEMPT=" shell undo cockpit bisect clone fleet "

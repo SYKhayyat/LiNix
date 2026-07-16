@@ -46,6 +46,41 @@ fn is_concrete_version(v: &str) -> bool {
     !v.is_empty() && v != "latest" && v != "*"
 }
 
+/// How a backend answers "which packages did the user actually ask for?" — the question
+/// `migrate` must get right before it adopts anything into managed state.
+///
+/// This is stated per backend rather than inferred from the absence of config: "no manual
+/// command configured" is ambiguous between *"listing everything is the correct answer"*
+/// (winget has no dependencies) and *"we have no idea"* (pip does). Conflating the two is
+/// how an entire dependency graph gets adopted and then purged.
+#[derive(Debug, Clone)]
+pub enum ManualListing {
+    /// Every installed package was user-requested: the manager installs no dependencies
+    /// of its own, so `list_installed` *is* the manual set (winget, choco, mas, dotnet).
+    AllInstalled,
+    /// The manager reports its explicit set via a command of its own.
+    Command {
+        /// Binary to run, when it is neither the backend nor `list_binary` (apt's manual
+        /// set lives in `apt-mark`, a third binary distinct from its `dpkg-query` lister).
+        /// `None` falls back to `list_binary`, then the backend name.
+        binary: Option<String>,
+        args: Vec<String>,
+        format: ManualFormat,
+    },
+    /// The manager installs dependencies but exposes no way to tell them apart from what
+    /// the user chose (pip, gem, zypper, pkgin). Adoption must skip the backend entirely.
+    Unsupported,
+}
+
+/// The shape of a `ManualListing::Command`'s output.
+#[derive(Debug, Clone, Copy)]
+pub enum ManualFormat {
+    /// Same shape as `list_args` output — reuse the backend's installed parser.
+    SameAsInstalled,
+    /// One bare package name per line, no versions (`apt-mark showmanual`).
+    BareNames,
+}
+
 /// Configuration for the Generic Manager Strategy.
 #[derive(Debug, Clone)]
 pub struct ManagerConfig {
@@ -53,11 +88,14 @@ pub struct ManagerConfig {
     pub install_args: Vec<String>,
     pub remove_args: Vec<String>,
     pub list_args: Vec<String>,
-    pub list_manual_args: Option<Vec<String>>,
+    pub manual: ManualListing,
+    /// Optional: args (run with `list_binary`) that report the packages the OS treats as
+    /// essential, for the removal guard. `None` = the manager has no such concept.
+    pub essential_args: Option<Vec<String>>,
     pub search_args: Vec<String>,
     /// Optional: if specified, use this binary for search instead of the backend name.
     pub search_binary: Option<String>,
-    /// Optional: binary to run the LIST commands (`list_args`/`list_manual_args`) with,
+    /// Optional: binary to run the LIST commands (`list_args`/`essential_args`) with,
     /// instead of the backend name. Required when a manager's query tool is a *separate*
     /// program — e.g. apt lists installed packages via `dpkg-query`, not `apt dpkg-query`.
     pub list_binary: Option<String>,
@@ -253,19 +291,49 @@ impl Queryable for GenericQueryable {
     }
 
     async fn list_manual(&self) -> Result<Vec<Package>> {
-        if let Some(ref manual_args) = self.core.config.list_manual_args {
-            let args: Vec<&str> = manual_args.iter().map(|s| s.as_str()).collect();
-            let bin = self
-                .core
-                .config
-                .list_binary
-                .as_deref()
-                .unwrap_or(&self.core.name);
-            let output = self.core.executor.run_output(bin, &args, false).await?;
-            Ok(self.core.parser.parse_installed(&output))
-        } else {
-            self.list_installed().await
+        match &self.core.config.manual {
+            ManualListing::AllInstalled => self.list_installed().await,
+            ManualListing::Command {
+                binary,
+                args,
+                format,
+            } => {
+                let args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                let bin = binary
+                    .as_deref()
+                    .or(self.core.config.list_binary.as_deref())
+                    .unwrap_or(&self.core.name);
+                let output = self.core.executor.run_output(bin, &args, false).await?;
+                Ok(match format {
+                    ManualFormat::BareNames => {
+                        crate::parsers::parse_bare_names(&output, &self.core.name)
+                    }
+                    ManualFormat::SameAsInstalled => self.core.parser.parse_installed(&output),
+                })
+            }
+            // Deliberately empty, not `list_installed`. Callers gate on `tracks_manual`;
+            // returning the installed set here would be a confident wrong answer.
+            ManualListing::Unsupported => Ok(Vec::new()),
         }
+    }
+
+    fn tracks_manual(&self) -> bool {
+        !matches!(self.core.config.manual, ManualListing::Unsupported)
+    }
+
+    async fn essential(&self) -> Result<Vec<String>> {
+        let Some(ref essential_args) = self.core.config.essential_args else {
+            return Ok(Vec::new());
+        };
+        let args: Vec<&str> = essential_args.iter().map(|s| s.as_str()).collect();
+        let bin = self
+            .core
+            .config
+            .list_binary
+            .as_deref()
+            .unwrap_or(&self.core.name);
+        let output = self.core.executor.run_output(bin, &args, false).await?;
+        Ok(self.core.parser.parse_essential(&output))
     }
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {
@@ -505,7 +573,8 @@ mod tests {
                 install_args: vec![],
                 remove_args: vec![],
                 list_args: vec![],
-                list_manual_args: None,
+                manual: ManualListing::AllInstalled,
+                essential_args: None,
                 search_args: vec![],
                 search_binary: None,
                 list_binary: None,
@@ -551,6 +620,123 @@ mod tests {
         let deps = core.get_dependencies("curl").await.unwrap();
         // "Depends: libc6" -> "libc6" (label + constraints stripped)
         assert_eq!(deps, vec!["libc6".to_string(), "bash".to_string()]);
+    }
+
+    /// Build a queryable over `manual`, with apt's real list/manual commands wired up.
+    fn queryable_with(
+        manual: ManualListing,
+        mock: Arc<MockExecutor>,
+        vfs: Arc<DashMap<std::path::PathBuf, String>>,
+    ) -> GenericQueryable {
+        let mut core = apt_like_core(mock, vfs);
+        core.config.list_binary = Some("dpkg-query".into());
+        core.config.list_args = vec!["-W".into(), "-f=${Package} ${Version}\\n".into()];
+        core.config.manual = manual;
+        core.parser = Arc::new(crate::parsers::apt::AptParser);
+        GenericQueryable {
+            core: Arc::new(core),
+        }
+    }
+
+    #[tokio::test]
+    async fn apt_manual_list_asks_apt_mark_not_dpkg_query() {
+        // The bug: apt had no manual command, so `list_manual` fell back to `dpkg-query
+        // -W` — every installed package, dependencies included (579 vs 103 on the real
+        // ubuntu image). It must ask `apt-mark showmanual` instead.
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "apt-mark showmanual",
+            Ok(DryRunOutput {
+                stdout: b"apt\nbase-files\njq\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        // If it wrongly fell back, it would hit this instead — and adopt a dependency.
+        mock.set_response(
+            "dpkg-query -W -f=${Package} ${Version}\\n",
+            Ok(DryRunOutput {
+                stdout: b"apt 2.7.14\njq 1.7.1\nlibperl5.38t64 5.38.2\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+
+        let q = queryable_with(
+            ManualListing::Command {
+                binary: Some("apt-mark".into()),
+                args: vec!["showmanual".into()],
+                format: ManualFormat::BareNames,
+            },
+            mock.clone(),
+            vfs,
+        );
+
+        let names: Vec<String> = q.list_manual().await.unwrap().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["apt", "base-files", "jq"]);
+        assert!(
+            !names.contains(&"libperl5.38t64".to_string()),
+            "a pure dependency must never be reported as user-chosen"
+        );
+        assert!(q.tracks_manual());
+
+        let calls = mock.get_calls().await;
+        assert!(calls.iter().any(|c| c == "apt-mark showmanual"), "{:?}", calls);
+    }
+
+    #[tokio::test]
+    async fn unsupported_backend_reports_nothing_rather_than_everything() {
+        // The safety backstop: a manager with dependencies and no way to name the user's
+        // choices must return an empty list AND admit it via tracks_manual, so adoption
+        // skips it. Returning list_installed here is a confident wrong answer.
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "dpkg-query -W -f=${Package} ${Version}\\n",
+            Ok(DryRunOutput {
+                stdout: b"apt 2.7.14\nlibperl5.38t64 5.38.2\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+
+        let q = queryable_with(ManualListing::Unsupported, mock, vfs);
+        assert!(!q.tracks_manual());
+        assert!(
+            q.list_manual().await.unwrap().is_empty(),
+            "adopting nothing is safe; adopting everything is catastrophic"
+        );
+        // list_installed still works — only the *intent* question is unanswerable.
+        assert_eq!(q.list_installed().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn all_installed_backends_still_report_their_installed_set() {
+        // winget/choco/mas install no dependencies, so everything listed was asked for.
+        // The Unsupported default must not silently swallow these.
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "dpkg-query -W -f=${Package} ${Version}\\n",
+            Ok(DryRunOutput {
+                stdout: b"jq 1.7.1\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let q = queryable_with(ManualListing::AllInstalled, mock, vfs);
+        assert!(q.tracks_manual());
+        assert_eq!(q.list_manual().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn essential_query_is_absent_unless_a_backend_declares_it() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let q = queryable_with(ManualListing::AllInstalled, mock, vfs);
+        // apt_like_core sets essential_args: None → no OS essential list, and no crash.
+        assert!(q.essential().await.unwrap().is_empty());
     }
 
     #[test]

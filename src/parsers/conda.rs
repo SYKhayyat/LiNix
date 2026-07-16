@@ -8,6 +8,37 @@ use crate::core::Package;
 use crate::parsers::utils::sanitize;
 use serde_json::Value;
 
+/// Parses `conda env export -n <env> --from-history --json` — the packages a person
+/// actually asked for, as opposed to the environment's full solved closure.
+///
+/// The distinction is not academic: on the stock `base` env of the test image,
+/// `conda list` reports 88 packages while `--from-history` reports 4. Adopting the other
+/// 84 would hand LiNix an entire dependency graph to later treat as removable.
+///
+/// `dependencies` is an array of match-specs, not names — `"python=3.13"`,
+/// `"conda[version='>=26.3.2']"`, or a bare `"pip"` — so the name is everything before
+/// the first version/bracket delimiter. A nested `{"pip": [...]}` object can appear in a
+/// full export; it carries pip's packages, not conda's, and is skipped.
+pub fn parse_conda_history(output: &str) -> Vec<Package> {
+    let clean = sanitize(output);
+    let json: Value = serde_json::from_str(&clean).unwrap_or_default();
+    json.get("dependencies")
+        .and_then(|d| d.as_array())
+        .map(|deps| {
+            deps.iter()
+                .filter_map(|d| {
+                    let spec = d.as_str()?;
+                    let name = spec
+                        .split(|c| matches!(c, '=' | '<' | '>' | '[' | ' ' | '!' | '~'))
+                        .next()?
+                        .trim();
+                    (!name.is_empty()).then(|| Package::new(name, "conda"))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Parses `conda list -n <env> --json` — an array of `{ "name", "version", ... }`.
 pub fn parse_conda_list(output: &str) -> Vec<Package> {
     let clean = sanitize(output);
@@ -52,6 +83,36 @@ pub fn parse_conda_search(output: &str) -> Vec<Package> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_reports_only_what_was_asked_for() {
+        // Verbatim from `conda env export -n base --from-history --json` on the tools test
+        // image, where `conda list` reports 88 packages and this reports these 4.
+        let input = r#"{
+          "name": "base",
+          "channels": ["conda-forge"],
+          "dependencies": [
+            "python=3.13",
+            "conda[version='>=26.3.2']",
+            "mamba[version='>=2.5.0']",
+            "pip"
+          ],
+          "prefix": "/opt/conda"
+        }"#;
+        let names: Vec<String> = parse_conda_history(input)
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(names, vec!["python", "conda", "mamba", "pip"]);
+    }
+
+    #[test]
+    fn history_of_an_untouched_env_is_empty_not_everything() {
+        // The failure that matters: if this ever returned the full closure instead, migrate
+        // would adopt an entire dependency graph.
+        assert!(parse_conda_history(r#"{"name":"base","dependencies":[]}"#).is_empty());
+        assert!(parse_conda_history("not json").is_empty());
+    }
 
     #[test]
     fn parses_conda_list_json() {

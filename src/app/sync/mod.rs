@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, instrument, warn};
 
+pub mod guard;
 pub mod planner;
 pub mod resolver;
 pub mod saved_plan;
@@ -91,8 +92,12 @@ impl<'a> SyncEngine<'a> {
     }
 
     /// Primary execution driver. Translates SyncChanges into OS-level modifications.
+    ///
+    /// `scope` names the command that asked, so the removal guard can be enforced here —
+    /// at the one point every drift-removal path funnels through — rather than at each
+    /// caller, where it only takes one forgotten site to purge a system.
     #[instrument(skip(self, changes))]
-    pub async fn sync(&self, changes: SyncChanges) -> Result<()> {
+    pub async fn sync(&self, changes: SyncChanges, scope: guard::GuardScope) -> Result<()> {
         let _heartbeat = self.executor.start_sudo_keepalive().await;
         let _ = self.hooks.run_before_sync().await;
 
@@ -100,6 +105,16 @@ impl<'a> SyncEngine<'a> {
             info!("Sync: OS state is consistent with declarative manifests.");
             return Ok(());
         }
+
+        // Before the snapshot and before any package is touched: refuse a removal set
+        // that is oversized or takes something the system needs.
+        guard::enforce(
+            self.config,
+            &self.registry,
+            &guard::removal_pairs(&changes),
+            scope,
+        )
+        .await?;
 
         // 1. Capture atomic safety snapshot (Feature 2). This is a safety NET, not a
         //    precondition: a Windows System Restore checkpoint needs admin (and System

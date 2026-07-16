@@ -175,6 +175,12 @@ So ~lean = base + rust − heavy~ is expressible, and ~work~ + ~gaming~ can be a
   metadata, and reconciles a drifted lockfile.
 - ~update~ — refresh repository metadata for all backends.
 - ~unmanaged~ — installed packages not managed by LiNix.
+- ~unmanage <pkg…> [--json]~ — stop managing a package *without uninstalling it*. Drops it
+  from managed state and removes its declaration from any manifest. Deleting a manifest
+  line by hand means "uninstall this"; this is the verb for "forget this, leave it alone".
+- ~protected [pkg…] [--json]~ — what the removal guard refuses to delete. With no argument
+  it prints the effective rules, the exemptions, ~max_removals~, and which commands are
+  guarded. With package names it answers per package and cites the deciding rule.
 - ~init [--force] [-i]~ — scaffold the layout; ~-i~ runs guided, interactive setup.
 - ~why <pkg> [--json]~ / ~audit [--json]~ / ~sbom~ — provenance, vulnerability audit, SBOM.
 - ~config edit~ — open the config in ~$EDITOR~/~$VISUAL~ and re-validate on save.
@@ -184,6 +190,59 @@ So ~lean = base + rust − heavy~ is expressible, and ~work~ + ~gaming~ can be a
 - ~status~/~config~/~repo~/~module~/~lease~/~schedule~/~snapshot~/
   ~teleport~/~shim~/~migrate~/~undo~/~bisect~/~clone~/~policy~/
   ~completions~ — see ~linix <cmd> --help~.
+
+* Removal guard
+
+Drift removal is derived from managed state, and managed state can be wrong — a
+mis-scoped manifest, a bad adoption, a registry copied from another machine. When
+it is wrong it does not produce a small mistake: it schedules *every* managed
+package for removal. The guard is the check that refuses those.
+
+*Every* path that deletes is guarded, not just the reviewed ones: ~apply~, ~prune~,
+~sync~, ~watch~, ~upgrade~, ~rollback~, ~canary~, ~remove~, ghost-shell exit, and
+expired-lease sweeps. Seven of these share one choke point (~SyncEngine::sync~);
+~apply~ and ~remove~ execute their own removals and call the guard directly.
+
+A removal is refused when either holds:
+
+- it removes more than ~max_removals~ packages (default 20; ~0~ disables), or
+- it touches a protected package.
+
+A package is protected when a ~protected_packages~ rule matches, or the backend
+reports the OS itself treats it as essential — for apt, ~dpkg-query -W -f='${Essential}
+${Priority} ${Package}'~ keeping ~Essential: yes~ or ~Priority: required~. Matching is
+exact and case-insensitive, or a prefix when a rule ends in ~*~ (~libpam*~ covers
+~libpam0g~; bare ~libc~ still does not cover ~libc-bin~). An ~unprotected_packages~
+entry overrides *both* sources — it is the user saying "I manage this one myself".
+
+Note the OS flags are necessary but *not sufficient*: on stock Ubuntu ~python3~ reports
+as ~no optional~ — neither essential nor required — yet appears in ~apt-mark showmanual~
+and removing it wrecks the machine. Hence the built-in list.
+
+The only override is ~--allow-mass-removal~ (global). ~--yes~ is deliberately *not* one:
+scripts and CI pass ~-y~ universally, and an unattended run is the case that cannot
+notice a system being dismantled. For the same reason ~allow_mass_removal~ cannot be set
+in config.toml — only per invocation.
+
+Refusal exits non-zero and names the deciding rule. ~linix protected~ shows the effective
+rules; ~linix unmanage~ is the way to stop managing something without deleting it.
+
+* Adoption (~migrate~)
+
+~migrate~ only adopts packages a backend can *prove* the user chose. Each backend
+declares one of three answers:
+
+| Answer                | Meaning                                            | Examples                        |
+|-----------------------+----------------------------------------------------+---------------------------------|
+| a command reports it  | ask it                                             | apt (~apt-mark showmanual~), pacman (~-Qe~), apk (~/etc/apk/world~), conda (~env export --from-history~), macports |
+| everything is chosen  | the manager installs no dependencies of its own    | winget, scoop, choco, mas, dotnet, bun, helm, mix, asdf, pixi, guix, slackpkg |
+| cannot tell           | it has dependencies and exposes no explicit record | pip, gem, zypper, pkgin, composer, opam, cabal, stack, luarocks, nimble, eopkg, emerge, custom backends |
+
+A backend in the third group *adopts nothing* and logs why. This is deliberate:
+everything adopted lands in the global state registry, and everything in that registry
+is a removal candidate later. Adopting nothing costs a manual manifest line; adopting a
+dependency graph costs the machine. The measured difference on stock images: apt 103
+user-chosen of 582 installed; conda 4 of 88.
 
 * Exit-code & failure contract
 
@@ -224,7 +283,10 @@ Written by ~linix config init~; every key is optional. Notable defaults:
 | ~prune_scope~          | ~"managed"~ | drift scope: managed-only vs any system package    |
 | ~protect_imperative~   | ~true~      | never prune packages installed via ~linix install~ |
 | ~confirm_destructive~  | ~false~     | extra prompt before removals                       |
-| ~protected_packages~   | —           | names that must never be removed                   |
+| ~protected_packages~   | —           | names that must never be removed (adds to built-ins) |
+| ~unprotected_packages~ | —           | names that are NOT protected, overriding everything |
+| ~max_removals~         | ~20~        | refuse any command removing more than this; ~0~ disables |
+| ~[guard.enforce_on]~   | all ~true~  | which commands the removal guard applies to        |
 | ~default_backend~      | auto        | force a single default backend                     |
 
 ~linix config show~ prints the effective config and its source (file vs built-in

@@ -51,6 +51,23 @@ impl Migrator {
         // Query every backend that supports the Queryable trait
         for backend in self.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
+                // Adoption is only safe for backends that can name the packages a person
+                // actually chose. Where a manager installs dependencies but exposes no way
+                // to tell them apart, the honest answer is to adopt nothing: everything
+                // adopted here lands in the global state registry, and anything in that
+                // registry is a removal candidate on the next sync. Adopting nothing costs
+                // the user a manual manifest entry; adopting a dependency graph costs them
+                // their system.
+                if !queryable.tracks_manual() {
+                    info!(
+                        "Migrator: Backend '{}' cannot distinguish user-chosen packages from \
+                         dependencies — skipping adoption. Add its packages to a manifest by \
+                         hand if you want them managed.",
+                        backend.name()
+                    );
+                    continue;
+                }
+
                 debug!(
                     "Migrator: Probing backend '{}' for unmanaged components...",
                     backend.name()
@@ -185,6 +202,11 @@ impl Migrator {
 
         for backend in self.registry.available() {
             if let Some(queryable) = backend.as_queryable() {
+                // Same gate as `migrate`: a backend that cannot report user intent has
+                // nothing trustworthy to preview.
+                if !queryable.tracks_manual() {
+                    continue;
+                }
                 if let Ok(pkgs) = queryable.list_manual().await {
                     for pkg in pkgs {
                         let key = format!("{}:{}", pkg.backend, pkg.name);
@@ -199,5 +221,183 @@ impl Migrator {
             }
         }
         Ok(unmanaged)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backends::generic::{
+        GenericBackendCore, GenericQueryable, ManagerConfig, ManualFormat, ManualListing,
+    };
+    use crate::core::executor::{DryRunOutput, MockExecutor};
+    use crate::core::{BackendCapabilities, CommandExecutor};
+    use crate::parsers::LambdaParser;
+    use dashmap::DashMap;
+    use std::path::PathBuf;
+
+    /// A backend named `apt` whose manual-listing behaviour is whatever the test needs.
+    fn registry_with(manual: ManualListing, mock: Arc<MockExecutor>) -> Arc<BackendRegistry> {
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        mock.set_command_exists("apt", true);
+        let exec = CommandExecutor::with_layer(
+            true,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(DashMap::new()),
+        );
+        let mut config = ManagerConfig {
+            name: "apt".into(),
+            install_args: vec![],
+            remove_args: vec![],
+            list_args: vec!["-W".into()],
+            manual: ManualListing::AllInstalled,
+            essential_args: None,
+            search_args: vec![],
+            search_binary: None,
+            list_binary: Some("dpkg-query".into()),
+            upgrade_args: vec![],
+            update_args: None,
+            orphan_args: None,
+            repo_add_args: None,
+            repo_remove_args: None,
+            repo_list_args: None,
+            depends_args: None,
+            version_pin: None,
+            needs_root: false,
+            is_exclusive: false,
+            flag_map: HashMap::new(),
+        };
+        config.manual = manual;
+
+        let core = Arc::new(GenericBackendCore {
+            name: "apt".into(),
+            executor: exec,
+            config,
+            parser: Arc::new(LambdaParser {
+                installed_fn: crate::parsers::apt::parse_list,
+                search_fn: crate::parsers::apt::parse_search,
+            }),
+        });
+        let mut reg = BackendRegistry::new();
+        reg.register(Arc::new(
+            BackendCapabilities::builder(core.clone())
+                .with_queryable(Arc::new(GenericQueryable { core }))
+                .build(),
+        ));
+        Arc::new(reg)
+    }
+
+    fn migrator(reg: Arc<BackendRegistry>) -> Migrator {
+        let config = Config {
+            // Keep the default protected list out of these assertions.
+            protected_packages: vec![],
+            ..Config::default()
+        };
+        let state = Arc::new(Mutex::new(StateRegistry::default()));
+        Migrator::new(reg, state, &config)
+    }
+
+    #[tokio::test]
+    async fn adopts_nothing_from_a_backend_that_cannot_report_intent() {
+        // The safety backstop. `dpkg-query -W` is wired and would happily return an entire
+        // dependency graph; because the backend admits it cannot tell user-chosen packages
+        // from dependencies, adoption must skip it entirely rather than adopt all of it.
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs));
+        mock.set_response(
+            "dpkg-query -W",
+            Ok(DryRunOutput {
+                stdout: b"apt 2.7.14\nlibperl5.38t64 5.38.2\npython3 3.12.3\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+
+        let found = migrator(registry_with(ManualListing::Unsupported, mock.clone()))
+            .audit()
+            .await
+            .unwrap();
+        assert!(
+            found.is_empty(),
+            "expected no adoption candidates, got {:?}",
+            found.iter().map(|p| &p.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn adopts_only_the_packages_the_backend_reports_as_user_chosen() {
+        // The real fix: ask `apt-mark showmanual`, not the installed listing. The
+        // dependency present in dpkg-query's output must not be adopted.
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs));
+        mock.set_response(
+            "apt-mark showmanual",
+            Ok(DryRunOutput {
+                stdout: b"apt\njq\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        mock.set_response(
+            "dpkg-query -W",
+            Ok(DryRunOutput {
+                stdout: b"apt 2.7.14\njq 1.7.1\nlibperl5.38t64 5.38.2\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+
+        let reg = registry_with(
+            ManualListing::Command {
+                binary: Some("apt-mark".into()),
+                args: vec!["showmanual".into()],
+                format: ManualFormat::BareNames,
+            },
+            mock.clone(),
+        );
+        let names: Vec<String> = migrator(reg)
+            .audit()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+
+        assert_eq!(names, vec!["apt", "jq"]);
+        assert!(
+            !names.contains(&"libperl5.38t64".to_string()),
+            "a pure dependency was adopted — this is the bug that purged the container"
+        );
+    }
+
+    #[tokio::test]
+    async fn protected_packages_are_never_adopted() {
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs));
+        mock.set_response(
+            "apt-mark showmanual",
+            Ok(DryRunOutput {
+                stdout: b"jq\npython3\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let reg = registry_with(
+            ManualListing::Command {
+                binary: Some("apt-mark".into()),
+                args: vec!["showmanual".into()],
+                format: ManualFormat::BareNames,
+            },
+            mock,
+        );
+        let config = Config {
+            protected_packages: vec!["python3".into()],
+            ..Config::default()
+        };
+        let m = Migrator::new(reg, Arc::new(Mutex::new(StateRegistry::default())), &config);
+        let names: Vec<String> = m.audit().await.unwrap().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, vec!["jq"]);
     }
 }

@@ -59,7 +59,9 @@ async fn test_e2e_sync_flow_hermetic() {
     // 6. Execution Phase: Apply the transaction closure
     // Modernized v3.6.0: Uses the Kernel's sync_engine factory to ensure 10-arg DI is correct
     let engine = kernel.app.sync_engine().await;
-    let result = engine.sync(changes).await;
+    let result = engine
+        .sync(changes, linix::app::sync::guard::GuardScope::Sync)
+        .await;
 
     assert!(
         result.is_ok(),
