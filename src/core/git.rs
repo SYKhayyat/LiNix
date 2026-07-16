@@ -114,12 +114,10 @@ impl GitManager {
         if !self.is_repo() {
             self.run_checked(&["init"])?;
         }
-        // Ignore rollback backups AND the machine-local lock-signing secret — the latter must
-        // never be committed (it would defeat lockfile tamper-evidence and leak between hosts).
         let ignore = self.root.join(".gitignore");
         let existing = std::fs::read_to_string(&ignore).unwrap_or_default();
         let mut body = existing.clone();
-        for pat in ["*.linix-backup", ".linix-lock.key"] {
+        for pat in ["*.linix-backup"] {
             if !existing.lines().any(|l| l.trim() == pat) {
                 if !body.is_empty() && !body.ends_with('\n') {
                     body.push('\n');

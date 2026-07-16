@@ -17,8 +17,6 @@ pub use args::{
     HooksCommand,
     LeaseArgs,
     LeaseCommand,
-    ManagedArgs,
-    ManagedCommand,
     // New for v3.6.0
     ModuleArgs,
     ModuleCommand,

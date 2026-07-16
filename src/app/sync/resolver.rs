@@ -8,7 +8,7 @@ use semver::{Version, VersionReq};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::fs;
-use tracing::{debug, error, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace, warn};
 use version_compare::{compare as loose_compare, Cmp};
 
 /// Responsible for calculating the "Desired State" of the system.
@@ -44,11 +44,6 @@ impl<'a> StateResolver<'a> {
         None
     }
 
-    /// Initializes a new StateResolver asynchronously.
-    ///
-    /// If `locked` is true, it attempts to load the machine-generated `locks.json`.
-    /// The lockfile lives in the GLOBAL groups folder, not in a `-g` folder: a lock is a
-    /// statement about what this machine has pinned, and there is one of those.
     pub async fn new(config: &'a Config, registry: Arc<BackendRegistry>, locked: bool) -> Self {
         let mut locks = HashMap::new();
 
@@ -61,46 +56,8 @@ impl<'a> StateResolver<'a> {
 
             if tokio::fs::try_exists(&lock_path).await.unwrap_or(false) {
                 if let Ok(data) = fs::read_to_string(&lock_path).await {
-                    // JSON Structure: {"locks": {"apt:curl": "7.81.0", ...}, "sig": "<hex>"}
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
                         if let Some(obj) = json.get("locks").and_then(|l| l.as_object()) {
-                            // Tamper check: a lockfile carrying a "sig" must verify against the
-                            // machine-local key. A missing sig is a legacy/unsigned lockfile —
-                            // allowed, with a nudge to re-run `linix lock`.
-                            match json.get("sig").and_then(|s| s.as_str()) {
-                                Some(sig) => match crate::core::locksig::read_key(&config.groups_dir) {
-                                    // A key exists here → this is the origin machine; enforce.
-                                    Some(key) => {
-                                        if crate::core::locksig::verify(&key, obj, sig) {
-                                            debug!("Resolver: locks.json signature verified.");
-                                        } else {
-                                            error!(
-                                                "Resolver: locks.json signature MISMATCH — the \
-                                                 lockfile was modified since `linix lock`. Refusing \
-                                                 to use it. Re-run `linix lock` to re-sign."
-                                            );
-                                            // Fail closed: leave `locks` empty so locked mode does
-                                            // not trust a tampered file.
-                                            return Self {
-                                                config,
-                                                registry,
-                                                locked,
-                                                locks: HashMap::new(),
-                                            };
-                                        }
-                                    }
-                                    // No local key (e.g. a fresh machine restoring a bundle): we
-                                    // can't verify, but refusing would break reproducibility, so
-                                    // proceed with a clear notice.
-                                    None => warn!(
-                                        "Resolver: locks.json is signed but no local key is present \
-                                         to verify it (fresh machine?). Proceeding unverified."
-                                    ),
-                                },
-                                None => warn!(
-                                    "Resolver: locks.json is unsigned (older format). Run `linix lock` to add tamper-evidence."
-                                ),
-                            }
                             for (key, val) in obj {
                                 if let Some(v_str) = val.as_str() {
                                     locks.insert(key.clone(), v_str.to_string());
@@ -659,122 +616,9 @@ mod wish_list_tests {
     use std::sync::Arc;
     use tempfile::tempdir;
 
-    /// Resolve against real files on disk and return the flat `backend:name` set. Goes
-    /// through the real `resolve_desired_state`, so it exercises the directory walk that
-    /// the overlay changed rather than a re-implementation of it.
-    async fn resolved(cfg: &Config) -> Vec<String> {
-        let reg = Arc::new(BackendRegistry::new());
-        let resolver = super::StateResolver::new(cfg, reg, false).await;
-        let by_backend = resolver.resolve_desired_state().await.unwrap();
-        let mut out: Vec<String> = by_backend
-            .into_iter()
-            .flat_map(|(b, specs)| {
-                specs
-                    .into_iter()
-                    .map(move |s| format!("{}:{}", b, s.name))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-        out.sort();
-        out
-    }
-
     fn write(dir: &std::path::Path, name: &str, body: &str) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join(name), body).unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_g_folder_adds_to_the_global_wish_list_instead_of_replacing_it() {
-        // The whole bug in one test. Before the overlay, `-g scratch` made global's
-        // packages vanish from the wish list while managed state still owned them —
-        // which is what turned them into drift and then into removals.
-        let tmp = tempdir().unwrap();
-        let global = tmp.path().join("global");
-        let scratch = tmp.path().join("scratch");
-        write(&global, "base.txt", "apt:curl\n");
-        write(&scratch, "extra.txt", "apt:jq\n");
-
-        let mut cfg = Config {
-            groups_dir: global.clone(),
-            ..Config::default()
-        };
-        cfg.extra_group_dirs = vec![scratch.clone()];
-
-        assert_eq!(resolved(&cfg).await, vec!["apt:curl", "apt:jq"]);
-    }
-
-    #[tokio::test]
-    async fn no_global_reads_only_the_g_folder() {
-        let tmp = tempdir().unwrap();
-        let global = tmp.path().join("global");
-        let scratch = tmp.path().join("scratch");
-        write(&global, "base.txt", "apt:curl\n");
-        write(&scratch, "extra.txt", "apt:jq\n");
-
-        let mut cfg = Config {
-            groups_dir: global.clone(),
-            ..Config::default()
-        };
-        cfg.extra_group_dirs = vec![scratch.clone()];
-        cfg.no_global = true;
-
-        assert_eq!(resolved(&cfg).await, vec!["apt:jq"]);
-    }
-
-    #[tokio::test]
-    async fn global_wins_when_a_g_folder_pins_the_same_package_differently() {
-        // The consequence of global-first + first-wins, stated as a rule: `-g` can ADD to
-        // your wish list but cannot quietly re-pin something global already decided. A
-        // scratch folder that could silently downgrade a globally pinned package would be
-        // a supply-chain footgun wearing a convenience flag.
-        let tmp = tempdir().unwrap();
-        let global = tmp.path().join("global");
-        let scratch = tmp.path().join("scratch");
-        write(&global, "base.txt", "apt:curl@version=1.0\n");
-        write(&scratch, "base.txt", "apt:curl@version=9.9\n");
-
-        let mut cfg = Config {
-            groups_dir: global.clone(),
-            ..Config::default()
-        };
-        cfg.extra_group_dirs = vec![scratch.clone()];
-
-        let reg = Arc::new(BackendRegistry::new());
-        let resolver = super::StateResolver::new(&cfg, reg, false).await;
-        let by_backend = resolver.resolve_desired_state().await.unwrap();
-        let curl = by_backend
-            .get("apt")
-            .and_then(|v| v.iter().find(|s| s.name == "curl"))
-            .expect("curl resolved");
-        assert_eq!(
-            curl.options.get("version").map(String::as_str),
-            Some("1.0"),
-            "a -g folder must not override a pin the global folder already made"
-        );
-    }
-
-    #[tokio::test]
-    async fn keep_txt_is_a_protection_list_not_an_install_list() {
-        // C14. keep.txt sits in the groups folder and ends in .txt, so the manifest walk
-        // read it as a wish list: `managed keep firefox` meant "never remove firefox" AND,
-        // silently, "install firefox".
-        let tmp = tempdir().unwrap();
-        let global = tmp.path().join("global");
-        write(&global, "base.txt", "apt:curl\n");
-        write(&global, "keep.txt", "firefox\n");
-
-        let cfg = Config {
-            groups_dir: global.clone(),
-            ..Config::default()
-        };
-        let got = resolved(&cfg).await;
-        assert_eq!(got, vec!["apt:curl"]);
-        assert!(
-            !got.iter().any(|s| s.contains("firefox")),
-            "a keep-list entry was turned into a package to install: {:?}",
-            got
-        );
     }
 
     #[tokio::test]

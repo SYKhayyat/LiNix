@@ -3,7 +3,6 @@ pub mod error;
 pub mod executor;
 pub mod git;
 pub mod journal;
-pub mod locksig;
 pub mod manager;
 pub mod package;
 pub mod ratelimiter;

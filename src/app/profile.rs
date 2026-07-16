@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::core::{CommandExecutor, Error, Journal, Result, SnapshotManager, StateRegistry};
 use crate::utils::progress::ProgressReporter;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, instrument};

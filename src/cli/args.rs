@@ -23,32 +23,9 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub yes: bool,
 
-    /// Force a specific backend for the operation
-    #[arg(short, long, global = true)]
-    pub backend: Option<String>,
-
     /// Path to custom config.toml
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
-
-    /// Also read package group files (.txt) from this directory. Repeatable.
-    ///
-    /// ADDS to your global groups folder rather than replacing it, so packages you manage
-    /// globally stay wanted. `-g a -g b` reads global, then a, then b, in that order.
-    ///
-    /// It used to replace, which is what made a mis-scoped command dangerous: your global
-    /// folder went unread, every package in it looked unwanted, and unwanted means removed.
-    /// Use --no-global for the isolated-sandbox behaviour, deliberately.
-    #[arg(short, long, global = true, value_name = "DIR")]
-    pub groups_dir: Vec<PathBuf>,
-
-    /// Read ONLY the -g directories, ignoring your global groups folder.
-    ///
-    /// Requires at least one -g. This makes every globally managed package look unwanted,
-    /// which for `prune`/`apply`/`sync` means scheduled for removal — so it is a separate,
-    /// explicit flag rather than something -g does quietly on your behalf.
-    #[arg(long, global = true)]
-    pub no_global: bool,
 
     /// Carry out a removal the guard refuses: one over `max_removals`, or touching a
     /// protected/essential package. Global because every command that can delete needs
@@ -157,20 +134,10 @@ pub enum Commands {
         json: bool,
     },
 
-    /// List and remove orphaned dependencies across all backends
-    Orphans,
-
     /// Show what `sync` would change (to install / drift to remove / unmanaged) — read-only
     #[command(alias = "diff")]
     Status {
         /// Output the report as JSON
-        #[arg(long)]
-        json: bool,
-    },
-
-    /// Remove drift: packages installed but no longer in your manifests
-    Prune {
-        /// Output the removal plan as JSON without removing anything
         #[arg(long)]
         json: bool,
     },
@@ -303,8 +270,8 @@ pub enum Commands {
         temp: Option<String>,
     },
 
-    /// Imperatively remove one or more packages
-    Remove {
+    /// Imperatively uninstall one or more packages
+    Uninstall {
         /// Names of packages to purge
         packages: Vec<String>,
 
@@ -336,8 +303,8 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Ingest manually installed packages into LiNix management
-    Migrate,
+    /// Take over the machine: write the packages you installed by hand into a module
+    Adopt,
 
     /// Move a package from one backend to another (e.g. apt -> snap)
     Teleport {
@@ -504,24 +471,8 @@ pub enum Commands {
         yes: bool,
     },
 
-    /// Replicate another machine's managed packages onto this one over SSH, translating
-    /// backends per-OS where needed (e.g. apt:ripgrep -> brew:ripgrep on macOS)
-    Clone {
-        /// SSH destination running LiNix, e.g. user@host
-        host: String,
-
-        /// Preview the translated plan without installing
-        #[arg(long)]
-        dry_run: bool,
-    },
-
     /// Compare a set of machines over SSH against your manifests and report drift
     Fleet(FleetArgs),
-
-    /// Choose how aggressively LiNix owns the system, and edit the keep-list.
-    /// `strict` prunes ANY package not in your manifests; `linix-only` prunes just
-    /// what LiNix installed. The keep-list (`keep.txt`) is always spared.
-    Managed(ManagedArgs),
 
     /// Auto-record manual package-manager use into LiNix (native hooks + shell wrappers),
     /// so `apt install foo` (etc.) updates your declarative state without changing workflow.
@@ -735,36 +686,6 @@ pub enum ServiceCommand {
     },
     /// List running services this host reports.
     List,
-}
-
-#[derive(Args, Debug)]
-pub struct ManagedArgs {
-    #[command(subcommand)]
-    pub command: ManagedCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum ManagedCommand {
-    /// Strict mode: `prune`/`sync` may remove ANY installed package not in your manifests
-    /// (except the keep-list and protected packages). "Everything is managed."
-    Strict,
-    /// LiNix-only mode (default): drift removal touches only packages LiNix installed.
-    #[command(name = "linix-only", alias = "relaxed")]
-    LinixOnly,
-    /// Show the current management mode and the keep-list.
-    Show,
-    /// Add package name(s) to the keep-list (`keep.txt`) so they are never auto-removed.
-    Keep {
-        /// Package names to protect
-        #[arg(required = true)]
-        packages: Vec<String>,
-    },
-    /// Remove package name(s) from the keep-list.
-    Unkeep {
-        /// Package names to stop protecting
-        #[arg(required = true)]
-        packages: Vec<String>,
-    },
 }
 
 #[derive(Args, Debug)]

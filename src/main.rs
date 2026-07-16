@@ -5,7 +5,7 @@ use linix::app::sync::planner::{ScopedFilter as PlannerScope, ScopedFilter};
 use linix::app::{ui::TuiPreview, App};
 use linix::cli::{
     Cli, Commands, ConfigCommand, GenerationCommand, GitCommand, HooksCommand, LeaseCommand,
-    ManagedCommand, ModuleCommand, ProfileCommand, RepoCommand, ScheduleCommand, ServiceCommand,
+    ModuleCommand, ProfileCommand, RepoCommand, ScheduleCommand, ServiceCommand,
     SnapshotCommand,
 };
 use linix::config::parser::{add_package_to_local, remove_package_from_local};
@@ -120,11 +120,11 @@ async fn main() -> Result<()> {
             json,
             temp,
         } => handle_install(&app, packages, *json, temp.as_deref()).await,
-        Commands::Remove {
+        Commands::Uninstall {
             packages,
             json,
             temp,
-        } => handle_remove(&app, packages, *json, temp.as_ref()).await,
+        } => handle_uninstall(&app, packages, *json, temp.as_ref()).await,
         Commands::Shell { packages } => handle_shell(&app, packages).await,
         Commands::Module(args) => handle_module(&app, &args.command).await,
         Commands::Lease(args) => handle_lease(&app, &args.command).await,
@@ -152,16 +152,14 @@ async fn main() -> Result<()> {
         Commands::Clean => handle_clean(&app).await,
         Commands::Heal => handle_heal(&app).await,
         Commands::Doctor { fix, json } => handle_doctor(&app, *fix, *json).await,
-        Commands::Migrate => handle_migrate(&app).await,
+        Commands::Adopt => handle_adopt(&app).await,
         Commands::Undo => handle_undo(&app).await,
         Commands::Cockpit => handle_cockpit(&app).await,
         Commands::Activate { profiles } => handle_activate(&app, profiles).await,
         Commands::Deactivate { profiles } => handle_deactivate(&app, profiles).await,
         Commands::Profile(args) => handle_profile(&app, &args.command).await,
         Commands::Run { packages, command } => handle_run(&app, packages, command).await,
-        Commands::Orphans => handle_orphans(&app).await,
         Commands::Status { json } => handle_status(&app, *json).await,
-        Commands::Prune { json } => handle_prune(&app, *json).await,
         Commands::Lock => handle_lock(&app).await,
         Commands::Plan { out } => handle_plan(&app, out).await,
         Commands::Apply { plan, yes } => handle_apply(&app, plan, *yes).await,
@@ -190,13 +188,9 @@ async fn main() -> Result<()> {
         Commands::Bisect { test, yes } => linix::app::bisect::bisect(&app, test, *yes)
             .await
             .map_err(|e| e.into()),
-        Commands::Clone { host, dry_run } => linix::app::fleet::clone(&app, host, *dry_run)
-            .await
-            .map_err(|e| e.into()),
         Commands::Fleet(args) => linix::app::fleet::fleet(&app, &args.hosts, args.sync, args.apply)
             .await
             .map_err(|e| e.into()),
-        Commands::Managed(args) => handle_managed(&app, &args.command).await,
         Commands::Hooks(args) => handle_hooks(&app, &args.command).await,
         Commands::HookRecord {
             manager,
@@ -1086,7 +1080,7 @@ async fn handle_install(
     perform_maintenance(app).await
 }
 
-async fn handle_remove(
+async fn handle_uninstall(
     app: &App,
     packages: &[String],
     json: bool,
@@ -1404,105 +1398,6 @@ async fn handle_lease(app: &App, cmd: &LeaseCommand) -> Result<()> {
                 .context("Input format: backend:package")?;
             app.state.lock().await.update_lease(b, n, duration)?;
             app.state.lock().await.save()?;
-        }
-    }
-    Ok(())
-}
-
-async fn handle_managed(app: &App, cmd: &ManagedCommand) -> Result<()> {
-    use linix::config::PruneScope;
-
-    // Persist a prune-scope change to config.toml. We re-read the file fresh (rather than
-    // serializing the in-memory config) so keep.txt entries that were merged into
-    // `protected_packages` at load time are NOT baked into config.toml.
-    async fn set_scope(app: &App, scope: PruneScope) -> Result<()> {
-        let path = app.config.config_file.clone();
-        let mut cfg = {
-            let p = path.clone();
-            tokio::task::spawn_blocking(move || linix::config::Config::from_file(&p)).await??
-        };
-        cfg.prune_scope = scope;
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await.ok();
-        }
-        let body = toml::to_string_pretty(&cfg).context("Failed to serialize config")?;
-        tokio::fs::write(&path, body)
-            .await
-            .with_context(|| format!("Failed to write config to {}", path.display()))?;
-        Ok(())
-    }
-
-    async fn edit_keepfile(app: &App, packages: &[String], adding: bool) -> Result<()> {
-        let path = app.config.keep_file_path();
-        let body = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-        let new_body = if adding {
-            keepfile_add(&body, packages)
-        } else {
-            keepfile_remove(&body, packages)
-        };
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await.ok();
-        }
-        tokio::fs::write(&path, new_body)
-            .await
-            .with_context(|| format!("Failed to write keep-list {}", path.display()))?;
-        Ok(())
-    }
-
-    match cmd {
-        ManagedCommand::Strict => {
-            set_scope(app, PruneScope::System).await?;
-            println!(
-                "Management mode: STRICT — `prune`/`sync` may remove any package not in your \
-                 manifests (keep-list and protected packages are always spared)."
-            );
-        }
-        ManagedCommand::LinixOnly => {
-            set_scope(app, PruneScope::Managed).await?;
-            println!(
-                "Management mode: LINIX-ONLY — drift removal touches only packages LiNix installed."
-            );
-        }
-        ManagedCommand::Show => {
-            let mode = match app.config.prune_scope {
-                PruneScope::System => "strict (everything managed)",
-                PruneScope::Managed => "linix-only",
-            };
-            println!("Management mode : {}", mode);
-            println!("prune_on_sync   : {}", app.config.prune_on_sync);
-            println!("protect_imperative: {}", app.config.protect_imperative);
-            let keep_path = app.config.keep_file_path();
-            println!("keep-list       : {}", keep_path.display());
-            match tokio::fs::read_to_string(&keep_path).await {
-                Ok(body) => {
-                    let items: Vec<&str> = body
-                        .lines()
-                        .map(|l| l.trim())
-                        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-                        .collect();
-                    if items.is_empty() {
-                        println!("  (empty)");
-                    }
-                    for it in items {
-                        println!("  {}", it);
-                    }
-                }
-                Err(_) => {
-                    println!("  (no keep.txt yet — add entries with `linix managed keep <pkg>`)")
-                }
-            }
-        }
-        ManagedCommand::Keep { packages } => {
-            edit_keepfile(app, packages, true).await?;
-            println!(
-                "Added {} package(s) to the keep-list ({}).",
-                packages.len(),
-                app.config.keep_file_path().display()
-            );
-        }
-        ManagedCommand::Unkeep { packages } => {
-            edit_keepfile(app, packages, false).await?;
-            println!("Removed {} package(s) from the keep-list.", packages.len());
         }
     }
     Ok(())
@@ -2254,7 +2149,7 @@ async fn handle_run(app: &App, packages: &[String], command: &str) -> Result<()>
         .map_err(|e| e.into())
 }
 
-async fn handle_migrate(app: &App) -> Result<()> {
+async fn handle_adopt(app: &App) -> Result<()> {
     app.migrator().migrate().await.map_err(|e| e.into())
 }
 async fn handle_undo(app: &App) -> Result<()> {
@@ -2369,71 +2264,7 @@ async fn handle_clean(app: &App) -> Result<()> {
     perform_maintenance(app).await
 }
 
-/// Non-destructive: report packages the next unscoped sync would prune as drift,
-/// without removing anything. `clean` performs the actual deep cleanup.
-async fn handle_orphans(app: &App) -> Result<()> {
-    let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
-    let desired = resolver.resolve_desired_state().await?;
-    let changes = {
-        let state_guard = app.state.lock().await;
-        let planner = linix::app::sync::planner::ChangePlanner::new(
-            app.registry.clone(),
-            &state_guard,
-            &app.config,
-        );
-        planner.plan(&desired, PlannerScope::None).await?
-    };
-    let report = changes.generate_report();
-    if report.remove.is_empty() {
-        info!("Orphans: no orphaned/drifted packages detected.");
-    } else {
-        println!("{:<15} PACKAGE", "BACKEND");
-        for entry in &report.remove {
-            println!("{:<15} {}", entry.backend, entry.name);
-        }
-        info!(
-            "Orphans: {} package(s) would be removed by `linix sync`/`linix clean`.",
-            report.remove.len()
-        );
-    }
-    Ok(())
-}
-
-/// Read-only reconciliation report: what `sync` would install, what drift `prune` would
-/// remove, and what's installed-but-unmanaged. Changes nothing.
-/// If a signed `locks.json` exists in the groups dir and a local signing key is present but the
-/// signature no longer verifies, return a human-readable MISMATCH warning. Returns `None` when
-/// there is no lockfile, no signature (legacy/unsigned), no local key (a fresh machine that can't
-/// verify), or the signature is valid. Never errors — a diagnostic must not fail the caller.
-async fn detect_lock_tamper(app: &App) -> Option<String> {
-    let lock_path = app.config.groups_dir.join("locks.json");
-    let data = tokio::fs::read_to_string(&lock_path).await.ok()?;
-    let val: serde_json::Value = serde_json::from_str(&data).ok()?;
-    let obj = val.get("locks").and_then(|l| l.as_object())?;
-    let sig = val.get("sig").and_then(|s| s.as_str())?;
-    let key = linix::core::locksig::read_key(&app.config.groups_dir)?;
-    if linix::core::locksig::verify(&key, obj, sig) {
-        None
-    } else {
-        Some(format!(
-            "⚠  lockfile signature MISMATCH — {} was modified since `linix lock`. Its pinned \
-             versions can no longer be trusted; re-run `linix lock` to re-sign, or restore the file.",
-            lock_path.display()
-        ))
-    }
-}
-
 async fn handle_status(app: &App, json: bool) -> Result<()> {
-    // Lockfile tamper check (read-only diagnostic): a signed locks.json that no longer verifies
-    // against the machine-local key was edited after `linix lock`. The signature is otherwise
-    // only checked under `sync --locked`, so a plain `status` never noticed a hand-edited
-    // lockfile. Surface it on stderr so it appears in both text and `--json` runs without
-    // polluting the JSON payload on stdout.
-    if let Some(msg) = detect_lock_tamper(app).await {
-        eprintln!("{}", msg);
-    }
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
@@ -2498,64 +2329,6 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// Remove drift: managed packages no longer present in the manifests. Separate from
-/// `sync` so removal is always an explicit action.
-async fn handle_prune(app: &App, json: bool) -> Result<()> {
-    let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
-    let desired = resolver.resolve_desired_state().await?;
-    let removals = {
-        let state_guard = app.state.lock().await;
-        let planner = linix::app::sync::planner::ChangePlanner::new(
-            app.registry.clone(),
-            &state_guard,
-            &app.config,
-        )
-        .with_prune(true);
-        let changes = planner.plan(&desired, PlannerScope::None).await?;
-        changes.removals_only()
-    };
-
-    let report = removals.generate_report();
-
-    // `--json` is a plan-only contract (see the arg doc: "output the removal plan as JSON without
-    // removing anything"): always emit VALID JSON — even when there's no drift — and never mutate,
-    // independent of the global --dry-run. This keeps the machine-readable output parseable.
-    if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
-        return Ok(());
-    }
-
-    if removals.is_empty() {
-        info!("Prune: no drift packages to remove.");
-        return Ok(());
-    }
-
-    println!("Prune will remove {} package(s):", report.remove.len());
-    for e in &report.remove {
-        println!("    {}:{}", e.backend, e.name);
-    }
-
-    if !app.config.yes && !app.config.dry_run {
-        let proceed = dialoguer::Confirm::new()
-            .with_prompt("Proceed with removal?")
-            .default(false)
-            .interact()
-            .unwrap_or(false);
-        if !proceed {
-            info!("Prune aborted by user.");
-            return Ok(());
-        }
-    }
-
-    app.sync_engine()
-        .await
-        .sync(removals, linix::app::sync::guard::GuardScope::Prune)
-        .await?;
-    perform_maintenance(app).await
 }
 
 /// Write the currently-installed version of every managed package to locks.json so a
@@ -2855,26 +2628,8 @@ async fn build_and_write_locks(app: &App) -> Result<usize> {
         }
     }
     let count = locks.len();
-    // Tamper-evidence: sign the canonical locks object with the machine-local key so
-    // `sync --locked` can detect an edited lockfile.
     tokio::fs::create_dir_all(&app.config.groups_dir).await.ok();
-    let sig = match linix::core::locksig::machine_key(&app.config.groups_dir) {
-        Ok(key) => Some(linix::core::locksig::sign(
-            &key,
-            &linix::core::locksig::canonical(&locks),
-        )),
-        Err(e) => {
-            warn!(
-                "lock: could not create signing key ({}); writing an unsigned lockfile.",
-                e
-            );
-            None
-        }
-    };
-    let doc = match sig {
-        Some(s) => serde_json::json!({ "locks": locks, "sig": s }),
-        None => serde_json::json!({ "locks": locks }),
-    };
+    let doc = serde_json::json!({ "locks": locks });
     let path = app.config.groups_dir.join("locks.json");
     tokio::fs::write(&path, serde_json::to_string_pretty(&doc)?)
         .await
@@ -3770,54 +3525,6 @@ fn apply_init_answers(mut base: linix::config::Config, a: &InitAnswers) -> linix
 
 /// Pure: append packages to a keep-file body, skipping any already present (case-insensitive
 /// on the package name, comments/blanks preserved). Returns the new body.
-fn keepfile_add(body: &str, packages: &[String]) -> String {
-    let mut present: std::collections::HashSet<String> = body
-        .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(|l| l.to_lowercase())
-        .collect();
-
-    let header = "# LiNix keep-list — packages here are never auto-removed, even in strict mode.\n";
-    let mut out = if body.trim().is_empty() {
-        String::from(header)
-    } else {
-        let mut s = body.to_string();
-        if !s.ends_with('\n') {
-            s.push('\n');
-        }
-        s
-    };
-    for p in packages {
-        let p = p.trim();
-        if p.is_empty() {
-            continue;
-        }
-        if present.insert(p.to_lowercase()) {
-            out.push_str(p);
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// Pure: remove packages (case-insensitive) from a keep-file body, preserving comments.
-fn keepfile_remove(body: &str, packages: &[String]) -> String {
-    let drop: std::collections::HashSet<String> =
-        packages.iter().map(|p| p.trim().to_lowercase()).collect();
-    let mut out = String::new();
-    for line in body.lines() {
-        let trimmed = line.trim();
-        let is_pkg = !trimmed.is_empty() && !trimmed.starts_with('#');
-        if is_pkg && drop.contains(&trimmed.to_lowercase()) {
-            continue;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    out
-}
-
 /// Pure: render a starter manifest body from a package list.
 fn render_starter_manifest(packages: &[String]) -> String {
     let mut out = String::from("# LiNix manifest — one package per line.\n");
@@ -4392,10 +4099,7 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
     config.merge_cli_overrides(
         Some(cli.dry_run),
         Some(cli.yes),
-        cli.backend.clone(),
         None,
-        cli.groups_dir.clone(),
-        cli.no_global,
         Some(cli.verbose),
         Some(cli.allow_mass_removal),
     )?;
@@ -4407,7 +4111,6 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
     // groups folder, which `-g` no longer moves — previously `-g /tmp/foo` made this look
     // for /tmp/foo/keep.txt, found nothing, returned early, and every keep-list protection
     // silently evaporated for that command. Every `is_protected` consumer honors it.
-    config.merge_keep_file();
     Ok(config)
 }
 
@@ -4616,34 +4319,6 @@ mod init_tests {
     }
 
     #[test]
-    fn keepfile_add_to_empty_writes_header_and_entries() {
-        let body = keepfile_add("", &["nvidia-driver".into(), "steam".into()]);
-        assert!(body.starts_with("# LiNix keep-list"));
-        assert!(body.contains("\nnvidia-driver\n"));
-        assert!(body.contains("\nsteam\n"));
-    }
-
-    #[test]
-    fn keepfile_add_is_idempotent_case_insensitive() {
-        let start = keepfile_add("", &["Steam".into()]);
-        let again = keepfile_add(&start, &["steam".into(), "STEAM".into()]);
-        let count = again
-            .lines()
-            .filter(|l| l.to_lowercase().trim() == "steam")
-            .count();
-        assert_eq!(count, 1, "no duplicate entries regardless of case");
-    }
-
-    #[test]
-    fn keepfile_remove_deletes_matching_and_keeps_comments() {
-        let body = "# my keep list\nsteam\nnvidia-driver\n";
-        let out = keepfile_remove(body, &["STEAM".into()]);
-        assert!(out.contains("# my keep list"));
-        assert!(!out.lines().any(|l| l.trim() == "steam"));
-        assert!(out.lines().any(|l| l.trim() == "nvidia-driver"));
-    }
-
-    #[test]
     fn config_template_actually_parses_and_matches_the_defaults() {
         // `linix config init` writes this file verbatim. A template that does not parse
         // hands every new user a broken config, and a template whose keys don't match the
@@ -4672,13 +4347,4 @@ mod init_tests {
         );
     }
 
-    #[test]
-    fn keepfile_add_preserves_existing_body_without_double_header() {
-        let body = "# header\nfoo\n";
-        let out = keepfile_add(body, &["bar".into()]);
-        assert_eq!(out.matches("# header").count(), 1);
-        assert!(out.contains("\nbar\n"));
-        // No second keep-list header injected onto a non-empty file.
-        assert!(!out.contains("# LiNix keep-list"));
-    }
 }

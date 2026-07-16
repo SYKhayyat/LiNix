@@ -66,11 +66,6 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, skip: Option<&Path>) -> Resu
         while let Some(entry) = rd.next_entry().await.map_err(Error::from)? {
             let ft = entry.file_type().await.map_err(Error::from)?;
             let from = entry.path();
-            // Never ship the machine-local lock-signing secret into a portable bundle — the
-            // target verifies-or-proceeds without it (see core::locksig).
-            if entry.file_name() == ".linix-lock.key" {
-                continue;
-            }
             // Skip the bundle output dir if it happens to sit inside the source tree.
             if ft.is_dir()
                 && skip_canon.is_some()
