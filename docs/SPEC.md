@@ -1034,8 +1034,7 @@ correctly. The measured 32 are the ones that remain.)*
 - Two snapshot retention engines. **(E4)**
 - Every bundle restore is unverified by construction. **(H1)**
 - `linix repo add` records nothing → modules are not portable.
-- `linix shim --source` is required, documented, and thrown away; `reconcile_shims` is
-  written and never called. **(verified)**
+- `linix shim --source` is required, documented, and thrown away. **(verified)**
 - Holds (machine-local) silently beat signed locks (portable).
 - `@lease=` in a manifest is inert. `remove --temp` is undone by the next sync.
 - `orphans` message false on both counts. **(C12)**
@@ -1063,6 +1062,7 @@ correctly. The measured 32 are the ones that remain.)*
 | **G2** | 104 of 245 assertions are `soft` and cannot fail → **Phase 5** |
 | **G3** | teleport, adopt, shim, cockpit, undo unverified → **Phase 5** |
 | **H2** | `sync/mod.rs:463`, `shell/mod.rs:126` → **Phase 5** |
+| **S1** | ~~`reconcile_shims` is never called~~ — **this was false.** `sync` calls `reconcile_all_shims` on every successful run, which calls `remove_shim` for every managed package that is not shimmed. `remove_shim` deleted `~/.local/bin/<name>` by filename alone, with no check that LiNix created it — so a managed package named `jq` made every sync delete the user's own `~/.local/bin/jq`. `~/.local/bin` is shared. **Fixed in Phase 0f**: ownership is now tested (a shim is the linix binary under another name — same file as `current_exe`, or a byte-identical copy). Three regression tests added; they could not exist before because `bin_dir` was private with no injection point, which is why G3 lists shims as unverified. |
 | — | `bundle` has no restore code and no end-to-end test → **Phase 4** |
 | — | air-gap artifacts need the whole dependency tree, and most backends can't → **Phase 4** |
 
