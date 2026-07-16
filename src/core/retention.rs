@@ -25,11 +25,8 @@ pub struct RetentionPolicy {
     pub keep: Vec<String>,
 }
 
-/// The three independently-configured histories.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct RetentionConfig {
-    #[serde(default)]
-    pub manifests: RetentionPolicy,
     #[serde(default)]
     pub generations: RetentionPolicy,
     #[serde(default)]

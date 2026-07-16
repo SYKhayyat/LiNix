@@ -62,9 +62,7 @@ pub async fn read_manifests(wish_dirs: &[PathBuf]) -> Result<HashMap<String, Str
 /// would change to `<file>.linix-backup` (once) so a rollback never silently discards
 /// uncommitted manifest edits.
 ///
-/// Keys are full paths (see `read_manifests`). A bare filename means the generation predates
-/// path-keying, and restores into `global_dir` — which is where every manifest lived when
-/// those generations were written, so the old behaviour is preserved exactly.
+/// Keys are full paths (see `read_manifests`).
 pub async fn write_manifests_with_backup(
     manifests: &HashMap<String, String>,
     global_dir: &Path,
@@ -74,26 +72,28 @@ pub async fn write_manifests_with_backup(
         .map_err(Error::from)?;
     for (key, body) in manifests {
         let recorded = Path::new(key);
-        let target = if recorded.is_absolute() {
-            // The folder may be gone — a `-g` scratch dir that was cleaned up since. Recreate
-            // it rather than dropping the file: the generation is a promise to restore what
-            // was captured, and a silent partial restore is worse than an unexpected mkdir.
-            if let Some(parent) = recorded.parent() {
-                if !tokio::fs::try_exists(parent).await.unwrap_or(false) {
-                    warn!(
-                        "Rollback: recreating {:?} — it held manifests when this generation \
-                         was captured, and has since gone away.",
-                        parent
-                    );
-                    tokio::fs::create_dir_all(parent)
-                        .await
-                        .map_err(Error::from)?;
-                }
+        if !recorded.is_absolute() {
+            return Err(Error::Other(format!(
+                "generation records the manifest {:?} without a full path, so there is no \
+                 way to know where to restore it. Refusing to guess.",
+                key
+            )));
+        }
+        // The folder may be gone. Recreate it rather than dropping the file: a silent
+        // partial restore is worse than an unexpected mkdir.
+        if let Some(parent) = recorded.parent() {
+            if !tokio::fs::try_exists(parent).await.unwrap_or(false) {
+                warn!(
+                    "Rollback: recreating {:?} — it held manifests when this generation \
+                     was captured, and has since gone away.",
+                    parent
+                );
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(Error::from)?;
             }
-            recorded.to_path_buf()
-        } else {
-            global_dir.join(key)
-        };
+        }
+        let target = recorded.to_path_buf();
         if let Ok(existing) = tokio::fs::read_to_string(&target).await {
             if existing != *body {
                 let backup = PathBuf::from(format!("{}.linix-backup", target.display()));
@@ -239,95 +239,6 @@ pub fn diff_package_sets(from: &[ManagedPackage], to: &[ManagedPackage]) -> Gene
 /// Diff two whole generations (convenience wrapper over [`diff_package_sets`]).
 pub fn diff_generations(from: &Generation, to: &Generation) -> GenerationDelta {
     diff_package_sets(&from.packages, &to.packages)
-}
-
-/// One archived snapshot of the manifest files, independent of generations. This is the
-/// "history of your instructions", kept on its own `[retention.manifests]` budget.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArchivedManifest {
-    pub id: String,
-    pub timestamp: String,
-    #[serde(default)]
-    pub files: HashMap<String, String>,
-}
-
-/// On-disk archive of manifest snapshots under `<data_dir>/manifest_archive/`.
-pub struct ManifestArchive {
-    dir: PathBuf,
-}
-
-impl ManifestArchive {
-    pub fn new(dir: PathBuf) -> Self {
-        Self { dir }
-    }
-
-    fn path_for(&self, id: &str) -> PathBuf {
-        self.dir.join(format!("{}.json", id))
-    }
-
-    /// Archive the current manifests. Skips writing when the newest existing entry already
-    /// has identical contents, so an unchanged manifest doesn't spawn duplicate history.
-    pub async fn capture(&self, id: &str, timestamp: &str, wish_dirs: &[PathBuf]) -> Result<bool> {
-        let files = read_manifests(wish_dirs).await?;
-        if let Some(latest) = self.list().await?.into_iter().next() {
-            if latest.files == files {
-                return Ok(false);
-            }
-        }
-        let entry = ArchivedManifest {
-            id: id.to_string(),
-            timestamp: timestamp.to_string(),
-            files,
-        };
-        tokio::fs::create_dir_all(&self.dir)
-            .await
-            .map_err(Error::from)?;
-        let json = serde_json::to_string_pretty(&entry)
-            .map_err(|e| Error::Other(format!("manifest archive serialize: {}", e)))?;
-        crate::utils::file::atomic_write(&self.path_for(id), &json)?;
-        Ok(true)
-    }
-
-    /// List archived manifests, newest first.
-    pub async fn list(&self) -> Result<Vec<ArchivedManifest>> {
-        let mut out = Vec::new();
-        if !tokio::fs::try_exists(&self.dir).await.unwrap_or(false) {
-            return Ok(out);
-        }
-        let mut entries = tokio::fs::read_dir(&self.dir).await.map_err(Error::from)?;
-        while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
-            let path = entry.path();
-            if path.extension().map(|e| e == "json").unwrap_or(false) {
-                if let Ok(body) = tokio::fs::read_to_string(&path).await {
-                    if let Ok(a) = serde_json::from_str::<ArchivedManifest>(&body) {
-                        out.push(a);
-                    }
-                }
-            }
-        }
-        out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-        Ok(out)
-    }
-
-    /// Apply a retention policy, deleting the archive entries it does not keep.
-    pub async fn prune(&self, policy: &RetentionPolicy, now: DateTime<Utc>) -> Result<Vec<String>> {
-        let items: Vec<RetentionItem> = self
-            .list()
-            .await?
-            .into_iter()
-            .map(|a| {
-                let ts = DateTime::parse_from_rfc3339(&a.timestamp)
-                    .map(|t| t.with_timezone(&Utc))
-                    .unwrap_or(now);
-                RetentionItem::new(a.id, ts)
-            })
-            .collect();
-        let doomed = policy.select_deletions(&items, now);
-        for id in &doomed {
-            let _ = tokio::fs::remove_file(self.path_for(id)).await;
-        }
-        Ok(doomed)
-    }
 }
 
 /// A single frozen generation: the realized state plus the manifests that produced it.
@@ -670,44 +581,6 @@ mod tests {
         // Only the apt backend: curl is unchanged, so nothing to do (cargo untouched).
         let apt_only = plan_rollback(&generation, &current, Some(&["apt".to_string()]), None);
         assert!(apt_only.is_empty());
-    }
-
-    #[tokio::test]
-    async fn manifest_archive_captures_dedups_and_prunes() {
-        let tmp = tempdir().unwrap();
-        let groups = tmp.path().join("groups");
-        write(&groups, "base.txt", "apt:curl\n").await;
-        let archive = ManifestArchive::new(tmp.path().join("marchive"));
-
-        // First capture writes; an identical re-capture is skipped (dedup).
-        assert!(archive
-            .capture("m1", "2026-07-01T00:00:00Z", std::slice::from_ref(&groups))
-            .await
-            .unwrap());
-        assert!(!archive
-            .capture("m2", "2026-07-02T00:00:00Z", std::slice::from_ref(&groups))
-            .await
-            .unwrap());
-
-        // A real edit produces a new archive entry.
-        write(&groups, "base.txt", "apt:curl\ncargo:bat\n").await;
-        assert!(archive
-            .capture("m3", "2026-07-03T00:00:00Z", std::slice::from_ref(&groups))
-            .await
-            .unwrap());
-
-        assert_eq!(archive.list().await.unwrap().len(), 2); // m1, m3
-
-        let policy = RetentionPolicy {
-            keep_last: 1,
-            ..Default::default()
-        };
-        let now = DateTime::parse_from_rfc3339("2026-07-03T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let deleted = archive.prune(&policy, now).await.unwrap();
-        assert_eq!(deleted, vec!["m1".to_string()]);
-        assert_eq!(archive.list().await.unwrap().len(), 1);
     }
 
     #[test]

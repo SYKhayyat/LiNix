@@ -25,15 +25,6 @@ impl Default for RetryConfig {
 }
 
 impl RetryConfig {
-    pub fn quick() -> Self {
-        Self {
-            max_attempts: 3,
-            initial_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(1),
-            backoff_multiplier: 2.0,
-        }
-    }
-
     pub fn persistent() -> Self {
         Self {
             max_attempts: 5,
@@ -127,7 +118,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_retry_eventual_success() {
-        let config = RetryConfig::quick();
+        // Short delays so the test does not spend its time asleep.
+        let config = RetryConfig {
+            initial_delay: Duration::from_millis(1),
+            max_delay: Duration::from_millis(4),
+            ..RetryConfig::default()
+        };
         let counter = AtomicU32::new(0);
 
         let result: std::result::Result<i32, &str> = retry(config, || {

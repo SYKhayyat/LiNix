@@ -19,7 +19,7 @@ pub mod planner;
 pub mod resolver;
 pub mod saved_plan;
 
-pub use self::planner::{ChangePlanner, ScopedFilter, SyncChanges};
+pub use self::planner::{ChangePlanner, Scope, SyncChanges};
 pub use self::resolver::StateResolver;
 pub use self::saved_plan::{SavedPlan, PLAN_SCHEMA};
 
@@ -37,7 +37,7 @@ pub trait Planner: Send + Sync {
     async fn plan(
         &self,
         desired: &std::collections::HashMap<String, Vec<PackageSpec>>,
-        scope: ScopedFilter,
+        scope: Option<Scope>,
     ) -> Result<SyncChanges>;
 }
 
@@ -284,18 +284,7 @@ impl<'a> SyncEngine<'a> {
             _ => {}
         }
 
-        // 2. Manifest archive: independent history of the instructions.
-        let archive = crate::app::generation::ManifestArchive::new(base.join("manifest_archive"));
-        if let Err(e) = archive.capture(&id, &rfc, &self.config.wish_dirs()).await {
-            warn!("Sync: manifest archive capture failed: {}", e);
-        }
-        match archive.prune(&self.config.retention.manifests, ts).await {
-            Ok(r) if !r.is_empty() => debug!("Sync: pruned {} archived manifest(s).", r.len()),
-            Err(e) => warn!("Sync: manifest retention prune failed: {}", e),
-            _ => {}
-        }
-
-        // 3. Filesystem snapshots: prune LiNix-owned ones per their own policy.
+        // 2. Filesystem snapshots: prune LiNix-owned ones per their own policy.
         match self
             .snapshot_manager
             .prune_with_policy(&self.config.retention.snapshots, ts, false)

@@ -1,4 +1,4 @@
-use linix::app::sync::planner::{ChangePlanner, ScopedFilter};
+use linix::app::sync::planner::ChangePlanner;
 use linix::app::sync::resolver::StateResolver;
 use linix::core::executor::DryRunOutput;
 use linix::core::journal::JournalAction;
@@ -49,9 +49,9 @@ async fn test_planner_recursive_native_dependencies() {
     );
 
     // Execute Planning
-    // Resolves E0061: Passes ScopedFilter::None (Global Sync)
+    // Resolves E0061: Passes None (Global Sync)
     let plan = planner
-        .plan(&desired, ScopedFilter::None)
+        .plan(&desired, None)
         .await
         .expect("Critical Path Error: Planning failed for native dependencies.");
 
@@ -90,7 +90,7 @@ async fn test_dag_cycle_detection_logic() {
     desired.insert("brew".to_string(), vec![spec_a, spec_b]);
 
     // Execute Planning
-    let result = planner.plan(&desired, ScopedFilter::None).await;
+    let result = planner.plan(&desired, None).await;
 
     // Verification
     assert!(
@@ -137,7 +137,7 @@ async fn test_transaction_rollback_fidelity() {
         kernel.app.registry.clone(),
         kernel.app.journal.clone(),
         kernel.app.diagnostics.clone(),
-        TransactionConfig::quick(),
+        TransactionConfig::default(),
     );
 
     let result = tx.execute_with_telemetry().await;

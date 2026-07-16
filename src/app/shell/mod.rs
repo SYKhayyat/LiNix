@@ -2,7 +2,7 @@
 
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::sandbox::{Sandbox, SandboxConfig};
-use crate::app::sync::{ChangePlanner, ScopedFilter, StateResolver, SyncEngine};
+use crate::app::sync::{ChangePlanner, StateResolver, SyncEngine};
 use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
@@ -263,7 +263,7 @@ impl GhostShell {
         let changes = {
             let state_guard = self.state.lock().await;
             let planner = ChangePlanner::new(self.registry.clone(), &state_guard, &self.config);
-            planner.plan(&transient_desired, ScopedFilter::None).await?
+            planner.plan(&transient_desired, None).await?
         }; // <-- state_guard dropped here
 
         if !changes.is_empty() {

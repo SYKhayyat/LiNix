@@ -33,20 +33,6 @@ impl Default for TransactionConfig {
 }
 
 impl TransactionConfig {
-    /// High-Performance Profile: Optimized for local filesystem or high-speed cache
-    /// operations where network latency is not a factor.
-    pub fn quick() -> Self {
-        Self {
-            max_concurrent: 8,
-            node_timeout: Duration::from_secs(60),
-            total_timeout: Duration::from_secs(600),
-            max_retries: 1,
-            initial_backoff: Duration::from_millis(100),
-            max_backoff: Duration::from_secs(2),
-            auto_rollback: true,
-        }
-    }
-
     /// Resilient Profile: Optimized for mixed remote and system-level operations.
     pub fn patient() -> Self {
         Self {

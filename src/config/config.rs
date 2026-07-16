@@ -247,9 +247,6 @@ pub struct Config {
     #[serde(default = "default_false")]
     pub prune_on_sync: bool,
 
-    #[serde(default = "default_false")]
-    pub purge_orphans: bool,
-
     /// Drift-removal scope for `prune`/`sync`. `Managed` (default) only removes
     /// LiNix-managed packages; `System` removes anything installed that isn't in your
     /// manifests (except protected packages).
@@ -277,9 +274,6 @@ pub struct Config {
     /// Suppress non-essential output (flight plan, transaction summary). Errors still print.
     #[serde(default)]
     pub quiet: bool,
-
-    #[serde(default = "default_cache_ttl")]
-    pub cache_ttl: u64,
 
     #[serde(default)]
     pub github_token: Option<String>,
@@ -332,9 +326,6 @@ pub struct Config {
     #[serde(default = "default_btrfs_path")]
     pub btrfs_path: String,
 
-    #[serde(default = "default_timeshift_path")]
-    pub timeshift_path: String,
-
     pub zfs_dataset: Option<String>,
 
     #[serde(default = "default_tmp_dir")]
@@ -373,9 +364,6 @@ fn default_bloatware_file() -> PathBuf {
 fn default_btrfs_path() -> String {
     "/.snapshots".to_string()
 }
-fn default_timeshift_path() -> String {
-    "/run/timeshift/backup/timeshift/snapshots".to_string()
-}
 fn default_tmp_dir() -> PathBuf {
     safe_data_dir().join("tmp")
 }
@@ -393,9 +381,6 @@ fn default_true() -> bool {
 }
 fn default_false() -> bool {
     false
-}
-fn default_cache_ttl() -> u64 {
-    300
 }
 fn default_max_parallel() -> usize {
     4
@@ -530,7 +515,6 @@ impl Default for Config {
             bloatware_file: default_bloatware_file(),
             remove_bloatware: false,
             prune_on_sync: false,
-            purge_orphans: false,
             prune_scope: PruneScope::default(),
             protect_imperative: true,
             fleet_hosts: Vec::new(),
@@ -538,7 +522,6 @@ impl Default for Config {
             show_progress: true,
             verbose: false,
             quiet: false,
-            cache_ttl: 300,
             github_token: None,
             max_parallel: 4,
             network_timeout_secs: default_network_timeout_secs(),
@@ -551,7 +534,6 @@ impl Default for Config {
             max_removals: default_max_removals(),
             guard: GuardSettings::default(),
             btrfs_path: default_btrfs_path(),
-            timeshift_path: default_timeshift_path(),
             zfs_dataset: None,
             tmp_dir: default_tmp_dir(),
             github_dir: default_github_dir(),

@@ -1,6 +1,6 @@
 // tests/security_and_resiliency_tests.rs
 
-use linix::app::sync::planner::{ChangePlanner, ScopedFilter};
+use linix::app::sync::planner::ChangePlanner;
 use linix::core::executor::DryRunOutput;
 use linix::core::{Error, GraphAction, Transaction, TransactionConfig, Validator};
 use std::collections::HashMap;
@@ -119,7 +119,7 @@ async fn test_planner_protects_mission_critical_closure() {
     let planner = ChangePlanner::new(kernel.app.registry.clone(), &state_guard, &config);
 
     let plan = planner
-        .plan(&desired, ScopedFilter::None)
+        .plan(&desired, None)
         .await
         .expect("Planning failed");
 
@@ -165,7 +165,7 @@ async fn test_transaction_atomic_rollback_fidelity() {
         kernel.app.registry.clone(),
         kernel.app.journal.clone(),
         kernel.app.diagnostics.clone(),
-        TransactionConfig::quick(),
+        TransactionConfig::default(),
     );
 
     let result = tx.execute().await;

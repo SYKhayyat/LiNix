@@ -216,10 +216,6 @@ pub enum Commands {
         #[arg(long)]
         module: Option<String>,
 
-        /// Limit upgrade to a specific group defined in config
-        #[arg(long)]
-        group: Option<String>,
-
         /// Output potential changes as JSON (requires --dry-run)
         #[arg(long)]
         json: bool,

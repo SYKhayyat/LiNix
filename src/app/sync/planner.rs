@@ -29,12 +29,13 @@ pub struct ReportEntry {
     pub source: Option<String>,
 }
 
+/// Narrows a sync to one profile or module. Absence of a scope is `Option::None` rather
+/// than a variant: as an enum variant it was an implicit spare-everything switch that
+/// `matches!` early-returns skipped past, so adding a variant produced no compiler error.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScopedFilter {
-    None,
+pub enum Scope {
     Profile(String),
     Module(String),
-    Group(String),
 }
 
 #[derive(Debug, Default, Clone)]
@@ -141,10 +142,10 @@ impl<'a> ChangePlanner<'a> {
     pub async fn plan(
         &self,
         desired: &HashMap<String, Vec<PackageSpec>>,
-        scope: ScopedFilter,
+        scope: Option<Scope>,
     ) -> Result<SyncChanges> {
         let mut changes = SyncChanges::default();
-        let filtered_desired = self.apply_scope_filtering(desired, &scope);
+        let filtered_desired = self.apply_scope_filtering(desired, scope.as_ref());
         let expanded_desired = self
             .expand_transitive_dependencies(&filtered_desired)
             .await?;
@@ -158,7 +159,7 @@ impl<'a> ChangePlanner<'a> {
         // (`upgrade --module X`), `desired` has already been reduced to that scope, so
         // running removal here would delete every package OUTSIDE the scope. A targeted
         // upgrade must be non-destructive — skip all removal planning when scoped.
-        if matches!(scope, ScopedFilter::None) {
+        if scope.is_none() {
             // Preload bloatware set if enabled
             let bloatware_set: HashSet<String> = if self.config.remove_bloatware {
                 if let Ok(bloat) = self.load_bloatware().await {
@@ -316,16 +317,14 @@ impl<'a> ChangePlanner<'a> {
     fn apply_scope_filtering(
         &self,
         desired: &HashMap<String, Vec<PackageSpec>>,
-        scope: &ScopedFilter,
+        scope: Option<&Scope>,
     ) -> HashMap<String, Vec<PackageSpec>> {
-        if matches!(scope, ScopedFilter::None) {
+        let Some(scope) = scope else {
             return desired.clone();
-        }
+        };
         let prefix = match scope {
-            ScopedFilter::Profile(p) => format!("manifest:{}", p),
-            ScopedFilter::Module(m) => format!("module:{}", m),
-            ScopedFilter::Group(g) => format!("group:{}", g),
-            _ => String::new(),
+            Scope::Profile(p) => format!("manifest:{}", p),
+            Scope::Module(m) => format!("module:{}", m),
         };
         let mut filtered = HashMap::new();
         for (backend, specs) in desired {
@@ -586,7 +585,7 @@ mod tests {
         // Unscoped: drift removal IS planned.
         let unscoped = {
             let planner = ChangePlanner::new(registry.clone(), &state, &config);
-            planner.plan(&desired, ScopedFilter::None).await.unwrap()
+            planner.plan(&desired, None).await.unwrap()
         };
         assert_eq!(
             unscoped.total_remove(),
@@ -598,7 +597,7 @@ mod tests {
         let scoped = {
             let planner = ChangePlanner::new(registry.clone(), &state, &config);
             planner
-                .plan(&desired, ScopedFilter::Module("dev".into()))
+                .plan(&desired, Some(Scope::Module("dev".into())))
                 .await
                 .unwrap()
         };
@@ -623,7 +622,7 @@ mod tests {
 
         let no_prune = ChangePlanner::new(registry.clone(), &state, &config)
             .with_prune(false)
-            .plan(&desired, ScopedFilter::None)
+            .plan(&desired, None)
             .await
             .unwrap();
         assert_eq!(
@@ -634,7 +633,7 @@ mod tests {
 
         let pruned = ChangePlanner::new(registry.clone(), &state, &config)
             .with_prune(true)
-            .plan(&desired, ScopedFilter::None)
+            .plan(&desired, None)
             .await
             .unwrap();
         assert_eq!(
@@ -661,7 +660,7 @@ mod tests {
         config.protect_imperative = true;
         let protected = ChangePlanner::new(registry.clone(), &state, &config)
             .with_prune(true)
-            .plan(&desired, ScopedFilter::None)
+            .plan(&desired, None)
             .await
             .unwrap();
         assert_eq!(
@@ -674,7 +673,7 @@ mod tests {
         config.protect_imperative = false;
         let unprotected = ChangePlanner::new(registry.clone(), &state, &config)
             .with_prune(true)
-            .plan(&desired, ScopedFilter::None)
+            .plan(&desired, None)
             .await
             .unwrap();
         assert_eq!(

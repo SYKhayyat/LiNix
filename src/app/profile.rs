@@ -1,7 +1,7 @@
 // src/app/profile.rs
 
 use crate::app::diagnostics::FailureDiagnosticEngine;
-use crate::app::sync::{ChangePlanner, ScopedFilter, StateResolver, SyncEngine};
+use crate::app::sync::{ChangePlanner, StateResolver, SyncEngine};
 use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
@@ -26,8 +26,7 @@ const ACTIVE_FILE: &str = "active";
 /// Manages system "Identities" or Profiles.
 ///
 /// A profile is a named set of software defined in `<profiles_dir>/<name>.profile` (a
-/// manifest with extra directives), or, for backward compatibility, a legacy directory
-/// `<profiles_dir>/<name>/` of `.txt` manifests. Profiles compose:
+/// manifest with extra directives). Profiles compose:
 ///
 /// - `include <other>` — union in another profile's resolved packages (the "plus").
 /// - `exclude <other>` — subtract another profile's resolved packages.
@@ -89,9 +88,6 @@ impl ProfileManager {
     fn profile_file(&self, name: &str) -> PathBuf {
         self.profiles_dir.join(format!("{name}.profile"))
     }
-    fn legacy_dir(&self, name: &str) -> PathBuf {
-        self.profiles_dir.join(name)
-    }
     fn active_file(&self) -> PathBuf {
         self.profiles_dir.join(ACTIVE_FILE)
     }
@@ -100,9 +96,6 @@ impl ProfileManager {
         tokio::fs::try_exists(self.profile_file(name))
             .await
             .unwrap_or(false)
-            || tokio::fs::try_exists(self.legacy_dir(name))
-                .await
-                .unwrap_or(false)
     }
 
     // ----------------------------------------------------- public lifecycle
@@ -192,10 +185,7 @@ impl ProfileManager {
                 .map_err(Error::from)?;
             while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
                 let path = entry.path();
-                let ft = entry.file_type().await.map_err(Error::from)?;
-                if ft.is_dir() {
-                    profiles.insert(entry.file_name().to_string_lossy().into_owned());
-                } else if path.extension().is_some_and(|e| e == "profile") {
+                if path.extension().is_some_and(|e| e == "profile") {
                     if let Some(stem) = path.file_stem() {
                         profiles.insert(stem.to_string_lossy().into_owned());
                     }
@@ -327,21 +317,7 @@ impl ProfileManager {
             .map_err(Error::from)?;
         while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
             let path = entry.path();
-            let ft = entry.file_type().await.map_err(Error::from)?;
-            if ft.is_dir() {
-                // Legacy: a directory of .txt manifests.
-                let name = entry.file_name().to_string_lossy().into_owned();
-                let mut lines = Vec::new();
-                let mut inner = tokio::fs::read_dir(&path).await.map_err(Error::from)?;
-                while let Some(e) = inner.next_entry().await.map_err(Error::from)? {
-                    let p = e.path();
-                    if p.extension().is_some_and(|x| x == "txt") {
-                        let body = tokio::fs::read_to_string(&p).await.map_err(Error::from)?;
-                        lines.extend(body.lines().map(|l| l.to_string()));
-                    }
-                }
-                defs.entry(name).or_default().extend(lines);
-            } else if path.extension().is_some_and(|e| e == "profile") {
+            if path.extension().is_some_and(|e| e == "profile") {
                 if let Some(stem) = path.file_stem() {
                     let body = tokio::fs::read_to_string(&path)
                         .await
@@ -416,7 +392,7 @@ impl ProfileManager {
         let changes = {
             let state_guard = self.state.lock().await;
             let planner = ChangePlanner::new(self.registry.clone(), &state_guard, &self.config);
-            planner.plan(&desired, ScopedFilter::None).await?
+            planner.plan(&desired, None).await?
         };
 
         if changes.is_empty() {

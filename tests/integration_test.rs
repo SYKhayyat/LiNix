@@ -1,5 +1,5 @@
 use chrono::Utc;
-use linix::app::sync::planner::{ChangePlanner, ScopedFilter};
+use linix::app::sync::planner::ChangePlanner;
 use linix::app::MetricsCollector;
 use linix::core::executor::DryRunOutput;
 use linix::core::{PackageSpec, StateRegistry, Validator};
@@ -165,9 +165,8 @@ async fn test_planner_template_logic_integration() {
     desired.insert("link".to_string(), vec![spec]);
 
     // 4. Plan the transition (Global Scope)
-    // Resolves E0061: Passing the required ScopedFilter argument
     let plan = planner
-        .plan(&desired, ScopedFilter::None)
+        .plan(&desired, None)
         .await
         .expect("Integration Planning Failure: Template logic closure failed.");
 

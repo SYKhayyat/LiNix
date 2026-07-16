@@ -1,4 +1,4 @@
-use linix::app::sync::planner::{ChangePlanner, ScopedFilter};
+use linix::app::sync::planner::ChangePlanner;
 use linix::app::sync::resolver::StateResolver;
 use linix::core::executor::DryRunOutput;
 use linix::core::{GraphAction, PackageSpec, Transaction, TransactionConfig};
@@ -44,9 +44,9 @@ async fn test_e2e_sync_flow_hermetic() {
             &state_guard,
             &kernel.app.config,
         );
-        // ScopedFilter::None handles global system reconciliation
+        // None handles global system reconciliation
         planner
-            .plan(&desired, ScopedFilter::None)
+            .plan(&desired, None)
             .await
             .expect("E2E Planning Error: Failed to generate SyncChanges DAG.")
     };
@@ -174,7 +174,7 @@ async fn test_concurrent_transaction_safety_e2e() {
         kernel.app.registry.clone(),
         kernel.app.journal.clone(),
         kernel.app.diagnostics.clone(), // DI
-        TransactionConfig::quick(),     // Production performance profile
+        TransactionConfig::default(),
     );
 
     // 3. Execute with telemetry

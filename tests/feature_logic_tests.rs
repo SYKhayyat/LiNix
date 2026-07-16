@@ -1,4 +1,4 @@
-use linix::app::sync::planner::{ChangePlanner, ScopedFilter};
+use linix::app::sync::planner::{ChangePlanner, Scope};
 use linix::app::sync::resolver::StateResolver;
 use linix::core::{Error, PackageSpec};
 use std::collections::HashMap;
@@ -144,8 +144,8 @@ async fn test_sync_report_generation_schema_fidelity() {
         }],
     );
 
-    // Plan with ScopedFilter::None (Global Sync)
-    let plan = planner.plan(&desired, ScopedFilter::None).await.unwrap();
+    // Plan with None (Global Sync)
+    let plan = planner.plan(&desired, None).await.unwrap();
     let report = plan.generate_report();
 
     // 1. Verify business logic mapping to the Report structure
@@ -177,7 +177,7 @@ async fn test_sync_report_generation_schema_fidelity() {
 // FEATURE 4: SCOPED UPGRADE LOGIC
 // ============================================================================
 
-/// Verifies that the ScopedFilter correctly prunes the DAG to only include
+/// Verifies that a Scope correctly prunes the DAG to only include
 /// nodes matching the requested source origin.
 #[tokio::test]
 async fn test_scoped_planner_filtering_accuracy() {
@@ -211,7 +211,7 @@ async fn test_scoped_planner_filtering_accuracy() {
 
     // Execute Plan for Scope: "work.txt"
     let plan = planner
-        .plan(&desired, ScopedFilter::Profile("work.txt".into()))
+        .plan(&desired, Some(Scope::Profile("work.txt".into())))
         .await
         .unwrap();
 

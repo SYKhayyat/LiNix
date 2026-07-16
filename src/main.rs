@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use linix::app::generation::GenerationStore;
-use linix::app::sync::planner::{ScopedFilter as PlannerScope, ScopedFilter};
+use linix::app::sync::planner::Scope as PlannerScope;
 use linix::app::{ui::TuiPreview, App};
 use linix::cli::{
     Cli, Commands, ConfigCommand, GenerationCommand, GitCommand, HooksCommand, LeaseCommand,
@@ -92,7 +92,6 @@ async fn main() -> Result<()> {
             except,
             profile,
             module,
-            group,
             json,
             canary,
             test,
@@ -107,7 +106,6 @@ async fn main() -> Result<()> {
                     except,
                     profile,
                     module,
-                    group,
                     json: *json,
                     canary: *canary,
                     test,
@@ -383,7 +381,7 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
             &app.config,
         )
         .with_prune(app.config.prune_on_sync);
-        planner.plan(&desired, PlannerScope::None).await?
+        planner.plan(&desired, None).await?
     };
 
     if changes.is_empty() {
@@ -482,7 +480,7 @@ async fn watch_reconcile(app: &App) -> Result<usize> {
             &app.config,
         )
         .with_prune(app.config.prune_on_sync)
-        .plan(&desired, PlannerScope::None)
+        .plan(&desired, None)
         .await?
     };
     if changes.is_empty() {
@@ -563,10 +561,19 @@ struct UpgradeRequest<'a> {
     except: &'a [String],
     profile: &'a Option<String>,
     module: &'a Option<String>,
-    group: &'a Option<String>,
     json: bool,
     canary: bool,
     test: &'a Option<String>,
+}
+
+impl UpgradeRequest<'_> {
+    fn scope(&self) -> Option<PlannerScope> {
+        if let Some(p) = self.profile {
+            Some(PlannerScope::Profile(p.clone()))
+        } else {
+            self.module.as_ref().map(|m| PlannerScope::Module(m.clone()))
+        }
+    }
 }
 
 /// True if `except` names this package, matching either the bare name or `backend:name`.
@@ -873,16 +880,7 @@ async fn upgrade_security(app: &App, except: &[String], json: bool) -> Result<()
 async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     // Canary keeps its own health-gated, scoped path.
     if req.canary {
-        let scope = if let Some(p) = req.profile {
-            ScopedFilter::Profile(p.clone())
-        } else if let Some(m) = req.module {
-            ScopedFilter::Module(m.clone())
-        } else if let Some(g) = req.group {
-            ScopedFilter::Group(g.clone())
-        } else {
-            ScopedFilter::None
-        };
-        return handle_canary(app, scope, req.test).await;
+        return handle_canary(app, req.scope(), req.test).await;
     }
 
     // Mode 1: audit-driven security upgrade.
@@ -898,7 +896,7 @@ async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     // Mode 3: --all, or a bare `upgrade` with no declarative scope → native whole-system
     // batch upgrade across every backend (this is the path that actually bumps
     // `latest`-pinned packages, which the constraint-driven planner never touches).
-    if req.all || (req.profile.is_none() && req.module.is_none() && req.group.is_none()) {
+    if req.all || req.scope().is_none() {
         if !req.except.is_empty() {
             eprintln!(
                 "note: --except is ignored for the native whole-system upgrade; \
@@ -926,15 +924,7 @@ async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
     }
 
     // Mode 4: scoped declarative upgrade (profile/module/group) via the change planner.
-    let scope = if let Some(p) = req.profile {
-        ScopedFilter::Profile(p.clone())
-    } else if let Some(m) = req.module {
-        ScopedFilter::Module(m.clone())
-    } else if let Some(g) = req.group {
-        ScopedFilter::Group(g.clone())
-    } else {
-        ScopedFilter::None
-    };
+    let scope = req.scope();
     let json = req.json;
 
     let resolver =
@@ -2278,7 +2268,7 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
             &app.config,
         )
         .with_prune(true);
-        planner.plan(&desired, PlannerScope::None).await?
+        planner.plan(&desired, None).await?
     };
     let report = changes.generate_report();
     let unmanaged = app.get_unmanaged_packages().await.unwrap_or_default();
@@ -2346,7 +2336,7 @@ async fn compute_full_changes(app: &App) -> Result<linix::app::sync::SyncChanges
         &state_guard,
         &app.config,
     );
-    Ok(planner.plan(&desired, ScopedFilter::None).await?)
+    Ok(planner.plan(&desired, None).await?)
 }
 
 async fn handle_plan(app: &App, out: &str) -> Result<()> {
@@ -3071,7 +3061,7 @@ async fn handle_heal(app: &App) -> Result<()> {
 
 /// Health-gated upgrade: snapshot, upgrade, run the test, roll back automatically on
 /// failure so a bad upgrade never leaves the machine broken.
-async fn handle_canary(app: &App, scope: ScopedFilter, test: &Option<String>) -> Result<()> {
+async fn handle_canary(app: &App, scope: Option<PlannerScope>, test: &Option<String>) -> Result<()> {
     let test = test
         .clone()
         .ok_or_else(|| anyhow::anyhow!("--canary requires --test <command> (the health check)"))?;
