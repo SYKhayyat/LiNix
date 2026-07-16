@@ -139,7 +139,14 @@ impl Queryable for CondaQueryable {
             .executor
             .run_output(
                 "conda",
-                &["env", "export", "-n", &self.core.env, "--from-history", "--json"],
+                &[
+                    "env",
+                    "export",
+                    "-n",
+                    &self.core.env,
+                    "--from-history",
+                    "--json",
+                ],
                 false,
             )
             .await?;

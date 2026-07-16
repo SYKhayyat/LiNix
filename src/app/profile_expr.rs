@@ -262,7 +262,10 @@ fn eval(expr: &Expr, resolve_atom: &mut dyn FnMut(&str) -> Vec<String>) -> Vec<S
 
 fn dedup(items: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
-    items.into_iter().filter(|x| seen.insert(x.clone())).collect()
+    items
+        .into_iter()
+        .filter(|x| seen.insert(x.clone()))
+        .collect()
 }
 
 /// Parse and evaluate a set expression. `resolve_atom` is called for every atom; return the
@@ -299,7 +302,10 @@ mod tests {
         }
     }
 
-    fn eval_str(input: &str, map: &[(&'static str, &[&'static str])]) -> Result<Vec<String>, String> {
+    fn eval_str(
+        input: &str,
+        map: &[(&'static str, &[&'static str])],
+    ) -> Result<Vec<String>, String> {
         let m: HashMap<&'static str, Vec<&'static str>> =
             map.iter().map(|(k, v)| (*k, v.to_vec())).collect();
         let mut r = resolver(m);
@@ -353,8 +359,11 @@ mod tests {
 
     #[test]
     fn function_forms_match_infix() {
-        let map: &[(&'static str, &[&'static str])] =
-            &[("work", &["a", "b"]), ("gaming", &["b", "c"]), ("security", &["b"])];
+        let map: &[(&'static str, &[&'static str])] = &[
+            ("work", &["a", "b"]),
+            ("gaming", &["b", "c"]),
+            ("security", &["b"]),
+        ];
         let f = eval_str("intersect(union(work, gaming), security)", map).unwrap();
         let i = eval_str("(work | gaming) & security", map).unwrap();
         assert_eq!(f, i);
@@ -365,12 +374,7 @@ mod tests {
     fn infinite_nesting_groups() {
         let r = eval_str(
             "((a | b) & (b | c)) \\ d",
-            &[
-                ("a", &["1"]),
-                ("b", &["2"]),
-                ("c", &["3"]),
-                ("d", &["2"]),
-            ],
+            &[("a", &["1"]), ("b", &["2"]), ("c", &["3"]), ("d", &["2"])],
         )
         .unwrap();
         // (a|b) = {1,2}; (b|c) = {2,3}; intersect = {2}; minus d({2}) = {}.

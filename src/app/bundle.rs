@@ -155,7 +155,9 @@ pub async fn create_bundle(
     // 3. Optional artifact pre-download for air-gapped installs.
     if include_artifacts {
         let dest_root = out.join("artifacts");
-        tokio::fs::create_dir_all(&dest_root).await.map_err(Error::from)?;
+        tokio::fs::create_dir_all(&dest_root)
+            .await
+            .map_err(Error::from)?;
         for (backend, name, _) in &managed {
             let dest = dest_root.join(backend);
             match offline_fetch_command(backend, name, &dest.to_string_lossy()) {
@@ -163,16 +165,19 @@ pub async fn create_bundle(
                     tokio::fs::create_dir_all(&dest).await.ok();
                     let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
                     if run_in_dir(&prog, &arg_refs, &dest).await {
-                        report.artifacts_fetched.push(format!("{}:{}", backend, name));
+                        report
+                            .artifacts_fetched
+                            .push(format!("{}:{}", backend, name));
                     } else {
                         report
                             .artifacts_skipped
                             .push(format!("{}:{} (fetch failed)", backend, name));
                     }
                 }
-                None => report
-                    .artifacts_skipped
-                    .push(format!("{}:{} (no offline fetch for backend '{}')", backend, name, backend)),
+                None => report.artifacts_skipped.push(format!(
+                    "{}:{} (no offline fetch for backend '{}')",
+                    backend, name, backend
+                )),
             }
         }
     }
@@ -192,7 +197,11 @@ pub async fn create_bundle(
          at them as a local source.\n",
         report.package_count,
         report.files_copied,
-        if include_artifacts { report.artifacts_fetched.len() } else { 0 },
+        if include_artifacts {
+            report.artifacts_fetched.len()
+        } else {
+            0
+        },
     );
     tokio::fs::write(out.join("RESTORE.md"), restore)
         .await
@@ -242,7 +251,12 @@ mod tests {
             offline_fetch_command("pip", "requests", "/d"),
             Some((
                 "pip".into(),
-                vec!["download".into(), "requests".into(), "-d".into(), "/d".into()]
+                vec![
+                    "download".into(),
+                    "requests".into(),
+                    "-d".into(),
+                    "/d".into()
+                ]
             ))
         );
         // pnpm/yarn/bun all route through `npm pack`
@@ -261,9 +275,13 @@ mod tests {
 
     #[tokio::test]
     async fn copy_dir_recursive_handles_missing_source() {
-        let n = copy_dir_recursive(Path::new("/nonexistent/xyz"), Path::new("/tmp/whatever"), None)
-            .await
-            .unwrap();
+        let n = copy_dir_recursive(
+            Path::new("/nonexistent/xyz"),
+            Path::new("/tmp/whatever"),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(n, 0);
     }
 
@@ -282,7 +300,10 @@ mod tests {
         let n = copy_dir_recursive(&src, &out.join("groups"), Some(&out))
             .await
             .unwrap();
-        assert_eq!(n, 1, "only local.txt should be copied, never the nested out dir");
+        assert_eq!(
+            n, 1,
+            "only local.txt should be copied, never the nested out dir"
+        );
     }
 
     #[test]

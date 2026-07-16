@@ -40,7 +40,11 @@ pub enum InitSystem {
 /// Pure: the ordered list of `(program, args)` commands that realize `action` for a service
 /// named `name` under a given init system. Empty when the platform can't express the action.
 /// Kept free of I/O so every mapping is unit-testable.
-pub fn plan_service(init: InitSystem, action: ServiceAction, name: &str) -> Vec<(String, Vec<String>)> {
+pub fn plan_service(
+    init: InitSystem,
+    action: ServiceAction,
+    name: &str,
+) -> Vec<(String, Vec<String>)> {
     let s = name.to_string();
     let one = |prog: &str, args: &[&str]| {
         vec![(
@@ -237,7 +241,9 @@ impl Installable for ServiceInstallable {
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
         for name in names {
             // Stop then disable; never let a missing service abort the sweep.
-            self.core.apply_lenient(ServiceAction::Stop, name, sudo).await;
+            self.core
+                .apply_lenient(ServiceAction::Stop, name, sudo)
+                .await;
             self.core
                 .apply_lenient(ServiceAction::Disable, name, sudo)
                 .await;
@@ -308,7 +314,11 @@ impl Queryable for ServiceQueryable {
                 let out = self
                     .core
                     .executor
-                    .run_output("sc", &["query", "type=", "service", "state=", "active"], false)
+                    .run_output(
+                        "sc",
+                        &["query", "type=", "service", "state=", "active"],
+                        false,
+                    )
                     .await?;
                 for line in out.lines() {
                     if let Some(v) = line.strip_prefix("SERVICE_NAME: ") {
@@ -376,11 +386,17 @@ mod tests {
     fn systemd_maps_each_action() {
         assert_eq!(
             plan_service(InitSystem::Systemd, ServiceAction::Enable, "nginx"),
-            vec![("systemctl".to_string(), vec!["enable".into(), "nginx".into()])]
+            vec![(
+                "systemctl".to_string(),
+                vec!["enable".into(), "nginx".into()]
+            )]
         );
         assert_eq!(
             plan_service(InitSystem::Systemd, ServiceAction::Restart, "nginx"),
-            vec![("systemctl".to_string(), vec!["restart".into(), "nginx".into()])]
+            vec![(
+                "systemctl".to_string(),
+                vec!["restart".into(), "nginx".into()]
+            )]
         );
     }
 
@@ -388,11 +404,17 @@ mod tests {
     fn openrc_uses_rc_update_and_rc_service() {
         assert_eq!(
             plan_service(InitSystem::OpenRc, ServiceAction::Enable, "sshd"),
-            vec![("rc-update".to_string(), vec!["add".into(), "sshd".into(), "default".into()])]
+            vec![(
+                "rc-update".to_string(),
+                vec!["add".into(), "sshd".into(), "default".into()]
+            )]
         );
         assert_eq!(
             plan_service(InitSystem::OpenRc, ServiceAction::Start, "sshd"),
-            vec![("rc-service".to_string(), vec!["sshd".into(), "start".into()])]
+            vec![(
+                "rc-service".to_string(),
+                vec!["sshd".into(), "start".into()]
+            )]
         );
     }
 
@@ -426,16 +448,28 @@ mod tests {
     #[test]
     fn options_are_independent() {
         // status only -> no enable/disable touched
-        assert_eq!(actions_for(None, Some("running")), vec![ServiceAction::Start]);
-        assert_eq!(actions_for(None, Some("stopped")), vec![ServiceAction::Stop]);
+        assert_eq!(
+            actions_for(None, Some("running")),
+            vec![ServiceAction::Start]
+        );
+        assert_eq!(
+            actions_for(None, Some("stopped")),
+            vec![ServiceAction::Stop]
+        );
         // enabled only -> no start/stop
         assert_eq!(actions_for(Some("true"), None), vec![ServiceAction::Enable]);
-        assert_eq!(actions_for(Some("false"), None), vec![ServiceAction::Disable]);
+        assert_eq!(
+            actions_for(Some("false"), None),
+            vec![ServiceAction::Disable]
+        );
         // both
         assert_eq!(
             actions_for(Some("true"), Some("running")),
             vec![ServiceAction::Enable, ServiceAction::Start]
         );
-        assert_eq!(actions_for(None, Some("restarted")), vec![ServiceAction::Restart]);
+        assert_eq!(
+            actions_for(None, Some("restarted")),
+            vec![ServiceAction::Restart]
+        );
     }
 }

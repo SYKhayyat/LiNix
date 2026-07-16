@@ -709,7 +709,10 @@ mod tests {
             interpret_source("module:dev"),
             "pulled in by module `dev` (@module:dev)"
         );
-        assert_eq!(interpret_source("group:editors"), "pulled in by group `editors`");
+        assert_eq!(
+            interpret_source("group:editors"),
+            "pulled in by group `editors`"
+        );
         assert_eq!(
             interpret_source("config:group:cli"),
             "pulled in by config group `cli`"
@@ -718,8 +721,10 @@ mod tests {
             interpret_source("imperative"),
             "installed imperatively via `linix install`"
         );
-        assert_eq!(interpret_source("/home/u/.config/linix/groups/local.txt"),
-            "declared in manifest `local.txt`");
+        assert_eq!(
+            interpret_source("/home/u/.config/linix/groups/local.txt"),
+            "declared in manifest `local.txt`"
+        );
         // combined
         assert_eq!(
             interpret_source("module:dev;imperative"),

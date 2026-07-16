@@ -646,7 +646,10 @@ mod tests {
             ("b", &["apt:htop", "apt:gdb"]),
             ("common", &["apt:htop", "apt:jq"]),
             // union(a,b) = {jq,htop,gdb}; intersect common = {jq,htop}; minus jq = {htop}.
-            ("combo", &["include a", "include b", "intersect common", "-apt:jq"]),
+            (
+                "combo",
+                &["include a", "include b", "intersect common", "-apt:jq"],
+            ),
         ]);
         assert_eq!(resolve("combo", &d), vec!["apt:htop"]);
     }

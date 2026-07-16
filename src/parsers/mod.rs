@@ -54,7 +54,7 @@ pub fn parse_bare_names(output: &str, backend: &str) -> Vec<Package> {
         .filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('!'))
         .filter_map(|l| {
             let name = l
-                .split(|c| matches!(c, '>' | '<' | '=' | '~' | '@' | ':' | ' '))
+                .split(['>', '<', '=', '~', '@', ':', ' '])
                 .next()?
                 .trim();
             (!name.is_empty()).then(|| Package::new(name, backend))

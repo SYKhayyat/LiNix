@@ -95,6 +95,15 @@ pub trait Queryable: Send + Sync {
         true
     }
 
+    /// How `list_manual` decided what the user chose, phrased so a person can judge it.
+    ///
+    /// Adoption writes an estimate into a file the user is then asked to trust. An
+    /// estimate whose provenance is hidden cannot be checked, and this one is wrong often
+    /// enough to matter: naming the command lets a reader reproduce it and disagree.
+    fn manual_source(&self) -> String {
+        "everything this manager installed (it installs no dependencies of its own)".to_string()
+    }
+
     /// Names the OS itself marks as essential — packages automated removal must refuse to
     /// touch regardless of what a manifest declares. Default: empty (no such concept).
     async fn essential(&self) -> Result<Vec<String>> {

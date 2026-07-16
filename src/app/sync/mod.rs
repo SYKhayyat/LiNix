@@ -198,7 +198,10 @@ impl<'a> SyncEngine<'a> {
         if probes.is_empty() {
             return;
         }
-        info!("Sync: running {} post-install health probe(s)...", probes.len());
+        info!(
+            "Sync: running {} post-install health probe(s)...",
+            probes.len()
+        );
         let mut failed = Vec::new();
         for (pkg, check) in &probes {
             if Self::probe_ok(check).await {
@@ -225,7 +228,9 @@ impl<'a> SyncEngine<'a> {
     async fn probe_ok(check: &str) -> bool {
         if let Some(port) = check.strip_prefix("port:") {
             return match port.trim().parse::<u16>() {
-                Ok(p) => tokio::net::TcpStream::connect(("127.0.0.1", p)).await.is_ok(),
+                Ok(p) => tokio::net::TcpStream::connect(("127.0.0.1", p))
+                    .await
+                    .is_ok(),
                 Err(_) => false,
             };
         }

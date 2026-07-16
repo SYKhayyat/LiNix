@@ -50,7 +50,10 @@ pub struct GenView {
 pub enum CockpitAction {
     Quit,
     /// Roll back to a generation; `with_config` also checks out its git commit.
-    Rollback { id: String, with_config: bool },
+    Rollback {
+        id: String,
+        with_config: bool,
+    },
 }
 
 /// One row in the left-hand timeline.
@@ -112,8 +115,16 @@ pub fn pkg_set_diff(older: &[String], newer: &[String]) -> (Vec<String>, Vec<Str
     use std::collections::HashSet;
     let old_set: HashSet<&String> = older.iter().collect();
     let new_set: HashSet<&String> = newer.iter().collect();
-    let added = newer.iter().filter(|p| !old_set.contains(*p)).cloned().collect();
-    let removed = older.iter().filter(|p| !new_set.contains(*p)).cloned().collect();
+    let added = newer
+        .iter()
+        .filter(|p| !old_set.contains(*p))
+        .cloned()
+        .collect();
+    let removed = older
+        .iter()
+        .filter(|p| !new_set.contains(*p))
+        .cloned()
+        .collect();
     (added, removed)
 }
 
@@ -159,7 +170,11 @@ impl Cockpit {
         if self.gens.is_empty() {
             return;
         }
-        let i = self.list_state.selected().map(|i| (i + 1) % self.gens.len()).unwrap_or(0);
+        let i = self
+            .list_state
+            .selected()
+            .map(|i| (i + 1) % self.gens.len())
+            .unwrap_or(0);
         self.list_state.select(Some(i));
     }
 
@@ -261,7 +276,11 @@ impl Cockpit {
         cmd: &str,
     ) -> Result<()> {
         disable_raw_mode()?;
-        execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+        execute!(
+            terminal.backend_mut(),
+            LeaveAlternateScreen,
+            DisableMouseCapture
+        )?;
 
         println!("$ {}\n", cmd);
         #[cfg(windows)]
@@ -276,7 +295,11 @@ impl Cockpit {
         let _ = io::stdin().read_line(&mut String::new());
 
         enable_raw_mode()?;
-        execute!(terminal.backend_mut(), EnterAlternateScreen, EnableMouseCapture)?;
+        execute!(
+            terminal.backend_mut(),
+            EnterAlternateScreen,
+            EnableMouseCapture
+        )?;
         terminal.clear()?;
         Ok(())
     }
@@ -299,7 +322,11 @@ impl Cockpit {
             .map(|g| ListItem::new(gen_row(g)))
             .collect();
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title(" Generations "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Generations "),
+            )
             .highlight_style(
                 Style::default()
                     .bg(Color::Rgb(40, 40, 40))
@@ -314,7 +341,11 @@ impl Cockpit {
             None => "No generations yet. They are created after each `sync`.".to_string(),
         };
         let detail_widget = Paragraph::new(detail)
-            .block(Block::default().borders(Borders::ALL).title(" Selected generation "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Selected generation "),
+            )
             .wrap(Wrap { trim: false });
         f.render_widget(detail_widget, cols[1]);
 
@@ -324,9 +355,13 @@ impl Cockpit {
         } else {
             self.status.clone()
         };
-        let title = if self.command_mode { " Shell (Enter to run, Esc to cancel) " } else { " Shell " };
-        let shell = Paragraph::new(bottom)
-            .block(Block::default().borders(Borders::ALL).title(title));
+        let title = if self.command_mode {
+            " Shell (Enter to run, Esc to cancel) "
+        } else {
+            " Shell "
+        };
+        let shell =
+            Paragraph::new(bottom).block(Block::default().borders(Borders::ALL).title(title));
         f.render_widget(shell, rows[1]);
     }
 }

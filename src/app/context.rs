@@ -360,7 +360,10 @@ impl App {
         )
         .await
         {
-            warn!("Kernel: expired-lease sweep refused, leaving them installed.\n{}", e);
+            warn!(
+                "Kernel: expired-lease sweep refused, leaving them installed.\n{}",
+                e
+            );
             return Ok(());
         }
 
@@ -447,7 +450,10 @@ impl App {
                         "Kernel: could not restore {}:{} ({}); dropping the suspension.",
                         s.backend, s.name, e
                     );
-                    self.state.lock().await.clear_suspension(&s.backend, &s.name);
+                    self.state
+                        .lock()
+                        .await
+                        .clear_suspension(&s.backend, &s.name);
                 }
             }
         }
@@ -482,7 +488,10 @@ impl App {
                         "Kernel: could not restore session-suspended {}:{} ({}); dropping it.",
                         s.backend, s.name, e
                     );
-                    self.state.lock().await.clear_suspension(&s.backend, &s.name);
+                    self.state
+                        .lock()
+                        .await
+                        .clear_suspension(&s.backend, &s.name);
                 }
             }
         }
@@ -520,7 +529,11 @@ impl App {
             return;
         }
         match git.commit_all(message) {
-            Ok(Some(hash)) => info!("Git: committed manifest change {} ({})", &hash[..hash.len().min(8)], message),
+            Ok(Some(hash)) => info!(
+                "Git: committed manifest change {} ({})",
+                &hash[..hash.len().min(8)],
+                message
+            ),
             Ok(None) => {} // nothing changed
             Err(e) => warn!("Git: auto-commit skipped: {}", e),
         }

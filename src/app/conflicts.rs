@@ -73,8 +73,7 @@ pub fn detect_conflicts(specs: &[PackageSpec]) -> Vec<Conflict> {
         let providers: Vec<(String, Option<String>)> = by_backend.into_iter().collect();
 
         // Distinct pinned versions among providers?
-        let mut versions: Vec<&String> =
-            providers.iter().filter_map(|(_, v)| v.as_ref()).collect();
+        let mut versions: Vec<&String> = providers.iter().filter_map(|(_, v)| v.as_ref()).collect();
         versions.sort();
         versions.dedup();
         let kind = if versions.len() > 1 {

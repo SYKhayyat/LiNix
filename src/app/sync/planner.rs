@@ -210,7 +210,10 @@ impl<'a> ChangePlanner<'a> {
                 // the input — not a licence to remove it. Checked once here rather than
                 // per-branch, which is how the lease and bloatware paths came to skip it.
                 if self.config.is_protected(&pkg.name) {
-                    debug!("Planner: '{}' is protected — never scheduling removal.", key);
+                    debug!(
+                        "Planner: '{}' is protected — never scheduling removal.",
+                        key
+                    );
                     continue;
                 }
 

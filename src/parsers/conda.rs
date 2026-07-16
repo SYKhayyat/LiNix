@@ -29,7 +29,7 @@ pub fn parse_conda_history(output: &str) -> Vec<Package> {
                 .filter_map(|d| {
                     let spec = d.as_str()?;
                     let name = spec
-                        .split(|c| matches!(c, '=' | '<' | '>' | '[' | ' ' | '!' | '~'))
+                        .split(['=', '<', '>', '[', ' ', '!', '~'])
                         .next()?
                         .trim();
                     (!name.is_empty()).then(|| Package::new(name, "conda"))

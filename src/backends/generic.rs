@@ -321,6 +321,28 @@ impl Queryable for GenericQueryable {
         !matches!(self.core.config.manual, ManualListing::Unsupported)
     }
 
+    fn manual_source(&self) -> String {
+        match &self.core.config.manual {
+            ManualListing::AllInstalled => format!(
+                "everything {} installed ({0} installs no dependencies of its own)",
+                self.core.name
+            ),
+            ManualListing::Command { binary, args, .. } => {
+                let bin = binary
+                    .as_deref()
+                    .or(self.core.config.list_binary.as_deref())
+                    .unwrap_or(&self.core.name);
+                format!("{} {}", bin, args.join(" "))
+            }
+            ManualListing::Unsupported => {
+                format!(
+                    "{} cannot tell your choices from dependencies",
+                    self.core.name
+                )
+            }
+        }
+    }
+
     async fn essential(&self) -> Result<Vec<String>> {
         let Some(ref essential_args) = self.core.config.essential_args else {
             return Ok(Vec::new());
@@ -673,7 +695,13 @@ mod tests {
             vfs,
         );
 
-        let names: Vec<String> = q.list_manual().await.unwrap().into_iter().map(|p| p.name).collect();
+        let names: Vec<String> = q
+            .list_manual()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
         assert_eq!(names, vec!["apt", "base-files", "jq"]);
         assert!(
             !names.contains(&"libperl5.38t64".to_string()),
@@ -682,7 +710,11 @@ mod tests {
         assert!(q.tracks_manual());
 
         let calls = mock.get_calls().await;
-        assert!(calls.iter().any(|c| c == "apt-mark showmanual"), "{:?}", calls);
+        assert!(
+            calls.iter().any(|c| c == "apt-mark showmanual"),
+            "{:?}",
+            calls
+        );
     }
 
     #[tokio::test]

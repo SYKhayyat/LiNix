@@ -853,7 +853,7 @@ mod tests {
         assert!(cfg.is_protected("steam"));
         assert!(cfg.is_protected("NVIDIA-DRIVER")); // case-insensitive
         assert!(cfg.is_protected("libc")); // original preserved
-        // Deduped: "steam" listed twice in the file appears once.
+                                           // Deduped: "steam" listed twice in the file appears once.
         let count = cfg
             .protected_packages
             .iter()

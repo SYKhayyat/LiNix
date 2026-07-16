@@ -213,9 +213,7 @@ pub fn backend_rollup(ops: &[OperationMetrics]) -> Vec<(String, usize, u64, u64)
         e.1 += op.duration_ms;
         e.2 = e.2.max(op.duration_ms);
     }
-    map.into_iter()
-        .map(|(b, (c, s, m))| (b, c, s, m))
-        .collect()
+    map.into_iter().map(|(b, (c, s, m))| (b, c, s, m)).collect()
 }
 
 #[cfg(test)]

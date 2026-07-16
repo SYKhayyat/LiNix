@@ -162,7 +162,9 @@ impl GitManager {
         }
         let out = self.run(&["rev-parse", "HEAD"])?;
         if out.status.success() {
-            Ok(Some(String::from_utf8_lossy(&out.stdout).trim().to_string()))
+            Ok(Some(
+                String::from_utf8_lossy(&out.stdout).trim().to_string(),
+            ))
         } else {
             Ok(None) // no commits yet
         }
@@ -295,6 +297,9 @@ mod tests {
         let restored = std::fs::read_to_string(&manifest)
             .unwrap()
             .replace("\r\n", "\n");
-        assert_eq!(restored, "apt:curl\n", "working tree restored to the v1 manifest");
+        assert_eq!(
+            restored, "apt:curl\n",
+            "working tree restored to the v1 manifest"
+        );
     }
 }

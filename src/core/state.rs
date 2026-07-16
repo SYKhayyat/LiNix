@@ -512,7 +512,9 @@ mod tests {
     #[test]
     fn timed_suspension_sets_future_restore_and_no_session() {
         let mut r = reg();
-        let at = r.suspend("apt", "htop", Some("3.0".into()), Some("1h")).unwrap();
+        let at = r
+            .suspend("apt", "htop", Some("3.0".into()), Some("1h"))
+            .unwrap();
         assert!(at.is_some());
         assert!(at.unwrap() > StateRegistry::now());
         let s = &r.list_suspensions()[0];
@@ -527,7 +529,10 @@ mod tests {
         let mut r = reg();
         r.active_session_id = Some("shell-abc".into());
         let at = r.suspend("dnf", "nano", None, None).unwrap();
-        assert!(at.is_none(), "session-scoped suspension has no timed restore");
+        assert!(
+            at.is_none(),
+            "session-scoped suspension has no timed restore"
+        );
         let s = &r.list_suspensions()[0];
         assert_eq!(s.session_id.as_deref(), Some("shell-abc"));
         assert_eq!(r.get_session_suspensions("shell-abc").len(), 1);

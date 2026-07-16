@@ -758,7 +758,7 @@ mod tests {
     #[test]
     fn diff_classifies_added_removed_and_version_changed() {
         let from = vec![
-            pkg("curl", "apt", "8.4.0"),   // stays same
+            pkg("curl", "apt", "8.4.0"),     // stays same
             pkg("ripgrep", "cargo", "14.0"), // version changes
             pkg("fd", "cargo", "9.0"),       // removed
         ];

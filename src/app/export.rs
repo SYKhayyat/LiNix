@@ -169,7 +169,9 @@ pub async fn export(
         return Ok(results);
     }
 
-    tokio::fs::create_dir_all(out_dir).await.map_err(Error::from)?;
+    tokio::fs::create_dir_all(out_dir)
+        .await
+        .map_err(Error::from)?;
     for f in formats {
         match f.render(&pkgs) {
             Some(text) => {

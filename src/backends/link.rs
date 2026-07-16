@@ -41,7 +41,12 @@ impl LinkBackendCore {
     /// binary. LiNix stays true to its "manager of managers" model: it orchestrates the
     /// tool the user already trusts rather than embedding crypto. stdout is captured raw
     /// (never trimmed) so key material survives byte-for-byte.
-    async fn decrypt_secret(&self, tool: &str, source: &Path, spec: &PackageSpec) -> Result<String> {
+    async fn decrypt_secret(
+        &self,
+        tool: &str,
+        source: &Path,
+        spec: &PackageSpec,
+    ) -> Result<String> {
         use tokio::process::Command;
         let mut cmd;
         match tool {
@@ -81,7 +86,10 @@ impl LinkBackendCore {
             )));
         }
         String::from_utf8(output.stdout).map_err(|e| {
-            Error::Other(format!("decrypted content of {:?} is not valid UTF-8: {}", source, e))
+            Error::Other(format!(
+                "decrypted content of {:?} is not valid UTF-8: {}",
+                source, e
+            ))
         })
     }
 

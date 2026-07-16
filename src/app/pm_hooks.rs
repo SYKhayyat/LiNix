@@ -255,7 +255,14 @@ pub fn detect_operation(argv: &[String]) -> Option<HookOp> {
     // Long-form keywords (subcommands) for install/remove across managers.
     const INSTALL_WORDS: [&str; 6] = ["install", "add", "in", "get", "reinstall", "emerge"];
     const REMOVE_WORDS: [&str; 8] = [
-        "remove", "uninstall", "erase", "del", "delete", "purge", "rm", "autoremove",
+        "remove",
+        "uninstall",
+        "erase",
+        "del",
+        "delete",
+        "purge",
+        "rm",
+        "autoremove",
     ];
 
     let mut op: Option<HookOp> = None;
@@ -287,8 +294,20 @@ pub fn detect_operation(argv: &[String]) -> Option<HookOp> {
 /// command after the shell wrapper ran it.
 pub fn extract_targets(argv: &[String]) -> Vec<String> {
     const KEYWORDS: [&str; 14] = [
-        "install", "add", "in", "get", "reinstall", "emerge", "remove", "uninstall", "erase",
-        "del", "delete", "purge", "rm", "autoremove",
+        "install",
+        "add",
+        "in",
+        "get",
+        "reinstall",
+        "emerge",
+        "remove",
+        "uninstall",
+        "erase",
+        "del",
+        "delete",
+        "purge",
+        "rm",
+        "autoremove",
     ];
     argv.iter()
         .skip(1)
@@ -321,7 +340,16 @@ pub fn diff_installed(before: &[String], after: &[String]) -> (Vec<String>, Vec<
 /// auto-learn fallback wrapper for any command. Supports bash/zsh (POSIX-ish) syntax.
 pub fn shell_wrappers(linix_bin: &str, shell: &str) -> String {
     // Known managers we wrap directly (name -> real binary is the same name via `command`).
-    let managers = ["apt", "apt-get", "dnf", "yum", "pacman", "zypper", "apk", "xbps-install"];
+    let managers = [
+        "apt",
+        "apt-get",
+        "dnf",
+        "yum",
+        "pacman",
+        "zypper",
+        "apk",
+        "xbps-install",
+    ];
     let mut out = String::new();
     out.push_str(&format!(
         "# LiNix shell integration ({shell}). Source this from your rc file:\n\
@@ -356,7 +384,9 @@ mod tests {
     fn hook_specs_reference_the_binary_and_cover_many_managers() {
         let specs = hook_specs("/usr/bin/linix");
         let managers: Vec<&str> = specs.iter().map(|s| s.manager).collect();
-        for expected in ["pacman", "apt", "dnf", "zypper", "apk", "xbps", "portage", "eopkg"] {
+        for expected in [
+            "pacman", "apt", "dnf", "zypper", "apk", "xbps", "portage", "eopkg",
+        ] {
             assert!(managers.contains(&expected), "missing hook for {expected}");
         }
         // Every hook actually invokes the linix binary.
@@ -380,8 +410,14 @@ mod tests {
 
     #[test]
     fn local_file_detection_by_path_and_extension() {
-        assert_eq!(classify_install_target("./htop.deb"), InstallKind::LocalFile);
-        assert_eq!(classify_install_target("/tmp/x.rpm"), InstallKind::LocalFile);
+        assert_eq!(
+            classify_install_target("./htop.deb"),
+            InstallKind::LocalFile
+        );
+        assert_eq!(
+            classify_install_target("/tmp/x.rpm"),
+            InstallKind::LocalFile
+        );
         assert_eq!(
             classify_install_target("C:\\pkgs\\a.msi"),
             InstallKind::LocalFile
@@ -404,18 +440,42 @@ mod tests {
 
     #[test]
     fn detect_operation_long_form() {
-        assert_eq!(detect_operation(&s(&["apt", "install", "curl"])), Some(HookOp::Install));
-        assert_eq!(detect_operation(&s(&["dnf", "remove", "nano"])), Some(HookOp::Remove));
-        assert_eq!(detect_operation(&s(&["apt-get", "purge", "x"])), Some(HookOp::Remove));
-        assert_eq!(detect_operation(&s(&["apk", "add", "jq"])), Some(HookOp::Install));
-        assert_eq!(detect_operation(&s(&["brew", "uninstall", "wget"])), Some(HookOp::Remove));
+        assert_eq!(
+            detect_operation(&s(&["apt", "install", "curl"])),
+            Some(HookOp::Install)
+        );
+        assert_eq!(
+            detect_operation(&s(&["dnf", "remove", "nano"])),
+            Some(HookOp::Remove)
+        );
+        assert_eq!(
+            detect_operation(&s(&["apt-get", "purge", "x"])),
+            Some(HookOp::Remove)
+        );
+        assert_eq!(
+            detect_operation(&s(&["apk", "add", "jq"])),
+            Some(HookOp::Install)
+        );
+        assert_eq!(
+            detect_operation(&s(&["brew", "uninstall", "wget"])),
+            Some(HookOp::Remove)
+        );
     }
 
     #[test]
     fn detect_operation_pacman_short_flags() {
-        assert_eq!(detect_operation(&s(&["pacman", "-S", "htop"])), Some(HookOp::Install));
-        assert_eq!(detect_operation(&s(&["pacman", "-Rns", "htop"])), Some(HookOp::Remove));
-        assert_eq!(detect_operation(&s(&["pacman", "-Syu"])), Some(HookOp::Install));
+        assert_eq!(
+            detect_operation(&s(&["pacman", "-S", "htop"])),
+            Some(HookOp::Install)
+        );
+        assert_eq!(
+            detect_operation(&s(&["pacman", "-Rns", "htop"])),
+            Some(HookOp::Remove)
+        );
+        assert_eq!(
+            detect_operation(&s(&["pacman", "-Syu"])),
+            Some(HookOp::Install)
+        );
     }
 
     #[test]

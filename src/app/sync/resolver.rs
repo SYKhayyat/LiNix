@@ -130,10 +130,7 @@ impl<'a> StateResolver<'a> {
                 resp.status()
             )));
         }
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
+        let body = resp.text().await.map_err(|e| Error::Http(e.to_string()))?;
         // Guard against pointing at a web page instead of a manifest.
         if crate::app::module_registry::looks_like_html(&body) {
             return Err(Error::Config(format!(
