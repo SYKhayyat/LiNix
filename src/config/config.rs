@@ -171,9 +171,6 @@ pub struct Config {
     pub command_aliases: HashMap<String, String>,
 
     #[serde(default)]
-    pub groups: HashMap<String, Vec<String>>,
-
-    #[serde(default)]
     pub dry_run: bool,
 
     #[serde(default)]
@@ -211,9 +208,6 @@ pub struct Config {
     #[serde(default)]
     pub hooks: HashMap<String, HashMap<String, String>>,
 
-    #[serde(default)]
-    pub hostname_packages: HashMap<String, Vec<String>>,
-
     /// Per-host backend allow-lists. When the current host has a (non-empty) entry here,
     /// it overrides the global `enabled_backends` for that host, so a machine can manage
     /// only a subset of backends (e.g. no `npm`/`cargo` on a server). Empty = inherit
@@ -221,15 +215,7 @@ pub struct Config {
     #[serde(default)]
     pub hostname_backends: HashMap<String, Vec<String>>,
 
-    /// Config files whose *contents* are declared inline here (target path -> file body),
-    /// instead of pointing the `link` backend at a separate source file. Each entry is
-    /// materialized as a managed `link` file: written on `sync`, self-healed if edited,
-    /// tracked for drift, and removed by `prune` when the entry is deleted. A pre-existing
-    /// file at the target is backed up once before it is overwritten.
-    #[serde(default)]
-    pub managed_files: HashMap<String, String>,
-
-    /// How long to retain each of LiNix's three histories — archived manifests,
+    /// How long to retain each of LiNix's histories —
     /// generations, and filesystem snapshots — each configured independently. See
     /// [`crate::core::RetentionConfig`]. Empty/zero policies keep everything (default).
     #[serde(default)]
@@ -496,7 +482,6 @@ impl Default for Config {
         Self {
             aliases: HashMap::new(),
             command_aliases: HashMap::new(),
-            groups: HashMap::new(),
             dry_run: false,
             yes: false,
             allow_mass_removal: false,
@@ -508,9 +493,7 @@ impl Default for Config {
             enabled_backends: Vec::new(),
             backend_priority: default_priority(),
             hooks: HashMap::new(),
-            hostname_packages: HashMap::new(),
             hostname_backends: HashMap::new(),
-            managed_files: HashMap::new(),
             retention: crate::core::RetentionConfig::default(),
             bloatware_file: default_bloatware_file(),
             remove_bloatware: false,

@@ -111,7 +111,6 @@ impl LinkBackendCore {
         context.insert("HOSTNAME", &Config::get_hostname());
 
         context.insert("aliases", &self.config.aliases);
-        context.insert("groups", &self.config.groups);
 
         tera.render("config", &context)
             .map_err(|e| Error::Other(format!("Tera Render Error in {:?}: {}", source_path, e)))

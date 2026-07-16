@@ -1,6 +1,6 @@
 use crate::backends::BackendRegistry;
 use crate::config::parser::{
-    identify_line, is_reserved_manifest, parse_group_file, parse_group_str, ManifestLine,
+    identify_line, is_reserved_manifest, parse_group_file, ManifestLine,
 };
 use crate::config::Config;
 use crate::core::{Error, PackageSpec, Result, Validator};
@@ -32,18 +32,6 @@ pub struct StateResolver<'a> {
 }
 
 impl<'a> StateResolver<'a> {
-    /// Find `filename` in the wish-list folders, in read order: global, then each `-g`.
-    /// First match wins. `None` if no folder has it.
-    async fn find_in_wish_dirs(&self, filename: &str) -> Option<std::path::PathBuf> {
-        for dir in self.config.wish_dirs() {
-            let candidate = dir.join(filename);
-            if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
-                return Some(candidate);
-            }
-        }
-        None
-    }
-
     pub async fn new(config: &'a Config, registry: Arc<BackendRegistry>, locked: bool) -> Self {
         let mut locks = HashMap::new();
 
@@ -79,40 +67,6 @@ impl<'a> StateResolver<'a> {
         }
     }
 
-    /// Fetch a remote `include:` manifest over HTTP and parse it into manifest lines (applying
-    /// the same BOM/comment/`when`-conditional handling as a local file). Network failures are
-    /// surfaced to the caller, which downgrades them to a skip-with-warning.
-    async fn fetch_remote_manifest(&self, url: &str) -> Result<Vec<String>> {
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(
-                self.config.network_timeout_secs.max(10),
-            ))
-            .user_agent("linix-include")
-            .build()
-            .map_err(|e| Error::Http(e.to_string()))?;
-        let resp = client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| Error::Http(e.to_string()))?;
-        if !resp.status().is_success() {
-            return Err(Error::Http(format!(
-                "include {} returned HTTP {}",
-                url,
-                resp.status()
-            )));
-        }
-        let body = resp.text().await.map_err(|e| Error::Http(e.to_string()))?;
-        // Guard against pointing at a web page instead of a manifest.
-        if crate::app::module_registry::looks_like_html(&body) {
-            return Err(Error::Config(format!(
-                "include {} looks like an HTML page, not a manifest",
-                url
-            )));
-        }
-        parse_group_str(&body)
-    }
-
     /// The primary resolution entry point.
     ///
     /// Performs a breadth-first recursive unrolling of all manifest sources.
@@ -121,10 +75,7 @@ impl<'a> StateResolver<'a> {
     #[instrument(skip(self))]
     pub async fn resolve_desired_state(&self) -> Result<HashMap<String, Vec<PackageSpec>>> {
         let mut resolved: HashMap<String, Vec<PackageSpec>> = HashMap::new();
-        // Queue stores (Raw Line String, Origin Source Name, Inherited Exclusions).
-        // Exclusions flow DOWN a module/group subtree: `@module:dev -vim` drops vim from
-        // everything dev pulls in, but not from what another top-level source contributes.
-        let mut raw_inputs: VecDeque<(String, String, HashSet<String>)> = VecDeque::new();
+        let mut raw_inputs: VecDeque<(String, String)> = VecDeque::new();
         let mut seen_keys: HashSet<String> = HashSet::new();
 
         let hostname = Config::get_hostname();
@@ -175,24 +126,11 @@ impl<'a> StateResolver<'a> {
                     );
                     continue;
                 }
-                // Support host-specific provisioning: "host-WORKSTATION.txt"
-                if fname.starts_with("host-") && fname != format!("host-{}.txt", hostname) {
-                    continue;
-                }
-
                 let source_id = format!("manifest:{}", fname);
                 debug!("Resolver: Seeding from manifest source '{}'", source_id);
                 for line in parse_group_file(&dir.join(&fname)).await? {
-                    raw_inputs.push_back((line, source_id.clone(), HashSet::new()));
+                    raw_inputs.push_back((line, source_id.clone()));
                 }
-            }
-        }
-
-        // B. Load config.toml [hostname_packages]
-        if let Some(config_pkgs) = self.config.hostname_packages.get(&hostname) {
-            let source_id = format!("config:hostname:{}", hostname);
-            for p in config_pkgs {
-                raw_inputs.push_back((p.clone(), source_id.clone(), HashSet::new()));
             }
         }
 
@@ -201,7 +139,7 @@ impl<'a> StateResolver<'a> {
         const MAX_EXPANSION_ITERATIONS: usize = 4096;
         let mut iterations = 0;
 
-        while let Some((line, source, excludes)) = raw_inputs.pop_front() {
+        while let Some((line, source)) = raw_inputs.pop_front() {
             iterations += 1;
             if iterations > MAX_EXPANSION_ITERATIONS {
                 return Err(Error::Transaction(
@@ -210,22 +148,8 @@ impl<'a> StateResolver<'a> {
             }
 
             match identify_line(&line) {
-                // Feature 3: Recursive Reusable Modules
                 ManifestLine::Module(mod_spec) => {
-                    // `@module:dev -vim -apt:nano` — the first token is the module name;
-                    // any `-token` after it is an exclusion scoped to this module's whole
-                    // (recursive) expansion, unioned with exclusions inherited from above.
-                    let mut parts = mod_spec.split_whitespace();
-                    let mod_name = parts.next().unwrap_or("").to_string();
-                    let mut child_excludes = excludes.clone();
-                    for tok in parts {
-                        if let Some(name) = tok.strip_prefix('-') {
-                            if !name.is_empty() {
-                                child_excludes.insert(name.to_string());
-                            }
-                        }
-                    }
-
+                    let mod_name = mod_spec.trim().to_string();
                     let mod_file = self
                         .config
                         .modules_dir
@@ -245,80 +169,7 @@ impl<'a> StateResolver<'a> {
 
                     let mod_id = format!("module:{}", mod_name);
                     for mod_line in parse_group_file(&mod_file).await? {
-                        raw_inputs.push_back((mod_line, mod_id.clone(), child_excludes.clone()));
-                    }
-                }
-
-                // Traditional named groups (manifest files or config.toml groups)
-                ManifestLine::Group(group_name) => {
-                    // Searched across every wish-list folder, in the same order they are
-                    // read: global, then each -g. First match wins, so a -g folder can
-                    // shadow a global group of the same name — the one place `-g` gets to
-                    // override rather than only add.
-                    let group_path = self.find_in_wish_dirs(&format!("{}.txt", group_name)).await;
-                    if let Some(group_path) = group_path {
-                        let group_id = format!("group:{}", group_name);
-                        for g_line in parse_group_file(&group_path).await? {
-                            raw_inputs.push_back((g_line, group_id.clone(), excludes.clone()));
-                        }
-                    } else if let Some(pkgs) = self.config.groups.get(&group_name) {
-                        let group_id = format!("config:group:{}", group_name);
-                        for p in pkgs {
-                            raw_inputs.push_back((p.clone(), group_id.clone(), excludes.clone()));
-                        }
-                    } else {
-                        warn!(
-                            "Resolver: Unknown group reference '{}' in source '{}'. Skipping.",
-                            group_name, source
-                        );
-                    }
-                }
-
-                // Inline another manifest file or a remote URL. A local path is resolved
-                // relative to groups_dir (absolute paths honored as-is); an http(s) URL is
-                // fetched. Included lines inherit this source's exclusions and re-enter the
-                // BFS, so includes may themselves contain groups/modules/includes (the
-                // MAX_EXPANSION_ITERATIONS guard above catches include cycles).
-                ManifestLine::Include(target) => {
-                    let included: Vec<String> =
-                        if target.starts_with("http://") || target.starts_with("https://") {
-                            match self.fetch_remote_manifest(&target).await {
-                                Ok(lines) => lines,
-                                Err(e) => {
-                                    warn!(
-                                        "Resolver: include of '{}' (from {}) failed: {}. Skipping.",
-                                        target, source, e
-                                    );
-                                    Vec::new()
-                                }
-                            }
-                        } else {
-                            let p = std::path::Path::new(&target);
-                            let path = if p.is_absolute() {
-                                Some(p.to_path_buf())
-                            } else {
-                                // Searched across the wish-list folders, same order, first
-                                // match wins — so `include: base.txt` from a -g folder finds
-                                // its neighbour rather than only ever looking in global.
-                                self.find_in_wish_dirs(&target).await
-                            };
-                            match path {
-                                Some(path) => parse_group_file(&path).await?,
-                                None => {
-                                    warn!(
-                                        "Resolver: include target '{}' (from {}) not found in any \
-                                     wish-list folder ({:?}). Skipping.",
-                                        target,
-                                        source,
-                                        self.config.wish_dirs()
-                                    );
-                                    Vec::new()
-                                }
-                            }
-                        };
-                    let inc_id = format!("include:{}", target);
-                    for inc_line in included {
-                        raw_inputs.push_back((inc_line, inc_id.clone(), excludes.clone()));
+                        raw_inputs.push_back((mod_line, mod_id.clone()));
                     }
                 }
 
@@ -333,19 +184,6 @@ impl<'a> StateResolver<'a> {
                         debug!(
                             "Resolver: Skipping '{}:{}' — backend not enabled on host '{}'.",
                             spec.backend, spec.name, hostname
-                        );
-                        continue;
-                    }
-
-                    // Module/group exclusion: an enclosing `@module:X -pkg` drops this
-                    // package from the subtree. Matches a bare name (`-vim`) or a
-                    // backend-qualified name (`-apt:vim`).
-                    if excludes.contains(&spec.name)
-                        || excludes.contains(&format!("{}:{}", spec.backend, spec.name))
-                    {
-                        debug!(
-                            "Resolver: '{}:{}' excluded by an enclosing module/group.",
-                            spec.backend, spec.name
                         );
                         continue;
                     }
@@ -382,15 +220,8 @@ impl<'a> StateResolver<'a> {
                         // Internal tagging for Feature 4 Targeted Upgrades
                         spec.options.insert("__source".to_string(), source.clone());
 
-                        // Resolve metadata-level dependencies (requires= tag). Exclusions
-                        // propagate to required packages too, so `@module:dev -vim` also
-                        // suppresses a vim pulled in via a dev package's `requires=`.
                         for req in &spec.requires {
-                            raw_inputs.push_back((
-                                req.clone(),
-                                format!("dep:{}", spec.name),
-                                excludes.clone(),
-                            ));
+                            raw_inputs.push_back((req.clone(), format!("dep:{}", spec.name)));
                         }
 
                         resolved.entry(spec.backend.clone()).or_default().push(spec);
@@ -412,29 +243,6 @@ impl<'a> StateResolver<'a> {
             }
         }
 
-        // Config-declared inline managed files (`[managed_files]`) become `link` specs
-        // that carry their body inline, so they flow through the same install / status /
-        // prune pipeline as everything else. Keyed by target path; a manifest-declared
-        // `link` for the same target (already in `seen_keys`) wins and is not overridden.
-        for (target, content) in &self.config.managed_files {
-            let unique_id = format!("link:{}", target);
-            if !seen_keys.insert(unique_id) {
-                continue;
-            }
-            let mut options = HashMap::new();
-            options.insert("target".to_string(), target.clone());
-            options.insert("content".to_string(), content.clone());
-            options.insert("__source".to_string(), "config:managed_files".to_string());
-            resolved
-                .entry("link".to_string())
-                .or_default()
-                .push(PackageSpec {
-                    name: target.clone(),
-                    backend: "link".to_string(),
-                    options,
-                    requires: vec![],
-                });
-        }
 
         debug!(
             "Resolver: Desired state calculated successfully in {} expansion steps.",

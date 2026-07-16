@@ -405,23 +405,16 @@ pub fn print_audit(report: &AuditReport, as_json: bool) -> Result<()> {
 // ============================================================================
 
 /// Turn the structured `__source` provenance tag recorded at install time into a friendly,
-/// specific explanation. Handles `module:X`, `group:X`, `config:group:X`, `imperative`,
-/// `clone`, manifest filenames, and `;`-joined combinations. Pure — unit tested.
+/// specific explanation. `;`-joined tags mean a package has more than one origin.
 pub fn interpret_source(src: &str) -> String {
     let one = |s: &str| -> String {
         let s = s.trim();
-        if let Some(m) = s.strip_prefix("config:group:") {
-            format!("pulled in by config group `{}`", m)
-        } else if let Some(m) = s.strip_prefix("group:") {
-            format!("pulled in by group `{}`", m)
-        } else if let Some(m) = s.strip_prefix("module:") {
+        if let Some(m) = s.strip_prefix("module:") {
             format!("pulled in by module `{}` (@module:{})", m, m)
         } else if let Some(m) = s.strip_prefix("profile:") {
             format!("required by profile `{}`", m)
         } else if s == "imperative" {
             "installed imperatively via `linix install`".to_string()
-        } else if s == "clone" {
-            "replicated from another host via `linix clone`".to_string()
         } else if s.is_empty() {
             "origin unknown (installed before provenance tracking)".to_string()
         } else {
@@ -444,8 +437,7 @@ pub fn line_declares(line: &str, backend: &str, name: &str) -> bool {
         return false;
     }
     // Structural directives never *declare* a leaf package by name.
-    if l.starts_with("@module:") || l.starts_with("group:") || l.starts_with("when ") || l == "end"
-    {
+    if l.starts_with("@module:") || l.starts_with("when ") || l == "end" {
         return false;
     }
     let head = l.split('@').next().unwrap_or(l).trim();
@@ -495,13 +487,6 @@ async fn scan_declarations(app: &App, backend: &str, name: &str) -> Vec<String> 
                     hits.push(format!("module: {}", mod_name));
                 }
             }
-        }
-    }
-
-    // Config-file groups.
-    for (gname, pkgs) in &app.config.groups {
-        if pkgs.iter().any(|p| line_declares(p, backend, name)) {
-            hits.push(format!("config group: {}", gname));
         }
     }
 
@@ -713,14 +698,6 @@ mod tests {
         assert_eq!(
             interpret_source("module:dev"),
             "pulled in by module `dev` (@module:dev)"
-        );
-        assert_eq!(
-            interpret_source("group:editors"),
-            "pulled in by group `editors`"
-        );
-        assert_eq!(
-            interpret_source("config:group:cli"),
-            "pulled in by config group `cli`"
         );
         assert_eq!(
             interpret_source("imperative"),

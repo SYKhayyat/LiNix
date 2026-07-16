@@ -12,11 +12,6 @@ pub enum ManifestLine {
     Package(String),
     /// A reference to another reusable module (e.g., "@module:development")
     Module(String),
-    /// A reference to a group of packages (e.g., "group:editors")
-    Group(String),
-    /// Inline another manifest file or a remote URL (e.g., "include: ./base.txt" or
-    /// "include: https://…/team-base.txt"), splicing its lines in place.
-    Include(String),
 }
 
 /// Facts about the host used to evaluate `when` conditionals in a manifest, so a single
@@ -202,13 +197,6 @@ pub fn parse_group_str(content: &str) -> Result<Vec<String>> {
 pub fn identify_line(line: &str) -> ManifestLine {
     if let Some(module_name) = line.strip_prefix("@module:") {
         ManifestLine::Module(module_name.trim().to_string())
-    } else if let Some(group_name) = line.strip_prefix("group:") {
-        ManifestLine::Group(group_name.trim().to_string())
-    } else if let Some(target) = line
-        .strip_prefix("include:")
-        .or_else(|| line.strip_prefix("include "))
-    {
-        ManifestLine::Include(target.trim().to_string())
     } else {
         ManifestLine::Package(line.trim().to_string())
     }
@@ -429,16 +417,11 @@ pub async fn write_group_file(path: &Path, packages: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Scans the groups directory and identifies all packages requested by the user.
-/// Correctly handles hostname-specific manifests (host-NAME.txt).
 pub async fn load_all_packages(groups_dir: &Path) -> Result<HashSet<String>> {
     let mut all_packages = HashSet::new();
     if !tokio::fs::try_exists(groups_dir).await.unwrap_or(false) {
         return Ok(all_packages);
     }
-
-    let current_hostname = crate::config::Config::get_hostname();
-    let host_file_name = format!("host-{}.txt", current_hostname);
 
     let groups_dir_owned = groups_dir.to_path_buf();
     let entries: Vec<PathBuf> = tokio::task::spawn_blocking(move || {
@@ -455,11 +438,6 @@ pub async fn load_all_packages(groups_dir: &Path) -> Result<HashSet<String>> {
 
     for path in entries {
         let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-
-        // Skip files that are host-specific but not for THIS host
-        if file_name.starts_with("host-") && file_name != host_file_name {
-            continue;
-        }
 
         if file_name.ends_with(".txt") {
             let packages = parse_group_file(&path).await?;
@@ -483,26 +461,29 @@ mod conditional_tests {
     }
 
     #[test]
-    fn identify_line_recognizes_include_and_others() {
-        assert_eq!(
-            identify_line("include: ./base.txt"),
-            ManifestLine::Include("./base.txt".into())
-        );
-        assert_eq!(
-            identify_line("include https://x/y.txt"),
-            ManifestLine::Include("https://x/y.txt".into())
-        );
+    fn identify_line_recognizes_modules_and_packages() {
         assert_eq!(
             identify_line("@module:dev"),
             ManifestLine::Module("dev".into())
         );
         assert_eq!(
-            identify_line("group:editors"),
-            ManifestLine::Group("editors".into())
-        );
-        assert_eq!(
             identify_line("apt:curl"),
             ManifestLine::Package("apt:curl".into())
+        );
+    }
+
+    #[test]
+    fn deleted_prefixes_are_no_longer_special() {
+        // `group:` and `include:` are gone (V.4: `group:` was already a no-op because the
+        // resolver seeded every .txt unconditionally). Until Phase 1 makes an unknown line
+        // an error, they fall through as package specs rather than silently resolving.
+        assert_eq!(
+            identify_line("group:editors"),
+            ManifestLine::Package("group:editors".into())
+        );
+        assert_eq!(
+            identify_line("include: ./base.txt"),
+            ManifestLine::Package("include: ./base.txt".into())
         );
     }
 

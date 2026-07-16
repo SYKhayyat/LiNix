@@ -74,69 +74,6 @@ async fn resolver_merges_manifest_and_module_sources() {
     );
 }
 
-/// `@module:dev -bat` must drop bat from what the dev module contributes.
-#[tokio::test]
-async fn module_exclusion_drops_package_from_module() {
-    let kernel = TestKernel::new().await;
-    let cfg = &kernel.app.config;
-    tokio::fs::create_dir_all(&cfg.groups_dir).await.unwrap();
-    tokio::fs::create_dir_all(&cfg.modules_dir).await.unwrap();
-    tokio::fs::write(cfg.groups_dir.join("base.txt"), "@module:dev -bat\n")
-        .await
-        .unwrap();
-    tokio::fs::write(
-        cfg.modules_dir.join("dev.module.txt"),
-        "cargo:ripgrep\ncargo:bat\n",
-    )
-    .await
-    .unwrap();
-
-    let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
-    let desired = resolver.resolve_desired_state().await.unwrap();
-
-    let cargo = desired.get("cargo").cloned().unwrap_or_default();
-    assert!(
-        cargo.iter().any(|s| s.name == "ripgrep"),
-        "ripgrep should still be pulled in by dev"
-    );
-    assert!(
-        !cargo.iter().any(|s| s.name == "bat"),
-        "bat was excluded from dev and should be absent"
-    );
-}
-
-/// Exclusion is scoped to the module: if another source independently asks for the same
-/// package, it survives. `@module:dev -bat` + a direct `cargo:bat` line ⇒ bat stays.
-#[tokio::test]
-async fn module_exclusion_is_scoped_not_global() {
-    let kernel = TestKernel::new().await;
-    let cfg = &kernel.app.config;
-    tokio::fs::create_dir_all(&cfg.groups_dir).await.unwrap();
-    tokio::fs::create_dir_all(&cfg.modules_dir).await.unwrap();
-    tokio::fs::write(
-        cfg.groups_dir.join("base.txt"),
-        "@module:dev -bat\ncargo:bat\n",
-    )
-    .await
-    .unwrap();
-    tokio::fs::write(
-        cfg.modules_dir.join("dev.module.txt"),
-        "cargo:ripgrep\ncargo:bat\n",
-    )
-    .await
-    .unwrap();
-
-    let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
-    let desired = resolver.resolve_desired_state().await.unwrap();
-
-    let cargo = desired.get("cargo").cloned().unwrap_or_default();
-    assert!(
-        cargo.iter().any(|s| s.name == "bat"),
-        "bat was requested directly, so the dev-scoped exclusion must not remove it"
-    );
-    assert!(cargo.iter().any(|s| s.name == "ripgrep"));
-}
-
 /// End-to-end: a targeted `upgrade --module dev` must never schedule removals for managed
 /// packages outside that scope — while an UNSCOPED plan would remove the same drift.
 #[tokio::test]
