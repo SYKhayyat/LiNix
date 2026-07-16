@@ -61,8 +61,10 @@ already exists". You cannot implement this correctly from a summary.
 - **There is no legacy.** No users exist. No migration path, no compatibility shim, no
   deprecation warning, no old-format reader. Delete legacy branches on sight.
 - **A comment states a constraint the code can't show. Nothing else.** Not what the line does.
-  Not where it came from. Not that it's good. This repo has 139 comments that break this rule,
-  written by models congratulating themselves; do not add the 140th.
+  Not where it came from. Not that it's good. This repo has ~884 comments that break this
+  rule, written by models congratulating themselves; do not add the next one.
+  *(The figure was 139 in the first draft, measured against an older, smaller tree. Re-measured
+  2026-07-16 across 2,147 comment blocks.)*
 
 ---
 
@@ -429,7 +431,7 @@ built** — Stage 2 routed adopt's skipping through `guard::protection_of`, whic
 code while keeping the word ambiguous. Adopting a protected package is correct: it belongs
 in your file, and deleting that line is refused (V.26).
 
-## II.10 The guard — five refusals, one function
+## II.10 The guard — nine refusals, one function
 
 | | |
 |---|---|
@@ -439,9 +441,13 @@ in your file, and deleting that line is refused (V.26).
 | `max_removals` (default **20**) | never remove more than this at once |
 | `max_installs` (default **unset**) | never install more than this at once |
 | `deny_packages` | never install this |
+| `pinned_only` (default **off**) | never install anything without an explicit `@version=` |
+| `require_snapshot` (default **off**) | never change anything when no snapshot can be taken |
+| `deny_vulnerable` (default **off**) | never apply when `audit` reports a managed package vulnerable |
 
 All in `[guard]` in `preferences.toml`. One decision function. **Every removal path calls
-it** — sync, `absent:`, expiry, `purge-unmanaged`, `clean`, shell exit, `uninstall`.
+it** — sync, `absent:`, expiry, `purge-unmanaged`, `clean`, shell exit, `uninstall`. The
+last three also gate *installs* and *changes*, so the install paths call it too.
 
 **A confirmation asks; a refusal says no.**
 
@@ -453,6 +459,7 @@ it** — sync, `absent:`, expiry, `purge-unmanaged`, `clean`, shell exit, `unins
 | hook script new or changed | **cannot skip.** `linix lock` |
 | protected / OS-essential | **nothing overrides** |
 | `purge-unmanaged` | **cannot skip.** Typed confirmation |
+| `pinned_only` / `require_snapshot` / `deny_vulnerable` | **cannot skip.** They are refusals (V.43) |
 
 **The plan always leads with the counts** — not a threshold, not a warning, just the plan
 being readable:
@@ -637,7 +644,7 @@ new model deletes the flag instead. Do not try to preserve it.
 **Pure subtraction. Nothing new can break. Tests stay green except those testing deleted
 features.** Do this first so nothing is carefully ported that was about to be deleted.
 
-Delete everything in II.17. Delete the 139 marketing comments. Delete every legacy branch
+Delete everything in II.17. Delete the ~884 marketing comments. Delete every legacy branch
 (`generation.rs` bare-filename keys, the `<name>/`-directory profile form).
 
 **Exit:** `cargo test` green. Codebase measurably smaller. Report the line count removed.
@@ -977,16 +984,30 @@ something LiNix could work out in a second and instead asks you to maintain by h
 on every machine. **That is not configuration, it's homework.** (And `max_parallel` is
 overwritten at `sync/mod.rs:296` anyway, so the setting is already a lie.)
 
+**V.43 — Why the guard has nine refusals and not five.** The first draft said five (then
+listed six). It was written before anyone re-read `policy.toml`, which held five rules and
+was marked in II.17 as moving to `[guard]`. Two of them had somewhere to go —
+`deny_packages` was already in the list, and `allow_backends` is what the `priority` file
+means (V.15). **The other three had nowhere, and "delete" was never decided — it was
+overlooked.** `pinned_only`, `require_snapshot` and `deny_vulnerable` are all exactly the
+shape V.26 defines: not "I want this" but "I will not do that". They are refusals, so they
+live where refusals live, and `-y` cannot skip them for the same reason it cannot skip any
+other (V.22). *Corrected knowingly against the headline: a wrong number in a document is
+cheaper than three deleted safety rails. If a rule here ever stops being a refusal and
+starts being a preference, that is the signal it does not belong in `[guard]`.*
+
 **V.42 — Why the comment rule.** This codebase has been touched by many AIs, and this is what
 that leaves behind: models narrate what they just wrote and congratulate themselves for it,
 because that reads like effort, and each one looks fine on its own. The repo already proves
-the rule works — `migrate.rs:54-60` explains *why* the `tracks_manual` gate exists and what
-happens if it's wrong; `generic.rs:350` explains in nine lines that choco lists Title-case
-"Wget" for install-id "wget" so `remove` silently no-ops, and why the fix must be
+the rule works — `core/manager.rs:86-93` explains *why* the `tracks_manual` gate exists and
+what happens if it's wrong; `generic.rs:363-370` explains in nine lines that choco lists
+Title-case "Wget" for install-id "wget" so `remove` silently no-ops, and why the fix must be
 Windows-only because npm has `socket.io`. **Those two are worth more than the other 137
-combined, and they're the same length.** The cost of the 139 is that **they trained everyone
-to skip** — which is why `audit()` has sat there documented as "a **destructive** Discovery
-cycle … without generating files or acquiring state", contradicting itself in one sentence.
+combined, and they're the same length.** The cost of the rest is that **they trained everyone
+to skip** — the reason 32 comments in this repo are outright false, each of which someone read
+past. *(The first draft's example, `audit()` documented as "a **destructive** Discovery cycle …
+without generating files or acquiring state", has since been fixed in the code and now reads
+correctly. The measured 32 are the ones that remain.)*
 
 ---
 
@@ -1036,7 +1057,7 @@ cycle … without generating files or acquiring state", contradicting itself in 
 | **E6** | "unmanaged" has two implementations that will disagree. Resolve as *"what `adopt` would adopt"* — one function → **Phase 2** |
 | **E11** | suspension restore implemented twice → **Phase 3** |
 | **F1** | `network_timeout_secs` lies (`.max(10)` floor); `max_parallel` detected; `priority` reason in a comment → **Phase 5** |
-| **F3** | 139 marketing comments → **Phase 0**. The rule → `CLAUDE.md` → **Phase 5** |
+| **F3** | ~884 marketing comments + **32 false ones** → **Phase 0**. The rule → `CLAUDE.md` → **Phase 5** |
 | **F4** | 33 vs 50 backends. **(measured: 41 registration sites)** Compute it → **Phase 5** |
 | **F5** | false doc comments → **Phase 5** |
 | **G2** | 104 of 245 assertions are `soft` and cannot fail → **Phase 5** |
@@ -1049,7 +1070,7 @@ cycle … without generating files or acquiring state", contradicting itself in 
 
 Three suspicions did not survive scrutiny:
 
-- `matches!(b, "choco"|"scoop"|"winget")` at `generic.rs:350` is the **only** such site, and
+- `matches!(b, "choco"|"scoop"|"winget")` at `generic.rs:363` is the **only** such site, and
   its comment is the best in the repo.
 - `.unwrap()` density: 192 total looks alarming, but outside tests the max is **5 in one
   file** and ≤2 elsewhere.
