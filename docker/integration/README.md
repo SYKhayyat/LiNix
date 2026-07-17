@@ -1,5 +1,12 @@
 # LiNix integration harness (real package managers)
 
+> **v7 note (2026-07-17):** `run-in-container.sh` was rewritten lean for v7 (real CLI,
+> `LINIX_CONFIG_DIR`/`LINIX_DATA_DIR` isolation, `linix init` scaffolding, HARD exit-code
+> assertions). The pre-v7 comprehensive script — built on the deleted `-g` flag and 102 soft
+> assertions — was **deleted (NO LEGACY)**. Some of the section-by-section description below still
+> reflects that older, broader sweep; re-porting its full multi-backend real-lifecycle coverage
+> into the lean v7 harness is a tracked follow-up (see the SPEC's Phase 5 harness note).
+
 The unit/integration test suite in `tests/` is **hermetic** — it mocks command execution,
 so it proves the *logic* but never touches a real package manager. This harness fills that
 gap: it runs the real `linix` binary against **real** apt / dnf / pacman / apk (and, on the
@@ -46,12 +53,14 @@ mechanisms enforce this:
    **everything after a successful install is HARD** — that is exactly what caught the pixi
    `global remove` vs `global uninstall` bug that a dry-run plan could never see.
 
-2. **FEATURE COVERAGE (section 12)** — every `linix` subcommand is exercised at least once:
-   completions (all six shells), heal, clean, unmanaged, orphans, audit, sbom, why, policy,
-   upgrade (+ `--canary --test`), repo add/list/remove, migrate, teleport, module
-   list/create/show, snapshot list/prune, generation pin/unpin, rollback, lease set/list,
-   schedule add/list/remove, run, shim — plus the install/remove/sync/prune/lock/profile/
-   status surface already driven by sections 3–10.
+2. **COMMAND-SURFACE SMOKE (section 11 of the v7 harness)** — every current `linix` subcommand
+   is exercised at least once via `--help`/dry-run: install, uninstall, sync, plan, status,
+   list, search, adopt, check, absent, protected, purge-unmanaged, rollback, diff, git,
+   snapshot, schedule, profile, module, bundle, export, doctor — plus the install→list→
+   idempotency→remove lifecycle driven by the earlier sections.
+   *(`generation`, `lease`, and the `-g` flag were removed in v7 — git is the manifest history,
+   `@expires` replaced leases, and `LINIX_CONFIG_DIR` replaced `-g`. The pre-v7 harness that
+   drove them was deleted, NO LEGACY.)*
 
 3. **PLAN-SMOKE (section 13)** — reserved for the *only* things that cannot run a real
    lifecycle in a plain container: distro-native managers on the wrong distro (emerge/guix/
