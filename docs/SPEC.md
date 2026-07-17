@@ -1129,6 +1129,10 @@ implementing agent's call; that it goes is not.**
   A sweep confirmed those are the only two files with emoji, but this is a **standing rule** for all
   new output too: plain text, name the problem, name the fix.
 
+- **R10 — Standardize the dry-run label to `[DRY-RUN]`.** It is uppercase almost everywhere, but two
+  spots print lowercase `[dry-run]` — `bisect.rs:84` and `go.rs:159`. Same concept, one spelling: make
+  both `[DRY-RUN]`.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
