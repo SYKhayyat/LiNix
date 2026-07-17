@@ -1375,7 +1375,10 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   existing files, and `--name` is user-typed (the `github:`/URL default can't inject a `/`). Low
   severity. **Solution TBD** (reject path separators in `name`).
 
-- **SEC7 — Delete the dead, ungated Lua code-exec path (`LuaHooks::render_template`).** `hooks.rs:220`
+- **SEC7 — DONE, 2026-07-17.** `LuaHooks::render_template` deleted (and the now-unused `regex::Regex`
+  import). Verified zero callers first — the only `.render_template(` in the tree is the link
+  backend's Tera renderer. `cargo check --lib`/`--bin` clean, no warnings. *(Original finding:)*
+  **Delete the dead, ungated Lua code-exec path (`LuaHooks::render_template`).** `hooks.rs:220`
   evaluates arbitrary `{{ … }}` as **Lua** with no approval-ledger check, and `setup_lua_sandbox`
   leaves `os`/`io`/`os.execute` intact — full code execution. The only `.render_template(` caller in
   the tree is `link.rs:271`, which resolves to the link backend's **Tera** renderer (`link.rs:94`,
