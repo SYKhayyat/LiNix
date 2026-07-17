@@ -2,7 +2,6 @@ use crate::config::Config;
 use crate::core::hook_lock::{hash_script, hook_id, refusal, HookLedger};
 use crate::core::{Error, Result};
 use mlua::Lua;
-use regex::Regex;
 use rhai::{Engine, Scope};
 use std::collections::HashMap;
 use std::io::Write;
@@ -217,23 +216,12 @@ impl LuaHooks {
         engine.register_fn("print", |msg: &str| info!("[Rhai] {}", msg));
     }
 
-    pub fn render_template(&self, template: &str) -> String {
-        let lua = Lua::new();
-        if let Err(e) = Self::setup_lua_sandbox(&lua) {
-            debug!("Template: Failed to setup Lua sandbox: {}", e);
-            return template.to_string();
-        }
-
-        let re = Regex::new(r"\{\{(.*?)\}\}").unwrap();
-        re.replace_all(template, |caps: &regex::Captures| {
-            let code = &caps[1];
-            match lua.load(code).eval::<String>() {
-                Ok(val) => val,
-                Err(_) => caps[0].to_string(),
-            }
-        })
-        .to_string()
-    }
+    // SEC7: `render_template` (arbitrary `{{ … }}` evaluated as Lua, with `os`/`io`/`os.execute`
+    // left intact in the sandbox) is DELETED. It had no callers — the only `.render_template(`
+    // in the tree is the link backend's Tera renderer — so it was dead code, but a loaded gun:
+    // wire it to file content and it is ungated RCE. Tera is the live, safe templating path; the
+    // gated Lua/Rhai/`#!` *hook* path (approved via the II.12 ledger) is a separate feature and
+    // stays. NO-LEGACY: a dead code-exec path is removed, not kept "just in case".
 
     pub async fn run_before_sync(&self) -> Result<()> {
         self.run_hook("before_sync", "*").await
