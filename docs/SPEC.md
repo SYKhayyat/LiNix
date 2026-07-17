@@ -946,8 +946,13 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
 - Rebuild the harness for the new model.
 - **G2:** 104 of 245 assertions are `soft` and cannot fail. Convert or register as debt.
 - **G3:** teleport, adopt, shim, cockpit, undo are effectively unverified.
-- **H2:** two error-swallows on safety paths — `sync/mod.rs:463` (failed rollback-remove
-  goes unreported), `shell/mod.rs:126` (dropped state write).
+- ~~**H2:** two error-swallows on safety paths — `sync/mod.rs:463` (failed rollback-remove
+  goes unreported), `shell/mod.rs:126` (dropped state write).~~ **DONE — the rollback swallow
+  was actually in `core/transaction.rs::rollback` (the line number had drifted): every
+  compensating action used `let _ =`, so a rollback that couldn't reinstall a just-removed
+  package left it silently MISSING. It now reports each failure by name, returns Err, and all
+  three auto-rollback call sites log it. GhostShell's dropped state write (`shell/mod.rs`) now
+  warns with the true consequence.**
 - **F4:** `--help` asks the registry for the backend count. The README line is generated.
 - ~~**F1:** `network_timeout_secs` — **honour it** (today every consumer applies an
   undocumented `.max(10)` floor, so setting 5 silently gives you 10).~~ **DONE — both consumers
