@@ -577,7 +577,7 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Check the desired system state against your policy rules (policy.toml)
+    /// Check the desired system state against your [guard] install/change rules
     Policy,
 
     /// Generate a shell completion script (bash, zsh, fish, powershell, elvish)

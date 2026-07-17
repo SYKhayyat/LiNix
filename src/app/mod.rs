@@ -12,7 +12,6 @@ pub mod metrics;
 pub mod migrate;
 pub mod module_registry;
 pub mod pm_hooks;
-pub mod policy;
 pub mod profile;
 pub mod profile_expr;
 pub mod run;

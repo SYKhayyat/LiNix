@@ -3398,26 +3398,29 @@ async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Enforce policy.toml (if present) against the desired state before any change. Spec rules
-/// are checked purely; snapshot- and vulnerability-based rules use runtime state.
+/// Enforce the `[guard]` install/change rules against the desired state before any change
+/// (II.10). The spec-level rules (`deny_packages`, `pinned_only`) are checked purely by the
+/// guard; the two that need runtime state (`require_snapshot`, `deny_vulnerable`) are checked
+/// here, where the snapshot provider and the audit report are in hand. All nine refusals now
+/// share one decision surface — this replaces the old parallel `policy.toml` gate (II.17).
 async fn enforce_policy(
     app: &App,
     desired: &HashMap<String, Vec<linix::core::PackageSpec>>,
 ) -> Result<()> {
-    let path = app.config.config_root().join("policy.toml");
-    let Some(policy) = linix::app::policy::Policy::load(&path).await? else {
-        return Ok(());
-    };
-    if policy.is_empty() {
+    let guard = &app.config.guard;
+    if guard.is_empty() {
         return Ok(());
     }
-    let mut violations = policy.check_specs(desired);
-    if policy.require_snapshot && !app.snapshot_manager.has_provider() {
+    let mut violations: Vec<String> = linix::app::sync::guard::inspect_desired(guard, desired)
+        .iter()
+        .map(linix::app::sync::guard::describe_objection)
+        .collect();
+    if guard.require_snapshot && !app.snapshot_manager.has_provider() {
         violations.push(
-            "policy requires a snapshot provider but none is available (require_snapshot)".into(),
+            "requires a snapshot provider but none is available (require_snapshot)".into(),
         );
     }
-    if policy.deny_vulnerable {
+    if guard.deny_vulnerable {
         match linix::app::insight::audit(app).await {
             Ok(report) => {
                 for f in report.findings {
@@ -3427,18 +3430,18 @@ async fn enforce_policy(
                     ));
                 }
             }
-            Err(e) => warn!("Policy: vulnerability check skipped ({}).", e),
+            Err(e) => warn!("Guard: vulnerability check skipped ({}).", e),
         }
     }
     if violations.is_empty() {
         return Ok(());
     }
-    eprintln!("Blocked by policy ({} violation(s)):", violations.len());
+    eprintln!("Blocked by [guard] ({} violation(s)):", violations.len());
     for v in &violations {
         eprintln!("  - {}", v);
     }
     Err(anyhow::anyhow!(
-        "policy violations prevent this operation; nothing was changed"
+        "guard rules prevent this operation; nothing was changed"
     ))
 }
 
@@ -3488,28 +3491,31 @@ fn print_flight_plan(app: &App, changes: &linix::app::sync::planner::SyncChanges
     }
 }
 
-/// `linix policy` — report whether the desired state complies with policy.toml.
+/// `linix policy` — report whether the desired state complies with the `[guard]` rules.
 async fn handle_policy(app: &App) -> Result<()> {
-    let path = app.config.config_root().join("policy.toml");
-    let Some(policy) = linix::app::policy::Policy::load(&path).await? else {
-        println!("No policy.toml at {} — no rules in effect.", path.display());
+    let guard = &app.config.guard;
+    if guard.is_empty() {
+        println!("No [guard] install/change rules are set — nothing to check.");
         return Ok(());
-    };
+    }
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let desired = resolver.resolve_desired_state().await?;
-    let mut violations = policy.check_specs(&desired);
-    if policy.require_snapshot && !app.snapshot_manager.has_provider() {
-        violations.push("policy requires a snapshot provider but none is available".into());
+    let mut violations: Vec<String> = linix::app::sync::guard::inspect_desired(guard, &desired)
+        .iter()
+        .map(linix::app::sync::guard::describe_objection)
+        .collect();
+    if guard.require_snapshot && !app.snapshot_manager.has_provider() {
+        violations.push("requires a snapshot provider but none is available".into());
     }
     if violations.is_empty() {
-        println!("Policy check passed — the desired state is compliant.");
-        if policy.deny_vulnerable {
+        println!("[guard] check passed — the desired state is compliant.");
+        if guard.deny_vulnerable {
             println!("(deny_vulnerable is also enforced at sync time via `linix audit`.)");
         }
     } else {
-        println!("Policy violations ({}):", violations.len());
+        println!("[guard] violations ({}):", violations.len());
         for v in &violations {
             println!("  - {}", v);
         }

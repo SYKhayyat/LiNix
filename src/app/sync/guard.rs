@@ -118,6 +118,10 @@ pub enum Objection {
     /// install-side twin of `TooMany`: a mis-globbed manifest schedules a flood of
     /// installs, and the count is the fact that explains it.
     TooManyInstalls { count: usize, limit: usize },
+    /// A desired package is on the `deny_packages` list (II.10) — never install this.
+    Denied { key: String },
+    /// `pinned_only` is set and a desired package has no explicit `@version=` (II.10).
+    Unpinned { key: String },
 }
 
 /// The guard's verdict over a removal set.
@@ -281,6 +285,59 @@ pub async fn enforce(
         return Ok(());
     }
     Err(Error::Other(report.message(scope)))
+}
+
+/// Inspect the *desired* state against the `[guard]` install rules (II.10) that do not need
+/// runtime state: `deny_packages` and `pinned_only`. The two that do — `require_snapshot`
+/// and `deny_vulnerable` — are enforced by the caller, which holds the snapshot provider and
+/// the audit report. Returns one objection per offending package; an empty vec means the
+/// spec-level rules pass.
+pub fn inspect_desired(
+    guard: &crate::config::GuardSettings,
+    desired: &std::collections::HashMap<String, Vec<crate::core::PackageSpec>>,
+) -> Vec<Objection> {
+    let mut objections = Vec::new();
+    for specs in desired.values() {
+        for s in specs {
+            let key = format!("{}:{}", s.backend, s.name);
+            if guard
+                .deny_packages
+                .iter()
+                .any(|d| d.eq_ignore_ascii_case(&s.name))
+            {
+                objections.push(Objection::Denied { key: key.clone() });
+            }
+            if guard.pinned_only {
+                let pinned = s
+                    .options
+                    .get("version")
+                    .map(|v| !v.is_empty() && v != "latest" && v != "*")
+                    .unwrap_or(false);
+                if !pinned {
+                    objections.push(Objection::Unpinned { key });
+                }
+            }
+        }
+    }
+    objections
+}
+
+/// A one-line, human-readable reason for an install-side objection, for the caller's
+/// violation list. (Removal objections render through [`GuardReport::message`] instead.)
+pub fn describe_objection(o: &Objection) -> String {
+    match o {
+        Objection::Denied { key } => format!("{} — denied by policy (deny_packages)", key),
+        Objection::Unpinned { key } => {
+            format!("{} — pinned_only requires an explicit @version=", key)
+        }
+        Objection::Protected { key, reason } => format!("{} — {}", key, reason),
+        Objection::TooMany { count, limit } => {
+            format!("removes {} packages, over max_removals ({})", count, limit)
+        }
+        Objection::TooManyInstalls { count, limit } => {
+            format!("installs {} packages, over max_installs ({})", count, limit)
+        }
+    }
 }
 
 /// Refuse an oversized install set (II.10). The install-side twin of the count check in
@@ -589,6 +646,60 @@ mod tests {
         cfg.max_installs = 50;
         cfg.yes = true;
         assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync).await.is_err());
+    }
+
+    fn desired(specs: &[(&str, &str, Option<&str>)]) -> std::collections::HashMap<String, Vec<crate::core::PackageSpec>> {
+        let mut m: std::collections::HashMap<String, Vec<crate::core::PackageSpec>> =
+            std::collections::HashMap::new();
+        for (backend, name, version) in specs {
+            let mut options = std::collections::HashMap::new();
+            if let Some(v) = version {
+                options.insert("version".to_string(), v.to_string());
+            }
+            m.entry(backend.to_string()).or_default().push(crate::core::PackageSpec {
+                name: name.to_string(),
+                backend: backend.to_string(),
+                options,
+                requires: vec![],
+                present: true,
+            });
+        }
+        m
+    }
+
+    #[test]
+    fn deny_packages_refuses_an_install_case_insensitively() {
+        let guard = crate::config::GuardSettings {
+            deny_packages: vec!["LeftPad".into()],
+            ..Default::default()
+        };
+        let os = inspect_desired(&guard, &desired(&[("npm", "leftpad", None)]));
+        assert!(matches!(os.as_slice(), [Objection::Denied { .. }]), "{:?}", os);
+    }
+
+    #[test]
+    fn pinned_only_requires_a_concrete_version() {
+        let guard = crate::config::GuardSettings {
+            pinned_only: true,
+            ..Default::default()
+        };
+        let os = inspect_desired(
+            &guard,
+            &desired(&[
+                ("apt", "curl", None),           // no version -> refused
+                ("apt", "wget", Some("latest")), // floating -> refused
+                ("apt", "jq", Some("1.6")),      // pinned -> ok
+            ]),
+        );
+        assert_eq!(os.len(), 2, "{:?}", os);
+        assert!(os.iter().all(|o| matches!(o, Objection::Unpinned { .. })));
+    }
+
+    #[test]
+    fn an_empty_guard_table_objects_to_nothing() {
+        let guard = crate::config::GuardSettings::default();
+        assert!(guard.is_empty());
+        assert!(inspect_desired(&guard, &desired(&[("apt", "curl", None)])).is_empty());
     }
 
     #[test]

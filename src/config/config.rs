@@ -36,10 +36,40 @@ impl Default for SandboxSettings {
     }
 }
 
-/// Settings for the removal guard — the check that refuses to delete too much, or to
-/// delete something the system needs.
+/// The `[guard]` table (II.10): the refusals that gate *installs and changes*, as opposed
+/// to the removal-count/protection rules that currently still live as top-level `Config`
+/// fields (`protected_packages`, `unprotected_packages`, `max_removals`, `max_installs` —
+/// their migration into this table is the remaining mechanical step of "nine refusals, one
+/// home"). These four were homeless when the v7 spec was drafted: they lived in a separate
+/// `policy.toml` (II.17 deletes it) and a parallel `Policy` struct. V.43 kept all of them —
+/// each matches V.26's definition of a refusal ("I will not, and there is no flag"), so `-y`
+/// cannot skip them. `allow_backends` is deliberately absent: the `priority` file is what
+/// "only these backends" means now (V.15).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct GuardSettings {}
+pub struct GuardSettings {
+    /// Package names that may never be installed (matched case-insensitively).
+    #[serde(default)]
+    pub deny_packages: Vec<String>,
+    /// Every desired package must carry an explicit `@version=` — no floating installs.
+    #[serde(default)]
+    pub pinned_only: bool,
+    /// Refuse to change anything unless a snapshot can be taken first.
+    #[serde(default)]
+    pub require_snapshot: bool,
+    /// Refuse to apply when `audit` reports a managed package as vulnerable.
+    #[serde(default)]
+    pub deny_vulnerable: bool,
+}
+
+impl GuardSettings {
+    /// True when no rule is active (so the install/change gate is a no-op).
+    pub fn is_empty(&self) -> bool {
+        self.deny_packages.is_empty()
+            && !self.pinned_only
+            && !self.require_snapshot
+            && !self.deny_vulnerable
+    }
+}
 
 /// Feature 2: Settings for automatic system snapshot management.
 #[derive(Debug, Clone, Deserialize, Serialize)]

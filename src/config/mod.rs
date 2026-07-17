@@ -3,7 +3,7 @@ pub mod config;
 pub mod grammar;
 pub mod parser;
 
-pub use config::Config;
+pub use config::{Config, GuardSettings};
 
 /// Module-level constants for configuration defaults
 pub const DEFAULT_BACKEND: &str = "apt";
