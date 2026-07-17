@@ -1201,6 +1201,21 @@ implementing agent's call; that it goes is not.**
   still routes through `GuardScope::Rollback` (protected packages safe), but the missing confirmation
   is a real sibling inconsistency. Fix: mirror `sync` — bail without `--yes` in a non-interactive shell.
 
+- **R19 — `clean` must preview, respect the guard, and stop being blind.** Today `clean_orphans`
+  (`context.rs:851-856`) loops **every** available backend and runs native orphan removal with
+  auto-confirm baked in (`apt autoremove -y`, `pacman -Rs --noconfirm`, `dnf autoremove -y`, …) — no
+  preview, and outside LiNix's `protected_packages`/`max_removals` guard (these are native-orphan
+  removals the manager decides). Owner ruling:
+  - **Orphan removal stays** (that is what it should do), but it must **show what it will remove and
+    confirm** — the same flight-plan-then-confirm shape as `sync` — and **respect the protected list**,
+    not run `-y`/`--noconfirm` blind.
+  - The name "clean" reads as janitorial (caches). **Rename** it to say what it does (e.g.
+    `remove-orphans`) if that is clearer.
+  - **Cache-cleaning is a separate real need that must also exist** — either a second command
+    (e.g. a cache cleaner) or one command with two modes. Both jobs (orphans, caches) must be doable.
+    The exact command topology is the implementing agent's call; that both exist and that orphan
+    removal previews + respects the guard is the ruling.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
