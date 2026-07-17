@@ -1375,6 +1375,7 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S10** | **`cargo test` wrote to the developer's REAL data dir**, and one bad file bricks every command. `TestKernel` (named `linix_hermetic_`) isolated `registry.json`, groups and tmp, but `Journal::new()` hardcoded `safe_data_dir()` — found at 733KB of test noise in `%APPDATA%/linix/journal.json`. Fixed in Phase 2b by injection (`Journal::at`). **The remaining half is real:** `Journal::load_sync` errors on a bad parse -> `App::new` fails -> EVERY command fails, with no message saying which file to delete or how to recover. Failing loud is right (P3); having no way out is not → **Phase 5** |
 | **S12** | **`repo:`, `shim:`, `service:`, `link:` and `schedule:` lines parse, resolve, and are then dropped on the floor.** The seam is `HashMap<backend, Vec<PackageSpec>>` and these are not packages, so `Resolver::resolve` collects them into `DesiredState::extras` and `resolve_desired_state` — which returns only `.packages` — discards them. Nothing downstream has ever consumed them. A `repo:ppa:deadsnakes/ppa` line therefore does exactly nothing, silently, which is VI.1's disease with new syntax. Not a regression (the syntax is new in Phase 1) but it must not ship: `sync` warns for now, naming each ignored line and its file. The fix is the ordering phases — repos → index refresh → packages → dependents — which is what `extras` was collected for → **Phase 2** (planner ordering) |
 | **S13** | **A bare name and an explicit one were two packages, not one.** `model::resolve` keys the merge on `backend:name`, and a bare `ripgrep` is keyed `?:ripgrep` until something probes it — so `ripgrep` in one module and `cargo:ripgrep` in another never met, never reconciled, and both reached the planner. Found while wiring the seam and **fixed there**: `Resolver::statements()` and `Resolver::collect()` are now separate, the caller probes in between, and `with_bare` hands the answers back so the merge sees real backends. II.7 rule 5 was silently not applying to every bare line → **Phase 2** (fixed) |
+| **S19** | **`@lease=2h` still works, and it is the one option key that can uninstall your package.** II.16 retires it — *"`@lease=2h` (inert today)"* → `apt:jq@expires=<absolute>` — and `install --temp` now writes `@expires`, so nothing LiNix writes uses it. But **`StateRegistry::add` still reads `options["lease"]` (`core/state.rs:186`) and turns it into a real `expires_at`**, and the grammar does not validate option keys against II.2's table — so a hand-written `apt:jq@lease=2h` in a module is silently a package that uninstalls itself, on the `sweep_expired_leases` path that **C3 says bypasses the guard**. Two fixes, both cheap: II.2's key table should be enforced by the grammar (an unknown key is an error that lists the real ones), and `lease`/`duration` should stop being read. The sweep itself is then dead: an expired line stops counting and sync removes what nothing declares — no timer, no second mechanism → **Phase 3** (every removal path calls the guard) |
 | **S18** | **`auto_lock_checksums` rewrites YOUR module files on every sync, and it defaults to true.** `sync/mod.rs::attempt_auto_lock` hashes a `github`/`appimage` artifact after install and calls `ManifestEngine::update_package` to splice `@sha256=…` into the line you wrote. Two rules say no: **II.16 — "LiNix must not rewrite your files"** — and II.6, which puts generated facts in `locks/` ("Generated. In git. Yours."), which is exactly what a checksum is. It is also the last caller of `ManifestEngine`, whose `update_package`/`find_all_packages` are a second file-editor with their own `split_once(':')` parsers (C13), and the last real reason `groups_dir` exists. **The fix is `locks/<backend>.toml`, so this is Phase 4's thread, not a patch** → **Phase 4** (locks and git) |
 | **S16** | **`--allow-mass-removal` deleted protected packages. FIXED.** `guard::enforce` returned `Ok(())` for *every* objection once the flag was set, so the flag meaning "yes, 50 packages is what I meant" also carried `python3` through. II.10 is explicit — `max_removals` exceeded → "cannot skip, `--allow-mass-removal`"; protected / OS-essential → **"nothing overrides"**. A confirmation asks; a refusal says no (V.26). The flag now clears only the count objection. **There was a test asserting the old behaviour** (`enforce_refuses_without_opt_in_and_proceeds_with_it`, which asserted the flag lets `python3` through) — the bug was written down as an expectation, which is why nothing caught it → **Phase 3** (fixed) |
 | **S17** | **`[guard.enforce_on]` was a config key that switched the guard off, per command. DELETED.** Ten booleans — `apply`, `prune`, `sync`, `watch`, `upgrade`, `rollback`, `canary`, `remove`, `shell-exit`, `leases` — each of which made that command able to remove **anything, without limit**, protected and OS-essential included. It is not one of II.10's nine refusals; it is a switch that turns off all nine. V.21 says **no setting anyone can flip, inherit, or copy from a dotfiles repo** makes a routine sync delete something it did not install, and this was exactly that setting. The config template documented it, and `linix protected` printed which commands were unguarded. All gone → **Phase 3** (fixed) |
@@ -1771,6 +1772,37 @@ parsers**; `migrate` (606 lines, renamed to `adopt` rather than deleted, still t
 to run a command that does not exist); and **E6** — "unmanaged" has two implementations that
 will disagree.
 
+## Done in Phase 2l — `uninstall`, and the symmetric pair is symmetric again
+
+**`uninstall` obeys P1 (S15 closed).** It removed the package first and edited the file
+after; now the file edit IS the command and sync carries it out — so the removal goes through
+the guard, the plan and the counts like every other removal, rather than reaching for the
+backend directly and asking the guard on the side. `install` and `uninstall` are the
+symmetric pair V.39 describes again.
+
+**Both of II.8's `uninstall` rules are built, and verified against the binary:**
+
+- *"jq is still declared in module `gaming`, which isn't active. It will come back if you
+  activate Gaming."* — deleting the line you can see while an identical line waits in a
+  module you forgot about is a package that returns the next time you switch profiles.
+- *"steam isn't declared, so there's nothing for it to come back to. Did you mean a plain
+  uninstall?"* — `--temp` on something undeclared.
+
+**`uninstall --temp=2h` is a suspension now (II.16, V.37).** It writes
+`absent:cargo:ripgrep@until=2026-07-17T16:17` and the model does the rest: a dated line beats
+an undated one (II.7 rule 6), so the module that wants it loses until the date passes, and
+then wins again. **Verified end to end** — the package is not wanted while suspended and is
+wanted again once the date is in the past. "Take the game away until the weekend" works, with
+no timer and no sweep: the same dated-line machinery `install --temp` uses, pointed the other
+way.
+
+Bare `--temp` (restore on shell exit) stays outside the model on purpose (II.8): a shell
+session is not a declaration, so it writes no file — and it now calls the guard, which it
+did not before (C1).
+
+**Found: S19** — `@lease=2h` still works by hand, and it is the one option key that can
+uninstall your package, on a path C3 says bypasses the guard.
+
 ## Done in Phase 2j/2k — the commands that still read the deleted model
 
 **`why` asks the model** — the audit's worst finding, answered in full above.
@@ -1935,8 +1967,10 @@ that says `use x`.
       (P1 order, `--into`, `--temp` -> `@expires`), `forget`, `teleport`, `service
       enable/disable`, the hook, `purge-unmanaged`, and `activate` / `activate -a` /
       `deactivate` / `why` — all three `activate` decisions were taken and are recorded above.
-      **Left:** `uninstall` is the last inverted verb (S15), and the read-only verbs
-      (`status`, `list`, `unmanaged`) have not been checked against II.8 at all.
+      `uninstall` (P1 order, both II.8 warnings, `--temp` -> `absent:@until`), `module`,
+      `adopt`, `bundle`. **Left:** the read-only verbs (`status`, `list`, `unmanaged`) have
+      not been checked against II.8 at all, and **E6** — `unmanaged` has two implementations
+      that will disagree.
 
 ## Decisions the owner has made — do not re-open
 

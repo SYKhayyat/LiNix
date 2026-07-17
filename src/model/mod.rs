@@ -14,7 +14,7 @@ pub mod profiles;
 pub mod resolve;
 
 pub use conflict::Declared;
-pub use edit::{active_module_files, Edit, Editor, Landing, Target};
+pub use edit::{active_module_files, inactive_declarations, Edit, Editor, Landing, Target};
 pub use layout::Layout;
 pub use priority::Priority;
 pub use resolve::{DesiredState, Reached, Resolver};

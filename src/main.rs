@@ -1060,157 +1060,155 @@ async fn handle_install(
     handle_sync(app, false, json).await
 }
 
+/// `uninstall PKG… [--temp]` — remove the line from every active module, sync (II.8).
+///
+/// P1, like `install`: the file edit IS the command, and convergence carries it out. So the
+/// removal goes through the guard, the plan and the counts, exactly as any other removal
+/// does — rather than reaching for the backend directly and asking the guard afterwards.
 async fn handle_uninstall(
     app: &App,
     packages: &[String],
     json: bool,
     temp: Option<&Option<String>>,
 ) -> Result<()> {
-    // Validate the temp-uninstall request before mutating anything.
-    if let Some(inner) = temp {
-        if let Some(dur) = inner {
-            if linix::core::StateRegistry::parse_duration(dur).is_none() {
+    // Bare `--temp` restores when a `linix shell` session ends. That is the ghost shell's
+    // business and it is outside the model by design (II.8), so it never touches a file.
+    if let Some(None) = temp {
+        let has_session = app.state.lock().await.active_session_id.is_some();
+        if !has_session {
+            anyhow::bail!(
+                "Bare `--temp` restores on shell exit, but no `linix shell` session is \
+                 active. Give a duration (e.g. --temp=2h) to schedule a timed restore."
+            );
+        }
+        return suspend_for_session(app, packages).await;
+    }
+
+    let vocab = app.vocabulary().await?;
+    let layout = app.config.layout();
+    let facts = linix::config::parser::HostFacts::current();
+
+    for pkg in packages {
+        // II.8: a `--temp` uninstall of something undeclared has nothing to come back to.
+        if let Some(Some(dur)) = temp {
+            let declared = !linix::model::active_module_files(&layout, &vocab, &facts)
+                .is_empty()
+                && app.declares(pkg).await?;
+            if !declared {
                 anyhow::bail!(
-                    "Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.",
-                    dur
+                    "{} isn't declared, so there's nothing for it to come back to. \
+                     Did you mean a plain uninstall?",
+                    pkg
                 );
             }
-        } else {
-            // Bare `--temp` (session-scoped) only makes sense with an active ghost shell;
-            // otherwise nothing would ever trigger the restore. Fail loudly instead.
-            let has_session = app.state.lock().await.active_session_id.is_some();
-            if !has_session {
-                anyhow::bail!(
-                    "Bare `--temp` restores on shell exit, but no `linix shell` session is \
-                     active. Give a duration (e.g. --temp=2h) to schedule a timed restore."
-                );
-            }
+
+            // II.16/V.37: "take the game away until the weekend". An `absent:` line with a
+            // date beats the module that wants it (II.7 rule 6) until the date passes —
+            // then the module wins again and it comes back. No timer, no sweep: the same
+            // dated-line machinery `install --temp` uses, pointed the other way.
+            let at = linix::model::dated::absolute_after(chrono::Utc::now(), dur)
+                .with_context(|| {
+                    format!("Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.", dur)
+                })?;
+            let spec = app
+                .resolve_spec(pkg)
+                .await?
+                .into_iter()
+                .next()
+                .with_context(|| format!("no package `{}` in any backend you use", pkg))?;
+            app.declare(
+                &format!("absent:{}:{}@until={}", spec.backend, spec.name, at),
+                None,
+                linix::model::Landing::Imperative,
+            )
+            .await?;
+            continue;
+        }
+
+        // A line you can see deleted, while an identical line waits in a module you forgot
+        // about, is a package that returns the next time you switch profiles (II.8).
+        for module in linix::model::inactive_declarations(&layout, &vocab, &facts, pkg) {
+            warn!(
+                "{} is still declared in module `{}`, which isn't active. It will come back \
+                 if a profile you activate uses it.",
+                pkg, module
+            );
+        }
+
+        let edits = app.undeclare(pkg).await?;
+        if edits.is_empty() {
+            warn!("{} is not declared in any active file.", pkg);
         }
     }
 
-    // Dry-run short-circuit for BOTH json and plain output (no state/manifest mutation).
-    if app.config.dry_run {
-        let mut planned = Vec::new();
-        for pkg_name in packages {
-            for b in app.registry.available() {
-                if let Some(q) = b.as_queryable() {
-                    if q.info(pkg_name).await?.is_some() {
-                        planned.push(serde_json::json!({
-                            "action": "remove", "backend": b.name(), "name": pkg_name,
-                        }));
-                        break;
-                    }
-                }
-            }
-        }
-        if json {
-            println!("{}", serde_json::to_string_pretty(&planned)?);
-        } else {
-            println!("[DRY-RUN] would remove {} package(s):", planned.len());
-            for p in &planned {
-                println!(
-                    "  - {}:{}",
-                    p["backend"].as_str().unwrap_or(""),
-                    p["name"].as_str().unwrap_or("")
-                );
-            }
-        }
-        return Ok(());
-    }
-    // Optional extra guard before destructive removals.
-    if app.config.confirm_destructive && !app.config.yes && !app.config.dry_run {
-        let proceed = dialoguer::Confirm::new()
-            .with_prompt(format!("Remove {} package(s)?", packages.len()))
-            .default(false)
-            .interact()
-            .unwrap_or(false);
-        if !proceed {
-            info!("Remove aborted by user.");
-            return Ok(());
-        }
-    }
+    // And the ordinary pipeline removes it: the package is now drift, and removing drift is
+    // what sync is (V.34).
+    handle_sync(app, false, json).await
+}
+
+/// Bare `--temp` inside a ghost shell: suspend now, restore when the session ends.
+///
+/// Outside the model on purpose (II.8) — a shell session is not a declaration, and writing
+/// a file for something that ends when the shell does would leave the file behind.
+async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
     for pkg_str in packages {
-        // Parse the same `backend:name[@opts]` syntax `install` accepts. A recognized
-        // backend prefix scopes the removal to that backend; otherwise every backend is
-        // searched. The *bare* name is what backends query/remove by — passing the full
-        // "backend:name" string here was the bug that made `remove backend:pkg` a no-op.
         let (scoped_backend, bare_name) =
             linix::config::parser::split_removal_target(pkg_str, |b| app.registry.get(b).is_some());
 
-        let mut removed = false;
+        let mut done = false;
         for b in app.registry.available() {
             if scoped_backend.as_deref().is_some_and(|sb| sb != b.name()) {
                 continue;
             }
-            if let Some(inst) = b.as_installable() {
-                // Confirm the package is installed when the backend can be queried. A backend
-                // WITHOUT a Queryable (e.g. `link`, whose "package" is a filesystem path) can't
-                // be probed — so honor an EXPLICIT scoped removal (`link:/path`) and attempt it
-                // directly, rather than treating remove as an impossible no-op (which silently
-                // left the symlink in place). Unscoped removal still requires a query hit, so a
-                // bare name never triggers a blind remove across every backend.
-                // Query once: a Queryable backend confirms presence and yields the version
-                // (best-effort, recorded for a temp uninstall). A non-Queryable backend
-                // (e.g. `link`) can't be probed, so honor an explicit scoped removal.
-                let (present, existing_version) = match b.as_queryable() {
-                    Some(q) => match q.info(&bare_name).await? {
-                        Some(p) => (true, p.version),
-                        None => (false, None),
-                    },
-                    None => (scoped_backend.as_deref() == Some(b.name()), None),
-                };
-                if present {
-                    // `remove` is deliberate, but "I typed it" is not the same as "I meant
-                    // to delete libc6". This is the most direct way to uninstall anything,
-                    // so it gets the same guard as every other removal path.
-                    linix::app::sync::guard::enforce(
-                        &app.config,
-                        &app.registry,
-                        &[(b.name().to_string(), bare_name.clone())],
-                        linix::app::sync::guard::GuardScope::Remove,
-                    )
-                    .await?;
-                    info!("LiNix: Purging {} from {}...", bare_name, b.name());
-                    inst.remove(std::slice::from_ref(&bare_name), b.sudo_for_write())
-                        .await?;
-                    app.state.lock().await.remove(b.name(), &bare_name);
-                    if let Some(inner) = temp {
-                        // Temporary uninstall: schedule a restore instead of editing the
-                        // manifest (a temp removal is a transient state change, not a
-                        // change of declarative intent).
-                        let restored_at = app.state.lock().await.suspend(
-                            b.name(),
-                            &bare_name,
-                            existing_version.clone(),
-                            inner.as_deref(),
-                        )?;
-                        match restored_at {
-                            Some(at) => info!(
-                                "LiNix: {} suspended; will be restored at Unix {}.",
-                                bare_name, at
-                            ),
-                            None => info!(
-                                "LiNix: {} suspended; will be restored when this shell exits.",
-                                bare_name
-                            ),
-                        }
-                    } else {
-                        app.undeclare(pkg_str).await?;
-                    }
-                    removed = true;
-                    break;
-                }
+            let Some(inst) = b.as_installable() else {
+                continue;
+            };
+            let (present, version) = match b.as_queryable() {
+                Some(q) => match q.info(&bare_name).await? {
+                    Some(p) => (true, p.version),
+                    None => (false, None),
+                },
+                None => (scoped_backend.as_deref() == Some(b.name()), None),
+            };
+            if !present {
+                continue;
             }
-        }
-        if !removed {
-            warn!(
-                "LiNix: '{}' is not installed under any managed backend.",
-                pkg_str
+
+            // Every removal path calls the guard (II.10), this one included.
+            linix::app::sync::guard::enforce(
+                &app.config,
+                &app.registry,
+                &[(b.name().to_string(), bare_name.clone())],
+                linix::app::sync::guard::GuardScope::Remove,
+            )
+            .await?;
+
+            if app.config.dry_run {
+                println!("[DRY-RUN] would suspend {}:{}", b.name(), bare_name);
+                done = true;
+                break;
+            }
+
+            inst.remove(std::slice::from_ref(&bare_name), b.sudo_for_write())
+                .await?;
+            app.state.lock().await.remove(b.name(), &bare_name);
+            app.state
+                .lock()
+                .await
+                .suspend(b.name(), &bare_name, version, None)?;
+            info!(
+                "{} suspended; it comes back when this shell exits.",
+                bare_name
             );
+            done = true;
+            break;
+        }
+        if !done {
+            warn!("'{}' is not installed under any backend you use.", pkg_str);
         }
     }
     app.state.lock().await.save()?;
-    perform_maintenance(app).await
+    Ok(())
 }
 
 async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {

@@ -353,6 +353,16 @@ impl<'a> Editor<'a> {
         false
     }
 
+    /// Whether any of `files` declares `target_pkg`.
+    pub fn declares_in(&self, files: &[PathBuf], target_pkg: &str) -> bool {
+        let wanted = self.match_key(target_pkg);
+        files.iter().any(|f| {
+            std::fs::read_to_string(f)
+                .map(|b| b.lines().any(|l| self.matches(l, &wanted)))
+                .unwrap_or(false)
+        })
+    }
+
     /// Remove every declaration of `target_pkg` from `files`, returning what was removed.
     ///
     /// The match is on the package, never on the raw prefix: `uninstall apt` must remove a
@@ -394,7 +404,7 @@ impl<'a> Editor<'a> {
     }
 
     /// What the user typed, as something to match against.
-    fn match_key(&self, target: &str) -> Match {
+    pub(crate) fn match_key(&self, target: &str) -> Match {
         match statement::parse(&Origin::argument(), target, self.backends) {
             Ok(Statement::Package(d)) | Ok(Statement::Absent(d)) => Match::Package {
                 backend: d.backend,
@@ -408,7 +418,7 @@ impl<'a> Editor<'a> {
         }
     }
 
-    fn matches(&self, raw: &str, wanted: &Match) -> bool {
+    pub(crate) fn matches(&self, raw: &str, wanted: &Match) -> bool {
         let line = match raw.find('#') {
             Some(i) => &raw[..i],
             None => raw,
@@ -446,7 +456,7 @@ impl<'a> Editor<'a> {
 ///
 /// A package is matched on backend and name, because a bare name means "under whatever
 /// backend has it". Everything else is matched whole: `service:nginx` names one thing.
-enum Match {
+pub(crate) enum Match {
     Package {
         backend: Option<String>,
         name: String,
@@ -540,6 +550,40 @@ pub fn active_module_files(
 /// Where a package should land when nobody said (II.8's three landing modules).
 pub fn landing_target(landing: Landing) -> Target {
     landing.target()
+}
+
+/// Modules that declare `target_pkg` but that no active profile reaches (II.8).
+///
+/// What `uninstall` warns about: *"jq is still declared in module `gaming`, which isn't
+/// active. It will come back if you activate Gaming."* Deleting the line you can see, while
+/// an identical line waits in a module you forgot about, is a package that returns from the
+/// dead the next time you switch profiles — and nothing said so.
+pub fn inactive_declarations(
+    layout: &Layout,
+    backends: &dyn BackendNames,
+    facts: &HostFacts,
+    target_pkg: &str,
+) -> Vec<String> {
+    let reached = active_module_files(layout, backends, facts);
+    let editor = Editor::new(layout, backends).with_facts(facts.clone());
+    let wanted = editor.match_key(target_pkg);
+
+    let mut out: Vec<String> = Vec::new();
+    let loader = ModuleLoader::new(layout, backends);
+    for name in loader.available() {
+        let path = layout.module_file(&name);
+        if reached.contains(&path) {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        if body.lines().any(|l| editor.matches(l, &wanted)) {
+            out.push(name);
+        }
+    }
+    out.sort();
+    out
 }
 
 #[cfg(test)]

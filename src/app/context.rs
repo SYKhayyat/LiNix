@@ -231,6 +231,19 @@ impl App {
         Ok(edit)
     }
 
+    /// Whether any active file declares this package.
+    ///
+    /// Asked through the resolver, so "declared" means the same thing here as it does to
+    /// `sync` — a second definition of declared is a second answer.
+    pub async fn declares(&self, target: &str) -> Result<bool> {
+        let vocab = self.vocabulary().await?;
+        let layout = self.config.layout();
+        let facts = crate::config::parser::HostFacts::current();
+        let files = crate::model::active_module_files(&layout, &vocab, &facts);
+        let editor = crate::model::Editor::new(&layout, &vocab).with_facts(facts);
+        Ok(editor.declares_in(&files, target))
+    }
+
     /// Remove a package's declaration from every file the active profiles reach (II.8's
     /// `uninstall`), and say which files changed.
     pub async fn undeclare(&self, target_pkg: &str) -> Result<Vec<crate::model::Edit>> {
