@@ -42,9 +42,14 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub allow_mass_install: bool,
 
-    /// Toggle progress indicators
-    #[arg(long, global = true, default_value = "true")]
-    pub progress: bool,
+    /// Hide progress indicators (spinners/bars). Progress shows by default; this turns it off.
+    ///
+    /// Was `--progress` with `default_value = "true"` on a `bool`, which clap derives as
+    /// `SetTrue` — so it was stuck on with no way to disable it (S5), and nothing read it. A
+    /// plain `--no-progress` flag is a real off-switch, and it overrides `show_progress` in
+    /// config.
+    #[arg(long, global = true)]
+    pub no_progress: bool,
 
     /// Enable debug-level logging
     #[arg(short, long, global = true)]

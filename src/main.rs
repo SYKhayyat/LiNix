@@ -4235,6 +4235,11 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
     if cli.quiet {
         config.quiet = true;
     }
+    // --no-progress is the real off-switch for the progress indicators (S5). A set flag wins
+    // over the `show_progress` config default.
+    if cli.no_progress {
+        config.show_progress = false;
+    }
     // Fold the user-editable keep-list into the protected set. It lives in the GLOBAL
     // groups folder, which `-g` no longer moves — previously `-g /tmp/foo` made this look
     // for /tmp/foo/keep.txt, found nothing, returned early, and every keep-list protection
