@@ -142,6 +142,13 @@ pub fn starter_order(available: &[String]) -> Vec<String> {
         "choco", "brew", "nix", "flatpak", "snap",
     ];
 
+    // `service:` and `link:` are dependent STATEMENTS, not package managers: they never
+    // gate on `priority` and never resolve a bare name, so listing them in the file that
+    // orders package managers is noise (S14). Everything else that installs by explicit
+    // spec — `web`, `github`, `appimage` — stays, because the model refuses an explicit
+    // `web:…` unless `web` is listed.
+    const NOT_A_MANAGER: &[&str] = &["service", "link"];
+
     let rank = |b: &str| -> usize {
         if b == "pip" {
             return 2;
@@ -152,7 +159,11 @@ pub fn starter_order(available: &[String]) -> Vec<String> {
         1
     };
 
-    let mut out: Vec<String> = available.to_vec();
+    let mut out: Vec<String> = available
+        .iter()
+        .filter(|b| !NOT_A_MANAGER.contains(&b.as_str()))
+        .cloned()
+        .collect();
     out.sort_by(|a, b| {
         rank(a)
             .cmp(&rank(b))
@@ -296,6 +307,25 @@ mod tests {
         // homework, and `priority` is not a wish list.
         let out = starter_order(&["cargo".into()]);
         assert_eq!(out, ["cargo"]);
+    }
+
+    #[test]
+    fn service_and_link_are_not_listed_but_artifact_backends_are() {
+        // S14: `service`/`link` are dependent statements, not package managers, so they
+        // are noise in `priority`. `web`/`github` install by explicit spec, which the
+        // model refuses unless the backend is listed — so they stay.
+        let out = starter_order(&[
+            "apt".into(),
+            "service".into(),
+            "link".into(),
+            "web".into(),
+            "github".into(),
+        ]);
+        assert!(!out.contains(&"service".to_string()), "{:?}", out);
+        assert!(!out.contains(&"link".to_string()), "{:?}", out);
+        assert!(out.contains(&"web".to_string()), "{:?}", out);
+        assert!(out.contains(&"github".to_string()), "{:?}", out);
+        assert_eq!(out.first().map(String::as_str), Some("apt"));
     }
 
     #[test]
