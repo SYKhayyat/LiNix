@@ -1048,8 +1048,14 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   diff` limited to `modules/profiles/active/priority/schedules` and keeps the `+`/`-` lines (shared
   `parse_manifest_changes` with the cockpit). `cargo check --lib`/`--bin` clean; a git-repo unit
   test written (not run).
-- `bundle` = `git bundle` + artifacts + registry, **honest per-backend about what can't be
-  bundled**.
+- ~~`bundle` = `git bundle` + artifacts + registry, **honest per-backend about what can't be
+  bundled**.~~ **DONE, 2026-07-17.** It already copied the whole config root + `packages.json` +
+  artifacts (with per-backend skip reporting); added the two missing halves: a `git bundle
+  create --all` → `config.bundle` (full manifest history, so the air-gapped host can `rollback`
+  to any commit — new `GitManager::bundle`, returns false + honestly reported when there's no
+  repo/commits), and a copy of the ownership `registry.json` from the data root (II.1 — it lives
+  beside the config, not in it). The bundle output now states each part's inclusion plainly
+  (included / NOT included and why). `cargo check --lib`/`--bin` clean.
 - ~~One retention engine.~~ **DONE, 2026-07-17.** There were two: generations and the `sync`-time
   snapshot prune both used `core::RetentionPolicy` (the correct engine, with the "always keep the
   newest" floor and the LiNix-ownership filter), but `App::prune_snapshots` (the `auto_prune`
