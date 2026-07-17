@@ -38,6 +38,32 @@ pub enum Scope {
     Module(String),
 }
 
+/// Split a desired-state map into what must exist and what must not.
+///
+/// `absent:` is a declaration, not drift: it is you reaching outside what LiNix manages,
+/// deliberately, by name (V.7). It shares the map with wishes because the map type is the
+/// seam, so it must be separated before anything reads the map as a wish list.
+fn partition_by_presence(
+    desired: &HashMap<String, Vec<PackageSpec>>,
+) -> (
+    HashMap<String, Vec<PackageSpec>>,
+    HashMap<String, Vec<PackageSpec>>,
+) {
+    let mut wanted: HashMap<String, Vec<PackageSpec>> = HashMap::new();
+    let mut unwanted: HashMap<String, Vec<PackageSpec>> = HashMap::new();
+    for (backend, specs) in desired {
+        for spec in specs {
+            let bucket = if spec.present {
+                &mut wanted
+            } else {
+                &mut unwanted
+            };
+            bucket.entry(backend.clone()).or_default().push(spec.clone());
+        }
+    }
+    (wanted, unwanted)
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct SyncChanges {
     pub graph: StableDiGraph<GraphAction, ()>,
@@ -145,7 +171,14 @@ impl<'a> ChangePlanner<'a> {
         scope: Option<Scope>,
     ) -> Result<SyncChanges> {
         let mut changes = SyncChanges::default();
-        let filtered_desired = self.apply_scope_filtering(desired, scope.as_ref());
+
+        // `absent:` says a package must NOT exist (II.2). Split off FIRST, before any
+        // other work: everything downstream of here reads `desired` as a wish list, so an
+        // absent declaration left in it would be installed — the exact opposite of what it
+        // says. Partitioning at the top means no later branch can misread one.
+        let (wanted, unwanted) = partition_by_presence(desired);
+
+        let filtered_desired = self.apply_scope_filtering(&wanted, scope.as_ref());
         let expanded_desired = self
             .expand_transitive_dependencies(&filtered_desired)
             .await?;
@@ -160,6 +193,23 @@ impl<'a> ChangePlanner<'a> {
         // running removal here would delete every package OUTSIDE the scope. A targeted
         // upgrade must be non-destructive — skip all removal planning when scoped.
         if scope.is_none() {
+            // `absent:` — the one thing LiNix removes that it does not manage, because
+            // you named it (V.7). Scheduled whether or not LiNix installed it; the guard
+            // decides whether it may actually go (Phase 3).
+            for (backend, specs) in &unwanted {
+                for spec in specs {
+                    let key = format!("{}:{}", backend, spec.name);
+                    if changes.removal_tracker.contains(&key) {
+                        continue;
+                    }
+                    changes.removal_tracker.insert(key);
+                    changes.graph.add_node(GraphAction::Remove {
+                        name: spec.name.clone(),
+                        backend: backend.clone(),
+                    });
+                }
+            }
+
             // Single pass over all managed packages to schedule removals
             for pkg in &self.state.packages {
                 let key = format!("{}:{}", pkg.backend, pkg.name);
@@ -556,6 +606,89 @@ mod tests {
             0,
             "scoped upgrade must never remove packages"
         );
+    }
+
+    fn absent_spec(name: &str, backend: &str) -> PackageSpec {
+        PackageSpec {
+            name: name.into(),
+            backend: backend.into(),
+            present: false,
+            ..PackageSpec::default()
+        }
+    }
+
+    /// `absent:` shares the desired-state map with wishes, because the map type is the
+    /// seam. Everything downstream of `plan` reads that map as a wish list, so an absent
+    /// declaration that survives into it gets INSTALLED — the exact opposite of what the
+    /// line says.
+    #[tokio::test]
+    async fn an_absent_declaration_is_never_installed() {
+        let registry = Arc::new(BackendRegistry::new());
+        let config = Config::default();
+        let state = StateRegistry::new(PathBuf::from("test-state.json"));
+        let desired: HashMap<String, Vec<PackageSpec>> = [(
+            "generic-test".to_string(),
+            vec![absent_spec("libreoffice", "generic-test")],
+        )]
+        .into_iter()
+        .collect();
+
+        let changes = ChangePlanner::new(registry, &state, &config)
+            .plan(&desired, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            changes.total_install(),
+            0,
+            "an `absent:` line must never become an install"
+        );
+    }
+
+    /// V.7: `absent:` is the one exception to "LiNix only removes what it manages" —
+    /// because you named it. So it is scheduled even though the registry never owned it.
+    #[tokio::test]
+    async fn an_absent_declaration_is_scheduled_for_removal_even_if_unmanaged() {
+        let registry = Arc::new(BackendRegistry::new());
+        let config = Config::default();
+        let state = StateRegistry::new(PathBuf::from("test-state.json"));
+        let desired: HashMap<String, Vec<PackageSpec>> = [(
+            "generic-test".to_string(),
+            vec![absent_spec("libreoffice", "generic-test")],
+        )]
+        .into_iter()
+        .collect();
+
+        let changes = ChangePlanner::new(registry, &state, &config)
+            .plan(&desired, None)
+            .await
+            .unwrap();
+
+        assert!(changes
+            .removal_tracker
+            .contains("generic-test:libreoffice"));
+    }
+
+    /// A scoped run is non-destructive, and that must hold for `absent:` too.
+    #[tokio::test]
+    async fn a_scoped_run_does_not_act_on_absent_declarations() {
+        let registry = Arc::new(BackendRegistry::new());
+        let config = Config::default();
+        let state = StateRegistry::new(PathBuf::from("test-state.json"));
+        let desired: HashMap<String, Vec<PackageSpec>> = [(
+            "generic-test".to_string(),
+            vec![absent_spec("libreoffice", "generic-test")],
+        )]
+        .into_iter()
+        .collect();
+
+        let changes = ChangePlanner::new(registry, &state, &config)
+            .plan(&desired, Some(Scope::Module("dev".into())))
+            .await
+            .unwrap();
+
+        assert_eq!(changes.total_remove(), 0);
+        assert_eq!(changes.total_install(), 0);
     }
 
     // `with_prune(false)` (what `sync` uses when prune_on_sync is off) must NOT schedule
