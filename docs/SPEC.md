@@ -1238,6 +1238,17 @@ implementing agent's call; that it goes is not.**
   caller prints "pruned N", so a snapshot/generation the delete couldn't remove is still reported gone
   — a said-so, not a done. Fix: return only the IDs actually deleted, and surface the failures.
 
+- **R23 — Rollback misses a node aborted mid-mutation, and the WAL net lapses after 4h (hardening).**
+  On a node failure with auto-rollback, the transaction does `abort_all()` then `rollback()`
+  (`transaction.rs:264-265`), but `rollback()` compensates only `self.history` — nodes that *completed*
+  (`:241`). A sibling aborted mid-`remove` already ran the OS removal yet never entered `history`, so
+  rollback won't reinstall it. The catch is the WAL: that node stays `InProgress`, so the next `sync`
+  auto-heals it — **except** `journal.cleanup()` flips `InProgress` entries older than 4h to `Abandoned`
+  (`journal.rs:263-271`), after which recovery no longer fires. Narrow (needs abort mid-mutation + no
+  sync within 4h + cleanup), so low severity, but a real hole. Harden: either have rollback also
+  compensate started-but-not-completed nodes, or make an `Abandoned` entry still trigger a heal/warn
+  rather than dropping it from recovery.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
