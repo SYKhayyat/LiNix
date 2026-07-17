@@ -145,7 +145,9 @@ impl Transaction {
                 );
                 self.cancellation_token.cancel();
                 if self.config.auto_rollback {
-                    let _ = self.rollback().await;
+                    if let Err(e) = self.rollback().await {
+                        error!("Transaction: {}", e);
+                    }
                 }
                 Err(Error::Transaction(format!(
                     "Transaction timed out after {:?}",
@@ -171,7 +173,9 @@ impl Transaction {
             if self.cancellation_token.is_cancelled() {
                 worker_pool.abort_all();
                 if self.config.auto_rollback {
-                    let _ = self.rollback().await;
+                    if let Err(e) = self.rollback().await {
+                        error!("Transaction: {}", e);
+                    }
                 }
                 return Err(Error::Transaction("Transaction cancelled.".into()));
             }
@@ -258,7 +262,9 @@ impl Transaction {
                     if self.config.auto_rollback {
                         info!("Transaction: Commencing auto-rollback...");
                         worker_pool.abort_all();
-                        let _ = self.rollback().await;
+                        if let Err(e) = self.rollback().await {
+                            error!("Transaction: {}", e);
+                        }
                     }
                     return Err(final_err);
                 }
@@ -488,15 +494,30 @@ impl Transaction {
 
     async fn rollback(&mut self) -> Result<()> {
         info!("Transaction: Reverting modification history.");
+        // A compensating action that itself fails leaves the system in a partial state —
+        // most dangerously, a package the user HAD, that this transaction removed, and that
+        // the reinstall could not bring back. Swallowing that error (the old `let _ =`) is
+        // the worst place in the codebase to be quiet (H2): the user is told the transaction
+        // failed and rolled back, while a package is silently gone. Report every failure by
+        // name, and return Err so the caller can say the rollback was incomplete.
+        let mut failures: Vec<String> = Vec::new();
         for &idx in self.history.iter().rev() {
             let action = &self.graph[idx];
             match action {
                 GraphAction::Install(spec) => {
                     if let Some(b) = self.registry.get(&spec.backend) {
                         if let Some(h) = b.as_installable() {
-                            let _ = h
+                            if let Err(e) = h
                                 .remove(std::slice::from_ref(&spec.name), b.sudo_for_write())
-                                .await;
+                                .await
+                            {
+                                error!(
+                                    "Transaction: rollback could not remove {}:{} that this \
+                                     run installed — it remains on the system: {}",
+                                    spec.backend, spec.name, e
+                                );
+                                failures.push(format!("{}:{} (left installed)", spec.backend, spec.name));
+                            }
                         }
                     }
                 }
@@ -510,12 +531,27 @@ impl Transaction {
                                 requires: vec![],
                                 present: true,
                             };
-                            let _ = h.install(&[spec], b.sudo_for_write()).await;
+                            if let Err(e) = h.install(&[spec], b.sudo_for_write()).await {
+                                error!(
+                                    "Transaction: rollback could not reinstall {}:{} that this \
+                                     run removed — it is now MISSING: {}",
+                                    backend, name, e
+                                );
+                                failures.push(format!("{}:{} (now missing)", backend, name));
+                            }
                         }
                     }
                 }
             }
         }
-        Ok(())
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Transaction(format!(
+                "rollback was incomplete — {} compensating action(s) failed: {}",
+                failures.len(),
+                failures.join(", ")
+            )))
+        }
     }
 }

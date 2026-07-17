@@ -123,7 +123,16 @@ impl GhostShell {
         {
             let mut state_guard = self.state.lock().await;
             state_guard.active_session_id = None;
-            let _ = state_guard.save();
+            // Don't drop this write silently (H2): if it fails, `active_session_id` stays
+            // set on disk and the next run believes a ghost session is still live.
+            if let Err(e) = state_guard.save() {
+                warn!(
+                    "GhostShell: could not persist session teardown ({}); the on-disk state \
+                     still marks a session active, which the next `linix shell` will clear \
+                     when it starts a new one.",
+                    e
+                );
+            }
         }
 
         info!("GhostShell: Cleanup successful. Host system remains consistent.");
