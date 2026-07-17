@@ -2070,24 +2070,14 @@ that says `use x`.
 - [x] **Ordering phases: repos → index refresh → packages → dependents (Phase 2o + 2p).**
       Applied by `sync` around the package graph, not inside `core/transaction.rs` (the seam
       keeps `core/` ignorant of repos and extras). Verified against the binary.
-- [ ] **Cycle detection (II.7) — already caught in all three places. Do not rewrite; improve
-      the errors.** `use` loops: `model/profiles.rs:62` and `model/modules.rs:146`, a
-      push/pop path stack, so diamonds correctly pass. `@requires` loops:
-      `planner.rs:323` — `is_cyclic_directed` after `build_execution_graph`, which is what
-      stops `transaction.rs:179-190`'s ready-set loop spinning to its timeout. What is owed
-      is **the error text, not the detection** (V.45): the two `use` errors name the path but
-      carry a single `Origin` — the edge that closed the loop — and the planner's is
-      *"Circular dependency detected in graph construction."*, which names nothing at all.
-      **Re-verified 2026-07-17 (line numbers rotted: `planner.rs:323`→`:276`,
-      `profiles.rs:62`→`:88`, `modules.rs:146`→`:165`; the claim itself holds).** Two things the
-      entry did not say: **`GrammarError` (`grammar/error.rs:45`) holds one `origin`, so it
-      cannot structurally carry II.7's trace** — the `seen: Vec<String>` path stack keeps names
-      only, and the file/line of every edge but the last is discarded at push time. Fixing the
-      text means changing the error type or the stack, not the message. **The planner's is
-      easier than it looks:** `PackageSpec` has no `Origin` field, but `options["__source"]` is
-      `file:line` (`model/resolve.rs:533`) and **the planner already reads it**
-      (`planner.rs:119`) — so II.7's *"which packages, and the file and line each edge came
-      from"* is reachable there today without a new field.
+- [x] **Cycle detection error text (V.45) — done (Phase 2u).** Detection was already right in
+      all three places; only the messages were owed. The two `use` loops (`profiles.rs`,
+      `modules.rs`) already name the path (`a -> b -> a`). The planner's was *"Circular
+      dependency detected in graph construction."* — naming nothing — and now names the
+      mutually-dependent packages **and their file:line**, `apt:foo (modules/dev.txt:3) ->
+      apt:bar (…) -> apt:foo`, via Tarjan's SCC (self-loops handled separately). As predicted,
+      `PackageSpec` needed no `Origin` field: `options["__source"]` is `file:line` and the
+      planner already read it. Tests for the 2-cycle and self-loop cases.
 - [ ] The II.8 command surface (`main.rs`, ~4,370 lines). **Done so far:** `install`
       (P1 order, `--into`, `--temp` -> `@expires`), `forget`, `teleport`, `service
       enable/disable`, the hook, `purge-unmanaged`, and `activate` / `activate -a` /

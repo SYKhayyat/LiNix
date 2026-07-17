@@ -127,11 +127,8 @@ async fn test_circular_dependency_detection_wiring() {
         "Planner allowed a circular dependency loop."
     );
     if let Err(linix::core::Error::Transaction(msg)) = plan_result {
-        assert!(
-            msg.contains("Circular dependency"),
-            "Incorrect error context: {}",
-            msg
-        );
+        // V.45: names the cycle rather than just reporting one exists.
+        assert!(msg.contains("cycle"), "should say it is a cycle: {}", msg);
     }
 }
 

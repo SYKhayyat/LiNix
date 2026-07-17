@@ -101,9 +101,12 @@ async fn test_dag_cycle_detection_logic() {
         "Planner failed to identify circular manifest closure."
     );
     if let Err(Error::Transaction(msg)) = result {
+        // V.45: the message names the cycle, not just "a cycle exists".
+        assert!(msg.contains("cycle"), "should say it is a cycle: {}", msg);
         assert!(
-            msg.contains("Circular dependency"),
-            "Incorrect error context returned for cycle."
+            msg.contains("brew:pkg-a") && msg.contains("brew:pkg-b"),
+            "should name the mutually-dependent packages: {}",
+            msg
         );
     }
 }

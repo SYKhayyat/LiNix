@@ -109,6 +109,14 @@ pub enum Commands {
     /// Identify all packages installed on the OS but not managed by LiNix
     Unmanaged,
 
+    /// Parse everything the active profiles reach and report any errors — without planning
+    /// or changing anything (II.8). A clean parse says how many packages resolved.
+    Check,
+
+    /// Show every `absent:` line in force and the module it comes from (II.8) — what LiNix
+    /// is keeping OFF this machine, and where each rule is written.
+    Absent,
+
     /// Delete everything LiNix does not manage. Shows the whole list first.
     ///
     /// This is the strict "make this machine exactly match my files" command. It is a

@@ -162,6 +162,8 @@ async fn main() -> Result<()> {
         Commands::Apply { plan, yes } => handle_apply(&app, plan, *yes).await,
         Commands::Update => handle_update(&app).await,
         Commands::Unmanaged => handle_unmanaged(&app).await,
+        Commands::Check => handle_check(&app).await,
+        Commands::Absent => handle_absent(&app).await,
         Commands::PurgeUnmanaged { i_really_mean_it } => {
             handle_purge_unmanaged(&app, *i_really_mean_it).await
         }
@@ -2683,6 +2685,62 @@ async fn handle_unmanaged(app: &App) -> Result<()> {
             "\n{} package(s) the OS reports as essential are left alone.",
             found.skipped.len()
         );
+    }
+    Ok(())
+}
+
+/// `check` (II.8): parse everything the active profiles reach and report errors, changing
+/// nothing. Resolution is where every parse/validation error surfaces — a bad line, an
+/// unknown option, a `use` cycle — so a clean resolve IS a clean parse; this just says so,
+/// and prints the counts a reader wants before running `sync`.
+async fn handle_check(app: &App) -> Result<()> {
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let state = resolver.resolve_model().await?;
+    println!(
+        "OK: everything the active profiles reach parses. {} present, {} absent, {} repo/shim/service/link/schedule line(s).",
+        state.total_present(),
+        state.absent().count(),
+        state.extras.len()
+    );
+    if !state.lapsed.is_empty() {
+        println!(
+            "\n{} dated line(s) have lapsed and no longer count:",
+            state.lapsed.len()
+        );
+        for (key, origin) in &state.lapsed {
+            println!("  {} at {}", key, origin);
+        }
+    }
+    Ok(())
+}
+
+/// `absent` (II.8): every `absent:` line in force, and the module it comes from — what LiNix
+/// keeps OFF this machine, and where each rule is written. Read-only.
+async fn handle_absent(app: &App) -> Result<()> {
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let state = resolver.resolve_model().await?;
+    let mut absent: Vec<_> = state.absent().collect();
+    if absent.is_empty() {
+        println!("No `absent:` lines are in force.");
+        return Ok(());
+    }
+    absent.sort_by(|a, b| (&a.backend, &a.name).cmp(&(&b.backend, &b.name)));
+    println!(
+        "{} `absent:` line(s) in force — kept off this machine:\n",
+        absent.len()
+    );
+    println!("{:<15} {:<25} SOURCE", "BACKEND", "PACKAGE");
+    for spec in absent {
+        let source = spec
+            .options
+            .get("__source")
+            .map(String::as_str)
+            .unwrap_or("?");
+        println!("{:<15} {:<25} {}", spec.backend, spec.name, source);
     }
     Ok(())
 }
