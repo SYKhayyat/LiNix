@@ -150,7 +150,7 @@ impl GuardReport {
             .find(|o| matches!(o, Objection::TooMany { .. }))
         {
             out.push_str(&format!(
-                "  - it removes {} packages, over the limit of {} (config: max_removals)\n",
+                "  - it removes {} packages, over the limit of {} ([guard] max_removals)\n",
                 count, limit
             ));
         }
@@ -179,7 +179,7 @@ impl GuardReport {
              linix protected <pkg>          why a package is guarded\n  \
              linix unmanage <pkg>           stop managing it WITHOUT uninstalling it\n  \
              <command> --allow-mass-removal carry out this removal anyway\n  \
-             unprotected_packages           exempt a package permanently (config.toml)",
+             [guard] unprotected_packages    exempt a package permanently (preferences.toml)",
         );
         out
     }
@@ -242,10 +242,10 @@ pub async fn inspect(
         }
     }
 
-    if config.max_removals > 0 && removals.len() > config.max_removals {
+    if config.guard.max_removals > 0 && removals.len() > config.guard.max_removals {
         report.objections.push(Objection::TooMany {
             count: removals.len(),
-            limit: config.max_removals,
+            limit: config.guard.max_removals,
         });
     }
 
@@ -352,7 +352,7 @@ pub fn describe_objection(o: &Objection) -> String {
 /// *installed* that the system forbids here — so the only question is the count, and `0`
 /// (unset) disables it.
 pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) -> Result<()> {
-    if config.max_installs == 0 || count <= config.max_installs {
+    if config.guard.max_installs == 0 || count <= config.guard.max_installs {
         return Ok(());
     }
     if config.allow_mass_install {
@@ -374,7 +374,7 @@ pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) 
          {} --allow-mass-install carry out this install anyway",
         scope.as_str(),
         count,
-        config.max_installs,
+        config.guard.max_installs,
         scope.as_str(),
     )))
 }
@@ -427,9 +427,12 @@ mod tests {
 
     fn config_with(max: usize) -> Config {
         Config {
-            protected_packages: vec!["python3".into(), "libpam*".into()],
-            unprotected_packages: Vec::new(),
-            max_removals: max,
+            guard: crate::config::GuardSettings {
+                protected_packages: vec!["python3".into(), "libpam*".into()],
+                unprotected_packages: Vec::new(),
+                max_removals: max,
+                ..Default::default()
+            },
             ..Config::default()
         }
     }
@@ -480,7 +483,7 @@ mod tests {
     #[test]
     fn unprotect_wins_over_a_config_rule() {
         let mut cfg = config_with(20);
-        cfg.unprotected_packages = vec!["libpam-modules".into()];
+        cfg.guard.unprotected_packages = vec!["libpam-modules".into()];
         let none = HashSet::new();
         // libpam* still protects the rest of the family...
         assert!(protection_of(&cfg, "apt", "libpam0g", &none).is_some());
@@ -493,7 +496,7 @@ mod tests {
         // The documented promise: un-protect beats *everything*, OS flags included.
         // Previously the OS check ran in an `else if` and fired anyway.
         let mut cfg = config_with(20);
-        cfg.unprotected_packages = vec!["dash".into()];
+        cfg.guard.unprotected_packages = vec!["dash".into()];
         let os: HashSet<String> = ["apt:dash".to_string()].into_iter().collect();
         assert!(protection_of(&cfg, "apt", "dash", &os).is_none());
         // An essential package the user did NOT exempt is still protected.
@@ -612,7 +615,7 @@ mod tests {
     #[tokio::test]
     async fn install_over_the_ceiling_is_refused() {
         let mut cfg = config_with(20);
-        cfg.max_installs = 50;
+        cfg.guard.max_installs = 50;
         let err = enforce_installs(&cfg, 51, GuardScope::Sync)
             .await
             .expect_err("51 installs over a limit of 50 must be refused");
@@ -626,7 +629,7 @@ mod tests {
     async fn install_at_the_ceiling_is_allowed() {
         // The limit is inclusive: exactly `max_installs` is fine; over it is not.
         let mut cfg = config_with(20);
-        cfg.max_installs = 50;
+        cfg.guard.max_installs = 50;
         assert!(enforce_installs(&cfg, 50, GuardScope::Sync).await.is_ok());
     }
 
@@ -634,7 +637,7 @@ mod tests {
     async fn allow_mass_install_clears_the_install_ceiling() {
         // Symmetric to --allow-mass-removal answering the removal count.
         let mut cfg = config_with(20);
-        cfg.max_installs = 50;
+        cfg.guard.max_installs = 50;
         cfg.allow_mass_install = true;
         assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync).await.is_ok());
     }
@@ -643,7 +646,7 @@ mod tests {
     async fn yes_does_not_override_the_install_ceiling() {
         // -y is what every script passes; it must not green-light a manifest-globbed flood.
         let mut cfg = config_with(20);
-        cfg.max_installs = 50;
+        cfg.guard.max_installs = 50;
         cfg.yes = true;
         assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync).await.is_err());
     }

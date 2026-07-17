@@ -3037,34 +3037,34 @@ async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
-                "protected_packages": cfg.protected_packages,
-                "unprotected_packages": cfg.unprotected_packages,
-                "max_removals": cfg.max_removals,
+                "protected_packages": cfg.guard.protected_packages,
+                "unprotected_packages": cfg.guard.unprotected_packages,
+                "max_removals": cfg.guard.max_removals,
             }))?
         );
         return Ok(());
     }
 
     println!("Removal guard — what LiNix refuses to remove.\n");
-    println!("Protected packages ({}):", cfg.protected_packages.len());
-    for p in &cfg.protected_packages {
+    println!("Protected packages ({}):", cfg.guard.protected_packages.len());
+    for p in &cfg.guard.protected_packages {
         match p.strip_suffix('*') {
             Some(prefix) => println!("  {:<24} (any name starting with '{}')", p, prefix),
             None => println!("  {}", p),
         }
     }
-    if cfg.unprotected_packages.is_empty() {
+    if cfg.guard.unprotected_packages.is_empty() {
         println!("\nExemptions: none.");
     } else {
         println!(
             "\nExemptions ({}) — these override the list above:",
-            cfg.unprotected_packages.len()
+            cfg.guard.unprotected_packages.len()
         );
-        for p in &cfg.unprotected_packages {
+        for p in &cfg.guard.unprotected_packages {
             println!("  {}", p);
         }
     }
-    match cfg.max_removals {
+    match cfg.guard.max_removals {
         0 => println!("\nMaximum removals in one command: unlimited (max_removals = 0)."),
         n => println!("\nMaximum removals in one command: {} (max_removals).", n),
     }
@@ -3072,7 +3072,7 @@ async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<
     println!(
         "\nPackages the OS itself reports as essential are also refused, on top of this list.\n\
          Every command that removes is guarded — there is no way to opt one out.\n\
-         Edit `protected_packages`, `unprotected_packages` or `max_removals` in {}.\n\
+         Edit `protected_packages`, `unprotected_packages` or `max_removals` under [guard] in {}.\n\
          Check one package:      linix protected apt:python3\n\
          Machine-readable:       linix protected --json\n\
          Allow a big removal:    linix <command> --allow-mass-removal (the count only —\n\
@@ -3111,18 +3111,34 @@ nix_gc_age = "30d"
 # Require confirmation before destructive (removal) operations unless `yes = true`.
 confirm_destructive = false
 
+# Default SSH destinations for `linix fleet` when none are given on the command line.
+# fleet_hosts = ["user@web-01", "user@web-02"]
+
+# Which backends this host uses, and in what order, live in the `priority` file (II.6) —
+# NOT here. One list, with `when` blocks for the per-host case.
+
+# Per-backend settings. Example: install flatpaks into the user scope.
+# [backend_settings.flatpak]
+# user = "true"
+
 # ---------------------------------------------------------------------------
-# Removal guard — what LiNix refuses to delete.
+# [guard] — the nine refusals (II.10). One table, one home.
 #
 # Drift removal is derived from managed state, and managed state can be wrong: a
 # mis-scoped manifest, a bad `migrate`, or a state file from another machine can
-# make hundreds of working packages look unwanted. The guard is the check that
-# refuses those. `linix protected` shows the effective rules.
+# make hundreds of working packages look unwanted. The guard refuses those.
+# Every rule here is a refusal, not a preference: `-y` cannot skip any of them.
+# `linix protected` shows the effective rules.
 # ---------------------------------------------------------------------------
+[guard]
 
-# Refuse any single command that would remove more than this many packages.
+# Refuse any single command that removes more than this many packages.
 # 0 disables the check entirely (not recommended).
 max_removals = 20
+
+# Refuse any single command that installs more than this many at once.
+# 0 (the default) leaves it off — installs are additive and far less dangerous.
+# max_installs = 500
 
 # Names removal must never touch, ADDED to the built-in list (`linix protected`
 # prints the full effective set). Matching is exact and case-insensitive, or a
@@ -3131,22 +3147,20 @@ max_removals = 20
 # protected_packages = ["steam", "nvidia-driver", "libfoo*"]
 
 # Names that are NOT protected even if a built-in rule (or the OS's own
-# "essential" flag) says otherwise. This wins over everything. Use it when you
-# genuinely manage something LiNix would otherwise refuse to touch.
+# "essential" flag) says otherwise. This wins over everything.
 # unprotected_packages = ["python3-pip"]
 
-# Default SSH destinations for `linix fleet` when none are given on the command line.
-# fleet_hosts = ["user@web-01", "user@web-02"]
+# Never install these (matched case-insensitively).
+# deny_packages = ["leftpad"]
 
-# Packages that must never be removed (exact, case-insensitive match).
-# protected_packages = ["sudo", "bash", "linix"]
+# Refuse any package that lacks an explicit @version= (no floating installs).
+# pinned_only = false
 
-# Which backends this host uses, and in what order, live in the `priority` file (II.6) —
-# NOT here. One list, with `when` blocks for the per-host case.
+# Refuse to change anything unless a snapshot can be taken first.
+# require_snapshot = false
 
-# Per-backend settings. Example: install flatpaks into the user scope.
-# [backend_settings.flatpak]
-# user = "true"
+# Refuse to apply when `linix audit` reports a managed package as vulnerable.
+# deny_vulnerable = false
 "#;
 
 /// The editor to fall back to when neither $VISUAL nor $EDITOR is set.
@@ -4414,7 +4428,7 @@ mod init_tests {
         // struct silently documents settings that do nothing (as `cache_ttl` did).
         let cfg: linix::config::Config =
             toml::from_str(CONFIG_TEMPLATE).expect("CONFIG_TEMPLATE must be valid config.toml");
-        assert_eq!(cfg.max_removals, 20);
+        assert_eq!(cfg.guard.max_removals, 20);
     }
 
     #[test]

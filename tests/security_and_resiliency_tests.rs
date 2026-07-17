@@ -110,8 +110,9 @@ async fn test_planner_protects_mission_critical_closure() {
     let desired = HashMap::new();
 
     let mut config = (*kernel.app.config).clone();
-    config.protected_packages.push("sudo".to_string());
+    config.guard.protected_packages.push("sudo".to_string());
     config
+        .guard
         .protected_packages
         .push("linux-image-generic".to_string());
 

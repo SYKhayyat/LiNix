@@ -59,8 +59,11 @@ show_progress = true
 # Enable verbose logging for debugging.
 verbose = false
 
-# FIX #12: Protected packages that LiNix will never remove.
-# These are critical system packages. Add or remove as needed for your distribution.
+# The [guard] table (II.10): the nine refusals, one home. Protected packages,
+# the removal/install ceilings, and the install/change rules all live here.
+[guard]
+# Packages LiNix will never remove, ADDED to the built-in list. These are
+# critical system packages; add or remove as needed for your distribution.
 protected_packages = [
     "sudo", "bash", "linix",
     "linux-image", "linux-headers", "kernel",
@@ -68,6 +71,12 @@ protected_packages = [
     "grub", "coreutils", "filesystem",
     "apt", "pacman", "dnf", "rpm"
 ]
+# max_removals = 20        # refuse removing more than this at once (0 = off)
+# max_installs = 500       # refuse installing more than this at once (0 = off, default)
+# deny_packages = ["leftpad"]
+# pinned_only = false      # every install must carry an explicit @version=
+# require_snapshot = false # refuse to change anything unless a snapshot can be taken
+# deny_vulnerable = false  # refuse to apply when `linix audit` flags a managed package
 
 # Backend Aliases
 [aliases]

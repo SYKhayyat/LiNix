@@ -381,7 +381,10 @@ mod tests {
     fn migrator(reg: Arc<BackendRegistry>) -> Migrator {
         let config = Config {
             // Keep the default protected list out of these assertions.
-            protected_packages: vec![],
+            guard: crate::config::GuardSettings {
+                protected_packages: vec![],
+                ..Default::default()
+            },
             ..Config::default()
         };
         let state = Arc::new(Mutex::new(StateRegistry::default()));
@@ -490,7 +493,10 @@ mod tests {
             mock,
         );
         let config = Config {
-            protected_packages: vec!["python3".into()],
+            guard: crate::config::GuardSettings {
+                protected_packages: vec!["python3".into()],
+                ..Default::default()
+            },
             ..Config::default()
         };
         let m = Migrator::new(reg, Arc::new(Mutex::new(StateRegistry::default())), &config);

@@ -36,17 +36,35 @@ impl Default for SandboxSettings {
     }
 }
 
-/// The `[guard]` table (II.10): the refusals that gate *installs and changes*, as opposed
-/// to the removal-count/protection rules that currently still live as top-level `Config`
-/// fields (`protected_packages`, `unprotected_packages`, `max_removals`, `max_installs` —
-/// their migration into this table is the remaining mechanical step of "nine refusals, one
-/// home"). These four were homeless when the v7 spec was drafted: they lived in a separate
-/// `policy.toml` (II.17 deletes it) and a parallel `Policy` struct. V.43 kept all of them —
-/// each matches V.26's definition of a refusal ("I will not, and there is no flag"), so `-y`
-/// cannot skip them. `allow_backends` is deliberately absent: the `priority` file is what
-/// "only these backends" means now (V.15).
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+/// The `[guard]` table (II.10): the one home for all nine refusals. The v7 spec split them —
+/// four removal rules lived as top-level `Config` fields and four install/change rules lived
+/// in a separate `policy.toml` (II.17 deletes it) and a parallel `Policy` struct. Both are
+/// now here. Every rule matches V.26's definition of a refusal ("I will not, and there is no
+/// flag"), so `-y` cannot skip any of them. `allow_backends` is deliberately absent: the
+/// `priority` file is what "only these backends" means now (V.15).
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GuardSettings {
+    // --- The removal rules (were top-level Config fields until the [guard] rename) ---
+    /// Names removal must never touch. Matched exactly (case-insensitively), or as a prefix
+    /// if the entry ends in `*` — `libpam*` covers `libpam0g`, while `libc` still does not
+    /// cover `libc-bin`. User entries add to the built-in defaults.
+    #[serde(default = "default_protected_packages")]
+    pub protected_packages: Vec<String>,
+    /// Names that are NOT protected even if a default (or an OS essential flag) says
+    /// otherwise. Same matching rules, and it wins over both — the escape hatch for "I
+    /// really do manage this one myself".
+    #[serde(default)]
+    pub unprotected_packages: Vec<String>,
+    /// Refuse a plan that removes more than this many packages unless explicitly opted into.
+    /// `0` disables the check.
+    #[serde(default = "default_max_removals")]
+    pub max_removals: usize,
+    /// Refuse a plan that installs more than this many packages at once unless explicitly
+    /// opted into. `0` (unset) disables it — installs are additive and far less dangerous.
+    #[serde(default)]
+    pub max_installs: usize,
+
+    // --- The install/change rules (were policy.toml until the consolidation) ---
     /// Package names that may never be installed (matched case-insensitively).
     #[serde(default)]
     pub deny_packages: Vec<String>,
@@ -61,8 +79,28 @@ pub struct GuardSettings {
     pub deny_vulnerable: bool,
 }
 
+impl Default for GuardSettings {
+    fn default() -> Self {
+        // The removal-safety defaults must survive the move off top-level Config — an empty
+        // protected list or a zero max_removals here would silently disarm the guard, the
+        // exact failure this project exists to prevent.
+        Self {
+            protected_packages: default_protected_packages(),
+            unprotected_packages: Vec::new(),
+            max_removals: default_max_removals(),
+            max_installs: 0,
+            deny_packages: Vec::new(),
+            pinned_only: false,
+            require_snapshot: false,
+            deny_vulnerable: false,
+        }
+    }
+}
+
 impl GuardSettings {
-    /// True when no rule is active (so the install/change gate is a no-op).
+    /// True when no *install/change* rule is active (so the pre-change gate is a no-op). The
+    /// removal rules are deliberately excluded: `protected_packages` always has defaults, so
+    /// including it would make this never-empty and run the install gate on every change.
     pub fn is_empty(&self) -> bool {
         self.deny_packages.is_empty()
             && !self.pinned_only
@@ -194,39 +232,14 @@ pub struct Config {
     #[serde(default)]
     pub backend_settings: HashMap<String, HashMap<String, String>>,
 
-    /// Names removal must never touch. An entry is matched exactly (case-insensitively),
-    /// or as a prefix if it ends in `*` — `libpam*` covers `libpam0g`, while `libc` still
-    /// does not cover `libc-bin`. User entries add to the built-in defaults.
-    #[serde(default = "default_protected_packages")]
-    pub protected_packages: Vec<String>,
-
-    /// Names that are NOT protected even if a default (or an essential flag reported by
-    /// the OS) says otherwise. Same matching rules as `protected_packages`, and it wins
-    /// over both — the escape hatch for "I really do manage this one myself".
-    #[serde(default)]
-    pub unprotected_packages: Vec<String>,
-
-    /// Refuse a plan that removes more than this many packages unless it is explicitly
-    /// opted into. Guards against a mis-scoped manifest quietly purging a system. `0`
-    /// disables the check.
-    #[serde(default = "default_max_removals")]
-    pub max_removals: usize,
-
-    /// Refuse a plan that installs more than this many packages at once unless it is
-    /// explicitly opted into (II.10). The symmetric partner to `max_removals`: a manifest
-    /// that accidentally globs `re:^lib` schedules tens of thousands of installs, and the
-    /// count is the fact that explains it. Default `0` (unset) — installs are additive and
-    /// far less dangerous than removals, so this stays off until a user asks for it.
-    #[serde(default)]
-    pub max_installs: usize,
-
     /// Carry out an install the guard would refuse for being over `max_installs`. CLI-only
     /// (`--allow-mass-install`), and — like [`allow_mass_removal`] — deliberately kept out
     /// of the config file: a permanently-on "install anything" switch defeats the ceiling.
     #[serde(skip)]
     pub allow_mass_install: bool,
 
-    /// Which commands the removal guard is enforced on. See `EnforceOn`.
+    /// The `[guard]` table (II.10): all nine refusals — protection, the removal/install
+    /// count ceilings, and the install/change rules. See [`GuardSettings`].
     #[serde(default)]
     pub guard: GuardSettings,
 
@@ -407,10 +420,6 @@ impl Default for Config {
             nix_gc_age: default_nix_gc_age(),
             confirm_destructive: false,
             backend_settings: HashMap::new(),
-            protected_packages: default_protected_packages(),
-            unprotected_packages: Vec::new(),
-            max_removals: default_max_removals(),
-            max_installs: 0,
             allow_mass_install: false,
             guard: GuardSettings::default(),
             btrfs_path: default_btrfs_path(),
@@ -438,8 +447,10 @@ impl Config {
         };
         let mut config: Self = toml::from_str(&content)?;
         config.config_file = path.to_path_buf();
-        if config.protected_packages.is_empty() {
-            config.protected_packages = default_protected_packages();
+        // Empty protection means the built-in defaults, never "no protection" — a config
+        // that omits (or empties) the list must not silently disarm the guard.
+        if config.guard.protected_packages.is_empty() {
+            config.guard.protected_packages = default_protected_packages();
         }
         Ok(config)
     }
@@ -551,15 +562,15 @@ impl Config {
         let name_lower = package_name.to_lowercase();
         // An explicit unprotect entry always wins, including over a package the OS itself
         // flags as essential. Nothing overrides the user's stated intent.
-        if Self::first_match(&self.unprotected_packages, &name_lower).is_some() {
+        if Self::first_match(&self.guard.unprotected_packages, &name_lower).is_some() {
             return None;
         }
-        Self::first_match(&self.protected_packages, &name_lower)
+        Self::first_match(&self.guard.protected_packages, &name_lower)
     }
 
     /// The `unprotected_packages` entry exempting `package_name`, if any.
     pub fn unprotect_rule(&self, package_name: &str) -> Option<&str> {
-        Self::first_match(&self.unprotected_packages, &package_name.to_lowercase())
+        Self::first_match(&self.guard.unprotected_packages, &package_name.to_lowercase())
     }
 
     /// The first pattern matching `name_lower`: exact (case-insensitive), or a prefix when
@@ -625,7 +636,10 @@ mod tests {
     #[test]
     fn is_protected_is_exact_not_substring() {
         let cfg = Config {
-            protected_packages: vec!["libc".into(), "apt".into(), "kernel".into()],
+            guard: GuardSettings {
+                protected_packages: vec!["libc".into(), "apt".into(), "kernel".into()],
+                ..Default::default()
+            },
             ..Config::default()
         };
         // exact matches (case-insensitive) are protected
@@ -643,7 +657,10 @@ mod tests {
         // `*`, and the shipped defaults rely on it (`libperl*`). Believing the doc means
         // hand-expanding the wildcard and losing protection for whatever the list misses.
         let cfg = Config {
-            protected_packages: vec!["libperl*".into(), "libc".into()],
+            guard: GuardSettings {
+                protected_packages: vec!["libperl*".into(), "libc".into()],
+                ..Default::default()
+            },
             ..Config::default()
         };
         assert!(cfg.is_protected("libperl5.38t64"));
