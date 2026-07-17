@@ -8,6 +8,7 @@ pub mod backends;
 pub mod cli;
 pub mod config;
 pub mod core;
+pub mod model;
 pub mod parsers;
 pub mod utils;
 

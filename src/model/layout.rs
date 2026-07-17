@@ -1,0 +1,149 @@
+use std::path::{Path, PathBuf};
+
+/// Where everything lives (SPEC II.1).
+///
+/// Two roots, and the split is load-bearing. **Your repo** holds what you wrote and is a
+/// git repo. **LiNix's data** holds what LiNix worked out, never goes in git, and never
+/// goes in a folder LiNix scans.
+///
+/// Keeping them apart is the fix for the shape of Monday's bug: `registry.json` (what
+/// LiNix owns) lived somewhere `-g` could not move while the wish list moved, so ownership
+/// and intent disagreed and everything owned-but-unwished read as drift (V.1). They can no
+/// longer be pointed at each other because they are no longer the same kind of thing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Layout {
+    config_root: PathBuf,
+    data_root: PathBuf,
+}
+
+impl Layout {
+    /// `$LINIX_CONFIG_DIR` / `$LINIX_DATA_DIR`, else the platform dirs.
+    pub fn discover() -> Self {
+        let config_root = std::env::var_os("LINIX_CONFIG_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(crate::utils::safe_config_dir);
+        let data_root = std::env::var_os("LINIX_DATA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(crate::utils::safe_data_dir);
+        Self {
+            config_root,
+            data_root,
+        }
+    }
+
+    pub fn new(config_root: impl Into<PathBuf>, data_root: impl Into<PathBuf>) -> Self {
+        Self {
+            config_root: config_root.into(),
+            data_root: data_root.into(),
+        }
+    }
+
+    /// Your repo. This is a git repo; every path below it is yours and travels with it.
+    pub fn config_root(&self) -> &Path {
+        &self.config_root
+    }
+
+    /// Your lists. Lowercase names, `*.txt`. **The folder decides** — anything else in here
+    /// is ignored, so a `README.md` costs nothing (II.3).
+    pub fn modules_dir(&self) -> PathBuf {
+        self.config_root.join("modules")
+    }
+
+    /// Your choices. Capitalized names.
+    pub fn profiles_dir(&self) -> PathBuf {
+        self.config_root.join("profiles")
+    }
+
+    /// Which profiles are on. Answers exactly one question and nothing else goes in it.
+    pub fn active_file(&self) -> PathBuf {
+        self.config_root.join("active")
+    }
+
+    /// Which backends, in order. Listed = available to LiNix; not listed = LiNix does not
+    /// use it at all (V.15).
+    pub fn priority_file(&self) -> PathBuf {
+        self.config_root.join("priority")
+    }
+
+    /// When LiNix runs itself. Being in the file means it is on — no active-list (V.28).
+    pub fn schedules_file(&self) -> PathBuf {
+        self.config_root.join("schedules")
+    }
+
+    /// What everything resolved to. Generated, in git, yours. One file per backend.
+    pub fn locks_dir(&self) -> PathBuf {
+        self.config_root.join("locks")
+    }
+
+    pub fn lock_file(&self, backend: &str) -> PathBuf {
+        self.locks_dir().join(format!("{}.toml", backend))
+    }
+
+    /// Refusals and behaviour. Nothing writes to it but you (II.6).
+    pub fn preferences_file(&self) -> PathBuf {
+        self.config_root.join("preferences.toml")
+    }
+
+    /// What LiNix currently owns. **Never in git. Never in a folder LiNix scans.**
+    pub fn registry_file(&self) -> PathBuf {
+        self.data_root.join("registry.json")
+    }
+
+    /// Snapshot metadata, tagged with commit hashes.
+    pub fn snapshots_dir(&self) -> PathBuf {
+        self.data_root.join("snapshots")
+    }
+
+    pub fn data_root(&self) -> &Path {
+        &self.data_root
+    }
+
+    /// The module file for `name`. II.3: the filename is the module name, lowercased.
+    pub fn module_file(&self, name: &str) -> PathBuf {
+        self.modules_dir().join(format!("{}.txt", name.to_lowercase()))
+    }
+
+    pub fn profile_file(&self, name: &str) -> PathBuf {
+        self.profiles_dir().join(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layout() -> Layout {
+        Layout::new("/cfg", "/data")
+    }
+
+    #[test]
+    fn your_repo_holds_what_you_wrote() {
+        let l = layout();
+        assert_eq!(l.modules_dir(), PathBuf::from("/cfg/modules"));
+        assert_eq!(l.profiles_dir(), PathBuf::from("/cfg/profiles"));
+        assert_eq!(l.active_file(), PathBuf::from("/cfg/active"));
+        assert_eq!(l.priority_file(), PathBuf::from("/cfg/priority"));
+        assert_eq!(l.schedules_file(), PathBuf::from("/cfg/schedules"));
+        assert_eq!(l.locks_dir(), PathBuf::from("/cfg/locks"));
+        assert_eq!(l.preferences_file(), PathBuf::from("/cfg/preferences.toml"));
+    }
+
+    #[test]
+    fn linix_data_is_never_inside_your_repo() {
+        // II.1. The registry is what LiNix OWNS; the modules are what you WANT. When those
+        // two can be pointed at each other, owned-but-unwished reads as drift and drift
+        // gets removed — which is Monday's bug (V.1).
+        let l = layout();
+        assert!(!l.registry_file().starts_with(l.config_root()));
+        assert!(!l.snapshots_dir().starts_with(l.config_root()));
+    }
+
+    #[test]
+    fn a_module_file_is_its_name_lowercased() {
+        // II.3: `Editors.txt` -> module `editors`.
+        assert_eq!(
+            layout().module_file("Editors"),
+            PathBuf::from("/cfg/modules/editors.txt")
+        );
+    }
+}
