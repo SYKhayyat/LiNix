@@ -399,9 +399,6 @@ pub enum Commands {
     /// System snapshots and atomic rollbacks
     Snapshot(SnapshotArgs),
 
-    /// Generations: list saved system states, pin them, or roll back to one
-    Generation(GenerationArgs),
-
     /// Roll back to a saved generation by id: realizes its package set on the system
     /// (drive backends), and for a full rollback also restores its manifests. Scope with
     /// `--package` and/or the global `--backend` to roll back just part of the system.
@@ -823,58 +820,6 @@ pub enum SnapshotCommand {
         /// Force removal without verification
         #[arg(long)]
         force: bool,
-    },
-}
-
-#[derive(Args, Debug)]
-pub struct GenerationArgs {
-    #[command(subcommand)]
-    pub command: GenerationCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum GenerationCommand {
-    /// List saved generations (newest first)
-    List,
-    /// Roll back to a generation: realize its package set (and, for a full rollback,
-    /// restore its manifests). Scope with `--package` / the global `--backend`.
-    Rollback {
-        /// Generation id (see `list`)
-        id: String,
-        /// Only roll back this package (name or backend:name)
-        #[arg(long)]
-        package: Option<String>,
-    },
-    /// Pin a generation so retention never deletes it
-    Pin {
-        /// Generation id
-        id: String,
-    },
-    /// Remove a generation's pin
-    Unpin {
-        /// Generation id
-        id: String,
-    },
-    /// Compact history, one line per generation (git-log style). Newest first.
-    Log {
-        /// Ultra-compact: id, package count, and label only
-        #[arg(long)]
-        oneline: bool,
-
-        /// Emit the history as JSON
-        #[arg(long)]
-        json: bool,
-    },
-    /// Show what changed between two generations: packages added, removed, and version-changed.
-    /// `from` is the older baseline. Omit `to` to compare `from` against the live system.
-    Diff {
-        /// Older generation id (baseline)
-        from: String,
-        /// Newer generation id (omit to diff against the current live state)
-        to: Option<String>,
-        /// Emit the delta as JSON
-        #[arg(long)]
-        json: bool,
     },
 }
 

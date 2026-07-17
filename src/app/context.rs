@@ -190,7 +190,6 @@ impl App {
             self.snapshot_manager.clone(),
             self.state.clone(),
             self.executor.clone(),
-            self.config.config_root(),
         )
     }
 

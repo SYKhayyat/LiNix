@@ -25,8 +25,8 @@ pub struct RetentionPolicy {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RetentionConfig {
-    #[serde(default)]
-    pub generations: RetentionPolicy,
+    // `generations` is gone: the generation format was deleted (git is the manifest history
+    // now), so there is no generation history to retain — only filesystem snapshots.
     #[serde(default = "default_snapshot_retention")]
     pub snapshots: RetentionPolicy,
 }
@@ -46,7 +46,6 @@ fn default_snapshot_retention() -> RetentionPolicy {
 impl Default for RetentionConfig {
     fn default() -> Self {
         Self {
-            generations: RetentionPolicy::default(),
             snapshots: default_snapshot_retention(),
         }
     }

@@ -5,7 +5,6 @@ pub mod context;
 pub mod diagnostics;
 pub mod export;
 pub mod fleet;
-pub mod generation;
 pub mod hooks;
 pub mod insight;
 pub mod metrics;

@@ -160,12 +160,10 @@ impl<'a> SyncEngine<'a> {
             // surfaced immediately (with the pre-sync snapshot available to revert).
             self.run_health_probes(&changes).await;
 
-            // Record a generation of this realized state (+ a frozen manifest copy), then
-            // apply the configured generation-retention policy. Non-fatal: a bookkeeping
-            // failure must never fail an otherwise-successful sync.
-            if let Err(e) = self.record_generation().await {
-                warn!("Sync: could not record generation: {}", e);
-            }
+            // The manifest history is git now (the generation format was deleted): the commit
+            // that records this change is made by `git_autocommit` in `perform_maintenance`,
+            // after a successful sync. Snapshot retention still runs here.
+            self.prune_snapshots_after_sync().await;
 
             let mut j = self.journal.lock().await;
             let _ = j.cleanup();
@@ -230,48 +228,14 @@ impl<'a> SyncEngine<'a> {
         crate::app::bisect::run_test(cmd).await
     }
 
-    async fn record_generation(&self) -> Result<()> {
-        // A preview never writes history.
+    /// Apply snapshot retention after a successful sync. (The manifest history is git now —
+    /// the commit is `git_autocommit`'s job in `perform_maintenance`; there is no generation
+    /// capture here anymore.) Non-fatal: a retention hiccup must never fail a good sync.
+    async fn prune_snapshots_after_sync(&self) {
         if self.config.dry_run {
-            return Ok(());
+            return;
         }
         let ts = chrono::Utc::now();
-        let rfc = ts.to_rfc3339();
-        let id = ts.timestamp().to_string();
-
-        // All three histories live beside the state registry, so the same path redirection
-        // that makes state hermetic in tests also contains them.
-        let base = {
-            let state = self.state.lock().await;
-            state
-                .path
-                .parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(crate::utils::safe_data_dir)
-        };
-
-        let gen_store = crate::app::generation::GenerationStore::new(base.join("generations"));
-        {
-            let state = self.state.lock().await;
-            gen_store
-                .capture(
-                    &id,
-                    &rfc,
-                    "",
-                    &state,
-                    &self.config.config_root(),
-                )
-                .await?;
-        }
-        match gen_store
-            .prune(&self.config.retention.generations, ts)
-            .await
-        {
-            Ok(r) if !r.is_empty() => debug!("Sync: pruned {} generation(s).", r.len()),
-            Err(e) => warn!("Sync: generation retention prune failed: {}", e),
-            _ => {}
-        }
-
         match self
             .snapshot_manager
             .prune_with_policy(&self.config.snapshot_retention(), ts, false)
@@ -281,8 +245,6 @@ impl<'a> SyncEngine<'a> {
             Err(e) => warn!("Sync: snapshot retention prune failed: {}", e),
             _ => {}
         }
-
-        Ok(())
     }
 
     async fn execute_transaction(

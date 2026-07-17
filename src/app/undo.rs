@@ -13,8 +13,6 @@ pub struct UndoManager {
     snapshot_manager: Arc<SnapshotManager>,
     state: Arc<Mutex<StateRegistry>>,
     executor: CommandExecutor,
-    /// Manifest directory, so a snapshot rollback can also restore the matching generation.
-    config_root: PathBuf,
 }
 
 #[derive(Debug, Default)]
@@ -55,49 +53,11 @@ impl UndoManager {
         snapshot_manager: Arc<SnapshotManager>,
         state: Arc<Mutex<StateRegistry>>,
         executor: CommandExecutor,
-        config_root: PathBuf,
     ) -> Self {
         Self {
             snapshot_manager,
             state,
             executor,
-            config_root,
-        }
-    }
-
-    /// After restoring a filesystem snapshot, also restore the generation that was current
-    /// at that snapshot's time — so the manifests and the realized-state record match the
-    /// system you rolled back to. Best-effort: never fails the snapshot restore.
-    async fn restore_matching_generation(&self, snapshot: &Snapshot) {
-        let Some(when) = snapshot.parse_time() else {
-            return;
-        };
-        let dir = {
-            let state = self.state.lock().await;
-            state
-                .path
-                .parent()
-                .map(|p| p.join("generations"))
-                .unwrap_or_else(|| crate::utils::safe_data_dir().join("generations"))
-        };
-        let store = crate::app::generation::GenerationStore::new(dir);
-        match store.nearest_at_or_before(when).await {
-            Ok(Some(gen)) => {
-                let mut state = self.state.lock().await;
-                if let Err(e) = store.restore(&gen.id, &mut state, &self.config_root).await {
-                    warn!(
-                        "Undo: could not restore matching generation {}: {}",
-                        gen.id, e
-                    );
-                } else {
-                    info!(
-                        "Undo: also restored generation {} (state + manifests) matching the snapshot.",
-                        gen.id
-                    );
-                }
-            }
-            Ok(None) => debug!("Undo: no generation at or before the snapshot's time."),
-            Err(e) => warn!("Undo: generation lookup failed: {}", e),
         }
     }
 
@@ -368,10 +328,9 @@ impl UndoManager {
             }
         }
 
-        // Pair the filesystem rollback with its generation so the manifests + state record
-        // match the system you restored.
-        self.restore_matching_generation(snapshot).await;
-
+        // The filesystem snapshot is a whole-`/` restore, so it already reverts your manifests
+        // and `registry.json` along with everything else — there is no separate generation to
+        // pair with anymore (the generation format was deleted; git is the manifest history).
         println!("\nSUCCESS: System root has been restored. Please reboot.");
         Ok(())
     }

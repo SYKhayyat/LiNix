@@ -8,89 +8,82 @@ use mock_providers::{MockSnapshotProvider, TestKernel};
 // FEATURE 2: SNAPSHOT LIFECYCLE (PHYSICAL PRUNING)
 // ============================================================================
 
-/// Verifies that the SnapshotManager correctly identifies stale snapshots
-/// by age and count, and physically invokes the provider's delete API
-/// when is_dry_run is false.
+/// The one retention engine (`prune_with_policy`): it reaps only LiNix-owned snapshots, and
+/// always keeps the most recent one — the floor the old `prune_stale_snapshots` lacked.
 #[tokio::test]
-async fn test_snapshot_pruning_physical_logic() {
-    // 1. Initialize hermetic test environment (Async DI bootstrap)
+async fn test_snapshot_retention_reaps_only_linix_owned_and_keeps_the_newest() {
+    use linix::core::RetentionPolicy;
     let _kernel = TestKernel::new().await;
-
-    // 2. Setup Mock Provider with 4 snapshots of varying ages
     let mock_provider = MockSnapshotProvider::new();
 
-    // Kept: Recent (Taken 1 day ago - Within 30 day limit)
-    mock_provider
-        .add_historical_snapshot("snap_keep_recent", 1)
-        .await;
-    // Kept: Recent (Taken 2 days ago - Fits within max_count of 2)
-    mock_provider
-        .add_historical_snapshot("snap_keep_count", 2)
-        .await;
-    // Pruned: Stale (Taken 45 days ago - Exceeds 30 day limit)
-    mock_provider
-        .add_historical_snapshot("snap_prune_age", 45)
-        .await;
-    // Pruned: Overflow (Taken 5 days ago - Within age limit but exceeds count of 2)
-    mock_provider
-        .add_historical_snapshot("snap_prune_count_overflow", 5)
-        .await;
+    // LiNix-owned (the id carries `linix_`): one recent, one ancient.
+    mock_provider.add_historical_snapshot("linix_recent", 1).await;
+    mock_provider.add_historical_snapshot("linix_ancient", 45).await;
+    // NOT LiNix's — a user or other-tool snapshot. Retention must never touch it.
+    mock_provider.add_historical_snapshot("weekly_backup", 90).await;
 
-    // Use the DI Factory to inject the mock provider
     let manager = SnapshotManager::with_provider(Box::new(mock_provider));
 
-    // 3. Execute Pruning Logic: Max Age: 30, Max Count: 2, is_dry_run: false
-    // Resolves E0282: Type is inferred from the awaited call
+    // Keep the single newest, plus anything under 30 days.
+    let policy = RetentionPolicy {
+        keep_last: 1,
+        keep_days: 30,
+        keep: vec![],
+    };
     manager
-        .prune_stale_snapshots(
-            30, 2, false, // Physical deletion enabled
-        )
+        .prune_with_policy(&policy, chrono::Utc::now(), false)
         .await
-        .expect("Critical Failure: Snapshot pruning orchestration crashed.");
+        .expect("retention prune crashed");
 
-    // 4. Verification: Logic check of remaining closure
-    let remaining = manager.list_snapshots().await.unwrap();
-    let remaining_ids: Vec<String> = remaining.iter().map(|s| s.id.clone()).collect();
+    let remaining: Vec<String> = manager
+        .list_snapshots()
+        .await
+        .unwrap()
+        .iter()
+        .map(|s| s.id.clone())
+        .collect();
 
-    assert_eq!(
-        remaining.len(),
-        2,
-        "Pruning engine failed to respect the max_count limit."
-    );
-    assert!(remaining_ids.contains(&"snap_keep_recent".to_string()));
-    assert!(remaining_ids.contains(&"snap_keep_count".to_string()));
-
-    // Verify physical removal from provider
+    // linix_ancient: not the newest, and 45 > 30 days -> reaped.
     assert!(
-        !remaining_ids.contains(&"snap_prune_age".to_string()),
-        "Age-based pruning failed to physically delete snapshot."
+        !remaining.contains(&"linix_ancient".to_string()),
+        "the ancient LiNix snapshot should have been reaped"
     );
+    // linix_recent: the newest -> kept by the floor.
+    assert!(remaining.contains(&"linix_recent".to_string()));
+    // weekly_backup: not LiNix's -> never touched, even at 90 days.
     assert!(
-        !remaining_ids.contains(&"snap_prune_count_overflow".to_string()),
-        "Count-based pruning failed to physically delete snapshot."
+        remaining.contains(&"weekly_backup".to_string()),
+        "retention must not reap a snapshot LiNix did not create"
     );
 }
 
-/// Verifies that the SnapshotManager respects the dry-run flag, ensuring
-/// no physical deletions occur even if snapshots are identified as stale.
+/// Dry-run identifies what it *would* delete but touches nothing.
 #[tokio::test]
-async fn test_snapshot_pruning_respects_dry_run_safety() {
+async fn test_snapshot_retention_respects_dry_run() {
+    use linix::core::RetentionPolicy;
     let mock_provider = MockSnapshotProvider::new();
-    mock_provider
-        .add_historical_snapshot("snap_stale_target", 100)
-        .await;
-
+    // Two owned snapshots so one is past the always-keep-newest floor.
+    mock_provider.add_historical_snapshot("linix_newest", 1).await;
+    mock_provider.add_historical_snapshot("linix_stale", 100).await;
     let manager = SnapshotManager::with_provider(Box::new(mock_provider));
 
-    // Execute with is_dry_run = true
-    manager.prune_stale_snapshots(1, 0, true).await.unwrap();
+    let policy = RetentionPolicy {
+        keep_last: 0,
+        keep_days: 1,
+        keep: vec![],
+    };
+    let doomed = manager
+        .prune_with_policy(&policy, chrono::Utc::now(), true)
+        .await
+        .unwrap();
 
-    // Verification: Snapshot must physically remain in the store
-    let list = manager.list_snapshots().await.unwrap();
+    // linix_stale is past the floor and older than 1 day -> identified...
+    assert!(doomed.contains(&"linix_stale".to_string()));
+    // ...but dry-run physically deletes nothing.
     assert_eq!(
-        list.len(),
-        1,
-        "Snapshot was physically deleted despite dry-run being active."
+        manager.list_snapshots().await.unwrap().len(),
+        2,
+        "dry-run must not physically delete"
     );
 }
 
