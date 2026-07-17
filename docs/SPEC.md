@@ -1154,6 +1154,22 @@ implementing agent's call; that it goes is not.**
   model — uninstall is undeclare + sync, i.e. declarative. Plain: "Uninstall one or more packages" /
   "Names of packages to uninstall."
 
+- **R14 — Drop the "ghost shell" metaphor; don't clobber the user's prompt.** The `shell` command
+  (ephemeral shell with packages loaded) brands itself "ghost shell" (`args.rs:353`), sets
+  `LINIX_GHOST=true`, and forces `PROMPT_COMMAND` to prefix `(linix-ghost)` (`shell/mod.rs:175`,`:218`),
+  which can stomp a user's own prompt setup. Rename to plain "ephemeral shell", and use a
+  non-intrusive session marker (an env var the user can opt into displaying) instead of overwriting
+  `PROMPT_COMMAND`.
+
+- **R15 — "Flight plan" → plain "Planned changes".** The change preview header prints "Flight plan:"
+  (`main.rs:3515`), and the aviation metaphor recurs in `--quiet` help and config comments
+  (`args.rs:58`, `config.rs:208`, `main.rs:445`). Rename to something plain like "Planned changes:"
+  everywhere the phrase appears.
+
+- **R16 — Tone down the shouty `THERE IS NO UNDO FOR THIS.`** Printed in all-caps at `main.rs:2859`
+  and `:2867` — the loudest string in the tool. The warning is justified for a destructive command,
+  but sentence case carries it: "This cannot be undone." Fix both spots.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
