@@ -53,7 +53,13 @@ impl TestKernel {
             .expect("Failed to create test `modules/`.");
         std::fs::create_dir_all(tmp.path().join("profiles"))
             .expect("Failed to create test `profiles/`.");
-        std::fs::write(tmp.path().join("active"), "")
+        // A profile has to be active or there is nowhere for a line to go: a module no
+        // profile reaches is one LiNix never reads, so writing to one is refused rather
+        // than done silently. A fixture with nothing active is a fixture that cannot
+        // install. Tests that care about a specific profile overwrite these two files.
+        std::fs::write(tmp.path().join("profiles/Main"), "")
+            .expect("Failed to write test profile.");
+        std::fs::write(tmp.path().join("active"), "Main\n")
             .expect("Failed to write test `active`.");
 
         let vfs = Arc::new(DashMap::new());

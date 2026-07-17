@@ -1278,7 +1278,8 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S10** | **`cargo test` wrote to the developer's REAL data dir**, and one bad file bricks every command. `TestKernel` (named `linix_hermetic_`) isolated `registry.json`, groups and tmp, but `Journal::new()` hardcoded `safe_data_dir()` — found at 733KB of test noise in `%APPDATA%/linix/journal.json`. Fixed in Phase 2b by injection (`Journal::at`). **The remaining half is real:** `Journal::load_sync` errors on a bad parse -> `App::new` fails -> EVERY command fails, with no message saying which file to delete or how to recover. Failing loud is right (P3); having no way out is not → **Phase 5** |
 | **S12** | **`repo:`, `shim:`, `service:`, `link:` and `schedule:` lines parse, resolve, and are then dropped on the floor.** The seam is `HashMap<backend, Vec<PackageSpec>>` and these are not packages, so `Resolver::resolve` collects them into `DesiredState::extras` and `resolve_desired_state` — which returns only `.packages` — discards them. Nothing downstream has ever consumed them. A `repo:ppa:deadsnakes/ppa` line therefore does exactly nothing, silently, which is VI.1's disease with new syntax. Not a regression (the syntax is new in Phase 1) but it must not ship: `sync` warns for now, naming each ignored line and its file. The fix is the ordering phases — repos → index refresh → packages → dependents — which is what `extras` was collected for → **Phase 2** (planner ordering) |
 | **S13** | **A bare name and an explicit one were two packages, not one.** `model::resolve` keys the merge on `backend:name`, and a bare `ripgrep` is keyed `?:ripgrep` until something probes it — so `ripgrep` in one module and `cargo:ripgrep` in another never met, never reconciled, and both reached the planner. Found while wiring the seam and **fixed there**: `Resolver::statements()` and `Resolver::collect()` are now separate, the caller probes in between, and `with_bare` hands the answers back so the merge sees real backends. II.7 rule 5 was silently not applying to every bare line → **Phase 2** (fixed) |
-| **S15** | **`install` has P1 backwards: it installs first and writes the line second.** `handle_install` resolves, calls the backend, records in the registry, and only then declares. P1 says an imperative command *is* a shortcut for editing a file and syncing — so the file edit is the operation, and the install is what convergence then does about it. Backwards, any refusal on the write (nothing active, several profiles active, unwritable file) lands *after* the package is already on the machine: installed, undeclared, and drift by the next `sync`. It has always been backwards; `let _ = add_package_to_local(...)` merely hid it by making the write unfailable. The order is `declare` → `sync`, and then `--dry-run` needs no special case because the plan is the dry run → **Phase 2** (II.8 command surface) |
+| **S15** | **`install` had P1 backwards: it installed first and wrote the line second. FIXED for `install`; `uninstall` is still inverted.** P1 says an imperative command *is* a shortcut for editing a file and syncing, so the edit is the operation and the install is what convergence then does about it. Backwards, every refusal on the write landed *after* the package was on the machine: installed, undeclared, drift by the next sync. `let _ = add_package_to_local(...)` hid it by making the write unfailable. `install` is now `declare` -> `sync`, which also puts an imperative install behind the guard (II.10) for the first time, and `--temp 2h` now writes `@expires=<absolute>` (II.16, V.38) instead of a lease nothing could read. **`uninstall` still removes first and undeclares second, so the pair is asymmetric (V.39 says they are a symmetric pair).** It cannot be flipped yet: `undeclare` -> `sync` only removes the package if `sync` removes drift, and `handle_sync` still passes `.with_prune(config.prune_on_sync)`, default **false**. **`prune_on_sync` is in II.17's delete list and V.34 says sync removes drift by definition — that deletion is the blocker, and it is the same one blocking `uninstall --temp` from becoming `absent:...@until=` (II.16).** → **Phase 2** (II.8 command surface) |
+
 | **S14** | **The generated `priority` lists things that are not package managers.** `linix init` fills it from `registry.available()`, which includes the pseudo-backends `service`, `link`, `web` and `github` — so a fresh file answers II.6's question ("which package managers does this setup use, and in what order") with 26 entries, four of which cannot install a package. Harmless today because the model only consults `priority` for package statements, but it is the first file a new user reads and it is teaching them the wrong thing. The registry has no "is this a package manager" answer to ask; capability probing (`as_installable` + `as_searchable`) is the likely shape → **Phase 5** (F1/F4 own the generated files) |
 | **S11** | **The test harness is not hermetic by construction, only by remembering.** `LINIX_DATA_DIR` exists precisely so tests do not touch real state (`safe_data_dir` says so), the docker/windows integration scripts set it, and the cargo tests never did — nothing enforced it, so it rotted silently for as long as the journal has existed. G3's "unverified" list and this are the same problem: isolation that depends on each test author remembering → **Phase 5** (make it structural, not remembered) |
 
@@ -1470,10 +1471,22 @@ deleted.
 
 ## The next action, precisely
 
-**S15 and the II.8 command surface.** `install` calls the backend first and writes the line
-second, so any refusal on the write lands after the package is already on the machine. The
-order is `declare` -> `sync`, and then `--dry-run` needs no special case because the plan is
-the dry run. That is the shape the rest of II.8's verbs want too.
+**Delete `prune_on_sync`, and make `sync` remove drift by definition (V.34, II.17).** It is
+now the blocker for three things at once, which is why it comes first:
+
+- **`uninstall` cannot obey P1 without it.** `install` is now `declare` -> `sync` (S15).
+  `uninstall` still removes first and undeclares second, so the symmetric pair V.39 describes
+  is not symmetric. Flipping it means `undeclare` -> `sync`, and that only removes the
+  package if sync removes drift. Today `handle_sync` passes `.with_prune(prune_on_sync)`,
+  default **false**.
+- **`uninstall --temp` cannot become `absent:...@until=`** (II.16) for the same reason.
+- **It is a config setting for a fact**: V.34 says sync removes drift *by definition*, so
+  `prune_on_sync = false` is a switch that turns sync into something that is not sync.
+
+**Handle with care — this is the one that fires the flagship bug.** Sync gaining removals by
+default is exactly the shape of the `apt-get purge` run. `max_removals` (default 20) and the
+plan-with-counts are what stand between this change and Monday; Phase 3 is where they get
+their per-path tests, so consider doing Phase 3's guard work alongside rather than after.
 
 Then the remaining deletions: **`groups_dir` (84 references)**, whose `config_root()` is still
 literally `groups_dir.parent()`; the **seven non-validating `split_once(':')` parsers**; and

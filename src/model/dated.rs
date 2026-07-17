@@ -72,6 +72,36 @@ pub fn still_counts(decl: &PackageDecl, now: DateTime<Utc>) -> bool {
     dating_of(&decl.options, now).counts()
 }
 
+/// Turn a duration someone typed into the absolute time a file can hold (V.38).
+///
+/// `--temp 2h` is a fine thing to type and an impossible thing to store: a file saying "2
+/// hours" cannot be read, because the machine reading it does not know when you wrote it,
+/// and it would mean something different every time it was read. The command line knows
+/// `now`, so this is where the conversion belongs — and the line it writes says exactly
+/// when, forever.
+///
+/// Accepts `s`, `m`, `h`, `d`, `w`.
+pub fn absolute_after(now: DateTime<Utc>, duration: &str) -> Option<String> {
+    let raw = duration.trim();
+    let unit = raw.chars().last()?;
+    let value: i64 = raw[..raw.len() - unit.len_utf8()].parse().ok()?;
+    if value < 0 {
+        return None;
+    }
+    let delta = match unit {
+        's' => chrono::Duration::try_seconds(value),
+        'm' => chrono::Duration::try_minutes(value),
+        'h' => chrono::Duration::try_hours(value),
+        'd' => chrono::Duration::try_days(value),
+        'w' => chrono::Duration::try_weeks(value),
+        _ => return None,
+    }?;
+    let at = now.checked_add_signed(delta)?;
+    // The format `parse_absolute` reads back, to the minute: a lease is not a stopwatch,
+    // and seconds in a file you read next month are noise.
+    Some(at.format("%Y-%m-%dT%H:%M").to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,5 +162,40 @@ mod tests {
         assert!(parse_absolute("2026-07-17T14:00").is_some());
         assert!(parse_absolute("2026-07-17").is_some());
         assert!(parse_absolute("2h").is_none());
+    }
+}
+
+#[cfg(test)]
+mod duration_tests {
+    use super::*;
+
+    fn now() -> DateTime<Utc> {
+        parse_absolute("2026-07-17T12:00").unwrap()
+    }
+
+    #[test]
+    fn a_duration_becomes_the_moment_it_runs_out() {
+        // V.38: the file cannot hold "2 hours" — it would mean something different every
+        // time it was read.
+        assert_eq!(absolute_after(now(), "2h").unwrap(), "2026-07-17T14:00");
+        assert_eq!(absolute_after(now(), "30m").unwrap(), "2026-07-17T12:30");
+        assert_eq!(absolute_after(now(), "7d").unwrap(), "2026-07-24T12:00");
+        assert_eq!(absolute_after(now(), "1w").unwrap(), "2026-07-24T12:00");
+    }
+
+    #[test]
+    fn what_it_writes_is_what_the_resolver_reads_back() {
+        // The two halves of the same fact: if these ever disagree, a `--temp` install is
+        // either permanent or already expired.
+        let written = absolute_after(now(), "2h").unwrap();
+        let read = parse_absolute(&written).expect("must parse back");
+        assert_eq!(read, parse_absolute("2026-07-17T14:00").unwrap());
+    }
+
+    #[test]
+    fn nonsense_is_refused_rather_than_guessed() {
+        for bad in ["", "2", "h", "2x", "-1h", "two hours", "2 h"] {
+            assert!(absolute_after(now(), bad).is_none(), "{} must be refused", bad);
+        }
     }
 }

@@ -1003,24 +1003,33 @@ async fn handle_install(
     temp: Option<&str>,
     into: Option<&str>,
 ) -> Result<()> {
-    // A temporary install must never silently become permanent: reject a malformed
-    // duration before touching the system.
-    if let Some(dur) = temp {
-        if linix::core::StateRegistry::parse_duration(dur).is_none() {
-            anyhow::bail!(
-                "Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.",
-                dur
-            );
-        }
+    // P1: this command IS a shortcut for editing a file and syncing. So the edit comes
+    // first and convergence follows — S15. Backwards, every refusal on the write (nothing
+    // active, several profiles active, an unwritable file) landed after the package was
+    // already installed: on the machine, in no file, and drift by the next sync.
+    let mut lines: Vec<String> = Vec::with_capacity(packages.len());
+    for pkg_str in packages {
+        lines.push(match temp {
+            // II.16: a lease is a dated line. `--temp 2h` is a fine thing to type and an
+            // impossible thing to store, so the duration is resolved against `now` here and
+            // the file gets the moment it runs out (V.38). Nothing sweeps it up later —
+            // the line simply stops counting, and sync removes what nothing declares.
+            Some(dur) => {
+                let at = linix::model::dated::absolute_after(chrono::Utc::now(), dur)
+                    .with_context(|| {
+                        format!("Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.", dur)
+                    })?;
+                format!("{}@expires={}", pkg_str.trim(), at)
+            }
+            None => pkg_str.trim().to_string(),
+        });
     }
 
-    // Dry-run must not mutate the system OR LiNix's own state/manifest. The command executor
-    // already no-ops real installs in dry-run, but the registry/manifest writes below still
-    // would — so short-circuit here for BOTH json and plain output.
+    // Dry-run answers "what would this do" without touching your files or the machine.
     if app.config.dry_run {
         let mut planned = Vec::new();
-        for pkg_str in packages {
-            for spec in app.resolve_spec(pkg_str).await? {
+        for line in &lines {
+            for spec in app.resolve_spec(line).await? {
                 planned.push(serde_json::json!({
                     "action": "install", "backend": spec.backend, "name": spec.name,
                     "temporary": temp.is_some(),
@@ -1041,41 +1050,15 @@ async fn handle_install(
         }
         return Ok(());
     }
-    for pkg_str in packages {
-        let resolved = app.resolve_spec(pkg_str).await?;
-        for spec in resolved {
-            let b = app.registry.get(&spec.backend).context("Backend offline")?;
-            if let Some(inst) = b.as_installable() {
-                info!("LiNix: Installing {} via {}...", spec.name, spec.backend);
-                inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
-                    .await?;
-                // For a temporary install, stamp the lease so the maintenance sweep
-                // reclaims it when time is up.
-                let mut options = spec.options.clone();
-                if let Some(dur) = temp {
-                    options.insert("lease".to_string(), dur.to_string());
-                }
-                // Tag as "imperative" so `protect_imperative` can shield it from drift
-                // pruning even if it never lands in (or is later removed from) a manifest.
-                app.state.lock().await.add(
-                    &spec.backend,
-                    &spec.name,
-                    None,
-                    options,
-                    Some("imperative".into()),
-                    false,
-                );
-                // A temporary install is not declarative desired state — keep it out of
-                // your files so `sync` doesn't resurrect it after the lease expires.
-                if temp.is_none() {
-                    app.declare(pkg_str, into, linix::model::Landing::Imperative)
-                        .await?;
-                }
-            }
-        }
+
+    for line in &lines {
+        app.declare(line, into, linix::model::Landing::Imperative)
+            .await?;
     }
-    app.state.lock().await.save()?;
-    perform_maintenance(app).await
+
+    // And now the ordinary declarative pipeline makes it true — which is also what puts an
+    // imperative install behind the guard for the first time (II.10).
+    handle_sync(app, false, json).await
 }
 
 async fn handle_uninstall(
