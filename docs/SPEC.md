@@ -1039,7 +1039,13 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   `RetentionConfig.generations`, and `undo`'s `restore_matching_generation` (a whole-`/` snapshot
   already reverts manifests + registry). **Checked:** `cargo check --lib`/`--bin`/`--tests` all
   clean, no warnings; unit tests written (cockpit render + `parse_manifest_changes`), not run.
-- `linix diff COMMIT COMMIT` in packages, not text.
+- ~~`linix diff COMMIT COMMIT` in packages, not text.~~ **DONE, 2026-07-17.** `linix diff <from>
+  [to]` prints the manifest lines added/removed between two commits (omit `to` → vs the working
+  tree), plus an `N added, M removed` tally. Since manifests are package declarations, the diff of
+  the config files IS the package-level story — new `GitManager::diff_manifest_changes` runs `git
+  diff` limited to `modules/profiles/active/priority/schedules` and keeps the `+`/`-` lines (shared
+  `parse_manifest_changes` with the cockpit). `cargo check --lib`/`--bin` clean; a git-repo unit
+  test written (not run).
 - `bundle` = `git bundle` + artifacts + registry, **honest per-backend about what can't be
   bundled**.
 - ~~One retention engine.~~ **DONE, 2026-07-17.** There were two: generations and the `sync`-time
