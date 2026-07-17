@@ -2649,6 +2649,20 @@ async fn handle_lock(app: &App) -> Result<()> {
         count,
         app.config.config_root().join("locks.json").display()
     );
+    // II.12: `lock` is also how you approve hooks. Record the current hash of every hook so a
+    // later change to any of them stops the next sync until it is re-approved here. "Hash
+    // everything, including your own scripts" — one rule, no exceptions.
+    let hooks = app.hooks.approve_all_hooks()?;
+    if hooks > 0 {
+        info!(
+            "Lock: approved {} hook(s) at their current script hash ({}).",
+            hooks,
+            linix::core::hook_lock::HookLedger::path_in(
+                &app.config.config_root().join("locks")
+            )
+            .display()
+        );
+    }
     Ok(())
 }
 

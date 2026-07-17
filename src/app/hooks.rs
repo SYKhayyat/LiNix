@@ -1,10 +1,12 @@
 use crate::config::Config;
+use crate::core::hook_lock::{hash_script, hook_id, refusal, HookLedger};
 use crate::core::{Error, Result};
 use mlua::Lua;
 use regex::Regex;
 use rhai::{Engine, Scope};
 use std::collections::HashMap;
 use std::io::Write;
+use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tracing::{debug, info};
@@ -12,6 +14,8 @@ use tracing::{debug, info};
 pub struct LuaHooks {
     rhai_engine: Engine,
     pub hooks: HashMap<String, HashMap<String, String>>,
+    /// The repo's `locks/` directory, where the hook approval ledger lives (II.12).
+    locks_dir: PathBuf,
 }
 
 impl LuaHooks {
@@ -22,7 +26,64 @@ impl LuaHooks {
         Ok(Self {
             rhai_engine,
             hooks: config.hooks.clone(),
+            locks_dir: config.config_root().join("locks"),
         })
+    }
+
+    /// The supply-chain gate (II.12): before a sync runs any hook, every configured hook must
+    /// be approved at its current hash. A new or changed script stops the sync — `-y` cannot
+    /// skip this, and only `linix lock` approves. Called with `?` from a place that propagates,
+    /// because a swallowed refusal here is no refusal at all.
+    ///
+    /// Reports every unapproved hook at once, not just the first: a reader fixing their locks
+    /// wants the whole list, not a one-at-a-time drip.
+    pub fn verify_all_approved(&self) -> Result<()> {
+        if self.hooks.is_empty() {
+            return Ok(());
+        }
+        let ledger = HookLedger::load(&HookLedger::path_in(&self.locks_dir))?;
+        let mut refusals = Vec::new();
+        for (id, script) in self.each_hook() {
+            let verdict = ledger.verdict(&id, &hash_script(&script));
+            if !verdict.is_approved() {
+                refusals.push(refusal(&id, "config", &verdict));
+            }
+        }
+        if refusals.is_empty() {
+            return Ok(());
+        }
+        Err(Error::Validation(format!(
+            "refusing to sync: {} hook(s) are not approved (II.12).\n\n{}",
+            refusals.len(),
+            refusals.join("\n\n")
+        )))
+    }
+
+    /// Approve every configured hook at its current hash — what `linix lock` does for hooks.
+    /// Returns how many approvals were written. This is the only path that writes an approval,
+    /// so approval stays a deliberate act.
+    pub fn approve_all_hooks(&self) -> Result<usize> {
+        let path = HookLedger::path_in(&self.locks_dir);
+        let mut ledger = HookLedger::load(&path)?;
+        let mut count = 0;
+        for (id, script) in self.each_hook() {
+            ledger.approve(&id, &hash_script(&script));
+            count += 1;
+        }
+        ledger.save(&path)?;
+        Ok(count)
+    }
+
+    /// Every hook as `(hook_id, script)`. One place builds the identity so enforcement and
+    /// approval can never key the ledger differently.
+    fn each_hook(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for (hook_name, by_package) in &self.hooks {
+            for (package, script) in by_package {
+                out.push((hook_id(hook_name, package), script.clone()));
+            }
+        }
+        out
     }
 
     async fn run_external_polyglot(&self, code: &str, hook: &str, pkg: &str) -> Result<()> {

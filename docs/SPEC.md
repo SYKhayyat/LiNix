@@ -959,6 +959,25 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
 ## Phase 4 — Locks and git
 
 - `locks/` (II.6): version, resolved backend, frozen regex expansions, hook hashes.
+  - **hook hashes — DONE (II.12 "the lock is the approval"), 2026-07-17.** New pure module
+    `core/hook_lock.rs`: `HookLedger` (→ `locks/hooks.toml`, a `BTreeMap<hook_id, sha256>` that
+    diffs cleanly), `hash_script`, `hook_id`, the `Verdict` enum (`Approved`/`New`/`Changed`),
+    and the II.12 refusal message. `LuaHooks` gained `verify_all_approved()` — the supply-chain
+    gate — called with `?` at the **top of `SyncEngine::sync`**, before any hook runs and before
+    anything is touched, so a new or changed hook **stops the sync**; `-y` cannot skip it (the
+    old `run_before_sync` swallowed its own errors, which is why the authoritative stop had to
+    move here). `linix lock` now also approves hooks (`approve_all_hooks`) — the only writer of
+    an approval, so approval stays deliberate. **What I checked:** `cargo build --all-targets` is
+    clean; **11 unit tests written but NOT executed this session** (no-run constraint) — they
+    cover hash stability/sensitivity, the New/Approved/Changed verdicts, identity isolation,
+    re-approval, TOML round-trip, missing-file load, and both refusal messages. **Honest gaps:**
+    (1) it currently hashes the **inline `config.hooks`** scripts (source tag `"config"`); the
+    II.12 examples show **module-attached** hooks from `github:x/y` — the mechanism is identical
+    and reusable, but wiring module hooks is not done. (2) `plan` does not yet show the trust
+    block (II.12's "adds repository / runs script [approved|CHANGED]"). (3) **Behaviour change:**
+    a user with existing `config.hooks` must now run `linix lock` once before the next sync — the
+    intended II.12 behaviour, but a change. (4) The version-pin `locks.json` still sits beside
+    `locks/` — its migration under `locks/` (below) is unchanged.
 - Commit on successful sync only. snapshot → apply → commit. Tag the snapshot.
 - `git checkout` + `sync` = rollback. Delete the generation format.
 - `linix diff COMMIT COMMIT` in packages, not text.

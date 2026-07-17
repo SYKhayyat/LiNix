@@ -84,6 +84,12 @@ impl<'a> SyncEngine<'a> {
     #[instrument(skip(self, changes))]
     pub async fn sync(&self, changes: SyncChanges, scope: guard::GuardScope) -> Result<()> {
         let _heartbeat = self.executor.start_sudo_keepalive().await;
+
+        // The supply-chain gate (II.12), before any hook runs and before anything is touched:
+        // a hook whose script is new or changed since you approved it stops the sync. Note the
+        // `?` — the `run_before_sync` below swallows its own errors, so the authoritative stop
+        // has to live here, where it propagates.
+        self.hooks.verify_all_approved()?;
         let _ = self.hooks.run_before_sync().await;
 
         if changes.is_empty() {
