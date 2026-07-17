@@ -296,9 +296,9 @@ profile names. To gate a whole file, wrap it. Keys: `os`, `arch`, `host`, `hostn
 ## II.4 Profiles
 
 - Set math over modules and profiles: `|` union, `&` intersect, `\` difference, `-`
-  subtract, parentheses. Directives `exclude` / `intersect`; **`use` is union** (V.44).
+  subtract, parentheses. Directives `exclude` / `intersect`; **`use` is union** (V.46).
 - **Set math produces packages, so a profile that uses it resolves to packages, not to
-  modules** (V.44). It operates on lines, not on names, so **every surviving package still
+  modules** (V.46). It operates on lines, not on names, so **every surviving package still
   knows the file it came from** and `upgrade --module` still finds it.
 - **Order is fixed: gather, then narrow by each `intersect`, then subtract. Subtraction
   always wins**, whatever order you wrote the lines in — otherwise `use gaming` below
@@ -349,10 +349,22 @@ when host == laptop {
 All three **write the file and sync** — the same as editing it by hand, because the file is
 the state. Each prints what it touched: `active is now Work, Gaming`.
 
-- **The CLI writes names at the top level, never inside a `when` block.** A block is
-  something you wrote; LiNix adds to it and subtracts from it by hand, or not at all.
-- **`activate NAME…` overwrites the file** — blocks included. It is the set form; it sets.
-  **This is not a special case and gets no extra refusal** (V.44).
+- **`activate -a` and `deactivate` write names at the top level and never touch a `when`
+  block.** A block is something you wrote; those two add to it and subtract from it by hand,
+  or not at all. **`activate` is the exception, and it is the whole exception** — see the next
+  bullet. *(This bullet used to say "the CLI" and applied to all three verbs, which
+  contradicted the one below it. Owner decided 2026-07-17: the set form sets.)*
+- **`activate NAME…` overwrites the file — blocks included.** It is the set form; it sets.
+  **This is not a special case and gets no extra refusal** (V.44). It does not ask, because
+  overwriting the list *is* the command's job — but **it is not silent** (S6): it names every
+  block it removed. *"active is now Work, Gaming. Removed the `when host == laptop` block on
+  line 4."* **Automatic and silent are different things, and only one of them is a decision
+  the user gets to review after the fact.**
+- **The asymmetry is the point, and it is the reason `-a` exists.** `activate` is the blunt
+  verb: it makes the file say exactly what you typed, and a block is part of what the file
+  says. If you want your blocks kept, you want `activate -a` or `deactivate` — the surgical
+  pair. **Two verbs that both half-preserve blocks would be two ways to do one thing** (P1);
+  one that replaces and two that edit is one way each.
 - **`deactivate` on a name a `when` block also names removes the top-level line and says
   what's left:** *"removed Travel from the list. It is still activated by the `when` block on
   line 4."*
@@ -1172,7 +1184,7 @@ other (V.22). *Corrected knowingly against the headline: a wrong number in a doc
 cheaper than three deleted safety rails. If a rule here ever stops being a refusal and
 starts being a preference, that is the signal it does not belong in `[guard]`.*
 
-**V.44 — Why set math costs a package its module name, and why `include` died.** *(Decided
+**V.46 — Why set math costs a package its module name, and why `include` died.** *(Decided
 2026-07-17, during Phase 2f. II.4 required set math and nothing implemented it:
 `model::profiles::evaluate_expression` had no caller outside its own tests, and the only
 working implementation was `compose()` in the old `app/profile.rs`, over flat strings.)*
@@ -1545,7 +1557,18 @@ verification — it ran the path the author was thinking about. **Rule 11 is usu
 about `cargo test`. It is not: it is about any observation standing in for the plan.** A wizard
 is a second path, and a second path is a second implementation.
 
-### `activate` does not do what II.6 says (found 2026-07-17)
+### `activate` does not do what II.6 says (found 2026-07-17 — **being fixed in flight**)
+
+> **Status at the time of writing: the working tree already fixes most of this.** `activate`
+> takes `add: bool`, `-a`/`--add` exists, `Switch` is deleted, `parse_active` reads `when`
+> blocks, and II.6's empty-names refusal is in the code verbatim. **The owner's four decisions
+> (above) match what was built** — they were made from this entry and landed within the hour.
+> **Retire the rest of this entry when that commit lands. One thing is not fixed, and it is
+> the last bullet: `activate` overwrites a `when` block and does not say so.** `profile.rs`
+> prints `active is now {names}.` and never names the block it deleted. **Automatic is not
+> silent (S6)** — the owner chose "no refusal", not "no receipt". *(Related, unjudged: these go
+> to `info!`/`tracing`, not stdout. II.6 says the commands **print** what they touched. Whether
+> a user with default settings ever sees them is untraced.)*
 
 Not marked ✅ — **worse: II.6 was written as a specification of existing behaviour and it
 describes the opposite of the code.**
@@ -1720,19 +1743,19 @@ It is now 348 lines and runs on the model. `materialize()` is gone (a materialis
 second place the same fact lives), and `compose()` — a second complete profile engine — is
 gone with it.
 
-**II.4's set math is implemented, and the decision behind it is V.44.** It was specified and
+**II.4's set math is implemented, and the decision behind it is V.46.** It was specified and
 never built: `ProfileLoader::resolve` handled only `use`, and `evaluate_expression` had no
 caller outside its own tests. It now works end to end — verified against the binary, not just
 tests. `exclude`, `intersect`, `-pkg` and full expressions like `(Work | gaming) & security`,
 with II.4's fixed order: gather, narrow, subtract, and **subtraction always wins** whatever
 order you wrote the lines in.
 
-**V.44 predicted a cost that turned out not to exist, and the entry says so.** The prediction
+**V.46 predicted a cost that turned out not to exist, and the entry says so.** The prediction
 was that set math would cost a package its module name. It does not: atoms map back to the
 **statements** they came from, so a package keeps its `Origin`, its file, and its module.
 `upgrade --module editors` still finds `vim` through an `exclude`.
 
-Also settled there: **`include` is gone.** `use` already meant union, and two words for one
+Also settled there: **`include` is gone** (V.46). `use` already meant union, and two words for one
 operation is the disease this design cures, sitting inside the spec. `include x` is an error
 that says `use x`.
 
@@ -1796,6 +1819,10 @@ that says `use x`.
 | **V.43** | Keep all nine guard refusals, including the three orphaned `policy.toml` rules (`pinned_only`, `require_snapshot`, `deny_vulnerable`). II.10's "five" was wrong. |
 | **S6** | `sync` heals **automatically**. Asking permission to fix drift asks permission to do sync's own job. Automatic ≠ silent: it must say what it did, and the removal still goes through the guard. |
 | **S8** | Keep `undo`. Keep its path check (renamed to say it guards the snapshot-read path). Delete the false global claim. Restore must state it rolls back the whole filesystem before asking. |
+| **II.6 verbs** (2026-07-17) | **Three verbs, as II.6 already said: `activate` SETS, `activate -a` ADDS, `deactivate` REMOVES.** The code had `activate` adding and the CLI help documenting it that way — **the spec was right and the code was wrong.** Not a re-opening: II.6 was already correct, the audit found the drift. |
+| **`profile switch`** (2026-07-17) | **Dies.** Once `activate` sets, `switch NAME` *is* `activate NAME` with a worse name and a one-name limit. It was the set form only because `activate` had wrongly taken the add form's job. **Two ways to do one thing** (P1). |
+| **`when` in `active`** (2026-07-17) | **`active` holds `when` blocks.** `when` gates every other file (II.2); `active` being the exception was an accident of `parse_active` rejecting any multi-word line — which made **II.6's own example file fail to parse.** One rule, everywhere. |
+| **`activate` vs blocks** (2026-07-17) | **`activate` overwrites the file, blocks included.** It is the set form; it sets, and a block is part of what the file says. **`activate -a` and `deactivate` never touch a block** — they are the surgical pair, and that asymmetry is why `-a` exists. **It does not ask** (declarative: overwriting the list is the command's job) **but it does not do it silently** (S6) — it names every block it removed. *Asking and reporting are not the same thing, and the argument against the first is not an argument against the second.* |
 
 ## A warning about this document
 
