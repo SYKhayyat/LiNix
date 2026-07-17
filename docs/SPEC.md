@@ -1317,6 +1317,13 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   snapshot label or id straight through, it becomes an elevated-PowerShell injection. **Solution TBD**
   (bind values as args / validate `id` is numeric); harden now while it is still latent.
 
+- **SEC6 — Module name traversal via `--name` (low).** `layout.rs:102-103`: `module_file(name)` =
+  `modules_dir().join(format!("{}.txt", name.to_lowercase()))`. `module add --name ../../foo` writes
+  the remote-fetched body to `modules_dir()/../../foo.txt`, up out of `modules/`. Bounded: the forced
+  `.txt` suffix defuses most sensitive targets, `refuse_overwrite` (`main.rs:1383`) blocks clobbering
+  existing files, and `--name` is user-typed (the `github:`/URL default can't inject a `/`). Low
+  severity. **Solution TBD** (reject path separators in `name`).
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
