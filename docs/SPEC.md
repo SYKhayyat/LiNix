@@ -1049,6 +1049,9 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
 A read-through of the actual code for things that are silly, confusing, or unintuitive — silly
 messages *and* silly features (a feature no user wants, two features that are really one, or a
 feature with a better way to do it). Each line below is an owner-approved change, not a proposal.
+**These are NO-LEGACY deletions: better code already exists (edit the file, sync). Do not
+preserve the old thing or build a compatibility helper — remove it. The teardown shape is the
+implementing agent's call; that it goes is not.**
 
 - **R1 — Kill the theatrical house voice.** The tool narrates routine work like a spaceship:
   `LiNix Kernel: … kernel initialized successfully` on **every** command (`context.rs:116`),
@@ -1060,6 +1063,18 @@ feature with a better way to do it). Each line below is an owner-approved change
   `Component: TheatricalVerb…` style for plain, quiet language, and (b) demote pure-status lines
   like "kernel initialized" to `debug!` so they stop printing every run. The bar is `apt`/`dnf`:
   near-silent on a normal run.
+
+- **R2 — Delete `teleport` outright.** A teleport is a prefix rewrite: `apt:nginx` → `snap:nginx`,
+  then sync. The declarative model already does that — change the backend on the line and sync
+  removes it from the old backend and installs it on the new. But `Teleporter` (`app/teleport.rs`)
+  builds its **own** remove→install `StableDiGraph` and runs `Transaction::execute()` directly
+  (`teleport.rs:107-133`), and `core/transaction.rs` has **no** guard call — so
+  `teleport python3 snap` rips out `apt:python3` with no protected/essential/max-removal check.
+  It is a second transaction engine *and* a guard bypass, for an operation that is one line-edit.
+  Delete the command, `Teleporter`, `move_the_line`, and the CLI entry (`cli/args.rs:343-349`,
+  handler `main.rs:3101`). A backend move is "rewrite the prefix, sync" — nothing more. If a
+  convenience verb is ever wanted it must route through `handle_sync` (guard included), never its
+  own transaction.
 
 ## Phase 6 — The five containers
 
