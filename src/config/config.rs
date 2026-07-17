@@ -253,8 +253,15 @@ fn default_true() -> bool {
 fn default_false() -> bool {
     false
 }
+/// How many backend operations run at once by default (F1). Detect the machine's core
+/// count rather than hardcoding 4 — a 32-core builder should not throttle itself to 4, and
+/// a single-core VM should not fan out to 4. `available_parallelism` respects cgroup/CPU
+/// affinity limits, so a container sees its quota, not the host's. Falls back to 4 if the
+/// count is unavailable.
 fn default_max_parallel() -> usize {
-    4
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
 }
 fn default_network_timeout_secs() -> u64 {
     15
@@ -365,7 +372,7 @@ impl Default for Config {
             verbose: false,
             quiet: false,
             github_token: None,
-            max_parallel: 4,
+            max_parallel: default_max_parallel(),
             network_timeout_secs: default_network_timeout_secs(),
             nix_gc_age: default_nix_gc_age(),
             confirm_destructive: false,

@@ -3099,7 +3099,8 @@ const CONFIG_TEMPLATE: &str = r#"# LiNix configuration file (config.toml)
 # Every key is optional; omit a key to use its built-in default.
 
 # Maximum number of packages installed/removed (and searched) in parallel.
-max_parallel = 4
+# Omit to auto-detect this machine's core count (respecting container CPU limits).
+# max_parallel = 4
 
 # Timeout (seconds) for outbound HTTP search requests (npm/PyPI/marketplace).
 network_timeout_secs = 15
