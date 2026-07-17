@@ -907,13 +907,19 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   `guard.rs` (`protected_packages`, `unprotected_packages`, OS-essential, `max_removals`); four
   are in a **separate `Policy` struct** (`app/policy.rs`) loaded from `groups_dir/policy.toml` —
   **a file II.17 deletes** — with `require_snapshot`/`deny_vulnerable` enforced ad-hoc in
-  `main.rs:3176`/`:3181` rather than in any guard; and **`max_installs` does not exist anywhere
-  in `src/`**. `policy.rs:25` also has a **tenth rule the spec never mentions**
+  `main.rs:3176`/`:3181` rather than in any guard; and ~~**`max_installs` does not exist anywhere
+  in `src/`**~~ — **DONE (install ceiling): `Config::max_installs` (default 0 = unset) +
+  `guard::enforce_installs` + `Objection::TooManyInstalls`, enforced at the one sync choke point
+  (`SyncEngine::sync`), with `--allow-mass-install` (CLI-only, mirrors `allow_mass_removal`). Five
+  tests.** `policy.rs:25` also has a **tenth rule the spec never mentions**
   (`allow_backends`). **"One decision function" is the work, not the summary:** today there are
   three (`guard::protection_of`, `guard::inspect`, `Policy::check_specs`), and the real ceiling
-  is `Objection` (`guard.rs:114`), which has **two variants** — `Protected` and `TooMany`. Nine
-  refusals cannot be expressed by a two-variant verdict; **that enum is the first thing to
-  change.** `--allow-mass-install` (II.10:578) does not exist either.
+  is `Objection` (`guard.rs:114`), which ~~has **two variants** — `Protected` and `TooMany`~~
+  **now has three (`Protected`, `TooMany`, `TooManyInstalls`) — the enum change has begun, count
+  refusals first.** Nine refusals cannot be expressed by a two-variant verdict; **the remaining
+  work is folding `policy.rs`'s four spec-rules into it and giving the install paths their own
+  `inspect` (deny_packages / pinned_only), so there is genuinely ONE decision surface.**
+  ~~`--allow-mass-install` (II.10:578) does not exist either.~~ **DONE — see above.**
 - **Every removal path calls it.** Today's misses: `uninstall` (C1), leases and `absent:`
   (C3), ghost-shell exit (C8), `clean`.
 - One lease-expiry implementation (C9 — two exist today with different semantics).
@@ -943,8 +949,11 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
 - **H2:** two error-swallows on safety paths — `sync/mod.rs:463` (failed rollback-remove
   goes unreported), `shell/mod.rs:126` (dropped state write).
 - **F4:** `--help` asks the registry for the backend count. The README line is generated.
-- **F1:** `network_timeout_secs` — **honour it** (today every consumer applies an
-  undocumented `.max(10)` floor, so setting 5 silently gives you 10).
+- ~~**F1:** `network_timeout_secs` — **honour it** (today every consumer applies an
+  undocumented `.max(10)` floor, so setting 5 silently gives you 10).~~ **DONE — both consumers
+  (`insight.rs` audit client, `main.rs` module-fetch client) now use `.max(1)`, matching
+  `node_registry`'s existing guard: honour any value ≥1, reject only a literal 0 (which reqwest
+  reads as instant-fail, not "no timeout").**
 - **F1:** `max_parallel` — detect the core count.
 - **F1:** the generated `priority` file carries its reason in a comment (V.14).
 - **F5:** fix the false doc comments.
