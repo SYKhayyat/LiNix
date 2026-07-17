@@ -337,9 +337,9 @@ impl<'a> ChangePlanner<'a> {
         let Some(scope) = scope else {
             return desired.clone();
         };
-        let prefix = match scope {
-            Scope::Profile(p) => format!("manifest:{}", p),
-            Scope::Module(m) => format!("module:{}", m),
+        let wanted = match scope {
+            Scope::Profile(p) => format!("profile:{}", p),
+            Scope::Module(m) => format!("module:{}", m.to_lowercase()),
         };
         let mut filtered = HashMap::new();
         for (backend, specs) in desired {
@@ -347,8 +347,8 @@ impl<'a> ChangePlanner<'a> {
                 .iter()
                 .filter(|s| {
                     s.options
-                        .get("__source")
-                        .is_some_and(|src| Self::source_matches_scope(src, &prefix))
+                        .get("__scopes")
+                        .is_some_and(|src| Self::in_scope(src, &wanted))
                 })
                 .cloned()
                 .collect();
@@ -359,19 +359,14 @@ impl<'a> ChangePlanner<'a> {
         filtered
     }
 
-    /// Exact-segment match between a package's `__source` tag and a scope prefix.
+    /// Whether a package's `__scopes` tag holds this exact scope.
     ///
-    /// Sources look like `module:dev`, `manifest:base.txt`, `group:editors`, or the
-    /// composite `config:group:editors`. A scope prefix is e.g. `module:dev` or
-    /// `group:editors`. We must NOT use a naive substring match (`module:dev` would
-    /// then wrongly match `module:dev-tools`). Match if the source equals the prefix
-    /// or ends with `:{prefix}` (so `config:group:editors` still matches `group:editors`).
-    fn source_matches_scope(source: &str, prefix: &str) -> bool {
-        // A source may carry multiple origins joined by ';' (see resolver tagging).
-        source.split(';').any(|src| {
-            let src = src.trim();
-            src == prefix || src.ends_with(&format!(":{}", prefix))
-        })
+    /// The resolver writes every scope a package belongs to, `;`-joined — `module:dev` and
+    /// `profile:Work` both, for a package a module holds and a profile reaches. The match
+    /// is on the whole segment, never a substring: `module:dev` must not match
+    /// `module:dev-tools`.
+    fn in_scope(scopes: &str, wanted: &str) -> bool {
+        scopes.split(';').any(|s| s.trim() == wanted)
     }
 
     async fn identify_needed_actions(
@@ -768,29 +763,27 @@ mod tests {
 
     #[test]
     fn scope_match_is_exact_segment() {
-        // exact
-        assert!(ChangePlanner::source_matches_scope(
-            "module:dev",
+        assert!(ChangePlanner::in_scope("module:dev", "module:dev"));
+
+        // Never a substring: `--module dev` must not sweep up `dev-tools`, and a scoped
+        // upgrade acting on a package nobody named is the shape of the bug this repo is
+        // named for.
+        assert!(!ChangePlanner::in_scope("module:dev-tools", "module:dev"));
+        assert!(!ChangePlanner::in_scope("module:dev", "module:dev-tools"));
+
+        // A package belongs to every scope that declared it: the module that holds it and
+        // the profile that reaches it.
+        assert!(ChangePlanner::in_scope(
+            "module:dev;profile:Work",
+            "profile:Work"
+        ));
+        assert!(ChangePlanner::in_scope(
+            "module:dev;profile:Work",
             "module:dev"
         ));
-        // composite source still matches a bare group scope
-        assert!(ChangePlanner::source_matches_scope(
-            "config:group:editors",
-            "group:editors"
-        ));
-        // must NOT substring-match a longer module name
-        assert!(!ChangePlanner::source_matches_scope(
-            "module:dev-tools",
-            "module:dev"
-        ));
-        assert!(!ChangePlanner::source_matches_scope(
-            "module:dev",
-            "module:dev-tools"
-        ));
-        // multi-origin source (';'-joined) matches if any segment matches
-        assert!(ChangePlanner::source_matches_scope(
-            "manifest:base.txt;module:dev",
-            "module:dev"
+        assert!(!ChangePlanner::in_scope(
+            "module:dev;profile:Work",
+            "profile:Home"
         ));
     }
 }

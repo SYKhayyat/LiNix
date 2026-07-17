@@ -221,8 +221,8 @@ apt:nginx {             declaration → body is options
 ```
 
 **`when` gates the lines inside it. One rule, everywhere** — in a module those lines are
-packages; in a profile they're imports; in `priority` they're backends. To gate a whole
-file, wrap it. Keys: `os`, `arch`, `host`, `hostname`, `family`. Operators: `==`, `!=`,
+packages; in a profile they're imports; in `priority` they're backends; in `active` they're
+profile names. To gate a whole file, wrap it. Keys: `os`, `arch`, `host`, `hostname`, `family`. Operators: `==`, `!=`,
 `in [a, b]`.
 
 ### Option keys
@@ -247,7 +247,7 @@ file, wrap it. Keys: `os`, `arch`, `host`, `hostname`, `family`. Operators: `==`
   with no `module` block is one module named after the file. Anything outside a block
   belongs to the file's own module.
 - **A module can `use` other modules. A module can NEVER reference a profile.** The layering
-  rule.
+  rule. **A `use` loop is an error** (II.7).
 - **`modules/*.txt`. The folder decides.** Anything else in `modules/` is silently ignored,
   so a `README.md` costs nothing.
 - **LiNix only parses what the active profiles reach.** `linix check` parses everything on
@@ -261,7 +261,9 @@ file, wrap it. Keys: `os`, `arch`, `host`, `hostname`, `family`. Operators: `==`
   subtract, parentheses. Directives `include` / `exclude` / `intersect`.
 - **A profile MAY hold package lines directly.** Cost, accepted knowingly: a module can
   never reach them (layering rule), so they are unshareable, permanently.
-- **Only profiles can be activated.**
+- **Only profiles can be activated.** By name, in `active` — by hand or via `activate` /
+  `activate -a` / `deactivate` (II.6).
+- **A profile may reference profiles. A `use` loop is an error** (II.7).
 - `absent:` does not exist in profiles. `-` does.
 
 ## II.5 Naming
@@ -277,6 +279,46 @@ file, wrap it. Keys: `os`, `arch`, `host`, `hostname`, `family`. Operators: `==`
 
 **`active`** — a plain list of profile names, unioned. Answers exactly one question: *what
 is this machine set to right now?* Nothing else goes in it.
+
+**Names, never expressions.** The set math lives inside profiles (II.4). `active` is the one
+file you read to know what is on, so it stays a list you can read at a glance. `when` gates
+it like any other file (II.2).
+
+```
+Work
+Gaming
+
+when host == laptop {
+  Travel
+}
+```
+
+**Three commands write it. Nothing else does.**
+
+| form | does |
+|---|---|
+| `activate NAME…` | `active` becomes exactly this list |
+| `activate -a NAME…` | adds to the list |
+| `deactivate NAME…` | takes away from the list |
+
+All three **write the file and sync** — the same as editing it by hand, because the file is
+the state. Each prints what it touched: `active is now Work, Gaming`.
+
+- **The CLI writes names at the top level, never inside a `when` block.** A block is
+  something you wrote; LiNix adds to it and subtracts from it by hand, or not at all.
+- **`activate NAME…` overwrites the file** — blocks included. It is the set form; it sets.
+  **This is not a special case and gets no extra refusal** (V.44).
+- **`deactivate` on a name a `when` block also names removes the top-level line and says
+  what's left:** *"removed Travel from the list. It is still activated by the `when` block on
+  line 4."*
+- **`activate` with no names is an error:** *"activate needs a profile name. To turn
+  everything off, edit `active` yourself."* An unset `$PROFILE` must not empty the machine.
+- **`activate -a` on a name already listed, and `deactivate` on one that isn't, say so and
+  change nothing.** Not errors — the end state is what was asked for.
+- **A name that isn't a profile is an error, and it teaches II.5:** *"no profile named
+  `editors` — profiles are Capitalized, modules are lowercase."*
+- **`deactivate` removes packages, so it goes through the plan and the guard** like every
+  other removal.
 
 **`priority`** — an ordered list of backends, with `when` blocks.
 
@@ -323,7 +365,7 @@ regenerates one file.
 
 ## II.7 Resolution
 
-1. Read `active` → the profile expression set.
+1. Read `active` → the profile names, unioned.
 2. Resolve profiles → the module set. Profiles may reference profiles; modules may not.
 3. Parse **only** the modules reached. Apply `when`.
 4. Resolve each line. Bare names use `priority`, then the lock.
@@ -334,6 +376,36 @@ regenerates one file.
    - **While it is counting, a dated line beats an undated one.** *(The only exception to
      rule 5.)*
 7. Produce the desired state.
+
+### Cycles
+
+**A `use` cycle is an error, at both layers.** `Work` uses `Gaming` uses `Work`. Module `a`
+uses `b` uses `a`. **Self-reference is the one-element case** and is the same error.
+
+**`@requires` cycles are the same error** — `apt:a@requires=apt:b` and
+`apt:b@requires=apt:a`. Same graph, same walk, same answer: the planner orders by the native
+dependency graph plus `@requires` edges, and a loop has no order. **It owes the same error as
+a `use` loop**: which packages, and the file and line each edge came from.
+
+**The error names every file and line in the loop, in order, and stops.** It does not dedupe
+and carry on (V.45):
+
+```
+ERROR: profiles reference each other in a loop
+
+  profiles/Work.txt:3     use Gaming
+  profiles/Gaming.txt:7   use Servers
+  profiles/Servers.txt:2  use Work
+                          ^ back to Work
+```
+
+**A diamond is not a cycle.** `Work` and `Gaming` may both `use base`. Reaching a module
+twice by two routes is not an error — sharing a module is what modules are for (V.2). Only a
+path that **returns to where it started** is a loop. *(So the check is a path, not a set of
+everything ever visited.)*
+
+**`linix check` catches cycles no active profile reaches** — consistent with II.3: LiNix
+parses what the active profiles reach, `check` parses everything on demand.
 
 **Ordering is the planner's job, never the file layout's.** Repos first → refresh indexes →
 packages (native dependency graph + `@requires` edges) → things depending on packages
@@ -363,6 +435,9 @@ else, ever.**
 | `shell` | throwaway shell. Outside the model |
 | `bundle` | git bundle + artifacts + registry |
 | `export FORMAT` | Brewfile / requirements.txt / package.json |
+| `activate NAME… [-a]` | write `active` — the list, or `-a` to add to it (II.6), sync |
+| `deactivate NAME…` | take away from `active` (II.6), sync |
+| `upgrade`, `list`, `status`, `doctor`, `profile`, `service`, `repo`, `hold` | as today, all reduced to file edits |
 
 **`shell` must be honest about being outside the model:** it writes no module, and **stops
 recording transient packages in the registry** — which is what lets a session's leftovers
@@ -371,7 +446,6 @@ look like managed drift later.
 **Destroying a file you wrote** (e.g. `module create` over an existing file) is a **plain
 refusal plus `--force`**, like every other tool. It has nothing to do with packages and must
 not be wired to a setting about removals.
-| `upgrade`, `list`, `status`, `doctor`, `activate`, `deactivate`, `profile`, `service`, `repo`, `hold` | as today, all reduced to file edits |
 
 **Every command prints the file it touched:**
 `Added jq to modules/imperative.txt (used by profile Work)`
@@ -1013,6 +1087,30 @@ past. *(The first draft's example, `audit()` documented as "a **destructive** Di
 without generating files or acquiring state", has since been fixed in the code and now reads
 correctly. The measured 32 are the ones that remain.)*
 
+**V.44 — Why `activate` writes a list and there is no `-r`.** The file is the state, so a
+command that activated *without* writing `active` would be a second place the answer lives —
+the exact defect `-g` and `keep.txt` died of (V.1, V.6). Set, add, subtract, because those
+are the three things you do to a list. **`deactivate` rather than `activate -r`** because
+`install`/`uninstall` already settled that the opposite of a verb is a verb (V.39), and a
+flag that silently inverts a command is how you delete something at 2am by leaving off one
+character. The empty list is the one refusal: `linix activate $PROFILE` with `$PROFILE`
+unset would otherwise read as *"turn everything off"* and be perfectly valid. The guard would
+catch it (V.19) — but the guard is for decisions you meant, and this one nobody means.
+**`activate NAME…` still overwrites `when` blocks without asking**, and that is not an
+oversight: it is the set form, it sets, and a form that quietly kept part of the old file
+would leave the machine in a state you did not type. The file is in git; that is what git is
+for (V.30).
+
+**V.45 — Why a cycle is an error and not deduped.** If `active` were the only consumer you
+could visit each profile once and move on, because union doesn't care how many times it sees
+a name. But profiles have `&`, `\` and `-` (II.4), so `Work include Gaming` /
+`Gaming exclude Work` has no answer to settle on — not a redundant answer, **no answer**.
+Deduping picks whichever order the resolver happened to walk in, which is V.5's defect
+wearing a different hat: files were read in filesystem order and first won, and the fix was
+to stop guessing and say so. Naming the whole loop instead of the last edge is II.2's rule —
+the error names the file and the line — and it is the difference between *"there is a cycle"*
+and a user who can see which of the three lines they meant to delete.
+
 ---
 
 # Part VI — Bugs
@@ -1086,6 +1184,8 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S8** | **`undo` lies about scope; there is no safety hole. DECIDED 2026-07-16.** What `undo` does: list filesystem snapshots, mount the chosen one read-only, read the `registry.json` *inside* it, diff that against now, show a package-level summary, and on confirmation hand the snapshot to btrfs/timeshift to restore. `FORBIDDEN_PATHS` guards step 3 only — which directory `undo` will read a registry out of, so a crafted path cannot make it parse `/etc/shadow` as JSON. That is a real check doing a real job. Its *name and comment* claim "paths NEVER allowed to be accessed", and restore goes over `/` including all of them. So the defect is the false claim, not the check. **Keep** the check (renamed to say it guards the snapshot-read path); **delete** the global claim; **keep** `undo` (nothing else turns a snapshot into a package diff), but restore must state plainly that it rolls back the entire filesystem before asking. Gating restore on the list would refuse every root snapshot, i.e. delete `undo` by accident → **Phase 3** |
 | **S9** | **`remove_package_from_local` (`parser.rs:290`) matches a bare target against the BACKEND prefix**: `\|\| b == package_name`. So removing a package named `npm` deletes every `npm:*` line in `local.txt`. Dies with `local.txt` itself → **Phase 2** |
 | **S10** | **`cargo test` wrote to the developer's REAL data dir**, and one bad file bricks every command. `TestKernel` (named `linix_hermetic_`) isolated `registry.json`, groups and tmp, but `Journal::new()` hardcoded `safe_data_dir()` — found at 733KB of test noise in `%APPDATA%/linix/journal.json`. Fixed in Phase 2b by injection (`Journal::at`). **The remaining half is real:** `Journal::load_sync` errors on a bad parse -> `App::new` fails -> EVERY command fails, with no message saying which file to delete or how to recover. Failing loud is right (P3); having no way out is not → **Phase 5** |
+| **S12** | **`repo:`, `shim:`, `service:`, `link:` and `schedule:` lines parse, resolve, and are then dropped on the floor.** The seam is `HashMap<backend, Vec<PackageSpec>>` and these are not packages, so `Resolver::resolve` collects them into `DesiredState::extras` and `resolve_desired_state` — which returns only `.packages` — discards them. Nothing downstream has ever consumed them. A `repo:ppa:deadsnakes/ppa` line therefore does exactly nothing, silently, which is VI.1's disease with new syntax. Not a regression (the syntax is new in Phase 1) but it must not ship: `sync` warns for now, naming each ignored line and its file. The fix is the ordering phases — repos → index refresh → packages → dependents — which is what `extras` was collected for → **Phase 2** (planner ordering) |
+| **S13** | **A bare name and an explicit one were two packages, not one.** `model::resolve` keys the merge on `backend:name`, and a bare `ripgrep` is keyed `?:ripgrep` until something probes it — so `ripgrep` in one module and `cargo:ripgrep` in another never met, never reconciled, and both reached the planner. Found while wiring the seam and **fixed there**: `Resolver::statements()` and `Resolver::collect()` are now separate, the caller probes in between, and `with_bare` hands the answers back so the merge sees real backends. II.7 rule 5 was silently not applying to every bare line → **Phase 2** (fixed) |
 | **S11** | **The test harness is not hermetic by construction, only by remembering.** `LINIX_DATA_DIR` exists precisely so tests do not touch real state (`safe_data_dir` says so), the docker/windows integration scripts set it, and the cargo tests never did — nothing enforced it, so it rotted silently for as long as the journal has existed. G3's "unverified" list and this are the same problem: isolation that depends on each test author remembering → **Phase 5** (make it structural, not remembered) |
 
 ## VI.3 Do not re-decide these
@@ -1107,45 +1207,53 @@ Three suspicions did not survive scrutiny:
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
-## The state at `2a8cb56` (2026-07-17)
+## The state at `HEAD` (2026-07-17)
 
-- **17 commits** since `d49d28c`. 125 files changed, +4039 / −3028.
-- **476 tests passing, 0 failing. `cargo clippy --all-targets` silent.**
-- Phase 0 ✅ · Phase 1 ✅ · **Phase 2 — about two-thirds** · Phases 3–6 not started.
+- **18 commits** since `d49d28c`.
+- **485 tests passing, 0 failing. `cargo clippy --all-targets` silent.**
+- Phase 0 ✅ · Phase 1 ✅ · **Phase 2 — the cliff is jumped; the command surface remains** ·
+  Phases 3–6 not started.
 
 ## The one thing to understand before continuing
 
-**`src/model/` is complete, unit-tested (60 tests, ~1,700 lines) — and nothing outside it
-calls it.** `grep -rn "crate::model" src/ | grep -v "^src/model/"` returns nothing. It is
-registered in `lib.rs` and dead to the application.
+**The model now runs resolution.** `StateResolver::resolve_desired_state` builds the II.1
+`Layout` from config, loads `priority`, runs `model::Resolver`, and probes bare names. The
+seam signature is unchanged, so `src/backends/`, `src/core/` and `src/parsers/` never
+noticed. `tests/e2e_tests.rs` now drives module → profile → resolve → plan → execute →
+registry on the new model.
 
-So the cliff is **built up to the edge and not jumped.** The old model still runs everything.
-This is the honest position: the new model is proven in isolation and unproven in place, and
-Phase 2's exit condition (the harness green on one distro) is nowhere near met.
+**The branch did not stay red, and that is not a warning sign** — the seam held. What broke
+was six tests written against the deleted model (`@module:`, `.module.txt`, the `groups_dir`
+crawl, `manifest:` tags). Each was ported to the II.1 layout with its guarantee intact, not
+deleted.
 
-That is also why the branch is not yet red. It goes red the moment the next step starts, and
-**that is expected — do not "fix" it by keeping both models alive behind a flag** (Part III,
-Phase 2).
+**Two things the wiring changed that the plan did not anticipate.** Both are in VI.2:
+
+- **S13 (fixed).** Probing had to move *between* reading the files and merging them. Keyed
+  `?:ripgrep` until probed, a bare `ripgrep` never met an explicit `cargo:ripgrep`, so rule
+  5 silently did not apply to bare lines and both were installed. `model::Resolver` now
+  splits: `statements()` → the caller probes → `with_bare(answers)` → `collect()`.
+  `resolve()` still does both, for callers that need no probe.
+- **`__scopes` is new, and `__source` changed meaning.** They were one tag doing two jobs,
+  which is how `upgrade --module dev` came to be matched against a filename. `__source` is
+  now `file:line` — what II.8's messages and every error need. `__scopes` carries
+  `module:dev;profile:Work` — what `--module` / `--profile` match on. The model writes it
+  because it is the only thing that knows profile→module. `collect` keeps **every** origin
+  of a merged package, not just the winner's: the loser's scope is not thereby untrue.
 
 ## The next action, precisely
 
-Wire `model::Resolver` into `StateResolver::resolve_desired_state()`
-(`src/app/sync/resolver.rs:61`).
-
-- **Keep the seam signature** `Result<HashMap<String, Vec<PackageSpec>>>`. That is the whole
-  point of the seam: `src/backends/`, `src/core/` and `src/parsers/` must not notice.
-- **9 call sites** consume it: `app/profile.rs:243`, `app/profile.rs:379`, `main.rs:384`,
-  `:483`, `:943`, `:2271`, `:2341`, `:3084`, `:3146`, `:3333`. The trait method is
-  `app/sync/mod.rs:28`.
-- Build `Layout` from config → load `priority` → run `model::Resolver` → **probe bare names.**
-- **Bare-name probing must survive.** `model::resolve` marks an unqualified name with
-  `BARE = "?"` as its backend; something must still resolve it against the registry in
-  `priority` order. The old logic to preserve lives in `parse_and_probe_spec`
-  (`resolver.rs:212`) — V.16: the bare name is the question, the lock is the answer.
+**The II.8 command surface (`main.rs`, ~4,370 lines).** The largest item left in Phase 2;
+everything else on the checklist is smaller and independent of it.
 
 ## Phase 2's remaining checklist
 
-- [ ] Wire `model::Resolver` into `StateResolver` (above).
+- [x] Wire `model::Resolver` into `StateResolver`.
+- [ ] **S12** — `repo:`, `shim:`, `service:`, `link:` and `schedule:` lines resolve into
+      `DesiredState::extras` and are then dropped at the seam, because the seam carries
+      packages. `sync` warns for each by file and line so it is not silent, but they do
+      nothing. The ordering phases below are the fix — that is what `extras` was collected
+      for.
 - [ ] Delete `local.txt` and `_active_profiles.txt`. **S9 dies with `local.txt`** — its bare
       target matches the backend prefix, so removing a package named `npm` deletes every
       `npm:*` line.
@@ -1154,7 +1262,16 @@ Wire `model::Resolver` into `StateResolver::resolve_desired_state()`
 - [ ] **E6** — "unmanaged" has two implementations that will disagree. One function, defined
       as *"what `adopt` would adopt"*.
 - [ ] Planner ordering phases: repos → index refresh → packages → dependents.
-- [ ] The II.8 command surface (`main.rs`, ~4,370 lines).
+- [ ] **Cycle detection (II.7) — already caught in all three places. Do not rewrite; improve
+      the errors.** `use` loops: `model/profiles.rs:62` and `model/modules.rs:146`, a
+      push/pop path stack, so diamonds correctly pass. `@requires` loops:
+      `planner.rs:323` — `is_cyclic_directed` after `build_execution_graph`, which is what
+      stops `transaction.rs:179-190`'s ready-set loop spinning to its timeout. What is owed
+      is **the error text, not the detection** (V.45): the two `use` errors name the path but
+      carry a single `Origin` — the edge that closed the loop — and the planner's is
+      *"Circular dependency detected in graph construction."*, which names nothing at all.
+- [ ] The II.8 command surface (`main.rs`, ~4,370 lines). Includes `activate` / `activate -a`
+      / `deactivate` writing `active` (II.6).
 
 ## Decisions the owner has made — do not re-open
 

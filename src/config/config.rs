@@ -1,4 +1,5 @@
 use crate::core::{Error, Result};
+use crate::model::Layout;
 use crate::utils::{safe_config_dir, safe_data_dir};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -581,6 +582,15 @@ impl Config {
             .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
             .map(PathBuf::from)
             .unwrap_or_else(safe_config_dir)
+    }
+
+    /// This run's II.1 layout: your repo, and LiNix's data beside it but never inside it.
+    ///
+    /// Derived rather than stored so there is one answer to "where are the files", and it
+    /// is the same answer whether it came from `$LINIX_CONFIG_DIR`, the platform dir, or a
+    /// test's temporary directory (P4).
+    pub fn layout(&self) -> Layout {
+        Layout::new(self.config_root(), safe_data_dir())
     }
 
     pub fn merge_cli_overrides(

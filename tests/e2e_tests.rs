@@ -20,13 +20,18 @@ async fn test_e2e_sync_flow_hermetic() {
     // 1. Initialize hermetic test environment (DI + Async Bootstrap)
     let kernel = TestKernel::new().await;
 
-    // 2. Setup: Define a declarative manifest on the virtual disk
-    let manifest_path = kernel.app.config.groups_dir.join("workstation.txt");
-    fs::create_dir_all(&kernel.app.config.groups_dir)
+    // 2. Setup: a module holding the package, and a profile that reaches it. A module
+    //    nothing activates is inert by design — profiles choose, modules hold — so the
+    //    profile and the `active` line are not ceremony here, they are the thing under
+    //    test. 'brew' is our universal mock identifier.
+    let root = kernel.app.config.config_root();
+    fs::write(root.join("modules/workstation.txt"), "brew:neovim\n")
         .await
         .unwrap();
-    // We use 'brew' as our universal mock identifier
-    fs::write(&manifest_path, "brew:neovim\n").await.unwrap();
+    fs::write(root.join("profiles/Work"), "use workstation\n")
+        .await
+        .unwrap();
+    fs::write(root.join("active"), "Work\n").await.unwrap();
 
     // 3. Resolution Phase: Transform manifest strings into PackageSpecs
     // Modernized v3.6.0: Await async constructor and provide explicit locked=false

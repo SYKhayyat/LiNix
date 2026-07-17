@@ -10,7 +10,8 @@ use crate::config::grammar::{
 use crate::config::parser::HostFacts;
 use crate::core::PackageSpec;
 use chrono::{DateTime, Utc};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 
 /// The desired state (SPEC II.7 step 7).
 ///
@@ -43,17 +44,30 @@ impl DesiredState {
     pub fn total_present(&self) -> usize {
         self.present().count()
     }
+}
 
-    /// The seam: `HashMap<backend, Vec<PackageSpec>>`, install intents only. What the
-    /// planner has always consumed.
-    pub fn into_install_map(self) -> HashMap<String, Vec<PackageSpec>> {
-        self.packages
-            .into_iter()
-            .filter_map(|(b, specs)| {
-                let keep: Vec<PackageSpec> = specs.into_iter().filter(|p| p.present).collect();
-                (!keep.is_empty()).then_some((b, keep))
-            })
-            .collect()
+/// What the active profiles reach: the statements, and which profile and module each file's
+/// lines belong to.
+///
+/// The scopes are collected here because this is the only place that knows them. Once the
+/// statements are flattened, "profile `Work` reaches module `dev`" is gone, and `linix
+/// upgrade --profile Work` has no way to ask.
+pub struct Reached {
+    pub statements: Vec<(Statement, Origin)>,
+    scopes: HashMap<PathBuf, BTreeSet<String>>,
+}
+
+impl Reached {
+    /// The scopes a line belongs to, as `module:dev` / `profile:Work`.
+    fn of(&self, origin: &Origin) -> Vec<String> {
+        self.scopes
+            .get(&origin.file)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    fn record(&mut self, file: &Path, scope: String) {
+        self.scopes.entry(file.to_path_buf()).or_default().insert(scope);
     }
 }
 
@@ -64,6 +78,7 @@ pub struct Resolver<'a> {
     priority: &'a Priority,
     facts: HostFacts,
     now: DateTime<Utc>,
+    bare: HashMap<String, String>,
 }
 
 impl<'a> Resolver<'a> {
@@ -74,7 +89,18 @@ impl<'a> Resolver<'a> {
             priority,
             facts: HostFacts::current(),
             now: Utc::now(),
+            bare: HashMap::new(),
         }
+    }
+
+    /// The prober's answers: bare name -> the backend it resolved to.
+    ///
+    /// Supplying them before `collect` is what makes `ripgrep` and `apt:ripgrep` meet each
+    /// other. Keyed on the resolved backend, they are one declaration and reconcile decides
+    /// between them; keyed on `BARE`, they would be two, and both would be installed.
+    pub fn with_bare(mut self, answers: HashMap<String, String>) -> Self {
+        self.bare = answers;
+        self
     }
 
     pub fn with_facts(mut self, facts: HostFacts) -> Self {
@@ -91,51 +117,91 @@ impl<'a> Resolver<'a> {
 
     /// II.7, steps 1-7.
     pub fn resolve(&self) -> Result<DesiredState> {
+        let statements = self.statements()?;
+        self.collect(statements)
+    }
+
+    /// II.7 steps 1-3: `active` -> profiles -> the modules they reach, parsed and gated.
+    ///
+    /// Split from `collect` because resolving a bare name needs the network and this does
+    /// not. The caller probes the bare names these statements carry, then hands the answers
+    /// back to `collect` via `with_bare` — so the merge in `collect` sees real backends.
+    pub fn statements(&self) -> Result<Reached> {
         // 1. Read `active` -> the profile set.
         let active_file = self.layout.active_file();
         let body = std::fs::read_to_string(&active_file).unwrap_or_default();
         let active = parse_active(&active_file, &body)?;
 
+        let mut out = Reached {
+            statements: Vec::new(),
+            scopes: HashMap::new(),
+        };
+
         // 2. Resolve profiles -> the module set. Profiles may reference profiles; modules
         //    may not.
         let profiles = ProfileLoader::new(self.layout, self.backends);
         let mut wanted_modules: Vec<String> = Vec::new();
+        // Which profiles want each module. A module two profiles both reach belongs to
+        // both, and `upgrade --profile` for either must find it.
+        let mut wanted_by: HashMap<String, Vec<String>> = HashMap::new();
         let mut direct: Vec<(Statement, Origin)> = Vec::new();
         for name in &active {
-            let r = profiles.resolve(name, &Origin::new(&active_file, 0), &self.facts, &mut Vec::new())?;
+            let r = profiles.resolve(
+                name,
+                &Origin::new(&active_file, 0),
+                &self.facts,
+                &mut Vec::new(),
+            )?;
             for m in r.modules {
                 if !wanted_modules.contains(&m) {
-                    wanted_modules.push(m);
+                    wanted_modules.push(m.clone());
                 }
+                wanted_by.entry(m).or_default().push(name.clone());
+            }
+            // A profile's own package lines belong to the profile and to no module: a
+            // module can never reach them, which is the cost II.4 accepts knowingly (V.3).
+            for (_, origin) in &r.direct {
+                out.record(&origin.file, format!("profile:{}", name));
             }
             direct.extend(r.direct);
         }
 
         // 3. Parse ONLY the modules reached. Apply `when`.
         let mut loader = ModuleLoader::new(self.layout, self.backends);
-        let mut statements: Vec<(Statement, Origin)> = Vec::new();
         for m in &wanted_modules {
-            statements.extend(expand(
+            let stmts = expand(
                 &mut loader,
                 m,
                 &Origin::new(&active_file, 0),
                 &self.facts,
                 &mut Vec::new(),
-            )?);
+            )?;
+            // Attributed by the file each line actually came from, so a module reached
+            // through another module is scoped to itself and to the profile that led here.
+            for (_, origin) in &stmts {
+                if origin.file.parent() == Some(self.layout.modules_dir().as_path()) {
+                    if let Some(stem) = origin.file.file_stem().and_then(|s| s.to_str()) {
+                        out.record(&origin.file, format!("module:{}", stem));
+                    }
+                }
+                for p in wanted_by.get(m).into_iter().flatten() {
+                    out.record(&origin.file, format!("profile:{}", p));
+                }
+            }
+            out.statements.extend(stmts);
         }
-        statements.extend(direct);
-
-        // 4-6. Resolve each line; conflicts are errors; dated lines get rule 6.
-        self.collect(statements)
+        out.statements.extend(direct);
+        Ok(out)
     }
 
-    fn collect(&self, statements: Vec<(Statement, Origin)>) -> Result<DesiredState> {
+    /// II.7 steps 4-7: resolve each line, conflicts are errors, dated lines get rule 6.
+    pub fn collect(&self, reached: Reached) -> Result<DesiredState> {
         // Keyed `backend:name` so two declarations of one package meet each other. BTreeMap
         // so the plan and any error list in a stable order rather than a hash one.
-        let mut merged: BTreeMap<String, (Declared, Option<String>, Selector)> = BTreeMap::new();
+        let mut merged: BTreeMap<String, Entry> = BTreeMap::new();
         let mut out = DesiredState::default();
 
-        for (stmt, origin) in statements {
+        for (stmt, origin) in reached.statements.iter().cloned() {
             let (decl, present) = match stmt {
                 Statement::Package(d) => (d, true),
                 Statement::Absent(d) => (d, false),
@@ -154,36 +220,56 @@ impl<'a> Resolver<'a> {
 
             let incoming = Declared {
                 options: decl.options.clone(),
-                origin,
+                origin: origin.clone(),
                 present,
             };
 
             match merged.remove(&key) {
-                Some((existing, b, sel)) => {
-                    let winner = reconcile(&key, existing, incoming, self.now)?;
-                    merged.insert(key, (winner, b, sel));
+                Some(mut e) => {
+                    // Reconcile decides which declaration wins, but BOTH still declared it:
+                    // the loser's scope is not thereby untrue, and dropping it would hide
+                    // the package from `upgrade --module <the other one>`.
+                    e.declared = reconcile(&key, e.declared, incoming, self.now)?;
+                    e.origins.push(origin);
+                    merged.insert(key, e);
                 }
                 None => {
-                    merged.insert(key, (incoming, Some(backend), decl.selector.clone()));
+                    merged.insert(
+                        key,
+                        Entry {
+                            declared: incoming,
+                            backend,
+                            selector: decl.selector.clone(),
+                            origins: vec![origin],
+                        },
+                    );
                 }
             }
         }
 
-        for (key, (declared, backend, selector)) in merged {
+        for (_, e) in merged {
             // A line whose date has passed has no opinion at all — it is not "absent", it
             // simply stops counting (II.7 rule 6).
-            if dating_of(&declared.options, self.now) == super::dated::Dating::Lapsed {
+            if dating_of(&e.declared.options, self.now) == super::dated::Dating::Lapsed {
                 continue;
             }
-            let backend = backend.unwrap_or_else(|| key.split(':').next().unwrap_or("").to_string());
+            let mut scopes: Vec<String> = Vec::new();
+            for o in &e.origins {
+                for s in reached.of(o) {
+                    if !scopes.contains(&s) {
+                        scopes.push(s);
+                    }
+                }
+            }
             let spec = to_spec(
-                &backend,
-                &selector,
-                &declared.options,
-                &declared.origin,
-                declared.present,
+                &e.backend,
+                &e.selector,
+                &e.declared.options,
+                &e.declared.origin,
+                e.declared.present,
+                &scopes,
             );
-            out.packages.entry(backend).or_default().push(spec);
+            out.packages.entry(e.backend).or_default().push(spec);
         }
 
         Ok(out)
@@ -215,9 +301,14 @@ impl<'a> Resolver<'a> {
                          line: `apt:curl`.",
                     ));
                 }
-                // Left for the prober: the bare name is the question, the lock is the
-                // answer (V.16). Marked so nothing downstream mistakes it for a decision.
-                Ok(BARE.to_string())
+                // The bare name is the question, the lock is the answer (V.16). If the
+                // prober has already answered, that answer is the backend; if not, the
+                // question is passed on marked, so nothing downstream mistakes it for a
+                // decision.
+                match self.bare.get(decl.selector.as_str()) {
+                    Some(b) => Ok(b.clone()),
+                    None => Ok(BARE.to_string()),
+                }
             }
         }
     }
@@ -227,12 +318,25 @@ impl<'a> Resolver<'a> {
 /// hands these to the prober, which replaces it with the lock's answer or `priority`'s.
 pub const BARE: &str = "?";
 
-fn to_spec(
+/// One package's declarations, mid-merge.
+struct Entry {
+    declared: Declared,
+    backend: String,
+    selector: Selector,
+    /// Every line that declared it, winner and losers alike — the scopes it belongs to.
+    origins: Vec<Origin>,
+}
+
+/// Build the seam's `PackageSpec` from one declaration. The only place this conversion
+/// happens: an imperative `linix install jq` and a line in a module must produce the same
+/// spec, or the two paths drift (P4).
+pub fn to_spec(
     backend: &str,
     selector: &Selector,
     options: &Options,
     origin: &Origin,
     present: bool,
+    scopes: &[String],
 ) -> PackageSpec {
     let mut properties: HashMap<String, String> = HashMap::new();
     for (k, vs) in options.iter() {
@@ -240,7 +344,14 @@ fn to_spec(
         // what the planner already splits on.
         properties.insert(k.to_string(), vs.join(";"));
     }
+    // Two different questions, two tags. `__source` is where the line is, for the human
+    // reading an error or "Added jq to modules/imperative.txt" (II.8). `__scopes` is what
+    // it belongs to, for `--module` / `--profile` to match on. One tag answering both is
+    // how `upgrade --module dev` came to be matched against a filename.
     properties.insert("__source".to_string(), origin.to_string());
+    if !scopes.is_empty() {
+        properties.insert("__scopes".to_string(), scopes.join(";"));
+    }
     if let Selector::Regex(p) = selector {
         properties.insert("__regex".to_string(), p.clone());
     }
@@ -439,6 +550,63 @@ mod tests {
         );
         let d = resolve(&f).unwrap();
         assert_eq!(names(&d, BARE), ["ripgrep"]);
+    }
+
+    /// Resolve with the prober's answers already in hand, as the caller does.
+    fn resolve_probed(f: &Fx, answers: &[(&str, &str)]) -> Result<DesiredState> {
+        let table: HashMap<String, String> = answers
+            .iter()
+            .map(|(n, b)| (n.to_string(), b.to_string()))
+            .collect();
+        let r = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts())
+            .at(parse_absolute("2026-07-16T12:00").unwrap())
+            .with_bare(table);
+        let stmts = r.statements()?;
+        r.collect(stmts)
+    }
+
+    #[test]
+    fn the_probers_answer_becomes_the_backend() {
+        let f = fx(
+            "Work\n",
+            &[("Work", "use base\n")],
+            &[("base.txt", "ripgrep\n")],
+        );
+        let d = resolve_probed(&f, &[("ripgrep", "cargo")]).unwrap();
+        assert_eq!(names(&d, "cargo"), ["ripgrep"]);
+        assert_eq!(names(&d, BARE), [] as [String; 0]);
+    }
+
+    #[test]
+    fn a_bare_name_and_an_explicit_one_are_one_package_once_probed() {
+        // Probing has to happen BEFORE the merge. Keyed on `?`, `ripgrep` and `cargo:ripgrep`
+        // never meet, and the run installs the same package twice — quietly, which is the
+        // one thing this model exists to stop.
+        let f = fx(
+            "Work\n",
+            &[("Work", "use a\nuse b\n")],
+            &[("a.txt", "ripgrep\n"), ("b.txt", "cargo:ripgrep\n")],
+        );
+        let d = resolve_probed(&f, &[("ripgrep", "cargo")]).unwrap();
+        assert_eq!(names(&d, "cargo"), ["ripgrep"], "one package, not two");
+    }
+
+    #[test]
+    fn a_probed_bare_name_can_contradict_an_explicit_one() {
+        // And having met, they obey rule 5 like any other pair.
+        let f = fx(
+            "Work\n",
+            &[("Work", "use a\nuse b\n")],
+            &[
+                ("a.txt", "ripgrep@version=14.1.0\n"),
+                ("b.txt", "cargo:ripgrep@version=13.0.0\n"),
+            ],
+        );
+        let err = resolve_probed(&f, &[("ripgrep", "cargo")]).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("a.txt"), "{}", msg);
+        assert!(msg.contains("b.txt"), "{}", msg);
     }
 
     #[test]

@@ -9,68 +9,58 @@ mod mock_providers;
 use mock_providers::TestKernel;
 
 // ============================================================================
-// FEATURE 3: NAMED MODULES (@module: recursive expansion)
+// MODULES: `use` and recursive expansion
 // ============================================================================
 
-/// Verifies that the Resolver correctly unrolls nested @module references
-/// into a flat list of PackageSpecs.
+/// A module `use`ing a module, reached by a profile, expands to a flat closure.
 ///
-/// This test confirms that:
-/// 1. Modules are correctly identified by the @module: prefix.
-/// 2. Deep recursive nesting is handled without cycles.
-/// 3. Source metadata is correctly attached for Feature 4 scoping.
+/// 1. `use NAME` takes a name — never a path, never a URL.
+/// 2. Deep nesting resolves without cycles.
+/// 3. Each package records where it came from and what it belongs to.
 #[tokio::test]
 async fn test_recursive_module_expansion_logic() {
     let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
 
-    // 1. Setup Module A (The Leaf module)
-    let mod_a_path = kernel.app.config.modules_dir.join("network.module.txt");
-    fs::create_dir_all(&kernel.app.config.modules_dir)
-        .await
-        .unwrap();
-    fs::write(&mod_a_path, "brew:curl\nbrew:wget")
+    // 1. The leaf module.
+    fs::write(root.join("modules/network.txt"), "brew:curl\nbrew:wget\n")
         .await
         .unwrap();
 
-    // 2. Setup Module B (The Recursive module)
-    let mod_b_path = kernel.app.config.modules_dir.join("bundle.module.txt");
-    fs::write(&mod_b_path, "@module:network\nbrew:git")
+    // 2. A module that uses it. A module may use a module; it may never name a profile.
+    fs::write(root.join("modules/bundle.txt"), "use network\nbrew:git\n")
         .await
         .unwrap();
 
-    // 3. Setup a primary manifest utilizing Module B
-    let manifest_path = kernel.app.config.groups_dir.join("main.txt");
-    fs::create_dir_all(&kernel.app.config.groups_dir)
+    // 3. A profile to reach it, and the machine set to that profile. Only profiles can be
+    //    activated, and nothing is active unless a profile names it.
+    fs::write(root.join("profiles/Work"), "use bundle\n")
         .await
         .unwrap();
-    fs::write(&manifest_path, "@module:bundle").await.unwrap();
+    fs::write(root.join("active"), "Work\n").await.unwrap();
 
-    // 4. Resolve System State
-    // Modernized: Await async constructor and provide explicit locked=false
     let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
     let desired = resolver
         .resolve_desired_state()
         .await
         .expect("State resolution failed");
 
-    // 5. Verification of the expanded closure
     let brew_specs = desired
         .get("brew")
         .expect("Missing brew backend specs in resolution map");
     let names: Vec<&str> = brew_specs.iter().map(|s| s.name.as_str()).collect();
 
-    // Assert that the deep recursion reached the leaf packages
     assert!(
         names.contains(&"curl"),
-        "Resolver failed to expand nested leaf 'curl' from Module A"
+        "Resolver failed to expand nested leaf 'curl' from `network`"
     );
     assert!(
         names.contains(&"wget"),
-        "Resolver failed to expand nested leaf 'wget' from Module A"
+        "Resolver failed to expand nested leaf 'wget' from `network`"
     );
     assert!(
         names.contains(&"git"),
-        "Resolver failed to expand direct member 'git' from Module B"
+        "Resolver failed to expand direct member 'git' from `bundle`"
     );
     assert_eq!(
         names.len(),
@@ -78,26 +68,26 @@ async fn test_recursive_module_expansion_logic() {
         "Expanded closure count mismatch. Expected 3 packages."
     );
 
-    // Assert that the source metadata is correctly tagged (Feature 4 requirement)
+    // Where the line is, for a human; and what it belongs to, for `--module` / `--profile`.
     let curl_spec = brew_specs.iter().find(|s| s.name == "curl").unwrap();
-    assert_eq!(curl_spec.options.get("__source").unwrap(), "module:network");
+    assert!(curl_spec.options.get("__source").unwrap().contains("network.txt:1"));
+    let scopes = curl_spec.options.get("__scopes").unwrap();
+    assert!(scopes.contains("module:network"), "{}", scopes);
+    assert!(scopes.contains("profile:Work"), "{}", scopes);
 }
 
-/// Verifies that references to non-existent modules result in a descriptive
-/// Config error rather than a silent failure or panic.
+/// A `use` of a module that does not exist is a descriptive error, never a silent skip and
+/// never a package named `ghost-module-123`.
 #[tokio::test]
 async fn test_module_resolution_failure_handling() {
     let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
 
-    let manifest_path = kernel.app.config.groups_dir.join("fail.txt");
-    fs::create_dir_all(&kernel.app.config.groups_dir)
+    fs::write(root.join("profiles/Work"), "use ghost-module-123\n")
         .await
         .unwrap();
-    fs::write(&manifest_path, "@module:ghost-module-123")
-        .await
-        .unwrap();
+    fs::write(root.join("active"), "Work\n").await.unwrap();
 
-    // Modernized: Resolve E0061/E0599
     let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
     let result = resolver.resolve_desired_state().await;
 
@@ -108,7 +98,8 @@ async fn test_module_resolution_failure_handling() {
     if let Err(Error::Config(msg)) = result {
         assert!(
             msg.contains("ghost-module-123"),
-            "Error message should identify the specific missing module"
+            "Error message should identify the specific missing module: {}",
+            msg
         );
     } else {
         panic!("Incorrect error type returned: {:?}", result.err());
@@ -190,7 +181,8 @@ async fn test_scoped_planner_filtering_accuracy() {
         &kernel.app.config,
     );
 
-    // Setup a mixed desired state
+    // Setup a mixed desired state. A package belongs to the module that holds it and the
+    // profile that reaches it, and the resolver records both.
     let mut desired = HashMap::new();
     desired.insert(
         "brew".to_string(),
@@ -198,23 +190,22 @@ async fn test_scoped_planner_filtering_accuracy() {
             PackageSpec {
                 name: "pkg-work".into(),
                 backend: "brew".into(),
-                options: HashMap::from([("__source".into(), "manifest:work.txt".into())]),
+                options: HashMap::from([("__scopes".into(), "module:dev;profile:Work".into())]),
                 requires: vec![],
                 present: true,
             },
             PackageSpec {
                 name: "pkg-home".into(),
                 backend: "brew".into(),
-                options: HashMap::from([("__source".into(), "manifest:home.txt".into())]),
+                options: HashMap::from([("__scopes".into(), "module:media;profile:Home".into())]),
                 requires: vec![],
                 present: true,
             },
         ],
     );
 
-    // Execute Plan for Scope: "work.txt"
     let plan = planner
-        .plan(&desired, Some(Scope::Profile("work.txt".into())))
+        .plan(&desired, Some(Scope::Profile("Work".into())))
         .await
         .unwrap();
 
@@ -228,7 +219,7 @@ async fn test_scoped_planner_filtering_accuracy() {
     assert_eq!(report.install[0].name, "pkg-work");
     assert!(
         !report.install.iter().any(|r| r.name == "pkg-home"),
-        "Package from outside the scope (home.txt) was incorrectly included in the plan"
+        "Package from outside the scope (profile Home) was incorrectly included in the plan"
     );
 }
 
@@ -254,11 +245,15 @@ async fn test_locked_mode_version_conflict_enforcement() {
     .await
     .unwrap();
 
-    // 2. Setup a manifest requesting a conflicting version 2.0.0
-    let manifest_path = kernel.app.config.groups_dir.join("main.txt");
-    fs::write(&manifest_path, "brew:vim@version=2.0.0")
+    // 2. A module requesting a conflicting version 2.0.0, and a profile reaching it.
+    let root = kernel.app.config.config_root();
+    fs::write(root.join("modules/main.txt"), "brew:vim@version=2.0.0\n")
         .await
         .unwrap();
+    fs::write(root.join("profiles/Work"), "use main\n")
+        .await
+        .unwrap();
+    fs::write(root.join("active"), "Work\n").await.unwrap();
 
     // 3. Resolve in Locked Mode (locked = true)
     let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), true).await;

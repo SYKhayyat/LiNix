@@ -43,6 +43,19 @@ impl TestKernel {
         config.tmp_dir = tmp.path().join("tmp");
         config.dry_run = true;
 
+        // The II.1 layout, because the resolver now reads a repo rather than a folder of
+        // manifests. `priority` says which package managers this machine uses: without it
+        // LiNix refuses to guess, so a fixture without one is a fixture that cannot resolve
+        // anything. These are the three the mock executor pretends to have.
+        std::fs::write(tmp.path().join("priority"), "apt\nbrew\ncargo\n")
+            .expect("Failed to write test `priority`.");
+        std::fs::create_dir_all(tmp.path().join("modules"))
+            .expect("Failed to create test `modules/`.");
+        std::fs::create_dir_all(tmp.path().join("profiles"))
+            .expect("Failed to create test `profiles/`.");
+        std::fs::write(tmp.path().join("active"), "")
+            .expect("Failed to write test `active`.");
+
         let vfs = Arc::new(DashMap::new());
         let lock_map = Arc::new(DashMap::new());
 

@@ -15,4 +15,4 @@ pub mod resolve;
 pub use conflict::Declared;
 pub use layout::Layout;
 pub use priority::Priority;
-pub use resolve::{DesiredState, Resolver};
+pub use resolve::{DesiredState, Reached, Resolver};

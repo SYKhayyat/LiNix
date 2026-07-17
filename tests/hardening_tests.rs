@@ -30,25 +30,25 @@ fn pinned_spec(backend: &str, name: &str, version: &str) -> PackageSpec {
     }
 }
 
-/// A package listed in a manifest AND pulled in by a module must end up tagged with
-/// BOTH origins, so it stays visible to every scope it belongs to.
+/// A package a profile declares directly AND a module it uses also declares must end up
+/// belonging to BOTH scopes, so it stays visible to each one.
+///
+/// Declaring the same thing twice is not a disagreement, so the two declarations merge —
+/// but the loser's scope is not thereby untrue. Keep only the winner's and `upgrade
+/// --module dev` stops finding a package module `dev` really does declare.
 #[tokio::test]
-async fn resolver_merges_manifest_and_module_sources() {
+async fn resolver_records_every_scope_a_package_belongs_to() {
     let kernel = TestKernel::new().await;
-    let cfg = &kernel.app.config;
-    tokio::fs::create_dir_all(&cfg.groups_dir).await.unwrap();
-    tokio::fs::create_dir_all(&cfg.modules_dir).await.unwrap();
-    // base manifest lists the package directly and also references the @dev module,
-    // which lists the same package.
-    tokio::fs::write(
-        cfg.groups_dir.join("base.txt"),
-        "cargo:ripgrep\n@module:dev\n",
-    )
-    .await
-    .unwrap();
-    tokio::fs::write(cfg.modules_dir.join("dev.module.txt"), "cargo:ripgrep\n")
+    let root = kernel.app.config.config_root();
+
+    // The profile holds the package directly and also uses a module holding the same one.
+    tokio::fs::write(root.join("profiles/Work"), "cargo:ripgrep\nuse dev\n")
         .await
         .unwrap();
+    tokio::fs::write(root.join("modules/dev.txt"), "cargo:ripgrep\n")
+        .await
+        .unwrap();
+    tokio::fs::write(root.join("active"), "Work\n").await.unwrap();
 
     let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
     let desired = resolver.resolve_desired_state().await.unwrap();
@@ -57,21 +57,26 @@ async fn resolver_merges_manifest_and_module_sources() {
         .get("cargo")
         .and_then(|specs| specs.iter().find(|s| s.name == "ripgrep"))
         .expect("ripgrep should be resolved under cargo");
+    assert_eq!(
+        desired.get("cargo").map(|s| s.len()),
+        Some(1),
+        "one package, declared twice — not two packages"
+    );
 
-    let source = spec
+    let scopes = spec
         .options
-        .get("__source")
-        .expect("__source should be tagged");
-    let segments: Vec<&str> = source.split(';').collect();
+        .get("__scopes")
+        .expect("__scopes should be tagged");
+    let segments: Vec<&str> = scopes.split(';').collect();
     assert!(
-        segments.contains(&"manifest:base.txt"),
-        "missing manifest origin in {:?}",
-        source
+        segments.contains(&"profile:Work"),
+        "missing profile scope in {:?}",
+        scopes
     );
     assert!(
         segments.contains(&"module:dev"),
-        "missing module origin in {:?}",
-        source
+        "missing module scope in {:?}",
+        scopes
     );
 }
 
@@ -80,17 +85,16 @@ async fn resolver_merges_manifest_and_module_sources() {
 #[tokio::test]
 async fn scoped_upgrade_is_non_destructive_end_to_end() {
     let kernel = TestKernel::new().await;
-    let cfg = &kernel.app.config;
-    tokio::fs::create_dir_all(&cfg.groups_dir).await.unwrap();
-    tokio::fs::create_dir_all(&cfg.modules_dir).await.unwrap();
-    tokio::fs::write(cfg.groups_dir.join("base.txt"), "@module:dev\n")
+    let root = kernel.app.config.config_root();
+    tokio::fs::write(root.join("profiles/Work"), "use dev\n")
         .await
         .unwrap();
-    tokio::fs::write(cfg.modules_dir.join("dev.module.txt"), "cargo:ripgrep\n")
+    tokio::fs::write(root.join("modules/dev.txt"), "cargo:ripgrep\n")
         .await
         .unwrap();
+    tokio::fs::write(root.join("active"), "Work\n").await.unwrap();
 
-    // A managed package that is NOT in any manifest/module == drift.
+    // A managed package that no active module declares == drift.
     {
         let mut state = kernel.app.state.lock().await;
         state.add(
