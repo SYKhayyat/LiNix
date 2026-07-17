@@ -127,6 +127,7 @@ async fn main() -> Result<()> {
         Commands::Schedule(args) => handle_schedule(&app, &args.command).await,
         Commands::Snapshot(args) => handle_snapshot(&app, &args.command).await,
         Commands::Rollback { reference } => handle_rollback(&app, reference).await,
+        Commands::Diff { from, to } => handle_diff(&app, from, to.as_deref()).await,
         Commands::Git(args) => handle_git(&app, &args.command).await,
         Commands::Repo(args) => handle_repo(&app, &args.command).await,
         Commands::Search {
@@ -1859,6 +1860,38 @@ async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
     );
     // The rollback is not complete until the machine matches the restored manifests.
     handle_sync(app, false, false).await
+}
+
+/// `linix diff <from> [to]` — what changed between two commits, in packages (Phase 4). The
+/// manifests are package declarations, so a diff of the manifest files IS the package-level
+/// change; git already records it. Omitting `to` compares `from` against your working tree.
+async fn handle_diff(app: &App, from: &str, to: Option<&str>) -> Result<()> {
+    let git = app.git_manager();
+    if !git.is_repo() {
+        anyhow::bail!(
+            "`diff` compares commits of your manifest history, which is git. Run `linix git \
+             init` once to start version-controlling your config."
+        );
+    }
+    let changes = git.diff_manifest_changes(from, to)?;
+    let target = to.unwrap_or("working tree");
+    if changes.is_empty() {
+        println!("No manifest changes between {} and {}.", from, target);
+        return Ok(());
+    }
+    println!("Manifest changes {} → {}:", from, target);
+    for line in &changes {
+        println!("  {}", line);
+    }
+    let (added, removed) = changes
+        .iter()
+        .fold((0usize, 0usize), |(a, r), l| match l.chars().next() {
+            Some('+') => (a + 1, r),
+            Some('-') => (a, r + 1),
+            _ => (a, r),
+        });
+    println!("\n{} added, {} removed.", added, removed);
+    Ok(())
 }
 
 async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {

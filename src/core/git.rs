@@ -211,6 +211,33 @@ impl GitManager {
         ])?;
         Ok(parse_manifest_changes(&raw))
     }
+
+    /// The manifest lines that differ between two commits — `linix diff <from> <to>` in
+    /// packages, not text (Phase 4). `from` is the older baseline; pass `to = None` to diff
+    /// `from` against the working tree (committed + uncommitted). Limited to the config files,
+    /// keeping only the `+`/`-` content lines. Because manifests are package declarations, this
+    /// diff IS the package-level story: what you'd add or remove going from one to the other.
+    pub fn diff_manifest_changes(&self, from: &str, to: Option<&str>) -> Result<Vec<String>> {
+        if !self.is_repo() {
+            return Ok(vec![]);
+        }
+        let range = match to {
+            Some(to) => format!("{}..{}", from, to),
+            None => from.to_string(),
+        };
+        let raw = self.run_checked(&[
+            "diff",
+            "--no-color",
+            &range,
+            "--",
+            "modules",
+            "profiles",
+            "active",
+            "priority",
+            "schedules",
+        ])?;
+        Ok(parse_manifest_changes(&raw))
+    }
 }
 
 /// Extract the `+`/`-` content lines from a `git show` diff — the added and removed manifest
@@ -292,6 +319,33 @@ mod tests {
 
     // The following tests exercise real git; they self-skip when git is unavailable so the
     // suite still passes in a minimal environment.
+    #[test]
+    fn diff_manifest_changes_reports_package_level_delta() {
+        if !GitManager::git_available() {
+            eprintln!("skipping: git not installed");
+            return;
+        }
+        let tmp = tempdir().unwrap();
+        let git = GitManager::new(tmp.path());
+        git.init().unwrap();
+        std::fs::create_dir_all(tmp.path().join("modules")).unwrap();
+
+        std::fs::write(tmp.path().join("modules/dev.txt"), "apt:curl\napt:nano\n").unwrap();
+        git.commit_all("base").unwrap();
+        std::fs::write(tmp.path().join("modules/dev.txt"), "apt:curl\ncargo:ripgrep\n").unwrap();
+        git.commit_all("swap nano for ripgrep").unwrap();
+
+        let changes = git.diff_manifest_changes("HEAD~1", Some("HEAD")).unwrap();
+        // Package-level delta: nano removed, ripgrep added, curl untouched (in neither).
+        assert!(changes.contains(&"- apt:nano".to_string()), "{:?}", changes);
+        assert!(changes.contains(&"+ cargo:ripgrep".to_string()), "{:?}", changes);
+        assert!(
+            !changes.iter().any(|c| c.contains("apt:curl")),
+            "unchanged lines must not appear: {:?}",
+            changes
+        );
+    }
+
     #[test]
     fn init_commit_head_and_log_round_trip() {
         if !GitManager::git_available() {

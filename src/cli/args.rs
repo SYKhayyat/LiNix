@@ -409,6 +409,16 @@ pub enum Commands {
         reference: String,
     },
 
+    /// Show what changed between two commits, in packages (not text): the manifest lines added
+    /// and removed going from `from` to `to`. Omit `to` to diff `from` against your current
+    /// manifests. See `linix git log` for commit refs.
+    Diff {
+        /// The older commit (baseline).
+        from: String,
+        /// The newer commit. Omit to compare against the working tree (HEAD + uncommitted).
+        to: Option<String>,
+    },
+
     /// Version-control your manifests/config directory with git: init, status, log, commit,
     /// and checkout (roll the *config* back to a past commit without touching packages).
     Git(GitArgs),
