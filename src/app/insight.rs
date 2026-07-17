@@ -263,7 +263,10 @@ pub async fn audit(app: &App) -> Result<AuditReport> {
     }
 
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(app.config.network_timeout_secs.max(10)))
+        // Honour the configured value (F1). `.max(1)` only rejects a literal 0, which
+        // reqwest reads as "time out after zero seconds" — every request fails instantly —
+        // not "no timeout". The old `.max(10)` silently tripled a documented `5`.
+        .timeout(Duration::from_secs(app.config.network_timeout_secs.max(1)))
         .user_agent("linix-audit")
         .build()
         .map_err(|e| Error::Http(e.to_string()))?;

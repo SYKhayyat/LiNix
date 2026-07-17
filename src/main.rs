@@ -1374,8 +1374,10 @@ async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
             refuse_overwrite(&path, &final_name, *force)?;
 
             let client = reqwest::Client::builder()
+                // Honour the configured value (F1); `.max(1)` only rejects a literal 0,
+                // which reqwest reads as an instant-fail timeout, not "no timeout".
                 .timeout(std::time::Duration::from_secs(
-                    app.config.network_timeout_secs.max(10),
+                    app.config.network_timeout_secs.max(1),
                 ))
                 .user_agent("linix-module")
                 .build()?;
