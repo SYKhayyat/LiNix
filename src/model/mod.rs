@@ -12,6 +12,7 @@ pub mod modules;
 pub mod priority;
 pub mod profiles;
 pub mod resolve;
+pub mod schedule;
 
 pub use conflict::Declared;
 pub use edit::{active_module_files, inactive_declarations, Edit, Editor, Landing, Target};

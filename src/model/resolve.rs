@@ -66,6 +66,17 @@ impl DesiredState {
     pub fn has_dependents(&self) -> bool {
         self.dependents().next().is_some()
     }
+
+    /// The `schedule:` lines (S21), as `(name, options, origin)`. The scheduler provisions
+    /// these onto systemd/launchd/Task Scheduler — a phase of its own, separate from the
+    /// package plan and the dependents. The file-context rule in `collect` guarantees every
+    /// one of these came from the `schedules` file.
+    pub fn schedules(&self) -> impl Iterator<Item = (&str, &Options, &Origin)> {
+        self.extras.iter().filter_map(|(s, o)| match s {
+            Statement::Schedule(name, opts) => Some((name.as_str(), opts, o)),
+            _ => None,
+        })
+    }
 }
 
 /// What the active profiles reach: the statements, and which profile and module each file's
@@ -220,6 +231,17 @@ impl<'a> Resolver<'a> {
             out.statements.extend(stmts);
         }
         out.statements.extend(direct);
+
+        // 3b (S21). Read the `schedules` file — the one place `schedule:` lines live (II.2).
+        // Parsed and `when`-gated exactly like a module, so `when host == laptop { … }` works
+        // here too. Absent file → no schedules, which is the norm. The file-context rule in
+        // `collect` refuses a `schedule:` from anywhere else, so this is its only legal source.
+        let schedules_file = self.layout.schedules_file();
+        if let Ok(body) = std::fs::read_to_string(&schedules_file) {
+            let doc = crate::config::grammar::parse_document(&schedules_file, &body, self.backends)?;
+            out.statements.extend(doc.statements_for(&self.facts)?);
+        }
+
         Ok(out)
     }
 
@@ -372,6 +394,21 @@ impl<'a> Resolver<'a> {
                          does not use it at all.",
                         backend, backend, spec
                     )));
+                }
+                // II.2 / S21: a `schedule:` line belongs in the `schedules` file, and only
+                // there — one in a module or profile is an error, not silently parsed. A
+                // schedule is a machine-wide fact ("run `clean` nightly"), not something a
+                // profile toggles, so letting it hide in a module would make "what does this
+                // machine run on a timer?" depend on what you activated.
+                Statement::Schedule(ref name, _) if origin.file != self.layout.schedules_file() => {
+                    return Err(GrammarError::new(
+                        origin.clone(),
+                        format!("`schedule:{}` is not in the `schedules` file", name),
+                    )
+                    .with_hint(
+                        "move it to the `schedules` file in your config root. A schedule runs \
+                         for the whole machine, so it does not live in a module or profile.",
+                    ));
                 }
                 other => {
                     out.extras.push((other, origin));

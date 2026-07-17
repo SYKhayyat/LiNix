@@ -409,9 +409,10 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
         planner.plan(&desired, None).await?
     };
 
-    // A config can be all dependents and no package changes (just a `service:` line). That
-    // is still work, so the "nothing to do" exit has to account for the dependent phase.
-    if changes.is_empty() && !state.has_dependents() {
+    // A config can be all dependents/schedules and no package changes (just a `service:` or a
+    // `schedule:` line). That is still work, so the "nothing to do" exit has to account for
+    // the dependent phase and the schedule phase too.
+    if changes.is_empty() && !state.has_dependents() && state.schedules().next().is_none() {
         info!("Success: System matches declarative manifests.");
         return Ok(());
     }
@@ -429,8 +430,9 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
             );
         }
         // Ordering phase 3, previewed: the dependent extras that a real run would apply
-        // after the packages.
+        // after the packages, then the schedule phase.
         app.apply_dependents(&state).await?;
+        app.apply_schedules(&state).await?;
         return Ok(());
     }
 
@@ -462,6 +464,8 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
 
     // Ordering phase 3: the dependent extras, now that every package they lean on is in.
     app.apply_dependents(&state).await?;
+    // Ordering phase 4 (S21): provision the declared schedules onto the OS scheduler.
+    app.apply_schedules(&state).await?;
     perform_maintenance(app).await
 }
 
@@ -541,6 +545,8 @@ async fn watch_reconcile(app: &App) -> Result<usize> {
 
     // Phase 3: dependents, after the packages they lean on.
     app.apply_dependents(&state).await?;
+    // Phase 4 (S21): provision declared schedules.
+    app.apply_schedules(&state).await?;
     perform_maintenance(app).await?;
     Ok(n)
 }

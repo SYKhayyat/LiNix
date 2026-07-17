@@ -388,6 +388,30 @@ impl App {
         Ok(())
     }
 
+    /// Provision the declared `schedule:` lines onto the OS scheduler (S21) — II.7's schedule
+    /// phase, after packages and dependents. Each line is mapped to a `ScheduleConfig` (which
+    /// validates it carries `cron` and `run`) and handed to the `SchedulerManager`. Declarative
+    /// and idempotent: re-registering the same task each sync is how the system state is kept
+    /// equal to what the `schedules` file says.
+    pub async fn apply_schedules(&self, state: &crate::model::DesiredState) -> Result<()> {
+        for (name, opts, origin) in state.schedules() {
+            let cfg = crate::model::schedule::schedule_config(name, opts, origin)?;
+            if self.config.dry_run {
+                info!(
+                    "[DRY-RUN] would schedule `{}`: `{}` on `{}`",
+                    name, cfg.command, cfg.cron
+                );
+                continue;
+            }
+            info!(
+                "Schedule: provisioning `{}` ({}) — `{}` on `{}`",
+                name, origin, cfg.command, cfg.cron
+            );
+            self.scheduler.provision(&self.executor, &cfg).await?;
+        }
+        Ok(())
+    }
+
     /// Whether any active file declares this package.
     ///
     /// Asked through the resolver, so "declared" means the same thing here as it does to

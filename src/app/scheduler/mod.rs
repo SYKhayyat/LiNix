@@ -66,24 +66,6 @@ impl SchedulerManager {
             name, cron
         );
 
-        // Standard cron is 5-field (min hour dom month dow); the `cron` crate expects a
-        // 6-field form with seconds, so 5-field expressions must be normalized by
-        // prepending "0" or they are rejected as invalid. `@`-macros (@reboot, @daily, ...)
-        // never reach the parser — the systemd/launchd mapping below handles them.
-        if !cron.starts_with('@') {
-            let normalized = if cron.split_whitespace().count() == 5 {
-                format!("0 {}", cron)
-            } else {
-                cron.clone()
-            };
-            if let Err(e) = Schedule::from_str(&normalized) {
-                return Err(Error::Validation(format!(
-                    "Invalid cron syntax for task '{}': {}. Rejection issued.",
-                    name, e
-                )));
-            }
-        }
-
         let schedule_entry = ScheduleConfig {
             name: name.clone(),
             cron,
@@ -94,9 +76,7 @@ impl SchedulerManager {
 
         // The OS registration must succeed before the config is written: persisting first
         // would leave a schedule the user can see but the system will never run.
-        self.provisioner
-            .add_task(executor, &schedule_entry, &self.linix_bin_path)
-            .await?;
+        self.provision(executor, &schedule_entry).await?;
 
         config_mut.schedules.retain(|s| s.name != name);
         config_mut.schedules.push(schedule_entry);
@@ -106,6 +86,39 @@ impl SchedulerManager {
             "Scheduler: Task '{}' successfully registered and active in OS.",
             name
         );
+        Ok(())
+    }
+
+    /// Register `cfg` with the OS scheduler (systemd/launchd/Task Scheduler) — the declarative
+    /// path (S21). Unlike [`add_schedule`], it does NOT write to `config.toml`: a `schedule:`
+    /// declared in the model lives in the `schedules` file, and `sync` provisions it from
+    /// there on every run. Idempotent by nature — `add_task` re-registers the same task.
+    pub async fn provision(&self, executor: &CommandExecutor, cfg: &ScheduleConfig) -> Result<()> {
+        Self::validate_cron(&cfg.name, &cfg.cron)?;
+        self.provisioner
+            .add_task(executor, cfg, &self.linix_bin_path)
+            .await
+    }
+
+    /// Reject an invalid cron before it reaches the OS scheduler. Standard cron is 5-field
+    /// (min hour dom month dow); the `cron` crate expects a 6-field form with seconds, so a
+    /// 5-field expression is normalized by prepending "0". `@`-macros (@reboot, @daily, …)
+    /// never reach the parser — the systemd/launchd mapping handles them.
+    fn validate_cron(name: &str, cron: &str) -> Result<()> {
+        if cron.starts_with('@') {
+            return Ok(());
+        }
+        let normalized = if cron.split_whitespace().count() == 5 {
+            format!("0 {}", cron)
+        } else {
+            cron.to_string()
+        };
+        Schedule::from_str(&normalized).map_err(|e| {
+            Error::Validation(format!(
+                "Invalid cron syntax for task '{}': {}. Rejection issued.",
+                name, e
+            ))
+        })?;
         Ok(())
     }
 
