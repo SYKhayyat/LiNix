@@ -397,10 +397,16 @@ impl<'a> SyncEngine<'a> {
             return Ok(());
         }
 
-        warn!(
-            "Heal: Resolving {} interrupted system modifications.",
+        // S6: healing is automatic (a half-finished transaction is drift, and removing drift
+        // is sync's job — asking permission would ask permission to do sync's own job). But
+        // automatic is not silent: a recovery nobody sees is exactly the class of bug this
+        // whole document is about (P3). Report every action taken, by name, and summarize.
+        info!(
+            "Heal: recovering {} interrupted operation(s) from a previous run.",
             incomplete_actions.len()
         );
+        let mut recovered: Vec<String> = Vec::new();
+        let mut failed: Vec<String> = Vec::new();
         for entry in incomplete_actions {
             let (backend, package, is_install) = match &entry.action {
                 crate::core::journal::JournalAction::Install(spec) => {
@@ -410,6 +416,7 @@ impl<'a> SyncEngine<'a> {
                     (backend.clone(), name.clone(), false)
                 }
             };
+            let key = format!("{}:{}", backend, package);
 
             if let Some(backend_cap) = self.registry.get(&backend) {
                 if let Some(handler) = backend_cap.as_installable() {
@@ -427,22 +434,37 @@ impl<'a> SyncEngine<'a> {
                         handler.remove(std::slice::from_ref(&package), sudo).await
                     };
 
+                    let verb = if is_install { "reinstalled" } else { "removed" };
                     if remediation_res.is_ok() {
                         let mut j = self.journal.lock().await;
                         let _ = j.record_success(&entry.id, std::collections::HashMap::new());
-                        debug!(
-                            "Heal: Task {} successfully resolved and marked in WAL.",
-                            entry.id
-                        );
+                        info!("Heal: {} {} (completing an interrupted {}).", verb, key,
+                            if is_install { "install" } else { "removal" });
+                        recovered.push(format!("{} {}", verb, key));
                     } else {
                         error!(
-                            "Heal: Failed to resolve task {}: {:?}",
-                            entry.id,
+                            "Heal: could not recover {} — {:?}. The system may be in a partial \
+                             state for this package; re-run `linix sync`.",
+                            key,
                             remediation_res.err()
                         );
+                        failed.push(key);
                     }
                 }
             }
+        }
+
+        // The summary a reader sees whether or not they had `--verbose` on: what actually
+        // changed, in one line.
+        if !recovered.is_empty() {
+            info!("Heal: recovered {} operation(s): {}.", recovered.len(), recovered.join(", "));
+        }
+        if !failed.is_empty() {
+            warn!(
+                "Heal: {} operation(s) could NOT be recovered: {}. Re-run `linix sync`.",
+                failed.len(),
+                failed.join(", ")
+            );
         }
 
         let mut j = self.journal.lock().await;
