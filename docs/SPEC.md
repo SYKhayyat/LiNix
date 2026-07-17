@@ -1085,6 +1085,12 @@ implementing agent's call; that it goes is not.**
   never reads it) — a mandatory flag that does nothing. Owner ruling: go fully declarative. Delete
   the command and the dead flag; `@shim=true` + sync is the only way to make a shim.
 
+- **R4 — Delete `generation rollback`; it is a subset of top-level `rollback`.** Both dispatch to
+  the same `rollback_to()` (`main.rs:135` and `:1986`); `generation rollback` just hardcodes
+  `with_config = false` (`:1986`). Top-level `rollback` takes `--package` and `--with-config`, so it
+  does everything the generation form does and more. Owner ruling: delete `GenerationCommand::Rollback`,
+  keep the top-level `rollback`.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
