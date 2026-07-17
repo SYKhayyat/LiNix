@@ -1097,6 +1097,14 @@ implementing agent's call; that it goes is not.**
   declaration … from …" lines never show. The command does the work; only its output lies. Make the
   keys agree.
 
+- **R6 — Plain notification emails; no emoji, no "Mission-Critical", no version.** The email
+  subject bakes in emoji (`🚨 LiNix CRITICAL - …`, `notify.rs:151`), the body is titled "LiNix
+  Mission-Critical Report" (`:153`), and the error level is "LiNix CRITICAL" (`:35`) — theatrical
+  for a package-upgrade summary. The footer also hardcodes a stale version, "Automated Management
+  via LiNix v5.0.0" (`:161`; tool is v6). Owner ruling: plain subject with no emoji, drop
+  "Mission-Critical", and the footer reads exactly "Automated Management via LiNix" — no version
+  string at all (nothing to go stale).
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
