@@ -820,7 +820,9 @@ mod tests {
     #[test]
     fn dependents_are_the_after_package_extras_only() {
         // II.7 phase 3: shims, services and links are the dependent phase. `repo:` is phase
-        // 1 and `schedule:` is the scheduler's, so neither counts as a dependent.
+        // 1, so it is excluded. (`schedule:` can no longer appear in a module at all — see
+        // `a_schedule_outside_the_schedules_file_is_refused` — so it is not part of this
+        // fixture.)
         let f = fx(
             "Work\n",
             &[("Work", "use svc\n")],
@@ -830,8 +832,7 @@ mod tests {
                  apt:nginx\n\
                  service:nginx@enabled=true\n\
                  link:~/.config/nginx.conf@target=~/.config/nginx.conf\n\
-                 shim:rg\n\
-                 schedule:nightly\n",
+                 shim:rg\n",
             )],
         );
         let d = resolve(&f).unwrap();
@@ -845,8 +846,43 @@ mod tests {
                 _ => "other",
             })
             .collect();
-        // Declaration order preserved; repo and schedule excluded.
+        // Declaration order preserved; repo excluded.
         assert_eq!(kinds, ["service", "link", "shim"]);
+    }
+
+    #[test]
+    fn a_schedule_outside_the_schedules_file_is_refused() {
+        // S21: a `schedule:` line belongs in the `schedules` file, and only there. One in a
+        // module is an error naming the file, not a silently-parsed extra.
+        let f = fx(
+            "Work\n",
+            &[("Work", "use m\n")],
+            &[("m.txt", "schedule:nightly@cron=0 2 * * *,run=clean\n")],
+        );
+        let err = resolve(&f).unwrap_err();
+        assert!(
+            err.what.contains("is not in the `schedules` file"),
+            "{}",
+            err
+        );
+    }
+
+    #[test]
+    fn a_schedule_in_the_schedules_file_is_read_and_is_not_a_dependent() {
+        // S21 parts (1) and (3): the resolver reads the `schedules` file, and its lines are
+        // schedules — not dependents, not packages.
+        let f = fx("Work\n", &[("Work", "apt:nginx\n")], &[]);
+        std::fs::write(
+            f.layout.schedules_file(),
+            "schedule:nightly@cron=0 2 * * *,run=clean\n",
+        )
+        .unwrap();
+        let d = resolve(&f).unwrap();
+        assert_eq!(d.schedules().count(), 1);
+        let (name, _opts, _origin) = d.schedules().next().unwrap();
+        assert_eq!(name, "nightly");
+        // A schedule is never a dependent (II.7 phase 4, not phase 3).
+        assert!(!d.has_dependents());
     }
 
     #[test]
