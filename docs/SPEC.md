@@ -1044,6 +1044,23 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   constraint, nothing else) plus NO LEGACY, one `backend:name` parser, every-removal-path-guards,
   prefer-deleting, and the verify chain.**
 
+### Rough edges — the 2026-07-17 review pass (owner-approved, one line each)
+
+A read-through of the actual code for things that are silly, confusing, or unintuitive — silly
+messages *and* silly features (a feature no user wants, two features that are really one, or a
+feature with a better way to do it). Each line below is an owner-approved change, not a proposal.
+
+- **R1 — Kill the theatrical house voice.** The tool narrates routine work like a spaceship:
+  `LiNix Kernel: … kernel initialized successfully` on **every** command (`context.rs:116`),
+  `Kernel: Commencing system-wide batch upgrade` (`context.rs:457`, `:446`, `:744`), `GhostShell:
+  Dropping into hardened sandbox` / `Purging ephemeral state` (`shell/mod.rs:101`,`:114`,`:138`),
+  `Cleaner: Initiating deep system cleanup` (`clean.rs:15`), `Teleporter: Executing atomic
+  transition transaction` (`teleport.rs:124`). Logging defaults to `info` on stderr
+  (`main.rs:43-46`), so all of it reaches ordinary users. Two fixes: (a) drop the
+  `Component: TheatricalVerb…` style for plain, quiet language, and (b) demote pure-status lines
+  like "kernel initialized" to `debug!` so they stop printing every run. The bar is `apt`/`dnf`:
+  near-silent on a normal run.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
