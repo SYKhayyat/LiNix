@@ -60,13 +60,6 @@ impl ManifestEngine {
                             e.path().is_file()
                                 && e.path().extension().is_some_and(|ext| ext == "txt")
                         })
-                        .filter(|e| {
-                            // keep.txt is a protection list, not a wish list. See
-                            // `is_reserved_manifest`.
-                            !e.file_name()
-                                .to_str()
-                                .is_some_and(crate::config::parser::is_reserved_manifest)
-                        })
                         .map(|e| e.path().to_path_buf()),
                 );
             }
@@ -182,87 +175,4 @@ impl ManifestEngine {
         Ok(())
     }
 
-    pub async fn delete_package(&self, package_name: &str) -> Result<usize> {
-        let locations = self.find_all_packages(package_name).await?;
-        let count = locations.len();
-        for loc in &locations {
-            self.delete_package_at_location(loc).await?;
-        }
-        Ok(count)
-    }
-
-    async fn delete_package_at_location(&self, location: &PackageLocation) -> Result<()> {
-        let content = fs::read_to_string(&location.file_path).await?;
-        let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-
-        if lines.len() > location.line_index {
-            lines.remove(location.line_index);
-            let output = lines.join("\n").trim_end().to_string() + "\n";
-
-            let path = location.file_path.clone();
-            tokio::task::spawn_blocking(move || atomic_write(&path, &output))
-                .await
-                .map_err(|e| Error::Other(e.to_string()))??;
-        }
-        Ok(())
-    }
-
-    pub async fn add_to_local(&self, spec_str: &str) -> Result<()> {
-        // Always the GLOBAL folder. `local.txt` is the record of what you installed
-        // imperatively on this machine — one machine, one record. Following `-g` would
-        // scatter it across scratch folders, and a scratch folder that later goes away
-        // takes the only evidence those packages were wanted with it.
-        let local_path = self.groups_dir.join("local.txt");
-        let name_part = spec_str.split('@').next().unwrap_or(spec_str);
-        let clean_name = name_part
-            .split_once(':')
-            .map(|(_, n)| n)
-            .unwrap_or(name_part)
-            .trim();
-
-        if !self.find_all_packages(clean_name).await?.is_empty() {
-            return Ok(());
-        }
-
-        if !self.groups_dir.exists() {
-            fs::create_dir_all(&self.groups_dir).await?;
-        }
-
-        let mut lines = if tokio::fs::try_exists(&local_path).await.unwrap_or(false) {
-            fs::read_to_string(&local_path)
-                .await?
-                .lines()
-                .map(|s| s.to_string())
-                .collect()
-        } else {
-            vec![
-                "# LiNix Local Manifest".to_string(),
-                "# Automatically managed imperative installations".to_string(),
-                "".to_string(),
-            ]
-        };
-
-        lines.push(spec_str.to_string());
-        let output = lines.join("\n") + "\n";
-
-        tokio::task::spawn_blocking(move || atomic_write(&local_path, &output))
-            .await
-            .map_err(|e| Error::Other(e.to_string()))??;
-
-        Ok(())
-    }
-
-    pub async fn list_all_specs(&self) -> Result<Vec<String>> {
-        let mut specs = Vec::new();
-        for path in self.manifest_files().await? {
-            let content = fs::read_to_string(path).await?;
-            for line in content.lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() && !trimmed.starts_with('#') {
-                    specs.push(trimmed.to_string());
-                }
-            }
-        }
-        Ok(specs)
-    }
 }

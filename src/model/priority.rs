@@ -126,6 +126,43 @@ impl Priority {
     }
 }
 
+/// Order backends the way V.14 says, keeping only the ones this machine has.
+///
+/// Most of an alphabetical or hand-kept order is meaningless — apt, pacman and dnf never
+/// coexist, so their relative order never decides anything. Exactly one distinction does:
+/// **a system manager beats a language manager**, because your distro maintains that build
+/// and updates it with everything else. A language manager is for what your distro does not
+/// carry. `pip` is last on its own: it installs into the system Python and can break it.
+///
+/// Anything unrecognised sorts with the language managers rather than ahead of them: a
+/// backend the onboarder added is not known to be safe to prefer over your distro.
+pub fn starter_order(available: &[String]) -> Vec<String> {
+    const SYSTEM: &[&str] = &[
+        "apt", "dnf", "pacman", "zypper", "apk", "xbps", "yay", "paru", "winget", "scoop",
+        "choco", "brew", "nix", "flatpak", "snap",
+    ];
+
+    let rank = |b: &str| -> usize {
+        if b == "pip" {
+            return 2;
+        }
+        if SYSTEM.contains(&b) {
+            return 0;
+        }
+        1
+    };
+
+    let mut out: Vec<String> = available.to_vec();
+    out.sort_by(|a, b| {
+        rank(a)
+            .cmp(&rank(b))
+            // Stable and predictable within a tier. The order inside a tier decides nothing
+            // real, so it should at least not vary between runs.
+            .then_with(|| a.cmp(b))
+    });
+    out
+}
+
 /// The generated starter `priority`, with its reason in a comment.
 ///
 /// F1/V.14: most of the old 10-backend order was meaningless — apt, pacman and dnf never
@@ -229,6 +266,36 @@ mod tests {
     #[test]
     fn a_stray_brace_is_an_error() {
         assert!(parse("apt\n}\n").is_err());
+    }
+
+    #[test]
+    fn a_system_manager_outranks_a_language_manager() {
+        // V.14: if both apt and cargo have ripgrep, apt wins — your distro maintains that
+        // build and updates it with everything else.
+        let out = starter_order(&["cargo".into(), "npm".into(), "apt".into()]);
+        assert_eq!(out, ["apt", "cargo", "npm"]);
+    }
+
+    #[test]
+    fn pip_is_last_because_it_can_break_your_system_python() {
+        let out = starter_order(&["pip".into(), "cargo".into(), "apt".into()]);
+        assert_eq!(out, ["apt", "cargo", "pip"]);
+    }
+
+    #[test]
+    fn an_unknown_backend_does_not_outrank_your_distro() {
+        // The onboarder can add backends at runtime, and nothing says a custom one is safe
+        // to prefer over the distro's own build.
+        let out = starter_order(&["weird".into(), "apt".into()]);
+        assert_eq!(out, ["apt", "weird"]);
+    }
+
+    #[test]
+    fn only_what_this_machine_has_is_listed() {
+        // "Detected, never configured" (V.41). Listing apt on a machine with no apt is
+        // homework, and `priority` is not a wish list.
+        let out = starter_order(&["cargo".into()]);
+        assert_eq!(out, ["cargo"]);
     }
 
     #[test]

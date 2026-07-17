@@ -264,6 +264,11 @@ pub enum Commands {
         /// Equivalent to appending `@lease=<DURATION>` to each package.
         #[arg(long, value_name = "DURATION")]
         temp: Option<String>,
+
+        /// Which file the line goes in: a module (lowercase) or a profile (Capitalized).
+        /// Without it, the line lands in the `imperative` module.
+        #[arg(long, value_name = "NAME")]
+        into: Option<String>,
     },
 
     /// Imperatively uninstall one or more packages

@@ -1,7 +1,13 @@
 # LiNix v7 — the declarative model
 
-**Status:** Phases 0 and 1 complete, Phase 2 in progress. **Part VII holds the current state
-— read it after Part II and before you touch anything.**
+**Status:** ~~Phases 0 and 1 complete~~ — **audited 2026-07-17 and both are false.** Phase 0
+deleted the `-g` flag but not the model beneath it; Phase 1 built the grammar but **added a
+ninth `backend:name` parser instead of removing eight**, six of which still skip validation.
+Phase 2 is in progress and its own account is accurate. **See Part VII → "Audit: two ✅ that
+are not true" before planning anything — the deletions are owed, and II.8 sits on top of
+them.**
+
+**Part VII holds the current state — read it after Part II and before you touch anything.**
 
 Supersedes [`docs/AUDIT-v6.org`](AUDIT-v6.org) — the audit that found all of this — except
 where Part VI carries an item forward explicitly. Part VI carries everything you need;
@@ -42,6 +48,28 @@ already exists". You cannot implement this correctly from a summary.
 8. **Report honestly.** If tests fail, say so and paste the output. If you skipped a step,
    say that. If you're unsure something works, say you're unsure. Never describe unverified
    work as done.
+9. **A ✅ is earned by a command, not by a belief.** Rule 8 was already here, in these words,
+   and **Phases 0 and 1 were both marked ✅ while untrue anyway** — so the rule is not
+   enough on its own. **Before writing ✅ on a phase, re-run that phase's Exit criterion and
+   paste the result.** Before *trusting* one, re-run it. **A phase that deletes things is
+   done when the greps are quiet, not when the new thing works** — Phase 0 and Phase 1 both
+   failed exactly here: the replacement was built, the replaced was left standing, the tests
+   went green, and green was read as done. **Green means the old code still works. That is
+   the thing you were trying to remove.**
+10. **At every phase change, run Part VII's audit section.** It is a list of commands, not
+    prose. Delete each finding as its command goes quiet — **in the same commit as the fix**,
+    because an audit nobody retires becomes the next thing nobody believes.
+11. **A green suite is not success. It is the absence of one kind of failure.** The tests
+    cannot see the plan. They do not know Phase 0 asked for a deletion, that II.6 asked for
+    three verbs and got two, or that the grammar was supposed to *replace* the eight parsers
+    rather than become the ninth. **Nothing in this document is verified by `cargo test`** —
+    every ✅ that turned out false was green when it was written. So green is a floor, not a
+    finding: it says you broke nothing that was already covered, which is the least
+    interesting thing you could report and never the thing that was asked. **The question is
+    never "do the tests pass?" It is "did I do what the plan said, in full?"** — and that is
+    answered by re-reading the phase and checking yourself against it, line by line, not by
+    reading a number. A partial implementation passes. A plan followed for three steps of
+    five passes. The wrong design, built perfectly, passes.
 
 ### How to work
 
@@ -50,8 +78,18 @@ already exists". You cannot implement this correctly from a summary.
 - **Phase 2 cannot be split, and the branch is red for a long stretch.** That is expected. Do
   **not** run the old and new models side by side behind a flag — that is the exact "two ways
   to do one thing" disease this whole design cures, applied to ourselves.
-- Every phase has an **exit condition**. Meet it before moving on.
+- Every phase has an **exit condition**. Meet it before moving on. The exit condition is the
+  bar — **not the test suite** (rule 11). Read the Exit lines and notice what they actually
+  ask for: Phase 0 wants the codebase *smaller* and a line count reported; Phase 4 wants a
+  test **per removal path proving the guard fires**; Phase 6 wants an **air-gapped container**
+  to restore. None of those is "the suite is green", and no amount of green implies any of
+  them. Phase 1's Exit is the one that reads like tests — "unit tests for every grammar rule
+  above, including every error case" — and note that it names a *surface to cover*, not a
+  result to observe; note also that **Phase 1 is one of the two phases that was falsely marked
+  ✅.** Its tests were written and they passed. The phase still wasn't done, because covering
+  the new grammar was never the same as unifying the parsers onto it.
 - `cargo test` and `cargo clippy` must be green at every commit outside Phase 2's interior.
+  Necessary, nowhere near sufficient: a phase can be green and untouched.
 - Part IV lists the specific proofs. They are not optional.
 
 ### The three principles that decide arguments
@@ -716,6 +754,12 @@ new model deletes the flag instead. Do not try to preserve it.
 
 ## Phase 0 — Delete
 
+> **⚠ Marked ✅ elsewhere in this document. It is not done — roughly 15% happened**
+> (audited 2026-07-17, Part VII). The `-g` *flag* is gone; `groups_dir` (84 refs),
+> `local.txt`, `keep.txt`, `_active_profiles.txt`, `prune` and `migrate` are all still live.
+> **The reason it matters is in this section's own first line:** *do this first so nothing is
+> carefully ported that was about to be deleted.* That is now happening.
+
 **Pure subtraction. Nothing new can break. Tests stay green except those testing deleted
 features.** Do this first so nothing is carefully ported that was about to be deleted.
 
@@ -725,6 +769,12 @@ Delete everything in II.17. Delete the ~884 marketing comments. Delete every leg
 **Exit:** `cargo test` green. Codebase measurably smaller. Report the line count removed.
 
 ## Phase 1 — One parser and the grammar
+
+> **⚠ Marked ✅ elsewhere in this document. Half done** (audited 2026-07-17, Part VII).
+> **The grammar is built and it is good. The unification never happened:** `grammar/statement.rs`
+> was added *alongside* the eight parsers, making **nine**, and **six still skip backend
+> validation**. The bullet directly below is the unmet one — it is a *replacement*, not an
+> addition, and the ✅ was awarded for the addition.
 
 **C13 and the grammar are one job, not two.** The grammar *is* the parser; unifying five
 parsers against the old grammar just to rewrite them is work done twice.
@@ -1153,7 +1203,7 @@ and a user who can see which of the three lines they meant to delete.
 | **C3** | lease and `absent:` removals skip protection, three lines above a drift branch that checks it → **Phase 3** |
 | **C8** | ghost-shell exit force-removes with no protection, no guard, no confirmation → **Phase 3** |
 | **C9** | lease expiry implemented twice with different semantics; the sweep runs on every state-changing command → **Phase 3** |
-| **C13** | ~~five~~ **eight** `backend:name` parsers, ~~three~~ **six** skip validation. **(re-measured)** → **Phase 1** ✅ done |
+| **C13** | ~~five~~ ~~**eight**~~ **NINE** `backend:name` parsers, **six** still skip validation. ~~**Phase 1** ✅ done~~ — **NOT done, re-audited 2026-07-17.** Phase 1 *added* `grammar/statement.rs:227` alongside the eight; it removed none. The six live non-validators: `main.rs:1397`, `config/parser.rs:288`, `:387`, `config/manifest.rs:97`, `:218`, `app/insight.rs:428`. **Blocks II.8** — see Part VII's audit → **Phase 2** |
 | **B3** | `unprotected_packages` doesn't beat OS-essential; `linix protected` reports the opposite of what the guard does → **Phase 3** |
 | **E6** | "unmanaged" has two implementations that will disagree. Resolve as *"what `adopt` would adopt"* — one function → **Phase 2** |
 | **E11** | suspension restore implemented twice → **Phase 3** |
@@ -1186,6 +1236,7 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S10** | **`cargo test` wrote to the developer's REAL data dir**, and one bad file bricks every command. `TestKernel` (named `linix_hermetic_`) isolated `registry.json`, groups and tmp, but `Journal::new()` hardcoded `safe_data_dir()` — found at 733KB of test noise in `%APPDATA%/linix/journal.json`. Fixed in Phase 2b by injection (`Journal::at`). **The remaining half is real:** `Journal::load_sync` errors on a bad parse -> `App::new` fails -> EVERY command fails, with no message saying which file to delete or how to recover. Failing loud is right (P3); having no way out is not → **Phase 5** |
 | **S12** | **`repo:`, `shim:`, `service:`, `link:` and `schedule:` lines parse, resolve, and are then dropped on the floor.** The seam is `HashMap<backend, Vec<PackageSpec>>` and these are not packages, so `Resolver::resolve` collects them into `DesiredState::extras` and `resolve_desired_state` — which returns only `.packages` — discards them. Nothing downstream has ever consumed them. A `repo:ppa:deadsnakes/ppa` line therefore does exactly nothing, silently, which is VI.1's disease with new syntax. Not a regression (the syntax is new in Phase 1) but it must not ship: `sync` warns for now, naming each ignored line and its file. The fix is the ordering phases — repos → index refresh → packages → dependents — which is what `extras` was collected for → **Phase 2** (planner ordering) |
 | **S13** | **A bare name and an explicit one were two packages, not one.** `model::resolve` keys the merge on `backend:name`, and a bare `ripgrep` is keyed `?:ripgrep` until something probes it — so `ripgrep` in one module and `cargo:ripgrep` in another never met, never reconciled, and both reached the planner. Found while wiring the seam and **fixed there**: `Resolver::statements()` and `Resolver::collect()` are now separate, the caller probes in between, and `with_bare` hands the answers back so the merge sees real backends. II.7 rule 5 was silently not applying to every bare line → **Phase 2** (fixed) |
+| **S14** | **The generated `priority` lists things that are not package managers.** `linix init` fills it from `registry.available()`, which includes the pseudo-backends `service`, `link`, `web` and `github` — so a fresh file answers II.6's question ("which package managers does this setup use, and in what order") with 26 entries, four of which cannot install a package. Harmless today because the model only consults `priority` for package statements, but it is the first file a new user reads and it is teaching them the wrong thing. The registry has no "is this a package manager" answer to ask; capability probing (`as_installable` + `as_searchable`) is the likely shape → **Phase 5** (F1/F4 own the generated files) |
 | **S11** | **The test harness is not hermetic by construction, only by remembering.** `LINIX_DATA_DIR` exists precisely so tests do not touch real state (`safe_data_dir` says so), the docker/windows integration scripts set it, and the cargo tests never did — nothing enforced it, so it rotted silently for as long as the journal has existed. G3's "unverified" list and this are the same problem: isolation that depends on each test author remembering → **Phase 5** (make it structural, not remembered) |
 
 ## VI.3 Do not re-decide these
@@ -1210,9 +1261,142 @@ verified against the tree at the commit that last touched this section, not reca
 ## The state at `HEAD` (2026-07-17)
 
 - **18 commits** since `d49d28c`.
-- **485 tests passing, 0 failing. `cargo clippy --all-targets` silent.**
-- Phase 0 ✅ · Phase 1 ✅ · **Phase 2 — the cliff is jumped; the command surface remains** ·
-  Phases 3–6 not started.
+- **485 tests passing, 0 failing. `cargo clippy --all-targets` silent.** *This line tells you
+  nothing about the two lines below it, and never could — both false ✅ were green when
+  written (rule 11). It is here because a red suite would be worth reporting, not because a
+  green one is progress.*
+- ~~Phase 0 ✅ · Phase 1 ✅~~ — **both false. See the audit immediately below.** ·
+  **Phase 2 — the cliff is jumped; the command surface remains** · Phases 3–6 not started.
+
+## Audit: two ✅ that are not true (last run 2026-07-17)
+
+**Phase 2's own account above is accurate — it was written from the work. Phases 0 and 1
+were marked ✅ before this section existed, and neither survives a grep.** Checked by hand
+against the working tree, not recalled. **The suite is green and will stay green through all
+of it: green means the old model still works, which is precisely the problem.**
+
+> ### How to use this section — run it, don't read it
+>
+> **Every finding below is a command and the answer that means it is fixed.** At each phase
+> change: **run the commands. Do not read the prose and believe it.** This section was
+> written on a tree that is already moving, and by the time you read it some of it may be
+> false — **that is the intended failure mode.** A finding that no longer reproduces is
+> **not** a finding to argue with: **delete the entry, in the same commit as the fix.**
+>
+> When every entry is gone, **delete this whole section and restore the ✅** — to Phase 0 and
+> Phase 1 in Part III, to C13 in VI.2, and to the status header at the top of this document.
+> Those four places are where the false ✅ lived; they are where the true one goes.
+>
+> **Do not add findings here that are merely unbuilt.** This section is only for **work this
+> document claims is finished and is not** — the failure that costs a reader their trust in
+> every other ✅. Unbuilt work goes on the phase checklists, where it is honest.
+>
+> *(Why this is a ritual and not a note: this document has now been wrong about its own state
+> every single time anyone checked — **always in the direction that flatters the tree**, and
+> **every one was found by a grep, none by a reading.** That is the whole argument for making
+> this a command you run rather than a paragraph you trust. See "A warning about this
+> document" below.)*
+
+### Phase 1 ✅ / C13 "done" — "one `backend:name` parser". There are nine.
+
+**This one blocks the next action, so it comes first.** The grammar parser was **added
+alongside** the eight, not substituted for them — and **six still trust the prefix without
+validating it**, which is the entire defect C13 names.
+
+| | site |
+|---|---|
+| **validates** | `grammar/statement.rs:227` (the new one), `config/parser.rs:217`, `main.rs:647` |
+| **skips validation** | `main.rs:1397`, `config/parser.rs:288`, `config/parser.rs:387`, `config/manifest.rs:97`, `config/manifest.rs:218`, `app/insight.rs:428` |
+
+```
+grep -rn "split_once(':')" src/ | grep -v "^src/parsers/"
+```
+**Now: 9 sites (plus one comment). Fixed when: 1** — `grammar/statement.rs`. Then delete this
+entry and restore C13's ✅. *(`src/parsers/` is excluded deliberately: it parses backend CLI
+**output**, a different concern that happens to share a word. Do not count it, and do not
+delete it.)*
+
+**Why it blocks II.8:** the command surface is the next action, and it is built on these.
+`config/parser.rs:288` is the live example — `remove_package_from_local` compares the
+**backend** half against the user's target, so `linix remove apt` deletes every `apt:*` line.
+That is **S9, which this document says "dies with `local.txt`"** — and `local.txt` has not
+died either (below). Building II.8 on top of the six inherits the bug into every new verb.
+
+**The test at `grammar/statement.rs:395` says the quiet part:** *"Six of the **eight old**
+parsers did `split_once(':')` and trusted the prefix."* The word **old** is unearned — the
+six are current, and the count matches exactly what is live today.
+
+### Phase 0 ✅ — "delete everything in II.17". Roughly 15% happened.
+
+| marked deleted | actually | evidence |
+|---|---|---|
+| the `-g` model | **the flag is gone; the model it anchored is not.** `groups_dir` has **84 references** across ~15 files, `config_root` **23**; `config_root()` is still literally `groups_dir.parent()`. | `config/config.rs:579` |
+| `local.txt` (V.1) | ~~alive in 10 files~~ — **dead as of Phase 2e.** `add_package_to_local`, `remove_package_from_local`, `remove_package_from_manifests`, `line_declares`, `get_user_group_file` and `ManifestEngine::add_to_local` are deleted; `model/edit.rs` replaces them. **S9 died with it**, and `model/edit.rs` has the test that proves `uninstall npm` no longer deletes every `npm:*` line. | fixed |
+| `keep.txt` (V.6) | ~~alive~~ — **dead as of Phase 2e.** It was never *read*: the whole `RESERVED_MANIFEST_NAMES` / `is_reserved_manifest` mechanism existed only to keep one file out of a crawl. Mechanism and all four exclusion sites deleted. | fixed |
+| `_active_profiles.txt` | **still written on every `activate`.** `app/profile.rs` is untouched and still holds `materialize()` and a second full profile-composition engine (`compose`) that duplicates `model/profiles.rs`. **The next unit.** | `app/profile.rs:20`, `:347` |
+| `prune` (V.34) | **still a CLI command** (`snapshot prune`), plus `prune_on_sync` / `prune_scope` / `auto_prune` in config. | `cli/args.rs:773`, `main.rs:1817` |
+| `migrate` | **606 live lines**, called by `adopt`. Renamed, not deleted — and `migrate.rs:283` still tells the user to *"run `linix migrate` again"*, a command that does not exist. | `main.rs:2153` |
+| `clone` (V.33) | ~~a CLI command~~ — the command was gone, but **`fleet::clone` + `install_one` were still `pub` with zero callers**: Phase 0 deleted the flag and left the implementation. Deleted in Phase 2e. | fixed |
+| ~884 marketing comments | **≈3,700 comment lines remain** in ≈41,600 lines of `src/` (~8.9%). **The count proves nothing on its own and is not the finding** — this one cannot be greped, so judge it by reading. The finding is that **the new `model/` files are writing spec-narration comments as the rule against them is being implemented**: `model/layout.rs:9` *"the fix for the shape of Monday's bug"*, `:135` *"which is Monday's bug (V.1)"*, `model/resolve.rs:162` *"the cost II.4 accepts knowingly"*. **V.42 is being broken by the code that cites V.42.** | `model/layout.rs:9,135` |
+
+**Each row is one grep.** Fixed when each returns nothing:
+
+```
+grep -rn  "groups_dir" src/                                                  # ≈84
+grep -rn  "config_root" src/                                                 # ≈25
+grep -rln "local.txt" src/                                                   # ≈11 files
+grep -rn  "_active_profiles\|RESERVED_MANIFEST" src/ | grep -v ^src/model/   # ≈7
+grep -rn  "keep.txt" src/                                                     # live
+grep -rn  "prune_on_sync\|auto_prune\|Prune" src/cli/ src/config/             # live
+wc -l src/app/migrate.rs                                                      # ≈606, called by adopt
+```
+
+> **The counts are `≈` on purpose — do not treat them as a target, and do not "correct" them.**
+> They drifted while this audit was being written (`config_root` 23→25, `local.txt` 10→11,
+> minutes apart) because **more than one agent is committing to this tree.** A count is a
+> tripwire, not a metric. **Only `0` means anything here.** If a number is merely different,
+> the finding stands; it is retired when the grep is **quiet**, and never on the strength of
+> the number having moved.
+
+Delete each row as its grep goes quiet; restore Phase 0's ✅ when the last one does.
+
+### Phase 2 — the II.1 layout: three of six paths have no reader
+
+`Layout` defines the paths; only `priority` and `active` are actually read. **Zero callers
+outside `layout.rs` and its own tests** for:
+
+- `preferences_file()` — `layout.rs:84`. Nothing reads `preferences.toml`. II.10's refusals
+  and V.43's nine guard rules have no source.
+- `schedules_file()` — `layout.rs:69`. Live scheduling still reads `config.schedules` from
+  `config.toml` (`scheduler/mod.rs:101`).
+- `locks_dir()` / `lock_file()` — `layout.rs:74-79`. Live locks still read the old
+  `groups_dir.join("locks.json")` (`sync/resolver.rs:52`).
+
+```
+grep -rn "preferences_file\|schedules_file\|locks_dir" src/ | grep -v model/layout.rs
+```
+**Now: nothing. Fixed when: a real caller for each** — which is the inverse of every other
+entry here, so read the result carefully. **An empty result means this is still broken.**
+This entry is unusual: unlike the rest of the audit it is *unbuilt work, not a false ✅* —
+it sits here only because Phase 2 is where it belongs and it is easy to mistake a path
+helper with a passing test for a working file.
+
+### The shape of all of it
+
+**The new model was built alongside the old one, and the old one was never removed.** That is
+the "two ways to do one thing" disease Phase 2 explicitly forbids — *"do not run two models
+behind a flag"* — arrived at by accretion rather than by decision, which is why no one chose
+it and no test objects.
+
+**The most dangerous artifact is not a false ✅ — it is a comment asserting a deletion that
+did not happen.** `model/profiles.rs:24` states there is no `_active_profiles.txt` and no
+materialization. `app/profile.rs:347` writes `_active_profiles.txt` on every `activate`. Both
+are in the tree right now, and the comment is the one a reader believes. **Trust neither the
+✅ nor the comment. Grep.**
+
+**Recommended order, given the above:** finish the deletions **before** II.8, not after.
+Every verb added on top of the six non-validating parsers, `groups_dir`, and `local.txt` is a
+verb that has to be rewritten when they go — and II.8 is the biggest surface in the plan.
 
 ## The one thing to understand before continuing
 
@@ -1249,6 +1433,15 @@ everything else on the checklist is smaller and independent of it.
 ## Phase 2's remaining checklist
 
 - [x] Wire `model::Resolver` into `StateResolver`.
+- [x] **`local.txt` and `keep.txt` are deleted, and S9 with them.** `model/edit.rs` is the one
+      writer now: `install`, `uninstall`, `forget`, `teleport`, `service enable/disable` and
+      the package-manager hook all go through it, and it parses every line with the grammar
+      rather than splitting on `:`. `--into` exists (II.8). The three landing modules exist,
+      and the first write to one adds `use <name>` to the active profile and says so.
+- [x] **`linix init` writes the II.1 repo** — `priority` generated from what this machine
+      actually has (V.41), ordered by V.14's one real rule, with its reason in the file (P5).
+      Verified by running it: it produces a repo that resolves. **S14**: the generated list
+      still includes `service`/`link`/`web`/`github`, which are not package managers.
 - [ ] **S12** — `repo:`, `shim:`, `service:`, `link:` and `schedule:` lines resolve into
       `DesiredState::extras` and are then dropped at the seam, because the seam carries
       packages. `sync` warns for each by file and line so it is not silent, but they do
@@ -1284,11 +1477,29 @@ everything else on the checklist is smaller and independent of it.
 ## A warning about this document
 
 **Every "(verified)" / "(measured)" fact in this spec that has been checked has been wrong —
-six for six, always under-reporting.** They were measured against an older tree. Corrected so
-far: the comment count (139 → 884 + 32 false), both good-comment exemplar citations, the
-parser count (5/3 → 8/6), the backend count, and — the expensive one — **"`reconcile_shims` is
-written and never called (verified)"**, which was false and was the sentence hiding a bug that
-made every `sync` delete the user's own files out of `~/.local/bin` (S1).
+seven for seven, always under-reporting.** They were measured against an older tree. Corrected
+so far: the comment count (139 → 884 + 32 false), both good-comment exemplar citations, the
+parser count (5/3 → 8/6 → **9/6**, wrong twice, the second time by a re-measurement that was
+itself called "(re-measured)"), the backend count, and — the expensive one —
+**"`reconcile_shims` is written and never called (verified)"**, which was false and was the
+sentence hiding a bug that made every `sync` delete the user's own files out of
+`~/.local/bin` (S1).
+
+**The ✅ markers fail the same way, and worse.** Phases 0 and 1 were both marked complete
+while untrue (2026-07-17 audit, Part VII) — under a rule, already written at the top of this
+document, that says *"never describe unverified work as done."* **The rule was not enough.**
+A wrong measurement makes a reader over-confident; **a wrong ✅ makes a reader skip the work
+entirely**, and nothing downstream will object, because the code it should have deleted is
+still there passing its tests.
+
+**The bias is one bias, in two costumes: this document flatters the codebase.** Measurements
+understate the mess; status markers overstate the progress. **When in doubt about any claim
+here, assume the tree is worse than the sentence** — every check that has ever been run has
+landed on that side, and none on the other.
+
+**Line numbers rot faster than claims.** V.29 cites `planner.rs:407-426` for `spec.requires`;
+the loop is at `:431`, and the *reasoning* is still correct. Treat a citation as a place to
+start looking, never as proof — **grep the symbol, don't trust the line.**
 
 **Verify any Part II–VI citation against `HEAD` before you act on it.** Part V's *reasoning*
 has been consistently right and is worth following; its *measurements* are not.

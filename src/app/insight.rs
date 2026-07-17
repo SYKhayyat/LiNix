@@ -440,7 +440,7 @@ async fn scan_declarations(app: &App, backend: &str, name: &str) -> Vec<String> 
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             let fname = entry.file_name().to_string_lossy().into_owned();
-            if !fname.ends_with(".txt") || crate::config::parser::is_reserved_manifest(&fname) {
+            if !fname.ends_with(".txt") {
                 continue;
             }
             if let Ok(content) = tokio::fs::read_to_string(&path).await {

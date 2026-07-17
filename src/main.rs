@@ -8,7 +8,6 @@ use linix::cli::{
     ModuleCommand, ProfileCommand, RepoCommand, ScheduleCommand, ServiceCommand,
     SnapshotCommand,
 };
-use linix::config::parser::{add_package_to_local, remove_package_from_local};
 use std::collections::HashMap;
 use std::env;
 use tracing::{info, warn};
@@ -117,7 +116,8 @@ async fn main() -> Result<()> {
             packages,
             json,
             temp,
-        } => handle_install(&app, packages, *json, temp.as_deref()).await,
+            into,
+        } => handle_install(&app, packages, *json, temp.as_deref(), into.as_deref()).await,
         Commands::Uninstall {
             packages,
             json,
@@ -453,10 +453,6 @@ async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u64, i64)> {
         };
         while let Ok(Some(entry)) = rd.next_entry().await {
             let path = entry.path();
-            let fname = entry.file_name().to_string_lossy().into_owned();
-            if linix::config::parser::is_reserved_manifest(&fname) {
-                continue;
-            }
             if path.extension().map(|e| e == "txt").unwrap_or(false) {
                 if let Ok(meta) = entry.metadata().await {
                     let mtime = meta
@@ -1005,6 +1001,7 @@ async fn handle_install(
     packages: &[String],
     json: bool,
     temp: Option<&str>,
+    into: Option<&str>,
 ) -> Result<()> {
     // A temporary install must never silently become permanent: reject a malformed
     // duration before touching the system.
@@ -1069,9 +1066,10 @@ async fn handle_install(
                     false,
                 );
                 // A temporary install is not declarative desired state — keep it out of
-                // the manifest so `sync` doesn't resurrect it after the lease expires.
+                // your files so `sync` doesn't resurrect it after the lease expires.
                 if temp.is_none() {
-                    let _ = add_package_to_local(&app.config.groups_dir, pkg_str).await;
+                    app.declare(pkg_str, into, linix::model::Landing::Imperative)
+                        .await?;
                 }
             }
         }
@@ -1215,7 +1213,7 @@ async fn handle_uninstall(
                             ),
                         }
                     } else {
-                        let _ = remove_package_from_local(&app.config.groups_dir, pkg_str).await;
+                        app.undeclare(pkg_str).await?;
                     }
                     removed = true;
                     break;
@@ -1446,21 +1444,18 @@ async fn handle_service(app: &App, cmd: &ServiceCommand) -> Result<()> {
         ServiceCommand::Enable { name } => {
             service_apply(app, name, "enabled=true,status=running").await?;
             // Persist so `sync` keeps the service enabled going forward.
-            let _ =
-                add_package_to_local(&app.config.groups_dir, &format!("service:{}", name)).await;
-            println!(
-                "Service '{}' enabled and started (recorded in manifest).",
-                name
-            );
+            app.declare(
+                &format!("service:{}@enabled=true", name),
+                None,
+                linix::model::Landing::Imperative,
+            )
+            .await?;
+            println!("Service '{}' enabled and started.", name);
         }
         ServiceCommand::Disable { name } => {
             service_apply(app, name, "enabled=false,status=stopped").await?;
-            let _ = remove_package_from_local(&app.config.groups_dir, &format!("service:{}", name))
-                .await;
-            println!(
-                "Service '{}' disabled and stopped (removed from manifest).",
-                name
-            );
+            app.undeclare(&format!("service:{}", name)).await?;
+            println!("Service '{}' disabled and stopped.", name);
         }
         ServiceCommand::Start { name } => {
             service_apply(app, name, "status=running").await?;
@@ -1652,8 +1647,12 @@ async fn record_hooked_target(
                 false,
             );
             if declarative {
-                let _ = add_package_to_local(&app.config.groups_dir, &format!("{manager}:{name}"))
-                    .await;
+                app.declare(
+                    &format!("{manager}:{name}"),
+                    None,
+                    linix::model::Landing::Hooks,
+                )
+                .await?;
             }
             info!(
                 "hook: recorded install {}:{} ({})",
@@ -1668,9 +1667,7 @@ async fn record_hooked_target(
         }
         HookOp::Remove => {
             app.state.lock().await.remove(manager, target);
-            let _ =
-                remove_package_from_local(&app.config.groups_dir, &format!("{manager}:{target}"))
-                    .await;
+            app.undeclare(&format!("{manager}:{target}")).await?;
             info!("hook: recorded remove {}:{}", manager, target);
         }
     }
@@ -2699,16 +2696,20 @@ async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<(
             }
         }
 
-        let dropped =
-            linix::config::parser::remove_package_from_manifests(&app.config.groups_dir, spec)
-                .await?;
+        // The line goes too. `forget` means LiNix never touches it again, and a package
+        // still declared is a package the next `sync` re-adopts — a command that silently
+        // undoes itself.
+        let dropped = app.undeclare(spec).await?;
 
         results.push(serde_json::json!({
             "package": spec,
             "forgotten": forgotten,
-            "manifest_lines_removed": dropped
+            "lines_removed": dropped
                 .iter()
-                .map(|(p, l)| serde_json::json!({ "file": p.display().to_string(), "line": l }))
+                .map(|e| serde_json::json!({
+                    "file": e.file.display().to_string(),
+                    "line": e.line,
+                }))
                 .collect::<Vec<_>>(),
             "still_installed": true,
         }));
@@ -3450,35 +3451,22 @@ async fn handle_init(app: &App, force: bool, interactive: bool) -> Result<()> {
         return interactive_init(app, force).await;
     }
 
-    let local = cfg.groups_dir.join("local.txt");
-    if !local.exists() || force {
-        let starter = "# LiNix manifest — one package per line. Examples:\n\
-                       #   ripgrep                     (auto-detect backend by priority)\n\
-                       #   cargo:exa                   (force a backend)\n\
-                       #   npm:typescript@version=>5.0.0\n\
-                       #   github:BurntSushi/ripgrep\n";
-        tokio::fs::write(&local, starter)
-            .await
-            .with_context(|| format!("Failed to write starter manifest {}", local.display()))?;
-        println!("  created  {:<10} {}", "manifest", local.display());
-    } else {
-        println!(
-            "  kept     {:<10} {} (exists; use --force to reset)",
-            "manifest",
-            local.display()
-        );
-    }
+    scaffold_repo(app, force).await?;
 
-    println!("\nReady. Edit {} then run `linix sync`.", local.display());
     println!("(Run `linix config init` to also write a commented config.toml, or `linix init -i` for guided setup.)");
     Ok(())
 }
 
 /// Create every on-disk directory LiNix expects. Idempotent.
 async fn scaffold_dirs(cfg: &linix::config::Config) -> Result<()> {
-    let dirs: [(&str, &std::path::Path); 6] = [
-        ("groups", &cfg.groups_dir),
-        ("modules", &cfg.modules_dir),
+    let layout = cfg.layout();
+    let modules = layout.modules_dir();
+    let profiles = layout.profiles_dir();
+    let locks = layout.locks_dir();
+    let dirs: [(&str, &std::path::Path); 7] = [
+        ("modules", &modules),
+        ("profiles", &profiles),
+        ("locks", &locks),
         ("tmp", &cfg.tmp_dir),
         ("github", &cfg.github_dir),
         ("web", &cfg.web_dir),
@@ -4367,4 +4355,67 @@ mod init_tests {
         );
     }
 
+}
+
+/// Write the II.1 repo: `priority`, `active`, and a profile to hang things on.
+///
+/// `priority` is generated from what this machine actually has (V.41: LiNix should look, not
+/// ask you to maintain a list by hand on every machine forever), ordered by the one rule
+/// that decides anything — a system manager beats a language manager (V.14). The file says
+/// why, because a default nobody can explain is a default nobody can safely change (P5).
+async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
+    let layout = app.config.layout();
+
+    let detected: Vec<String> = app
+        .registry
+        .available()
+        .iter()
+        .map(|b| b.name().to_string())
+        .collect();
+    let ordered = linix::model::priority::starter_order(&detected);
+
+    let priority = layout.priority_file();
+    if !priority.exists() || force {
+        tokio::fs::write(&priority, linix::model::priority::starter_file(&ordered))
+            .await
+            .with_context(|| format!("Failed to write {}", priority.display()))?;
+        println!(
+            "  created  {:<10} {} ({})",
+            "priority",
+            priority.display(),
+            if ordered.is_empty() {
+                "no package managers detected — add yours by hand".to_string()
+            } else {
+                ordered.join(", ")
+            }
+        );
+    } else {
+        println!("  kept     {:<10} {}", "priority", priority.display());
+    }
+
+    // Something has to be active or nothing is: a module nothing reaches is inert (II.3).
+    let profile = layout.profile_file("Main");
+    if !profile.exists() || force {
+        tokio::fs::write(
+            &profile,
+            "# What this machine is set to. Add `use <module>` lines, or packages directly.\n\
+             #\n\
+             # Profiles are Capitalized, modules are lowercase — so `(Work | gaming)` tells\n\
+             # you what everything is without extra syntax.\n",
+        )
+        .await
+        .with_context(|| format!("Failed to write {}", profile.display()))?;
+        println!("  created  {:<10} {}", "profile", profile.display());
+    }
+
+    let active = layout.active_file();
+    if !active.exists() || force {
+        tokio::fs::write(&active, "Main\n")
+            .await
+            .with_context(|| format!("Failed to write {}", active.display()))?;
+        println!("  created  {:<10} {}", "active", active.display());
+    }
+
+    println!("\nReady. `linix install jq` writes a line you own; `linix sync` makes it so.");
+    Ok(())
 }

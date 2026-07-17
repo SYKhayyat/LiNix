@@ -17,6 +17,7 @@ pub mod profile;
 pub mod profile_expr;
 pub mod run;
 pub mod sandbox;
+pub mod vocab;
 pub mod search;
 pub mod services;
 pub mod shim_manager;

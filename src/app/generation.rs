@@ -35,14 +35,6 @@ pub async fn read_manifests(groups_dir: &Path) -> Result<HashMap<String, String>
             if !path.extension().map(|e| e == "txt").unwrap_or(false) {
                 continue;
             }
-            let fname = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            if crate::config::parser::is_reserved_manifest(&fname) {
-                continue;
-            }
             if let Ok(body) = tokio::fs::read_to_string(&path).await {
                 out.insert(path.to_string_lossy().into_owned(), body);
             }

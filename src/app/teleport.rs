@@ -1,12 +1,14 @@
-use crate::app::diagnostics::FailureDiagnosticEngine; // Modernized: DI Import
+use crate::app::diagnostics::FailureDiagnosticEngine;
+use crate::app::vocab::Vocab;
 use crate::backends::BackendRegistry;
-use crate::config::manifest::ManifestEngine;
+use crate::config::parser::HostFacts;
+use crate::config::Config;
 use crate::core::{
     Error, GraphAction, Journal, PackageSpec, Result, StateRegistry, Transaction,
 };
+use crate::model::{active_module_files, Editor, Landing};
 use petgraph::stable_graph::StableDiGraph;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 pub use tokio::sync::Mutex;
 use tracing::{debug, error, info, instrument, trace};
@@ -15,7 +17,7 @@ pub struct Teleporter {
     registry: Arc<BackendRegistry>,
     journal: Arc<Mutex<Journal>>,
     state: Arc<Mutex<StateRegistry>>,
-    manifest_engine: ManifestEngine,
+    config: Arc<Config>,
     diagnostics: Arc<FailureDiagnosticEngine>,
 }
 
@@ -25,15 +27,49 @@ impl Teleporter {
         journal: Arc<Mutex<Journal>>,
         state: Arc<Mutex<StateRegistry>>,
         diagnostics: Arc<FailureDiagnosticEngine>,
-        groups_dir: &Path,
+        config: Arc<Config>,
     ) -> Self {
         Self {
             registry,
             journal,
             state,
-            manifest_engine: ManifestEngine::new(groups_dir),
+            config,
             diagnostics,
         }
+    }
+
+    /// II.8: `teleport` edits the line and syncs. The old backend's line goes, the new
+    /// one arrives — the same two edits you would have made by hand.
+    async fn move_the_line(&self, package_name: &str, target_backend: &str) -> Result<()> {
+        let priority = crate::app::sync::resolver::StateResolver::new(
+            &self.config,
+            self.registry.clone(),
+            false,
+        )
+        .await
+        .priority_for_host()
+        .await?;
+        let vocab = Vocab::new(&self.registry, &self.config, &priority);
+        let layout = self.config.layout();
+        let facts = HostFacts::current();
+
+        let editor = Editor::new(&layout, &vocab).with_facts(facts.clone());
+        let files = active_module_files(&layout, &vocab, &facts);
+        let removed = editor
+            .remove_from(&files, package_name)
+            .map_err(Error::from)?;
+
+        // Put the new line where the old one was, so a teleported package stays in the
+        // module you chose to keep it in rather than migrating to `imperative`.
+        let target = match removed.first().and_then(|e| e.file.file_stem()) {
+            Some(stem) => crate::model::Target::Module(stem.to_string_lossy().into_owned()),
+            None => Landing::Imperative.target(),
+        };
+        let edit = editor
+            .add(&target, &format!("{}:{}", target_backend, package_name))
+            .map_err(Error::from)?;
+        info!("{}", edit.describe("Moved"));
+        Ok(())
     }
 
     #[instrument(skip(self))]
@@ -119,10 +155,8 @@ impl Teleporter {
                         .map_err(|e| Error::Other(format!("State save join panic: {}", e)))??;
                 }
 
-                trace!("Teleporter: Aligning declarative manifests...");
-                let _ = self.manifest_engine.delete_package(package_name).await;
-                let new_spec_str = format!("{}:{}", target_backend_name, package_name);
-                self.manifest_engine.add_to_local(&new_spec_str).await?;
+                trace!("Teleporter: Aligning your files with the move...");
+                self.move_the_line(package_name, target_backend_name).await?;
 
                 info!(
                     "Teleporter: Success. '{}' moved to {}.",

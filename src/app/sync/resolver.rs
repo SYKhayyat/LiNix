@@ -1,5 +1,6 @@
 use crate::backends::BackendRegistry;
-use crate::config::grammar::{statement, BackendNames, GrammarError, Origin, Statement};
+use crate::app::vocab::Vocab;
+use crate::config::grammar::{statement, GrammarError, Origin, Statement};
 use crate::config::parser::HostFacts;
 use crate::config::Config;
 use crate::core::{Error, PackageSpec, Result, Validator};
@@ -11,27 +12,6 @@ use std::sync::Arc;
 use tokio::fs;
 use tracing::{debug, info, instrument, warn};
 use version_compare::{compare as loose_compare, Cmp};
-
-/// Which `prefix:` names a real backend, for the grammar.
-///
-/// Three sources, because a backend name can legitimately come from any of them: the
-/// registry knows what is compiled in and what the onboarder added, `aliases` renames them,
-/// and `priority` names what this setup uses — including a backend this OS does not build,
-/// which must still parse so that `priority` can be the thing that refuses it (V.15), not a
-/// baffling "unrecognised line".
-struct Known<'a> {
-    registry: &'a BackendRegistry,
-    config: &'a Config,
-    priority: &'a Priority,
-}
-
-impl BackendNames for Known<'_> {
-    fn is_backend(&self, name: &str) -> bool {
-        self.registry.get(name).is_some()
-            || self.config.aliases.contains_key(name)
-            || self.priority.allows(name)
-    }
-}
 
 pub struct StateResolver<'a> {
     config: &'a Config,
@@ -87,6 +67,10 @@ impl<'a> StateResolver<'a> {
     /// package managers for you — inheriting them from whatever happens to be installed is
     /// the thing `priority` exists to stop (V.15), and a default nobody chose is a default
     /// nobody can safely change (P5).
+    pub async fn priority_for_host(&self) -> Result<Priority> {
+        self.priority(&HostFacts::current()).await
+    }
+
     async fn priority(&self, facts: &HostFacts) -> Result<Priority> {
         let file = self.layout.priority_file();
         let body = match fs::read_to_string(&file).await {
@@ -119,11 +103,7 @@ impl<'a> StateResolver<'a> {
     pub async fn resolve_model(&self) -> Result<DesiredState> {
         let facts = HostFacts::current();
         let priority = self.priority(&facts).await?;
-        let known = Known {
-            registry: &self.registry,
-            config: self.config,
-            priority: &priority,
-        };
+        let known = Vocab::new(&self.registry, self.config, &priority);
 
         info!("Resolver: Resolving desired state for host '{}'.", facts.host);
 
@@ -301,11 +281,7 @@ impl<'a> StateResolver<'a> {
     pub async fn parse_and_probe_spec(&self, line: &str) -> Result<PackageSpec> {
         let facts = HostFacts::current();
         let priority = self.priority(&facts).await?;
-        let known = Known {
-            registry: &self.registry,
-            config: self.config,
-            priority: &priority,
-        };
+        let known = Vocab::new(&self.registry, self.config, &priority);
 
         let origin = Origin::argument();
         let stmt = statement::parse(&origin, line.trim(), &known)?;

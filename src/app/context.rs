@@ -1,3 +1,4 @@
+use crate::config::grammar::Origin;
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::migrate::Migrator;
 use crate::app::profile::ProfileManager;
@@ -128,7 +129,7 @@ impl App {
             self.journal.clone(),
             self.state.clone(),
             self.diagnostics.clone(),
-            &self.config.groups_dir,
+            self.config.clone(),
         )
     }
 
@@ -193,6 +194,58 @@ impl App {
             self.diagnostics.clone(),
         )
         .await
+    }
+
+    /// This machine's backend vocabulary, for anything that reads or writes a line.
+    pub async fn vocabulary(&self) -> Result<crate::app::vocab::Vocab> {
+        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
+        let priority = resolver.priority_for_host().await?;
+        Ok(crate::app::vocab::Vocab::new(
+            &self.registry,
+            &self.config,
+            &priority,
+        ))
+    }
+
+    /// Write a declaration into your files (P1: an imperative command is a shortcut for
+    /// editing a file and syncing), and say which file it touched (II.8).
+    ///
+    /// `into` is II.8's `--into`: a module (lowercase) or a profile (Capitalized). Without
+    /// it, the line lands in the module named for how it arrived (V.40).
+    pub async fn declare(
+        &self,
+        line: &str,
+        into: Option<&str>,
+        landing: crate::model::Landing,
+    ) -> Result<crate::model::Edit> {
+        let vocab = self.vocabulary().await?;
+        let layout = self.config.layout();
+        let target = match into {
+            Some(name) => crate::model::Target::parse(name, &Origin::argument())?,
+            None => landing.target(),
+        };
+        let edit = crate::model::Editor::new(&layout, &vocab)
+            .add(&target, line)
+            .map_err(Error::from)?;
+        info!("{}", edit.describe("Added"));
+        Ok(edit)
+    }
+
+    /// Remove a package's declaration from every file the active profiles reach (II.8's
+    /// `uninstall`), and say which files changed.
+    pub async fn undeclare(&self, target_pkg: &str) -> Result<Vec<crate::model::Edit>> {
+        let vocab = self.vocabulary().await?;
+        let layout = self.config.layout();
+        let facts = crate::config::parser::HostFacts::current();
+        let files = crate::model::active_module_files(&layout, &vocab, &facts);
+        let edits = crate::model::Editor::new(&layout, &vocab)
+            .with_facts(facts)
+            .remove_from(&files, target_pkg)
+            .map_err(Error::from)?;
+        for e in &edits {
+            info!("{}", e.describe("Removed"));
+        }
+        Ok(edits)
     }
 
     #[instrument(skip(self))]

@@ -14,8 +14,7 @@
 // flags that opt into changes.
 
 use crate::app::App;
-use crate::config::parser::add_package_to_local;
-use crate::core::{Error, Package, Result};
+use crate::core::{Error, Result};
 use serde_json::Value;
 use tracing::{info, warn};
 
@@ -39,102 +38,6 @@ async fn ssh_capture(host: &str, remote_cmd: &str) -> Result<String> {
         )));
     }
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-/// Replicate `host`'s installed packages onto the local machine, translating backends.
-pub async fn clone(app: &App, host: &str, dry_run: bool) -> Result<()> {
-    info!("Clone: reading installed packages from {} ...", host);
-    let json = ssh_capture(host, "linix list --json").await?;
-    let remote: Vec<Package> = serde_json::from_str(&json)
-        .map_err(|e| Error::Json(format!("parsing `linix list --json` from {}: {}", host, e)))?;
-
-    if remote.is_empty() {
-        println!("{} reports no packages to clone.", host);
-        return Ok(());
-    }
-
-    // Translate each remote package to a spec this machine can install.
-    let mut plan: Vec<(String, String)> = Vec::new(); // (human description, spec string)
-    for pkg in &remote {
-        let local_has = app
-            .registry
-            .get(&pkg.backend)
-            .map(|b| b.is_available())
-            .unwrap_or(false);
-        if local_has {
-            plan.push((
-                format!("{0}:{1}", pkg.backend, pkg.name),
-                format!("{}:{}", pkg.backend, pkg.name),
-            ));
-        } else {
-            // Backend absent here: fall back to a bare name so the resolver auto-detects a
-            // backend from this machine's priority list.
-            plan.push((
-                format!("{0}:{1} -> auto", pkg.backend, pkg.name),
-                pkg.name.clone(),
-            ));
-        }
-    }
-
-    println!(
-        "Cloning {} package(s) from {} onto this machine:",
-        plan.len(),
-        host
-    );
-    for (desc, _) in &plan {
-        println!("    {}", desc);
-    }
-
-    if dry_run || app.config.dry_run {
-        println!("\n[dry-run] Nothing installed. Re-run without --dry-run to apply.");
-        return Ok(());
-    }
-
-    let (mut ok, mut failed) = (0u32, 0u32);
-    for (_, spec_str) in &plan {
-        match install_one(app, spec_str).await {
-            Ok(true) => ok += 1,
-            Ok(false) => {} // already present / no installable backend
-            Err(e) => {
-                failed += 1;
-                warn!("Clone: failed to install '{}': {}", spec_str, e);
-            }
-        }
-    }
-    app.state.lock().await.save()?;
-    println!("\nClone complete: {} installed, {} failed.", ok, failed);
-    Ok(())
-}
-
-/// Resolve a spec string and install it locally, recording provenance as "clone".
-/// Returns Ok(true) if something was installed, Ok(false) if there was nothing to do.
-async fn install_one(app: &App, spec_str: &str) -> Result<bool> {
-    let mut installed_any = false;
-    for spec in app.resolve_spec(spec_str).await? {
-        let Some(b) = app.registry.get(&spec.backend) else {
-            continue;
-        };
-        let Some(inst) = b.as_installable() else {
-            continue;
-        };
-        inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
-            .await?;
-        app.state.lock().await.add(
-            &spec.backend,
-            &spec.name,
-            None,
-            spec.options.clone(),
-            Some("clone".into()),
-            false,
-        );
-        let _ = add_package_to_local(
-            &app.config.groups_dir,
-            &format!("{}:{}", spec.backend, spec.name),
-        )
-        .await;
-        installed_any = true;
-    }
-    Ok(installed_any)
 }
 
 /// Per-host drift summary from a remote `linix status --json`.
