@@ -1025,8 +1025,10 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
     mechanism is identical and reusable, but that wiring is the remaining half. (2) `plan` does not yet show the trust
     block (II.12's "adds repository / runs script [approved|CHANGED]"). (3) **Behaviour change:**
     a user with existing `config.hooks` must now run `linix lock` once before the next sync — the
-    intended II.12 behaviour, but a change. (4) The version-pin `locks.json` still sits beside
-    `locks/` — its migration under `locks/` (below) is unchanged.
+    intended II.12 behaviour, but a change. (4) ~~The version-pin `locks.json` still sits beside
+    `locks/` — its migration under `locks/` (below) is unchanged.~~ **DONE, 2026-07-17 — moved to
+    `locks/versions.json`, joining the hook and extras ledgers; `locks/` is now the one home for
+    all lock state (II.6). All read/write/doctor/help sites updated.**
 - Commit on successful sync only. snapshot → apply → commit. Tag the snapshot.
 - ~~`git checkout` + `sync` = rollback. Delete the generation format.~~ **DONE, 2026-07-17
   (owner-approved migration, steps A–C).** (A) `linix rollback <ref>` checks out the manifests at
