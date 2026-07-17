@@ -1415,7 +1415,7 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S18** | **`auto_lock_checksums` rewrote your module files on every sync. FIXED (Phase 2n) by deletion.** It spliced `@sha256=…` into the line you wrote — II.16 says LiNix must not rewrite your files, and a checksum is a generated fact, which II.6 keeps in `locks/`. The whole `attempt_auto_lock` path is gone, and with it `ManifestEngine` (its last caller): a second file-editor with its own `split_once(':')` parser (C13), `load_locks`/`update_lock`/`manifest_files` all already dead. `groups_dir` refs 77 → 64. **The supply-chain intent survives, unbuilt:** recording an artifact's hash so a changed artifact is caught (II.12) belongs in `locks/<backend>.toml` → **Phase 4** (locks and git) |
 | **S16** | **`--allow-mass-removal` deleted protected packages. FIXED.** `guard::enforce` returned `Ok(())` for *every* objection once the flag was set, so the flag meaning "yes, 50 packages is what I meant" also carried `python3` through. II.10 is explicit — `max_removals` exceeded → "cannot skip, `--allow-mass-removal`"; protected / OS-essential → **"nothing overrides"**. A confirmation asks; a refusal says no (V.26). The flag now clears only the count objection. **There was a test asserting the old behaviour** (`enforce_refuses_without_opt_in_and_proceeds_with_it`, which asserted the flag lets `python3` through) — the bug was written down as an expectation, which is why nothing caught it → **Phase 3** (fixed) |
 | **S17** | **`[guard.enforce_on]` was a config key that switched the guard off, per command. DELETED.** Ten booleans — `apply`, `prune`, `sync`, `watch`, `upgrade`, `rollback`, `canary`, `remove`, `shell-exit`, `leases` — each of which made that command able to remove **anything, without limit**, protected and OS-essential included. It is not one of II.10's nine refusals; it is a switch that turns off all nine. V.21 says **no setting anyone can flip, inherit, or copy from a dotfiles repo** makes a routine sync delete something it did not install, and this was exactly that setting. The config template documented it, and `linix protected` printed which commands were unguarded. All gone → **Phase 3** (fixed) |
-| **S15** | **`install` had P1 backwards: it installed first and wrote the line second. FIXED for `install`; `uninstall` is still inverted.** P1 says an imperative command *is* a shortcut for editing a file and syncing, so the edit is the operation and the install is what convergence then does about it. Backwards, every refusal on the write landed *after* the package was on the machine: installed, undeclared, drift by the next sync. `let _ = add_package_to_local(...)` hid it by making the write unfailable. `install` is now `declare` -> `sync`, which also puts an imperative install behind the guard (II.10) for the first time, and `--temp 2h` now writes `@expires=<absolute>` (II.16, V.38) instead of a lease nothing could read. **`uninstall` still removes first and undeclares second, so the pair is asymmetric (V.39 says they are a symmetric pair).** It cannot be flipped yet: `undeclare` -> `sync` only removes the package if `sync` removes drift, and `handle_sync` still passes `.with_prune(config.prune_on_sync)`, default **false**. **`prune_on_sync` is in II.17's delete list and V.34 says sync removes drift by definition — that deletion is the blocker, and it is the same one blocking `uninstall --temp` from becoming `absent:...@until=` (II.16).** → **Phase 2** (II.8 command surface) |
+| **S15** | **`install` and `uninstall` both had P1 backwards. FIXED for both (`install` 2g, `uninstall` 2l).** P1 says an imperative command *is* a shortcut for editing a file and syncing, so the edit is the operation and the install is what convergence then does about it. Backwards, every refusal on the write landed *after* the package was on the machine. `install` is now `declare` -> `sync` (behind the guard for the first time; `--temp 2h` writes `@expires=<absolute>`). **`uninstall` is now `undeclare` -> `sync` too** (`main.rs:1182` edits the file, `:1190` calls `handle_sync`), so removal goes through the guard, the plan and the counts like any other drift — the symmetric pair V.39 describes. **Verified adversarially 2026-07-17: the old "still inverted, blocked on `prune_on_sync` default false" claim was stale in both halves** — `prune_on_sync`/`with_prune` are deleted (Phase 2h; only comments remain), and sync removes drift by definition (V.34). `uninstall --temp` is likewise done: it writes `absent:...@until=` (II.16). → **Phase 2** (done) |
 
 | **S14** | **FIXED (Phase 2w).** `linix init` filled `priority` from `registry.available()`, which includes the pseudo-backends `service`, `link`, `web`, `github` — teaching a new user that the file answering *"which package managers, in what order"* contains four things that cannot resolve a package. `starter_order` now drops `service` and `link` (dependent statements, never priority-gated, never resolving a bare name). **`web`/`github`/`appimage` stay on purpose:** the model refuses an explicit `web:…` unless `web` is listed (V.15), so excluding them would break those specs — **the original S14 was imprecise to lump them in.** Test: `service_and_link_are_not_listed_but_artifact_backends_are`. *(The deeper "is this a package manager" capability probe the row imagined proved unnecessary: the two truly-not-managers are a fixed pair, and the rest legitimately need listing.)* → **Phase 2** (done) |
 | **S11** | **The test harness is not hermetic by construction, only by remembering.** `LINIX_DATA_DIR` exists precisely so tests do not touch real state (`safe_data_dir` says so), the docker/windows integration scripts set it, and the cargo tests never did — nothing enforced it, so it rotted silently for as long as the journal has existed. G3's "unverified" list and this are the same problem: isolation that depends on each test author remembering → **Phase 5** (make it structural, not remembered) |
@@ -1441,10 +1441,10 @@ verified against the tree at the commit that last touched this section, not reca
 
 ## The state at `HEAD` (2026-07-17)
 
-- **35 commits** since `d49d28c`.
-- **525 tests passing, 0 failing. `cargo clippy --all-targets` silent.** *(The audit above
-  caught this tree mid-deletion and said so rather than filing it as a finding — that was the
-  right call, and the deletion has landed.)*
+- **49 commits** since `d49d28c`.
+- **522 tests passing, 0 failing. `cargo clippy --all-targets` silent.** *(Measured on HEAD
+  2026-07-17 after Phase 2x. The Phase-2-holding note below says "≈521" and Phase 2x's commit
+  said "521" — the exact figure is 522; treat any single count as a tripwire, not a target.)*
 - *Those two numbers tell you nothing about the line below them, and never could — every false
   ✅ in this document was green when it was written (rule 11). They are here because a **red**
   suite would be worth reporting, not because a green one is progress. **The 2026-07-17 audit
@@ -1495,50 +1495,31 @@ problem.**
 > this a command you run rather than a paragraph you trust. See "A warning about this
 > document" below.)*
 
-### Phase 1 ✅ / C13 "done" — "one `backend:name` parser". Was nine; one skipper left.
+### ~~Phase 1 ✅ / C13 "done" — one `backend:name` parser~~ — C13 CLOSED (verified 2026-07-17, adversarial re-audit)
 
-**This all but closed itself while the audit was being written.** The grammar parser was
-**added alongside** the eight, not substituted for them — but the phases that deleted the old
-model took the skippers with them, and **one non-validating parser now remains.** This no
-longer blocks the next action; it is nearly done, and the doc had not caught up.
-
-**Third pass 2026-07-17 (after Phase 2o): two of the three skippers are gone.**
-`app/insight.rs:428` died in **Phase 2j** (the `why` rewrite) and `config/manifest.rs:90` died
-in **Phase 2n** (ManifestEngine deleted). The grep is now **7 hits (6 code + 1 comment), and
-exactly one skips validation:**
-
-| | site |
-|---|---|
-| **validates** | `grammar/statement.rs:328` (the grammar keeper — `is_backend(prefix)` at `:329`) · `grammar/statement.rs:187` (`repo:` parse, new in 2o — validates at `:201`) · `config/parser.rs:199` `split_removal_target` — *consults the registry, and is not a defect* · `main.rs:649` — `registry.get(b).is_some()` · `model/resolve.rs:501` — `same_package`, a name-comparison helper in the new model, not a backend parser |
-| **skips validation** | `main.rs:1410` (`lease set`, was `:1378`) — **the last one.** It splits `backend:package` and trusts it, and it is **the same path S19 flags**: `@lease` can uninstall your package on a route C3 says bypasses the guard. Fixing S19 fixes this. |
-| **comment** | `grammar/statement.rs:530` — the test comment, not a parser. |
+**This entry is retired.** Every non-validating `backend:name` splitter is gone. The last one,
+`lease set` (`main.rs:1410`), went with the retired `lease` command in Phase 2s — after an
+earlier pass of this entry called it "the last skipper," which was true when written and stale
+within the hour. Verified now against the tree:
 
 ```
 grep -rn "split_once(':')" src/ | grep -v "^src/parsers/"
 ```
-**Now: 7 (6 code + 1 comment). Fixed when: `main.rs:1410` (`lease set`) validates** — every
-other hit either checks the registry or is a helper/comment that never trusted a prefix.
-**Do not delete the validators to hit a number:** the earlier "Fixed when: 1" / "3 remain"
-targets were both wrong, in both directions, and either would have had someone delete working
-code. *(`src/parsers/` is excluded deliberately: it parses backend CLI **output**, a different
-concern that happens to share a word. Do not count it, and do not delete it.)*
+**7 hits, zero skippers.** Each remaining site either validates against the registry before
+trusting a prefix (`grammar/statement.rs:328`/`:187`, `config/parser.rs:94`, `main.rs:686`), is
+a name-half helper on an already-resolved key (`model/resolve.rs:522`), or is a comment
+(`grammar/statement.rs:561`). This agrees with VI.2's C13 row (DONE, Phase 2r/2s) — the two had
+disagreed, this one was the stale side.
 
-**S9 is not why this matters — C13 is.** The old "why it blocks II.8" argument rested on
-`remove_package_from_local` (`grep` empty; died in Phase 2e, and **S9 died with it**, of
-`model/edit.rs`). The one surviving skipper was never S9's shape either: `lease set` is a
-suspension path, not a removal that compares a backend half. **The reason to finish this is
-that a `lease` can act on an unvalidated `backend:package` — which is S19 — not S9.**
-
-**The test comment at `grammar/statement.rs:530` still says the quiet part:** *"Six of the
-**eight old** parsers did `split_once(':')` and trusted the prefix."* **All of it is now wrong**
-— it is **one**, not six; the parsers are **current**, not old; and that one is `lease set`,
-which the sentence predates. Update the comment when `lease set` is fixed and this entry goes.
+**Phase 1's ✅ is a separate question and is NOT restored here.** C13 was only one of Phase 1's
+findings; this entry retires the parser count, not Phase 1. Whoever restores Phase 1's ✅ must
+confirm the II.2 grammar-rule findings (2q, S19) are all closed too, independently of C13.
 
 ### Phase 0 ✅ — "delete everything in II.17". Roughly 15% happened.
 
 | marked deleted | actually | evidence |
 |---|---|---|
-| the `-g` model | **the flag is gone; the model it anchored is not.** `groups_dir` ≈**51** refs across 14 files (was 84 — moving, not gone), `config_root` ≈**24**; `config_root()` is still literally `groups_dir.parent()`. | `config/config.rs:579` |
+| the `-g` model | ~~the model it anchored is not gone~~ — **now gone (Phase 2r), verified 2026-07-17.** `Config::groups_dir`/`modules_dir` are deleted; `grep -rn groups_dir src/` returns **two doc comments** (`insight.rs:396`, `policy.rs:3`), no field. **`config_root()` is no longer `groups_dir.parent()`** — it returns the `config_root` field directly (`config.rs:416`) with the never-resolve-to-CWD guard. This row's old claim was stale in the "worse than reality" direction; it is retired. | `config.rs:416` |
 | `local.txt` (V.1) | ~~alive in 10 files~~ ~~**dead as of Phase 2e**~~ — **the write is dead; the readers are not, and this row named a deletion that did not happen.** `add_package_to_local`, `remove_package_from_local`, `remove_package_from_manifests`, `get_user_group_file` and `ManifestEngine::add_to_local` are genuinely gone, and `model/edit.rs` replaces them — **S9 really did die** (`edit.rs:378` parses via the grammar; test at `:669`), **but of `edit.rs`, not of `local.txt`.** `line_declares` is **NOT deleted**: `insight.rs:418`, live, called at `:447`/`:463`, with passing tests at `:695`. `main.rs:3616` still wrote `local.txt` in `init -i` (being removed in the current working tree). **See the `linix why` entry above — this row is how it hid.** | `insight.rs:418` |
 | `keep.txt` (V.6) | ~~alive~~ — **dead as of Phase 2e.** It was never *read*: the whole `RESERVED_MANIFEST_NAMES` / `is_reserved_manifest` mechanism existed only to keep one file out of a crawl. Mechanism and all four exclusion sites deleted. | fixed |
 | `_active_profiles.txt` | ~~still written on every `activate`~~ — **dead as of Phase 2f.** `materialize()`, `compose()` (the second profile engine) and `RESERVED_MANIFEST` are deleted; `ProfileManager` runs on the model and `activate` edits one file, `active`. 657 lines -> 348. | fixed |
