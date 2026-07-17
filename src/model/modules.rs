@@ -63,6 +63,25 @@ impl<'a> ModuleLoader<'a> {
                      module contains would depend on what you activated.",
                 ));
             }
+            // II.3: a module is a list. `-` subtraction does not exist in one; `absent:`
+            // does. Choosing is the profile's job (II.4, V.2), and set math is choosing.
+            let what = match stmt {
+                Statement::Exclude(_) => Some("exclude"),
+                Statement::Intersect(_) => Some("intersect"),
+                Statement::Subtract(_) => Some("`-` subtraction"),
+                Statement::Expr(_) => Some("a set expression"),
+                _ => None,
+            };
+            if let Some(what) = what {
+                return Err(GrammarError::new(
+                    origin.clone(),
+                    format!("a module cannot use {}", what),
+                )
+                .with_hint(
+                    "a module is a list of what it holds; set math is how a profile chooses \
+                     between them. To say something must NOT exist, write `absent:apt:foo`.",
+                ));
+            }
         }
         Ok(())
     }

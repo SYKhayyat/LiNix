@@ -403,6 +403,10 @@ fn extra_kind(stmt: &Statement) -> &'static str {
         Statement::Service(_, _) => "service:",
         Statement::Link(_, _) => "link:",
         Statement::Use(_) => "use",
+        Statement::Exclude(_) => "exclude",
+        Statement::Intersect(_) => "intersect",
+        Statement::Subtract(_) => "-",
+        Statement::Expr(_) => "set expression",
         Statement::Package(_) | Statement::Absent(_) => "package",
     }
 }

@@ -1,12 +1,11 @@
 use super::layout::Layout;
-use crate::app::profile_expr;
 use crate::config::grammar::{
     parse_document, BackendNames, GrammarError, Origin, Reference, Result, Statement,
 };
 use crate::config::parser::HostFacts;
-use std::collections::HashMap;
 
-/// What a profile resolved to: the modules it reaches, and any lines it holds directly.
+/// What a profile resolved to: the modules it reaches, the lines it holds directly, and the
+/// set math it applies to the result.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Resolved {
     /// Module names, in first-seen order.
@@ -15,6 +14,33 @@ pub struct Resolved {
     /// module can never reach them (the layering rule), so they are unshareable,
     /// permanently — and you find out the day you want to share them (V.3).
     pub direct: Vec<(Statement, Origin)>,
+    /// II.4's set math, in the order written. Applied by the caller, which is the only
+    /// thing that can turn a module name into the packages to intersect or subtract.
+    pub ops: Vec<(SetOp, Origin)>,
+}
+
+/// One set operation from a profile (II.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetOp {
+    /// `exclude heavy` — take that module's or profile's packages out.
+    Exclude(Reference),
+    /// `intersect security` — keep only what is also in it.
+    Intersect(Reference),
+    /// `-vim` — take one package out.
+    Subtract(String),
+    /// `(Work | gaming) & security`.
+    Expr(String),
+}
+
+impl Resolved {
+    /// Whether this profile does set math at all.
+    ///
+    /// It decides the shape of the answer: without it a profile names modules and each
+    /// package keeps its module's name, with it the profile resolves to packages and there
+    /// is no module to name (V.44).
+    pub fn does_set_math(&self) -> bool {
+        !self.ops.is_empty()
+    }
 }
 
 /// Loads and composes profiles (SPEC II.4).
@@ -93,7 +119,30 @@ impl<'a> ProfileLoader<'a> {
                         }
                     }
                     out.direct.extend(inner.direct);
+                    // A profile's set math travels with it: `use Work` where Work excludes
+                    // heavy means you asked for Work, and Work is Work-without-heavy.
+                    out.ops.extend(inner.ops);
                 }
+
+                Statement::Exclude(r) => out.ops.push((SetOp::Exclude(r), origin)),
+                Statement::Intersect(r) => out.ops.push((SetOp::Intersect(r), origin)),
+                Statement::Subtract(p) => out.ops.push((SetOp::Subtract(p), origin)),
+                Statement::Expr(e) => out.ops.push((SetOp::Expr(e), origin)),
+
+                // II.4: `absent:` does not exist in profiles. `-` does. `absent:` reaches
+                // outside what LiNix manages and deletes something you never declared
+                // (V.7); `-vim` only says this profile does not want vim.
+                Statement::Absent(d) => {
+                    return Err(GrammarError::new(
+                        origin,
+                        format!("a profile cannot use `absent:{}`", d.selector.as_str()),
+                    )
+                    .with_hint(
+                        "write `-<package>` to leave it out of this profile, or put the \
+                         `absent:` line in a module if you mean it must not exist at all.",
+                    ))
+                }
+
                 other => out.direct.push((other, origin)),
             }
         }
@@ -162,33 +211,6 @@ pub fn parse_active(file: &std::path::Path, body: &str) -> Result<Vec<String>> {
     }
     Ok(out)
 }
-
-/// Evaluate a set expression over profiles (II.4), e.g. `(Work | gaming) & security`.
-///
-/// Reuses `profile_expr`, which already implements `|` `&` `\` and parentheses with the
-/// precedence `&` binds tighter than `|`/`\`. `-` is deliberately not infix there: real
-/// package atoms contain it (`g++`, `libstdc++`).
-pub fn evaluate_expression(
-    expr: &str,
-    resolve_atom: &mut dyn FnMut(&str) -> Result<Vec<String>>,
-) -> Result<Vec<String>> {
-    let mut err: Option<GrammarError> = None;
-    let out = profile_expr::evaluate(expr, &mut |atom| match resolve_atom(atom) {
-        Ok(v) => v,
-        Err(e) => {
-            err.get_or_insert(e);
-            Vec::new()
-        }
-    })
-    .map_err(|e| GrammarError::new(Origin::argument(), e))?;
-    match err {
-        Some(e) => Err(e),
-        None => Ok(out),
-    }
-}
-
-/// Index of profile name -> resolved set, for expression atoms.
-pub type ProfileSets = HashMap<String, Vec<String>>;
 
 #[cfg(test)]
 mod tests {
@@ -307,23 +329,4 @@ mod tests {
         assert_eq!(out, ["Work"]);
     }
 
-    #[test]
-    fn set_math_over_profiles() {
-        // II.4, via the existing profile_expr.
-        let sets: ProfileSets = [
-            ("Work".to_string(), vec!["a".to_string(), "b".to_string()]),
-            ("Gaming".to_string(), vec!["b".to_string(), "c".to_string()]),
-        ]
-        .into_iter()
-        .collect();
-        let mut lookup = |atom: &str| -> Result<Vec<String>> {
-            Ok(sets.get(atom).cloned().unwrap_or_else(|| vec![atom.to_string()]))
-        };
-        let out = evaluate_expression("Work | Gaming", &mut lookup).unwrap();
-        assert_eq!(out, ["a", "b", "c"]);
-        let out = evaluate_expression("Work & Gaming", &mut lookup).unwrap();
-        assert_eq!(out, ["b"]);
-        let out = evaluate_expression("Work \\ Gaming", &mut lookup).unwrap();
-        assert_eq!(out, ["a"]);
-    }
 }

@@ -3,9 +3,10 @@ use super::dated::dating_of;
 use super::layout::Layout;
 use super::modules::{expand, ModuleLoader};
 use super::priority::Priority;
-use super::profiles::{parse_active, ProfileLoader};
+use super::profiles::{parse_active, ProfileLoader, SetOp};
 use crate::config::grammar::{
-    BackendNames, GrammarError, Options, Origin, PackageDecl, Result, Selector, Statement,
+    statement, BackendNames, GrammarError, Options, Origin, PackageDecl, Result, Selector,
+    Statement,
 };
 use crate::config::parser::HostFacts;
 use crate::core::PackageSpec;
@@ -145,13 +146,25 @@ impl<'a> Resolver<'a> {
         // both, and `upgrade --profile` for either must find it.
         let mut wanted_by: HashMap<String, Vec<String>> = HashMap::new();
         let mut direct: Vec<(Statement, Origin)> = Vec::new();
+        let mut loader = ModuleLoader::new(self.layout, self.backends);
+        let asked = Origin::new(&active_file, 0);
+
         for name in &active {
-            let r = profiles.resolve(
-                name,
-                &Origin::new(&active_file, 0),
-                &self.facts,
-                &mut Vec::new(),
-            )?;
+            let r = profiles.resolve(name, &asked, &self.facts, &mut Vec::new())?;
+
+            // A profile doing set math resolves to packages, not to modules: an
+            // intersection of two modules' packages is not a module (V.44). So it is
+            // materialised here and its result joins `direct`.
+            if r.does_set_math() {
+                let stmts = self.apply_set_math(&profiles, &mut loader, &r, &asked)?;
+                for (_, origin) in &stmts {
+                    out.record(&origin.file, format!("profile:{}", name));
+                    self.record_module_scope(&mut out, origin);
+                }
+                direct.extend(stmts);
+                continue;
+            }
+
             for m in r.modules {
                 if !wanted_modules.contains(&m) {
                     wanted_modules.push(m.clone());
@@ -167,7 +180,6 @@ impl<'a> Resolver<'a> {
         }
 
         // 3. Parse ONLY the modules reached. Apply `when`.
-        let mut loader = ModuleLoader::new(self.layout, self.backends);
         for m in &wanted_modules {
             let stmts = expand(
                 &mut loader,
@@ -179,11 +191,7 @@ impl<'a> Resolver<'a> {
             // Attributed by the file each line actually came from, so a module reached
             // through another module is scoped to itself and to the profile that led here.
             for (_, origin) in &stmts {
-                if origin.file.parent() == Some(self.layout.modules_dir().as_path()) {
-                    if let Some(stem) = origin.file.file_stem().and_then(|s| s.to_str()) {
-                        out.record(&origin.file, format!("module:{}", stem));
-                    }
-                }
+                self.record_module_scope(&mut out, origin);
                 for p in wanted_by.get(m).into_iter().flatten() {
                     out.record(&origin.file, format!("profile:{}", p));
                 }
@@ -192,6 +200,135 @@ impl<'a> Resolver<'a> {
         }
         out.statements.extend(direct);
         Ok(out)
+    }
+
+    /// A line keeps its file, so a package that survives an intersection still knows which
+    /// module holds it. That is what makes `upgrade --module` keep working through set math.
+    fn record_module_scope(&self, out: &mut Reached, origin: &Origin) {
+        if origin.file.parent() != Some(self.layout.modules_dir().as_path()) {
+            return;
+        }
+        if let Some(stem) = origin.file.file_stem().and_then(|s| s.to_str()) {
+            out.record(&origin.file, format!("module:{}", stem));
+        }
+    }
+
+    /// Apply a profile's set math to what it reaches (II.4).
+    ///
+    /// Order is fixed and stated in II.4: everything is gathered first, then narrowed by
+    /// each `intersect`, then everything subtracted is removed. **Subtraction always wins** —
+    /// otherwise `use gaming` after `-steam` would quietly put steam back, and which line
+    /// won would depend on the order you happened to write them in.
+    fn apply_set_math(
+        &self,
+        profiles: &ProfileLoader<'_>,
+        loader: &mut ModuleLoader<'a>,
+        r: &super::profiles::Resolved,
+        asked: &Origin,
+    ) -> Result<Vec<(Statement, Origin)>> {
+        let mut base: Vec<(Statement, Origin)> = Vec::new();
+        for m in &r.modules {
+            base.extend(expand(loader, m, asked, &self.facts, &mut Vec::new())?);
+        }
+        base.extend(r.direct.clone());
+
+        let mut intersects: Vec<Vec<String>> = Vec::new();
+        let mut subtract: Vec<String> = Vec::new();
+
+        for (op, origin) in &r.ops {
+            match op {
+                SetOp::Expr(e) => {
+                    let found = self.eval_expression(profiles, loader, e, origin)?;
+                    base.extend(found);
+                }
+                SetOp::Intersect(reference) => {
+                    let other = self.atom(profiles, loader, reference.name(), origin)?;
+                    intersects.push(other.iter().map(|(s, _)| set_key(s)).collect());
+                }
+                SetOp::Exclude(reference) => {
+                    let other = self.atom(profiles, loader, reference.name(), origin)?;
+                    subtract.extend(other.iter().map(|(s, _)| set_key(s)));
+                }
+                SetOp::Subtract(pkg) => subtract.push(pkg.trim().to_string()),
+            }
+        }
+
+        for keep in &intersects {
+            base.retain(|(s, _)| keep.iter().any(|k| same_package(k, &set_key(s))));
+        }
+        base.retain(|(s, _)| !subtract.iter().any(|k| same_package(k, &set_key(s))));
+
+        Ok(base)
+    }
+
+    /// Evaluate `(Work | gaming) & security` and return the statements that survive.
+    ///
+    /// `profile_expr` works over names, so each atom is resolved to its packages' keys, the
+    /// expression is evaluated over those, and the winners are mapped back to the statements
+    /// they came from — which is what keeps their file, and therefore their module.
+    fn eval_expression(
+        &self,
+        profiles: &ProfileLoader<'_>,
+        loader: &mut ModuleLoader<'a>,
+        expr: &str,
+        origin: &Origin,
+    ) -> Result<Vec<(Statement, Origin)>> {
+        let mut table: HashMap<String, (Statement, Origin)> = HashMap::new();
+        let mut failure: Option<GrammarError> = None;
+
+        let keys = crate::app::profile_expr::evaluate(expr, &mut |atom| {
+            match self.atom(profiles, loader, atom, origin) {
+                Ok(stmts) => stmts
+                    .into_iter()
+                    .map(|(s, o)| {
+                        let k = set_key(&s);
+                        table.entry(k.clone()).or_insert((s, o));
+                        k
+                    })
+                    .collect(),
+                Err(e) => {
+                    failure.get_or_insert(e);
+                    Vec::new()
+                }
+            }
+        })
+        .map_err(|e| {
+            GrammarError::new(origin.clone(), format!("`{}` is not a set expression: {}", expr, e))
+                .with_hint(
+                    "set math is `|` union, `&` intersect, `\\` difference, and parentheses \
+                     — for example `(Work | gaming) & security`.",
+                )
+        })?;
+
+        if let Some(e) = failure {
+            return Err(e);
+        }
+        Ok(keys.into_iter().filter_map(|k| table.remove(&k)).collect())
+    }
+
+    /// One name in an expression: a profile, a module, or a package written literally.
+    fn atom(
+        &self,
+        profiles: &ProfileLoader<'_>,
+        loader: &mut ModuleLoader<'a>,
+        atom: &str,
+        origin: &Origin,
+    ) -> Result<Vec<(Statement, Origin)>> {
+        let capitalized = atom.chars().next().is_some_and(char::is_uppercase);
+
+        if capitalized {
+            let r = profiles.resolve(atom, origin, &self.facts, &mut Vec::new())?;
+            return self.apply_set_math(profiles, loader, &r, origin);
+        }
+
+        if self.layout.module_file(atom).is_file() {
+            return expand(loader, atom, origin, &self.facts, &mut Vec::new());
+        }
+
+        // Not a file, so it is a package named literally: `(Work | jq)`. Parsed, so a typo
+        // is an error here rather than a package nobody has.
+        let stmt = statement::parse(origin, atom, self.backends)?;
+        Ok(vec![(stmt, origin.clone())])
     }
 
     /// II.7 steps 4-7: resolve each line, conflicts are errors, dated lines get rule 6.
@@ -317,6 +454,51 @@ impl<'a> Resolver<'a> {
 /// The backend of a bare name, before probing. Never reaches a backend: `Resolver::resolve`
 /// hands these to the prober, which replaces it with the lock's answer or `priority`'s.
 pub const BARE: &str = "?";
+
+/// How a statement is named in set math: as written, `apt:jq` or bare `jq`.
+///
+/// Not the resolved backend, because nothing has probed yet — set math happens while reading
+/// the files, and probing needs the network.
+fn set_key(stmt: &Statement) -> String {
+    match stmt {
+        Statement::Package(d) | Statement::Absent(d) => match &d.backend {
+            Some(b) => format!("{}:{}", b, d.selector.as_str()),
+            None => d.selector.as_str().to_string(),
+        },
+        Statement::Repo(s) => format!("repo:{}", s),
+        Statement::Shim(n, _) => format!("shim:{}", n),
+        Statement::Schedule(n, _) => format!("schedule:{}", n),
+        Statement::Service(n, _) => format!("service:{}", n),
+        Statement::Link(n, _) => format!("link:{}", n),
+        Statement::Use(r) => format!("use {}", r.name()),
+        Statement::Exclude(r) => format!("exclude {}", r.name()),
+        Statement::Intersect(r) => format!("intersect {}", r.name()),
+        Statement::Subtract(p) => format!("-{}", p),
+        Statement::Expr(e) => e.clone(),
+    }
+}
+
+/// Whether two set-math keys name the same package.
+///
+/// A bare name matches any backend's line for it, so `-vim` takes vim out however it was
+/// going to arrive. Two explicit backends must agree: `-apt:vim` leaves `cargo:vim` alone,
+/// because you said which one.
+fn same_package(a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    fn name_of(s: &str) -> &str {
+        s.split_once(':').map(|(_, n)| n).unwrap_or(s)
+    }
+    fn bare(s: &str) -> bool {
+        !s.contains(':')
+    }
+    match (bare(a), bare(b)) {
+        (true, false) => a == name_of(b),
+        (false, true) => name_of(a) == b,
+        _ => false,
+    }
+}
 
 /// One package's declarations, mid-merge.
 struct Entry {
@@ -607,6 +789,167 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("a.txt"), "{}", msg);
         assert!(msg.contains("b.txt"), "{}", msg);
+    }
+
+    // ------------------------------------------------------------ II.4 set math
+
+    #[test]
+    fn a_profile_can_subtract_one_package() {
+        // `-vim`: this profile does not want vim, whatever module holds it.
+        let f = fx(
+            "Work\n",
+            &[("Work", "use editors\n-vim\n")],
+            &[("editors.txt", "apt:vim\napt:neovim\n")],
+        );
+        assert_eq!(names(&resolve(&f).unwrap(), "apt"), ["neovim"]);
+    }
+
+    #[test]
+    fn a_bare_subtraction_takes_the_package_out_whatever_backend_holds_it() {
+        let f = fx(
+            "Work\n",
+            &[("Work", "use editors\n-ripgrep\n")],
+            &[("editors.txt", "cargo:ripgrep\napt:vim\n")],
+        );
+        let d = resolve(&f).unwrap();
+        assert_eq!(names(&d, "cargo"), [] as [String; 0]);
+        assert_eq!(names(&d, "apt"), ["vim"]);
+    }
+
+    #[test]
+    fn an_explicit_subtraction_leaves_the_other_backends_line_alone() {
+        // You said which one, so only that one goes.
+        let f = fx(
+            "Work\n",
+            &[("Work", "use editors\n-apt:ripgrep\n")],
+            &[("editors.txt", "cargo:ripgrep\napt:ripgrep\n")],
+        );
+        let d = resolve(&f).unwrap();
+        assert_eq!(names(&d, "cargo"), ["ripgrep"]);
+        assert_eq!(names(&d, "apt"), [] as [String; 0]);
+    }
+
+    #[test]
+    fn exclude_subtracts_a_whole_modules_packages() {
+        let f = fx(
+            "Work\n",
+            &[("Work", "use everything\nexclude heavy\n")],
+            &[
+                ("everything.txt", "apt:vim\napt:libreoffice\napt:jq\n"),
+                ("heavy.txt", "apt:libreoffice\n"),
+            ],
+        );
+        assert_eq!(names(&resolve(&f).unwrap(), "apt"), ["jq", "vim"]);
+    }
+
+    #[test]
+    fn intersect_keeps_only_what_is_in_both() {
+        let f = fx(
+            "Work\n",
+            &[("Work", "use everything\nintersect approved\n")],
+            &[
+                ("everything.txt", "apt:vim\napt:steam\napt:jq\n"),
+                ("approved.txt", "apt:vim\napt:jq\napt:never-installed\n"),
+            ],
+        );
+        // Intersect NARROWS. It must not add `never-installed`, which `approved` has and
+        // `everything` does not.
+        assert_eq!(names(&resolve(&f).unwrap(), "apt"), ["jq", "vim"]);
+    }
+
+    #[test]
+    fn subtraction_wins_however_you_order_the_lines() {
+        // II.4's fixed order: gather, narrow, then subtract. Otherwise `use gaming` after
+        // `-steam` quietly puts steam back, and the winner depends on the order you typed.
+        let a = fx(
+            "Work\n",
+            &[("Work", "-steam\nuse gaming\n")],
+            &[("gaming.txt", "apt:steam\napt:lutris\n")],
+        );
+        let b = fx(
+            "Work\n",
+            &[("Work", "use gaming\n-steam\n")],
+            &[("gaming.txt", "apt:steam\napt:lutris\n")],
+        );
+        assert_eq!(names(&resolve(&a).unwrap(), "apt"), ["lutris"]);
+        assert_eq!(names(&resolve(&b).unwrap(), "apt"), ["lutris"]);
+    }
+
+    #[test]
+    fn a_set_expression_unions_and_intersects() {
+        // II.4's headline: `(Work | gaming) & security`.
+        let f = fx(
+            "Main\n",
+            &[
+                ("Main", "(Desk | gaming) & security\n"),
+                ("Desk", "use editors\n"),
+            ],
+            &[
+                ("editors.txt", "apt:vim\napt:emacs\n"),
+                ("gaming.txt", "apt:steam\n"),
+                ("security.txt", "apt:vim\napt:steam\napt:gpg\n"),
+            ],
+        );
+        // vim (from Desk) and steam (from gaming) are both in security; emacs is not, and
+        // gpg is in security only.
+        assert_eq!(names(&resolve(&f).unwrap(), "apt"), ["steam", "vim"]);
+    }
+
+    #[test]
+    fn a_package_surviving_set_math_still_knows_its_module() {
+        // The reason set math maps back to statements rather than to strings: a line keeps
+        // its file, so `upgrade --module editors` still finds vim.
+        let f = fx(
+            "Main\n",
+            &[("Main", "use editors\nexclude heavy\n")],
+            &[
+                ("editors.txt", "apt:vim\n"),
+                ("heavy.txt", "apt:libreoffice\n"),
+            ],
+        );
+        let d = resolve(&f).unwrap();
+        let vim = d.present().find(|p| p.name == "vim").unwrap();
+        let scopes = vim.options.get("__scopes").unwrap();
+        assert!(scopes.contains("module:editors"), "{}", scopes);
+        assert!(scopes.contains("profile:Main"), "{}", scopes);
+    }
+
+    #[test]
+    fn a_module_cannot_do_set_math() {
+        // II.3: a module is a list. Choosing is the profile's job (V.2).
+        for line in ["-vim", "exclude heavy", "intersect secure", "(a | b)"] {
+            let f = fx(
+                "Work\n",
+                &[("Work", "use base\n")],
+                &[("base.txt", &format!("apt:curl\n{}\n", line))],
+            );
+            let err = resolve(&f).unwrap_err();
+            assert!(
+                err.to_string().contains("module cannot"),
+                "`{}` in a module must be refused, got: {}",
+                line,
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn a_profile_cannot_use_absent() {
+        // II.4. `absent:` reaches outside what LiNix manages (V.7); `-` only says this
+        // profile does not want it.
+        let f = fx("Work\n", &[("Work", "absent:apt:steam\n")], &[]);
+        let err = resolve(&f).unwrap_err();
+        assert!(err.to_string().contains("cannot use `absent:"), "{}", err);
+        assert!(err.hint.unwrap().contains("-<package>"));
+    }
+
+    #[test]
+    fn include_says_to_write_use_instead() {
+        // V.44: `use` already means union, and two words for one thing is the disease.
+        let f = fx("Work\n", &[("Work", "include editors\n")], &[]);
+        let err = resolve(&f).unwrap_err();
+        assert!(err.to_string().contains("there is no `include`"), "{}", err);
+        assert!(err.hint.unwrap().contains("use editors"));
     }
 
     #[test]

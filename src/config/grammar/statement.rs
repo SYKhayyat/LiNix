@@ -76,6 +76,18 @@ pub enum Statement {
     Service(String, Options),
     Link(String, Options),
     Use(Reference),
+    /// `exclude heavy` — subtract that module's or profile's packages (II.4).
+    Exclude(Reference),
+    /// `intersect security` — keep only packages that are also in it (II.4).
+    Intersect(Reference),
+    /// `-vim` — subtract one package (II.4).
+    ///
+    /// Not an infix operator: real package names contain `-` (`g++` aside, `fonts-noto`
+    /// does), so `a - b` cannot be told from a package called `a - b` without quoting, and
+    /// there are no quotes (V.10).
+    Subtract(String),
+    /// `(Work | gaming) & security` — a set expression over modules and profiles (II.4).
+    Expr(String),
 }
 
 /// Decides whether a `prefix:` names a real backend. Injected rather than hardcoded: the
@@ -115,6 +127,41 @@ pub fn parse(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result
     }
     if line == "use" || line.starts_with("use\t") {
         return parse_use(origin, line[3..].trim());
+    }
+
+    // II.4's set directives. Checked before the package parser, which would otherwise read
+    // `exclude heavy` as a package named `exclude heavy`.
+    for word in ["exclude ", "intersect "] {
+        if let Some(rest) = line.strip_prefix(word) {
+            return parse_set_directive(origin, word.trim(), rest.trim());
+        }
+    }
+
+    // V.44: `use` already means union, so a second word for it is two ways to do one thing.
+    if let Some(rest) = line.strip_prefix("include ") {
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`include {}` — there is no `include`", rest.trim()),
+        )
+        .with_hint(format!(
+            "write `use {}`. One word brings something in, everywhere: modules use it too.",
+            rest.trim()
+        )));
+    }
+
+    // A set expression, before the package parser reads `(Work` as a package name.
+    if crate::app::profile_expr::looks_like_expression(line) {
+        return Ok(Statement::Expr(line.to_string()));
+    }
+
+    // `-vim`. Checked after expressions so `a \ b` is a difference, not a subtraction.
+    if let Some(rest) = line.strip_prefix('-') {
+        let target = rest.trim();
+        if target.is_empty() {
+            return Err(GrammarError::new(origin.clone(), "`-` subtracts nothing")
+                .with_hint("write `-vim` to take one package out."));
+        }
+        return Ok(Statement::Subtract(target.to_string()));
     }
 
     if let Some(rest) = line.strip_prefix("absent:") {
@@ -192,6 +239,36 @@ fn parse_use(origin: &Origin, target: &str) -> Result<Statement> {
             format!("`{}` is neither a module nor a profile name", target),
         )
         .with_hint("profiles are Capitalized, modules are lowercase.")
+    })
+}
+
+/// `exclude heavy` / `intersect security` — both take one module or profile name, and case
+/// says which, exactly as `use` does.
+fn parse_set_directive(origin: &Origin, word: &str, target: &str) -> Result<Statement> {
+    if target.is_empty() {
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`{}` names nothing", word),
+        )
+        .with_hint(format!("write `{} heavy` (a module) or `{} Work` (a profile).", word, word)));
+    }
+    if target.split_whitespace().count() > 1 {
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`{} {}` names more than one thing", word, target),
+        )
+        .with_hint(format!("one `{}` per line.", word)));
+    }
+    let reference = Reference::classify(target).ok_or_else(|| {
+        GrammarError::new(
+            origin.clone(),
+            format!("`{}` is neither a module nor a profile name", target),
+        )
+        .with_hint("profiles are Capitalized, modules are lowercase.")
+    })?;
+    Ok(match word {
+        "exclude" => Statement::Exclude(reference),
+        _ => Statement::Intersect(reference),
     })
 }
 

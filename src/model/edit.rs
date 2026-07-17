@@ -430,7 +430,13 @@ fn other_key(stmt: &Statement) -> Option<String> {
         Statement::Service(n, _) => Some(format!("service:{}", n)),
         Statement::Link(n, _) => Some(format!("link:{}", n)),
         Statement::Use(r) => Some(format!("use {}", r.name())),
-        Statement::Package(_) | Statement::Absent(_) => None,
+        // Set math is an operation, not a thing with a name to look up.
+        Statement::Exclude(_)
+        | Statement::Intersect(_)
+        | Statement::Subtract(_)
+        | Statement::Expr(_)
+        | Statement::Package(_)
+        | Statement::Absent(_) => None,
     }
 }
 

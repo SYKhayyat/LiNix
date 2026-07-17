@@ -296,7 +296,14 @@ profile names. To gate a whole file, wrap it. Keys: `os`, `arch`, `host`, `hostn
 ## II.4 Profiles
 
 - Set math over modules and profiles: `|` union, `&` intersect, `\` difference, `-`
-  subtract, parentheses. Directives `include` / `exclude` / `intersect`.
+  subtract, parentheses. Directives `exclude` / `intersect`; **`use` is union** (V.44).
+- **Set math produces packages, so a profile that uses it resolves to packages, not to
+  modules** (V.44). It operates on lines, not on names, so **every surviving package still
+  knows the file it came from** and `upgrade --module` still finds it.
+- **Order is fixed: gather, then narrow by each `intersect`, then subtract. Subtraction
+  always wins**, whatever order you wrote the lines in — otherwise `use gaming` below
+  `-steam` quietly puts steam back.
+- `intersect` narrows and never adds: a package only the other side has does not appear.
 - **A profile MAY hold package lines directly.** Cost, accepted knowingly: a module can
   never reach them (layering rule), so they are unshareable, permanently.
 - **Only profiles can be activated.** By name, in `active` — by hand or via `activate` /
@@ -1124,6 +1131,41 @@ other (V.22). *Corrected knowingly against the headline: a wrong number in a doc
 cheaper than three deleted safety rails. If a rule here ever stops being a refusal and
 starts being a preference, that is the signal it does not belong in `[guard]`.*
 
+**V.44 — Why set math costs a package its module name, and why `include` died.** *(Decided
+2026-07-17, during Phase 2f. II.4 required set math and nothing implemented it:
+`model::profiles::evaluate_expression` had no caller outside its own tests, and the only
+working implementation was `compose()` in the old `app/profile.rs`, over flat strings.)*
+
+**The shape does not fit, and pretending otherwise is the bug.** Resolution is
+`profiles → the modules they reach → the packages in those modules`. Set math breaks that
+chain: `(Work | gaming) & security` is **an intersection of package sets**, and there is no
+module whose contents are that intersection. So a profile using set math resolves to packages
+directly rather than naming modules.
+
+Making `&` operate on module *names* was the alternative, and it answers a different question
+than the one asked: the intersection of `{editors}` and `{security}` is empty even when both
+hold `vim`. Inventing a synthetic module to hold the result was the other, and it names a
+module that does not exist on disk, so `upgrade --module` would match something nobody can
+open.
+
+**The predicted cost turned out not to exist, and that is worth stating plainly because this
+document predicted it wrongly.** The first draft of this entry said set math costs a package
+its module name. It does not: the implementation maps expression atoms back to **the
+statements they came from**, not to strings, so a package that survives an intersection still
+carries its `Origin` — its file, and therefore its module. `upgrade --module editors` finds
+`vim` through an `exclude`. There is a test (`a_package_surviving_set_math_still_knows_its
+module`). The only lines that get profile scope alone are ones written in the profile itself,
+including a bare package atom inside an expression — which is correct, because that line
+really is in the profile. **Keep mapping back to statements. Mapping back to strings is what
+would make the predicted cost real.**
+
+**`include` died because `use` already is it.** II.4 listed `include`/`exclude`/`intersect` as
+the three directives while II.2 listed `use NAME` as the way to reference a module or profile
+— and for the union case those are the same operation with two names, which is the exact
+"two ways to do one thing" disease this design exists to cure, sitting inside the spec. `use`
+wins: it is II.2's word, it is the one modules use too, and one word for "bring this in"
+everywhere beats two. `include` is an error that says so.
+
 **V.42 — Why the comment rule.** This codebase has been touched by many AIs, and this is what
 that leaves behind: models narrate what they just wrote and congratulate themselves for it,
 because that reads like effort, and each one looks fine on its own. The repo already proves
@@ -1334,7 +1376,7 @@ six are current, and the count matches exactly what is live today.
 | the `-g` model | **the flag is gone; the model it anchored is not.** `groups_dir` has **84 references** across ~15 files, `config_root` **23**; `config_root()` is still literally `groups_dir.parent()`. | `config/config.rs:579` |
 | `local.txt` (V.1) | ~~alive in 10 files~~ — **dead as of Phase 2e.** `add_package_to_local`, `remove_package_from_local`, `remove_package_from_manifests`, `line_declares`, `get_user_group_file` and `ManifestEngine::add_to_local` are deleted; `model/edit.rs` replaces them. **S9 died with it**, and `model/edit.rs` has the test that proves `uninstall npm` no longer deletes every `npm:*` line. | fixed |
 | `keep.txt` (V.6) | ~~alive~~ — **dead as of Phase 2e.** It was never *read*: the whole `RESERVED_MANIFEST_NAMES` / `is_reserved_manifest` mechanism existed only to keep one file out of a crawl. Mechanism and all four exclusion sites deleted. | fixed |
-| `_active_profiles.txt` | **still written on every `activate`.** `app/profile.rs` is untouched and still holds `materialize()` and a second full profile-composition engine (`compose`) that duplicates `model/profiles.rs`. **The next unit.** | `app/profile.rs:20`, `:347` |
+| `_active_profiles.txt` | ~~still written on every `activate`~~ — **dead as of Phase 2f.** `materialize()`, `compose()` (the second profile engine) and `RESERVED_MANIFEST` are deleted; `ProfileManager` runs on the model and `activate` edits one file, `active`. 657 lines -> 348. | fixed |
 | `prune` (V.34) | **still a CLI command** (`snapshot prune`), plus `prune_on_sync` / `prune_scope` / `auto_prune` in config. | `cli/args.rs:773`, `main.rs:1817` |
 | `migrate` | **606 live lines**, called by `adopt`. Renamed, not deleted — and `migrate.rs:283` still tells the user to *"run `linix migrate` again"*, a command that does not exist. | `main.rs:2153` |
 | `clone` (V.33) | ~~a CLI command~~ — the command was gone, but **`fleet::clone` + `install_one` were still `pub` with zero callers**: Phase 0 deleted the flag and left the implementation. Deleted in Phase 2e. | fixed |
@@ -1428,25 +1470,44 @@ deleted.
 
 ## The next action, precisely
 
-**`app/profile.rs` — the last whole copy of the old model.** 657 lines that still write
+**S15 and the II.8 command surface.** `install` calls the backend first and writes the line
+second, so any refusal on the write lands after the package is already on the machine. The
+order is `declare` -> `sync`, and then `--dry-run` needs no special case because the plan is
+the dry run. That is the shape the rest of II.8's verbs want too.
+
+Then the remaining deletions: **`groups_dir` (84 references)**, whose `config_root()` is still
+literally `groups_dir.parent()`; the **seven non-validating `split_once(':')` parsers**; and
+`migrate` (606 lines, renamed to `adopt` rather than deleted, still telling users to run a
+command that does not exist).
+
+## Done in Phase 2f — set math, and the last of the old profile engine
+
+**`app/profile.rs` was the last whole copy of the old model.** 657 lines that still write
 `_active_profiles.txt` on every `activate`, and still hold `compose()`: a second, complete
 profile-composition engine duplicating `model/profiles.rs`. Its `active` file is in the wrong
 place (`profiles/active`, not the config root) and its profiles are `<name>.profile`, not
 II.5's Capitalized `profiles/<Name>`. Nothing about it agrees with the model that now runs
 resolution.
 
-**One real question is buried in it, and it needs answering before the rewrite:** II.4 says
-profiles support set math (`|`, `&`, `\`, `-`, and `include`/`exclude`/`intersect`).
-`model/profiles.rs` **does not implement it** — `ProfileLoader::resolve` handles only `use`,
-and `model::profiles::evaluate_expression` has no caller outside its own tests. The old
-`compose()` does implement it, over flat package-name strings. The two are not the same shape:
-`Resolved { modules, direct }` cannot express "the intersection of two profiles' packages",
-because an intersection is a package set, not a module list. So set math either changes what
-`Resolved` is, or lands in `direct` and loses its module scope. **This is a design decision,
-not a port.**
+It is now 348 lines and runs on the model. `materialize()` is gone (a materialised copy is a
+second place the same fact lives), and `compose()` — a second complete profile engine — is
+gone with it.
 
-Then: **the II.8 command surface** (`main.rs`, ~4,370 lines), starting with **S15** — `install`
-does the file edit last instead of first, which is P1 inverted.
+**II.4's set math is implemented, and the decision behind it is V.44.** It was specified and
+never built: `ProfileLoader::resolve` handled only `use`, and `evaluate_expression` had no
+caller outside its own tests. It now works end to end — verified against the binary, not just
+tests. `exclude`, `intersect`, `-pkg` and full expressions like `(Work | gaming) & security`,
+with II.4's fixed order: gather, narrow, subtract, and **subtraction always wins** whatever
+order you wrote the lines in.
+
+**V.44 predicted a cost that turned out not to exist, and the entry says so.** The prediction
+was that set math would cost a package its module name. It does not: atoms map back to the
+**statements** they came from, so a package keeps its `Origin`, its file, and its module.
+`upgrade --module editors` still finds `vim` through an `exclude`.
+
+Also settled there: **`include` is gone.** `use` already meant union, and two words for one
+operation is the disease this design cures, sitting inside the spec. `include x` is an error
+that says `use x`.
 
 ## Phase 2's remaining checklist
 

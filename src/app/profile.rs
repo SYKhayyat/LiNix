@@ -1,41 +1,25 @@
-// src/app/profile.rs
-
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::sync::{ChangePlanner, StateResolver, SyncEngine};
+use crate::app::vocab::Vocab;
 use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;
+use crate::config::grammar::Origin;
+use crate::config::parser::HostFacts;
 use crate::config::Config;
 use crate::core::{CommandExecutor, Error, Journal, Result, SnapshotManager, StateRegistry};
+use crate::model::profiles::{parse_active, ProfileLoader};
+use crate::model::Layout;
 use crate::utils::progress::ProgressReporter;
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, instrument};
 
-/// The reserved manifest LiNix writes the union of all active profiles into. It lives in
-/// the groups dir alongside `local.txt`, so the ordinary declarative resolver picks it up
-/// and `sync`/`status`/`prune` converge the system to the active profile set. It is
-/// machine-owned: `activate`/`deactivate` overwrite it wholesale.
-const RESERVED_MANIFEST: &str = "_active_profiles.txt";
-
-/// The file (in the profiles dir) that records which profiles are currently active, one
-/// name per line. Multiple profiles can be active at once; their package sets are unioned.
-const ACTIVE_FILE: &str = "active";
-
-/// Manages system "Identities" or Profiles.
+/// Turns profiles on and off (SPEC II.6).
 ///
-/// A profile is a named set of software defined in `<profiles_dir>/<name>.profile` (a
-/// manifest with extra directives). Profiles compose:
-///
-/// - `include <other>` — union in another profile's resolved packages (the "plus").
-/// - `exclude <other>` — subtract another profile's resolved packages.
-/// - `-<pkg>`          — subtract a single package (the "minus").
-/// - any other line    — a package spec (`ripgrep`, `cargo:exa`, `@module:dev`, …).
-///
-/// Several profiles can be *active* simultaneously; the effective desired state is the
-/// union of every active profile. Activation and deactivation are live — they re-render
-/// the reserved manifest and converge the running system with no reboot.
+/// **Only profiles can be activated**, and activating one edits exactly one file: `active`,
+/// a plain list of profile names. Nothing is materialised, because a materialised copy is a
+/// second place the same fact lives, and the day it disagrees with your files it wins
+/// silently (P4). The resolver reads `active` on every run and composes from there.
 pub struct ProfileManager {
     registry: Arc<BackendRegistry>,
     executor: CommandExecutor,
@@ -47,7 +31,7 @@ pub struct ProfileManager {
     state: Arc<Mutex<StateRegistry>>,
     config: Arc<Config>,
     diagnostics: Arc<FailureDiagnosticEngine>,
-    profiles_dir: PathBuf,
+    layout: Layout,
 }
 
 impl ProfileManager {
@@ -64,10 +48,7 @@ impl ProfileManager {
         config: Arc<Config>,
         diagnostics: Arc<FailureDiagnosticEngine>,
     ) -> Self {
-        // config_root(), not a hand-rolled parent(): a relative groups_dir made this
-        // resolve to ./profiles, i.e. profiles scattered wherever the user was standing.
-        let profiles_dir = config.config_root().join("profiles");
-
+        let layout = config.layout();
         Self {
             registry,
             executor,
@@ -79,287 +60,215 @@ impl ProfileManager {
             state,
             config,
             diagnostics,
-            profiles_dir,
+            layout,
         }
     }
 
-    fn profile_file(&self, name: &str) -> PathBuf {
-        self.profiles_dir.join(format!("{name}.profile"))
-    }
-    fn active_file(&self) -> PathBuf {
-        self.profiles_dir.join(ACTIVE_FILE)
-    }
-
-    async fn profile_exists(&self, name: &str) -> bool {
-        tokio::fs::try_exists(self.profile_file(name))
+    async fn vocab(&self) -> Result<Vocab> {
+        let priority = StateResolver::new(&self.config, self.registry.clone(), false)
             .await
-            .unwrap_or(false)
+            .priority_for_host()
+            .await?;
+        Ok(Vocab::new(&self.registry, &self.config, &priority))
     }
 
-    /// Activate one or more profiles: add each to the active set, then converge the system
-    /// to the union of all active profiles. Idempotent — activating an already-active
-    /// profile is a no-op for the set.
+    /// Turn profiles on, then converge. Idempotent: activating an active profile changes
+    /// nothing.
     #[instrument(skip(self))]
     pub async fn activate(&self, names: &[String]) -> Result<()> {
-        let mut active = self.load_active().await?;
+        let mut active = self.active_profiles().await?;
         for name in names {
-            if !self.profile_exists(name).await {
-                return Err(Error::Config(format!(
-                    "Profile '{}' not found in {:?}. Create it with `linix profile create {}`.",
-                    name, self.profiles_dir, name
-                )));
-            }
+            self.must_exist(name).await?;
             if !active.iter().any(|a| a == name) {
                 active.push(name.clone());
             }
         }
-        self.save_active(&active).await?;
-        let union = self.materialize(&active).await?;
+        self.write_active(&active).await?;
         info!(
-            "Profiles: {} active [{}] → {} package(s) desired. Converging...",
-            active.len(),
-            active.join(", "),
-            union.len()
+            "Active: {}. Converging...",
+            if active.is_empty() {
+                "nothing".to_string()
+            } else {
+                active.join(", ")
+            }
         );
         self.sync_now().await
     }
 
-    /// Deactivate one or more profiles: drop each from the active set, then converge —
-    /// removing packages no longer required by any *remaining* active profile (packages
-    /// still provided by another active profile survive; imperative installs are always
-    /// spared per `protect_imperative`).
+    /// Turn profiles off, then converge — removing what no remaining active profile wants.
     #[instrument(skip(self))]
     pub async fn deactivate(&self, names: &[String]) -> Result<()> {
-        let mut active = self.load_active().await?;
+        let mut active = self.active_profiles().await?;
         let before = active.len();
         active.retain(|a| !names.iter().any(|n| n == a));
         if active.len() == before {
-            info!("Profiles: none of [{}] were active.", names.join(", "));
+            info!("None of [{}] were active.", names.join(", "));
+            return Ok(());
         }
-        self.save_active(&active).await?;
-        let _ = self.materialize(&active).await?;
+        self.write_active(&active).await?;
         info!(
-            "Profiles: deactivated [{}]; {} still active [{}]. Converging...",
+            "Deactivated [{}]. Still active: {}. Converging...",
             names.join(", "),
-            active.len(),
-            active.join(", ")
+            if active.is_empty() {
+                "nothing".to_string()
+            } else {
+                active.join(", ")
+            }
         );
         self.sync_now().await
     }
 
-    /// Exclusively switch to a single profile: deactivate everything else, activate this
-    /// one, and converge. This is the "swap my whole identity" operation.
+    /// Swap the whole identity: this profile and nothing else.
     #[instrument(skip(self))]
     pub async fn switch(&self, name: &str) -> Result<()> {
-        if !self.profile_exists(name).await {
-            return Err(Error::Config(format!(
-                "Profile '{}' not found in {:?}",
-                name, self.profiles_dir
-            )));
-        }
-        let active = vec![name.to_string()];
-        self.save_active(&active).await?;
-        self.materialize(&active).await?;
-        info!(
-            "Profiles: switched to exclusive identity '{}'. Converging...",
-            name
-        );
+        self.must_exist(name).await?;
+        self.write_active(&[name.to_string()]).await?;
+        info!("Switched to '{}'. Converging...", name);
         self.sync_now().await
     }
 
     pub async fn list_profiles(&self) -> Result<Vec<String>> {
-        let mut profiles: HashSet<String> = HashSet::new();
-        if tokio::fs::try_exists(&self.profiles_dir)
+        let vocab = self.vocab().await?;
+        Ok(ProfileLoader::new(&self.layout, &vocab).available())
+    }
+
+    /// The currently-active profiles, in the order `active` lists them.
+    pub async fn active_profiles(&self) -> Result<Vec<String>> {
+        let file = self.layout.active_file();
+        let body = tokio::fs::read_to_string(&file).await.unwrap_or_default();
+        Ok(parse_active(&file, &body)?)
+    }
+
+    /// What a profile expands to, as `backend:name` lines.
+    ///
+    /// Resolved by the same code that resolves a sync, so what this prints and what a sync
+    /// does cannot drift apart. It reports the profile as if it alone were active.
+    pub async fn show(&self, name: &str) -> Result<Vec<String>> {
+        self.must_exist(name).await?;
+
+        let restore = self.active_profiles().await?;
+        self.write_active(&[name.to_string()]).await?;
+        let resolved = StateResolver::new(&self.config, self.registry.clone(), false)
             .await
-            .unwrap_or(false)
-        {
-            let mut entries = tokio::fs::read_dir(&self.profiles_dir)
-                .await
-                .map_err(Error::from)?;
-            while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "profile") {
-                    if let Some(stem) = path.file_stem() {
-                        profiles.insert(stem.to_string_lossy().into_owned());
-                    }
-                }
-            }
-        }
-        let mut out: Vec<String> = profiles.into_iter().collect();
+            .resolve_desired_state()
+            .await;
+        // Whatever happened, put `active` back: a read-only command must not change what
+        // this machine is set to.
+        self.write_active(&restore).await?;
+
+        let mut out: Vec<String> = resolved?
+            .values()
+            .flatten()
+            .filter(|s| s.present)
+            .map(|s| format!("{}:{}", s.backend, s.name))
+            .collect();
         out.sort();
+        out.dedup();
         Ok(out)
     }
 
-    /// The currently-active profiles, in activation order.
-    pub async fn active_profiles(&self) -> Result<Vec<String>> {
-        self.load_active().await
-    }
-
-    /// The resolved (composed) package set a profile expands to.
-    pub async fn show(&self, name: &str) -> Result<Vec<String>> {
-        if !self.profile_exists(name).await {
-            return Err(Error::Config(format!(
-                "Profile '{}' not found in {:?}",
-                name, self.profiles_dir
-            )));
-        }
-        self.resolve(name).await
-    }
-
-    /// Scaffold a new, empty profile definition file.
+    /// Scaffold an empty profile.
     pub async fn create(&self, name: &str) -> Result<()> {
-        tokio::fs::create_dir_all(&self.profiles_dir).await.ok();
-        let path = self.profile_file(name);
+        self.check_name(name)?;
+        let path = self.layout.profile_file(name);
         if tokio::fs::try_exists(&path).await.unwrap_or(false) {
             return Err(Error::Config(format!(
-                "Profile '{}' already exists at {:?}",
-                name, path
+                "Profile '{}' already exists at {}. Delete it first, or edit it.",
+                name,
+                path.display()
             )));
         }
-        let tmpl = format!(
-            "# LiNix profile: {name}\n\
-             # One package per line, e.g.:\n\
-             #   ripgrep\n\
-             #   cargo:exa\n\
-             #   npm:cowsay\n\
-             # Compose from other profiles:\n\
-             #   include base      (union another profile — the \"plus\")\n\
-             #   intersect secure  (keep only packages also in another profile)\n\
-             #   exclude heavy     (subtract another profile's packages)\n\
-             #   -vim              (subtract a single package — the \"minus\")\n\
-             # Or a full set expression with grouping (parentheses nest infinitely):\n\
-             #   (work | gaming) & security          (union, then intersect)\n\
-             #   intersect(union(work, gaming), security)   (same, function form)\n\
-             #   base \\\\ heavy                        (difference)\n"
-        );
-        tokio::fs::write(&path, tmpl).await.map_err(Error::from)?;
+        tokio::fs::create_dir_all(self.layout.profiles_dir())
+            .await
+            .ok();
+        tokio::fs::write(&path, PROFILE_TEMPLATE)
+            .await
+            .map_err(Error::from)?;
+        info!("Created profile '{}' at {}.", name, path.display());
         Ok(())
     }
 
-    /// Snapshot the current desired state (everything the manifests resolve to) into a new
-    /// standalone profile, so "what I have now" becomes a reusable identity.
+    /// Snapshot what this machine currently wants into a new profile.
     pub async fn save_current_as(&self, name: &str) -> Result<()> {
-        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
-        let desired = resolver.resolve_desired_state().await?;
+        self.check_name(name)?;
+        let desired = StateResolver::new(&self.config, self.registry.clone(), false)
+            .await
+            .resolve_desired_state()
+            .await?;
 
-        let mut lines: Vec<String> = Vec::new();
-        for specs in desired.values() {
-            for s in specs {
-                lines.push(format!("{}:{}", s.backend, s.name));
-            }
-        }
+        let mut lines: Vec<String> = desired
+            .values()
+            .flatten()
+            .filter(|s| s.present)
+            .map(|s| format!("{}:{}", s.backend, s.name))
+            .collect();
         lines.sort();
         lines.dedup();
 
-        tokio::fs::create_dir_all(&self.profiles_dir).await.ok();
-        let body = format!(
-            "# LiNix profile '{name}' — snapshot of the current desired state\n{}\n",
-            lines.join("\n")
-        );
-        tokio::fs::write(self.profile_file(name), body)
-            .await
-            .map_err(Error::from)?;
-        info!("Profile '{}' saved with {} package(s).", name, lines.len());
-        Ok(())
-    }
-
-    async fn load_active(&self) -> Result<Vec<String>> {
-        let path = self.active_file();
-        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            return Ok(vec![]);
-        }
-        let body = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(Error::from)?;
-        Ok(body
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-            .map(|l| l.to_string())
-            .collect())
-    }
-
-    async fn save_active(&self, active: &[String]) -> Result<()> {
-        tokio::fs::create_dir_all(&self.profiles_dir).await.ok();
-        let body = format!(
-            "# LiNix active profiles (managed by `linix activate`/`deactivate`)\n{}\n",
-            active.join("\n")
-        );
-        tokio::fs::write(self.active_file(), body)
-            .await
-            .map_err(Error::from)?;
-        Ok(())
-    }
-
-    /// Reading the whole set at once is what keeps [`compose`] pure and sync, and therefore
-    /// unit-testable without a filesystem. Resolve nothing lazily from in here.
-    async fn load_all_definitions(&self) -> Result<HashMap<String, Vec<String>>> {
-        let mut defs: HashMap<String, Vec<String>> = HashMap::new();
-        if !tokio::fs::try_exists(&self.profiles_dir)
-            .await
-            .unwrap_or(false)
-        {
-            return Ok(defs);
-        }
-        let mut entries = tokio::fs::read_dir(&self.profiles_dir)
-            .await
-            .map_err(Error::from)?;
-        while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "profile") {
-                if let Some(stem) = path.file_stem() {
-                    let body = tokio::fs::read_to_string(&path)
-                        .await
-                        .map_err(Error::from)?;
-                    defs.insert(
-                        stem.to_string_lossy().into_owned(),
-                        body.lines().map(|l| l.to_string()).collect(),
-                    );
-                }
-            }
-        }
-        Ok(defs)
-    }
-
-    /// Resolve a profile to its concrete, de-duplicated, ordered package set, applying
-    /// `include` (union), `exclude` (subtract a profile), and `-pkg` (subtract a package).
-    async fn resolve(&self, name: &str) -> Result<Vec<String>> {
-        let defs = self.load_all_definitions().await?;
-        Ok(compose(name, &defs, &mut HashSet::new()))
-    }
-
-    /// Render the union of the active profiles into the reserved manifest so the ordinary
-    /// declarative pipeline (resolve → plan → sync) sees it. Returns the union for logging.
-    async fn materialize(&self, active: &[String]) -> Result<Vec<String>> {
-        let mut union: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-        for name in active {
-            for tok in self.resolve(name).await? {
-                if seen.insert(tok.clone()) {
-                    union.push(tok);
-                }
-            }
-        }
-
-        tokio::fs::create_dir_all(&self.config.groups_dir)
+        tokio::fs::create_dir_all(self.layout.profiles_dir())
             .await
             .ok();
-        let path = self.config.groups_dir.join(RESERVED_MANIFEST);
-        let mut body = String::from(
-            "# AUTO-GENERATED by `linix activate`/`deactivate` — do not edit by hand.\n",
+        let path = self.layout.profile_file(name);
+        let body = format!(
+            "# Profile '{name}' — what this machine wanted when it was saved.\n\
+             #\n\
+             # These are package lines held directly by the profile, so no module can reach\n\
+             # them. Move them into a module to share them between profiles.\n\n{}\n",
+            lines.join("\n")
         );
-        body.push_str(&format!("# Active profiles: {}\n", active.join(", ")));
-        for tok in &union {
-            body.push_str(tok);
-            body.push('\n');
-        }
         tokio::fs::write(&path, body).await.map_err(Error::from)?;
-        Ok(union)
+        info!(
+            "Saved profile '{}' with {} package(s) to {}.",
+            name,
+            lines.len(),
+            path.display()
+        );
+        Ok(())
     }
 
-    /// Converge the running system to the current manifest set (including the reserved
-    /// active-profiles manifest). Uses the default planner, which prunes managed drift —
-    /// so deactivation actually removes the packages that dropped out.
+    /// II.5: profiles are Capitalized. A lowercase name would mint a module.
+    fn check_name(&self, name: &str) -> Result<()> {
+        if name.chars().next().is_some_and(char::is_uppercase) {
+            return Ok(());
+        }
+        Err(Error::Config(format!(
+            "`{}` is not a profile name — profiles are Capitalized, modules are lowercase.\n  \
+             Did you mean `{}`? Only profiles can be activated.",
+            name,
+            capitalize(name)
+        )))
+    }
+
+    async fn must_exist(&self, name: &str) -> Result<()> {
+        self.check_name(name)?;
+        let vocab = self.vocab().await?;
+        let loader = ProfileLoader::new(&self.layout, &vocab);
+        if loader.exists(name) {
+            return Ok(());
+        }
+        // II.5's error teaches the rule rather than just saying no.
+        let err = loader
+            .resolve(name, &Origin::argument(), &HostFacts::current(), &mut Vec::new())
+            .unwrap_err();
+        Err(err.into())
+    }
+
+    /// `active` is a plain list of profile names and nothing else goes in it (II.6).
+    async fn write_active(&self, active: &[String]) -> Result<()> {
+        tokio::fs::create_dir_all(self.layout.config_root())
+            .await
+            .ok();
+        let body = if active.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", active.join("\n"))
+        };
+        tokio::fs::write(self.layout.active_file(), body)
+            .await
+            .map_err(Error::from)
+    }
+
+    /// Converge to whatever `active` now says.
     async fn sync_now(&self) -> Result<()> {
         let engine = SyncEngine::new(
             &self.config,
@@ -375,8 +284,10 @@ impl ProfileManager {
         )
         .await;
 
-        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
-        let desired = resolver.resolve_desired_state().await?;
+        let desired = StateResolver::new(&self.config, self.registry.clone(), false)
+            .await
+            .resolve_desired_state()
+            .await?;
 
         let changes = {
             let state_guard = self.state.lock().await;
@@ -385,7 +296,7 @@ impl ProfileManager {
         };
 
         if changes.is_empty() {
-            info!("Profiles: system already matches the active profile set.");
+            info!("This machine already matches the active profiles.");
             return Ok(());
         }
 
@@ -396,262 +307,42 @@ impl ProfileManager {
     }
 }
 
-/// Pure composition of a profile into its concrete, de-duplicated, ordered package set.
-///
-/// Directives (per line; `#` comments and blanks ignored):
-/// - `include <name>` / `use <name>` — union another profile's resolved set (the "plus").
-/// - `intersect <name>`              — keep only packages ALSO in another profile.
-/// - `exclude <name>`                — subtract another profile's resolved set.
-/// - `-<pkg>`                        — subtract a single package (the "minus").
-/// - a set *expression*             — e.g. `intersect(union(work, gaming), security)` or
-///   `(work | gaming) & security` (see [`crate::app::profile_expr`]); its result is unioned in.
-/// - anything else                   — a package spec.
-///
-/// Evaluation order is fixed and predictable: **union first, then intersect, then subtract**.
-/// So additions (plain packages, `include`, and expression results) are collected; the set is
-/// then narrowed to the intersection with every `intersect`ed profile; and finally all
-/// subtractions (`-pkg` and every `exclude`d profile) are removed. Subtraction always wins.
-/// `visiting` guards cyclic `include`/`intersect`/`exclude` references — a profile already on
-/// the resolution stack contributes nothing further. Unknown profile names resolve to the
-/// empty set (missing files are validated at the `activate`/`switch` entry points).
-fn compose(
-    name: &str,
-    defs: &HashMap<String, Vec<String>>,
-    visiting: &mut HashSet<String>,
-) -> Vec<String> {
-    if !visiting.insert(name.to_string()) {
-        return vec![]; // cycle
+fn capitalize(name: &str) -> String {
+    let mut c = name.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
     }
-    let mut adds: Vec<String> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut sub_pkgs: HashSet<String> = HashSet::new();
-    let mut sub_profiles: Vec<String> = Vec::new();
-    let mut intersect_profiles: Vec<String> = Vec::new();
-
-    for raw in defs.get(name).map(|v| v.as_slice()).unwrap_or(&[]) {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some(rest) = line
-            .strip_prefix("include ")
-            .or_else(|| line.strip_prefix("use "))
-        {
-            let child = rest.trim();
-            if !child.is_empty() {
-                for tok in compose(child, defs, visiting) {
-                    if seen.insert(tok.clone()) {
-                        adds.push(tok);
-                    }
-                }
-            }
-        } else if let Some(rest) = line.strip_prefix("intersect ") {
-            let child = rest.trim();
-            if !child.is_empty() {
-                intersect_profiles.push(child.to_string());
-            }
-        } else if let Some(rest) = line.strip_prefix("exclude ") {
-            let child = rest.trim();
-            if !child.is_empty() {
-                sub_profiles.push(child.to_string());
-            }
-        } else if let Some(rest) = line.strip_prefix('-') {
-            let tok = rest.trim();
-            if !tok.is_empty() {
-                sub_pkgs.insert(tok.to_string());
-            }
-        } else if crate::app::profile_expr::looks_like_expression(line) {
-            // A set expression: resolve each atom as a profile (recursively) if one exists
-            // by that name, otherwise treat it as a literal package token. Then union the
-            // result into this profile's additions.
-            let mut resolve_atom = |atom: &str| {
-                if defs.contains_key(atom) {
-                    compose(atom, defs, visiting)
-                } else {
-                    vec![atom.to_string()]
-                }
-            };
-            match crate::app::profile_expr::evaluate(line, &mut resolve_atom) {
-                Ok(tokens) => {
-                    for tok in tokens {
-                        if seen.insert(tok.clone()) {
-                            adds.push(tok);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Profile '{}': ignoring malformed set expression `{}`: {}",
-                        name,
-                        line,
-                        e
-                    );
-                }
-            }
-        } else if seen.insert(line.to_string()) {
-            adds.push(line.to_string());
-        }
-    }
-
-    // Narrow to the intersection with each `intersect`ed profile (after all unions).
-    for p in &intersect_profiles {
-        let keep: HashSet<String> = compose(p, defs, visiting).into_iter().collect();
-        adds.retain(|t| keep.contains(t));
-    }
-
-    // Collect profile-level subtractions, then apply all subtractions last.
-    for p in &sub_profiles {
-        for tok in compose(p, defs, visiting) {
-            sub_pkgs.insert(tok);
-        }
-    }
-
-    visiting.remove(name);
-    adds.into_iter().filter(|t| !sub_pkgs.contains(t)).collect()
 }
+
+const PROFILE_TEMPLATE: &str = "\
+# A profile chooses; modules hold. Bring a module in with `use`:
+#
+#   use editors
+#   use Work            (a profile — profiles are Capitalized, modules are lowercase)
+#
+# You can write packages here directly, but no module can reach them:
+#
+#   apt:curl
+#   ripgrep             (no backend named — LiNix asks each one in `priority` order)
+#
+# Set math, if you need it:
+#
+#   exclude heavy       (drop that module's packages)
+#   intersect approved  (keep only what is also in there)
+#   -steam              (drop one package)
+#   (Work | gaming) & security
+#
+# Gather, then narrow, then subtract — subtraction always wins.
+";
 
 #[cfg(test)]
 mod tests {
-    use super::compose;
-    use std::collections::{HashMap, HashSet};
-
-    fn defs(pairs: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
-        pairs
-            .iter()
-            .map(|(n, lines)| (n.to_string(), lines.iter().map(|l| l.to_string()).collect()))
-            .collect()
-    }
-
-    fn resolve(name: &str, d: &HashMap<String, Vec<String>>) -> Vec<String> {
-        compose(name, d, &mut HashSet::new())
-    }
+    use super::capitalize;
 
     #[test]
-    fn standalone_profile_lists_its_packages() {
-        let d = defs(&[("a", &["apt:jq", "apt:htop", "# a comment", ""])]);
-        assert_eq!(resolve("a", &d), vec!["apt:jq", "apt:htop"]);
-    }
-
-    #[test]
-    fn include_unions_and_dedups_preserving_order() {
-        let d = defs(&[
-            ("base", &["apt:jq"]),
-            ("dev", &["include base", "apt:htop", "apt:jq"]),
-        ]);
-        assert_eq!(resolve("dev", &d), vec!["apt:jq", "apt:htop"]);
-    }
-
-    #[test]
-    fn minus_subtracts_a_single_package() {
-        let d = defs(&[
-            ("both", &["apt:jq", "apt:htop"]),
-            ("lean", &["include both", "-apt:jq"]),
-        ]);
-        assert_eq!(resolve("lean", &d), vec!["apt:htop"]);
-    }
-
-    #[test]
-    fn exclude_subtracts_another_profiles_packages() {
-        let d = defs(&[
-            ("heavy", &["apt:gdb", "apt:valgrind"]),
-            ("base", &["apt:jq", "apt:gdb"]),
-            ("slim", &["include base", "exclude heavy"]),
-        ]);
-        // base brings jq+gdb; excluding heavy (gdb+valgrind) removes gdb.
-        assert_eq!(resolve("slim", &d), vec!["apt:jq"]);
-    }
-
-    #[test]
-    fn relational_plus_and_minus_together() {
-        let d = defs(&[
-            ("a", &["apt:jq"]),
-            ("b", &["apt:htop"]),
-            ("combo", &["include a", "include b"]),
-            ("lean", &["include combo", "-apt:jq"]),
-        ]);
-        assert_eq!(resolve("combo", &d), vec!["apt:jq", "apt:htop"]);
-        assert_eq!(resolve("lean", &d), vec!["apt:htop"]);
-    }
-
-    #[test]
-    fn cyclic_includes_terminate() {
-        let d = defs(&[
-            ("x", &["include y", "apt:one"]),
-            ("y", &["include x", "apt:two"]),
-        ]);
-        // Must not stack-overflow; both packages surface exactly once.
-        let mut r = resolve("x", &d);
-        r.sort();
-        assert_eq!(r, vec!["apt:one", "apt:two"]);
-    }
-
-    #[test]
-    fn unknown_profile_is_empty_not_a_panic() {
-        let d = defs(&[("a", &["include ghost", "apt:jq"])]);
-        assert_eq!(resolve("a", &d), vec!["apt:jq"]);
-    }
-
-    #[test]
-    fn intersect_directive_keeps_only_common_packages() {
-        let d = defs(&[
-            ("base", &["apt:jq", "apt:htop", "apt:gdb"]),
-            ("secure", &["apt:jq", "apt:gdb", "apt:auditd"]),
-            ("hardened", &["include base", "intersect secure"]),
-        ]);
-        // base ∩ secure = {jq, gdb}, in base's order.
-        assert_eq!(resolve("hardened", &d), vec!["apt:jq", "apt:gdb"]);
-    }
-
-    #[test]
-    fn intersect_applies_after_union_before_subtraction() {
-        let d = defs(&[
-            ("a", &["apt:jq", "apt:htop"]),
-            ("b", &["apt:htop", "apt:gdb"]),
-            ("common", &["apt:htop", "apt:jq"]),
-            // union(a,b) = {jq,htop,gdb}; intersect common = {jq,htop}; minus jq = {htop}.
-            (
-                "combo",
-                &["include a", "include b", "intersect common", "-apt:jq"],
-            ),
-        ]);
-        assert_eq!(resolve("combo", &d), vec!["apt:htop"]);
-    }
-
-    #[test]
-    fn expression_line_unions_into_profile() {
-        let d = defs(&[
-            ("work", &["apt:vim", "apt:git"]),
-            ("gaming", &["apt:git", "apt:steam"]),
-            ("security", &["apt:git", "apt:auditd"]),
-            // The user's headline example, as a set expression.
-            ("locked", &["(work | gaming) & security"]),
-        ]);
-        // (vim,git,steam) ∩ (git,auditd) = {git}.
-        assert_eq!(resolve("locked", &d), vec!["apt:git"]);
-    }
-
-    #[test]
-    fn function_form_expression_matches_infix() {
-        let d = defs(&[
-            ("work", &["a", "b"]),
-            ("gaming", &["b", "c"]),
-            ("security", &["b"]),
-            ("f", &["intersect(union(work, gaming), security)"]),
-        ]);
-        assert_eq!(resolve("f", &d), vec!["b"]);
-    }
-
-    #[test]
-    fn expression_atoms_can_be_literal_packages() {
-        let d = defs(&[("p", &["apt:g++ | cargo:ripgrep"])]);
-        // g++ must survive tokenization as a literal atom, not be split on '+'.
-        assert_eq!(resolve("p", &d), vec!["apt:g++", "cargo:ripgrep"]);
-    }
-
-    #[test]
-    fn malformed_expression_is_ignored_not_fatal() {
-        // An unbalanced expression is dropped with a warning; other lines still resolve.
-        let d = defs(&[("p", &["(work | gaming", "apt:jq"])]);
-        assert_eq!(resolve("p", &d), vec!["apt:jq"]);
+    fn the_suggestion_capitalizes_the_name_you_typed() {
+        assert_eq!(capitalize("work"), "Work");
+        assert_eq!(capitalize(""), "");
     }
 }

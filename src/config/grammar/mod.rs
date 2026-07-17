@@ -264,7 +264,12 @@ fn merge_options(stmt: &mut Statement, extra: Options, origin: &Origin) -> Resul
         | Statement::Schedule(_, o)
         | Statement::Service(_, o)
         | Statement::Link(_, o) => o,
-        Statement::Repo(_) | Statement::Use(_) => {
+        Statement::Repo(_)
+        | Statement::Use(_)
+        | Statement::Exclude(_)
+        | Statement::Intersect(_)
+        | Statement::Subtract(_)
+        | Statement::Expr(_) => {
             return Err(GrammarError::new(
                 origin.clone(),
                 "this statement takes no options",
