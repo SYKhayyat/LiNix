@@ -1077,7 +1077,20 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
 
 ## Phase 5 — Harness and docs
 
-- Rebuild the harness for the new model.
+- **Rebuild the harness for the new model — STARTED, 2026-07-17.** The old
+  `docker/integration/run-in-container.sh` (1112 lines, built on the deleted `-g` flag +
+  `generation`/`lease`, 102 soft assertions) was **DELETED, not kept** (NO LEGACY — a "legacy"
+  file is a file to delete on sight; standing rule from the owner). Replaced with a **lean v7
+  harness** (~172 lines) driven entirely through the real v7 CLI: `LINIX_CONFIG_DIR`/
+  `LINIX_DATA_DIR` isolation, `linix init` to scaffold the II.1 repo, and **HARD** exit-code
+  assertions (`ok`/`nok`/`grep_ok`; the run exits non-zero on any hard failure — so G2's
+  soft-assertion problem is gone by construction). It covers the Part IV proofs: adopt takes the
+  manual set and python3 survives; a protected package is never removed; `purge-unmanaged` is not
+  a silent mass-delete; plus install→list→idempotency→remove, dry-run safety, git rollback/diff,
+  read-only verbs, and a command-surface smoke. **Not run here** (needs Docker — untestable on
+  Windows). **Remaining:** re-port the old script's comprehensive *multi-backend real-lifecycle
+  sweep + plan-smoke* (cargo/npm/pip/… each installed for real) into this harness — that breadth
+  was the old script's value and is a later, container-testable job.
 - **G2 — CORRECTED 2026-07-17 (my earlier "moot" was wrong).** The soft assertions are not in
   Rust (the `src/`/`tests/` grep is genuinely empty) — they are in the **shell container harness**
   `docker/integration/run-in-container.sh`, which has **102 `soft "…"` calls** (matches the "104").
