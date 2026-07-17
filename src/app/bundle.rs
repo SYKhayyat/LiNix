@@ -184,7 +184,7 @@ pub async fn create_bundle(
          2. Point LiNix at it (e.g. set the config dir to this bundle) or copy `groups/` and\n\
             `modules/` into your LiNix config directory.\n\
          3. Reproduce the exact versions:  `linix sync --locked`\n\
-            (locks.json inside `groups/` pins every version).\n\n\
+            (`locks/versions.json` pins every version).\n\n\
          If you bundled with `--artifacts`, the `artifacts/<backend>/` folders hold the\n\
          downloaded package files for a fully air-gapped install; point your package manager\n\
          at them as a local source.\n",

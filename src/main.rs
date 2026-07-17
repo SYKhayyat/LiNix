@@ -2147,7 +2147,7 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// Write the currently-installed version of every managed package to locks.json so a
+/// Write the currently-installed version of every managed package to locks/versions.json so a
 /// later `sync --locked` reproduces those exact versions (where the backend supports it).
 /// Compute the sync changes for the current desired state (shared by `plan` and `apply`).
 async fn compute_full_changes(app: &App) -> Result<linix::app::sync::SyncChanges> {
@@ -2413,7 +2413,7 @@ async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
     perform_maintenance(app).await
 }
 
-/// Build and write `locks.json` from the current managed state (live installed versions
+/// Build and write `locks/versions.json` from the current managed state (live installed versions
 /// preferred, falling back to recorded state). Returns the number of versions pinned. Shared
 /// by `linix lock` and `doctor --fix` (lockfile heal).
 async fn build_and_write_locks(app: &App) -> Result<usize> {
@@ -2444,9 +2444,13 @@ async fn build_and_write_locks(app: &App) -> Result<usize> {
         }
     }
     let count = locks.len();
-    tokio::fs::create_dir_all(&app.config.config_root()).await.ok();
+    let path = app.config.config_root().join("locks").join("versions.json");
+    // The version pins live in the `locks/` directory (II.6) beside the hook and extras
+    // ledgers — not a stray `locks.json` file beside that directory (the old layout).
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await.ok();
+    }
     let doc = serde_json::json!({ "locks": locks });
-    let path = app.config.config_root().join("locks.json");
     tokio::fs::write(&path, serde_json::to_string_pretty(&doc)?)
         .await
         .with_context(|| format!("Failed to write {}", path.display()))?;
@@ -2458,7 +2462,7 @@ async fn handle_lock(app: &App) -> Result<()> {
     info!(
         "Lock: pinned {} package version(s) to {}",
         count,
-        app.config.config_root().join("locks.json").display()
+        app.config.config_root().join("locks").join("versions.json").display()
     );
     // II.12: `lock` is also how you approve hooks. Record the current hash of every hook so a
     // later change to any of them stops the next sync until it is re-approved here. "Hash
@@ -3843,9 +3847,9 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
         }
     }
 
-    // ---- Lockfile integrity: does locks.json still match the managed set? ----
+    // ---- Lockfile integrity: does locks/versions.json still match the managed set? ----
     {
-        let lock_path = app.config.config_root().join("locks.json");
+        let lock_path = app.config.config_root().join("locks").join("versions.json");
         if !lock_path.exists() {
             system.push((
                 "lockfile".into(),
@@ -3880,7 +3884,7 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
             } else if fix {
                 match build_and_write_locks(app).await {
                     Ok(n) => {
-                        fixes.push(format!("reconciled locks.json ({} entries)", n));
+                        fixes.push(format!("reconciled locks/versions.json ({} entries)", n));
                         system.push((
                             "lockfile".into(),
                             HealthStatus::Ok,

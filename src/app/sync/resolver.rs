@@ -17,7 +17,7 @@ pub struct StateResolver<'a> {
     config: &'a Config,
     registry: Arc<BackendRegistry>,
     layout: Layout,
-    /// When true, a package with no entry in locks.json is an error rather than a free
+    /// When true, a package with no entry in locks/versions.json is an error rather than a free
     /// resolve — the whole point of a locked run is that nothing floats.
     locked: bool,
     /// "backend:package" -> version.
@@ -29,7 +29,7 @@ impl<'a> StateResolver<'a> {
         let mut locks = HashMap::new();
 
         if locked {
-            let lock_path = config.config_root().join("locks.json");
+            let lock_path = config.config_root().join("locks").join("versions.json");
             debug!(
                 "Resolver: Locked mode active. Probing for locks at {:?}",
                 lock_path
@@ -48,7 +48,7 @@ impl<'a> StateResolver<'a> {
                     }
                 }
             } else {
-                warn!("Resolver: Locked mode requested but locks.json is missing.");
+                warn!("Resolver: Locked mode requested but locks/versions.json is missing.");
             }
         }
 
@@ -257,7 +257,7 @@ impl<'a> StateResolver<'a> {
                 let key = format!("{}:{}", backend, spec.name);
                 let Some(locked) = self.locks.get(&key) else {
                     return Err(Error::Validation(format!(
-                        "Locked Mode Error: '{}' is missing from locks.json.",
+                        "Locked Mode Error: '{}' is missing from locks/versions.json.",
                         key
                     )));
                 };

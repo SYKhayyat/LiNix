@@ -194,8 +194,8 @@ pub enum Commands {
         yes: bool,
     },
 
-    /// Record the installed version of every managed package to locks.json, so
-    /// `sync --locked` reproduces those exact versions on another machine
+    /// Record the installed version of every managed package to locks/versions.json (and
+    /// approve current hooks), so `sync --locked` reproduces those exact versions elsewhere
     Lock,
 
     /// Parallel search across all searchable repositories
