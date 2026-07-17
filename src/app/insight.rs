@@ -388,91 +388,74 @@ pub fn print_audit(report: &AuditReport, as_json: bool) -> Result<()> {
 }
 
 
-/// Turn the structured `__source` provenance tag recorded at install time into a friendly,
-/// specific explanation. `;`-joined tags mean a package has more than one origin.
-pub fn interpret_source(src: &str) -> String {
-    let one = |s: &str| -> String {
-        let s = s.trim();
-        if let Some(m) = s.strip_prefix("module:") {
-            format!("pulled in by module `{}` (@module:{})", m, m)
-        } else if let Some(m) = s.strip_prefix("profile:") {
-            format!("required by profile `{}`", m)
-        } else if s == "imperative" {
-            "installed imperatively via `linix install`".to_string()
-        } else if s.is_empty() {
-            "origin unknown (installed before provenance tracking)".to_string()
-        } else {
-            let base = s.rsplit(['/', '\\']).next().unwrap_or(s);
-            format!("declared in manifest `{}`", base)
-        }
-    };
-    src.split(';')
-        .filter(|s| !s.trim().is_empty())
-        .map(one)
-        .collect::<Vec<_>>()
-        .join("; ")
+/// Where a package is declared, straight from the resolver (II.7).
+///
+/// **Asks the model rather than re-reading the files.** `why` answers the one question the
+/// model exists to answer — *where is this declared?* — so a second implementation here is a
+/// second answer, and it is the one a user reaches for precisely when they already distrust
+/// the state. This used to crawl `groups_dir/*.txt` and `modules_dir/*.module.txt` with its
+/// own `backend:name` parser: three things II.1 deleted. It could not see a II.1 module at
+/// all, never opened `profiles/` or `active`, and said so confidently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Declaration {
+    /// `modules/dev.txt:3` — the file and line, for a human to open.
+    pub at: String,
+    /// `module:dev`, `profile:Work` — what it belongs to.
+    pub scopes: Vec<String>,
+    /// A dated line that has stopped counting still sits in the file (II.16).
+    pub lapsed: bool,
 }
 
-/// Pure: does a raw manifest line declare the given package? Matches the bare name or a
-/// `backend:name` prefix, ignoring `@options` and leading exclusion markers. Unit tested.
-pub fn line_declares(line: &str, backend: &str, name: &str) -> bool {
-    let l = line.trim();
-    if l.is_empty() || l.starts_with('#') || l.starts_with('-') {
-        return false;
-    }
-    // Structural directives never *declare* a leaf package by name.
-    if l.starts_with("@module:") || l.starts_with("when ") || l == "end" {
-        return false;
-    }
-    let head = l.split('@').next().unwrap_or(l).trim();
-    match head.split_once(':') {
-        Some((b, n)) => b == backend && n == name,
-        None => head == name,
+impl Declaration {
+    /// The sentence `why` prints.
+    pub fn describe(&self) -> String {
+        let mut out = format!("at {}", self.at);
+        if !self.scopes.is_empty() {
+            out.push_str(&format!(" ({})", self.scopes.join(", ")));
+        }
+        if self.lapsed {
+            out.push_str(" — expired, so it no longer counts");
+        }
+        out
     }
 }
 
-/// Scan every manifest (.txt) and module (.module.txt) under the config dirs for lines that
-/// declare this package, returning human labels like "module: dev" or "manifest: local.txt".
-async fn scan_declarations(app: &App, backend: &str, name: &str) -> Vec<String> {
-    let mut hits = Vec::new();
+/// Ask the resolver where `backend:name` is declared.
+///
+/// An error is returned, never swallowed into "declared nowhere": a `why` that cannot read
+/// your files must say so, or it reports a broken config as an absent declaration.
+async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Vec<Declaration>> {
+    let resolver =
+        crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let state = resolver.resolve_model().await?;
 
-    if let Ok(mut entries) = tokio::fs::read_dir(&app.config.groups_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            let fname = entry.file_name().to_string_lossy().into_owned();
-            if !fname.ends_with(".txt") {
-                continue;
-            }
-            if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                if content.lines().any(|l| line_declares(l, backend, name)) {
-                    hits.push(format!("manifest: {}", fname));
-                }
-            }
+    let lapsed_keys: Vec<&str> = state.lapsed.iter().map(|(k, _)| k.as_str()).collect();
+    let key = format!("{}:{}", backend, name);
+
+    let mut out = Vec::new();
+    for spec in state.packages.values().flatten() {
+        if spec.backend != backend || spec.name != name {
+            continue;
         }
+        out.push(Declaration {
+            at: spec
+                .options
+                .get("__source")
+                .cloned()
+                .unwrap_or_else(|| "an unknown file".to_string()),
+            scopes: spec
+                .options
+                .get("__scopes")
+                .map(|s| s.split(';').map(str::to_string).collect())
+                .unwrap_or_default(),
+            lapsed: lapsed_keys.contains(&key.as_str()),
+        });
     }
-
-    // Modules directory.
-    let modules_dir = app.config.modules_dir.clone();
-    if let Ok(mut entries) = tokio::fs::read_dir(&modules_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let fname = entry.file_name().to_string_lossy().into_owned();
-            let Some(mod_name) = fname.strip_suffix(".module.txt") else {
-                continue;
-            };
-            if let Ok(content) = tokio::fs::read_to_string(entry.path()).await {
-                if content.lines().any(|l| line_declares(l, backend, name)) {
-                    hits.push(format!("module: {}", mod_name));
-                }
-            }
-        }
-    }
-
-    hits.sort();
-    hits.dedup();
-    hits
+    Ok(out)
 }
 
-/// Explain why a package is present: how it entered management, and what depends on it.
+/// Explain why a package is present: how it entered management, and what depends on it./// Explain why a package is present: how it entered management, and what depends on it.
 /// With `as_json`, emit the same provenance as a machine-readable array instead of text.
 pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
     // Snapshot the state we need, then release the lock before doing async backend queries.
@@ -516,12 +499,29 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
     let mut json_matches: Vec<serde_json::Value> = Vec::new();
 
     for (backend, name, version, source, expires) in matches {
-        // Provenance from the recorded source tag, interpreted into a specific sentence.
-        let prov = interpret_source(source.as_deref().unwrap_or(""));
+        // Where your files declare it, from the resolver — the same answer `sync` acts on.
+        let found = declarations_of(app, &backend, &name).await?;
+        let declarations: Vec<String> = found.iter().map(|d| d.describe()).collect();
 
-        // Live scan of all manifests/modules/groups — surfaces every place the package is
-        // declared, including profiles/modules that the single recorded tag doesn't capture.
-        let declarations = scan_declarations(app, &backend, &name).await;
+        // How it got into the registry, which is a different question: `adopt` took it, a
+        // hook caught it, `linix install` put it there.
+        let prov = match source.as_deref() {
+            Some("imperative") => "installed by `linix install`".to_string(),
+            Some("hook") => "installed behind LiNix's back, and caught by the hook".to_string(),
+            Some("adopt") | Some("migrate") => "adopted from this machine".to_string(),
+            Some("teleport") => "moved here by `linix teleport`".to_string(),
+            Some(other) if !other.is_empty() => format!("recorded by {}", other),
+            _ => "origin unknown (recorded before LiNix tracked it)".to_string(),
+        };
+
+        // Declared nowhere and still managed IS the answer, not a gap: it is drift, and the
+        // next sync removes it. Saying "declared nowhere" without saying what that means is
+        // how a true sentence still misleads.
+        let declarations: Vec<String> = if declarations.is_empty() {
+            vec!["in no active file — the next `sync` will remove it".to_string()]
+        } else {
+            declarations
+        };
 
         let lease = expires.map(|exp| {
             match chrono::DateTime::<chrono::Utc>::from_timestamp(exp as i64, 0) {
@@ -562,8 +562,9 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
             let ver = version.map(|v| format!(" @ {}", v)).unwrap_or_default();
             println!("{}:{}{}", backend, name, ver);
             println!("  why:         {}", prov);
-            if !declarations.is_empty() {
-                println!("  declared in: {}", declarations.join(", "));
+            for (i, d) in declarations.iter().enumerate() {
+                let label = if i == 0 { "declared:" } else { "" };
+                println!("  {:<12} {}", label, d);
             }
             if let Some(l) = &lease {
                 println!("  lease:       temporary — expires {}", l);
@@ -671,38 +672,41 @@ mod tests {
     }
 
     #[test]
-    fn interpret_source_maps_structured_tags() {
+    fn a_declaration_reads_as_a_place_you_can_open() {
+        // `why` answers "where is this declared?", so the answer is a file and a line — not
+        // a label like "manifest: local.txt" that names a file the model no longer reads.
+        let d = Declaration {
+            at: "modules/dev.txt:3".into(),
+            scopes: vec!["module:dev".into(), "profile:Work".into()],
+            lapsed: false,
+        };
         assert_eq!(
-            interpret_source("module:dev"),
-            "pulled in by module `dev` (@module:dev)"
-        );
-        assert_eq!(
-            interpret_source("imperative"),
-            "installed imperatively via `linix install`"
-        );
-        assert_eq!(
-            interpret_source("/home/u/.config/linix/groups/local.txt"),
-            "declared in manifest `local.txt`"
-        );
-        // combined
-        assert_eq!(
-            interpret_source("module:dev;imperative"),
-            "pulled in by module `dev` (@module:dev); installed imperatively via `linix install`"
+            d.describe(),
+            "at modules/dev.txt:3 (module:dev, profile:Work)"
         );
     }
 
     #[test]
-    fn line_declares_matches_name_and_backend() {
-        assert!(line_declares("apt:htop", "apt", "htop"));
-        assert!(line_declares("htop", "apt", "htop"));
-        assert!(line_declares("apt:htop@version=1.0", "apt", "htop"));
-        // wrong backend
-        assert!(!line_declares("brew:htop", "apt", "htop"));
-        // exclusions, comments, directives never declare
-        assert!(!line_declares("-apt:htop", "apt", "htop"));
-        assert!(!line_declares("# apt:htop", "apt", "htop"));
-        assert!(!line_declares("@module:htop", "apt", "htop"));
-        assert!(!line_declares("when os == linux", "apt", "htop"));
+    fn a_lapsed_declaration_says_it_stopped_counting() {
+        // II.16: an expired line lingers in your file. `why` must not report it as the
+        // reason a package is present when it has stopped being that reason.
+        let d = Declaration {
+            at: "modules/imperative.txt:2".into(),
+            scopes: vec!["module:imperative".into()],
+            lapsed: true,
+        };
+        assert!(d.describe().contains("expired, so it no longer counts"));
+    }
+
+    #[test]
+    fn a_declaration_with_no_scope_still_names_its_file() {
+        // A line in a profile belongs to no module, and an imperative spec to neither.
+        let d = Declaration {
+            at: "profiles/Work:5".into(),
+            scopes: vec![],
+            lapsed: false,
+        };
+        assert_eq!(d.describe(), "at profiles/Work:5");
     }
 
     #[test]

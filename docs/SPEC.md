@@ -1555,7 +1555,30 @@ This entry is unusual: unlike the rest of the audit it is *unbuilt work, not a f
 it sits here only because Phase 2 is where it belongs and it is easy to mistake a path
 helper with a passing test for a working file.
 
-### `linix why` answers from the old model, and cannot see the new one (found 2026-07-17)
+### `linix why` answers from the old model, and cannot see the new one (found 2026-07-17) — **FIXED**
+
+**Fixed in Phase 2j. The diagnosis was right, including that it outranked C13.** `why` now
+asks the resolver — `StateResolver::resolve_model()` — instead of re-reading the files with
+its own parser. That is the point: `why` answers *"where is this declared?"*, which is the
+question the model exists to answer, so a second implementation here was always going to be a
+second answer, and it was the one a user reaches for when they already distrust the state.
+
+- `scan_declarations`, `line_declares` (the 9th `split_once(':')` parser) and
+  `interpret_source` are **deleted**, along with the test asserting `@module:` behaviour for a
+  syntax this document deleted.
+- **The answer is now a file and a line**: `at modules/dev.txt:2 (module:dev, profile:Work)`,
+  taken from `__source` and `__scopes`. Verified against the binary on a II.1 repo — the exact
+  case it previously could never see.
+- **A `why` that cannot read your files now says so** rather than reporting "declared
+  nowhere": `declarations_of` returns `Result` and the error names the file and line. Reporting
+  a broken config as an absent declaration is the same failure in a quieter voice.
+- **"Declared nowhere" is now an answer, not a blank**: *"in no active file — the next `sync`
+  will remove it"*. That is drift, and saying it without saying what it means is how a true
+  sentence still misleads.
+- A lapsed line is reported as lapsed (II.16), not as the reason a package is present.
+
+**The rest of the finding stands and is the next action.** `insight.rs` was one of nine files
+holding `groups_dir`/`modules_dir`; 77 references remain across the tree.
 
 **This is the new "most dangerous artifact", and it outranks C13.** Phase 2e's row below says
 `line_declares` is **deleted**. It is alive at `app/insight.rs:418`, with its own passing unit
@@ -1848,9 +1871,11 @@ that says `use x`.
       packages. `sync` warns for each by file and line so it is not silent, but they do
       nothing. The ordering phases below are the fix — that is what `extras` was collected
       for.
-- [ ] Delete `local.txt` and `_active_profiles.txt`. **S9 dies with `local.txt`** — its bare
-      target matches the backend prefix, so removing a package named `npm` deletes every
-      `npm:*` line.
+- [x] **`local.txt` and `_active_profiles.txt` are deleted** (Phase 2e, 2f). S9 died with
+      `local.txt`. *Corrected: Phase 2e's commit said `line_declares` was deleted; that was
+      true of `config/parser.rs` and **there was a second copy in `insight.rs`** — deleted in
+      Phase 2j. "Deleted" means the grep is empty, not that the copy you were looking at is
+      gone.*
 - [ ] Delete the remaining `config.toml` sections superseded by `priority` / `preferences.toml`.
 - [ ] Delete the old parsers now that `config/grammar/` is the one parser (C13).
 - [ ] **E6** — "unmanaged" has two implementations that will disagree. One function, defined
@@ -1874,15 +1899,12 @@ that says `use x`.
       `file:line` (`model/resolve.rs:533`) and **the planner already reads it**
       (`planner.rs:119`) — so II.7's *"which packages, and the file and line each edge came
       from"* is reachable there today without a new field.
-- [ ] The II.8 command surface (`main.rs`, ~4,370 lines). Includes `activate` / `activate -a`
-      / `deactivate` writing `active` (II.6). **Read the `activate` audit entry above first —
-      this is not greenfield.** `activate` exists and **adds** where II.6 says it sets; there is
-      **no `-a`**; `profile switch` is an undocumented set form; and `active` cannot round-trip
-      the `when` block II.6:330 shows in it (`write_active` flattens it away, `parse_active`
-      rejects it). **Three decisions are owed before code:** does `activate` set or add; does
-      `switch` die or become the spec'd verb; does `active` take `when` blocks at all — if yes,
-      `parse_active` and `write_active` both need block awareness; if no, II.6's example is wrong
-      and should go.
+- [ ] The II.8 command surface (`main.rs`, ~4,370 lines). **Done so far:** `install`
+      (P1 order, `--into`, `--temp` -> `@expires`), `forget`, `teleport`, `service
+      enable/disable`, the hook, `purge-unmanaged`, and `activate` / `activate -a` /
+      `deactivate` / `why` — all three `activate` decisions were taken and are recorded above.
+      **Left:** `uninstall` is the last inverted verb (S15), and the read-only verbs
+      (`status`, `list`, `unmanaged`) have not been checked against II.8 at all.
 
 ## Decisions the owner has made — do not re-open
 
