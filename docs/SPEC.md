@@ -921,7 +921,7 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   `describe_objection`; `require_snapshot`/`deny_vulnerable` stay in `enforce_policy` (they need
   the snapshot provider + audit report) but read `config.guard` and share the violation list.
   `enforce_policy` and `handle_policy` read `[guard]`, not `policy.toml`.** `Objection`
-  (`guard.rs`) ~~has **two variants**~~ **now has four (`Protected`, `TooMany`, `TooManyInstalls`,
+  (`guard.rs`) ~~has **two variants**~~ **now has five (`Protected`, `TooMany`, `TooManyInstalls`,
   `Denied`, `Unpinned`).** ~~`--allow-mass-install` (II.10:578) does not exist either.~~ **DONE.**
   ~~**Remaining mechanical step:** the four removal-count rules (`protected_packages`,
   `unprotected_packages`, `max_removals`, `max_installs`) still sit as top-level `Config` fields;
@@ -1005,9 +1005,18 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   (`insight.rs` audit client, `main.rs` module-fetch client) now use `.max(1)`, matching
   `node_registry`'s existing guard: honour any value ≥1, reject only a literal 0 (which reqwest
   reads as instant-fail, not "no timeout").**
-- ~~**F1:** `max_parallel` — detect the core count.~~ **DONE — `default_max_parallel()` uses
-  `std::thread::available_parallelism()` (respects container CPU limits), falls back to 4; the
+- ~~**F1:** `max_parallel` — detect the core count.~~ **DONE for the *detection* — `default_max_parallel()`
+  uses `std::thread::available_parallelism()` (respects container CPU limits), falls back to 4; the
   Default impl routes through it and the generated template comments the key out.**
+  **⚠ BUT THIS DONE CONTRADICTS TWO RULES (audit 2026-07-17, unresolved — owner call needed).**
+  F1 kept `max_parallel` as a config key and polished it. But **II.17 lists `max_parallel` in the
+  config *delete* list** (line ~763), and **II.1 says the core count is "detected, never configured."**
+  The key still exists (`config.rs:216`, `default_max_parallel()` at `config.rs:304`) and the generated
+  template still emits `# max_parallel = 4` (`main.rs:3115`). So a *configurable* core count that two
+  rules forbid was ported and graded green — the "carefully ported something about to be deleted" trap
+  Phase 0 warns of. **Resolve one way or the other before F1 is truly closed:** either delete the key
+  (II.1 + II.17 win — detection needs no config surface) or amend II.17/II.1 to bless a manual override.
+  Do not leave it DONE-and-contradicting.
 - ~~**F1:** the generated `priority` file carries its reason in a comment (V.14).~~ **DONE —
   `model::priority::starter_file` (wired into `init` at `main.rs:4457`) already writes the
   "system managers first / pip last / when-block" rationale as the file header.**
@@ -1507,7 +1516,9 @@ verified against the tree at the commit that last touched this section, not reca
 
 ## The state at `HEAD` (2026-07-17)
 
-- **49 commits** since `d49d28c`.
+- **68 commits** since `d49d28c`. *(The "49" that stood here was stale by 19 commits — an
+  adversarial audit on 2026-07-17 ran `git rev-list --count d49d28c..HEAD`. The header drifted
+  behind the tree it heads.)*
 - **522 tests passing, 0 failing. `cargo clippy --all-targets` silent.** *(Measured on HEAD
   2026-07-17 after Phase 2x. The Phase-2-holding note below says "≈521" and Phase 2x's commit
   said "521" — the exact figure is 522; treat any single count as a tripwire, not a target.)*
@@ -1516,7 +1527,13 @@ verified against the tree at the commit that last touched this section, not reca
   suite would be worth reporting, not because a green one is progress. **The 2026-07-17 audit
   found four more false claims and the suite never moved off 0 failing.***
 - ~~Phase 0 ✅ · Phase 1 ✅~~ — **both false. See the audit immediately below.** ·
-  **Phase 2 — the cliff is jumped; the command surface remains** · Phases 3–6 not started.
+  **Phase 2 — the cliff is jumped; the command surface remains** · ~~Phases 3–6 not started~~ —
+  **also false, and this one drifted *downward*.** Part III below marks a dozen Phase 3–5 items
+  DONE with commits behind them (guard consolidation `a757bfb`, install ceiling, the II.12 hook
+  ledger `2993c6c`, snapshot-age S2, F1 `d2472e3`/`c571b19`, H2 `c8c37b3`, P6 `e118e10`), and the
+  2026-07-17 audit verified them real in the code — not self-graded ✅. Phases 3–5 are **partly
+  built, not "not started"**; Phase 6 is untouched. A header that says nothing past Phase 2 began
+  would send a cold reader to redo committed work.
 
 ## Audit: the ✅ that are not true (last run 2026-07-17, second pass)
 
@@ -1585,7 +1602,8 @@ confirm the II.2 grammar-rule findings (2q, S19) are all closed too, independent
 
 | marked deleted | actually | evidence |
 |---|---|---|
-| the `-g` model | ~~the model it anchored is not gone~~ — **now gone (Phase 2r), verified 2026-07-17.** `Config::groups_dir`/`modules_dir` are deleted; `grep -rn groups_dir src/` returns **two doc comments** (`insight.rs:396`, `policy.rs:3`), no field. **`config_root()` is no longer `groups_dir.parent()`** — it returns the `config_root` field directly (`config.rs:416`) with the never-resolve-to-CWD guard. This row's old claim was stale in the "worse than reality" direction; it is retired. | `config.rs:416` |
+| the `-g` model | ~~the model it anchored is not gone~~ — **now gone (Phase 2r), verified 2026-07-17.** `Config::groups_dir`/`modules_dir` are deleted; `grep -rn groups_dir src/` returns **one doc comment** (`insight.rs:399`), no field. *(The old
+`policy.rs:3` citation died with `policy.rs` in the Phase 3 guard consolidation; re-grepped 2026-07-17.)* **`config_root()` is no longer `groups_dir.parent()`** — it returns the `config_root` field directly (`config.rs:416`) with the never-resolve-to-CWD guard. This row's old claim was stale in the "worse than reality" direction; it is retired. | `config.rs:416` |
 | `local.txt` (V.1) | ~~alive in 10 files~~ ~~**dead as of Phase 2e**~~ — **the write is dead; the readers are not, and this row named a deletion that did not happen.** `add_package_to_local`, `remove_package_from_local`, `remove_package_from_manifests`, `get_user_group_file` and `ManifestEngine::add_to_local` are genuinely gone, and `model/edit.rs` replaces them — **S9 really did die** (`edit.rs:378` parses via the grammar; test at `:669`), **but of `edit.rs`, not of `local.txt`.** `line_declares` is **NOT deleted**: `insight.rs:418`, live, called at `:447`/`:463`, with passing tests at `:695`. `main.rs:3616` still wrote `local.txt` in `init -i` (being removed in the current working tree). **See the `linix why` entry above — this row is how it hid.** | `insight.rs:418` |
 | `keep.txt` (V.6) | ~~alive~~ — **dead as of Phase 2e.** It was never *read*: the whole `RESERVED_MANIFEST_NAMES` / `is_reserved_manifest` mechanism existed only to keep one file out of a crawl. Mechanism and all four exclusion sites deleted. | fixed |
 | `_active_profiles.txt` | ~~still written on every `activate`~~ — **dead as of Phase 2f.** `materialize()`, `compose()` (the second profile engine) and `RESERVED_MANIFEST` are deleted; `ProfileManager` runs on the model and `activate` edits one file, `active`. 657 lines -> 348. | fixed |
