@@ -1,6 +1,7 @@
 # LiNix v7 — the declarative model
 
-**Status:** design complete, nothing built.
+**Status:** Phases 0 and 1 complete, Phase 2 in progress. **Part VII holds the current state
+— read it after Part II and before you touch anything.**
 
 Supersedes [`docs/AUDIT-v6.org`](AUDIT-v6.org) — the audit that found all of this — except
 where Part VI carries an item forward explicitly. Part VI carries everything you need;
@@ -692,7 +693,8 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
 
 ## Phase 3 — The guard
 
-- 16 → 5 (II.10). One decision function.
+- 16 → 9 (II.10). One decision function. *(The first draft said five, then six. The owner
+  chose to keep all three orphaned `policy.toml` rules rather than delete them — V.43.)*
 - **Every removal path calls it.** Today's misses: `uninstall` (C1), leases and `absent:`
   (C3), ghost-shell exit (C8), `clean`.
 - One lease-expiry implementation (C9 — two exist today with different semantics).
@@ -1096,3 +1098,93 @@ Three suspicions did not survive scrutiny:
   file** and ≤2 elsewhere.
 - `bisect`, `fleet`, `conflicts`, `generation` are real, unit-tested implementations, not
   stubs.
+
+---
+
+# Part VII — Where the work stands
+
+**Living section. It is the one place that records progress — Part III stays the plan, this
+says how far it got (P4).** Update it at the end of every session. Everything below was
+verified against the tree at the commit that last touched this section, not recalled.
+
+## The state at `2a8cb56` (2026-07-17)
+
+- **17 commits** since `d49d28c`. 125 files changed, +4039 / −3028.
+- **476 tests passing, 0 failing. `cargo clippy --all-targets` silent.**
+- Phase 0 ✅ · Phase 1 ✅ · **Phase 2 — about two-thirds** · Phases 3–6 not started.
+
+## The one thing to understand before continuing
+
+**`src/model/` is complete, unit-tested (60 tests, ~1,700 lines) — and nothing outside it
+calls it.** `grep -rn "crate::model" src/ | grep -v "^src/model/"` returns nothing. It is
+registered in `lib.rs` and dead to the application.
+
+So the cliff is **built up to the edge and not jumped.** The old model still runs everything.
+This is the honest position: the new model is proven in isolation and unproven in place, and
+Phase 2's exit condition (the harness green on one distro) is nowhere near met.
+
+That is also why the branch is not yet red. It goes red the moment the next step starts, and
+**that is expected — do not "fix" it by keeping both models alive behind a flag** (Part III,
+Phase 2).
+
+## The next action, precisely
+
+Wire `model::Resolver` into `StateResolver::resolve_desired_state()`
+(`src/app/sync/resolver.rs:61`).
+
+- **Keep the seam signature** `Result<HashMap<String, Vec<PackageSpec>>>`. That is the whole
+  point of the seam: `src/backends/`, `src/core/` and `src/parsers/` must not notice.
+- **9 call sites** consume it: `app/profile.rs:243`, `app/profile.rs:379`, `main.rs:384`,
+  `:483`, `:943`, `:2271`, `:2341`, `:3084`, `:3146`, `:3333`. The trait method is
+  `app/sync/mod.rs:28`.
+- Build `Layout` from config → load `priority` → run `model::Resolver` → **probe bare names.**
+- **Bare-name probing must survive.** `model::resolve` marks an unqualified name with
+  `BARE = "?"` as its backend; something must still resolve it against the registry in
+  `priority` order. The old logic to preserve lives in `parse_and_probe_spec`
+  (`resolver.rs:212`) — V.16: the bare name is the question, the lock is the answer.
+
+## Phase 2's remaining checklist
+
+- [ ] Wire `model::Resolver` into `StateResolver` (above).
+- [ ] Delete `local.txt` and `_active_profiles.txt`. **S9 dies with `local.txt`** — its bare
+      target matches the backend prefix, so removing a package named `npm` deletes every
+      `npm:*` line.
+- [ ] Delete the remaining `config.toml` sections superseded by `priority` / `preferences.toml`.
+- [ ] Delete the old parsers now that `config/grammar/` is the one parser (C13).
+- [ ] **E6** — "unmanaged" has two implementations that will disagree. One function, defined
+      as *"what `adopt` would adopt"*.
+- [ ] Planner ordering phases: repos → index refresh → packages → dependents.
+- [ ] The II.8 command surface (`main.rs`, ~4,370 lines).
+
+## Decisions the owner has made — do not re-open
+
+| | |
+|---|---|
+| **V.43** | Keep all nine guard refusals, including the three orphaned `policy.toml` rules (`pinned_only`, `require_snapshot`, `deny_vulnerable`). II.10's "five" was wrong. |
+| **S6** | `sync` heals **automatically**. Asking permission to fix drift asks permission to do sync's own job. Automatic ≠ silent: it must say what it did, and the removal still goes through the guard. |
+| **S8** | Keep `undo`. Keep its path check (renamed to say it guards the snapshot-read path). Delete the false global claim. Restore must state it rolls back the whole filesystem before asking. |
+
+## A warning about this document
+
+**Every "(verified)" / "(measured)" fact in this spec that has been checked has been wrong —
+six for six, always under-reporting.** They were measured against an older tree. Corrected so
+far: the comment count (139 → 884 + 32 false), both good-comment exemplar citations, the
+parser count (5/3 → 8/6), the backend count, and — the expensive one — **"`reconcile_shims` is
+written and never called (verified)"**, which was false and was the sentence hiding a bug that
+made every `sync` delete the user's own files out of `~/.local/bin` (S1).
+
+**Verify any Part II–VI citation against `HEAD` before you act on it.** Part V's *reasoning*
+has been consistently right and is worth following; its *measurements* are not.
+
+## Bugs found while implementing
+
+**S1–S11 in VI.2 → "Found during implementation".** Each is assigned to the phase that owns
+the mechanism. Four were live defects already fixed (S1 shim deletion, S10 tests writing to
+the real data dir, and two parser bugs); the rest are scheduled. Add to that table rather
+than to a commit message — a bug recorded only in a commit message is a bug nobody will find.
+
+## Not started, and owed
+
+`README.md` (28k) still documents `-g`, `prune`, `clone` and `migrate` — **all four deleted in
+Phase 0.** `CHANGELOG.md` likewise. Both are Phase 5 (docs), and both are cleanly separable
+from the code work if a second session ever runs in parallel.
