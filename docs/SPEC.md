@@ -761,9 +761,11 @@ new model deletes the flag instead. Do not try to preserve it.
 
 ## Phase 0 — Delete
 
-> **⚠ Marked ✅ elsewhere in this document. It is not done — roughly 15% happened**
-> (audited 2026-07-17, Part VII). The `-g` *flag* is gone; `groups_dir` (84 refs),
-> `local.txt`, `keep.txt`, `_active_profiles.txt`, `prune` and `migrate` are all still live.
+> **⚠ Marked ✅ elsewhere in this document. It is not done** (audited 2026-07-17, twice;
+> Part VII). The `-g` *flag* is gone. **`keep.txt` and `_active_profiles.txt` are now genuinely
+> dead** (Phase 2e/2f); `groups_dir` (≈51 refs, was 84), `prune` and `migrate` (606 lines) are
+> still live, and **`local.txt` still has readers** — `insight.rs:418` `line_declares`, which
+> Part VII wrongly recorded as deleted.
 > **The reason it matters is in this section's own first line:** *do this first so nothing is
 > carefully ported that was about to be deleted.* That is now happening.
 
@@ -779,9 +781,14 @@ Delete everything in II.17. Delete the ~884 marketing comments. Delete every leg
 
 > **⚠ Marked ✅ elsewhere in this document. Half done** (audited 2026-07-17, Part VII).
 > **The grammar is built and it is good. The unification never happened:** `grammar/statement.rs`
-> was added *alongside* the eight parsers, making **nine**, and **six still skip backend
-> validation**. The bullet directly below is the unmet one — it is a *replacement*, not an
-> addition, and the ✅ was awarded for the addition.
+> was added *alongside* the other parsers rather than substituted for them. The bullet directly
+> below is the unmet one — it is a *replacement*, not an addition, and the ✅ was awarded for the
+> addition. **Re-audited 2026-07-17: it is now three skippers, not six** (`insight.rs:428`,
+> `manifest.rs:90`, `main.rs:1378`) — **and the bullet's own citation has rotted: `resolver.rs:212`
+> no longer parses anything**, because Phase 2d rewired it onto `model::Resolver`. The count in
+> that bullet is wrong in the direction this document never errs in — **the tree got better and
+> the doc did not notice.** Do not read this as licence to trust it; read it as the tripwire
+> working.
 
 **C13 and the grammar are one job, not two.** The grammar *is* the parser; unifying five
 parsers against the old grammar just to rewrite them is work done twice.
@@ -799,6 +806,29 @@ parsers against the old grammar just to rewrite them is work done twice.
 - **Unknown line → error**, naming file, line, and what was expected.
 
 **Exit:** unit tests for every grammar rule above, including every error case.
+
+> **Three II.2 rules have no implementation (audited 2026-07-17). Every one of them has a
+> passing test file next to it — they are untested, not failing, which is rule 11's whole
+> point: the Exit above names a *surface to cover*, and these are the parts of the surface
+> nobody thought to cover.**
+>
+> - **`@until` "on `absent:` only" (II.2:273) is not enforced.** `grammar/statement.rs:407` has
+>   a comment stating the rule and then `Ok(())`. `apt:jq@until=2026-01-01` parses clean. **The
+>   comment reads exactly like a check.**
+> - **II.2's option-key table is not a whitelist.** `options.rs:124` `is_key` says so out loud
+>   (*"not a judgement about which keys exist — II.2's table decides that"*) and **nothing
+>   downstream makes that judgement.** `apt:jq@versionn=1.6` is accepted silently — a typo'd
+>   key, which is the same defect class as a typo'd package name that II.2 exists to refuse.
+> - **`link:` cannot take a Windows path, or any source containing `\ | & (`.** The expression
+>   check (`statement.rs:153`) runs **before** the `link:`/`absent:`/`repo:`/`shim:` branches
+>   (`:167-206`), and `profile_expr.rs:57` calls any line containing those characters an
+>   expression. So `link:C:\Users\me\.vimrc` parses as `Statement::Expr`. **This is II.4's set
+>   math eating II.2's statements** — the two grammars overlap and precedence decided it
+>   silently. Untested in either direction.
+>
+> Also: `Exclude`/`Intersect`/`Subtract`/`Expr` exist (`statement.rs:79-90`) but are **not in
+> II.2's statement list**, while `statement.rs:66` calls that list *"II.2's full list"*. And
+> `schedule:NAME` "(only in `schedules`)" has **no file-context check** — it parses in a module.
 
 ## Phase 2 — The model (the cliff)
 
@@ -826,6 +856,17 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
 
 - 16 → 9 (II.10). One decision function. *(The first draft said five, then six. The owner
   chose to keep all three orphaned `policy.toml` rules rather than delete them — V.43.)*
+  **Audited 2026-07-17 — the starting point is not what II.10 implies.** Four of the nine are in
+  `guard.rs` (`protected_packages`, `unprotected_packages`, OS-essential, `max_removals`); four
+  are in a **separate `Policy` struct** (`app/policy.rs`) loaded from `groups_dir/policy.toml` —
+  **a file II.17 deletes** — with `require_snapshot`/`deny_vulnerable` enforced ad-hoc in
+  `main.rs:3176`/`:3181` rather than in any guard; and **`max_installs` does not exist anywhere
+  in `src/`**. `policy.rs:25` also has a **tenth rule the spec never mentions**
+  (`allow_backends`). **"One decision function" is the work, not the summary:** today there are
+  three (`guard::protection_of`, `guard::inspect`, `Policy::check_specs`), and the real ceiling
+  is `Objection` (`guard.rs:114`), which has **two variants** — `Protected` and `TooMany`. Nine
+  refusals cannot be expressed by a two-variant verdict; **that enum is the first thing to
+  change.** `--allow-mass-install` (II.10:578) does not exist either.
 - **Every removal path calls it.** Today's misses: `uninstall` (C1), leases and `absent:`
   (C3), ghost-shell exit (C8), `clean`.
 - One lease-expiry implementation (C9 — two exist today with different semantics).
@@ -1245,7 +1286,7 @@ and a user who can see which of the three lines they meant to delete.
 | **C3** | lease and `absent:` removals skip protection, three lines above a drift branch that checks it → **Phase 3** |
 | **C8** | ghost-shell exit force-removes with no protection, no guard, no confirmation → **Phase 3** |
 | **C9** | lease expiry implemented twice with different semantics; the sweep runs on every state-changing command → **Phase 3** |
-| **C13** | ~~five~~ ~~**eight**~~ **NINE** `backend:name` parsers, **six** still skip validation. ~~**Phase 1** ✅ done~~ — **NOT done, re-audited 2026-07-17.** Phase 1 *added* `grammar/statement.rs:227` alongside the eight; it removed none. The six live non-validators: `main.rs:1397`, `config/parser.rs:288`, `:387`, `config/manifest.rs:97`, `:218`, `app/insight.rs:428`. **Blocks II.8** — see Part VII's audit → **Phase 2** |
+| **C13** | ~~five~~ ~~**eight**~~ ~~**NINE**~~ **EIGHT** `split_once(':')` sites outside `src/parsers/` (7 code + 1 comment); ~~six~~ **three** skip validation. ~~**Phase 1** ✅ done~~ — **NOT done.** Phase 1 *added* `grammar/statement.rs:304` alongside the others; it removed none. **Re-audited 2026-07-17: four of the six sites this row named did not exist** (`config/manifest.rs:218` is past the end of a 178-line file). The three live non-validators: **`app/insight.rs:428`, `config/manifest.rs:90`, `main.rs:1378`**. *(`config/parser.rs:199` validates — do not delete it. `model/resolve.rs:491` is a new-model name helper.)* ~~**Blocks II.8**~~ — **that argument rested on `remove_package_from_local`, which no longer exists; S9 is fixed.** → **Phase 2** |
 | **B3** | `unprotected_packages` doesn't beat OS-essential; `linix protected` reports the opposite of what the guard does → **Phase 3** |
 | **E6** | "unmanaged" has two implementations that will disagree. Resolve as *"what `adopt` would adopt"* — one function → **Phase 2** |
 | **E11** | suspension restore implemented twice → **Phase 3** |
@@ -1274,10 +1315,12 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S6** | **`sync` heals without asking. DECIDED 2026-07-16: it should, and that is what declarative means.** A half-finished transaction is a state nobody declared — it is drift, and removing drift is sync's job. Asking permission to fix it would ask permission to do sync's own job, and would make `sync` mean two different things depending on the answer. So: automatic, NOT a prompt. But it must **say** what it recovered (P3 — every bug here is something that didn't work and said nothing), and a rollback-removal is a removal, so it goes through the guard like every other (II.10) → **Phase 3** |
 | **S7** | **A crash left unhealed for 4 hours becomes unhealable.** `Journal::cleanup` reclassifies stale `InProgress` entries to `Abandoned`, and `get_incomplete_actions` (what `heal` acts on) excludes `Abandoned`. So the window to recover a crashed transaction silently closes. The 4h threshold is also a magic number with no stated reason (P5) → **Phase 5** |
 | **S8** | **`undo` lies about scope; there is no safety hole. DECIDED 2026-07-16.** What `undo` does: list filesystem snapshots, mount the chosen one read-only, read the `registry.json` *inside* it, diff that against now, show a package-level summary, and on confirmation hand the snapshot to btrfs/timeshift to restore. `FORBIDDEN_PATHS` guards step 3 only — which directory `undo` will read a registry out of, so a crafted path cannot make it parse `/etc/shadow` as JSON. That is a real check doing a real job. Its *name and comment* claim "paths NEVER allowed to be accessed", and restore goes over `/` including all of them. So the defect is the false claim, not the check. **Keep** the check (renamed to say it guards the snapshot-read path); **delete** the global claim; **keep** `undo` (nothing else turns a snapshot into a package diff), but restore must state plainly that it rolls back the entire filesystem before asking. Gating restore on the list would refuse every root snapshot, i.e. delete `undo` by accident → **Phase 3** |
-| **S9** | **`remove_package_from_local` (`parser.rs:290`) matches a bare target against the BACKEND prefix**: `\|\| b == package_name`. So removing a package named `npm` deletes every `npm:*` line in `local.txt`. Dies with `local.txt` itself → **Phase 2** |
+| **S9** | ~~`remove_package_from_local` (`parser.rs:290`) matches a bare target against the BACKEND prefix~~ — **FIXED in Phase 2e, and this row was stale in three ways (2026-07-17).** The function is gone (`grep` empty). The removal path is now `model/edit.rs:378` `matches()`, which parses each line **through the grammar** and compares `d.selector`, never the prefix; regression test at `edit.rs:669` (`npm:typescript` survives, `apt:npm` dies). **It did not "die with `local.txt`" — it died of `edit.rs`, and `local.txt` still has readers** (`insight.rs:418`). ~~→ **Phase 2**~~ **Nothing owed.** *(Both surviving prefix-splitters were checked for this defect shape and do not have it — `insight.rs:429` requires both halves, `manifest.rs:90` matches the name half.)* |
 | **S10** | **`cargo test` wrote to the developer's REAL data dir**, and one bad file bricks every command. `TestKernel` (named `linix_hermetic_`) isolated `registry.json`, groups and tmp, but `Journal::new()` hardcoded `safe_data_dir()` — found at 733KB of test noise in `%APPDATA%/linix/journal.json`. Fixed in Phase 2b by injection (`Journal::at`). **The remaining half is real:** `Journal::load_sync` errors on a bad parse -> `App::new` fails -> EVERY command fails, with no message saying which file to delete or how to recover. Failing loud is right (P3); having no way out is not → **Phase 5** |
 | **S12** | **`repo:`, `shim:`, `service:`, `link:` and `schedule:` lines parse, resolve, and are then dropped on the floor.** The seam is `HashMap<backend, Vec<PackageSpec>>` and these are not packages, so `Resolver::resolve` collects them into `DesiredState::extras` and `resolve_desired_state` — which returns only `.packages` — discards them. Nothing downstream has ever consumed them. A `repo:ppa:deadsnakes/ppa` line therefore does exactly nothing, silently, which is VI.1's disease with new syntax. Not a regression (the syntax is new in Phase 1) but it must not ship: `sync` warns for now, naming each ignored line and its file. The fix is the ordering phases — repos → index refresh → packages → dependents — which is what `extras` was collected for → **Phase 2** (planner ordering) |
 | **S13** | **A bare name and an explicit one were two packages, not one.** `model::resolve` keys the merge on `backend:name`, and a bare `ripgrep` is keyed `?:ripgrep` until something probes it — so `ripgrep` in one module and `cargo:ripgrep` in another never met, never reconciled, and both reached the planner. Found while wiring the seam and **fixed there**: `Resolver::statements()` and `Resolver::collect()` are now separate, the caller probes in between, and `with_bare` hands the answers back so the merge sees real backends. II.7 rule 5 was silently not applying to every bare line → **Phase 2** (fixed) |
+| **S16** | **`--allow-mass-removal` deleted protected packages. FIXED.** `guard::enforce` returned `Ok(())` for *every* objection once the flag was set, so the flag meaning "yes, 50 packages is what I meant" also carried `python3` through. II.10 is explicit — `max_removals` exceeded → "cannot skip, `--allow-mass-removal`"; protected / OS-essential → **"nothing overrides"**. A confirmation asks; a refusal says no (V.26). The flag now clears only the count objection. **There was a test asserting the old behaviour** (`enforce_refuses_without_opt_in_and_proceeds_with_it`, which asserted the flag lets `python3` through) — the bug was written down as an expectation, which is why nothing caught it → **Phase 3** (fixed) |
+| **S17** | **`[guard.enforce_on]` was a config key that switched the guard off, per command. DELETED.** Ten booleans — `apply`, `prune`, `sync`, `watch`, `upgrade`, `rollback`, `canary`, `remove`, `shell-exit`, `leases` — each of which made that command able to remove **anything, without limit**, protected and OS-essential included. It is not one of II.10's nine refusals; it is a switch that turns off all nine. V.21 says **no setting anyone can flip, inherit, or copy from a dotfiles repo** makes a routine sync delete something it did not install, and this was exactly that setting. The config template documented it, and `linix protected` printed which commands were unguarded. All gone → **Phase 3** (fixed) |
 | **S15** | **`install` had P1 backwards: it installed first and wrote the line second. FIXED for `install`; `uninstall` is still inverted.** P1 says an imperative command *is* a shortcut for editing a file and syncing, so the edit is the operation and the install is what convergence then does about it. Backwards, every refusal on the write landed *after* the package was on the machine: installed, undeclared, drift by the next sync. `let _ = add_package_to_local(...)` hid it by making the write unfailable. `install` is now `declare` -> `sync`, which also puts an imperative install behind the guard (II.10) for the first time, and `--temp 2h` now writes `@expires=<absolute>` (II.16, V.38) instead of a lease nothing could read. **`uninstall` still removes first and undeclares second, so the pair is asymmetric (V.39 says they are a symmetric pair).** It cannot be flipped yet: `undeclare` -> `sync` only removes the package if `sync` removes drift, and `handle_sync` still passes `.with_prune(config.prune_on_sync)`, default **false**. **`prune_on_sync` is in II.17's delete list and V.34 says sync removes drift by definition — that deletion is the blocker, and it is the same one blocking `uninstall --temp` from becoming `absent:...@until=` (II.16).** → **Phase 2** (II.8 command surface) |
 
 | **S14** | **The generated `priority` lists things that are not package managers.** `linix init` fills it from `registry.available()`, which includes the pseudo-backends `service`, `link`, `web` and `github` — so a fresh file answers II.6's question ("which package managers does this setup use, and in what order") with 26 entries, four of which cannot install a package. Harmless today because the model only consults `priority` for package statements, but it is the first file a new user reads and it is teaching them the wrong thing. The registry has no "is this a package manager" answer to ask; capability probing (`as_installable` + `as_searchable`) is the likely shape → **Phase 5** (F1/F4 own the generated files) |
@@ -1304,20 +1347,39 @@ verified against the tree at the commit that last touched this section, not reca
 
 ## The state at `HEAD` (2026-07-17)
 
-- **18 commits** since `d49d28c`.
-- **485 tests passing, 0 failing. `cargo clippy --all-targets` silent.** *This line tells you
-  nothing about the two lines below it, and never could — both false ✅ were green when
-  written (rule 11). It is here because a red suite would be worth reporting, not because a
-  green one is progress.*
+- **24 commits** since `d49d28c` (was 18).
+- **506 tests passing, 0 failing at `3cc4a68`** (was 485). *`cargo clippy --all-targets` does
+  **not** compile in the working tree as of this audit — `PruneScope`, `InitAnswers::prune_on_sync`,
+  `ChangePlanner::with_prune`, `GuardSettings::enforce_on` are all gone from the config but still
+  referenced from `#[cfg(test)]` code. **That is the `prune_on_sync` deletion in flight, not a
+  finding** — re-check after it lands. Recorded only so the next reader does not "discover" it.*
+- *Those two numbers tell you nothing about the line below them, and never could — every false
+  ✅ in this document was green when it was written (rule 11). They are here because a **red**
+  suite would be worth reporting, not because a green one is progress. **The 2026-07-17 audit
+  found four more false claims and the suite never moved off 0 failing.***
 - ~~Phase 0 ✅ · Phase 1 ✅~~ — **both false. See the audit immediately below.** ·
   **Phase 2 — the cliff is jumped; the command surface remains** · Phases 3–6 not started.
 
-## Audit: two ✅ that are not true (last run 2026-07-17)
+## Audit: the ✅ that are not true (last run 2026-07-17, second pass)
 
-**Phase 2's own account above is accurate — it was written from the work. Phases 0 and 1
-were marked ✅ before this section existed, and neither survives a grep.** Checked by hand
-against the working tree, not recalled. **The suite is green and will stay green through all
-of it: green means the old model still works, which is precisely the problem.**
+**Phases 0 and 1 were marked ✅ before this section existed, and neither survives a grep.**
+Checked by hand against the working tree, not recalled. **The suite is green and will stay
+green through all of it: green means the old model still works, which is precisely the
+problem.**
+
+> **The second pass (2026-07-17) re-ran every command in this section and found the section
+> itself was wrong in both directions.** One entry was **fixed and still filed**
+> (`_active_profiles.txt` — with a retirement grep that could never have gone quiet), and
+> C13's evidence had rotted so far that **four of the six sites it named did not exist** and its
+> "Fixed when: 1" would have driven someone to delete a working validator. **Meanwhile it had
+> missed three live ones** — `linix why`, `init -i`, and `activate`.
+>
+> **Phase 2's own account was the trusted one — "written from the work" — and it is where two of
+> the three new findings were hiding.** `linix init` is ticked *"verified by running it"* and the
+> wizard writes the old model; the `local.txt` row says `line_declares` is deleted and it is
+> live with passing tests. **"Written from the work" is the same claim as "the tests pass": an
+> observation standing in for the plan (rule 11).** Trust this section's *commands*. Do not
+> trust its *prose*, including this paragraph.
 
 > ### How to use this section — run it, don't read it
 >
@@ -1347,38 +1409,47 @@ of it: green means the old model still works, which is precisely the problem.**
 alongside** the eight, not substituted for them — and **six still trust the prefix without
 validating it**, which is the entire defect C13 names.
 
+**Re-run 2026-07-17: the finding stands and every number and line in it was wrong.** It said
+nine sites and six skippers. It is **eight hits — 7 code + 1 comment — and three skippers**,
+and **four of the six sites it named do not exist** (`config/manifest.rs:218` is past the end
+of a 178-line file). Corrected:
+
 | | site |
 |---|---|
-| **validates** | `grammar/statement.rs:227` (the new one), `config/parser.rs:217`, `main.rs:647` |
-| **skips validation** | `main.rs:1397`, `config/parser.rs:288`, `config/parser.rs:387`, `config/manifest.rs:97`, `config/manifest.rs:218`, `app/insight.rs:428` |
+| **validates** | `grammar/statement.rs:304` (the new one, the one to keep) · `config/parser.rs:199` `split_removal_target` — *consults the registry, and is not a defect* · `main.rs:643` — `registry.get(b).is_some()` |
+| **skips validation** | `app/insight.rs:428` · `config/manifest.rs:90` · `main.rs:1378` (`lease set`) |
+| **uncounted, and new** | `model/resolve.rs:491` — `same_package`, in the **new model**. A name-comparison helper, not a backend parser; judge it, don't just count it. |
 
 ```
 grep -rn "split_once(':')" src/ | grep -v "^src/parsers/"
 ```
-**Now: 9 sites (plus one comment). Fixed when: 1** — `grammar/statement.rs`. Then delete this
-entry and restore C13's ✅. *(`src/parsers/` is excluded deliberately: it parses backend CLI
-**output**, a different concern that happens to share a word. Do not count it, and do not
-delete it.)*
+**Now: 8 (7 code + 1 comment). Fixed when: 3 remain** — `grammar/statement.rs`,
+`config/parser.rs:199` (validates, belongs) and `model/resolve.rs:491` (a helper).
+**"Fixed when: 1" was never reachable and would have driven someone to delete a working
+validator.** *(`src/parsers/` is excluded deliberately: it parses backend CLI **output**, a
+different concern that happens to share a word. Do not count it, and do not delete it.)*
 
-**Why it blocks II.8:** the command surface is the next action, and it is built on these.
-`config/parser.rs:288` is the live example — `remove_package_from_local` compares the
-**backend** half against the user's target, so `linix remove apt` deletes every `apt:*` line.
-That is **S9, which this document says "dies with `local.txt`"** — and `local.txt` has not
-died either (below). Building II.8 on top of the six inherits the bug into every new verb.
+**The "why it blocks II.8" argument this entry used to make was built on a function that no
+longer exists.** It cited `remove_package_from_local` comparing the backend half — `grep -rn
+"remove_package_from_local" src/` is **empty**; it died in Phase 2e, and **S9 died with it**,
+of `model/edit.rs`, not of `local.txt`. The two remaining skippers were checked for S9's shape
+and **do not have it**: `insight.rs:429` requires both halves (`b == backend && n == name`) and
+`manifest.rs:90` matches the *name* half. **The reason to finish C13 is C13, not S9** — do not
+re-argue this from the old text.
 
-**The test at `grammar/statement.rs:395` says the quiet part:** *"Six of the **eight old**
-parsers did `split_once(':')` and trusted the prefix."* The word **old** is unearned — the
-six are current, and the count matches exactly what is live today.
+**The test at `grammar/statement.rs:472` still says the quiet part:** *"Six of the **eight old**
+parsers did `split_once(':')` and trusted the prefix."* **Both numbers are now wrong and the
+word "old" is still unearned** — it is three, of eight, and they are current.
 
 ### Phase 0 ✅ — "delete everything in II.17". Roughly 15% happened.
 
 | marked deleted | actually | evidence |
 |---|---|---|
-| the `-g` model | **the flag is gone; the model it anchored is not.** `groups_dir` has **84 references** across ~15 files, `config_root` **23**; `config_root()` is still literally `groups_dir.parent()`. | `config/config.rs:579` |
-| `local.txt` (V.1) | ~~alive in 10 files~~ — **dead as of Phase 2e.** `add_package_to_local`, `remove_package_from_local`, `remove_package_from_manifests`, `line_declares`, `get_user_group_file` and `ManifestEngine::add_to_local` are deleted; `model/edit.rs` replaces them. **S9 died with it**, and `model/edit.rs` has the test that proves `uninstall npm` no longer deletes every `npm:*` line. | fixed |
+| the `-g` model | **the flag is gone; the model it anchored is not.** `groups_dir` ≈**51** refs across 14 files (was 84 — moving, not gone), `config_root` ≈**24**; `config_root()` is still literally `groups_dir.parent()`. | `config/config.rs:579` |
+| `local.txt` (V.1) | ~~alive in 10 files~~ ~~**dead as of Phase 2e**~~ — **the write is dead; the readers are not, and this row named a deletion that did not happen.** `add_package_to_local`, `remove_package_from_local`, `remove_package_from_manifests`, `get_user_group_file` and `ManifestEngine::add_to_local` are genuinely gone, and `model/edit.rs` replaces them — **S9 really did die** (`edit.rs:378` parses via the grammar; test at `:669`), **but of `edit.rs`, not of `local.txt`.** `line_declares` is **NOT deleted**: `insight.rs:418`, live, called at `:447`/`:463`, with passing tests at `:695`. `main.rs:3616` still wrote `local.txt` in `init -i` (being removed in the current working tree). **See the `linix why` entry above — this row is how it hid.** | `insight.rs:418` |
 | `keep.txt` (V.6) | ~~alive~~ — **dead as of Phase 2e.** It was never *read*: the whole `RESERVED_MANIFEST_NAMES` / `is_reserved_manifest` mechanism existed only to keep one file out of a crawl. Mechanism and all four exclusion sites deleted. | fixed |
 | `_active_profiles.txt` | ~~still written on every `activate`~~ — **dead as of Phase 2f.** `materialize()`, `compose()` (the second profile engine) and `RESERVED_MANIFEST` are deleted; `ProfileManager` runs on the model and `activate` edits one file, `active`. 657 lines -> 348. | fixed |
-| `prune` (V.34) | **still a CLI command** (`snapshot prune`), plus `prune_on_sync` / `prune_scope` / `auto_prune` in config. | `cli/args.rs:773`, `main.rs:1817` |
+| `prune` (V.34) | **partly fixed in Phase 2h.** `prune_on_sync`, `prune_scope` and `protect_imperative` are deleted, and sync removes drift by definition. `snapshot prune` stays — V.34 says deleting the command leaves exactly one meaning of the word ("delete old history"), and that is it. `auto_prune` is snapshot retention, the same one surviving meaning. | fixed |
 | `migrate` | **606 live lines**, called by `adopt`. Renamed, not deleted — and `migrate.rs:283` still tells the user to *"run `linix migrate` again"*, a command that does not exist. | `main.rs:2153` |
 | `clone` (V.33) | ~~a CLI command~~ — the command was gone, but **`fleet::clone` + `install_one` were still `pub` with zero callers**: Phase 0 deleted the flag and left the implementation. Deleted in Phase 2e. | fixed |
 | ~884 marketing comments | **≈3,700 comment lines remain** in ≈41,600 lines of `src/` (~8.9%). **The count proves nothing on its own and is not the finding** — this one cannot be greped, so judge it by reading. The finding is that **the new `model/` files are writing spec-narration comments as the rule against them is being implemented**: `model/layout.rs:9` *"the fix for the shape of Monday's bug"*, `:135` *"which is Monday's bug (V.1)"*, `model/resolve.rs:162` *"the cost II.4 accepts knowingly"*. **V.42 is being broken by the code that cites V.42.** | `model/layout.rs:9,135` |
@@ -1413,17 +1484,117 @@ outside `layout.rs` and its own tests** for:
   and V.43's nine guard rules have no source.
 - `schedules_file()` — `layout.rs:69`. Live scheduling still reads `config.schedules` from
   `config.toml` (`scheduler/mod.rs:101`).
-- `locks_dir()` / `lock_file()` — `layout.rs:74-79`. Live locks still read the old
-  `groups_dir.join("locks.json")` (`sync/resolver.rs:52`).
+- ~~`locks_dir()` / `lock_file()` — `layout.rs:74-79`.~~ **Partly retired 2026-07-17:
+  `locks_dir()` now has one real caller — `main.rs:3448`, which creates the directory in
+  `scaffold_dirs`. Creating it is not reading it:** live locks still read the old
+  `groups_dir.join("locks.json")` (`sync/resolver.rs:52`), so `lock_file()` remains unread and
+  Phase 4 still owns this. **Two paths to one fact, again.**
 
 ```
 grep -rn "preferences_file\|schedules_file\|locks_dir" src/ | grep -v model/layout.rs
 ```
-**Now: nothing. Fixed when: a real caller for each** — which is the inverse of every other
-entry here, so read the result carefully. **An empty result means this is still broken.**
+**Now: one hit (`main.rs:3448`, `locks_dir`). Fixed when: a real caller for each of the three**
+— which is the inverse of every other entry here, so read the result carefully. **A missing
+name in that output means it is still broken**, and a name appearing does not mean it is read
+— `locks_dir` is proof: it appears, and nothing reads a lock.
 This entry is unusual: unlike the rest of the audit it is *unbuilt work, not a false ✅* —
 it sits here only because Phase 2 is where it belongs and it is easy to mistake a path
 helper with a passing test for a working file.
+
+### `linix why` answers from the old model, and cannot see the new one (found 2026-07-17)
+
+**This is the new "most dangerous artifact", and it outranks C13.** Phase 2e's row below says
+`line_declares` is **deleted**. It is alive at `app/insight.rs:418`, with its own passing unit
+tests at `:695-705` — including `assert!(!line_declares("@module:htop", …))`, a test asserting
+the behaviour of a syntax this document deleted.
+
+```
+grep -c "layout()\|Layout\|profiles_dir\|active_file" src/app/insight.rs      # 0. Fixed when: not 0.
+```
+**`insight.rs` does not contain the word `Layout`.** `why` (`insight.rs:477`) calls
+`scan_declarations` (`:436`), which crawls `config.groups_dir` for `*.txt` and
+`config.modules_dir` for **`*.module.txt`** (`:459`). II.1 modules are `modules/<name>.txt`
+(`model/layout.rs:102`). **So `linix why` can never see a II.1 module** — wrong suffix — and it
+never opens `profiles/` or `active` at all.
+
+**Why this is the worst one in the section:** resolution runs on the new model (Phase 2d), so
+`why` is now the command that *answers the question the new model exists to answer* — "where is
+this declared?" — by reading the model that no longer decides. It does not error. It prints a
+confident, sourced, wrong sentence, and **it is the command a user reaches for precisely when
+they already distrust the state.** A false ✅ makes a reader skip work; this makes the tool lie
+to a user who is checking.
+
+**It is not a one-off.** `grep -rln "config\.groups_dir\|config\.modules_dir" src/` → **9 files**;
+`services.rs`, `bundle.rs` and `config/manifest.rs` also score **0** for any Layout reference.
+"The seam held" is true of `src/backends/`, `src/core/` and `src/parsers/` — the seam was never
+what these were on the wrong side of.
+
+### `linix init -i` writes the old model — the ✅ verified one of two paths
+
+Phase 2's checklist marks `linix init` done: *"Verified by running it: it produces a repo that
+resolves."* True — of `linix init`. **`handle_init` (`main.rs:3429`) has two paths**, and
+`interactive_init` (`:3457`) `return`s at `:3434` **before `scaffold_repo` (`:4294`) — the
+only thing that writes `priority`, `active` and a profile — ever runs.** It wrote
+`groups_dir/local.txt` (`:3616`) and interactively prompted for `prune_on_sync`, `prune_scope`
+and `auto_prune`: three settings II.17 deletes and "the next action" is deleting now.
+
+**Being fixed in the working tree as this was written** — the `local.txt` write is already gone
+from the uncommitted diff. **Kept anyway, because the lesson is not the bug.** *"Verified by
+running it"* is the strongest evidence claim in this document and it was still a partial
+verification — it ran the path the author was thinking about. **Rule 11 is usually read as being
+about `cargo test`. It is not: it is about any observation standing in for the plan.** A wizard
+is a second path, and a second path is a second implementation.
+
+### `activate` does not do what II.6 says (found 2026-07-17)
+
+Not marked ✅ — **worse: II.6 was written as a specification of existing behaviour and it
+describes the opposite of the code.**
+
+| II.6 says (`:345`) | `app/profile.rs` does |
+|---|---|
+| `activate NAME…` — *the file becomes exactly this list* | **adds.** `:78-96` reads `active`, pushes what's missing, writes it back. This is `activate -a`. |
+| `activate -a NAME…` — *adds* | **no `-a` flag exists.** `cli/args.rs:334-338` takes `profiles: Vec<String>` and nothing else. |
+| — | **`profile switch NAME` (`args.rs:737`, `profile.rs:123`) is the set form**, one name only, and appears nowhere in this document. |
+
+`args.rs:332` documents `activate` as *"add each to the active set"* — **the CLI help and II.6
+contradict each other in the same repo.** The refusal at II.6:360 (*"activate needs a profile
+name…"*) does not exist; `#[arg(required = true)]` prints clap's generic error. `-r` is
+genuinely gone (verified).
+
+**And `active` cannot hold a `when` block, which II.6:330 shows it holding.**
+`write_active` (`profile.rs:257-269`) rebuilds the file from a flat `Vec<String>` — **any
+activate/deactivate silently destroys every block in it** — and `parse_active`
+(`model/profiles.rs:194`) rejects any line with more than one word, so `when host == laptop {`
+is a hard error: *"`when host == laptop {` is not a profile name"*. The II.6 example file does
+not parse. **Decide which is right before building the verb, not after.**
+
+### VI.1 "killed by this design — no work needed" — two rows are live bugs (found 2026-07-17)
+
+**VI.1 is a list of finished-claims and belongs under this section's rule.** *"Killed by this
+design"* is only true once the design is **built**; two rows are killed by designs that are
+**not started**, so the bug is live and filed as needing no work — the exact failure a false ✅
+causes, wearing a different word.
+
+- **`linix shim --source` — marked "(verified)". It is a live bug.** `cli/args.rs:100` makes
+  `--source` **required**; `main.rs:2883` → `context.rs:612`
+  `pub async fn create_shim(&self, binary_name: &str, _source_spec: &str)` — **the underscore
+  is the bug.** The user is forced to supply a value that is discarded, so
+  `shim rg --source cargo:ripgrep` and `--source apt:nonsense` do the same thing. What kills
+  it is II.16 (shims as declared lines) — **unbuilt**, and S4 routes the shim path to Phase 3,
+  **not started**.
+- **E12 `confirm_destructive` gates the wrong thing.** Killed by the II.10 guard — Phase 3,
+  not started. Still live at `main.rs:966`, `:1118`, `:1303`, default `false`
+  (`config/config.rs:405`).
+
+**Also contradictory:** E4 says two snapshot retention engines need no work; **S2 routes its own
+fix to "Phase 4 (one retention engine)"** — the document says both that the consolidation is
+unnecessary and that a bug waits on it. *(A check for the second engine found only one — both
+`snapshot.rs:455` and `generation.rs:262` feed `core::RetentionPolicy`. E4 may simply be stale
+wording rather than a real pair. **Decide it; do not leave it readable both ways.**)*
+
+**The rule this earns:** VI.1's rows must name the phase that kills each bug, and a row whose
+phase is unstarted is **not** "no work needed" — it is *work scheduled elsewhere*, which is a
+different sentence with a different reader response.
 
 ### The shape of all of it
 
@@ -1433,10 +1604,21 @@ behind a flag"* — arrived at by accretion rather than by decision, which is wh
 it and no test objects.
 
 **The most dangerous artifact is not a false ✅ — it is a comment asserting a deletion that
-did not happen.** `model/profiles.rs:24` states there is no `_active_profiles.txt` and no
-materialization. `app/profile.rs:347` writes `_active_profiles.txt` on every `activate`. Both
-are in the tree right now, and the comment is the one a reader believes. **Trust neither the
-✅ nor the comment. Grep.**
+did not happen.** ~~`model/profiles.rs:24` states there is no `_active_profiles.txt` and no
+materialization. `app/profile.rs:347` writes it on every `activate`.~~ — **retired 2026-07-17:
+the comment came true.** Phase 2f deleted the writer; `grep -rn "_active_profiles\.txt" src/`
+now returns that comment and nothing else. **The example is retired; the rule it teaches is
+not: trust neither the ✅ nor the comment. Grep.** The replacement example is one line down,
+and it is worse, because a comment can only lie about one file — **`linix why` lies about the
+whole model** (below).
+
+> **The retirement grep in this section was broken and could never have gone quiet.**
+> `grep -rn "_active_profiles\|RESERVED_MANIFEST"` matches the *test name*
+> `the_seam_carries_what_the_active_profiles_reach` (`sync/resolver.rs:466`) — the `_active_profiles`
+> substring sits inside `what_the_active_profiles_reach`. A fixed entry read as unfixed forever.
+> **Anchor a retirement grep on the filename (`_active_profiles\.txt`), never the bare stem** —
+> a tripwire that cannot go quiet is not a tripwire, it is a permanent false finding, and this
+> section's whole ritual is "run it and believe the result."
 
 **Recommended order, given the above:** finish the deletions **before** II.8, not after.
 Every verb added on top of the six non-validating parsers, `groups_dir`, and `local.txt` is a
@@ -1471,27 +1653,59 @@ deleted.
 
 ## The next action, precisely
 
-**Delete `prune_on_sync`, and make `sync` remove drift by definition (V.34, II.17).** It is
-now the blocker for three things at once, which is why it comes first:
+**`uninstall` — the last inverted verb (S15).** `install` is now `declare` -> `sync`;
+`uninstall` still removes first and undeclares second, so the pair V.39 calls symmetric is
+not. The blocker is gone: sync removes drift by definition now, so `undeclare` -> `sync`
+removes the package. This is a small change and the guard is ready for it.
 
-- **`uninstall` cannot obey P1 without it.** `install` is now `declare` -> `sync` (S15).
-  `uninstall` still removes first and undeclares second, so the symmetric pair V.39 describes
-  is not symmetric. Flipping it means `undeclare` -> `sync`, and that only removes the
-  package if sync removes drift. Today `handle_sync` passes `.with_prune(prune_on_sync)`,
-  default **false**.
-- **`uninstall --temp` cannot become `absent:...@until=`** (II.16) for the same reason.
-- **It is a config setting for a fact**: V.34 says sync removes drift *by definition*, so
-  `prune_on_sync = false` is a switch that turns sync into something that is not sync.
+Then the remaining deletions: **`groups_dir` (84 references)**, whose `config_root()` is
+still literally `groups_dir.parent()`; the **seven non-validating `split_once(':')`
+parsers**; `migrate` (606 lines, renamed to `adopt` rather than deleted, still telling users
+to run a command that does not exist); and **E6** — "unmanaged" has two implementations that
+will disagree.
 
-**Handle with care — this is the one that fires the flagship bug.** Sync gaining removals by
-default is exactly the shape of the `apt-get purge` run. `max_removals` (default 20) and the
-plan-with-counts are what stand between this change and Monday; Phase 3 is where they get
-their per-path tests, so consider doing Phase 3's guard work alongside rather than after.
+## Done in Phase 2h — the guard, and sync becoming sync
 
-Then the remaining deletions: **`groups_dir` (84 references)**, whose `config_root()` is still
-literally `groups_dir.parent()`; the **seven non-validating `split_once(':')` parsers**; and
-`migrate` (606 lines, renamed to `adopt` rather than deleted, still telling users to run a
-command that does not exist).
+**Two live safety bugs, both contradicting II.10's "nothing overrides". S16 and S17 in
+VI.2.** `--allow-mass-removal` cleared every objection including protected and OS-essential;
+`[guard.enforce_on]` was a config key that switched the guard off per command. **The first
+had a test asserting the broken behaviour** — the bug was written down as an expectation,
+which is why it survived review. Both fixed, with the tests II.10 actually implies.
+
+**`prune_on_sync`, `prune_scope`, `with_prune` and `protect_imperative` are deleted, and
+sync removes drift because that is what sync IS (V.34).**
+
+- `prune_on_sync` made "does sync converge?" a setting. A sync that does not remove drift is
+  not sync; it is `prune` with the install half amputated, which is the thing V.34 deleted.
+- `prune_scope = "system"` was **the setting V.21 forbids in so many words**: flip it and a
+  routine sync deletes software LiNix never installed. That is `purge-unmanaged` — **a
+  command you type, not a mode you inherit** — which is why deleting the mode and building
+  the command had to be one change. Deleting it alone would have removed a real feature.
+- `protect_imperative` guarded against a bug that no longer exists. An imperative install
+  had no line, so it read as drift the moment it was recorded; it has a line now
+  (`modules/imperative.txt`), so it is declared like everything else.
+
+**`purge-unmanaged` is built (II.11).** The ratio, not the count (V.20 — on Alpine a count
+misses 14-of-14); `max_removals` does not apply because it catches accidents and this is
+deliberate; protection and OS-essential still do; snapshot first, automatically, and **"THERE
+IS NO UNDO FOR THIS" when none can be taken**; the whole list, every line, because the pain
+is the feature; typed confirmation.
+
+**Guided setup lost four questions that stopped existing**: "should sync remove drift?" (it
+is drift removal), "how aggressive?" (that is `purge-unmanaged`), "protect imperative
+installs?" (they are declared now), "preferred default backend?" (that is `priority`,
+detected). A question whose answer LiNix can work out is homework (V.41).
+
+## Superseded — the note this section carried before
+
+This section previously warned that making sync remove drift by default was "the shape of
+this repo's flagship bug". **That was overcautious, and reading V.21 and II.7 carefully is
+what corrected it.** Sync removes *what it manages and you stopped declaring* — bounded by
+the registry, not by the machine. The flagship bug was the opposite shape: `-g` moved the
+wish list while the registry stayed put, so owned-but-unwished read as drift (V.1). The
+dangerous thing was never sync converging; it was `prune_scope = "system"`, which let sync
+reach outside what it owns. That is now impossible rather than merely off by default —
+which is what V.21 means by "not safe by default, but safe permanently".
 
 ## Done in Phase 2f — set math, and the last of the old profile engine
 
@@ -1555,8 +1769,25 @@ that says `use x`.
       is **the error text, not the detection** (V.45): the two `use` errors name the path but
       carry a single `Origin` — the edge that closed the loop — and the planner's is
       *"Circular dependency detected in graph construction."*, which names nothing at all.
+      **Re-verified 2026-07-17 (line numbers rotted: `planner.rs:323`→`:276`,
+      `profiles.rs:62`→`:88`, `modules.rs:146`→`:165`; the claim itself holds).** Two things the
+      entry did not say: **`GrammarError` (`grammar/error.rs:45`) holds one `origin`, so it
+      cannot structurally carry II.7's trace** — the `seen: Vec<String>` path stack keeps names
+      only, and the file/line of every edge but the last is discarded at push time. Fixing the
+      text means changing the error type or the stack, not the message. **The planner's is
+      easier than it looks:** `PackageSpec` has no `Origin` field, but `options["__source"]` is
+      `file:line` (`model/resolve.rs:533`) and **the planner already reads it**
+      (`planner.rs:119`) — so II.7's *"which packages, and the file and line each edge came
+      from"* is reachable there today without a new field.
 - [ ] The II.8 command surface (`main.rs`, ~4,370 lines). Includes `activate` / `activate -a`
-      / `deactivate` writing `active` (II.6).
+      / `deactivate` writing `active` (II.6). **Read the `activate` audit entry above first —
+      this is not greenfield.** `activate` exists and **adds** where II.6 says it sets; there is
+      **no `-a`**; `profile switch` is an undocumented set form; and `active` cannot round-trip
+      the `when` block II.6:330 shows in it (`write_active` flattens it away, `parse_active`
+      rejects it). **Three decisions are owed before code:** does `activate` set or add; does
+      `switch` die or become the spec'd verb; does `active` take `when` blocks at all — if yes,
+      `parse_active` and `write_active` both need block awareness; if no, II.6's example is wrong
+      and should go.
 
 ## Decisions the owner has made — do not re-open
 
@@ -1584,14 +1815,32 @@ A wrong measurement makes a reader over-confident; **a wrong ✅ makes a reader 
 entirely**, and nothing downstream will object, because the code it should have deleted is
 still there passing its tests.
 
-**The bias is one bias, in two costumes: this document flatters the codebase.** Measurements
-understate the mess; status markers overstate the progress. **When in doubt about any claim
-here, assume the tree is worse than the sentence** — every check that has ever been run has
-landed on that side, and none on the other.
+**The bias was one bias, in two costumes: this document flatters the codebase.** Measurements
+understate the mess; status markers overstate the progress.
 
-**Line numbers rot faster than claims.** V.29 cites `planner.rs:407-426` for `spec.requires`;
-the loop is at `:431`, and the *reasoning* is still correct. Treat a citation as a place to
-start looking, never as proof — **grep the symbol, don't trust the line.**
+> **The 2026-07-17 second pass produced the first counter-examples, and the rule has to change.**
+> `_active_profiles.txt` was **fixed and still filed as broken**; C13's skipper count was **six
+> and is three**; `resolver.rs:212` was cited as a non-validating parser and **no longer parses
+> anything**. In each, the **tree was better than the sentence** — the first time that has ever
+> happened here.
+>
+> **This is not good news and it is not permission to relax.** The old rule ("assume the tree is
+> worse") was a *heuristic that let you skip checking*, and it has now failed in both directions,
+> which is the only thing that could have shown it was always the wrong kind of rule. **The
+> document is not biased pessimistic or optimistic. It is stale**, and stale drifts whichever way
+> the tree moved. **The replacement rule is not a direction, it is a refusal to guess: no claim
+> here is evidence of anything. Run the command.** Note which way this one broke — a *fixed* entry
+> read as broken costs someone a day re-fixing it, and a *stale* count read as a target
+> (**"Fixed when: 1"**) would have had them delete a working validator to hit a number.
+
+**Line numbers rot faster than claims — and this very example rotted again.** V.29 cites
+`planner.rs:407-426` for `spec.requires`; **this document corrected that to `:431`, and it is now
+`:384`.** The *reasoning* is still correct. **The correction needed a correction inside one
+session** — which is the argument, not a footnote to it. Treat a citation as a place to start
+looking, never as proof — **grep the symbol, don't trust the line.** Every cycle-detection
+citation on Phase 2's checklist has rotted the same way (`planner.rs:323` → `:276`,
+`profiles.rs:62` → `:88`, `modules.rs:146` → `:165`); the claim they support — *"already caught
+in all three places, do not rewrite"* — **re-verified true.**
 
 **Verify any Part II–VI citation against `HEAD` before you act on it.** Part V's *reasoning*
 has been consistently right and is worth following; its *measurements* are not.
