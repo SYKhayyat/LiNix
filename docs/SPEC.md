@@ -993,7 +993,9 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   `model::priority::starter_file` (wired into `init` at `main.rs:4457`) already writes the
   "system managers first / pip last / when-block" rationale as the file header.**
 - **F5:** fix the false doc comments.
-- **P6** goes in `CLAUDE.md`.
+- ~~**P6** goes in `CLAUDE.md`.~~ **DONE — repo-root `CLAUDE.md` carries P6 (comment states a
+  constraint, nothing else) plus NO LEGACY, one `backend:name` parser, every-removal-path-guards,
+  prefer-deleting, and the verify chain.**
 
 ## Phase 6 — The five containers
 
