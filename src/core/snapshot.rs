@@ -61,6 +61,19 @@ impl Snapshot {
     pub fn timestamp_from_id(id: &str) -> Option<String> {
         Self::time_from_id(id).map(|t| t.to_rfc3339())
     }
+
+    /// Whether LiNix created this snapshot — the ownership test retention uses so it never
+    /// reclaims a restore point the user made by hand (S3).
+    ///
+    /// The marker lands in different fields per provider: btrfs/zfs put `linix_` in the **id**
+    /// (`linix_pre_…`, `…@linix_…`), while Windows System Restore forces the id to a bare
+    /// `SequenceNumber` and carries `LiNix:` in the **description**. Checking only the id — the
+    /// old bug — meant nothing LiNix created on Windows was ever pruned. So check both, and do
+    /// it case-insensitively to catch `LiNix:` as well as `linix_`.
+    pub fn is_linix_owned(&self) -> bool {
+        let has_marker = |s: &str| s.to_lowercase().contains("linix");
+        has_marker(&self.id) || has_marker(&self.description)
+    }
 }
 
 /// Interpret a naive datetime as local wall-clock (how snapshot ids are formatted) and convert
@@ -526,7 +539,7 @@ impl SnapshotManager {
             .list()
             .await?
             .into_iter()
-            .filter(|s| s.id.contains("linix"))
+            .filter(|s| s.is_linix_owned())
             .collect();
         let items: Vec<crate::core::RetentionItem> = list
             .iter()
@@ -603,6 +616,32 @@ mod tests {
         assert!(Snapshot::time_from_id("tank/root@weekly-2026").is_none());
         // Right shape, non-numeric tail.
         assert!(Snapshot::time_from_id("linix_pre_sync_notadate12").is_none());
+    }
+
+    fn snap(id: &str, description: &str, backend: &str) -> Snapshot {
+        Snapshot {
+            id: id.into(),
+            timestamp: Utc::now().to_rfc3339(),
+            description: description.into(),
+            backend: backend.into(),
+        }
+    }
+
+    #[test]
+    fn ownership_is_recognized_across_every_provider() {
+        // S3: the marker lands in different fields per provider. All of these are LiNix's.
+        assert!(snap("linix_pre_pre_sync_20260717143022", "BTRFS System State", "btrfs")
+            .is_linix_owned());
+        assert!(snap("tank/root@linix_20260717_143022", "ZFS Snapshot", "zfs").is_linix_owned());
+        // Windows: id is a bare sequence number, marker is in the description — the case the
+        // old id-only filter missed entirely.
+        assert!(snap("12", "LiNix: pre_sync", "windows_restore").is_linix_owned());
+    }
+
+    #[test]
+    fn a_user_made_snapshot_is_not_owned_and_is_left_alone() {
+        assert!(!snap("12", "Windows Update", "windows_restore").is_linix_owned());
+        assert!(!snap("tank/root@weekly", "manual weekly", "zfs").is_linix_owned());
     }
 
     #[test]
