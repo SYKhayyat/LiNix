@@ -764,48 +764,31 @@ impl App {
             "Kernel: {} temporary uninstall(s) are due for restoration.",
             due.len()
         );
-        for s in due {
-            match self.restore_package(&s.backend, &s.name).await {
-                Ok(()) => {
-                    info!("Restored temporarily-removed {}:{}", s.backend, s.name);
-                    let mut state = self.state.lock().await;
-                    state.add(
-                        &s.backend,
-                        &s.name,
-                        s.version.clone(),
-                        std::collections::HashMap::new(),
-                        Some("imperative".into()),
-                        false,
-                    );
-                    state.clear_suspension(&s.backend, &s.name);
-                }
-                Err(e) => {
-                    warn!(
-                        "Kernel: could not restore {}:{} ({}); dropping the suspension.",
-                        s.backend, s.name, e
-                    );
-                    self.state
-                        .lock()
-                        .await
-                        .clear_suspension(&s.backend, &s.name);
-                }
-            }
-        }
-        self.state.lock().await.save()?;
-        Ok(())
+        self.restore_suspensions(due, "temporarily-removed").await
     }
 
     /// Restore every package suspended under a given ephemeral shell session (called when
     /// that ghost shell exits). Same warn-and-move-on contract as the timed sweep.
     pub async fn restore_session_suspensions(&self, session_id: &str) -> Result<()> {
         let owned = { self.state.lock().await.get_session_suspensions(session_id) };
-        for s in owned {
+        self.restore_suspensions(owned, "session-suspended on shell exit")
+            .await
+    }
+
+    /// Reinstall a set of suspended packages and clear each suspension — whether the reinstall
+    /// succeeds or fails (a suspension LiNix cannot honour is dropped, not retried forever).
+    /// One implementation shared by the timed sweep and the shell-exit restore, which used to
+    /// carry byte-identical copies of this loop (E11); `occasion` is the only thing that
+    /// differed, and it only ever changed the log wording.
+    async fn restore_suspensions(
+        &self,
+        items: Vec<crate::core::state::Suspension>,
+        occasion: &str,
+    ) -> Result<()> {
+        for s in items {
             match self.restore_package(&s.backend, &s.name).await {
                 Ok(()) => {
-                    info!(
-                        "Restored session-suspended {}:{} on shell exit",
-                        s.backend, s.name
-                    );
+                    info!("Restored {} {}:{}", occasion, s.backend, s.name);
                     let mut state = self.state.lock().await;
                     state.add(
                         &s.backend,
@@ -819,8 +802,8 @@ impl App {
                 }
                 Err(e) => {
                     warn!(
-                        "Kernel: could not restore session-suspended {}:{} ({}); dropping it.",
-                        s.backend, s.name, e
+                        "Kernel: could not restore {} {}:{} ({}); dropping the suspension.",
+                        occasion, s.backend, s.name, e
                     );
                     self.state
                         .lock()
