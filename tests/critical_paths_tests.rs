@@ -9,6 +9,30 @@ use std::collections::HashMap;
 mod mock_providers;
 use mock_providers::TestKernel;
 
+/// S11: hermeticity is now structural, not remembered — a `TestKernel` isolates BOTH the
+/// config root and the data root (registry/snapshots/journal) inside its sandbox, so no test
+/// can touch the developer's real state, whether or not the test author set `$LINIX_DATA_DIR`.
+#[tokio::test]
+async fn test_kernel_isolates_both_config_and_data_roots() {
+    let kernel = TestKernel::new().await;
+    let sandbox = kernel.tmp.path();
+    assert!(
+        kernel.app.config.config_root().starts_with(sandbox),
+        "config_root {:?} escaped the sandbox {:?}",
+        kernel.app.config.config_root(),
+        sandbox
+    );
+    assert!(
+        kernel.app.config.data_root().starts_with(sandbox),
+        "data_root {:?} escaped the sandbox {:?} — a test could write to real user data",
+        kernel.app.config.data_root(),
+        sandbox
+    );
+    // And the layout the resolver actually uses points both halves at the sandbox.
+    let layout = kernel.app.config.layout();
+    assert!(layout.modules_dir().starts_with(sandbox));
+}
+
 // ============================================================================
 // LOGIC TESTS: PLANNING & DEPENDENCIES
 // ============================================================================

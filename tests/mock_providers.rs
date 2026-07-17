@@ -39,6 +39,10 @@ impl TestKernel {
 
         let mut config = Config::default();
         config.config_root = tmp.path().to_path_buf();
+        // Isolate LiNix's DATA root too, structurally and in one place (S11): the layout's
+        // snapshots (and anything else derived from the data root) now target the sandbox, not
+        // the developer's real data dir — no per-test `$LINIX_DATA_DIR` remembering required.
+        config.data_root = tmp.path().to_path_buf();
         config.tmp_dir = tmp.path().join("tmp");
         config.dry_run = true;
 

@@ -173,6 +173,14 @@ pub struct Config {
     #[serde(default = "default_config_root")]
     pub config_root: PathBuf,
 
+    /// Where LiNix's own data lives (II.1): the registry, snapshots, journal — BESIDE the repo,
+    /// never inside it. Derived from [`safe_data_dir`] by default (which honours `$LINIX_DATA_
+    /// DIR`), but a stored field so a test harness can inject an isolated root ONCE, structurally,
+    /// instead of every test remembering to set an env var (S11). `#[serde(skip)]`: it is not a
+    /// config-file knob, only a runtime/derived path.
+    #[serde(skip, default = "default_data_root")]
+    pub data_root: PathBuf,
+
     #[serde(skip)]
     pub config_file: PathBuf,
 
@@ -264,6 +272,9 @@ pub struct Config {
 
 fn default_config_root() -> PathBuf {
     safe_config_dir()
+}
+fn default_data_root() -> PathBuf {
+    safe_data_dir()
 }
 fn default_btrfs_path() -> String {
     "/.snapshots".to_string()
@@ -391,6 +402,7 @@ impl Default for Config {
             yes: false,
             allow_mass_removal: false,
             config_root: default_config_root(),
+            data_root: default_data_root(),
             config_file: safe_config_dir().join("config.toml"),
             hooks: HashMap::new(),
             retention: crate::core::RetentionConfig::default(),
@@ -468,13 +480,24 @@ impl Config {
         self.config_root.clone()
     }
 
+    /// LiNix's data root (II.1) — where the registry, snapshots and journal live, beside the
+    /// repo. Same empty/relative guard as [`config_root`], falling back to [`safe_data_dir`].
+    /// One answer to "where is LiNix's data", whether it came from the platform dir,
+    /// `$LINIX_DATA_DIR`, or a test's injected temp dir (P4/S11).
+    pub fn data_root(&self) -> PathBuf {
+        if self.data_root.as_os_str().is_empty() || !self.data_root.is_absolute() {
+            return safe_data_dir();
+        }
+        self.data_root.clone()
+    }
+
     /// This run's II.1 layout: your repo, and LiNix's data beside it but never inside it.
     ///
     /// Derived rather than stored so there is one answer to "where are the files", and it
     /// is the same answer whether it came from `$LINIX_CONFIG_DIR`, the platform dir, or a
     /// test's temporary directory (P4).
     pub fn layout(&self) -> Layout {
-        Layout::new(self.config_root(), safe_data_dir())
+        Layout::new(self.config_root(), self.data_root())
     }
 
     pub fn merge_cli_overrides(
