@@ -1078,8 +1078,16 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
 ## Phase 5 — Harness and docs
 
 - Rebuild the harness for the new model.
-- **G2:** 104 of 245 assertions are `soft` and cannot fail. Convert or register as debt.
-- **G3:** teleport, adopt, shim, cockpit, undo are effectively unverified.
+- ~~**G2:** 104 of 245 assertions are `soft` and cannot fail. Convert or register as debt.~~
+  **MOOT, verified 2026-07-17.** The soft-assertion harness is gone — the v7 rewrite removed it;
+  a grep for `soft`/`SoftAssert`/`assert_soft`/`non_fatal` across `src/` and `tests/` finds
+  nothing. Every current test uses real `assert!`/`assert_eq!`. Nothing to convert.
+- **G3 — mostly DONE, 2026-07-17.** `shim` (shim_manager tests, S1/S4), `adopt`/`migrate`
+  (migrate.rs test module), `cockpit` (rebuilt on git with render tests), and `undo`
+  (calculate_diff unit tests just added) are now covered. **`teleport` remains the thin
+  gap** — but its core mechanism is the remove→install DAG executed by `Transaction`, which IS
+  tested (`dag_test`); only teleport's own "already on target = no-op" / "not found = error"
+  branches are unverified, and those need mock-query wiring. Low residual risk.
 - ~~**H2:** two error-swallows on safety paths — `sync/mod.rs:463` (failed rollback-remove
   goes unreported), `shell/mod.rs:126` (dropped state write).~~ **DONE — the rollback swallow
   was actually in `core/transaction.rs::rollback` (the line number had drifted): every
@@ -1842,8 +1850,8 @@ and a user who can see which of the three lines they meant to delete.
 | **F3** | ~884 marketing comments + **32 false ones** → **Phase 0**. The rule → `CLAUDE.md` → **Phase 5** |
 | **F4** | 33 vs 50 backends. **(measured: 41 registration sites)** Compute it → **Phase 5** |
 | **F5** | false doc comments → **Phase 5** |
-| **G2** | 104 of 245 assertions are `soft` and cannot fail → **Phase 5** |
-| **G3** | teleport, adopt, shim, cockpit, undo unverified → **Phase 5** |
+| **G2** | ~~104 of 245 assertions are `soft` and cannot fail~~ **MOOT 2026-07-17** — the soft-assertion harness was removed in the v7 rewrite; grep finds no `soft`/`assert_soft`/`non_fatal` in src or tests. → **Phase 5** |
+| **G3** | ~~teleport, adopt, shim, cockpit, undo unverified~~ **mostly DONE 2026-07-17** — shim/adopt/cockpit/undo now have tests; only `teleport`'s thin no-op/not-found branches remain (its core DAG is tested via dag_test). → **Phase 5** |
 | **H2** | `sync/mod.rs:463`, `shell/mod.rs:126` → **Phase 5** |
 | **S1** | ~~`reconcile_shims` is never called~~ — **this was false.** `sync` calls `reconcile_all_shims` on every successful run, which calls `remove_shim` for every managed package that is not shimmed. `remove_shim` deleted `~/.local/bin/<name>` by filename alone, with no check that LiNix created it — so a managed package named `jq` made every sync delete the user's own `~/.local/bin/jq`. `~/.local/bin` is shared. **Fixed in Phase 0f**: ownership is now tested (a shim is the linix binary under another name — same file as `current_exe`, or a byte-identical copy). Three regression tests added; they could not exist before because `bin_dir` was private with no injection point, which is why G3 lists shims as unverified. |
 | — | `bundle` has no restore code and no end-to-end test → **Phase 4** |
