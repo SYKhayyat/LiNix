@@ -1142,6 +1142,12 @@ implementing agent's call; that it goes is not.**
   both. Not a deletion — a consolidation: extract one shared reconcile that both `handle_sync` and
   `watch_reconcile` call, with `watch` passing an unattended/no-confirm scope. Delete the copy.
 
+- **R12 — Rename `cockpit` to a descriptive name.** The command (alias `tui`, `args.rs:360-363`)
+  opens an interactive browser for generations, but is named "Time-travel cockpit" — nobody scanning
+  `--help` guesses `cockpit` = "browse my generations." Rename to something plain like `browse` or
+  `history`, keep `tui` as an alias, and drop the "time-travel" wording (also covered by R7). Exact
+  name is the implementing agent's call.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
