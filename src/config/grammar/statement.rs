@@ -151,8 +151,14 @@ pub fn parse(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result
         )));
     }
 
-    // A set expression, before the package parser reads `(Work` as a package name.
-    if crate::app::profile_expr::looks_like_expression(line) {
+    // A set expression, before the package parser reads `(Work` as a package name — but NOT
+    // before the typed statements. `looks_like_expression` fires on `\ | & (`, and a
+    // `link:C:\Users\me\.vimrc` is full of `\`: without this guard II.4's set math eats
+    // II.2's statements, and `link:` silently parses as `Statement::Expr`. A line that opens
+    // with a known statement prefix is that statement, never an expression.
+    if !starts_with_statement_prefix(line)
+        && crate::app::profile_expr::looks_like_expression(line)
+    {
         return Ok(Statement::Expr(line.to_string()));
     }
 
@@ -167,7 +173,7 @@ pub fn parse(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result
     }
 
     if let Some(rest) = line.strip_prefix("absent:") {
-        let decl = parse_package(origin, rest.trim(), backends)?;
+        let decl = parse_package(origin, rest.trim(), backends, true)?;
         if decl.backend.is_none() {
             return Err(GrammarError::new(
                 origin.clone(),
@@ -229,8 +235,17 @@ pub fn parse(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result
         }
     }
 
-    let decl = parse_package(origin, line, backends)?;
+    let decl = parse_package(origin, line, backends, false)?;
     Ok(Statement::Package(decl))
+}
+
+/// Whether a line opens with one of II.2's typed-statement prefixes. Such a line is that
+/// statement and must not be mistaken for a set expression (II.4), whatever punctuation its
+/// payload carries — a `link:` target is a path, not a difference.
+fn starts_with_statement_prefix(line: &str) -> bool {
+    ["absent:", "repo:", "shim:", "schedule:", "service:", "link:"]
+        .iter()
+        .any(|p| line.starts_with(p))
 }
 
 fn parse_use(origin: &Origin, target: &str) -> Result<Statement> {
@@ -305,7 +320,12 @@ fn split_options(origin: &Origin, text: &str) -> Result<(String, Options)> {
     }
 }
 
-fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Result<PackageDecl> {
+fn parse_package(
+    origin: &Origin,
+    text: &str,
+    backends: &dyn BackendNames,
+    absent: bool,
+) -> Result<PackageDecl> {
     let (head, options) = match text.split_once('@') {
         Some((head, opts)) => (head.trim(), parse_short(origin, opts)?),
         None => (text, Options::default()),
@@ -375,7 +395,7 @@ fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Re
         selector,
         options,
     };
-    validate_options(origin, &decl)?;
+    validate_options(origin, &decl, absent)?;
     Ok(decl)
 }
 
@@ -390,7 +410,7 @@ const PACKAGE_OPTION_KEYS: &[&str] = &[
 
 /// Option rules from II.2's table that are about the options themselves rather than any
 /// one backend.
-fn validate_options(origin: &Origin, decl: &PackageDecl) -> Result<()> {
+fn validate_options(origin: &Origin, decl: &PackageDecl, absent: bool) -> Result<()> {
     let o = &decl.options;
 
     // II.2's table is the whole list. An unknown key used to be kept and handed downstream,
@@ -464,7 +484,18 @@ fn validate_options(origin: &Origin, decl: &PackageDecl) -> Result<()> {
 
     // `until` is the mirror of `expires` and only makes sense on `absent:` (absent now,
     // present after). On a present line it would mean "install this later", which the
-    // grammar has no way to act on.
+    // grammar has no way to act on — so it is refused there, naming the file and line,
+    // rather than parsed and quietly ignored.
+    if !absent && o.contains("until") {
+        return Err(GrammarError::new(
+            origin.clone(),
+            "`@until` is only for `absent:` lines",
+        )
+        .with_hint(
+            "`@until` lifts an `absent:` line on a date (absent now, present after). To make \
+             a present line lapse on a date, use `@expires`.",
+        ));
+    }
     Ok(())
 }
 
@@ -725,5 +756,27 @@ mod option_key_tests {
         }
         // `until` belongs to `absent:` (II.2), and is accepted there.
         assert!(parse_line("absent:apt:steam@until=2026-07-20T00:00").is_ok());
+    }
+
+    #[test]
+    fn until_on_a_present_line_is_refused() {
+        // II.2: `@until` is for `absent:` only (absent now, present after). On a present line
+        // it means "install this later", which nothing can act on. It used to parse clean.
+        let err = parse_line("apt:steam@until=2026-07-20T00:00").unwrap_err();
+        assert!(err.what.contains("only for `absent:`"), "{}", err);
+        assert!(err.hint.unwrap().contains("@expires"), "must point at the present-line form");
+    }
+
+    #[test]
+    fn a_link_with_a_windows_path_is_a_link_not_an_expression() {
+        // II.2 vs II.4: `looks_like_expression` fires on `\`, and a Windows path is full of
+        // them. The typed prefix has to win, or `link:C:\Users\me\.vimrc` parses as set math.
+        let stmt = parse_line(r"link:C:\Users\me\.vimrc@target=~/.vimrc").unwrap();
+        assert!(matches!(stmt, Statement::Link(..)), "got {:?}", stmt);
+        // And an actual expression with no statement prefix still reads as one.
+        assert!(matches!(
+            parse_line("editors | fonts").unwrap(),
+            Statement::Expr(_)
+        ));
     }
 }

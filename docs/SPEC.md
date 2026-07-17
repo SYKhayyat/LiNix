@@ -834,24 +834,23 @@ parsers against the old grammar just to rewrite them is work done twice.
 
 **Exit:** unit tests for every grammar rule above, including every error case.
 
-> **Three II.2 rules have no implementation (audited 2026-07-17). Every one of them has a
-> passing test file next to it — they are untested, not failing, which is rule 11's whole
-> point: the Exit above names a *surface to cover*, and these are the parts of the surface
-> nobody thought to cover.**
+> **Three II.2 rules had no implementation (audited 2026-07-17). ALL THREE now closed (Phase
+> 2q) — the audit was right, and each is now enforced with a test.**
 >
-> - **`@until` "on `absent:` only" (II.2:273) is not enforced.** `grammar/statement.rs:407` has
->   a comment stating the rule and then `Ok(())`. `apt:jq@until=2026-01-01` parses clean. **The
->   comment reads exactly like a check.**
-> - **II.2's option-key table is not a whitelist.** `options.rs:124` `is_key` says so out loud
->   (*"not a judgement about which keys exist — II.2's table decides that"*) and **nothing
->   downstream makes that judgement.** `apt:jq@versionn=1.6` is accepted silently — a typo'd
->   key, which is the same defect class as a typo'd package name that II.2 exists to refuse.
-> - **`link:` cannot take a Windows path, or any source containing `\ | & (`.** The expression
->   check (`statement.rs:153`) runs **before** the `link:`/`absent:`/`repo:`/`shim:` branches
->   (`:167-206`), and `profile_expr.rs:57` calls any line containing those characters an
->   expression. So `link:C:\Users\me\.vimrc` parses as `Statement::Expr`. **This is II.4's set
->   math eating II.2's statements** — the two grammars overlap and precedence decided it
->   silently. Untested in either direction.
+> - **~~`@until` "on `absent:` only" is not enforced~~ — FIXED (Phase 2q).** `validate_options`
+>   now takes an `absent: bool` (threaded from the `absent:` branch of `parse`), and a present
+>   line carrying `@until` is refused, naming the file and line, with a hint pointing at
+>   `@expires`. Test: `until_on_a_present_line_is_refused`. `apt:jq@until=…` no longer parses
+>   clean. *(The comment that "read exactly like a check" is now a check.)*
+> - **~~II.2's option-key table is not a whitelist~~ — was already FIXED by S19 (Phase 2l).**
+>   `validate_options` rejects any key not in `PACKAGE_OPTION_KEYS` (plus the `*_install`
+>   suffix). `apt:jq@versionn=1.6` errors, listing the real keys. Test:
+>   `an_unknown_key_lists_the_real_ones`. This audit bullet was stale by the time it was written.
+> - **~~`link:` cannot take a Windows path~~ — FIXED (Phase 2q).** The expression check now runs
+>   only when the line does *not* open with a typed-statement prefix (`starts_with_statement_prefix`
+>   guards `absent:`/`repo:`/`shim:`/`schedule:`/`service:`/`link:`). `link:C:\Users\me\.vimrc`
+>   parses as `Statement::Link` again; a bare `editors | fonts` is still an `Expr`. **II.4's set
+>   math no longer eats II.2's statements.** Test: `a_link_with_a_windows_path_is_a_link_not_an_expression`.
 >
 > Also: `Exclude`/`Intersect`/`Subtract`/`Expr` exist (`statement.rs:79-90`) but are **not in
 > II.2's statement list**, while `statement.rs:66` calls that list *"II.2's full list"*. And
