@@ -1290,6 +1290,15 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   TBD** (candidates: reject non-`https` unless explicit opt-in; require `@sha256` or loudly mark an
   unverified install; wire appimage into `verify_checksum`). Do not implement until decided.
 
+- **SEC3 — `@target` (link backend) has no path confinement, and a bare `~` panics.** `link.rs:225-231`
+  uses `@target` raw: `~`-prefixed → `home_dir().join(&target_str[2..])`, otherwise
+  `PathBuf::from(target_str)` (any absolute path). `link:/src @target=/etc/cron.d/x` places/symlinks a
+  file wherever the value points (whatever the user can write). This is closer to the link backend's
+  stated purpose (placing dotfiles/managed files) than SEC1's traversal, so the question is whether to
+  confine it at all — an explicit decision, not a clear exploit. Separately a robustness bug:
+  `&target_str[2..]` on a bare `"~"` (len 1) is an out-of-bounds slice → **panic** on a malformed spec,
+  and `"~x"` silently drops the `x` (use `strip_prefix("~/")`, guard the length). **Solution TBD.**
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
