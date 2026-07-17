@@ -3,7 +3,7 @@
 use crate::backends::BackendRegistry;
 use crate::config::Config;
 use crate::core::{Error, GraphAction, PackageSpec, Result, StateRegistry};
-use petgraph::algo::is_cyclic_directed;
+use petgraph::algo::{is_cyclic_directed, tarjan_scc};
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableDiGraph;
 use semver::{Version, VersionReq};
@@ -41,6 +41,48 @@ pub enum Scope {
 /// Split a desired-state map into what must exist and what must not.
 ///
 /// `absent:` is a declaration, not drift: it is you reaching outside what LiNix manages,
+/// A one-line name for a graph node: `backend:name`, and its file:line when the spec
+/// carries `__source` (II.7 wants the error to say where each edge came from).
+fn node_label(action: &GraphAction) -> String {
+    match action {
+        GraphAction::Install(spec) => {
+            let base = format!("{}:{}", spec.backend, spec.name);
+            match spec.options.get("__source") {
+                Some(src) => format!("{} ({})", base, src),
+                None => base,
+            }
+        }
+        GraphAction::Remove { name, backend } => format!("{}:{}", backend, name),
+    }
+}
+
+/// Name the `@requires` cycle the graph contains, as `a -> b -> a`. Uses Tarjan's SCC to
+/// find the mutually-dependent set (V.45: name what closed the loop, not just "a cycle
+/// exists"). Falls back to a self-loop (a package requiring itself), then to a generic
+/// phrase if the shape defies naming — the message must never be emptier than the old one.
+fn describe_cycle(graph: &StableDiGraph<GraphAction, ()>) -> String {
+    for scc in tarjan_scc(graph) {
+        if scc.len() > 1 {
+            // tarjan_scc yields reverse-topological order; reverse it so the chain reads
+            // the way the `requires` edges point.
+            let mut labels: Vec<String> =
+                scc.iter().rev().map(|&idx| node_label(&graph[idx])).collect();
+            if let Some(first) = labels.first().cloned() {
+                labels.push(first); // close the loop visually: a -> b -> a
+            }
+            return labels.join(" -> ");
+        }
+    }
+    // A self-loop is its own SCC of one, so it is checked separately.
+    for idx in graph.node_indices() {
+        if graph.find_edge(idx, idx).is_some() {
+            let l = node_label(&graph[idx]);
+            return format!("{} -> {}", l, l);
+        }
+    }
+    "a set of packages that each require the next".to_string()
+}
+
 /// deliberately, by name (V.7). It shares the map with wishes because the map type is the
 /// seam, so it must be separated before anything reads the map as a wish list.
 fn partition_by_presence(
@@ -292,9 +334,11 @@ impl<'a> ChangePlanner<'a> {
             .await?;
 
         if is_cyclic_directed(&changes.graph) {
-            return Err(Error::Transaction(
-                "Circular dependency detected in graph construction.".into(),
-            ));
+            return Err(Error::Transaction(format!(
+                "`requires` forms a cycle — these packages each wait for the next, so none \
+                 can go first: {}. Break the loop by removing one `requires` edge.",
+                describe_cycle(&changes.graph)
+            )));
         }
 
         Ok(changes)
@@ -519,6 +563,45 @@ mod tests {
     use super::*;
     use crate::core::state::ManagedPackage;
     use std::path::PathBuf;
+
+    #[test]
+    fn a_requires_cycle_names_the_packages_and_where_they_came_from() {
+        // V.45: the message must name what closed the loop, not just say one exists.
+        let mut graph: StableDiGraph<GraphAction, ()> = StableDiGraph::new();
+        let mk = |name: &str, src: &str| {
+            let mut options = HashMap::new();
+            options.insert("__source".to_string(), src.to_string());
+            GraphAction::Install(PackageSpec {
+                name: name.into(),
+                backend: "apt".into(),
+                options,
+                requires: vec![],
+                present: true,
+            })
+        };
+        let a = graph.add_node(mk("foo", "modules/dev.txt:3"));
+        let b = graph.add_node(mk("bar", "modules/dev.txt:4"));
+        graph.add_edge(a, b, ());
+        graph.add_edge(b, a, ());
+
+        let msg = describe_cycle(&graph);
+        assert!(msg.contains("apt:foo"), "{}", msg);
+        assert!(msg.contains("apt:bar"), "{}", msg);
+        assert!(msg.contains("modules/dev.txt:3"), "must name the file:line: {}", msg);
+        assert!(msg.contains("->"), "must show the chain: {}", msg);
+    }
+
+    #[test]
+    fn a_package_requiring_itself_is_named() {
+        let mut graph: StableDiGraph<GraphAction, ()> = StableDiGraph::new();
+        let n = graph.add_node(GraphAction::Remove {
+            name: "loop".into(),
+            backend: "apt".into(),
+        });
+        graph.add_edge(n, n, ());
+        let msg = describe_cycle(&graph);
+        assert!(msg.contains("apt:loop ->"), "{}", msg);
+    }
 
     fn managed(name: &str, backend: &str) -> ManagedPackage {
         ManagedPackage {

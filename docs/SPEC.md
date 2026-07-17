@@ -2042,7 +2042,17 @@ that says `use x`.
       true of `config/parser.rs` and **there was a second copy in `insight.rs`** — deleted in
       Phase 2j. "Deleted" means the grep is empty, not that the copy you were looking at is
       gone.*
-- [ ] Delete the remaining `config.toml` sections superseded by `priority` / `preferences.toml`.
+- [x] **The `config.toml` backend-selection cluster is deleted (Phase 2t).** `priority`
+      (II.6) replaced four settings that said one thing between them; the model read the file
+      but `search`, `rollback` scope, `repo`'s default, and the planner's drift gate still read
+      the config fields. Now all read `priority`: `App::priority_backends()` feeds `search` and
+      `rollback`; `ChangePlanner::with_enabled(..)` scopes drift so a backend you stop listing
+      is left alone, not reaped (imperative paths/tests default to "all"). Deleted:
+      `enabled_backends`, `hostname_backends`, `backend_priority`, `default_backend`,
+      `effective_enabled_backends`, `is_backend_enabled`, `default_priority`, and their tests.
+      *(No global `-b` flag exists — the planner comment claiming one was stale.)* Other stale
+      `config.toml` example keys (`bloatware_file`, `[managed_files]`, `[hostname_packages]`)
+      are Phase 5 docs debt, not live fields.
 - [x] **The old-model crawl is deleted (Phase 2r).** `config/parser.rs` 437 → 215 lines:
       `ManifestLine`, `identify_line`, `parse_group_file`/`parse_group_str`,
       `filter_conditional_lines`, `load_all_packages`, `write_group_file` — the whole
