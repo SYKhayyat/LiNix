@@ -412,6 +412,107 @@ impl App {
         Ok(())
     }
 
+    /// Undo the extras that were applied but are no longer declared (S20). Extras had no
+    /// record of what was put in place, so deleting a `service:`/`repo:`/`shim:`/`link:`/
+    /// `schedule:` line left it in effect forever — `sync` could not even *detect* the
+    /// removal. The applied-extras ledger (`locks/extras.toml`) closes that: this diffs the
+    /// currently-declared extras against what the last sync recorded, undoes the difference,
+    /// and records the new set. It is the extras' half of "removing a line removes the thing".
+    ///
+    /// Best-effort per item: a backend that cannot undo one extra must not block the rest, so
+    /// each failure warns and the run continues. The ledger is still updated to the declared
+    /// set — a drifted extra we could not undo is reported, not retried forever.
+    pub async fn reconcile_extras(&self, state: &crate::model::DesiredState) -> Result<()> {
+        use crate::core::extras_lock::{extra_key, split_key, ExtrasLedger};
+        use std::collections::BTreeSet;
+
+        // Every declared extra key: the dependents (repo/shim/service/link) and the schedules.
+        let declared: BTreeSet<String> = state
+            .extras
+            .iter()
+            .filter_map(|(s, _)| extra_key(s))
+            .collect();
+
+        let path = ExtrasLedger::path_in(&self.config.config_root().join("locks"));
+        let ledger = ExtrasLedger::load(&path)?;
+        let drift = ledger.drift(&declared);
+
+        // Nothing drifted and the record already matches — no work and, crucially, no write, so
+        // an ordinary no-op sync does not churn `locks/extras.toml` on every run.
+        if drift.is_empty() && ledger.applied() == &declared {
+            return Ok(());
+        }
+
+        for key in &drift {
+            let Some((kind, id)) = split_key(key) else {
+                continue;
+            };
+            if self.config.dry_run {
+                info!("[DRY-RUN] would undo removed extra `{}`", key);
+                continue;
+            }
+            info!("Extras: `{}` is no longer declared — undoing it.", key);
+            if let Err(e) = self.undo_extra(kind, id).await {
+                warn!("Extras: could not undo `{}` ({}); it may still be in place.", key, e);
+            }
+        }
+
+        // Record what is declared now (even in dry-run? no — a dry run changes nothing, so
+        // the ledger must not move, or the next real run would miss the drift).
+        if !self.config.dry_run {
+            let mut ledger = ledger;
+            ledger.record(declared);
+            ledger.save(&path)?;
+        }
+        Ok(())
+    }
+
+    /// Execute the undo for one drifted extra, dispatched on its kind (S20). Each arm uses the
+    /// same removal path the imperative command would.
+    async fn undo_extra(&self, kind: &str, id: &str) -> Result<()> {
+        match kind {
+            "shim" => self.shim_manager().await?.remove_shim(id).await,
+            "schedule" => self.scheduler.deprovision(&self.executor, id).await,
+            "service" | "link" => {
+                let Some(b) = self.registry.get(kind) else {
+                    return Err(Error::BackendNotFound(format!(
+                        "the `{}` backend is not available to undo `{}:{}`",
+                        kind, kind, id
+                    )));
+                };
+                let Some(inst) = b.as_installable() else {
+                    return Ok(());
+                };
+                inst.remove(std::slice::from_ref(&id.to_string()), b.sudo_for_write())
+                    .await
+                    .map(|_| ())
+            }
+            "repo" => {
+                // A repo key is `repo:<backend>:<spec>`; `id` here is `<backend>:<spec>`.
+                let Some((backend, spec)) = id.split_once(':') else {
+                    return Err(Error::Config(format!("malformed repo key `repo:{}`", id)));
+                };
+                let Some(b) = self.registry.get(backend) else {
+                    return Err(Error::BackendNotFound(format!(
+                        "the `{}` backend is not available to undo `repo:{}:{}`",
+                        backend, backend, spec
+                    )));
+                };
+                let Some(mgr) = b.as_repo_manager() else {
+                    return Err(Error::Unsupported(format!(
+                        "`{}` does not manage repositories",
+                        backend
+                    )));
+                };
+                mgr.remove_repo(spec, b.sudo_for_write()).await.map(|_| ())
+            }
+            other => {
+                warn!("Extras: no undo known for extra kind `{}`.", other);
+                Ok(())
+            }
+        }
+    }
+
     /// Whether any active file declares this package.
     ///
     /// Asked through the resolver, so "declared" means the same thing here as it does to

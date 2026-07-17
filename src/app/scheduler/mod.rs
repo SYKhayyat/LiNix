@@ -100,6 +100,12 @@ impl SchedulerManager {
             .await
     }
 
+    /// Remove a task from the OS scheduler by name, without touching config.toml — the undo
+    /// side of [`provision`], used when a `schedule:` line is deleted (S20 drift).
+    pub async fn deprovision(&self, executor: &CommandExecutor, name: &str) -> Result<()> {
+        self.provisioner.remove_task(executor, name).await
+    }
+
     /// Reject an invalid cron before it reaches the OS scheduler. Standard cron is 5-field
     /// (min hour dom month dow); the `cron` crate expects a 6-field form with seconds, so a
     /// 5-field expression is normalized by prepending "0". `@`-macros (@reboot, @daily, …)

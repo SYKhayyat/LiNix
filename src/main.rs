@@ -413,6 +413,10 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
     // `schedule:` line). That is still work, so the "nothing to do" exit has to account for
     // the dependent phase and the schedule phase too.
     if changes.is_empty() && !state.has_dependents() && state.schedules().next().is_none() {
+        // Even with no packages/dependents/schedules to apply, an extra may have been
+        // *removed* — deleting the last `service:` line is a real change (S20). Reconcile the
+        // applied-extras ledger so that undo still happens; it is a cheap no-op otherwise.
+        app.reconcile_extras(&state).await?;
         info!("Success: System matches declarative manifests.");
         return Ok(());
     }
@@ -430,9 +434,10 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
             );
         }
         // Ordering phase 3, previewed: the dependent extras that a real run would apply
-        // after the packages, then the schedule phase.
+        // after the packages, then the schedule phase, then the undo of removed extras.
         app.apply_dependents(&state).await?;
         app.apply_schedules(&state).await?;
+        app.reconcile_extras(&state).await?;
         return Ok(());
     }
 
@@ -466,6 +471,8 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
     app.apply_dependents(&state).await?;
     // Ordering phase 4 (S21): provision the declared schedules onto the OS scheduler.
     app.apply_schedules(&state).await?;
+    // Phase 5 (S20): undo extras that were applied before but are no longer declared.
+    app.reconcile_extras(&state).await?;
     perform_maintenance(app).await
 }
 
@@ -547,6 +554,8 @@ async fn watch_reconcile(app: &App) -> Result<usize> {
     app.apply_dependents(&state).await?;
     // Phase 4 (S21): provision declared schedules.
     app.apply_schedules(&state).await?;
+    // Phase 5 (S20): undo extras no longer declared.
+    app.reconcile_extras(&state).await?;
     perform_maintenance(app).await?;
     Ok(n)
 }

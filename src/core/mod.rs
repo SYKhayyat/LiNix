@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod error;
 pub mod executor;
+pub mod extras_lock;
 pub mod hook_lock;
 pub mod git;
 pub mod journal;
@@ -36,6 +37,8 @@ pub use package::{Package, PackageSpec};
 pub use security::verify_checksum;
 
 pub use hook_lock::{hook_id, HookLedger, Verdict};
+
+pub use extras_lock::{extra_key, ExtrasLedger};
 
 pub use state::{GhostMetadata, ManagedPackage, StateRegistry};
 
