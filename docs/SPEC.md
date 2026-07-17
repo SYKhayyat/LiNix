@@ -1076,6 +1076,15 @@ implementing agent's call; that it goes is not.**
   convenience verb is ever wanted it must route through `handle_sync` (guard included), never its
   own transaction.
 
+- **R3 — Delete the imperative `shim` command; shims are declarative only.** A shim is a small
+  PATH stand-in that forwards to a managed tool. It is already produced declaratively: `@shim=true`
+  on a package line, and `sync`'s `reconcile_all_shims` (`sync/mod.rs:148`,`:360`) creates it — and
+  owns it (an imperatively-made shim is cleaned up on the next sync if the line lacks `@shim`). The
+  `shim` command (`cli/args.rs:106-113`, handler `context.rs:828`) is a second, self-undoing path,
+  and its **required** `--source` flag is discarded (`create_shim` binds it to `_source_spec` and
+  never reads it) — a mandatory flag that does nothing. Owner ruling: go fully declarative. Delete
+  the command and the dead flag; `@shim=true` + sync is the only way to make a shim.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
