@@ -1773,25 +1773,40 @@ deleted.
   because it is the only thing that knows profile→module. `collect` keeps **every** origin
   of a merged package, not just the winner's: the loser's scope is not thereby untrue.
 
-## The next action, precisely
+## Where Phase 2 is holding (2026-07-17, after Phase 2v/2w)
 
-**S12 is done — all three ordering phases are built and verified** (repos before packages,
-packages, dependents after). What is left in Phase 2 is two kinds of work: the remaining
-deletions, and two S12 follow-ups that are new (not the forward direction, which is done).
+**The Phase 2 checklist is complete.** Every box under "Phase 2's remaining checklist" is
+now `[x]`. What landed this session, each committed and verified against the binary or with
+tests, clippy silent throughout (≈521 tests):
 
-**S12 follow-up:** *drift for extras* — a `service:`/`link:`/`shim:` line the user removed
-should be reconciled away, but the planner tracks package drift only, so a removed extra
-lingers. That needs the planner (or a sibling of it) to know what extras were applied last
-time, which is state it does not record yet. (`watch` is no longer a gap — it runs the full
-repos → packages → dependents ordering, same as `sync`.)
+- **S12 done** — all three ordering phases: `repo:` before packages (`apply_repositories`),
+  packages, then `shim:`/`service:`/`link:` after (`apply_dependents`), in declaration order.
+  `watch` runs the same three phases. (2o–2p)
+- **Grammar's last II.2 gaps closed** — `@until` refused on present lines; `link:` no longer
+  eaten by set-math precedence; the option-key whitelist (S19) confirmed. (2q)
+- **Old-model teardown** — `config/parser.rs` 437→215 (the `@module:`/`groups/` crawl gone);
+  `Config::groups_dir`/`modules_dir` fields replaced by one `config_root`; the retired `lease`
+  command deleted; the `config.toml` backend-selection cluster (`enabled_backends`,
+  `hostname_backends`, `backend_priority`, `default_backend`) deleted and `search`/`rollback`/
+  `repo`/planner-drift routed through the `priority` file. (2r–2t)
+- **Cycle errors name the cycle** (V.45) — the planner reports `apt:foo (file:line) -> apt:bar
+  -> apt:foo` via Tarjan SCC. (2u)
+- **II.8 read-only surface** — `status`/`list`/`plan` reviewed; `unmanaged` is E6-fixed; the
+  two missing verbs `check` and `absent` were built. (2v)
+- **S14** — `init` no longer lists `service`/`link` in the generated `priority`. (2w)
 
-**~~The remaining deletions~~ — `groups_dir` is gone (Phase 2r).** The `Config::groups_dir`
-and `Config::modules_dir` fields (41 refs) are deleted; a single `config_root` field replaces
-them and `config_root()` returns it directly instead of `groups_dir.parent()`. The old-model
-crawl in `config/parser.rs` went with them (437 → 215 lines). `migrate` was rewired onto the
-new model in Phase 2k (called by `adopt`), not deleted. **Left in the deletion column:** the
-stale `config.toml` sections superseded by `priority`/`preferences.toml` — a `[backends]`/
-`[groups]`-era block still deserializes into fields nothing reads.
+**What remains before the Phase 2 exit ("the harness green on one distro"):**
+
+1. *Drift for extras* (the one real follow-up): a `service:`/`link:`/`shim:` line the user
+   **removes** is not reconciled away — the planner tracks package drift, not extra drift, and
+   records no "extras applied last time" state. The forward direction (apply) is done.
+2. *The Docker integration harness* has not been run on this branch — it is the literal exit
+   condition, and rebuilding it for the new model is itself Phase 5's first bullet, so there is
+   a genuine ordering tension the owner may want to resolve (run the old harness as a smoke test
+   vs. wait for the Phase 5 rebuild). Cannot be run from this Windows dev box.
+3. *Small doc/comment debt:* `Exclude`/`Intersect`/`Subtract`/`Expr` are not in II.2's listed
+   statements though `statement.rs` calls that list "II.2's full list"; `schedule:NAME` has no
+   "only in `schedules`" file-context check. Both are grammar-comment accuracy, not behaviour.
 
 ## Done in Phase 2l — `uninstall`, and the symmetric pair is symmetric again
 
@@ -2030,8 +2045,11 @@ that says `use x`.
       and the first write to one adds `use <name>` to the active profile and says so.
 - [x] **`linix init` writes the II.1 repo** — `priority` generated from what this machine
       actually has (V.41), ordered by V.14's one real rule, with its reason in the file (P5).
-      Verified by running it: it produces a repo that resolves. **S14**: the generated list
-      still includes `service`/`link`/`web`/`github`, which are not package managers.
+      Verified by running it: it produces a repo that resolves. **S14 fixed (Phase 2w):**
+      `starter_order` now drops `service`/`link` (dependent statements, not managers, never
+      priority-gated). `web`/`github`/`appimage` stay — the model refuses an explicit `web:…`
+      unless `web` is listed (V.15), so excluding them would break those specs; S14's lumping
+      them in was imprecise.
 - [x] **S12 — done (Phase 2o + 2p).** `repo:` applies before packages (`apply_repositories`),
       `shim:`/`service:`/`link:` apply after (`apply_dependents`), in declaration order. The
       extras that used to be dropped at the seam are now walked off `DesiredState::extras`
