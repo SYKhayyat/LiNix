@@ -23,12 +23,33 @@ pub struct RetentionPolicy {
     pub keep: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RetentionConfig {
     #[serde(default)]
     pub generations: RetentionPolicy,
-    #[serde(default)]
+    #[serde(default = "default_snapshot_retention")]
     pub snapshots: RetentionPolicy,
+}
+
+/// Filesystem snapshots can be large and are taken on every sync, so — unlike generations and
+/// manifests, which default to keep-everything — they carry an active default: the 10 most
+/// recent, and anything from the last 30 days. This preserves the behaviour the deleted legacy
+/// `[snapshots]` keys used to provide, now expressed in the one retention dialect.
+fn default_snapshot_retention() -> RetentionPolicy {
+    RetentionPolicy {
+        keep_last: 10,
+        keep_days: 30,
+        keep: Vec::new(),
+    }
+}
+
+impl Default for RetentionConfig {
+    fn default() -> Self {
+        Self {
+            generations: RetentionPolicy::default(),
+            snapshots: default_snapshot_retention(),
+        }
+    }
 }
 
 /// A minimal view of one stored entry, enough for the policy to judge it.

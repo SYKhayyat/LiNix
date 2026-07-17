@@ -1011,12 +1011,16 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   maintenance path) used a **separate** `SnapshotManager::prune_stale_snapshots` with different
   semantics — notably **no newest-floor**, so if every snapshot was older than `max_age_days` it
   deleted them all, leaving no rollback point. Deleted that duplicate; `prune_snapshots` now goes
-  through `prune_with_policy` like `sync` does. Config was also doubled (`[snapshots]`
-  `max_age_days`/`max_count` vs `[retention.snapshots]`): new `Config::snapshot_retention()`
-  resolves both dialects to one `RetentionPolicy` (modern preferred, legacy mapped so existing
-  configs keep working), used by both call sites — one engine, one answer. **Checked:** `cargo
-  check --lib`/`--bin` clean, no warnings; **1 unit test written but NOT run** (modern-wins /
-  legacy-maps). The OS-level delete is untestable here; the policy resolution + selection is pure.
+  through `prune_with_policy` like `sync` does. Config was also doubled — **owner decision (NO
+  LEGACY): the legacy `[snapshots]` `max_age_days`/`max_count` keys are DELETED.**
+  `[retention.snapshots]` is the one surface; `Config::snapshot_retention()` reads it, and both
+  call sites use it. To avoid a silent behaviour change (an empty policy keeps everything, so
+  snapshots would accumulate), `RetentionConfig::default().snapshots` is now active — keep 10 /
+  30 days, exactly what the deleted keys used to provide — while generations/manifests keep their
+  keep-everything default. The `init -i` wizard writes `retention.snapshots.keep_last`. **Checked:**
+  `cargo check --lib`/`--bin` clean, no warnings; **2 unit tests updated but NOT run** (default is
+  10/30; explicit policy read straight through) + the wizard tests. The OS-level delete is
+  untestable here; the policy resolution + selection is pure.
 
 **Exit:** an air-gapped container restores from a bundle, or bundle says why it can't.
 

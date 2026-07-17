@@ -3718,7 +3718,9 @@ struct InitAnswers {
 fn apply_init_answers(mut base: linix::config::Config, a: &InitAnswers) -> linix::config::Config {
     base.snapshots.auto_prune = a.auto_prune_snapshots;
     if let Some(n) = a.snapshot_count {
-        base.snapshots.max_count = n;
+        // Snapshot retention lives in the one retention engine now (`[retention.snapshots]`),
+        // not the deleted legacy `[snapshots]` count key.
+        base.retention.snapshots.keep_last = n as usize;
     }
     base
 }
@@ -3758,7 +3760,7 @@ async fn interactive_init(app: &App, force: bool) -> Result<()> {
         .interact()?;
     let keep: String = Input::new()
         .with_prompt("How many system snapshots to keep")
-        .default(defaults.snapshots.max_count.to_string())
+        .default(defaults.snapshot_retention().keep_last.to_string())
         .interact_text()?;
     answers.snapshot_count = keep.trim().parse::<u32>().ok();
 
@@ -4424,19 +4426,19 @@ mod init_tests {
         };
         let cfg = apply_init_answers(base, &answers);
         assert!(!cfg.snapshots.auto_prune);
-        assert_eq!(cfg.snapshots.max_count, 42);
+        assert_eq!(cfg.retention.snapshots.keep_last, 42);
     }
 
     #[test]
     fn omitted_snapshot_count_keeps_base_default() {
         let base = linix::config::Config::default();
-        let base_count = base.snapshots.max_count;
+        let base_count = base.retention.snapshots.keep_last;
         let answers = InitAnswers {
             snapshot_count: None,
             ..Default::default()
         };
         let cfg = apply_init_answers(base, &answers);
-        assert_eq!(cfg.snapshots.max_count, base_count);
+        assert_eq!(cfg.retention.snapshots.keep_last, base_count);
     }
 
     #[test]
@@ -4452,7 +4454,7 @@ mod init_tests {
         let toml_str = toml::to_string_pretty(&cfg).expect("serializes");
         let back: linix::config::Config = toml::from_str(&toml_str).expect("parses back");
         assert!(back.snapshots.auto_prune);
-        assert_eq!(back.snapshots.max_count, 7);
+        assert_eq!(back.retention.snapshots.keep_last, 7);
     }
 
     #[test]

@@ -109,17 +109,11 @@ impl GuardSettings {
     }
 }
 
-/// Feature 2: Settings for automatic system snapshot management.
+/// Settings for automatic system snapshot management. Retention counts/ages moved to the one
+/// retention engine (`[retention.snapshots]`); the legacy `max_age_days`/`max_count` keys were
+/// deleted (NO LEGACY). Only the on/off switch remains here.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SnapshotSettings {
-    /// Maximum age of a snapshot in days before it is pruned.
-    #[serde(default = "default_max_age")]
-    pub max_age_days: u32,
-
-    /// Maximum number of snapshots to keep.
-    #[serde(default = "default_max_count")]
-    pub max_count: u32,
-
     /// If true, prune snapshots automatically after successful transactions.
     #[serde(default = "default_true")]
     pub auto_prune: bool,
@@ -127,11 +121,7 @@ pub struct SnapshotSettings {
 
 impl Default for SnapshotSettings {
     fn default() -> Self {
-        Self {
-            max_age_days: 30,
-            max_count: 10,
-            auto_prune: true,
-        }
+        Self { auto_prune: true }
     }
 }
 
@@ -311,12 +301,6 @@ fn default_network_timeout_secs() -> u64 {
 }
 fn default_nix_gc_age() -> String {
     "30d".to_string()
-}
-fn default_max_age() -> u32 {
-    30
-}
-fn default_max_count() -> u32 {
-    10
 }
 
 
@@ -523,21 +507,12 @@ impl Config {
         Ok(())
     }
 
-    /// The one snapshot-retention policy, resolving LiNix's two config dialects into a single
-    /// [`crate::core::RetentionPolicy`] so there is one retention *engine* fed by one *answer*.
-    /// Prefer the modern `[retention.snapshots]`; fall back to the legacy `[snapshots]`
-    /// (`max_age_days`/`max_count`) when the modern one is inactive, so existing configs keep
-    /// working. `keep_days`/`keep_last` are a union, exactly as `RetentionPolicy` defines them.
+    /// The snapshot-retention policy: `[retention.snapshots]`, the one config surface (the
+    /// legacy `[snapshots]` count/age keys were deleted — NO LEGACY). Its default keeps the 10
+    /// most-recent / 30 days, so out-of-the-box behaviour is unchanged; a user widens or
+    /// narrows it by editing `[retention.snapshots]`.
     pub fn snapshot_retention(&self) -> crate::core::RetentionPolicy {
-        if self.retention.snapshots.is_active() {
-            self.retention.snapshots.clone()
-        } else {
-            crate::core::RetentionPolicy {
-                keep_last: self.snapshots.max_count as usize,
-                keep_days: self.snapshots.max_age_days as u64,
-                keep: Vec::new(),
-            }
-        }
+        self.retention.snapshots.clone()
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -613,27 +588,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn snapshot_retention_prefers_modern_and_falls_back_to_legacy() {
-        // Modern [retention.snapshots] wins when active.
+    fn snapshot_retention_reads_the_one_config_dialect() {
+        // `[retention.snapshots]` is the only surface now (legacy `[snapshots]` count/age keys
+        // deleted). The default preserves the old out-of-box behaviour: keep 10 / 30 days.
+        let p = Config::default().snapshot_retention();
+        assert_eq!((p.keep_last, p.keep_days), (10, 30), "default should keep 10 / 30 days");
+
+        // And an explicit policy is read straight through.
         let mut cfg = Config::default();
         cfg.retention.snapshots = crate::core::RetentionPolicy {
             keep_last: 5,
             keep_days: 14,
             keep: Vec::new(),
         };
-        cfg.snapshots.max_count = 99;
-        cfg.snapshots.max_age_days = 99;
-        let p = cfg.snapshot_retention();
-        assert_eq!((p.keep_last, p.keep_days), (5, 14), "modern policy should win");
-
-        // With the modern one inactive, the legacy [snapshots] fields map through — so an
-        // existing config keeps the same retention it always had, now on the one engine.
-        let mut legacy = Config::default();
-        legacy.retention.snapshots = crate::core::RetentionPolicy::default(); // inactive
-        legacy.snapshots.max_count = 10;
-        legacy.snapshots.max_age_days = 30;
-        let lp = legacy.snapshot_retention();
-        assert_eq!((lp.keep_last, lp.keep_days), (10, 30), "legacy fields should map");
+        let q = cfg.snapshot_retention();
+        assert_eq!((q.keep_last, q.keep_days), (5, 14));
     }
 
     fn schedule(cron: &str) -> ScheduleConfig {
