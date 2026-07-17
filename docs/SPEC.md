@@ -1306,6 +1306,14 @@ implementing agent's call; that it goes is not.**
 
 ### Security — the 2026-07-17 review pass (PROBLEMS RECORDED, solutions NOT yet decided)
 
+> **DEFERRED BY THE OWNER (2026-07-17): SEC1–SEC6 are consciously parked, to be decided and
+> fixed in a later dedicated pass — not forgotten.** The owner reviewed a proposed decision batch
+> (SEC1 traversal confinement, SEC2 download strictness, SEC3/SEC6 path confinement, SEC4/SEC5
+> injection hardening) and chose to handle them later. **Do not implement SEC1–SEC6 until that
+> pass.** Already resolved and out of this set: **SEC7** (dead Lua code-exec path — deleted) and
+> the **SEC3 panic** (bare `~` out-of-bounds slice — fixed; only the `@target` *confinement*
+> question remains deferred).
+
 Unlike R1–R23 above (owner-approved fixes), these are **recorded vulnerabilities awaiting a
 solution decision**. Do not implement a fix until the owner rules on the approach. A pass 5
 security review confirmed the core is sound — every package-manager command is built as argv
@@ -1348,7 +1356,9 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   stated purpose (placing dotfiles/managed files) than SEC1's traversal, so the question is whether to
   confine it at all — an explicit decision, not a clear exploit. Separately a robustness bug:
   `&target_str[2..]` on a bare `"~"` (len 1) is an out-of-bounds slice → **panic** on a malformed spec,
-  and `"~x"` silently drops the `x` (use `strip_prefix("~/")`, guard the length). **Solution TBD.**
+  and `"~x"` silently drops the `x` (use `strip_prefix("~/")`, guard the length). ~~**Solution TBD.**~~
+  **Panic half FIXED 2026-07-17** (`strip_prefix("~/")`; bare `~` → home dir). **The confinement
+  half remains DEFERRED** — see the owner note at the top of this section.
 
 - **SEC4 — SSH host argument injection (fleet), semi-trusted input.** `fleet.rs:24-28` passes `host`
   to `ssh` with no `--` separator: `.arg("-o").arg("BatchMode=yes").arg(host).arg(remote_cmd)`. A host
