@@ -1232,6 +1232,12 @@ implementing agent's call; that it goes is not.**
   backends: surface the delete failure — warn and do not record it as a clean removal; better, return
   the error so state is not updated as if the package is gone.
 
+- **R22 — Prune counts IDs as deleted even when the delete failed.** `snapshot.rs:506-514` logs a
+  failed `p.delete(id)` at `debug!` only and returns the full `doomed` list; `app/generation.rs:387`
+  does `let _ = tokio::fs::remove_file(self.path_for(id)).await` and returns the full `doomed`. The
+  caller prints "pruned N", so a snapshot/generation the delete couldn't remove is still reported gone
+  — a said-so, not a done. Fix: return only the IDs actually deleted, and surface the failures.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
