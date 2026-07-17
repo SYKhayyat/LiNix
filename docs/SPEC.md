@@ -1785,11 +1785,13 @@ lingers. That needs the planner (or a sibling of it) to know what extras were ap
 time, which is state it does not record yet. (`watch` is no longer a gap — it runs the full
 repos → packages → dependents ordering, same as `sync`.)
 
-**The remaining deletions** are smaller and independent: `groups_dir` (**41** refs, down from
-84), whose `config_root()` is still `groups_dir.parent()`; and the **one** non-validating
-`split_once(':')` parser left (`lease set`, `main.rs:1410` — fixed with S19). `migrate` is no
-longer on this list: it was rewired onto the new model in Phase 2k (now 696 lines, called by
-`adopt`), not deleted, and the "run `linix migrate` again" message is gone.
+**~~The remaining deletions~~ — `groups_dir` is gone (Phase 2r).** The `Config::groups_dir`
+and `Config::modules_dir` fields (41 refs) are deleted; a single `config_root` field replaces
+them and `config_root()` returns it directly instead of `groups_dir.parent()`. The old-model
+crawl in `config/parser.rs` went with them (437 → 215 lines). `migrate` was rewired onto the
+new model in Phase 2k (called by `adopt`), not deleted. **Left in the deletion column:** the
+stale `config.toml` sections superseded by `priority`/`preferences.toml` — a `[backends]`/
+`[groups]`-era block still deserializes into fields nothing reads.
 
 ## Done in Phase 2l — `uninstall`, and the symmetric pair is symmetric again
 
@@ -2015,7 +2017,18 @@ that says `use x`.
       Phase 2j. "Deleted" means the grep is empty, not that the copy you were looking at is
       gone.*
 - [ ] Delete the remaining `config.toml` sections superseded by `priority` / `preferences.toml`.
-- [ ] Delete the old parsers now that `config/grammar/` is the one parser (C13).
+- [x] **The old-model crawl is deleted (Phase 2r).** `config/parser.rs` 437 → 215 lines:
+      `ManifestLine`, `identify_line`, `parse_group_file`/`parse_group_str`,
+      `filter_conditional_lines`, `load_all_packages`, `write_group_file` — the whole
+      `@module:`/`groups/` crawl the model replaced — all gone, with their 7 tests. Kept
+      `HostFacts` + `eval_when` (the model's `when` engine, 5 live refs) and
+      `split_removal_target` (the one `split_once(':')` that consults the registry, so *not* a
+      C13 non-validating parser). **`Config::groups_dir` and `Config::modules_dir` fields are
+      gone too** — a single `config_root` field replaces them, `config_root()` returns it
+      (CWD-guard kept), and all 29 call sites moved to `config_root()`/`config_root().join(..)`.
+      *Remaining C13 surface:* the grammar is the one **statement** parser now, but a couple of
+      colon-splitters survive for non-statement jobs (`main.rs:679` a `requires` target,
+      `ecosystem.rs:275` a `name:ver`) — neither reads a backend name, so neither is the C13 risk.
 - [x] **E6** — `unmanaged` is one function now, *"what `adopt` would adopt"* (Phase 2m).
       **E7** fixed with it: adopt takes protected packages; only OS-essential is held back.
 - [x] **Ordering phases: repos → index refresh → packages → dependents (Phase 2o + 2p).**

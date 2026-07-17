@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, info, trace};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GhostMetadata {
@@ -228,36 +228,6 @@ impl StateRegistry {
 
     pub fn add_simple(&mut self, backend: &str, name: &str, version: Option<String>) {
         self.add(backend, name, version, HashMap::new(), None, false);
-    }
-
-    pub fn update_lease(&mut self, backend: &str, name: &str, duration_str: &str) -> Result<()> {
-        let expiry = Self::parse_duration(duration_str).ok_or_else(|| {
-            Error::Validation(format!(
-                "Invalid duration format: '{}'. Use 30d, 2h, etc.",
-                duration_str
-            ))
-        })?;
-
-        if let Some(pkg) = self
-            .packages
-            .iter_mut()
-            .find(|p| p.backend == backend && p.name == name)
-        {
-            pkg.expires_at = Some(expiry);
-            pkg.options
-                .insert("lease".to_string(), duration_str.to_string());
-            info!(
-                "StateRegistry: Updated lease for {}:{} -> Expires at Unix {}",
-                backend, name, expiry
-            );
-            Ok(())
-        } else {
-            error!(
-                "StateRegistry: Attempted to set lease for unmanaged package {}:{}",
-                backend, name
-            );
-            Err(Error::PackageNotFound(format!("{}:{}", backend, name)))
-        }
     }
 
     pub fn remove(&mut self, backend: &str, name: &str) {

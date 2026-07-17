@@ -4,7 +4,7 @@ use linix::app::generation::GenerationStore;
 use linix::app::sync::planner::Scope as PlannerScope;
 use linix::app::{ui::TuiPreview, App};
 use linix::cli::{
-    Cli, Commands, ConfigCommand, GenerationCommand, GitCommand, HooksCommand, LeaseCommand,
+    Cli, Commands, ConfigCommand, GenerationCommand, GitCommand, HooksCommand,
     ModuleCommand, ProfileCommand, RepoCommand, ScheduleCommand, ServiceCommand,
     SnapshotCommand,
 };
@@ -125,7 +125,6 @@ async fn main() -> Result<()> {
         } => handle_uninstall(&app, packages, *json, temp.as_ref()).await,
         Commands::Shell { packages } => handle_shell(&app, packages).await,
         Commands::Module(args) => handle_module(&app, &args.command).await,
-        Commands::Lease(args) => handle_lease(&app, &args.command).await,
         Commands::Schedule(args) => handle_schedule(&app, &args.command).await,
         Commands::Snapshot(args) => handle_snapshot(&app, &args.command).await,
         Commands::Generation(args) => handle_generation(&app, &args.command).await,
@@ -1392,55 +1391,6 @@ async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
                 path.display(),
                 final_name
             );
-        }
-    }
-    Ok(())
-}
-
-async fn handle_lease(app: &App, cmd: &LeaseCommand) -> Result<()> {
-    match cmd {
-        LeaseCommand::List => {
-            let state = app.state.lock().await;
-            let fmt_ts =
-                |ts: u64| match chrono::DateTime::<chrono::Utc>::from_timestamp(ts as i64, 0) {
-                    Some(dt) => dt.to_rfc2822(),
-                    None => format!("<invalid time: {}>", ts),
-                };
-
-            // Temporary installs (leases): present now, self-removing at EXPIRATION.
-            println!("Temporary installs (auto-remove):");
-            println!("  {:<15} {:<20} {:<20}", "BACKEND", "PACKAGE", "EXPIRATION");
-            let mut any_lease = false;
-            for pkg in &state.packages {
-                if let Some(exp) = pkg.expires_at {
-                    any_lease = true;
-                    println!("  {:<15} {:<20} {}", pkg.backend, pkg.name, fmt_ts(exp));
-                }
-            }
-            if !any_lease {
-                println!("  (none)");
-            }
-
-            // Temporary uninstalls (suspensions): removed now, auto-restoring later.
-            println!("\nTemporary uninstalls (auto-restore):");
-            println!("  {:<15} {:<20} {:<20}", "BACKEND", "PACKAGE", "RESTORE");
-            if state.list_suspensions().is_empty() {
-                println!("  (none)");
-            }
-            for s in state.list_suspensions() {
-                let when = match s.restore_at {
-                    Some(at) => fmt_ts(at),
-                    None => "on shell exit".to_string(),
-                };
-                println!("  {:<15} {:<20} {}", s.backend, s.name, when);
-            }
-        }
-        LeaseCommand::Set { package, duration } => {
-            let (b, n) = package
-                .split_once(':')
-                .context("Input format: backend:package")?;
-            app.state.lock().await.update_lease(b, n, duration)?;
-            app.state.lock().await.save()?;
         }
     }
     Ok(())

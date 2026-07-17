@@ -15,8 +15,6 @@ pub use args::{
     GitCommand,
     HooksArgs,
     HooksCommand,
-    LeaseArgs,
-    LeaseCommand,
     // New for v3.6.0
     ModuleArgs,
     ModuleCommand,

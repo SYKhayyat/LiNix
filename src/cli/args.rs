@@ -274,7 +274,7 @@ pub enum Commands {
         json: bool,
 
         /// Temporary install: uninstall itself after this duration (e.g. "2h", "30d").
-        /// Equivalent to appending `@lease=<DURATION>` to each package.
+        /// Written as a dated line — `@expires=<absolute time>` (II.16) — not a lease.
         #[arg(long, value_name = "DURATION")]
         temp: Option<String>,
 
@@ -400,9 +400,6 @@ pub enum Commands {
     /// Version-control your manifests/config directory with git: init, status, log, commit,
     /// and checkout (roll the *config* back to a past commit without touching packages).
     Git(GitArgs),
-
-    /// Manage package leases and expirations
-    Lease(LeaseArgs),
 
     /// Native system-level task scheduling (systemd, launchd, task-scheduler)
     Schedule(ScheduleArgs),
@@ -863,26 +860,6 @@ pub enum GenerationCommand {
         /// Emit the delta as JSON
         #[arg(long)]
         json: bool,
-    },
-}
-
-#[derive(Args, Debug)]
-pub struct LeaseArgs {
-    #[command(subcommand)]
-    pub command: LeaseCommand,
-}
-
-#[derive(Subcommand, Debug)]
-pub enum LeaseCommand {
-    /// List all packages with active leases and their expiration times
-    List,
-    /// Set or update the lease duration for a managed package
-    Set {
-        /// Package identifier (backend:name)
-        package: String,
-        /// Duration string (e.g. "30d", "2h", "15m")
-        #[arg(short, long)]
-        duration: String,
     },
 }
 
