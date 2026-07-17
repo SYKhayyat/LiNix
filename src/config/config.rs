@@ -119,20 +119,7 @@ pub struct Config {
     pub config_file: PathBuf,
 
     #[serde(default)]
-    pub enabled_backends: Vec<String>,
-
-    #[serde(default = "default_priority")]
-    pub backend_priority: Vec<String>,
-
-    #[serde(default)]
     pub hooks: HashMap<String, HashMap<String, String>>,
-
-    /// Per-host backend allow-lists. When the current host has a (non-empty) entry here,
-    /// it overrides the global `enabled_backends` for that host, so a machine can manage
-    /// only a subset of backends (e.g. no `npm`/`cargo` on a server). Empty = inherit
-    /// the global list (which, when itself empty, means "all backends").
-    #[serde(default)]
-    pub hostname_backends: HashMap<String, Vec<String>>,
 
     /// How long to retain each of LiNix's histories —
     /// generations, and filesystem snapshots — each configured independently. See
@@ -176,9 +163,6 @@ pub struct Config {
 
     #[serde(default)]
     pub backend_settings: HashMap<String, HashMap<String, String>>,
-
-    #[serde(default)]
-    pub default_backend: Option<String>,
 
     /// Names removal must never touch. An entry is matched exactly (case-insensitively),
     /// or as a prefix if it ends in `*` — `libpam*` covers `libpam0g`, while `libc` still
@@ -271,20 +255,6 @@ fn default_max_count() -> u32 {
     10
 }
 
-fn default_priority() -> Vec<String> {
-    vec![
-        "apt".into(),
-        "pacman".into(),
-        "dnf".into(),
-        "winget".into(),
-        "brew".into(),
-        "flatpak".into(),
-        "snap".into(),
-        "cargo".into(),
-        "npm".into(),
-        "pip".into(),
-    ]
-}
 
 /// Refuse a plan removing more than this many packages without an explicit opt-in.
 /// Twenty is comfortably above a routine cleanup and far below the ~100 that adopting a
@@ -374,10 +344,7 @@ impl Default for Config {
             allow_mass_removal: false,
             config_root: default_config_root(),
             config_file: safe_config_dir().join("config.toml"),
-            enabled_backends: Vec::new(),
-            backend_priority: default_priority(),
             hooks: HashMap::new(),
-            hostname_backends: HashMap::new(),
             retention: crate::core::RetentionConfig::default(),
             fleet_hosts: Vec::new(),
             show_progress: true,
@@ -389,7 +356,6 @@ impl Default for Config {
             nix_gc_age: default_nix_gc_age(),
             confirm_destructive: false,
             backend_settings: HashMap::new(),
-            default_backend: None,
             protected_packages: default_protected_packages(),
             unprotected_packages: Vec::new(),
             max_removals: default_max_removals(),
@@ -441,24 +407,6 @@ impl Config {
             .ok()
             .and_then(|h| h.into_string().ok())
             .unwrap_or_else(|| "unknown".to_string())
-    }
-
-    /// The set of backends LiNix manages on the current host. A non-empty per-host
-    /// override in `[hostname_backends]` wins; otherwise the global `enabled_backends`.
-    /// An empty result means "all backends" — the default when nothing is configured.
-    pub fn effective_enabled_backends(&self) -> Vec<String> {
-        let host = Self::get_hostname();
-        match self.hostname_backends.get(&host) {
-            Some(list) if !list.is_empty() => list.clone(),
-            _ => self.enabled_backends.clone(),
-        }
-    }
-
-    /// Whether `backend` is managed on this host. An empty effective set enables every
-    /// backend, preserving the zero-config default where nothing is filtered.
-    pub fn is_backend_enabled(&self, backend: &str) -> bool {
-        let effective = self.effective_enabled_backends();
-        effective.is_empty() || effective.iter().any(|b| b == backend)
     }
 
     /// The repo root (II.1). NEVER resolves to the current working directory: a config that
@@ -587,41 +535,6 @@ mod tests {
             notification: None,
             last_synced: None,
         }
-    }
-
-    #[test]
-    fn backend_gating_defaults_to_all_enabled() {
-        let cfg = Config::default();
-        // Zero config → every backend is managed.
-        assert!(cfg.is_backend_enabled("apt"));
-        assert!(cfg.is_backend_enabled("cargo"));
-        assert!(cfg.effective_enabled_backends().is_empty());
-    }
-
-    #[test]
-    fn global_enabled_backends_restricts() {
-        let cfg = Config {
-            enabled_backends: vec!["apt".into(), "cargo".into()],
-            ..Default::default()
-        };
-        assert!(cfg.is_backend_enabled("apt"));
-        assert!(!cfg.is_backend_enabled("npm"));
-    }
-
-    #[test]
-    fn per_host_override_wins_over_global() {
-        // A per-host entry for THIS machine replaces the global list entirely.
-        let mut hostname_backends = HashMap::new();
-        hostname_backends.insert(Config::get_hostname(), vec!["cargo".into(), "npm".into()]);
-        let cfg = Config {
-            enabled_backends: vec!["apt".into()],
-            hostname_backends,
-            ..Default::default()
-        };
-        assert!(cfg.is_backend_enabled("cargo"));
-        assert!(cfg.is_backend_enabled("npm"));
-        // 'apt' was only in the global list, which the host override supersedes.
-        assert!(!cfg.is_backend_enabled("apt"));
     }
 
     #[test]

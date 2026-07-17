@@ -9,11 +9,18 @@ use tracing::{debug, error, info, instrument, trace, warn};
 pub struct UniversalSearch<'a> {
     registry: &'a BackendRegistry,
     config: &'a Config,
+    /// The backends to search, from the `priority` file (II.6). Empty = every available
+    /// backend (the file is missing, which the resolver already refuses elsewhere).
+    enabled: Vec<String>,
 }
 
 impl<'a> UniversalSearch<'a> {
-    pub fn new(registry: &'a BackendRegistry, config: &'a Config) -> Self {
-        Self { registry, config }
+    pub fn new(registry: &'a BackendRegistry, config: &'a Config, enabled: Vec<String>) -> Self {
+        Self {
+            registry,
+            config,
+            enabled,
+        }
     }
 
     #[instrument(skip(self, query))]
@@ -23,11 +30,10 @@ impl<'a> UniversalSearch<'a> {
             query
         );
 
-        let effective = self.config.effective_enabled_backends();
-        let searchable_backends: Vec<_> = if effective.is_empty() {
+        let searchable_backends: Vec<_> = if self.enabled.is_empty() {
             self.registry.available()
         } else {
-            self.registry.get_filtered(&effective)
+            self.registry.get_filtered(&self.enabled)
         }
         .into_iter()
         .filter(|b| b.as_searchable().is_some())

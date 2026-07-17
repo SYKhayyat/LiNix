@@ -8,12 +8,9 @@ dry_run = false
 # Skip confirmation prompts for automated workflows.
 yes = false
 
-# Directory containing your declarative package group files (.txt).
-groups_dir = "~/.config/linix/groups"
-
-# Priority order for universal package discovery.
-# When a package name is ambiguous, LiNix checks these backends in order.
-backend_priority = ["apt", "pacman", "dnf", "winget", "brew", "flatpak", "snap", "cargo", "npm", "pip"]
+# Which backends this host uses, and in what order, live in the `priority` file (II.6),
+# NOT here — one list, with `when` blocks for the per-host case. Your repo root (holding
+# modules/, profiles/, active, priority) is $LINIX_CONFIG_DIR or the platform config dir.
 
 # Maximum number of parallel operations. Now drives the install/remove transaction
 # engine (DAG concurrency) as well as parallel search — not just search.
@@ -47,9 +44,6 @@ protect_imperative = true
 # Default SSH destinations for `linix fleet` when none are passed on the command line.
 # fleet_hosts = ["user@web-01", "user@web-02"]
 
-# Whitelist of enabled backends (empty = all available discovered binaries).
-enabled_backends = []
-
 # Source of truth for packages to remove (bloatware).
 bloatware_file = "~/.config/linix/bloatware.txt"
 remove_bloatware = false
@@ -64,9 +58,6 @@ show_progress = true
 
 # Enable verbose logging for debugging.
 verbose = false
-
-# Default backend to use when no prefix is provided (e.g. "curl" vs "apt:curl").
-default_backend = "apt"
 
 # FIX #12: Protected packages that LiNix will never remove.
 # These are critical system packages. Add or remove as needed for your distribution.
@@ -89,14 +80,11 @@ ext = "vscode"
 # workstation = ["docker", "kubernetes-cli", "terraform"]
 # gaming-pc = ["steam", "discord", "nvidia-settings"]
 
-# Hostname-specific backend allow-lists.
-# When a host has a (non-empty) entry here it overrides the global `enabled_backends`
-# for that machine: manifest entries for any other backend are ignored on that host
-# (not an error), and search / system-prune respect the same set. Omit or leave empty
-# to manage all backends (the default). Handy for keeping dev tooling off a server.
-[hostname_backends]
-# server-01 = ["apt", "service", "github", "web"]
-# workstation = ["apt", "cargo", "npm", "uv", "flatpak", "vscode"]
+# Per-host backend sets now live in the `priority` file with `when` blocks, e.g.
+#   when host == server-01
+#   apt
+#   end
+# — keeping dev tooling off a server without a second place to say which backends exist.
 
 # Managed config files, contents declared inline (target path -> file body).
 # Each becomes a managed `link` file: written on `sync`, self-healed if edited, tracked

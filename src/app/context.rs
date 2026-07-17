@@ -779,8 +779,25 @@ impl App {
             .await
     }
 
+    /// The backends this host uses, in priority order (II.6's `priority` file). Empty only
+    /// when the file is missing or unreadable — a state the model refuses to resolve in
+    /// anyway — in which case a caller treats "no filter" as "every available backend".
+    ///
+    /// This is what replaced `config.enabled_backends`/`hostname_backends`: one file, with
+    /// `when` blocks for the per-host case, instead of a config section that expressed the
+    /// same fact a second way.
+    pub async fn priority_backends(&self) -> Vec<String> {
+        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
+        resolver
+            .priority_for_host()
+            .await
+            .map(|p| p.order().to_vec())
+            .unwrap_or_default()
+    }
+
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let searcher = UniversalSearch::new(&self.registry, &self.config);
+        let enabled = self.priority_backends().await;
+        let searcher = UniversalSearch::new(&self.registry, &self.config, enabled);
         searcher.search(query).await
     }
 

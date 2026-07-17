@@ -138,6 +138,12 @@ pub struct ChangePlanner<'a> {
     registry: Arc<BackendRegistry>,
     state: &'a StateRegistry,
     config: &'a Config,
+    /// The backends this host manages, from II.6's `priority` file. Empty = every backend —
+    /// the default for the imperative paths (which act on exactly the package they were
+    /// given) and for tests. A full `sync`/`watch`/`prune` sets it, so drift removal is
+    /// scoped: a managed package whose backend is not in `priority` is left alone, never
+    /// removed, because "not listed = LiNix does not use it" (II.6).
+    enabled: Vec<String>,
 }
 
 impl<'a> ChangePlanner<'a> {
@@ -150,7 +156,21 @@ impl<'a> ChangePlanner<'a> {
             registry,
             state,
             config,
+            enabled: Vec::new(),
         }
+    }
+
+    /// Scope drift removal to these backends (the `priority` file). Without it, drift is
+    /// planned for every backend — right for an imperative command, wrong for a full sync
+    /// that must not reap a backend you have simply stopped listing.
+    pub fn with_enabled(mut self, enabled: Vec<String>) -> Self {
+        self.enabled = enabled;
+        self
+    }
+
+    /// Whether `backend` is one this host manages. An empty scope means every backend.
+    fn backend_enabled(&self, backend: &str) -> bool {
+        self.enabled.is_empty() || self.enabled.iter().any(|b| b == backend)
     }
 
     #[instrument(skip(self, desired))]
@@ -208,12 +228,10 @@ impl<'a> ChangePlanner<'a> {
                     continue;
                 }
 
-                // Respect per-host and `-b` backend gating. Without this, `linix -b cargo
-                // prune` still removed apt drift: `-b` narrows which backend a command
-                // acts on everywhere else, so a removal loop that ignores it is scoped by
-                // nothing. The system-scope loop below already checked this; this one did
-                // not.
-                if !self.config.is_backend_enabled(&pkg.backend) {
+                // Scope drift by the `priority` file: a managed package whose backend this
+                // host no longer lists is left alone, not reaped. Empty scope = every
+                // backend (the imperative paths, which act on exactly what they were given).
+                if !self.backend_enabled(&pkg.backend) {
                     continue;
                 }
 

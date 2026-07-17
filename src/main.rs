@@ -393,13 +393,17 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
     // the PPA is added, so this runs before the package plan (not inside it).
     app.apply_repositories(&state).await?;
 
+    // Drift is scoped to the backends this host lists in `priority`: a full sync must not
+    // reap a backend you have simply stopped listing.
+    let enabled = app.priority_backends().await;
     let mut changes = {
         let state_guard = app.state.lock().await;
         let planner = linix::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
-        );
+        )
+        .with_enabled(enabled);
         planner.plan(&desired, None).await?
     };
 
@@ -506,6 +510,7 @@ async fn watch_reconcile(app: &App) -> Result<usize> {
     // Phase 1: repos, before the package plan.
     app.apply_repositories(&state).await?;
 
+    let enabled = app.priority_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
         linix::app::sync::planner::ChangePlanner::new(
@@ -513,6 +518,7 @@ async fn watch_reconcile(app: &App) -> Result<usize> {
             &state_guard,
             &app.config,
         )
+        .with_enabled(enabled)
         .plan(&desired, None)
         .await?
     };
@@ -1248,17 +1254,22 @@ async fn suspend_for_session(app: &App, packages: &[String]) -> Result<()> {
 }
 
 async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
-    let b_name = match cmd {
+    let explicit = match cmd {
         RepoCommand::Add { backend, .. } => backend.clone(),
         RepoCommand::Remove { backend, .. } => backend.clone(),
         RepoCommand::List { backend } => backend.clone(),
-    }
-    .unwrap_or_else(|| {
-        app.config
-            .default_backend
-            .clone()
-            .unwrap_or_else(|| "apt".into())
-    });
+    };
+    // No explicit `--backend`: fall back to the first backend in the `priority` file (this
+    // host's default manager), or `apt` if the file names nothing.
+    let b_name = match explicit {
+        Some(b) => b,
+        None => app
+            .priority_backends()
+            .await
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "apt".into()),
+    };
 
     let b = app.registry.get(&b_name).context("Backend not found")?;
     let mgr = b
@@ -1839,9 +1850,9 @@ async fn rollback_to(
         state.packages.clone()
     };
 
-    // Backend scope comes from the global `--backend` (via effective enabled backends);
-    // package scope from `--package`. Neither ⇒ a full rollback.
-    let eff = app.config.effective_enabled_backends();
+    // Backend scope comes from the `priority` file (the backends this host uses); package
+    // scope from `--package`. Neither ⇒ a full rollback.
+    let eff = app.priority_backends().await;
     let backends: Option<&[String]> = if eff.is_empty() {
         None
     } else {
@@ -2258,13 +2269,16 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let desired = resolver.resolve_desired_state().await?;
+    // `status` reports what a full `sync` would do, so it scopes drift the same way.
+    let enabled = app.priority_backends().await;
     let changes = {
         let state_guard = app.state.lock().await;
         let planner = linix::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
-        );
+        )
+        .with_enabled(enabled);
         planner.plan(&desired, None).await?
     };
     let report = changes.generate_report();
@@ -3064,8 +3078,8 @@ max_removals = 20
 # Packages that must never be removed (exact, case-insensitive match).
 # protected_packages = ["sudo", "bash", "linix"]
 
-# Force a single default backend (otherwise auto-detected by priority).
-# default_backend = "apt"
+# Which backends this host uses, and in what order, live in the `priority` file (II.6) —
+# NOT here. One list, with `when` blocks for the per-host case.
 
 # Per-backend settings. Example: install flatpaks into the user scope.
 # [backend_settings.flatpak]
