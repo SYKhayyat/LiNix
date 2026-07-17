@@ -1,6 +1,5 @@
 #[allow(clippy::module_inception)]
 pub mod config;
-pub mod manifest;
 pub mod grammar;
 pub mod parser;
 

@@ -150,9 +150,6 @@ pub struct Config {
     pub fleet_hosts: Vec<String>,
 
     #[serde(default = "default_true")]
-    pub auto_lock_checksums: bool,
-
-    #[serde(default = "default_true")]
     pub show_progress: bool,
 
     #[serde(default)]
@@ -394,7 +391,6 @@ impl Default for Config {
             hostname_backends: HashMap::new(),
             retention: crate::core::RetentionConfig::default(),
             fleet_hosts: Vec::new(),
-            auto_lock_checksums: true,
             show_progress: true,
             verbose: false,
             quiet: false,

@@ -1,9 +1,7 @@
 use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::{LuaHooks, MetricsCollector, ShimManager};
 use crate::backends::BackendRegistry;
-use crate::config::manifest::ManifestEngine;
 use crate::config::Config;
-use crate::core::security::generate_checksum;
 use crate::core::{
     CommandExecutor, Error, GraphAction, Journal, PackageSpec, Result, SnapshotManager,
     StateRegistry, Transaction, TransactionConfig,
@@ -49,7 +47,6 @@ pub struct SyncEngine<'a> {
     pub snapshot_manager: Arc<SnapshotManager>,
     pub journal: Arc<Mutex<Journal>>,
     pub state: Arc<Mutex<StateRegistry>>,
-    pub manifest_engine: ManifestEngine,
     pub diagnostics: Arc<FailureDiagnosticEngine>,
 }
 
@@ -67,7 +64,6 @@ impl<'a> SyncEngine<'a> {
         state: Arc<Mutex<StateRegistry>>,
         diagnostics: Arc<FailureDiagnosticEngine>,
     ) -> Self {
-        let manifest_engine = ManifestEngine::from_config(config);
         Self {
             config,
             registry,
@@ -78,7 +74,6 @@ impl<'a> SyncEngine<'a> {
             snapshot_manager,
             journal,
             state,
-            manifest_engine,
             diagnostics,
         }
     }
@@ -334,13 +329,11 @@ impl<'a> SyncEngine<'a> {
                         session_active,
                     );
 
-                    let lockable_backends = ["web", "github", "appimage"];
-                    if lockable_backends.contains(&spec.backend.as_str())
-                        && !spec.options.contains_key("sha256")
-                        && self.config.auto_lock_checksums
-                    {
-                        self.attempt_auto_lock(spec).await;
-                    }
+                    // S18: auto-locking used to splice `@sha256=…` into the line you wrote
+                    // — II.16 says LiNix must not rewrite your files, and a checksum is a
+                    // generated fact, which II.6 keeps in `locks/`. The recording of an
+                    // artifact hash is a real supply-chain feature (II.12); it lands in
+                    // `locks/<backend>.toml` in Phase 4, not in your module.
                 }
                 GraphAction::Remove { name, backend } => {
                     state.remove(backend, name);
@@ -351,43 +344,6 @@ impl<'a> SyncEngine<'a> {
         self.metrics.record_install(changes.total_install() as u64);
         self.metrics.record_remove(changes.total_remove() as u64);
         Ok(())
-    }
-
-    async fn attempt_auto_lock(&self, spec: &PackageSpec) {
-        if let Some(backend_cap) = self.registry.get(&spec.backend) {
-            if let Some(queryable) = backend_cap.as_queryable() {
-                if let Ok(Some(pkg)) = queryable.info(&spec.name).await {
-                    let path_key = match spec.backend.as_str() {
-                        "github" => "install_path",
-                        "appimage" => "local_path",
-                        _ => "local_path",
-                    };
-
-                    if let Some(local_path) = pkg.properties.get(path_key) {
-                        let path = std::path::Path::new(local_path).to_path_buf();
-                        let hash_res =
-                            tokio::task::spawn_blocking(move || generate_checksum(&path)).await;
-
-                        if let Ok(Ok(hash)) = hash_res {
-                            info!("Auto-Lock: Generated checksum for {}: {}", spec.name, hash);
-                            let mut new_options = spec.options.clone();
-                            new_options.insert("sha256".into(), hash);
-                            let opt_parts: Vec<String> = new_options
-                                .iter()
-                                .filter(|(k, _)| !k.starts_with("__"))
-                                .map(|(k, v)| format!("{}={}", k, v))
-                                .collect();
-                            let new_spec_str =
-                                format!("{}:{}@{}", spec.backend, spec.name, opt_parts.join(","));
-                            let _ = self
-                                .manifest_engine
-                                .update_package(&spec.name, &new_spec_str)
-                                .await;
-                        }
-                    }
-                }
-            }
-        }
     }
 
     async fn reconcile_all_shims(&self, state: &StateRegistry) -> Result<()> {
