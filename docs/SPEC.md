@@ -1324,6 +1324,16 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   existing files, and `--name` is user-typed (the `github:`/URL default can't inject a `/`). Low
   severity. **Solution TBD** (reject path separators in `name`).
 
+- **SEC7 — Delete the dead, ungated Lua code-exec path (`LuaHooks::render_template`).** `hooks.rs:220`
+  evaluates arbitrary `{{ … }}` as **Lua** with no approval-ledger check, and `setup_lua_sandbox`
+  leaves `os`/`io`/`os.execute` intact — full code execution. The only `.render_template(` caller in
+  the tree is `link.rs:271`, which resolves to the link backend's **Tera** renderer (`link.rs:94`,
+  safe); nothing calls the Lua one. It is dead today but a loaded gun: wire it to file content and it
+  is ungated RCE. Unlike SEC1–SEC6 this is not solution-TBD — per NO-LEGACY it is a straight **delete**
+  (Tera is the live renderer). Remove `LuaHooks::render_template` (and any Lua-eval-for-templating
+  scaffolding that exists only to serve it). The hook-execution path — Lua/Rhai/`#!` hooks gated by
+  the II.12 ledger — is a separate, correct feature and stays.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
