@@ -93,6 +93,18 @@ impl ShimManager {
         // Remove first: hard_link/copy onto an existing path fails, and a dangling symlink
         // reports as non-existent to `try_exists`, hence the explicit `is_symlink` check.
         if tokio::fs::try_exists(&target_path).await.unwrap_or(false) || target_path.is_symlink() {
+            // S4: only overwrite a file LiNix itself deployed. `bin_dir` is `~/.local/bin`,
+            // shared with the user and every other tool; a same-named binary they put there is
+            // an unmanaged file, and deploying a shim must not silently destroy it — the same
+            // ownership rule `remove_shim` already follows. Redeploying LiNix's own shim is
+            // fine (it hashes identical to the linix binary).
+            if !Self::is_deployed_shim(&target_path).await {
+                return Err(Error::Validation(format!(
+                    "refusing to deploy the `{}` shim: {:?} already exists and LiNix did not \
+                     create it. Move or rename that file yourself if you want the shim there.",
+                    binary_name, target_path
+                )));
+            }
             fs::remove_file(&target_path).await.map_err(Error::from)?;
         }
 
@@ -233,6 +245,28 @@ mod tests {
             "sync deleted a file LiNix never created: {:?}",
             victim
         );
+    }
+
+    /// S4: the create path had the same blind spot the remove path used to — it deleted
+    /// whatever sat at `~/.local/bin/<name>` before deploying. A managed package named `jq`
+    /// would then clobber the user's own `jq` on the next sync. Deploy must refuse, not
+    /// destroy, an unmanaged file.
+    #[tokio::test]
+    async fn create_shim_refuses_to_clobber_a_file_linix_did_not_deploy() {
+        let tmp = tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        let mgr = ShimManager::with_bin_dir(bin.clone()).await.unwrap();
+
+        let victim = bin.join("jq");
+        let contents = b"#!/bin/sh\necho the user's own jq\n";
+        tokio::fs::write(&victim, contents).await.unwrap();
+
+        let result = mgr.create_shim("jq").await;
+
+        assert!(result.is_err(), "create_shim must refuse to overwrite a user's file");
+        // And it must not have touched the file on its way to refusing.
+        let after = tokio::fs::read(&victim).await.unwrap();
+        assert_eq!(after, contents, "the user's file was modified despite the refusal");
     }
 
     #[tokio::test]
