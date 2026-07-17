@@ -142,25 +142,32 @@ impl<'a> Editor<'a> {
 
     /// Write `line` into `target`, and make sure something reaches it.
     ///
-    /// A line in a module nothing activates is a line that does nothing, so writing one
-    /// without wiring it up would make `linix install` silently fail to install.
-    pub fn add(&self, target: &Target, line: &str) -> std::io::Result<Edit> {
-        let path = target.file(self.layout);
-        let existing = std::fs::read_to_string(&path).unwrap_or_default();
-        let created = existing.is_empty();
-
-        let body = self.replace_or_append(&existing, line, created, target);
-
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, body)?;
-
+    /// A line in a module nothing activates is a line that does nothing, so this refuses
+    /// rather than write one: `install` that quietly installs nothing is the disease.
+    pub fn add(&self, target: &Target, line: &str) -> Result<Edit> {
+        // Decided before writing. Writing the line and then failing to wire it leaves the
+        // file changed and the machine not converging, which is the worst of both.
         let wired_into = match target {
-            Target::Module(m) => self.ensure_reachable(m)?,
+            Target::Module(m) => self.reachable_via(m)?,
             // A profile is reached by `active`, not by a `use` line somewhere else.
             Target::Profile(_) => None,
         };
+
+        let path = target.file(self.layout);
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let created = existing.is_empty();
+        let body = self.replace_or_append(&existing, line, created, target);
+
+        write(&path, &body)?;
+        if let Some(p) = &wired_into {
+            let pf = self.layout.profile_file(p);
+            let mut b = std::fs::read_to_string(&pf).unwrap_or_default();
+            if !b.is_empty() && !b.ends_with('\n') {
+                b.push('\n');
+            }
+            b.push_str(&format!("use {}\n", target.name()));
+            write(&pf, &b)?;
+        }
 
         Ok(Edit {
             file: path,
@@ -238,36 +245,51 @@ impl<'a> Editor<'a> {
         }
     }
 
-    /// Add `use <module>` to the active profile if nothing reaches it yet.
+    /// Which profile must gain `use <module>` for this write to mean anything.
     ///
-    /// II.8: the first time LiNix writes to a landing module it says so. A normal line you
-    /// can read and delete — never implicit.
-    fn ensure_reachable(&self, module: &str) -> std::io::Result<Option<String>> {
+    /// `None` = already reached, nothing to do. `Some(p)` = add it to `p` and say so
+    /// (II.8: a normal line you can read and delete — never implicit).
+    fn reachable_via(&self, module: &str) -> Result<Option<String>> {
         let active_file = self.layout.active_file();
         let body = std::fs::read_to_string(&active_file).unwrap_or_default();
-        let Ok(active) = parse_active(&active_file, &body) else {
-            return Ok(None);
-        };
+        let active = parse_active(&active_file, &body)?;
 
         if self.reaches(&active, module) {
             return Ok(None);
         }
 
-        // With one profile active there is no question which one owns this. With several
-        // there is, and `--into` is how II.8 already asks it — so guessing here would pick
-        // one of your identities at random and never mention it.
-        let [only] = active.as_slice() else {
-            return Ok(None);
-        };
+        match active.as_slice() {
+            // One active profile: no question which of your identities owns this.
+            [only] => Ok(Some(only.clone())),
 
-        let path = self.layout.profile_file(only);
-        let mut body = std::fs::read_to_string(&path).unwrap_or_default();
-        if !body.is_empty() && !body.ends_with('\n') {
-            body.push('\n');
+            // Nothing is active, so there is nowhere for this to be reached from. Writing
+            // the line anyway would report success and change nothing.
+            [] => Err(GrammarError::new(
+                Origin::new(&active_file, 0),
+                "nothing is active, so there is nowhere to put this.",
+            )
+            .with_hint(
+                "activate a profile first (`linix activate Main`), or name one with \
+                 `--into <Profile>`. A module no profile reaches is a module LiNix never reads.",
+            )),
+
+            // Several: `--into` is how II.8 already asks this question, so ask it rather
+            // than pick one of your identities at random and never mention it.
+            many => Err(GrammarError::new(
+                Origin::new(&active_file, 0),
+                format!(
+                    "{} profiles are active ({}), so which one should own `{}`?",
+                    many.len(),
+                    many.join(", "),
+                    module
+                ),
+            )
+            .with_hint(format!(
+                "say where it goes: `--into {}` puts it in that profile, `--into <module>` \
+                 in a module. Only needed once — after that the `use {}` line is there.",
+                many[0], module
+            ))),
         }
-        body.push_str(&format!("use {}\n", module));
-        std::fs::write(&path, body)?;
-        Ok(Some(only.clone()))
     }
 
     /// Whether any active profile already reaches this module.
@@ -302,7 +324,7 @@ impl<'a> Editor<'a> {
     ///
     /// The match is on the package, never on the raw prefix: `uninstall apt` must remove a
     /// package named `apt`, not every line whose backend is apt (S9).
-    pub fn remove_from(&self, files: &[PathBuf], target_pkg: &str) -> std::io::Result<Vec<Edit>> {
+    pub fn remove_from(&self, files: &[PathBuf], target_pkg: &str) -> Result<Vec<Edit>> {
         let wanted = self.match_key(target_pkg);
         let mut edits = Vec::new();
 
@@ -326,7 +348,7 @@ impl<'a> Editor<'a> {
             }
             let mut new_body = out.join("\n");
             new_body.push('\n');
-            std::fs::write(file, new_body)?;
+            write(file, &new_body)?;
             for line in hit {
                 edits.push(Edit {
                     file: file.clone(),
@@ -410,6 +432,19 @@ fn other_key(stmt: &Statement) -> Option<String> {
         Statement::Use(r) => Some(format!("use {}", r.name())),
         Statement::Package(_) | Statement::Absent(_) => None,
     }
+}
+
+/// A failed write is an error that names the file. "Permission denied" with no path is a
+/// message nobody can act on.
+fn write(path: &std::path::Path, body: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| io_error(path, &e))?;
+    }
+    std::fs::write(path, body).map_err(|e| io_error(path, &e))
+}
+
+fn io_error(path: &std::path::Path, e: &std::io::Error) -> GrammarError {
+    GrammarError::new(Origin::new(path, 0), format!("could not write this file: {}", e))
 }
 
 fn landing_of(module: &str) -> Option<Landing> {
@@ -546,6 +581,50 @@ mod tests {
             .unwrap();
         assert_eq!(edit.wired_into, None);
         assert_eq!(read(&f, "profiles/Work").matches("use imperative").count(), 1);
+    }
+
+    #[test]
+    fn installing_with_several_profiles_active_asks_which_one_rather_than_guessing() {
+        // The alternative is picking one of your identities at random, or — worse — writing
+        // the line, wiring nothing, and reporting success while installing nothing.
+        let f = fx(&[
+            ("active", "Work\nHome\n"),
+            ("profiles/Work", "use dev\n"),
+            ("profiles/Home", "use media\n"),
+        ]);
+        let err = editor(&f)
+            .add(&Landing::Imperative.target(), "apt:jq")
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Work") && msg.contains("Home"), "{}", msg);
+        assert!(msg.contains("--into"), "{}", msg);
+        // And it wrote nothing: a refusal that half-applies is worse than either answer.
+        assert_eq!(read(&f, "modules/imperative.txt"), "");
+    }
+
+    #[test]
+    fn installing_with_nothing_active_refuses_rather_than_writing_a_line_nobody_reads() {
+        let f = fx(&[("active", "\n")]);
+        let err = editor(&f)
+            .add(&Landing::Imperative.target(), "apt:jq")
+            .unwrap_err();
+        assert!(err.to_string().contains("nothing is active"), "{}", err);
+        assert_eq!(read(&f, "modules/imperative.txt"), "");
+    }
+
+    #[test]
+    fn into_a_named_profile_settles_the_question() {
+        // Which is why the refusal above points at `--into`: it has to actually work.
+        let f = fx(&[
+            ("active", "Work\nHome\n"),
+            ("profiles/Work", "use dev\n"),
+            ("profiles/Home", "use media\n"),
+        ]);
+        let edit = editor(&f)
+            .add(&Target::Profile("Work".into()), "apt:jq")
+            .unwrap();
+        assert!(read(&f, "profiles/Work").contains("apt:jq"));
+        assert_eq!(edit.wired_into, None, "a profile is reached by `active`");
     }
 
     #[test]

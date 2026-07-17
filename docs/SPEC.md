@@ -1236,6 +1236,7 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S10** | **`cargo test` wrote to the developer's REAL data dir**, and one bad file bricks every command. `TestKernel` (named `linix_hermetic_`) isolated `registry.json`, groups and tmp, but `Journal::new()` hardcoded `safe_data_dir()` — found at 733KB of test noise in `%APPDATA%/linix/journal.json`. Fixed in Phase 2b by injection (`Journal::at`). **The remaining half is real:** `Journal::load_sync` errors on a bad parse -> `App::new` fails -> EVERY command fails, with no message saying which file to delete or how to recover. Failing loud is right (P3); having no way out is not → **Phase 5** |
 | **S12** | **`repo:`, `shim:`, `service:`, `link:` and `schedule:` lines parse, resolve, and are then dropped on the floor.** The seam is `HashMap<backend, Vec<PackageSpec>>` and these are not packages, so `Resolver::resolve` collects them into `DesiredState::extras` and `resolve_desired_state` — which returns only `.packages` — discards them. Nothing downstream has ever consumed them. A `repo:ppa:deadsnakes/ppa` line therefore does exactly nothing, silently, which is VI.1's disease with new syntax. Not a regression (the syntax is new in Phase 1) but it must not ship: `sync` warns for now, naming each ignored line and its file. The fix is the ordering phases — repos → index refresh → packages → dependents — which is what `extras` was collected for → **Phase 2** (planner ordering) |
 | **S13** | **A bare name and an explicit one were two packages, not one.** `model::resolve` keys the merge on `backend:name`, and a bare `ripgrep` is keyed `?:ripgrep` until something probes it — so `ripgrep` in one module and `cargo:ripgrep` in another never met, never reconciled, and both reached the planner. Found while wiring the seam and **fixed there**: `Resolver::statements()` and `Resolver::collect()` are now separate, the caller probes in between, and `with_bare` hands the answers back so the merge sees real backends. II.7 rule 5 was silently not applying to every bare line → **Phase 2** (fixed) |
+| **S15** | **`install` has P1 backwards: it installs first and writes the line second.** `handle_install` resolves, calls the backend, records in the registry, and only then declares. P1 says an imperative command *is* a shortcut for editing a file and syncing — so the file edit is the operation, and the install is what convergence then does about it. Backwards, any refusal on the write (nothing active, several profiles active, unwritable file) lands *after* the package is already on the machine: installed, undeclared, and drift by the next `sync`. It has always been backwards; `let _ = add_package_to_local(...)` merely hid it by making the write unfailable. The order is `declare` → `sync`, and then `--dry-run` needs no special case because the plan is the dry run → **Phase 2** (II.8 command surface) |
 | **S14** | **The generated `priority` lists things that are not package managers.** `linix init` fills it from `registry.available()`, which includes the pseudo-backends `service`, `link`, `web` and `github` — so a fresh file answers II.6's question ("which package managers does this setup use, and in what order") with 26 entries, four of which cannot install a package. Harmless today because the model only consults `priority` for package statements, but it is the first file a new user reads and it is teaching them the wrong thing. The registry has no "is this a package manager" answer to ask; capability probing (`as_installable` + `as_searchable`) is the likely shape → **Phase 5** (F1/F4 own the generated files) |
 | **S11** | **The test harness is not hermetic by construction, only by remembering.** `LINIX_DATA_DIR` exists precisely so tests do not touch real state (`safe_data_dir` says so), the docker/windows integration scripts set it, and the cargo tests never did — nothing enforced it, so it rotted silently for as long as the journal has existed. G3's "unverified" list and this are the same problem: isolation that depends on each test author remembering → **Phase 5** (make it structural, not remembered) |
 
@@ -1427,8 +1428,25 @@ deleted.
 
 ## The next action, precisely
 
-**The II.8 command surface (`main.rs`, ~4,370 lines).** The largest item left in Phase 2;
-everything else on the checklist is smaller and independent of it.
+**`app/profile.rs` — the last whole copy of the old model.** 657 lines that still write
+`_active_profiles.txt` on every `activate`, and still hold `compose()`: a second, complete
+profile-composition engine duplicating `model/profiles.rs`. Its `active` file is in the wrong
+place (`profiles/active`, not the config root) and its profiles are `<name>.profile`, not
+II.5's Capitalized `profiles/<Name>`. Nothing about it agrees with the model that now runs
+resolution.
+
+**One real question is buried in it, and it needs answering before the rewrite:** II.4 says
+profiles support set math (`|`, `&`, `\`, `-`, and `include`/`exclude`/`intersect`).
+`model/profiles.rs` **does not implement it** — `ProfileLoader::resolve` handles only `use`,
+and `model::profiles::evaluate_expression` has no caller outside its own tests. The old
+`compose()` does implement it, over flat package-name strings. The two are not the same shape:
+`Resolved { modules, direct }` cannot express "the intersection of two profiles' packages",
+because an intersection is a package set, not a module list. So set math either changes what
+`Resolved` is, or lands in `direct` and loses its module scope. **This is a design decision,
+not a port.**
+
+Then: **the II.8 command surface** (`main.rs`, ~4,370 lines), starting with **S15** — `install`
+does the file edit last instead of first, which is P1 inverted.
 
 ## Phase 2's remaining checklist
 
