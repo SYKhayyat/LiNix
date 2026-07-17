@@ -491,12 +491,22 @@ async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u64, i64)> {
 
 /// One unattended reconcile pass: resolve desired state, plan, and auto-apply any changes. This
 /// is `sync` without the interactive confirmation gate — `watch` is explicitly unattended.
+///
+/// It runs the same three ordering phases `sync` does (II.7): repos before the package plan,
+/// then packages, then dependents after. `watch` reconciling only packages would leave a
+/// PPA unadded or a `service:` unenabled until someone ran `sync` by hand — which defeats the
+/// point of an unattended reconcile.
 async fn watch_reconcile(app: &App) -> Result<usize> {
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
-    let desired = resolver.resolve_desired_state().await?;
+    let state = resolver.resolve_model().await?;
+    let desired = state.packages.clone();
     enforce_policy(app, &desired).await?;
+
+    // Phase 1: repos, before the package plan.
+    app.apply_repositories(&state).await?;
+
     let changes = {
         let state_guard = app.state.lock().await;
         linix::app::sync::planner::ChangePlanner::new(
@@ -507,15 +517,23 @@ async fn watch_reconcile(app: &App) -> Result<usize> {
         .plan(&desired, None)
         .await?
     };
-    if changes.is_empty() {
+
+    // Nothing to do only when the package plan is empty AND there are no dependents to apply.
+    if changes.is_empty() && !state.has_dependents() {
         return Ok(0);
     }
+
     let n = changes.total_install() + changes.total_remove();
-    print_flight_plan(app, &changes);
-    app.sync_engine()
-        .await
-        .sync(changes, linix::app::sync::guard::GuardScope::Watch)
-        .await?;
+    if !changes.is_empty() {
+        print_flight_plan(app, &changes);
+        app.sync_engine()
+            .await
+            .sync(changes, linix::app::sync::guard::GuardScope::Watch)
+            .await?;
+    }
+
+    // Phase 3: dependents, after the packages they lean on.
+    app.apply_dependents(&state).await?;
     perform_maintenance(app).await?;
     Ok(n)
 }
