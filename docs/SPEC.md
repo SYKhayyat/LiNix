@@ -1,13 +1,16 @@
 # LiNix v7 — the declarative model
 
-**Status:** ~~Phases 0 and 1 complete~~ — **audited 2026-07-17 and both are false.** Phase 0
-deleted the `-g` flag but not the model beneath it; Phase 1 built the grammar but **added a
-ninth `backend:name` parser instead of removing eight**, six of which still skip validation.
-Phase 2 is in progress and its own account is accurate. **See Part VII → "Audit: two ✅ that
-are not true" before planning anything — the deletions are owed, and II.8 sits on top of
-them.**
+**Status (2026-07-17, and the tree is under active edit as this is written — trust Part VII, not
+this line):** Phase 1's parser unification is closed (one `backend:name` parser, C13). Phases 2–5
+largely landed (the model, the guard's nine refusals in one home, the II.12 hook ledger, F1/H2/P6);
+Phase 0's deletions are still partly owed; Phase 6's containers have not been run. A five-pass code
+review on 2026-07-17 added two kinds of entry under Phase 5: **R1–R23 (owner-approved fixes)** and
+**SEC1–SEC7 (recorded vulnerabilities whose solutions are NOT yet decided)** — the agent is
+implementing these now. The earlier "Phases 0 and 1 complete" claim was audited false; that history
+lives in Part VII.
 
-**Part VII holds the current state — read it after Part II and before you touch anything.**
+**Part VII holds the current state — read it after Part II and before you touch anything. It is the
+living truth; every frozen status line, including this one, drifts behind the tree.**
 
 Supersedes [`docs/AUDIT-v6.org`](AUDIT-v6.org) — the audit that found all of this — except
 where Part VI carries an item forward explicitly. Part VI carries everything you need;
@@ -104,6 +107,30 @@ already exists". You cannot implement this correctly from a summary.
   rule, written by models congratulating themselves; do not add the next one.
   *(The figure was 139 in the first draft, measured against an older, smaller tree. Re-measured
   2026-07-16 across 2,147 comment blocks.)*
+
+### Lessons from the 2026-07-17 review pass
+
+A five-pass read of the actual code (messages, redundant features, surprising defaults, failure
+paths, security) produced the `R*` and `SEC*` lists under **Phase 5**. The lessons behind them:
+
+- **Stale status drifts *both* ways.** This session the HEAD header lied *downward* — it said
+  "Phases 3–6 not started" while a dozen Phase 3–5 items were done with commits behind them.
+  Re-run the command; never trust a status line's direction. (Reinforces rules 9–11.)
+- **`R1–R23` are owner-approved fixes. `SEC1–SEC7` are recorded vulnerabilities whose solutions
+  are NOT yet decided — do not implement a SEC fix until the owner rules** (the one exception is
+  SEC7, a straight NO-LEGACY delete of dead code).
+- **A "feature" that hand-rolls its own transaction/graph parallel to `sync` is a second engine to
+  delete, not maintain.** Teleport and the `shim` command were imperative shortcuts for "edit the
+  file, sync" — and teleport's private transaction *bypassed the guard* (a real safety hole). When
+  you find a command doing the machine's core loop by itself, that is the bug.
+- **When you surface a redundant feature, the teardown shape is yours to choose; that it goes is
+  the owner's ruling.** State NO-LEGACY and that better code already exists (usually "edit the file,
+  sync"); do not agonize over helper-vs-delete.
+- **The security soft spot is the download/link backends.** The core is safe — every PM command is
+  argv (no `sh -c`), the II.12 hook ledger is enforced on every path, archive extraction rejects
+  `..`. But `web`/`appimage`/`github`/`link` take untrusted URLs and `@`-options straight to the
+  filesystem: validate `@`-option paths (no `..`/separators/absolute escapes) and enforce
+  TLS+checksum before making a downloaded file executable and putting it on PATH.
 
 ---
 
