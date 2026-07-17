@@ -1148,6 +1148,12 @@ implementing agent's call; that it goes is not.**
   `history`, keep `tui` as an alias, and drop the "time-travel" wording (also covered by R7). Exact
   name is the implementing agent's call.
 
+- **R13 — Fix `uninstall`'s help wording.** Command help says "Imperatively uninstall one or more
+  packages" and the arg help says "Names of packages to purge" (`args.rs:307-309`). "purge" collides
+  with the separate `purge-unmanaged` command, and "Imperatively" is jargon that also contradicts the
+  model — uninstall is undeclare + sync, i.e. declarative. Plain: "Uninstall one or more packages" /
+  "Names of packages to uninstall."
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
