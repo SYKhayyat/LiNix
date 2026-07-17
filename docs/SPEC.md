@@ -1115,6 +1115,12 @@ implementing agent's call; that it goes is not.**
   the version, don't update it. The test: help and output should describe the tool plainly, the way
   `apt`/`dnf` do, with zero adjectives selling it.
 
+- **R8 — Rename `--i-really-mean-it` to `--allow-mass-purge`.** `purge-unmanaged` guards itself with
+  the jokey `--i-really-mean-it` (`cli/args.rs:141`, used at `main.rs:2809`,`:2819`), while every
+  sibling destructive gate is sober and consistent: `--allow-mass-removal`, `--allow-mass-install`
+  (`args.rs:36`,`:43`). Rename it into that family — `--allow-mass-purge` — and update the flag, its
+  handler param, and the hint text at `main.rs:2819`. One vocabulary for the guard, no jokes.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
