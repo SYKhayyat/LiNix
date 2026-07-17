@@ -229,7 +229,7 @@ LiNix will:
 
 | `fleet [hosts…] [--sync] [--apply]` | Compare many machines over SSH against their manifests and report drift; `--sync` reconciles the drifted ones, `--apply` pushes `sync` to every reachable host. |
 
-| `policy` | Check the desired state against declarative rules in `policy.toml` (also enforced automatically before `sync`/`upgrade`). |
+| `policy` | Check the desired state against the `[guard]` install/change rules (also enforced automatically before `sync`/`upgrade`). |
 
 | `run --packages <pkgs> "<cmd>"` | Run a single command inside an ephemeral environment with those packages, then tear it down. |
 
@@ -350,8 +350,9 @@ Since 6.0.0, the following have landed in the codebase (see the `[Unreleased]` s
   something.
 - **`clone <user@host>` / `fleet`** — replicate a machine over SSH (translating backends
   per‑OS), and see/repair drift across many machines.
-- **Policy gate (`policy.toml`)** — declarative rules (`deny_packages`, `allow_backends`,
-  `pinned_only`, `require_snapshot`, `deny_vulnerable`) enforced before any change.
+- **The `[guard]` gate** — nine refusals (`protected_packages`, `unprotected_packages`,
+  `max_removals`, `max_installs`, `deny_packages`, `pinned_only`, `require_snapshot`,
+  `deny_vulnerable`, and OS-essential) enforced before any change; `-y` cannot skip them.
 - **`init`** — scaffold the directory layout + a starter manifest on a fresh machine.
 - **Safer pruning** — `prune_scope` (`managed` default vs whole‑`system`) and
   `protect_imperative` shield imperative installs; leases are swept on every run; and
