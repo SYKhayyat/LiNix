@@ -63,7 +63,11 @@ impl Reference {
     }
 }
 
-/// One statement. II.2's full list.
+/// One parsed line. Covers every statement kind the grammar accepts: II.2's declarations
+/// and typed lines (`Package`, `Absent`, `Repo`, `Shim`, `Schedule`, `Service`, `Link`,
+/// `Use`) **and** II.4's set operations (`Exclude`, `Intersect`, `Subtract`, `Expr`) — the
+/// latter belong to the set-math grammar, not II.2's statement table, so this is not "II.2's
+/// full list" but the union of the two grammars a module line can be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Statement {
     Package(PackageDecl),
