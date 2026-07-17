@@ -1091,6 +1091,12 @@ implementing agent's call; that it goes is not.**
   does everything the generation form does and more. Owner ruling: delete `GenerationCommand::Rollback`,
   keep the top-level `rollback`.
 
+- **R5 — Fix `unmanage`'s broken confirmation output (key mismatch).** The result JSON is built
+  with key `"lines_removed"` (`main.rs:2950`) but the human printer reads `"manifest_lines_removed"`
+  (`:2971`, `:2989`) — a key that never exists. So the count always prints 0 and the "removed
+  declaration … from …" lines never show. The command does the work; only its output lies. Make the
+  keys agree.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
