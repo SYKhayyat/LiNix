@@ -173,25 +173,31 @@ impl Migrator {
 
         info!("Migrator: {} candidate(s) for adoption.", found.adopt.len());
 
-        let timestamp = Local::now().format("%Y%m%d_%H%M%S");
-        let filename = format!("migrated_{}.txt", timestamp);
-        let manifest_path = self.config.groups_dir.join(&filename);
+        // II.9: **one** `modules/adopted.txt`. It used to be `migrated_<timestamp>.txt` in
+        // the groups folder — a folder nothing reads any more, under a name that made the
+        // second `adopt` declare every package twice, which the resolver then refuses as a
+        // contradiction (II.7 rule 5). One file, overwritten, so adopting again answers
+        // "the machine as it is now" rather than "the machine plus history".
+        let priority = crate::app::sync::resolver::StateResolver::new(
+            &self.config,
+            self.registry.clone(),
+            false,
+        )
+        .await
+        .priority_for_host()
+        .await?;
+        let vocab = crate::app::vocab::Vocab::new(&self.registry, &self.config, &priority);
+        let layout = self.config.layout();
 
-        info!("Migrator: writing manifest {:?}", manifest_path);
-
-        // `atomic_write` writes to a temp file and renames, so a crash mid-write leaves
-        // either the old file or the new one, never a truncated list. The previous code
-        // claimed to be atomic in a comment while doing `File::create` plus three
-        // sequential writes — a truncated manifest is a silent mass removal next sync.
         let manifest = self.render_manifest(&found);
-        let path = manifest_path.clone();
-        tokio::task::spawn_blocking(move || crate::utils::file::atomic_write(&path, &manifest))
-            .await
-            .map_err(|e| Error::Other(format!("manifest-write thread failure: {}", e)))??;
+        let edit = crate::model::Editor::new(&layout, &vocab)
+            .write_module(&crate::model::Landing::Adopted.target(), &manifest)?;
+        let manifest_path = edit.file.clone();
+        info!("{}", edit.describe("Wrote"));
 
         {
             let mut state_mut = self.state.lock().await;
-            let source_meta = Some(format!("manifest:{}", filename));
+            let source_meta = Some("adopt".to_string());
 
             for pkg in &found.adopt {
                 state_mut.add(

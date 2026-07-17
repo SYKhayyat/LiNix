@@ -1375,6 +1375,7 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S10** | **`cargo test` wrote to the developer's REAL data dir**, and one bad file bricks every command. `TestKernel` (named `linix_hermetic_`) isolated `registry.json`, groups and tmp, but `Journal::new()` hardcoded `safe_data_dir()` — found at 733KB of test noise in `%APPDATA%/linix/journal.json`. Fixed in Phase 2b by injection (`Journal::at`). **The remaining half is real:** `Journal::load_sync` errors on a bad parse -> `App::new` fails -> EVERY command fails, with no message saying which file to delete or how to recover. Failing loud is right (P3); having no way out is not → **Phase 5** |
 | **S12** | **`repo:`, `shim:`, `service:`, `link:` and `schedule:` lines parse, resolve, and are then dropped on the floor.** The seam is `HashMap<backend, Vec<PackageSpec>>` and these are not packages, so `Resolver::resolve` collects them into `DesiredState::extras` and `resolve_desired_state` — which returns only `.packages` — discards them. Nothing downstream has ever consumed them. A `repo:ppa:deadsnakes/ppa` line therefore does exactly nothing, silently, which is VI.1's disease with new syntax. Not a regression (the syntax is new in Phase 1) but it must not ship: `sync` warns for now, naming each ignored line and its file. The fix is the ordering phases — repos → index refresh → packages → dependents — which is what `extras` was collected for → **Phase 2** (planner ordering) |
 | **S13** | **A bare name and an explicit one were two packages, not one.** `model::resolve` keys the merge on `backend:name`, and a bare `ripgrep` is keyed `?:ripgrep` until something probes it — so `ripgrep` in one module and `cargo:ripgrep` in another never met, never reconciled, and both reached the planner. Found while wiring the seam and **fixed there**: `Resolver::statements()` and `Resolver::collect()` are now separate, the caller probes in between, and `with_bare` hands the answers back so the merge sees real backends. II.7 rule 5 was silently not applying to every bare line → **Phase 2** (fixed) |
+| **S18** | **`auto_lock_checksums` rewrites YOUR module files on every sync, and it defaults to true.** `sync/mod.rs::attempt_auto_lock` hashes a `github`/`appimage` artifact after install and calls `ManifestEngine::update_package` to splice `@sha256=…` into the line you wrote. Two rules say no: **II.16 — "LiNix must not rewrite your files"** — and II.6, which puts generated facts in `locks/` ("Generated. In git. Yours."), which is exactly what a checksum is. It is also the last caller of `ManifestEngine`, whose `update_package`/`find_all_packages` are a second file-editor with their own `split_once(':')` parsers (C13), and the last real reason `groups_dir` exists. **The fix is `locks/<backend>.toml`, so this is Phase 4's thread, not a patch** → **Phase 4** (locks and git) |
 | **S16** | **`--allow-mass-removal` deleted protected packages. FIXED.** `guard::enforce` returned `Ok(())` for *every* objection once the flag was set, so the flag meaning "yes, 50 packages is what I meant" also carried `python3` through. II.10 is explicit — `max_removals` exceeded → "cannot skip, `--allow-mass-removal`"; protected / OS-essential → **"nothing overrides"**. A confirmation asks; a refusal says no (V.26). The flag now clears only the count objection. **There was a test asserting the old behaviour** (`enforce_refuses_without_opt_in_and_proceeds_with_it`, which asserted the flag lets `python3` through) — the bug was written down as an expectation, which is why nothing caught it → **Phase 3** (fixed) |
 | **S17** | **`[guard.enforce_on]` was a config key that switched the guard off, per command. DELETED.** Ten booleans — `apply`, `prune`, `sync`, `watch`, `upgrade`, `rollback`, `canary`, `remove`, `shell-exit`, `leases` — each of which made that command able to remove **anything, without limit**, protected and OS-essential included. It is not one of II.10's nine refusals; it is a switch that turns off all nine. V.21 says **no setting anyone can flip, inherit, or copy from a dotfiles repo** makes a routine sync delete something it did not install, and this was exactly that setting. The config template documented it, and `linix protected` printed which commands were unguarded. All gone → **Phase 3** (fixed) |
 | **S15** | **`install` had P1 backwards: it installed first and wrote the line second. FIXED for `install`; `uninstall` is still inverted.** P1 says an imperative command *is* a shortcut for editing a file and syncing, so the edit is the operation and the install is what convergence then does about it. Backwards, every refusal on the write landed *after* the package was on the machine: installed, undeclared, drift by the next sync. `let _ = add_package_to_local(...)` hid it by making the write unfailable. `install` is now `declare` -> `sync`, which also puts an imperative install behind the guard (II.10) for the first time, and `--temp 2h` now writes `@expires=<absolute>` (II.16, V.38) instead of a lease nothing could read. **`uninstall` still removes first and undeclares second, so the pair is asymmetric (V.39 says they are a symmetric pair).** It cannot be flipped yet: `undeclare` -> `sync` only removes the package if `sync` removes drift, and `handle_sync` still passes `.with_prune(config.prune_on_sync)`, default **false**. **`prune_on_sync` is in II.17's delete list and V.34 says sync removes drift by definition — that deletion is the blocker, and it is the same one blocking `uninstall --temp` from becoming `absent:...@until=` (II.16).** → **Phase 2** (II.8 command surface) |
@@ -1686,9 +1687,11 @@ causes, wearing a different word.
   `shim rg --source cargo:ripgrep` and `--source apt:nonsense` do the same thing. What kills
   it is II.16 (shims as declared lines) — **unbuilt**, and S4 routes the shim path to Phase 3,
   **not started**.
-- **E12 `confirm_destructive` gates the wrong thing.** Killed by the II.10 guard — Phase 3,
-  not started. Still live at `main.rs:966`, `:1118`, `:1303`, default `false`
-  (`config/config.rs:405`).
+- **E12 `confirm_destructive` gates the wrong thing.** **`module` overwrite fixed in Phase 2k**
+  — II.8 says destroying a file you wrote is a plain refusal plus `--force`, and it is now
+  exactly that, wired to nothing. **The other two sites are live**: `main.rs:966` and `:1118`
+  gate `install`/`uninstall` confirmation, which is the II.10 guard's job — Phase 3, not
+  started. `confirm_destructive` itself is in II.17's delete list and dies with them.
 
 **Also contradictory:** E4 says two snapshot retention engines need no work; **S2 routes its own
 fix to "Phase 4 (one retention engine)"** — the document says both that the consolidation is
@@ -1767,6 +1770,35 @@ still literally `groups_dir.parent()`; the **seven non-validating `split_once(':
 parsers**; `migrate` (606 lines, renamed to `adopt` rather than deleted, still telling users
 to run a command that does not exist); and **E6** — "unmanaged" has two implementations that
 will disagree.
+
+## Done in Phase 2j/2k — the commands that still read the deleted model
+
+**`why` asks the model** — the audit's worst finding, answered in full above.
+
+**`adopt` writes `modules/adopted.txt` (II.9).** It wrote `migrated_<timestamp>.txt` into
+`groups_dir`: a folder nothing reads any more, under a name that made **the second `adopt`
+declare every package twice** — which the resolver then refuses as a contradiction (II.7 rule
+5). One file, overwritten, so adopting again answers "the machine as it is now" rather than
+"the machine plus history". It goes through the editor, so `use adopted` reaches the active
+profile and says so.
+
+**`module` runs on II.1.** It listed `*.module.txt` — a suffix II.1 does not have — so
+`module list` printed **nothing** on a real repo, and `module show`/`create` addressed files
+the resolver never reads. Now `modules/<name>.txt`, and **the folder decides**: `module list`
+asks `ModuleLoader::available()`, so a `README.md` in `modules/` costs nothing (II.3).
+
+**E12 is fixed for `module` (II.8).** Overwriting a module you wrote was gated on
+`confirm_destructive` — a setting about *package removals* deciding whether your file
+survives, which is one prompt meaning two unrelated things. It is now a plain refusal plus
+`--force`, like every other tool, and wired to nothing.
+
+**`bundle` copies your repo, whole.** It copied `groups/` and `modules/` by name, so under
+II.1 it silently left `profiles/`, `active`, `priority`, `locks/` and `preferences.toml`
+behind — a bundle that restores half your declarations is worse than one that fails.
+
+**Found, not fixed: S18** — `auto_lock_checksums` rewrites your module files on every sync,
+and defaults to true. It is Phase 4's thread (a checksum is a lock), and it is the last
+caller of `ManifestEngine` and the last real reason `groups_dir` exists.
 
 ## Done in Phase 2i — `activate` does what II.6 says, and `active` gained `when`
 

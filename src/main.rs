@@ -1251,30 +1251,80 @@ async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
     Ok(())
 }
 
+/// Destroying a file you wrote is a plain refusal plus `--force`, like every other tool
+/// (II.8). It has nothing to do with packages, so it is not wired to `confirm_destructive`
+/// — a setting about removals deciding whether your module survives is how one prompt came
+/// to mean two unrelated things (E12).
+fn refuse_overwrite(path: &std::path::Path, name: &str, force: bool) -> Result<()> {
+    if force || !path.exists() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "module `{}` already exists at {}.\n  \
+         Pass --force to overwrite it, or pick another name.",
+        name,
+        path.display()
+    )
+}
+
 async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
+    let layout = app.config.layout();
     match cmd {
         ModuleCommand::List => {
-            let mut entries = tokio::fs::read_dir(&app.config.modules_dir).await?;
-            while let Some(entry) = entries.next_entry().await? {
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if name.ends_with(".module.txt") {
-                    println!("{}", name.replace(".module.txt", ""));
-                }
+            // **The folder decides** (II.3): `modules/*.txt`, so a README.md in there costs
+            // nothing. It used to list `*.module.txt`, a suffix II.1 does not have — so this
+            // listed nothing on a real repo.
+            let vocab = app.vocabulary().await?;
+            let loader = linix::model::modules::ModuleLoader::new(&layout, &vocab);
+            let names = loader.available();
+            if names.is_empty() {
+                println!(
+                    "No modules yet. `linix module create <name>`, or `linix install` writes \
+                     one for you."
+                );
+            }
+            for n in names {
+                println!("{}", n);
             }
         }
         ModuleCommand::Show { name } => {
-            let path = app.config.modules_dir.join(format!("{}.module.txt", name));
-            println!("{}", tokio::fs::read_to_string(path).await?);
+            let path = layout.module_file(name);
+            let body = tokio::fs::read_to_string(&path).await.with_context(|| {
+                format!("no module `{}` — looked in {}", name, path.display())
+            })?;
+            println!("{}", body);
         }
-        ModuleCommand::Create { name } => {
-            let path = app.config.modules_dir.join(format!("{}.module.txt", name));
-            tokio::fs::write(&path, format!("# LiNix Module: {}\n", name)).await?;
-            info!("Module '{}' created successfully.", name);
+        ModuleCommand::Create { name, force } => {
+            let path = layout.module_file(name);
+            refuse_overwrite(&path, name, *force)?;
+            tokio::fs::create_dir_all(layout.modules_dir()).await.ok();
+            tokio::fs::write(
+                &path,
+                format!(
+                    "# Module: {}\n\
+                     #\n\
+                     # A list of what this module holds, one per line:\n\
+                     #\n\
+                     #   apt:curl\n\
+                     #   ripgrep            (no backend named — LiNix asks each one in\n\
+                     #                       `priority` order, then locks the answer)\n\
+                     #   use base           (bring in another module)\n\
+                     #   absent:apt:nano    (this must NOT exist)\n\
+                     #\n\
+                     # Nothing here happens until a profile reaches it: `use {}`.\n",
+                    name, name
+                ),
+            )
+            .await?;
+            println!("Created {}", path.display());
+            println!("  Add it to a profile with `use {}` — nothing reads a module no profile names.", name);
         }
-        ModuleCommand::Add { source, name } => {
+        ModuleCommand::Add { source, name, force } => {
             use linix::app::module_registry;
             let (url, default_name) = module_registry::resolve_module_source(source)?;
             let final_name = name.clone().unwrap_or(default_name);
+            let path = layout.module_file(&final_name);
+            refuse_overwrite(&path, &final_name, *force)?;
 
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(
@@ -1295,34 +1345,12 @@ async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
                 );
             }
 
-            tokio::fs::create_dir_all(&app.config.modules_dir)
-                .await
-                .ok();
-            let path = app
-                .config
-                .modules_dir
-                .join(format!("{}.module.txt", final_name));
-            if tokio::fs::try_exists(&path).await.unwrap_or(false)
-                && app.config.confirm_destructive
-                && !app.config.yes
-            {
-                let proceed = dialoguer::Confirm::new()
-                    .with_prompt(format!(
-                        "Module '{}' already exists. Overwrite?",
-                        final_name
-                    ))
-                    .default(false)
-                    .interact()
-                    .unwrap_or(false);
-                if !proceed {
-                    println!("Kept existing module '{}'.", final_name);
-                    return Ok(());
-                }
-            }
+            tokio::fs::create_dir_all(layout.modules_dir()).await.ok();
             tokio::fs::write(&path, &body).await?;
             let count = module_registry::count_entries(&body);
             println!(
-                "Added module '{}' ({} entries) from {}\n  saved to {}\n  use it with `@module:{}` in a manifest.",
+                "Added module `{}` ({} entries) from {}\n  saved to {}\n  \
+                 Use it with `use {}` in a profile — nothing reads a module no profile names.",
                 final_name,
                 count,
                 url,

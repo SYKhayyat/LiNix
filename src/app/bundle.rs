@@ -113,13 +113,15 @@ pub async fn create_bundle(
         ..Default::default()
     };
 
-    report.files_copied +=
-        copy_dir_recursive(&app.config.groups_dir, &out.join("groups"), Some(out)).await?;
-    report.files_copied +=
-        copy_dir_recursive(&app.config.modules_dir, &out.join("modules"), Some(out)).await?;
-    if let Some(parent) = app.config.groups_dir.parent() {
-        let cfg = parent.join("config.toml");
-        if cfg.exists() {
+    // Your repo, whole. Under II.1 the repo IS the config root — modules, profiles,
+    // `active`, `priority`, `locks/`, `preferences.toml` — so copying two named folders
+    // out of it silently left the rest behind, and a bundle that restores half your
+    // declarations is worse than one that fails.
+    let root = app.config.config_root();
+    report.files_copied += copy_dir_recursive(&root, out, Some(out)).await?;
+    {
+        let cfg = app.config.config_file.clone();
+        if cfg.exists() && cfg.parent() != Some(root.as_path()) {
             let _ = tokio::fs::copy(&cfg, out.join("config.toml")).await;
             report.files_copied += 1;
         }

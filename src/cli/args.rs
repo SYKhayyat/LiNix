@@ -769,20 +769,30 @@ pub struct ModuleArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ModuleCommand {
-    /// List all available reusable modules
+    /// List the modules in your repo
     List,
-    /// Display the contents of a specific module
+    /// Display the contents of a module
     Show { name: String },
-    /// Create a new module interactively
-    Create { name: String },
-    /// Fetch a shared module from a remote source into your local modules, e.g.
-    /// `linix module add github:acme/rust-dev`. Reference it later with `@module:<name>`.
+    /// Create a new, empty module
+    Create {
+        name: String,
+        /// Overwrite a module that already exists
+        #[arg(long)]
+        force: bool,
+    },
+    /// Fetch a shared module into `modules/`, e.g. `linix module add github:acme/rust-dev`.
+    ///
+    /// This is the fetch step: `use` takes a name, never a URL, so a module from the
+    /// internet lands on disk first and then you `use <name>` it like any other (II.2).
     Add {
         /// Source: `github:user/repo[@ref][/path]` or an `https://…` raw URL
         source: String,
         /// Save the module under this name (default: derived from the source)
         #[arg(long)]
         name: Option<String>,
+        /// Overwrite a module that already exists
+        #[arg(long)]
+        force: bool,
     },
 }
 

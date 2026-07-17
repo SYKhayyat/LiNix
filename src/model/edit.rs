@@ -176,6 +176,39 @@ impl<'a> Editor<'a> {
         })
     }
 
+    /// Replace a module's whole contents with generated text, and make sure something
+    /// reaches it.
+    ///
+    /// For a module LiNix writes rather than edits — `adopted`, which II.9 says is **one**
+    /// file. A timestamped file per run would make the second `adopt` declare everything
+    /// twice, and two declarations of one package is a conflict the resolver then refuses
+    /// (II.7 rule 5). Overwriting is also what makes it re-runnable: `adopt` again and the
+    /// answer is the machine as it is now, not the machine plus history.
+    pub fn write_module(&self, target: &Target, body: &str) -> Result<Edit> {
+        let wired_into = match target {
+            Target::Module(m) => self.reachable_via(m)?,
+            Target::Profile(_) => None,
+        };
+
+        let path = target.file(self.layout);
+        write(&path, body)?;
+        if let Some(p) = &wired_into {
+            let pf = self.layout.profile_file(p);
+            let mut b = std::fs::read_to_string(&pf).unwrap_or_default();
+            if !b.is_empty() && !b.ends_with('\n') {
+                b.push('\n');
+            }
+            b.push_str(&format!("use {}\n", target.name()));
+            write(&pf, &b)?;
+        }
+
+        Ok(Edit {
+            file: path,
+            line: format!("{} line(s)", body.lines().count()),
+            wired_into,
+        })
+    }
+
     /// A second declaration of the same package would be a conflict the resolver then
     /// refuses (II.7 rule 5), so `install jq@version=2` must replace the `jq` line rather
     /// than sit next to it.
