@@ -1181,6 +1181,18 @@ implementing agent's call; that it goes is not.**
   and `:2867` — the loudest string in the tool. The warning is justified for a destructive command,
   but sentence case carries it: "This cannot be undone." Fix both spots.
 
+- **R17 — `export` must never silently overwrite; handle the conflict.** `export()` does
+  `tokio::fs::write(path, text)` with no existence check, no backup, no `--force` (`export.rs:179`);
+  the default out dir is `.` and with no `--format` it writes **every** format (`export.rs:158`). So
+  `linix export` in a Node project overwrites the real `package.json` with a LiNix stub — and
+  `handle_export` has no dry-run branch (`main.rs:3579`), so `--dry-run` clobbers it too. Meanwhile
+  `module create` / `config init` / `init` all refuse to overwrite without `--force`. Fix:
+  (a) honor `--dry-run` (write nothing, report what *would* be written); (b) **never silently clobber
+  an existing file** — on a name collision, write to a non-colliding name (append a suffix, e.g.
+  `package.linix.json`) or merge into the existing file where the format makes merge well-defined
+  (e.g. appending `Brewfile` lines), never a blind replace; (c) `--force` for a deliberate plain
+  overwrite. The default must be conflict-safe, not destructive.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
