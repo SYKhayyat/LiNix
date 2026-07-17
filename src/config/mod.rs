@@ -1,7 +1,8 @@
 #[allow(clippy::module_inception)]
 pub mod config;
 pub mod manifest;
-pub mod parser; // <-- added
+pub mod grammar;
+pub mod parser;
 
 pub use config::{Config, PruneScope};
 
