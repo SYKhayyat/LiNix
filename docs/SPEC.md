@@ -1632,9 +1632,9 @@ and a user who can see which of the three lines they meant to delete.
 
 | | |
 |---|---|
-| **C1** | `uninstall` never consults protection. `linix uninstall libc6` proceeds → **Phase 3** |
-| **C3** | lease and `absent:` removals skip protection, three lines above a drift branch that checks it → **Phase 3** |
-| **C8** | ghost-shell exit force-removes with no protection, no guard, no confirmation → **Phase 3** |
+| **C1** | ~~`uninstall` never consults protection. `linix uninstall libc6` proceeds~~ **DONE by architecture, verified 2026-07-17.** `handle_uninstall` undeclares then calls `handle_sync`; the removal is drift, and `SyncEngine::sync` runs `guard::enforce` (`GuardScope::Sync`) before touching anything — so `uninstall libc6` is refused (libc6 is protected). No direct-removal path bypasses sync. → **Phase 3** |
+| **C3** | ~~lease and `absent:` removals skip protection~~ **DONE, verified 2026-07-17.** Leases were deleted in Phase 2 (no lease removal path exists); `absent:` becomes drift removed by `sync`, which is guarded. → **Phase 3** |
+| **C8** | ~~ghost-shell exit force-removes with no protection, no guard, no confirmation~~ **DONE, verified 2026-07-17.** `cleanup_transient_env` builds a Remove graph and routes it through `engine.sync(changes, GuardScope::ShellExit)`, which runs `guard::enforce` first — the exit removal is guarded like every other. → **Phase 3** |
 | **C9** | lease expiry implemented twice with different semantics; the sweep runs on every state-changing command → **Phase 3** |
 | **C13** | **DONE (Phase 2r/2s).** The grammar is the one **statement** parser, and every non-validating `backend:name` splitter is gone. `config/manifest.rs` (`ManifestEngine`) was deleted whole in Phase 2n; `app/insight.rs`'s splitter is gone; `main.rs`'s last one (`lease set`) went with the retired `lease` command in 2s. **Re-measured 2026-07-17 — the splitters that remain are none of them the C13 risk:** `config/parser.rs:94` (`split_removal_target`) and `main.rs:686` (a `requires` target) both consult the registry before treating a prefix as a backend; `model/resolve.rs:522` extracts the *name* half of an already-resolved key; `parsers/ecosystem.rs:275` splits `name:ver`, not a backend. None reads an unvalidated backend name. → **Phase 2** (done) |
 | **B3** | `unprotected_packages` doesn't beat OS-essential; `linix protected` reports the opposite of what the guard does → **Phase 3** |
