@@ -1105,6 +1105,16 @@ implementing agent's call; that it goes is not.**
   "Mission-Critical", and the footer reads exactly "Automated Management via LiNix" — no version
   string at all (nothing to go stale).
 
+- **R7 — Strip all marketing language; "mission-critical" appears nowhere.** Replace the `--help`
+  tagline and crate docs with a genuinely descriptive line (what it *does*: a declarative package
+  manager — edit a file, sync the machine to match). This is a sweep, not one string. Kill every
+  "mission-critical", "high-performance", "DAG-based orchestration", "enterprise/blazing/world-class"
+  wherever it appears: `cli/args.rs:4-5`,`:12`,`:106`; `lib.rs:1`,`:3`; `notify.rs:153` (covered by
+  R6); `context.rs:76`; `services.rs:98`; `core/state.rs:118`; `bin/shim.rs:4`; `main.rs:50` comment.
+  Two of those log lines also carry stale hardcoded versions ("v3.6.0" at `services.rs:98`) — delete
+  the version, don't update it. The test: help and output should describe the tool plainly, the way
+  `apt`/`dnf` do, with zero adjectives selling it.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
