@@ -1762,16 +1762,25 @@ deleted.
 
 ## The next action, precisely
 
-**`uninstall` — the last inverted verb (S15).** `install` is now `declare` -> `sync`;
-`uninstall` still removes first and undeclares second, so the pair V.39 calls symmetric is
-not. The blocker is gone: sync removes drift by definition now, so `undeclare` -> `sync`
-removes the package. This is a small change and the guard is ready for it.
+**The planner's ordering phases (S12): repos → refresh indexes → packages → dependents.**
+This is the one substantial Phase 2 item still unbuilt, and the reason `repo:`, `shim:`,
+`service:` and `link:` lines resolve and then do nothing — they land in
+`DesiredState::extras`, which `resolve_desired_state` drops because the seam carries
+`.packages` only. `sync` warns for each by file and line (not silent), but nothing acts.
 
-Then the remaining deletions: **`groups_dir` (84 references)**, whose `config_root()` is
-still literally `groups_dir.parent()`; the **seven non-validating `split_once(':')`
-parsers**; `migrate` (606 lines, renamed to `adopt` rather than deleted, still telling users
-to run a command that does not exist); and **E6** — "unmanaged" has two implementations that
-will disagree.
+The shape: `sync` resolves the whole `DesiredState`, applies `repo:` FIRST (a package from a
+PPA is uninstallable without the PPA — this is the ordering that actually decides something),
+refreshes indexes, plans and executes packages as today, then applies the dependents
+(`service:`, `shim:`, `link:`) AFTER. `GraphAction` (`core/transaction.rs`) is `Install`/
+`Remove` only, and the seam says `core/` must not learn about repos — so the extras are
+applied by the `SyncEngine` around the package graph, not inside it. `RepoManager` already
+exists (`core/manager.rs:120`); services have `service_apply` (`main.rs:1413`); shims have
+`ShimManager` and already reconcile in sync; links have the `link` backend.
+
+**The remaining deletions** are smaller and independent: `groups_dir` (64 refs, down from
+84), whose `config_root()` is still `groups_dir.parent()`; the **six** non-validating
+`split_once(':')` parsers; and `migrate` (606 lines, renamed to `adopt`, still telling users
+to run a command that does not exist).
 
 ## Done in Phase 2l — `uninstall`, and the symmetric pair is symmetric again
 
