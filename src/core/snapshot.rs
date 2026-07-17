@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::core::{CommandExecutor, Error, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
@@ -22,6 +22,55 @@ impl Snapshot {
             .map(|dt| dt.with_timezone(&Utc))
             .ok()
     }
+
+    /// Recover a snapshot's creation time from the timestamp LiNix embeds in the id it
+    /// generates (S2). `list()` cannot get this from btrfs/zfs — their creation-time flags and
+    /// output formats vary by version — but every id LiNix makes carries the time in a fixed
+    /// shape:
+    ///
+    /// - btrfs: `linix_pre_<label>_<YYYYMMDDHHMMSS>`
+    /// - zfs:   `<dataset>@linix_<YYYYMMDD_HHMMSS>`
+    ///
+    /// The digits are local wall-clock (that is how `create()` formats them), so they are read
+    /// back as local time. Returns `None` for an id in neither shape — e.g. a snapshot LiNix
+    /// did not create — so the caller can fall back rather than trust a wrong time.
+    ///
+    /// This is the fix for the bug where `list()` stamped every snapshot with `Utc::now()`, so
+    /// each read as zero seconds old and age-based retention (`max_age_days`, `keep_days`) could
+    /// never fire — a retention policy that silently keeps everything (P3).
+    pub fn time_from_id(id: &str) -> Option<DateTime<Utc>> {
+        // zfs first: the part after the last `@linix_`, formatted `%Y%m%d_%H%M%S`.
+        if let Some(rest) = id.rsplit_once("@linix_") {
+            if let Ok(naive) = NaiveDateTime::parse_from_str(rest.1.trim(), "%Y%m%d_%H%M%S") {
+                return local_naive_to_utc(naive);
+            }
+        }
+        // btrfs: the trailing `_<14 digits>` group.
+        if let Some(tail) = id.rsplit('_').next() {
+            if tail.len() == 14 && tail.bytes().all(|b| b.is_ascii_digit()) {
+                if let Ok(naive) = NaiveDateTime::parse_from_str(tail, "%Y%m%d%H%M%S") {
+                    return local_naive_to_utc(naive);
+                }
+            }
+        }
+        None
+    }
+
+    /// The rfc3339 string for the [`Snapshot::time_from_id`] of `id`, or `None` if the id
+    /// carries no recognizable time. Used by `list()` to fill the `timestamp` field.
+    pub fn timestamp_from_id(id: &str) -> Option<String> {
+        Self::time_from_id(id).map(|t| t.to_rfc3339())
+    }
+}
+
+/// Interpret a naive datetime as local wall-clock (how snapshot ids are formatted) and convert
+/// to UTC. Ambiguous local times (a DST fall-back hour) resolve to the earlier instant, which
+/// for a retention age is close enough and never panics.
+fn local_naive_to_utc(naive: NaiveDateTime) -> Option<DateTime<Utc>> {
+    Local
+        .from_local_datetime(&naive)
+        .earliest()
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 #[async_trait]
@@ -80,8 +129,11 @@ impl SnapshotProvider for BtrfsProvider {
             .filter_map(|l| {
                 let id = l.split('/').next_back()?.trim();
                 Some(Snapshot {
+                    // S2: read the real creation time out of the id, not `Utc::now()` — else
+                    // every listed snapshot is zero seconds old and retention keeps them all.
+                    timestamp: Snapshot::timestamp_from_id(id)
+                        .unwrap_or_else(|| Utc::now().to_rfc3339()),
                     id: id.to_string(),
-                    timestamp: Utc::now().to_rfc3339(),
                     description: "BTRFS System State".into(),
                     backend: "btrfs".into(),
                 })
@@ -151,11 +203,16 @@ impl SnapshotProvider for ZfsProvider {
         Ok(out
             .lines()
             .filter(|l| l.contains("@linix_"))
-            .map(|l| Snapshot {
-                id: l.trim().to_string(),
-                timestamp: Utc::now().to_rfc3339(),
-                description: "ZFS Snapshot".into(),
-                backend: "zfs".into(),
+            .map(|l| {
+                let id = l.trim();
+                Snapshot {
+                    // S2: derive the age from the id, not `Utc::now()`.
+                    timestamp: Snapshot::timestamp_from_id(id)
+                        .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                    id: id.to_string(),
+                    description: "ZFS Snapshot".into(),
+                    backend: "zfs".into(),
+                }
             })
             .collect())
     }
@@ -497,5 +554,68 @@ impl SnapshotManager {
         } else {
             Err(Error::Snapshot("No active provider".into()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Build ids the way `create()` does, from a known local time, so a round-trip proves the
+    // parse regardless of the test machine's timezone.
+    fn btrfs_id(local: DateTime<Local>) -> String {
+        format!("linix_pre_pre_sync_{}", local.format("%Y%m%d%H%M%S"))
+    }
+    fn zfs_id(local: DateTime<Local>) -> String {
+        format!("tank/root@linix_{}", local.format("%Y%m%d_%H%M%S"))
+    }
+
+    #[test]
+    fn btrfs_id_round_trips_to_its_creation_time() {
+        let t = Local.with_ymd_and_hms(2026, 7, 17, 14, 30, 22).unwrap();
+        let parsed = Snapshot::time_from_id(&btrfs_id(t)).expect("btrfs id carries a time");
+        assert_eq!(parsed, t.with_timezone(&Utc));
+    }
+
+    #[test]
+    fn zfs_id_round_trips_to_its_creation_time() {
+        let t = Local.with_ymd_and_hms(2026, 7, 17, 14, 30, 22).unwrap();
+        let parsed = Snapshot::time_from_id(&zfs_id(t)).expect("zfs id carries a time");
+        assert_eq!(parsed, t.with_timezone(&Utc));
+    }
+
+    #[test]
+    fn an_older_id_parses_to_an_earlier_time_than_a_newer_one() {
+        // The property retention actually depends on: order is preserved.
+        let older = Local.with_ymd_and_hms(2026, 7, 10, 9, 0, 0).unwrap();
+        let newer = Local.with_ymd_and_hms(2026, 7, 17, 9, 0, 0).unwrap();
+        assert!(
+            Snapshot::time_from_id(&btrfs_id(older)).unwrap()
+                < Snapshot::time_from_id(&btrfs_id(newer)).unwrap()
+        );
+    }
+
+    #[test]
+    fn an_id_with_no_embedded_time_returns_none() {
+        // A snapshot LiNix did not create, or a malformed id: no guess, so the caller falls
+        // back rather than trusting a wrong time.
+        assert!(Snapshot::time_from_id("some_manual_snapshot").is_none());
+        assert!(Snapshot::time_from_id("tank/root@weekly-2026").is_none());
+        // Right shape, non-numeric tail.
+        assert!(Snapshot::time_from_id("linix_pre_sync_notadate12").is_none());
+    }
+
+    #[test]
+    fn a_parsed_snapshot_reads_its_real_age_not_zero() {
+        // The bug in one assertion: a snapshot created a week ago must NOT read as ~now.
+        let a_week_ago = Local::now() - ChronoDuration::days(7);
+        let snap = Snapshot {
+            id: btrfs_id(a_week_ago),
+            timestamp: Snapshot::timestamp_from_id(&btrfs_id(a_week_ago)).unwrap(),
+            description: "test".into(),
+            backend: "btrfs".into(),
+        };
+        let age = Utc::now() - snap.parse_time().unwrap();
+        assert!(age.num_days() >= 6, "age should be ~7 days, was {:?}", age);
     }
 }
