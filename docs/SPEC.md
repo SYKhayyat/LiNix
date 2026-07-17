@@ -1193,6 +1193,14 @@ implementing agent's call; that it goes is not.**
   (e.g. appending `Brewfile` lines), never a blind replace; (c) `--force` for a deliberate plain
   overwrite. The default must be conflict-safe, not destructive.
 
+- **R18 — `rollback` must refuse to apply unconfirmed in a non-interactive shell, like `sync` does.**
+  In `rollback_to` (`main.rs:1897-1911`) the confirmation TUI runs only `if stdin().is_terminal()`, so
+  a non-interactive shell (pipe/CI/cron) without `--yes` skips the check and falls through to apply.
+  `handle_sync` in the same case hard-bails ("Refusing to apply changes without confirmation in a
+  non-interactive shell", `main.rs:450-457`). So `echo | linix rollback <gen>` applies unprompted. It
+  still routes through `GuardScope::Rollback` (protected packages safe), but the missing confirmation
+  is a real sibling inconsistency. Fix: mirror `sync` — bail without `--yes` in a non-interactive shell.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
