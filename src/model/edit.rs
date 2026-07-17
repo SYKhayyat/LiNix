@@ -467,7 +467,7 @@ pub(crate) enum Match {
 /// `service:nginx`, `shim:jq` — the identity of a non-package statement.
 fn other_key(stmt: &Statement) -> Option<String> {
     match stmt {
-        Statement::Repo(s) => Some(format!("repo:{}", s)),
+        Statement::Repo { backend, spec } => Some(format!("repo:{}:{}", backend, spec)),
         Statement::Shim(n, _) => Some(format!("shim:{}", n)),
         Statement::Schedule(n, _) => Some(format!("schedule:{}", n)),
         Statement::Service(n, _) => Some(format!("service:{}", n)),

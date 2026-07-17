@@ -201,7 +201,7 @@ NAME                          bare package — backend resolved via `priority`, 
 BACKEND:NAME                  explicit backend
 BACKEND:re:PATTERN            regex — matches names in that backend
 absent:BACKEND:NAME           declare it must not exist
-repo:SPEC                     a repository
+repo:BACKEND:SPEC             a repository, for that backend
 shim:NAME                     a shim
 schedule:NAME                 a scheduled task (only in `schedules`)
 service:NAME                  a service
@@ -724,7 +724,7 @@ One package, recoverable, snapshot has your back.
 
 | Today | Becomes |
 |---|---|
-| `linix repo add` (**stores nothing**) | `repo:ppa:deadsnakes/ppa` |
+| `linix repo add` (**stores nothing**) | `repo:apt:ppa:deadsnakes/ppa` |
 | `linix shim jq --source cargo:jq` (**`--source` discarded unread**) | `shim:jq@source=cargo:jq` |
 | `linix hold jq` (machine-local `registry.json`) | `apt:jq@hold` |
 | hooks table in config | `apt:nginx@after_install=./setup.sh` |
@@ -736,7 +736,7 @@ One package, recoverable, snapshot has your back.
 A repo and the package needing it are **one fact**:
 ```
 module python-latest {
-  repo:ppa:deadsnakes/ppa
+  repo:apt:ppa:deadsnakes/ppa
   apt:python3.12
 }
 ```
@@ -1044,6 +1044,19 @@ catches typos and makes your backend set declared rather than inherited.
 lands on cargo today, Ubuntu adds it tomorrow, and the same unchanged line resolves to apt:
 LiNix uninstalls from cargo and installs from apt because a repo you don't control changed.
 **The bare name is the question; the lock is the answer.**
+
+**V.47 — Why a `repo:` line names its backend.** *(Decided 2026-07-17.)* A repository belongs
+to exactly one package manager — a PPA is apt's, a COPR is dnf's, and `add-apt-repository`
+run against dnf is a system command that fails, or worse, half-succeeds. A bare `repo:SPEC`
+would make LiNix guess which backend, and the honest ways to guess are all wrong: a
+prefix→backend table (`ppa:`→apt) is a second copy of a fact each backend already owns and grows
+with every ecosystem (P4); "the one system backend in `priority`" fails at run time on the
+machine where the guess is wrong, which is the machine you least want a repo command
+misfiring on. So the backend is named, exactly as a package line names one: `repo:apt:ppa:...`.
+It is refused when the backend is not in `priority` (V.15), and a bare `repo:` is a parse
+error that says so — caught in the file, not at the command. **The repo and the package it
+serves already sit together in a module (II.16); naming the backend once more is the cost of
+never running the wrong tool.**
 
 **V.17 — Why regex is live by default.** "Give me all the fonts, including ones that don't
 exist yet" is real. Mandatory locking turns a living pattern into a frozen list and defeats
@@ -1374,7 +1387,7 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S8** | **`undo` lies about scope; there is no safety hole. DECIDED 2026-07-16.** What `undo` does: list filesystem snapshots, mount the chosen one read-only, read the `registry.json` *inside* it, diff that against now, show a package-level summary, and on confirmation hand the snapshot to btrfs/timeshift to restore. `FORBIDDEN_PATHS` guards step 3 only — which directory `undo` will read a registry out of, so a crafted path cannot make it parse `/etc/shadow` as JSON. That is a real check doing a real job. Its *name and comment* claim "paths NEVER allowed to be accessed", and restore goes over `/` including all of them. So the defect is the false claim, not the check. **Keep** the check (renamed to say it guards the snapshot-read path); **delete** the global claim; **keep** `undo` (nothing else turns a snapshot into a package diff), but restore must state plainly that it rolls back the entire filesystem before asking. Gating restore on the list would refuse every root snapshot, i.e. delete `undo` by accident → **Phase 3** |
 | **S9** | ~~`remove_package_from_local` (`parser.rs:290`) matches a bare target against the BACKEND prefix~~ — **FIXED in Phase 2e, and this row was stale in three ways (2026-07-17).** The function is gone (`grep` empty). The removal path is now `model/edit.rs:378` `matches()`, which parses each line **through the grammar** and compares `d.selector`, never the prefix; regression test at `edit.rs:669` (`npm:typescript` survives, `apt:npm` dies). **It did not "die with `local.txt`" — it died of `edit.rs`, and `local.txt` still has readers** (`insight.rs:418`). ~~→ **Phase 2**~~ **Nothing owed.** *(Both surviving prefix-splitters were checked for this defect shape and do not have it — `insight.rs:429` requires both halves, `manifest.rs:90` matches the name half.)* |
 | **S10** | **`cargo test` wrote to the developer's REAL data dir**, and one bad file bricks every command. `TestKernel` (named `linix_hermetic_`) isolated `registry.json`, groups and tmp, but `Journal::new()` hardcoded `safe_data_dir()` — found at 733KB of test noise in `%APPDATA%/linix/journal.json`. Fixed in Phase 2b by injection (`Journal::at`). **The remaining half is real:** `Journal::load_sync` errors on a bad parse -> `App::new` fails -> EVERY command fails, with no message saying which file to delete or how to recover. Failing loud is right (P3); having no way out is not → **Phase 5** |
-| **S12** | **`repo:`, `shim:`, `service:`, `link:` and `schedule:` lines parse, resolve, and are then dropped on the floor.** The seam is `HashMap<backend, Vec<PackageSpec>>` and these are not packages, so `Resolver::resolve` collects them into `DesiredState::extras` and `resolve_desired_state` — which returns only `.packages` — discards them. Nothing downstream has ever consumed them. A `repo:ppa:deadsnakes/ppa` line therefore does exactly nothing, silently, which is VI.1's disease with new syntax. Not a regression (the syntax is new in Phase 1) but it must not ship: `sync` warns for now, naming each ignored line and its file. The fix is the ordering phases — repos → index refresh → packages → dependents — which is what `extras` was collected for → **Phase 2** (planner ordering) |
+| **S12** | **`repo:` is APPLIED now (Phase 2o); `shim:`, `service:`, `link:`, `schedule:` still resolve and do nothing.** These land in `DesiredState::extras`, which the old `resolve_desired_state` dropped because the seam carries `.packages` only. `sync` resolves the whole state now: **`App::apply_repositories` runs `repo:` lines first — add repo, refresh index — before the package plan (II.7's ordering), verified against the binary.** Each repo names its backend (V.47) and a backend not in `priority` is refused in the file (V.15). The other three extras still `warn!` by file and line — the remaining ordering phases (`service:`/`shim:`/`link:` as dependents, AFTER packages) are the rest of this item → **Phase 2** (planner ordering)
 | **S13** | **A bare name and an explicit one were two packages, not one.** `model::resolve` keys the merge on `backend:name`, and a bare `ripgrep` is keyed `?:ripgrep` until something probes it — so `ripgrep` in one module and `cargo:ripgrep` in another never met, never reconciled, and both reached the planner. Found while wiring the seam and **fixed there**: `Resolver::statements()` and `Resolver::collect()` are now separate, the caller probes in between, and `with_bare` hands the answers back so the merge sees real backends. II.7 rule 5 was silently not applying to every bare line → **Phase 2** (fixed) |
 | **S19** | **`@lease=2h` still worked by hand, and it was the one option key that could uninstall your package. FIXED.** II.16 retired it — nothing LiNix writes used it — but `StateRegistry::add` still read `options["lease"]` and turned it into a real `expires_at`, and **the grammar validated no option keys at all**, so a hand-written `apt:jq@lease=2h` was silently a package that uninstalls itself, on the `sweep_expired_leases` path C3 says bypasses the guard. Both halves closed: **II.2's key table is now enforced by the grammar** (an unknown key is an error naming the file and line, and `@lease` gets a hint pointing at `@expires=<absolute>`), and `state.rs` no longer reads `lease`/`duration`. **This was Phase 1's job** — "unit tests for every grammar rule above, including every error case" — and II.2's table was the one rule with no test → **Phase 1** (fixed in 2l) |
 | **S18** | **`auto_lock_checksums` rewrote your module files on every sync. FIXED (Phase 2n) by deletion.** It spliced `@sha256=…` into the line you wrote — II.16 says LiNix must not rewrite your files, and a checksum is a generated fact, which II.6 keeps in `locks/`. The whole `attempt_auto_lock` path is gone, and with it `ManifestEngine` (its last caller): a second file-editor with its own `split_once(':')` parser (C13), `load_locks`/`update_lock`/`manifest_files` all already dead. `groups_dir` refs 77 → 64. **The supply-chain intent survives, unbuilt:** recording an artifact's hash so a changed artifact is caught (II.12) belongs in `locks/<backend>.toml` → **Phase 4** (locks and git) |
@@ -1812,6 +1825,24 @@ did not before (C1).
 
 **Found: S19** — `@lease=2h` still works by hand, and it is the one option key that can
 uninstall your package, on a path C3 says bypasses the guard.
+
+## Done in Phase 2o — repos, the first ordering phase
+
+**`repo:` lines are applied (S12, partly).** They resolved and were dropped; now `sync`
+resolves the whole `DesiredState` and `App::apply_repositories` runs the `repo:` lines FIRST
+— add the repository, then refresh that backend's index — before the package plan. This is
+II.7's ordering, and it is the one that decides something: a package from a PPA cannot
+install until the PPA is added and `apt update` has seen it. Verified against the binary: the
+add and the refresh log before the flight plan.
+
+**The owner decided how a `repo:` names its backend (V.47):** explicitly, like a package line
+— `repo:apt:ppa:deadsnakes/ppa`. A repository belongs to one manager, and guessing runs the
+wrong system command. A bare `repo:ppa:...` is a parse error, and a backend not in `priority`
+is refused in the file (V.15) — both caught before any command runs.
+
+**Still owed on S12:** `shim:`, `service:` and `link:` as the *dependent* phase, applied
+AFTER packages. They still resolve and `warn!` by file and line. `schedule:` belongs to the
+scheduler, not the sync ordering.
 
 ## Done in Phase 2j/2k — the commands that still read the deleted model
 

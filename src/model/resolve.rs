@@ -342,6 +342,16 @@ impl<'a> Resolver<'a> {
             let (decl, present) = match stmt {
                 Statement::Package(d) => (d, true),
                 Statement::Absent(d) => (d, false),
+                // V.47/V.15: a `repo:` names a backend, and a backend not in `priority` is
+                // one LiNix does not use — refused here so `sync`, `plan` and `check` all
+                // say the same thing, in the file, rather than at the add command.
+                Statement::Repo { backend, spec } if !self.priority.allows(&backend) => {
+                    return Err(self.priority.reject(&backend, &origin).with_hint(format!(
+                        "add `{}` to `priority` to use `repo:{}:{}`. Not listed means LiNix \
+                         does not use it at all.",
+                        backend, backend, spec
+                    )));
+                }
                 other => {
                     out.extras.push((other, origin));
                     continue;
@@ -465,7 +475,7 @@ fn set_key(stmt: &Statement) -> String {
             Some(b) => format!("{}:{}", b, d.selector.as_str()),
             None => d.selector.as_str().to_string(),
         },
-        Statement::Repo(s) => format!("repo:{}", s),
+        Statement::Repo { backend, spec } => format!("repo:{}:{}", backend, spec),
         Statement::Shim(n, _) => format!("shim:{}", n),
         Statement::Schedule(n, _) => format!("schedule:{}", n),
         Statement::Service(n, _) => format!("service:{}", n),
@@ -710,14 +720,42 @@ mod tests {
     }
 
     #[test]
+    fn a_repo_carries_its_backend() {
+        // V.47: a repo names the package manager that owns it.
+        let f = fx(
+            "Work\n",
+            &[("Work", "use py\n")],
+            &[("py.txt", "repo:apt:ppa:deadsnakes/ppa\napt:python3.12\n")],
+        );
+        let d = resolve(&f).unwrap();
+        let repo = d.extras.iter().find_map(|(s, _)| match s {
+            Statement::Repo { backend, spec } => Some((backend.clone(), spec.clone())),
+            _ => None,
+        });
+        assert_eq!(repo, Some(("apt".into(), "ppa:deadsnakes/ppa".into())));
+    }
+
+    #[test]
+    fn a_repo_for_a_backend_not_in_priority_is_refused() {
+        // V.47/V.15. `snap` is not in this fixture's priority (apt, cargo).
+        let f = fx(
+            "Work\n",
+            &[("Work", "use py\n")],
+            &[("py.txt", "repo:snap:whatever\n")],
+        );
+        let err = resolve(&f).unwrap_err();
+        assert!(err.what.contains("isn't in your priority list"), "{}", err);
+    }
+
+    #[test]
     fn extras_are_carried_in_declaration_order() {
         let f = fx(
             "Work\n",
             &[("Work", "use py\n")],
-            &[("py.txt", "repo:ppa:deadsnakes/ppa\napt:python3.12\n")],
+            &[("py.txt", "repo:apt:ppa:deadsnakes/ppa\napt:python3.12\n")],
         );
         let d = resolve(&f).unwrap();
-        assert!(matches!(d.extras[0].0, Statement::Repo(_)));
+        assert!(matches!(d.extras[0].0, Statement::Repo { .. }));
         assert_eq!(names(&d, "apt"), ["python3.12"]);
     }
 

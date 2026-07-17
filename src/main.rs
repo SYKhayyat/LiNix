@@ -384,8 +384,15 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), locked)
             .await;
-    let desired = resolver.resolve_desired_state().await?;
+    // The whole desired state, extras included — repos must be applied before packages
+    // (II.7), so `sync` needs more than the package map here.
+    let state = resolver.resolve_model().await?;
+    let desired = state.packages.clone();
     enforce_policy(app, &desired).await?;
+
+    // Ordering phase 1: repos → refresh indexes. A package from a PPA cannot install until
+    // the PPA is added, so this runs before the package plan (not inside it).
+    app.apply_repositories(&state).await?;
 
     let mut changes = {
         let state_guard = app.state.lock().await;

@@ -135,10 +135,14 @@ impl<'a> StateResolver<'a> {
             warn!("`{}` at {} has expired and no longer counts.", key, origin);
         }
 
-        // S12: repos, shims, services, links and schedules resolve and then have nowhere to
-        // go — the seam carries packages, and the planner does not order them yet. Saying so
-        // is the difference between "not built yet" and a line that does nothing forever.
+        // S12: `repo:` is applied by `sync` (App::apply_repositories) before the package
+        // plan. The rest — shim:, service:, link:, schedule: — still resolve and then have
+        // nowhere to go, so warn for those, by file and line. Saying so is the difference
+        // between "not built yet" and a line that does nothing forever.
         for (stmt, origin) in &state.extras {
+            if matches!(stmt, Statement::Repo { .. }) {
+                continue;
+            }
             warn!(
                 "{}: this line is not applied yet — LiNix does not act on {} lines at this \
                  point in the rewrite.",
@@ -397,7 +401,7 @@ impl<'a> StateResolver<'a> {
 /// The word for a non-package statement, for the message that says it is not applied yet.
 fn extra_kind(stmt: &Statement) -> &'static str {
     match stmt {
-        Statement::Repo(_) => "repo:",
+        Statement::Repo { .. } => "repo:",
         Statement::Shim(_, _) => "shim:",
         Statement::Schedule(_, _) => "schedule:",
         Statement::Service(_, _) => "service:",

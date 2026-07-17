@@ -264,7 +264,7 @@ fn merge_options(stmt: &mut Statement, extra: Options, origin: &Origin) -> Resul
         | Statement::Schedule(_, o)
         | Statement::Service(_, o)
         | Statement::Link(_, o) => o,
-        Statement::Repo(_)
+        Statement::Repo { .. }
         | Statement::Use(_)
         | Statement::Exclude(_)
         | Statement::Intersect(_)
@@ -442,7 +442,7 @@ mod tests {
              apt:curl\n\
              apt:re:^fonts-\n\
              absent:apt:libreoffice\n\
-             repo:ppa:deadsnakes/ppa\n\
+             repo:apt:ppa:deadsnakes/ppa\n\
              shim:jq@source=cargo:jq\n\
              service:nginx@enabled=true\n\
              link:/home/me/.vimrc\n\
@@ -450,7 +450,7 @@ mod tests {
         );
         assert_eq!(out.len(), 9);
         assert!(matches!(out[3], Statement::Absent(_)));
-        assert!(matches!(out[4], Statement::Repo(_)));
+        assert!(matches!(out[4], Statement::Repo { .. }));
         assert!(matches!(out[8], Statement::Use(Reference::Module(_))));
     }
 

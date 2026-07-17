@@ -70,7 +70,9 @@ pub enum Statement {
     /// `absent:BACKEND:NAME` — declare it must not exist. The one thing LiNix may remove
     /// that it does not manage, because you named it (V.7).
     Absent(PackageDecl),
-    Repo(String),
+    /// `repo:BACKEND:SPEC` — a repository, for a named backend (V.47). A PPA is apt's, a
+    /// COPR dnf's; guessing the backend runs the wrong system command, so it is named.
+    Repo { backend: String, spec: String },
     Shim(String, Options),
     Schedule(String, Options),
     Service(String, Options),
@@ -180,11 +182,33 @@ pub fn parse(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result
     }
 
     if let Some(rest) = line.strip_prefix("repo:") {
-        let spec = rest.trim();
-        if spec.is_empty() {
-            return Err(GrammarError::new(origin.clone(), "`repo:` names no repository"));
+        let rest = rest.trim();
+        // `repo:apt:ppa:deadsnakes/ppa` — backend, then the spec (which has its own colons).
+        let Some((backend, spec)) = rest.split_once(':') else {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`repo:{}` does not name a backend", rest),
+            )
+            .with_hint(
+                "a repository belongs to one package manager, so name it:                  `repo:apt:ppa:deadsnakes/ppa`. A PPA is apt's, a COPR is dnf's.",
+            ));
+        };
+        let (backend, spec) = (backend.trim(), spec.trim());
+        if backend.is_empty() || spec.is_empty() {
+            return Err(GrammarError::new(origin.clone(), "`repo:` needs `backend:spec`")
+                .with_hint("for example `repo:apt:ppa:deadsnakes/ppa`."));
         }
-        return Ok(Statement::Repo(spec.to_string()));
+        if !backends.is_backend(backend) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`{}` is not a backend", backend),
+            )
+            .with_hint("name the package manager that owns this repository, e.g. `apt`."));
+        }
+        return Ok(Statement::Repo {
+            backend: backend.to_string(),
+            spec: spec.to_string(),
+        });
     }
 
     for (prefix, build) in [
@@ -617,10 +641,24 @@ mod tests {
 
     #[test]
     fn repo_and_the_package_needing_it_are_both_statements() {
+        // V.47: the backend is named, and the spec keeps its own colons.
         assert_eq!(
-            p("repo:ppa:deadsnakes/ppa").unwrap(),
-            Statement::Repo("ppa:deadsnakes/ppa".into())
+            p("repo:apt:ppa:deadsnakes/ppa").unwrap(),
+            Statement::Repo {
+                backend: "apt".into(),
+                spec: "ppa:deadsnakes/ppa".into()
+            }
         );
+    }
+
+    #[test]
+    fn a_repo_without_a_backend_is_refused() {
+        // A repository belongs to one package manager; guessing runs the wrong system
+        // command (V.47). `snap` isn't in this test's known set, so it also proves the
+        // backend is validated.
+        let err = p("repo:ppa:deadsnakes/ppa").unwrap_err();
+        assert!(err.what.contains("not a backend"), "{}", err);
+        assert!(err.hint.unwrap().contains("apt"));
     }
 
     #[test]
