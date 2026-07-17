@@ -1387,7 +1387,7 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S8** | **`undo` lies about scope; there is no safety hole. DECIDED 2026-07-16.** What `undo` does: list filesystem snapshots, mount the chosen one read-only, read the `registry.json` *inside* it, diff that against now, show a package-level summary, and on confirmation hand the snapshot to btrfs/timeshift to restore. `FORBIDDEN_PATHS` guards step 3 only — which directory `undo` will read a registry out of, so a crafted path cannot make it parse `/etc/shadow` as JSON. That is a real check doing a real job. Its *name and comment* claim "paths NEVER allowed to be accessed", and restore goes over `/` including all of them. So the defect is the false claim, not the check. **Keep** the check (renamed to say it guards the snapshot-read path); **delete** the global claim; **keep** `undo` (nothing else turns a snapshot into a package diff), but restore must state plainly that it rolls back the entire filesystem before asking. Gating restore on the list would refuse every root snapshot, i.e. delete `undo` by accident → **Phase 3** |
 | **S9** | ~~`remove_package_from_local` (`parser.rs:290`) matches a bare target against the BACKEND prefix~~ — **FIXED in Phase 2e, and this row was stale in three ways (2026-07-17).** The function is gone (`grep` empty). The removal path is now `model/edit.rs:378` `matches()`, which parses each line **through the grammar** and compares `d.selector`, never the prefix; regression test at `edit.rs:669` (`npm:typescript` survives, `apt:npm` dies). **It did not "die with `local.txt`" — it died of `edit.rs`, and `local.txt` still has readers** (`insight.rs:418`). ~~→ **Phase 2**~~ **Nothing owed.** *(Both surviving prefix-splitters were checked for this defect shape and do not have it — `insight.rs:429` requires both halves, `manifest.rs:90` matches the name half.)* |
 | **S10** | **`cargo test` wrote to the developer's REAL data dir**, and one bad file bricks every command. `TestKernel` (named `linix_hermetic_`) isolated `registry.json`, groups and tmp, but `Journal::new()` hardcoded `safe_data_dir()` — found at 733KB of test noise in `%APPDATA%/linix/journal.json`. Fixed in Phase 2b by injection (`Journal::at`). **The remaining half is real:** `Journal::load_sync` errors on a bad parse -> `App::new` fails -> EVERY command fails, with no message saying which file to delete or how to recover. Failing loud is right (P3); having no way out is not → **Phase 5** |
-| **S12** | **`repo:` is APPLIED now (Phase 2o); `shim:`, `service:`, `link:`, `schedule:` still resolve and do nothing.** These land in `DesiredState::extras`, which the old `resolve_desired_state` dropped because the seam carries `.packages` only. `sync` resolves the whole state now: **`App::apply_repositories` runs `repo:` lines first — add repo, refresh index — before the package plan (II.7's ordering), verified against the binary.** Each repo names its backend (V.47) and a backend not in `priority` is refused in the file (V.15). The other three extras still `warn!` by file and line — the remaining ordering phases (`service:`/`shim:`/`link:` as dependents, AFTER packages) are the rest of this item → **Phase 2** (planner ordering)
+| **S12** | **DONE (Phase 2o + 2p). All the extras now have somewhere to go.** They land in `DesiredState::extras`, which the old `resolve_desired_state` dropped because the seam carries `.packages` only; `sync` resolves the whole `DesiredState` now and applies the extras in II.7's ordering. **Phase 1 — `App::apply_repositories`:** `repo:` lines FIRST (add repo, refresh index) before the package plan, each repo naming its backend (V.47), a backend not in `priority` refused in the file (V.15). **Phase 3 — `App::apply_dependents`:** `shim:`, `service:`, `link:` AFTER the package plan executes — a shim wraps a tool that must already be installed, a service enables a unit a package just laid down, a link writes a config a package expects, so they are the *dependent* phase and cannot be interleaved with packages. Applied in declaration order (a config `link:` above the `service:` that reads it keeps that order). A dependents-only config (no package changes) still runs the phase — the "System matches" exit checks `has_dependents()`. Verified against the binary: `schedule:` warns (file:line), Flight plan installs the package, THEN service → link → shim preview. **Only `schedule:` is still unwired** — the scheduler owns it, not `sync` — and it is now the one line the resolver warns about. **Not yet built: drift for extras** (reconciling away a *removed* `service:`/`link:`/`shim:` line — the forward direction is done, the teardown is not) and `watch` still uses `resolve_desired_state` (packages only), so it skips the dependent phase → **Phase 2** (extras drift + `watch`)
 | **S13** | **A bare name and an explicit one were two packages, not one.** `model::resolve` keys the merge on `backend:name`, and a bare `ripgrep` is keyed `?:ripgrep` until something probes it — so `ripgrep` in one module and `cargo:ripgrep` in another never met, never reconciled, and both reached the planner. Found while wiring the seam and **fixed there**: `Resolver::statements()` and `Resolver::collect()` are now separate, the caller probes in between, and `with_bare` hands the answers back so the merge sees real backends. II.7 rule 5 was silently not applying to every bare line → **Phase 2** (fixed) |
 | **S19** | **`@lease=2h` still worked by hand, and it was the one option key that could uninstall your package. FIXED.** II.16 retired it — nothing LiNix writes used it — but `StateRegistry::add` still read `options["lease"]` and turned it into a real `expires_at`, and **the grammar validated no option keys at all**, so a hand-written `apt:jq@lease=2h` was silently a package that uninstalls itself, on the `sweep_expired_leases` path C3 says bypasses the guard. Both halves closed: **II.2's key table is now enforced by the grammar** (an unknown key is an error naming the file and line, and `@lease` gets a hint pointing at `@expires=<absolute>`), and `state.rs` no longer reads `lease`/`duration`. **This was Phase 1's job** — "unit tests for every grammar rule above, including every error case" — and II.2's table was the one rule with no test → **Phase 1** (fixed in 2l) |
 | **S18** | **`auto_lock_checksums` rewrote your module files on every sync. FIXED (Phase 2n) by deletion.** It spliced `@sha256=…` into the line you wrote — II.16 says LiNix must not rewrite your files, and a checksum is a generated fact, which II.6 keeps in `locks/`. The whole `attempt_auto_lock` path is gone, and with it `ManifestEngine` (its last caller): a second file-editor with its own `split_once(':')` parser (C13), `load_locks`/`update_lock`/`manifest_files` all already dead. `groups_dir` refs 77 → 64. **The supply-chain intent survives, unbuilt:** recording an artifact's hash so a changed artifact is caught (II.12) belongs in `locks/<backend>.toml` → **Phase 4** (locks and git) |
@@ -1776,20 +1776,16 @@ deleted.
 
 ## The next action, precisely
 
-**The planner's ordering phases (S12): repos → refresh indexes → packages → dependents.**
-This is the one substantial Phase 2 item still unbuilt, and the reason `repo:`, `shim:`,
-`service:` and `link:` lines resolve and then do nothing — they land in
-`DesiredState::extras`, which `resolve_desired_state` drops because the seam carries
-`.packages` only. `sync` warns for each by file and line (not silent), but nothing acts.
+**S12 is done — all three ordering phases are built and verified** (repos before packages,
+packages, dependents after). What is left in Phase 2 is two kinds of work: the remaining
+deletions, and two S12 follow-ups that are new (not the forward direction, which is done).
 
-The shape: `sync` resolves the whole `DesiredState`, applies `repo:` FIRST (a package from a
-PPA is uninstallable without the PPA — this is the ordering that actually decides something),
-refreshes indexes, plans and executes packages as today, then applies the dependents
-(`service:`, `shim:`, `link:`) AFTER. `GraphAction` (`core/transaction.rs`) is `Install`/
-`Remove` only, and the seam says `core/` must not learn about repos — so the extras are
-applied by the `SyncEngine` around the package graph, not inside it. `RepoManager` already
-exists (`core/manager.rs:120`); services have `service_apply` (`main.rs:1413`); shims have
-`ShimManager` and already reconcile in sync; links have the `link` backend.
+**S12 follow-ups:** *drift for extras* — a `service:`/`link:`/`shim:` line the user removed
+should be reconciled away, but the planner tracks package drift only, so a removed extra
+lingers; and `watch`, which resolves with `resolve_desired_state` (packages only) and so
+never runs `apply_dependents`. Making `watch` call `resolve_model` + `apply_dependents` is the
+small half; extras-drift needs the planner (or a sibling of it) to know what extras were
+applied last time, which is state it does not record yet.
 
 **The remaining deletions** are smaller and independent: `groups_dir` (**41** refs, down from
 84), whose `config_root()` is still `groups_dir.parent()`; and the **one** non-validating
@@ -1842,9 +1838,41 @@ add and the refresh log before the flight plan.
 wrong system command. A bare `repo:ppa:...` is a parse error, and a backend not in `priority`
 is refused in the file (V.15) — both caught before any command runs.
 
-**Still owed on S12:** `shim:`, `service:` and `link:` as the *dependent* phase, applied
-AFTER packages. They still resolve and `warn!` by file and line. `schedule:` belongs to the
-scheduler, not the sync ordering.
+**~~Still owed on S12~~ — done in Phase 2p (below):** `shim:`, `service:` and `link:` as the
+*dependent* phase, applied AFTER packages. `schedule:` belongs to the scheduler, not the sync
+ordering, and stays owed.
+
+## Done in Phase 2p — dependents, the third ordering phase (S12 done)
+
+**`shim:`, `service:` and `link:` are applied AFTER packages (S12 closed).** `App::apply_dependents`
+is the mirror of `apply_repositories`: it walks `DesiredState::dependents()` — the extras that
+lean on a package — and dispatches each. A `service:` becomes a `service`-backend install
+(`systemctl enable`, `sc config`, `rc-update add` — whatever the host's init is); a `link:`
+becomes a `link`-backend install (symlink / rendered template / decrypted secret / managed
+content); a `shim:` deploys through `ShimManager`. They run in **declaration order**, so a
+config `link:` written above the `service:` that reads it keeps that order.
+
+**Why a distinct phase and not part of the package plan:** each one presupposes a package —
+a shim wraps a binary that must already be on disk, a service enables a unit a package just
+installed, a link writes the config a package expects. So they wait for the whole package
+plan to finish; they cannot be interleaved. `DesiredState` grew `dependents()` (the three
+after-package extras, in order) and `has_dependents()`, and `sync`'s "System matches" exit
+now checks the latter — a config that is all `service:`/`link:`/`shim:` and no package
+changes is still work, and previously would have exited "nothing to do".
+
+**Verified against the binary.** A repo + package + `service:` + `link:` + `shim:` + `schedule:`
+config, `sync --dry-run`: `schedule:` warns by file and line, the Flight plan installs the
+package, THEN service → link → shim preview — in that order, after the packages. A
+dependents-only config previews the three and does *not* say "System matches"; a truly empty
+config does. Tests: `dependents_are_the_after_package_extras_only` and
+`a_config_with_no_extras_has_no_dependents` (model), `dependents_only_config_resolves_and_applies_the_dependent_phase`
+(integration, hermetic). 528 pass, clippy silent.
+
+**Still owed (not S12's forward direction — new, smaller items):** *drift for extras* —
+reconciling away a `service:`/`link:`/`shim:` line the user *removed* (the forward direction
+is done; the teardown is not, because the planner tracks package drift, not extra drift); and
+`watch`, which still resolves with `resolve_desired_state` (packages only) and so skips the
+dependent phase. Both are Phase 2 follow-ups.
 
 ## Done in Phase 2j/2k — the commands that still read the deleted model
 
@@ -1973,11 +2001,11 @@ that says `use x`.
       actually has (V.41), ordered by V.14's one real rule, with its reason in the file (P5).
       Verified by running it: it produces a repo that resolves. **S14**: the generated list
       still includes `service`/`link`/`web`/`github`, which are not package managers.
-- [ ] **S12** — `repo:`, `shim:`, `service:`, `link:` and `schedule:` lines resolve into
-      `DesiredState::extras` and are then dropped at the seam, because the seam carries
-      packages. `sync` warns for each by file and line so it is not silent, but they do
-      nothing. The ordering phases below are the fix — that is what `extras` was collected
-      for.
+- [x] **S12 — done (Phase 2o + 2p).** `repo:` applies before packages (`apply_repositories`),
+      `shim:`/`service:`/`link:` apply after (`apply_dependents`), in declaration order. The
+      extras that used to be dropped at the seam are now walked off `DesiredState::extras`
+      around the package graph. Only `schedule:` still warns by file and line — the scheduler
+      owns it. Follow-ups (extras-drift, `watch`) noted in "The next action, precisely".
 - [x] **`local.txt` and `_active_profiles.txt` are deleted** (Phase 2e, 2f). S9 died with
       `local.txt`. *Corrected: Phase 2e's commit said `line_declares` was deleted; that was
       true of `config/parser.rs` and **there was a second copy in `insight.rs`** — deleted in
@@ -1987,7 +2015,9 @@ that says `use x`.
 - [ ] Delete the old parsers now that `config/grammar/` is the one parser (C13).
 - [x] **E6** — `unmanaged` is one function now, *"what `adopt` would adopt"* (Phase 2m).
       **E7** fixed with it: adopt takes protected packages; only OS-essential is held back.
-- [ ] Planner ordering phases: repos → index refresh → packages → dependents.
+- [x] **Ordering phases: repos → index refresh → packages → dependents (Phase 2o + 2p).**
+      Applied by `sync` around the package graph, not inside `core/transaction.rs` (the seam
+      keeps `core/` ignorant of repos and extras). Verified against the binary.
 - [ ] **Cycle detection (II.7) — already caught in all three places. Do not rewrite; improve
       the errors.** `use` loops: `model/profiles.rs:62` and `model/modules.rs:146`, a
       push/pop path stack, so diamonds correctly pass. `@requires` loops:

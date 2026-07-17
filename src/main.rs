@@ -404,12 +404,14 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
         planner.plan(&desired, None).await?
     };
 
-    if changes.is_empty() {
+    // A config can be all dependents and no package changes (just a `service:` line). That
+    // is still work, so the "nothing to do" exit has to account for the dependent phase.
+    if changes.is_empty() && !state.has_dependents() {
         info!("Success: System matches declarative manifests.");
         return Ok(());
     }
 
-    if !json {
+    if !json && !changes.is_empty() {
         print_flight_plan(app, &changes);
     }
 
@@ -421,30 +423,40 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
                 serde_json::to_string_pretty(&changes.generate_report())?
             );
         }
+        // Ordering phase 3, previewed: the dependent extras that a real run would apply
+        // after the packages.
+        app.apply_dependents(&state).await?;
         return Ok(());
     }
 
-    // Interactive confirmation — but only with a real terminal. A non-interactive caller
-    // (pipe/CI/script) must pass --yes (or --json); otherwise we neither hang on a TUI that
-    // can't receive input nor silently apply unconfirmed changes.
-    if !app.config.yes && !json {
-        use std::io::IsTerminal;
-        if !std::io::stdin().is_terminal() {
-            anyhow::bail!(
-                "Refusing to apply changes without confirmation in a non-interactive shell. \
-                 Re-run with --yes to proceed, or --dry-run to preview."
-            );
+    // The package plan runs only when it has something in it — a dependents-only sync skips
+    // straight to phase 3, with no flight plan and no confirmation to answer.
+    if !changes.is_empty() {
+        // Interactive confirmation — but only with a real terminal. A non-interactive caller
+        // (pipe/CI/script) must pass --yes (or --json); otherwise we neither hang on a TUI
+        // that can't receive input nor silently apply unconfirmed changes.
+        if !app.config.yes && !json {
+            use std::io::IsTerminal;
+            if !std::io::stdin().is_terminal() {
+                anyhow::bail!(
+                    "Refusing to apply changes without confirmation in a non-interactive shell. \
+                     Re-run with --yes to proceed, or --dry-run to preview."
+                );
+            }
+            let mut preview = TuiPreview::new(&changes, HashMap::new());
+            if !preview.run()? {
+                return Ok(());
+            }
+            changes = preview.get_filtered_changes();
         }
-        let mut preview = TuiPreview::new(&changes, HashMap::new());
-        if !preview.run()? {
-            return Ok(());
-        }
-        changes = preview.get_filtered_changes();
+
+        engine
+            .sync(changes, linix::app::sync::guard::GuardScope::Sync)
+            .await?;
     }
 
-    engine
-        .sync(changes, linix::app::sync::guard::GuardScope::Sync)
-        .await?;
+    // Ordering phase 3: the dependent extras, now that every package they lean on is in.
+    app.apply_dependents(&state).await?;
     perform_maintenance(app).await
 }
 

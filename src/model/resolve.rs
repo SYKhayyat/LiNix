@@ -45,6 +45,27 @@ impl DesiredState {
     pub fn total_present(&self) -> usize {
         self.present().count()
     }
+
+    /// The extras `sync` applies AFTER packages (II.7's dependent phase): shims, services
+    /// and links. A shim wraps a tool that must already be installed; a service enables a
+    /// unit a package just laid down; a link writes a config a package expects — each one
+    /// depends on the package plan having run, which is what makes them the *dependent*
+    /// phase and not part of the package map. `repo:` is phase 1 (before packages) and
+    /// `schedule:` belongs to the scheduler, so neither is here.
+    pub fn dependents(&self) -> impl Iterator<Item = &(Statement, Origin)> {
+        self.extras.iter().filter(|(s, _)| {
+            matches!(
+                s,
+                Statement::Shim(..) | Statement::Service(..) | Statement::Link(..)
+            )
+        })
+    }
+
+    /// Whether there is any dependent extra to apply — so `sync` knows it has work even
+    /// when the package plan is empty (a config that only declares a `service:` line).
+    pub fn has_dependents(&self) -> bool {
+        self.dependents().next().is_some()
+    }
 }
 
 /// What the active profiles reach: the statements, and which profile and module each file's
@@ -757,6 +778,44 @@ mod tests {
         let d = resolve(&f).unwrap();
         assert!(matches!(d.extras[0].0, Statement::Repo { .. }));
         assert_eq!(names(&d, "apt"), ["python3.12"]);
+    }
+
+    #[test]
+    fn dependents_are_the_after_package_extras_only() {
+        // II.7 phase 3: shims, services and links are the dependent phase. `repo:` is phase
+        // 1 and `schedule:` is the scheduler's, so neither counts as a dependent.
+        let f = fx(
+            "Work\n",
+            &[("Work", "use svc\n")],
+            &[(
+                "svc.txt",
+                "repo:apt:ppa:deadsnakes/ppa\n\
+                 apt:nginx\n\
+                 service:nginx@enabled=true\n\
+                 link:~/.config/nginx.conf@target=~/.config/nginx.conf\n\
+                 shim:rg\n\
+                 schedule:nightly\n",
+            )],
+        );
+        let d = resolve(&f).unwrap();
+        assert!(d.has_dependents());
+        let kinds: Vec<&str> = d
+            .dependents()
+            .map(|(s, _)| match s {
+                Statement::Service(..) => "service",
+                Statement::Link(..) => "link",
+                Statement::Shim(..) => "shim",
+                _ => "other",
+            })
+            .collect();
+        // Declaration order preserved; repo and schedule excluded.
+        assert_eq!(kinds, ["service", "link", "shim"]);
+    }
+
+    #[test]
+    fn a_config_with_no_extras_has_no_dependents() {
+        let f = fx("Work\n", &[("Work", "apt:curl\n")], &[]);
+        assert!(!resolve(&f).unwrap().has_dependents());
     }
 
     #[test]

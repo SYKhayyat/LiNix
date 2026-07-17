@@ -138,6 +138,47 @@ async fn scoped_upgrade_is_non_destructive_end_to_end() {
     );
 }
 
+/// II.7 phase 3: a config whose only work is dependent extras (a `service:`, a `link:`, a
+/// `shim:`) still resolves them, and `apply_dependents` walks them without error. The
+/// dry-run kernel makes this a preview: it touches nothing, so it also proves the dependent
+/// phase does not reach for the real filesystem or `~/.local/bin` when only previewing.
+#[tokio::test]
+async fn dependents_only_config_resolves_and_applies_the_dependent_phase() {
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
+    tokio::fs::write(root.join("profiles/Work"), "use svc\n")
+        .await
+        .unwrap();
+    // A module with no package line at all — only dependents. `apt:nginx` is omitted on
+    // purpose so the "package plan is empty but there is still work" path is what runs.
+    tokio::fs::write(
+        root.join("modules/svc.txt"),
+        "service:nginx@enabled=true\n\
+         link:~/.config/app.conf@target=~/.config/app.conf,content=hello\n\
+         shim:rg\n",
+    )
+    .await
+    .unwrap();
+    tokio::fs::write(root.join("active"), "Work\n").await.unwrap();
+
+    let resolver =
+        StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
+    let state = resolver.resolve_model().await.unwrap();
+
+    assert!(
+        state.packages.values().all(|v| v.is_empty()),
+        "the fixture declares no packages"
+    );
+    assert!(
+        state.has_dependents(),
+        "the three extras are the dependent phase's work"
+    );
+    assert_eq!(state.dependents().count(), 3);
+
+    // Previews cleanly (dry-run kernel): resolution -> dependent dispatch, no panic, no touch.
+    kernel.app.apply_dependents(&state).await.unwrap();
+}
+
 /// A backend's RepoManager must issue the backend's real "add source" command.
 #[tokio::test]
 async fn repo_manager_dispatches_add_command() {

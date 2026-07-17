@@ -26,6 +26,28 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 
+/// Turn a non-package statement's options into a `PackageSpec` the `service`/`link`
+/// backends consume. Their `Installable::install` reads the options it knows (`enabled`,
+/// `status`, `target`, `content`, `template`, `decrypt`, …); a key it doesn't know is
+/// simply ignored, which is why the grammar — not this conversion — is where an unknown
+/// key is refused. Options are single-valued here (a service is enabled or not), so the
+/// first value of each key is taken.
+fn spec_from_extra(backend: &str, name: &str, opts: &crate::config::grammar::Options) -> PackageSpec {
+    let mut options = std::collections::HashMap::new();
+    for (key, values) in opts.iter() {
+        if let Some(first) = values.first() {
+            options.insert(key.to_string(), first.clone());
+        }
+    }
+    PackageSpec {
+        name: name.to_string(),
+        backend: backend.to_string(),
+        options,
+        requires: Vec::new(),
+        present: true,
+    }
+}
+
 pub struct App {
     pub config: Arc<Config>,
     pub cache: Arc<PackageCache>,
@@ -283,6 +305,84 @@ impl App {
                         warn!("Repo: {} index refresh failed: {} — a package from a new repo may not be found yet.", backend, e);
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply the dependent extras — shims, services and links — AFTER the package plan has
+    /// run (II.7's dependent phase, the mirror of `apply_repositories`'s phase 1).
+    ///
+    /// **Why after packages, not interleaved:** each of these presupposes a package. A
+    /// `shim:` wraps a binary that must already be on disk; a `service:` enables a unit a
+    /// package just installed; a `link:` writes the config a package expects to read. So
+    /// they cannot be planned alongside packages — they must wait for the whole package
+    /// plan to finish. Applied in declaration order, so a user who writes the config `link:`
+    /// above the `service:` that reads it gets that order honoured.
+    ///
+    /// Idempotent, like the repo phase: re-deploying an existing shim, re-enabling a running
+    /// service, or re-writing an unchanged link are all no-ops, which is what lets these
+    /// lines live in a file that syncs on every run. This is the forward (declared →
+    /// applied) direction only; reconciling away a *removed* dependent line is drift the
+    /// package planner does not yet track for extras.
+    pub async fn apply_dependents(
+        &self,
+        state: &crate::model::DesiredState,
+    ) -> Result<()> {
+        use crate::config::grammar::Statement;
+
+        for (stmt, origin) in state.dependents() {
+            match stmt {
+                Statement::Shim(name, _opts) => {
+                    if self.config.dry_run {
+                        info!("[DRY-RUN] would deploy shim `{}`", name);
+                        continue;
+                    }
+                    info!("Shim: deploying `{}` ({})", name, origin);
+                    self.shim_manager().await?.create_shim(name).await?;
+                }
+                Statement::Service(name, opts) => {
+                    let Some(b) = self.registry.get("service") else {
+                        warn!(
+                            "{}: the service backend is not available here — skipping `service:{}`.",
+                            origin, name
+                        );
+                        continue;
+                    };
+                    if self.config.dry_run {
+                        info!("[DRY-RUN] would apply service `{}`", name);
+                        continue;
+                    }
+                    let Some(inst) = b.as_installable() else {
+                        continue;
+                    };
+                    info!("Service: applying `{}` ({})", name, origin);
+                    let spec = spec_from_extra("service", name, opts);
+                    inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
+                        .await?;
+                }
+                Statement::Link(name, opts) => {
+                    let Some(b) = self.registry.get("link") else {
+                        warn!(
+                            "{}: the link backend is not available here — skipping `link:{}`.",
+                            origin, name
+                        );
+                        continue;
+                    };
+                    if self.config.dry_run {
+                        info!("[DRY-RUN] would apply link `{}`", name);
+                        continue;
+                    }
+                    let Some(inst) = b.as_installable() else {
+                        continue;
+                    };
+                    info!("Link: applying `{}` ({})", name, origin);
+                    let spec = spec_from_extra("link", name, opts);
+                    inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
+                        .await?;
+                }
+                // dependents() yields only these three variants.
+                _ => {}
             }
         }
         Ok(())

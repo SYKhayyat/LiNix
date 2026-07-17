@@ -135,19 +135,16 @@ impl<'a> StateResolver<'a> {
             warn!("`{}` at {} has expired and no longer counts.", key, origin);
         }
 
-        // S12: `repo:` is applied by `sync` (App::apply_repositories) before the package
-        // plan. The rest — shim:, service:, link:, schedule: — still resolve and then have
-        // nowhere to go, so warn for those, by file and line. Saying so is the difference
+        // S12: the extras now have somewhere to go. `repo:` is phase 1 (App::apply_repositories,
+        // before packages); `shim:`, `service:` and `link:` are phase 3 (App::apply_dependents,
+        // after packages). Only `schedule:` is still unwired — the scheduler owns it, not `sync` —
+        // so it is the one line left to warn about, by file and line. Saying so is the difference
         // between "not built yet" and a line that does nothing forever.
-        for (stmt, origin) in &state.extras {
-            if matches!(stmt, Statement::Repo { .. }) {
-                continue;
-            }
+        for (_, origin) in state.extras.iter().filter(|(s, _)| matches!(s, Statement::Schedule(..))) {
             warn!(
-                "{}: this line is not applied yet — LiNix does not act on {} lines at this \
-                 point in the rewrite.",
-                origin,
-                extra_kind(stmt)
+                "{}: `schedule:` is not applied by `sync` — the scheduler owns it, and that \
+                 wiring is not built yet.",
+                origin
             );
         }
 
@@ -395,23 +392,6 @@ impl<'a> StateResolver<'a> {
             Ok(Cmp::Gt) if constraint.starts_with('>') => true,
             _ => false,
         }
-    }
-}
-
-/// The word for a non-package statement, for the message that says it is not applied yet.
-fn extra_kind(stmt: &Statement) -> &'static str {
-    match stmt {
-        Statement::Repo { .. } => "repo:",
-        Statement::Shim(_, _) => "shim:",
-        Statement::Schedule(_, _) => "schedule:",
-        Statement::Service(_, _) => "service:",
-        Statement::Link(_, _) => "link:",
-        Statement::Use(_) => "use",
-        Statement::Exclude(_) => "exclude",
-        Statement::Intersect(_) => "intersect",
-        Statement::Subtract(_) => "-",
-        Statement::Expr(_) => "set expression",
-        Statement::Package(_) | Statement::Absent(_) => "package",
     }
 }
 
