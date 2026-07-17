@@ -209,7 +209,7 @@ impl UndoManager {
                 .map_err(Error::from)?;
 
         let current_state = self.state.lock().await;
-        let diff = self.calculate_diff(&current_state, &snapshot_state);
+        let diff = Self::calculate_diff(&current_state, &snapshot_state);
 
         if !diff.added.is_empty() || !diff.removed.is_empty() || !diff.changed.is_empty() {
             println!("\nPACKAGE CHANGES (Rolling back will result in):");
@@ -259,7 +259,11 @@ impl UndoManager {
         }
     }
 
-    fn calculate_diff(&self, current: &StateRegistry, past: &StateRegistry) -> StateDiff {
+    /// The package-level diff shown before a restore: what rolling back to `past` would add,
+    /// remove, or change versions of, relative to `current`. Pure (no `self`) so it is unit-
+    /// tested directly — the summary a user reads before confirming a whole-filesystem restore
+    /// must be right.
+    fn calculate_diff(current: &StateRegistry, past: &StateRegistry) -> StateDiff {
         let mut diff = StateDiff::default();
         let curr_map: HashMap<String, &ManagedPackage> = current
             .packages
@@ -333,5 +337,56 @@ impl UndoManager {
         // pair with anymore (the generation format was deleted; git is the manifest history).
         println!("\nSUCCESS: System root has been restored. Please reboot.");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn reg(pkgs: &[(&str, &str, &str)]) -> StateRegistry {
+        let mut r = StateRegistry::default();
+        for (backend, name, version) in pkgs {
+            r.add(
+                backend,
+                name,
+                Some(version.to_string()),
+                HashMap::new(),
+                Some("imperative".into()),
+                false,
+            );
+        }
+        r
+    }
+
+    #[test]
+    fn diff_reports_added_removed_and_version_changed() {
+        // current: what's installed now; past: the snapshot we'd roll back to.
+        let current = reg(&[("apt", "curl", "8.4"), ("cargo", "rg", "14.0")]);
+        let past = reg(&[("apt", "curl", "8.2"), ("apt", "nano", "7.0")]);
+
+        let diff = UndoManager::calculate_diff(&current, &past);
+
+        // In current but not past -> rolling back would REMOVE it.
+        assert_eq!(diff.added.len(), 1);
+        assert_eq!(diff.added[0].name, "rg");
+        // In past but not current -> rolling back would RESTORE it.
+        assert_eq!(diff.removed.len(), 1);
+        assert_eq!(diff.removed[0].name, "nano");
+        // In both, different version -> a version change.
+        assert_eq!(diff.changed.len(), 1);
+        let (cur, old) = &diff.changed[0];
+        assert_eq!(cur.name, "curl");
+        assert_eq!(cur.version.as_deref(), Some("8.4"));
+        assert_eq!(old.version.as_deref(), Some("8.2"));
+    }
+
+    #[test]
+    fn identical_states_produce_an_empty_diff() {
+        let a = reg(&[("apt", "curl", "8.4")]);
+        let b = reg(&[("apt", "curl", "8.4")]);
+        let diff = UndoManager::calculate_diff(&a, &b);
+        assert!(diff.added.is_empty() && diff.removed.is_empty() && diff.changed.is_empty());
     }
 }
