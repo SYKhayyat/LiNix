@@ -182,10 +182,11 @@ impl StateRegistry {
         source: Option<String>,
         is_transient: bool,
     ) {
-        let expires_at = options
-            .get("lease")
-            .or_else(|| options.get("duration"))
-            .and_then(|l| Self::parse_duration(l));
+        // Deliberately does NOT read `@lease` / `@duration`. II.16 retired them: a lease is
+        // a dated line now (`@expires=<absolute>`), which the resolver reads and sync acts
+        // on. Reading them here made a key the grammar now refuses into a real expiry — a
+        // package that uninstalls itself, on a path the guard does not see (S19, C3).
+        let expires_at = None;
 
         let session_id = if is_transient {
             self.active_session_id.clone()

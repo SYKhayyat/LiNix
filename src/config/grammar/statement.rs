@@ -355,10 +355,44 @@ fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Re
     Ok(decl)
 }
 
+/// Every option a package line may carry (II.2's table). Hooks are `*_install`
+/// (`after_install`, `before_install`, …), so they are matched by suffix rather than listed.
+///
+/// `until` is here and refused below unless the line is `absent:` — II.2 puts it on
+/// `absent:` only, and "not an option" would be the wrong error for a key that exists.
+const PACKAGE_OPTION_KEYS: &[&str] = &[
+    "version", "hold", "expires", "until", "requires", "sha256",
+];
+
 /// Option rules from II.2's table that are about the options themselves rather than any
 /// one backend.
 fn validate_options(origin: &Origin, decl: &PackageDecl) -> Result<()> {
     let o = &decl.options;
+
+    // II.2's table is the whole list. An unknown key used to be kept and handed downstream,
+    // where something might act on it — `@lease=2h` is the one that mattered: II.16 retired
+    // it, nothing writes it, and `StateRegistry::add` still read it and turned it into a
+    // real expiry. So a key this document deleted was silently still a package that
+    // uninstalls itself (S19). An option nobody reads is a line that does nothing; an
+    // option someone still reads is worse.
+    for key in o.keys() {
+        if PACKAGE_OPTION_KEYS.contains(&key) || key.ends_with("_install") {
+            continue;
+        }
+        let mut err = GrammarError::new(origin.clone(), format!("`@{}` is not an option", key));
+        err = match key {
+            // The one worth naming, because it used to work.
+            "lease" | "duration" => err.with_hint(
+                "a lease is a dated line now: `@expires=2026-07-17T14:00`. A file cannot hold \
+                 \"2 hours\" — it would mean something different every time it was read.",
+            ),
+            _ => err.with_hint(format!(
+                "options on a package are: {}, and the `*_install` hooks.",
+                PACKAGE_OPTION_KEYS.join(", ")
+            )),
+        };
+        return Err(err);
+    }
 
     // `@hold` says "never upgrade this"; `@version=` says "this exact version". Together
     // they are a contradiction, not a refinement: hold means whatever is installed, and
@@ -602,5 +636,56 @@ mod tests {
     fn every_error_names_the_file_and_line() {
         let err = p("aptt:curl").unwrap_err();
         assert!(err.to_string().contains("modules/dev.txt:7"), "{}", err);
+    }
+}
+
+#[cfg(test)]
+mod option_key_tests {
+    use super::*;
+
+    fn known(name: &str) -> bool {
+        matches!(name, "apt" | "cargo")
+    }
+
+    fn parse_line(line: &str) -> Result<Statement> {
+        parse(&Origin::new("modules/dev.txt", 1), line, &known)
+    }
+
+    #[test]
+    fn lease_is_refused_and_points_at_the_dated_line() {
+        // S19. II.16 retired `@lease=2h`, and nothing LiNix writes used it — but
+        // `StateRegistry::add` still READ it and turned it into a real expiry, so a
+        // hand-written lease was silently a package that uninstalls itself, on a path the
+        // guard does not see (C3).
+        let err = parse_line("apt:jq@lease=2h").unwrap_err();
+        assert!(err.what.contains("`@lease` is not an option"), "{}", err);
+        assert!(err.hint.unwrap().contains("@expires="), "must teach the replacement");
+    }
+
+    #[test]
+    fn an_unknown_key_lists_the_real_ones() {
+        // II.2's table is the whole list. A key nobody reads is a line that does nothing; a
+        // key someone still reads is worse.
+        let err = parse_line("apt:jq@colour=blue").unwrap_err();
+        assert!(err.what.contains("`@colour` is not an option"), "{}", err);
+        let hint = err.hint.unwrap();
+        assert!(hint.contains("version"), "{}", hint);
+        assert!(hint.contains("requires"), "{}", hint);
+    }
+
+    #[test]
+    fn every_key_in_the_table_is_accepted() {
+        for line in [
+            "apt:jq@version=1.6",
+            "apt:jq@hold",
+            "apt:jq@expires=2026-07-17T14:00",
+            "apt:jq@requires=apt:libfoo",
+            "apt:nginx@after_install=./setup.sh",
+            "apt:nginx@before_install=./pre.sh",
+        ] {
+            assert!(parse_line(line).is_ok(), "{} must parse", line);
+        }
+        // `until` belongs to `absent:` (II.2), and is accepted there.
+        assert!(parse_line("absent:apt:steam@until=2026-07-20T00:00").is_ok());
     }
 }
