@@ -954,8 +954,12 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   (`insight.rs` audit client, `main.rs` module-fetch client) now use `.max(1)`, matching
   `node_registry`'s existing guard: honour any value ≥1, reject only a literal 0 (which reqwest
   reads as instant-fail, not "no timeout").**
-- **F1:** `max_parallel` — detect the core count.
-- **F1:** the generated `priority` file carries its reason in a comment (V.14).
+- ~~**F1:** `max_parallel` — detect the core count.~~ **DONE — `default_max_parallel()` uses
+  `std::thread::available_parallelism()` (respects container CPU limits), falls back to 4; the
+  Default impl routes through it and the generated template comments the key out.**
+- ~~**F1:** the generated `priority` file carries its reason in a comment (V.14).~~ **DONE —
+  `model::priority::starter_file` (wired into `init` at `main.rs:4457`) already writes the
+  "system managers first / pip last / when-block" rationale as the file header.**
 - **F5:** fix the false doc comments.
 - **P6** goes in `CLAUDE.md`.
 
