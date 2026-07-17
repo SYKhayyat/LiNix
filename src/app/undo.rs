@@ -35,10 +35,12 @@ const ALLOWED_SNAPSHOT_PREFIXES: &[&str] = &[
     "/.zfs/snapshot/",
 ];
 
-/// Paths `validate_snapshot_path` refuses to read a snapshot registry out of. This does not
-/// constrain `execute_restore`, which restores over `/` — and therefore over every path
-/// listed here. Adding an entry protects the diff path only.
-const FORBIDDEN_PATHS: &[&str] = &[
+/// Paths `validate_snapshot_path` refuses to read a snapshot **registry** out of — the guard
+/// on the diff step, so a crafted snapshot path cannot make `undo` parse `/etc/shadow` as
+/// JSON. It is NOT a global "never touch these" list (the name it used to have, `FORBIDDEN_
+/// PATHS`, was a lie): `execute_restore` rolls the whole filesystem back over `/`, and
+/// therefore over every path here. Adding an entry protects the registry-read path only.
+const REGISTRY_READ_FORBIDDEN_PATHS: &[&str] = &[
     "/etc/shadow",
     "/etc/sudoers",
     "/etc/passwd",
@@ -150,10 +152,12 @@ impl UndoManager {
 
         let path_str = canonical.to_string_lossy();
 
-        for forbidden in FORBIDDEN_PATHS {
+        for forbidden in REGISTRY_READ_FORBIDDEN_PATHS {
             if path_str.contains(forbidden) {
                 return Err(Error::Snapshot(format!(
-                    "Security violation: Attempted to access forbidden path '{}'",
+                    "refusing to read a snapshot registry from '{}': that path is not a place a \
+                     LiNix registry can legitimately live, and reading it as JSON is a way to \
+                     turn `undo` into an arbitrary-file reader",
                     forbidden
                 )));
             }
@@ -265,7 +269,15 @@ impl UndoManager {
             println!("\nNo package changes detected.");
         }
 
-        warn!("\nCRITICAL: Reverting to this snapshot will overwrite your system root (/).");
+        // The package list above is a SUMMARY, not the scope. A snapshot restore rolls the
+        // entire filesystem back — every file, not just managed packages: configs you edited,
+        // data you wrote, and anything else that changed since the snapshot are all reverted
+        // too (S8). Say so plainly before asking, so "RESTORE" is informed consent.
+        warn!(
+            "\nCRITICAL: this does NOT just revert the packages listed above. It rolls your \
+             ENTIRE filesystem (/) back to the snapshot — every file changed since then, \
+             including configs and data, is reverted. There is no partial restore."
+        );
         print!("Are you absolutely sure? Type 'RESTORE' to proceed: ");
 
         use std::io::{self, Write};
