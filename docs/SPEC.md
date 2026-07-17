@@ -1133,6 +1133,15 @@ implementing agent's call; that it goes is not.**
   spots print lowercase `[dry-run]` — `bisect.rs:84` and `go.rs:159`. Same concept, one spelling: make
   both `[DRY-RUN]`.
 
+- **R11 — Collapse `watch`'s duplicated sync pipeline into one shared reconcile.** `watch_reconcile`
+  (`main.rs:515+`) hand-copies `handle_sync`'s body — resolve model, `enforce_policy`,
+  `apply_repositories`, `ChangePlanner`, `print_flight_plan`, `sync_engine().sync()` — and its own
+  comment admits "the same three ordering phases sync does." The `watch` feature is legitimate and it
+  does go through the guard (`GuardScope::Watch`), so this is not a safety hole — it is a
+  two-of-everything smell: change sync's ordering and `watch` silently drifts unless someone updates
+  both. Not a deletion — a consolidation: extract one shared reconcile that both `handle_sync` and
+  `watch_reconcile` call, with `watch` passing an unattended/no-confirm scope. Delete the copy.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
