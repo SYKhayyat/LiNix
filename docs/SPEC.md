@@ -178,7 +178,10 @@ snapshots/          snapshot metadata, tagged with commit hashes
 
 **Facts about this machine** — **detected, never configured.** Core count, whether btrfs /
 ZFS / Timeshift exists and where, which backends are installed. LiNix looks; it does not
-ask you to maintain them by hand on every machine forever.
+ask you to maintain them by hand on every machine forever. **One deliberate exception:
+`max_parallel` (owner ruling, 2026-07-17).** The core count is detected and is the default,
+but you may set `max_parallel` by hand to cap concurrency *below* it — a preference (spare the
+machine while it works), not a fact LiNix could look up. See V.41.
 
 ## II.2 Grammar
 
@@ -760,7 +763,9 @@ special status · `-vim` in modules
 `[schedules]` · `backend_priority` · `enabled_backends` · `hostname_backends` ·
 `default_backend` · `prune_on_sync` · `prune_scope` · `purge_orphans` · `cache_ttl` ·
 `confirm_destructive` · `protect_imperative` · `remove_bloatware` · `timeshift_path` ·
-`max_parallel` · `config.snapshots` · `github_token` (→ env)
+`config.snapshots` · `github_token` (→ env)
+*(`max_parallel` was struck from this delete list by owner ruling 2026-07-17 — it stays as an
+optional concurrency cap. See II.1 and V.41.)*
 
 **Files:** `keep.txt` (→ `forget`) · `policy.toml` (→ `[guard]`) · `bloatware.txt` (→
 `absent:`) · `.linix-lock.key` · `locks.json` (→ `locks/`) · `ghosts.json`
@@ -1005,18 +1010,15 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   (`insight.rs` audit client, `main.rs` module-fetch client) now use `.max(1)`, matching
   `node_registry`'s existing guard: honour any value ≥1, reject only a literal 0 (which reqwest
   reads as instant-fail, not "no timeout").**
-- ~~**F1:** `max_parallel` — detect the core count.~~ **DONE for the *detection* — `default_max_parallel()`
-  uses `std::thread::available_parallelism()` (respects container CPU limits), falls back to 4; the
-  Default impl routes through it and the generated template comments the key out.**
-  **⚠ BUT THIS DONE CONTRADICTS TWO RULES (audit 2026-07-17, unresolved — owner call needed).**
-  F1 kept `max_parallel` as a config key and polished it. But **II.17 lists `max_parallel` in the
-  config *delete* list** (line ~763), and **II.1 says the core count is "detected, never configured."**
-  The key still exists (`config.rs:216`, `default_max_parallel()` at `config.rs:304`) and the generated
-  template still emits `# max_parallel = 4` (`main.rs:3115`). So a *configurable* core count that two
-  rules forbid was ported and graded green — the "carefully ported something about to be deleted" trap
-  Phase 0 warns of. **Resolve one way or the other before F1 is truly closed:** either delete the key
-  (II.1 + II.17 win — detection needs no config surface) or amend II.17/II.1 to bless a manual override.
-  Do not leave it DONE-and-contradicting.
+- ~~**F1:** `max_parallel` — detect the core count.~~ **DONE. `default_max_parallel()` uses
+  `std::thread::available_parallelism()` (respects container CPU limits), falls back to 4; the
+  Default impl routes through it and the generated template comments the key out** (`config.rs:216`,
+  `:304`; `main.rs:3117`). The 2026-07-17 audit flagged this DONE as contradicting II.17 (which
+  listed `max_parallel` for deletion) and II.1 ("detected, never configured"). **Owner ruled
+  2026-07-17: keep the manual override** — the core count is the default, but you may cap concurrency
+  by hand. II.1, II.17, and V.41 were amended to match, so the contradiction is closed, not carried.
+  The key is honoured for real: `sync/mod.rs:297` reads it (the old overwrite V.41 called "a lie" is
+  gone). F1 is genuinely done.
 - ~~**F1:** the generated `priority` file carries its reason in a comment (V.14).~~ **DONE —
   `model::priority::starter_file` (wired into `init` at `main.rs:4457`) already writes the
   "system managers first / pip last / when-block" rationale as the file header.**
@@ -1292,8 +1294,16 @@ them and forgets which was which.
 **V.41 — Why "detected, not configured".** LiNix should not be *told* you have btrfs; it
 should look. Not told you have four cores. Almost every "local fact" in `config.toml` is
 something LiNix could work out in a second and instead asks you to maintain by hand, forever,
-on every machine. **That is not configuration, it's homework.** (And `max_parallel` is
-overwritten at `sync/mod.rs:296` anyway, so the setting is already a lie.)
+on every machine. **That is not configuration, it's homework.**
+
+**The `max_parallel` exception (owner ruling, 2026-07-17).** This rule's first draft called
+`max_parallel` homework too — and noted it was overwritten at `sync/mod.rs:296` anyway, "so the
+setting is already a lie." Both halves are now dead: the overwrite is gone (`sync/mod.rs:293-297`
+reads it as *"the user's knob"* and honours `self.config.max_parallel.max(1)`), and the owner has
+ruled to **keep** it. The distinction that saves the rule: the core count is a *fact* (detected),
+but *how many of those cores to use* is a *preference* — you may want to cap it to keep the
+machine responsive while a big sync runs. A preference LiNix cannot look up is not homework. So
+`max_parallel` stays: detected as the default, overridable by hand.
 
 **V.43 — Why the guard has nine refusals and not five.** The first draft said five (then
 listed six). It was written before anyone re-read `policy.toml`, which held five rules and
