@@ -1307,6 +1307,16 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   or CLI (semi-trusted), so lower severity — but a fleet list from a shared/generated source makes it
   reachable. **Solution TBD** (insert `--` before `host`, or reject hosts beginning with `-`).
 
+- **SEC5 — Latent PowerShell injection in snapshot ops (Windows, elevated).** `snapshot.rs` builds
+  PowerShell by interpolation and runs it via `-Command` with elevation: `Checkpoint-Computer
+  -Description 'LiNix: {label}'` (`:344` — a `'` in label escapes the quote), and `DeleteStatus({id})`
+  / `Restore-Computer -RestorePoint {id}` with `id` interpolated **unquoted** (`:384`,`:392`). Traced:
+  `label` is always a compile-time constant (`pre_sync`, `pre_upgrade`, `purge-unmanaged`, `pre_canary`)
+  and `id` comes from the system's own `SequenceNumber` via list/bisect/canary/undo — **not currently
+  attacker-reachable**, so this is latent, not live. But the day any command lets a user pass a
+  snapshot label or id straight through, it becomes an elevated-PowerShell injection. **Solution TBD**
+  (bind values as args / validate `id` is numeric); harden now while it is still latent.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
