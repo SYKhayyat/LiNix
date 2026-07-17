@@ -138,10 +138,6 @@ pub struct ChangePlanner<'a> {
     registry: Arc<BackendRegistry>,
     state: &'a StateRegistry,
     config: &'a Config,
-    /// Whether to schedule drift removals (packages in state but not in desired).
-    /// Defaults to true to preserve existing reconcile behavior; `sync` overrides this
-    /// from `config.prune_on_sync` so pruning is opt-in there.
-    prune: bool,
 }
 
 impl<'a> ChangePlanner<'a> {
@@ -154,14 +150,7 @@ impl<'a> ChangePlanner<'a> {
             registry,
             state,
             config,
-            prune: true,
         }
-    }
-
-    /// Control whether drift packages are scheduled for removal.
-    pub fn with_prune(mut self, prune: bool) -> Self {
-        self.prune = prune;
-        self
     }
 
     #[instrument(skip(self, desired))]
@@ -253,13 +242,16 @@ impl<'a> ChangePlanner<'a> {
                         name: pkg.name.clone(),
                         backend: pkg.backend.clone(),
                     });
-                } else if self.prune
-                    && !(self.config.protect_imperative
-                        && pkg.source.as_deref() == Some("imperative"))
-                {
-                    // Drift removal (only when pruning is enabled and — when
-                    // protect_imperative is on — not an imperatively-installed package;
-                    // protection was already applied to every branch above).
+                } else {
+                    // Drift: LiNix manages it and nothing declares it any more. Removing
+                    // that is what sync IS (V.34) — not a mode, not a second command with
+                    // the install half amputated.
+                    //
+                    // `protect_imperative` used to guard this branch, because an imperative
+                    // install had no line and so read as drift the moment it was recorded.
+                    // It has a line now (`modules/imperative.txt`), so it is declared like
+                    // everything else and the setting protected against a bug that no
+                    // longer exists (II.17).
                     debug!("Planner: Scheduling drift removal: {}", key);
                     changes.removal_tracker.insert(key.clone());
                     changes.graph.add_node(GraphAction::Remove {
@@ -269,45 +261,6 @@ impl<'a> ChangePlanner<'a> {
                 }
             }
 
-            // System-wide prune (opt-in): also remove packages that are INSTALLED but not
-            // under LiNix management and not in the desired state — a true "make the system
-            // exactly match my manifests" mode. Protected packages and LiNix itself are
-            // always spared. Only runs when `prune_scope = "system"` and pruning is enabled.
-            if self.prune && self.config.prune_scope == crate::config::PruneScope::System {
-                for backend in self.registry.available() {
-                    // Respect per-host backend gating: never remove packages from a
-                    // backend this host is told not to manage.
-                    if !self.config.is_backend_enabled(backend.name()) {
-                        continue;
-                    }
-                    let Some(q) = backend.as_queryable() else {
-                        continue;
-                    };
-                    let installed = match q.list_installed().await {
-                        Ok(v) => v,
-                        Err(_) => continue, // a backend that can't be queried is skipped, not fatal
-                    };
-                    let bname = backend.name().to_string();
-                    for pkg in installed {
-                        let key = format!("{}:{}", bname, pkg.name);
-                        if changes.removal_tracker.contains(&key) || desired_keys.contains(&key) {
-                            continue;
-                        }
-                        if self.config.is_protected(&pkg.name) || pkg.name == "linix" {
-                            continue;
-                        }
-                        debug!(
-                            "Planner: Scheduling system-scope removal (unmanaged drift): {}",
-                            key
-                        );
-                        changes.removal_tracker.insert(key.clone());
-                        changes.graph.add_node(GraphAction::Remove {
-                            name: pkg.name.clone(),
-                            backend: bname.clone(),
-                        });
-                    }
-                }
-            }
         } else {
             debug!(
                 "Planner: Scoped plan ({:?}) — skipping all removal planning (non-destructive).",
@@ -686,10 +639,11 @@ mod tests {
         assert_eq!(changes.total_install(), 0);
     }
 
-    // `with_prune(false)` (what `sync` uses when prune_on_sync is off) must NOT schedule
-    // drift removals; `with_prune(true)` does. Removals are now opt-in for sync.
     #[tokio::test]
-    async fn prune_flag_gates_drift_removal() {
+    async fn sync_removes_what_it_manages_and_you_stopped_declaring() {
+        // V.34: sync removes drift BY DEFINITION. `prune_on_sync` made that a setting, so
+        // sync could be configured into something that is not sync — and `linix prune` was
+        // sync with the install half amputated.
         let registry = Arc::new(BackendRegistry::new());
         let config = Config::default();
         let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
@@ -698,66 +652,59 @@ mod tests {
             .push(managed("drift-pkg-xyz", "generic-test"));
         let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
 
-        let no_prune = ChangePlanner::new(registry.clone(), &state, &config)
-            .with_prune(false)
+        let changes = ChangePlanner::new(registry.clone(), &state, &config)
             .plan(&desired, None)
             .await
             .unwrap();
         assert_eq!(
-            no_prune.total_remove(),
-            0,
-            "with_prune(false) must not remove drift"
-        );
-
-        let pruned = ChangePlanner::new(registry.clone(), &state, &config)
-            .with_prune(true)
-            .plan(&desired, None)
-            .await
-            .unwrap();
-        assert_eq!(
-            pruned.total_remove(),
+            changes.total_remove(),
             1,
-            "with_prune(true) should remove drift"
+            "a managed package nothing declares is drift, and removing it is what sync is"
         );
-        // removals_only() preserves the removal
-        assert_eq!(pruned.removals_only().total_remove(), 1);
     }
 
-    // protect_imperative shields imperatively-installed packages from drift removal.
     #[tokio::test]
-    async fn protect_imperative_shields_imperative_installs_from_drift() {
+    async fn an_imperative_install_is_ordinary_drift_once_nothing_declares_it() {
+        // `protect_imperative` existed because an imperative install had no line, so it
+        // read as drift the moment it was recorded. It has a line now
+        // (`modules/imperative.txt`), so it is declared like everything else — and if that
+        // line is gone, so is the reason to keep the package (II.17).
         let registry = Arc::new(BackendRegistry::new());
-        let mut config = Config::default();
+        let config = Config::default();
         let mut state = StateRegistry::new(PathBuf::from("test-state.json"));
         let mut imp = managed("my-imperative-tool", "generic-test");
         imp.source = Some("imperative".into());
         state.packages.push(imp);
         let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
 
-        // Default (protect_imperative = true): imperative drift is NOT scheduled for removal.
-        config.protect_imperative = true;
-        let protected = ChangePlanner::new(registry.clone(), &state, &config)
-            .with_prune(true)
+        let changes = ChangePlanner::new(registry.clone(), &state, &config)
             .plan(&desired, None)
             .await
             .unwrap();
-        assert_eq!(
-            protected.total_remove(),
-            0,
-            "imperative install must be shielded when protect_imperative=true"
-        );
+        assert_eq!(changes.total_remove(), 1);
+        assert_eq!(changes.removals_only().total_remove(), 1);
+    }
 
-        // protect_imperative = false: it becomes ordinary drift and IS scheduled.
-        config.protect_imperative = false;
-        let unprotected = ChangePlanner::new(registry.clone(), &state, &config)
-            .with_prune(true)
+    #[tokio::test]
+    async fn sync_never_removes_what_it_does_not_manage() {
+        // II.7: what LiNix may remove is what it manages and you stopped declaring, plus
+        // `absent:`. Nothing else, ever. `prune_scope = "system"` was a setting that broke
+        // that rule — a routine sync deleting software it never installed (V.21). It is
+        // `purge-unmanaged` instead: a command you type, not a mode you inherit.
+        let registry = Arc::new(BackendRegistry::new());
+        let config = Config::default();
+        // Nothing managed, nothing desired: an untouched machine full of software.
+        let state = StateRegistry::new(PathBuf::from("test-state.json"));
+        let desired: HashMap<String, Vec<PackageSpec>> = HashMap::new();
+
+        let changes = ChangePlanner::new(registry.clone(), &state, &config)
             .plan(&desired, None)
             .await
             .unwrap();
         assert_eq!(
-            unprotected.total_remove(),
-            1,
-            "imperative install is drift when protect_imperative=false"
+            changes.total_remove(),
+            0,
+            "sync must never reach outside what it manages"
         );
     }
 

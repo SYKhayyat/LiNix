@@ -4,7 +4,7 @@ pub mod manifest;
 pub mod grammar;
 pub mod parser;
 
-pub use config::{Config, PruneScope};
+pub use config::Config;
 
 /// Module-level constants for configuration defaults
 pub const DEFAULT_BACKEND: &str = "apt";

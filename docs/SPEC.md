@@ -365,9 +365,24 @@ the state. Each prints what it touched: `active is now Work, Gaming`.
   says. If you want your blocks kept, you want `activate -a` or `deactivate` — the surgical
   pair. **Two verbs that both half-preserve blocks would be two ways to do one thing** (P1);
   one that replaces and two that edit is one way each.
-- **`deactivate` on a name a `when` block also names removes the top-level line and says
-  what's left:** *"removed Travel from the list. It is still activated by the `when` block on
-  line 4."*
+- **`deactivate NAME` removes the name from the top level AND from every `when` block that
+  applies to this host.** *"Deactivate" must mean it. A verb that removed the top-level line
+  and left the name switched on by a block two lines down would be reporting a state it did
+  not reach* — the same defect as `activate` "setting" a list that a block then contradicts.
+  If that empties a block, **the block goes too, and it says so**: *"Removed Travel. Removed
+  the now-empty `when host == laptop` block on line 4."*
+- **A `when` block that does NOT apply to this host is never touched, and that is not an
+  exception — it is the same rule.** On the desktop, `when host == laptop { Travel }` is not
+  activating anything, so there is nothing there to deactivate. **`active` is a file you
+  commit and share; reaching into another host's block from this one would change a machine
+  you are not sitting at.** So it changes nothing and says why: *"Travel is not active on this
+  host. `active` line 4 activates it when host == laptop — edit that by hand if you meant
+  every machine."*
+- **This is the one place `deactivate` edits a block and `activate -a` does not**, and the
+  asymmetry is not arbitrary: **adding has a choice of where to put the name and removing does
+  not.** `-a` appends at the top level because a block is a rule you wrote and it has no
+  business joining it. `deactivate` has no such freedom — the name is where it is, and leaving
+  it there would make the verb a lie.
 - **`activate` with no names is an error:** *"activate needs a profile name. To turn
   everything off, edit `active` yourself."* An unset `$PROFILE` must not empty the machine.
 - **`activate -a` on a name already listed, and `deactivate` on one that isn't, say so and
@@ -1244,7 +1259,36 @@ catch it (V.19) — but the guard is for decisions you meant, and this one nobod
 **`activate NAME…` still overwrites `when` blocks without asking**, and that is not an
 oversight: it is the set form, it sets, and a form that quietly kept part of the old file
 would leave the machine in a state you did not type. The file is in git; that is what git is
-for (V.30).
+for (V.30). **It does not ask and it does not stay quiet** — it names each block it removed.
+*Asking and reporting got argued as one thing and they are not: the case against a prompt is
+that overwriting the list is the command's own job (S6), and none of that is a case for
+hiding what the job did.*
+
+**Why `deactivate` reaches into a `when` block when `activate -a` does not** *(decided
+2026-07-17, after the first draft of this entry said the opposite)*. The first rule here was
+that LiNix never edits a block — a block is something you wrote — so `deactivate Travel` would
+remove the top-level line and report *"it is still activated by the `when` block on line 4."*
+**That sentence is the argument against itself.** It is a command named "deactivate"
+announcing that it did not deactivate. **A verb that reports the state it failed to reach is
+the `-g` disease in miniature: the name says one thing, the file says another, and you find
+out later.** So it removes the name wherever this host would read it, and the empty block goes
+with it.
+
+**The asymmetry with `activate -a` is real and it is not a compromise: adding has a choice of
+where to put the name, removing has none.** `-a` appends at the top level because a block is a
+rule you wrote and a new name has no business joining it — there is a right answer and it is
+"outside". `deactivate` gets no such freedom; the name is where it is, and the only way to
+leave the block untouched is to not do the job.
+
+**And why it stops at blocks that do not apply to this host.** Not caution — the same rule,
+read carefully. `deactivate` turns off what is on; on the desktop, `when host == laptop {
+Travel }` has nothing on, so there is nothing to turn off, and removing the line would be a
+different command (*"never activate Travel anywhere"*) that nobody typed. **`active` is a file
+you commit and share (V.30), which makes "edit it wherever the name appears" a way to change a
+machine you are not sitting at from one you are.** The blast-radius reasoning is V.22's, and
+it lands in the same place: **the refusal is cheap and the mistake is not.** It says why, and
+names the line, so the hand-edit is one keystroke away for the person who did mean every
+machine.
 
 **V.45 — Why a cycle is an error and not deduped.** If `active` were the only consumer you
 could visit each profile once and move on, because union doesn't care how many times it sees
@@ -1359,12 +1403,10 @@ verified against the tree at the commit that last touched this section, not reca
 
 ## The state at `HEAD` (2026-07-17)
 
-- **24 commits** since `d49d28c` (was 18).
-- **506 tests passing, 0 failing at `3cc4a68`** (was 485). *`cargo clippy --all-targets` does
-  **not** compile in the working tree as of this audit — `PruneScope`, `InitAnswers::prune_on_sync`,
-  `ChangePlanner::with_prune`, `GuardSettings::enforce_on` are all gone from the config but still
-  referenced from `#[cfg(test)]` code. **That is the `prune_on_sync` deletion in flight, not a
-  finding** — re-check after it lands. Recorded only so the next reader does not "discover" it.*
+- **26 commits** since `d49d28c`.
+- **517 tests passing, 0 failing. `cargo clippy --all-targets` silent.** *(The audit above
+  caught this tree mid-deletion and said so rather than filing it as a finding — that was the
+  right call, and the deletion has landed.)*
 - *Those two numbers tell you nothing about the line below them, and never could — every false
   ✅ in this document was green when it was written (rule 11). They are here because a **red**
   suite would be worth reporting, not because a green one is progress. **The 2026-07-17 audit
@@ -1541,7 +1583,13 @@ to a user who is checking.
 "The seam held" is true of `src/backends/`, `src/core/` and `src/parsers/` — the seam was never
 what these were on the wrong side of.
 
-### `linix init -i` writes the old model — the ✅ verified one of two paths
+### `linix init -i` writes the old model — the ✅ verified one of two paths — **FIXED 2026-07-17**
+
+**Fixed in Phase 2h.** `interactive_init` calls `scaffold_repo`, the `local.txt` write is
+gone, and the three prompts for deleted settings are gone with the settings. **The lesson is
+kept below verbatim, because it is the part worth keeping**: *"verified by running it"* was
+the strongest evidence claim in this document and it was still partial — it ran the path the
+author was thinking about.
 
 Phase 2's checklist marks `linix init` done: *"Verified by running it: it produces a repo that
 resolves."* True — of `linix init`. **`handle_init` (`main.rs:3429`) has two paths**, and
@@ -1563,10 +1611,20 @@ is a second path, and a second path is a second implementation.
 > takes `add: bool`, `-a`/`--add` exists, `Switch` is deleted, `parse_active` reads `when`
 > blocks, and II.6's empty-names refusal is in the code verbatim. **The owner's four decisions
 > (above) match what was built** — they were made from this entry and landed within the hour.
-> **Retire the rest of this entry when that commit lands. One thing is not fixed, and it is
-> the last bullet: `activate` overwrites a `when` block and does not say so.** `profile.rs`
-> prints `active is now {names}.` and never names the block it deleted. **Automatic is not
-> silent (S6)** — the owner chose "no refusal", not "no receipt". *(Related, unjudged: these go
+> **Retire the rest of this entry when that commit lands. Two things are not fixed:**
+>
+> 1. **`activate` overwrites a `when` block and does not say so.** `profile.rs` prints
+>    `active is now {names}.` and never names the block it deleted. **Automatic is not silent
+>    (S6)** — the owner chose "no refusal", not "no receipt".
+> 2. **`deactivate` implements a rule the owner has since reversed.** `profile.rs:189` prints
+>    *"Removed {} from the list. It is still activated by the `when {}` block…"* — **that is
+>    the behaviour II.6 no longer specifies.** `deactivate` must now remove the name from the
+>    matching block too, so that sentence is unreachable by construction. **It was built
+>    correctly against the spec as it read at the time; the spec moved.** The replacement
+>    message is for the *other* case only — a block that does not apply to this host, which is
+>    left alone. `model/profiles.rs:459`'s comment says it exists to support the old sentence;
+>    **the machinery it feeds is still needed, for the opposite purpose.** Do not delete the
+>    block-awareness — re-point it. *(Related, unjudged: these go
 > to `info!`/`tracing`, not stdout. II.6 says the commands **print** what they touched. Whether
 > a user with default settings ever sees them is untraced.)*
 
@@ -1686,6 +1744,20 @@ still literally `groups_dir.parent()`; the **seven non-validating `split_once(':
 parsers**; `migrate` (606 lines, renamed to `adopt` rather than deleted, still telling users
 to run a command that does not exist); and **E6** — "unmanaged" has two implementations that
 will disagree.
+
+## Done in Phase 2i — `activate` does what II.6 says, and `active` gained `when`
+
+Answered the audit's `activate` finding in full; the details are in that section, marked
+FIXED. The shape of it: **II.6 described the opposite of the code**, the CLI help contradicted
+II.6 in the same repo, and `profile switch` — the set form under a second name — was not in
+this document at all. `activate` sets, `activate -a` adds, `switch` is deleted, and the empty
+list gets II.6's refusal instead of clap's.
+
+**`active` holds `when` blocks.** It was the one file that broke II.2's "one rule, everywhere"
+— `parse_active` rejected any line with more than one word, so **II.6's own example file was a
+hard error**, and `write_active` rebuilt the file from a flat list so any activate/deactivate
+silently destroyed every block in it. `read_active` now gates them, `deactivate` edits
+top-level lines only, and a name a block also holds is reported rather than silently ignored.
 
 ## Done in Phase 2h — the guard, and sync becoming sync
 
@@ -1822,6 +1894,7 @@ that says `use x`.
 | **II.6 verbs** (2026-07-17) | **Three verbs, as II.6 already said: `activate` SETS, `activate -a` ADDS, `deactivate` REMOVES.** The code had `activate` adding and the CLI help documenting it that way — **the spec was right and the code was wrong.** Not a re-opening: II.6 was already correct, the audit found the drift. |
 | **`profile switch`** (2026-07-17) | **Dies.** Once `activate` sets, `switch NAME` *is* `activate NAME` with a worse name and a one-name limit. It was the set form only because `activate` had wrongly taken the add form's job. **Two ways to do one thing** (P1). |
 | **`when` in `active`** (2026-07-17) | **`active` holds `when` blocks.** `when` gates every other file (II.2); `active` being the exception was an accident of `parse_active` rejecting any multi-word line — which made **II.6's own example file fail to parse.** One rule, everywhere. |
+| **`deactivate` vs blocks** (2026-07-17) | **`deactivate` removes the name from the top level and from every `when` block that applies to this host** — empty blocks go with it, and it says so. **Reverses II.6's old *"it is still activated by the `when` block on line 4"* bullet**, which described a verb that removed the line and left the thing on. **A block that does not apply to this host is never touched**: nothing there is active, so there is nothing to deactivate, and `active` is a shared file — editing another host's block from this one changes a machine you are not at. It says why and changes nothing. **This is the one place `deactivate` edits a block and `activate -a` does not: adding has a choice of where to put the name; removing does not.** |
 | **`activate` vs blocks** (2026-07-17) | **`activate` overwrites the file, blocks included.** It is the set form; it sets, and a block is part of what the file says. **`activate -a` and `deactivate` never touch a block** — they are the surgical pair, and that asymmetry is why `-a` exists. **It does not ask** (declarative: overwriting the list is the command's job) **but it does not do it silently** (S6) — it names every block it removed. *Asking and reporting are not the same thing, and the argument against the first is not an argument against the second.* |
 
 ## A warning about this document

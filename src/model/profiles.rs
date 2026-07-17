@@ -37,7 +37,7 @@ impl Resolved {
     ///
     /// It decides the shape of the answer: without it a profile names modules and each
     /// package keeps its module's name, with it the profile resolves to packages and there
-    /// is no module to name (V.44).
+    /// is no module to name (V.46).
     pub fn does_set_math(&self) -> bool {
         !self.ops.is_empty()
     }
@@ -180,7 +180,45 @@ impl<'a> ProfileLoader<'a> {
 /// Answers exactly one question — *what is this machine set to right now?* Nothing else
 /// goes in it.
 pub fn parse_active(file: &std::path::Path, body: &str) -> Result<Vec<String>> {
-    let mut out = Vec::new();
+    Ok(read_active(file, body)?
+        .into_iter()
+        .filter(|e| e.on)
+        .map(|e| e.name)
+        .collect())
+}
+
+/// One name in `active`, and whether this machine gets it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActiveEntry {
+    pub name: String,
+    /// 1-based, as an editor counts.
+    pub line: usize,
+    /// Inside a `when` block, and if so which — so `deactivate` can say *"it is still
+    /// activated by the `when` block on line 4"* rather than silently doing nothing.
+    pub gate: Option<String>,
+    /// Whether it applies to this host. A name inside a `when` that does not match is in
+    /// the file and not in force.
+    pub on: bool,
+}
+
+/// Read `active` with its `when` blocks intact.
+///
+/// `when` gates it like any other file — one rule, everywhere (II.2). `active` used to be
+/// the exception: it rejected any line with more than one word, so the `when host == laptop
+/// {` in II.6's own example was a hard error.
+pub fn read_active(file: &std::path::Path, body: &str) -> Result<Vec<ActiveEntry>> {
+    let facts = HostFacts::current();
+    read_active_with(file, body, &facts)
+}
+
+pub fn read_active_with(
+    file: &std::path::Path,
+    body: &str,
+    facts: &HostFacts,
+) -> Result<Vec<ActiveEntry>> {
+    let mut out: Vec<ActiveEntry> = Vec::new();
+    let mut gate: Option<(String, bool)> = None;
+
     for (idx, raw) in body.lines().enumerate() {
         let origin = Origin::new(file, idx + 1);
         let line = match raw.find('#') {
@@ -191,11 +229,41 @@ pub fn parse_active(file: &std::path::Path, body: &str) -> Result<Vec<String>> {
         if line.is_empty() {
             continue;
         }
+
+        if line == "}" {
+            if gate.is_none() {
+                return Err(GrammarError::new(
+                    origin,
+                    "`}` closes a `when` that was never opened",
+                ));
+            }
+            gate = None;
+            continue;
+        }
+
+        if let Some(header) = line.strip_suffix('{') {
+            let header = header.trim();
+            let Some(pred) = header.strip_prefix("when ") else {
+                return Err(GrammarError::new(
+                    origin,
+                    format!("`{}` is not a `when` block", header),
+                )
+                .with_hint("`active` holds profile names and `when` blocks, nothing else."));
+            };
+            if gate.is_some() {
+                return Err(GrammarError::new(origin, "a `when` block inside a `when` block")
+                    .with_hint("`active` nests one level: name the condition once."));
+            }
+            let hit = crate::config::parser::eval_when(pred.trim(), facts)
+                .map_err(|e| GrammarError::new(Origin::new(file, idx + 1), e.to_string()))?;
+            gate = Some((pred.trim().to_string(), hit));
+            continue;
+        }
+
         if line.split_whitespace().count() > 1 {
             return Err(
                 GrammarError::new(origin, format!("`{}` is not a profile name", line)).with_hint(
-                    "`active` is a plain list of profile names, one per line. It answers one \
-                     question: what is this machine set to right now?",
+                    "`active` is a list of profile names, one per line, and `when` blocks.                      It answers one question: what is this machine set to right now?",
                 ),
             );
         }
@@ -205,9 +273,22 @@ pub fn parse_active(file: &std::path::Path, body: &str) -> Result<Vec<String>> {
                     .with_hint("profiles are Capitalized, modules are lowercase. Only profiles can be activated."),
             );
         }
-        if !out.iter().any(|x| x == line) {
-            out.push(line.to_string());
+        if out.iter().any(|e| e.name == line) {
+            continue;
         }
+        out.push(ActiveEntry {
+            name: line.to_string(),
+            line: idx + 1,
+            gate: gate.as_ref().map(|(p, _)| p.clone()),
+            on: gate.as_ref().map(|(_, hit)| *hit).unwrap_or(true),
+        });
+    }
+
+    if gate.is_some() {
+        return Err(
+            GrammarError::new(Origin::new(file, 0), "a `when` block is never closed")
+                .with_hint("add the matching `}`."),
+        );
     }
     Ok(out)
 }
@@ -329,4 +410,93 @@ mod tests {
         assert_eq!(out, ["Work"]);
     }
 
+}
+
+#[cfg(test)]
+mod active_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn facts(host: &str) -> HostFacts {
+        HostFacts {
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            host: host.into(),
+            family: "unix".into(),
+        }
+    }
+
+    fn read(body: &str, host: &str) -> Result<Vec<ActiveEntry>> {
+        read_active_with(&PathBuf::from("active"), body, &facts(host))
+    }
+
+    fn on(body: &str, host: &str) -> Vec<String> {
+        read(body, host)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.on)
+            .map(|e| e.name)
+            .collect()
+    }
+
+    /// II.6's own example file. It did not parse: `active` rejected any line with more than
+    /// one word, so `when host == laptop {` was a hard error — the one file that broke
+    /// II.2's "one rule, everywhere".
+    const II6_EXAMPLE: &str = "Work\nGaming\n\nwhen host == laptop {\n  Travel\n}\n";
+
+    #[test]
+    fn the_example_in_the_spec_parses() {
+        assert_eq!(on(II6_EXAMPLE, "laptop"), ["Work", "Gaming", "Travel"]);
+    }
+
+    #[test]
+    fn when_gates_active_like_every_other_file() {
+        assert_eq!(on(II6_EXAMPLE, "server"), ["Work", "Gaming"]);
+    }
+
+    #[test]
+    fn a_gated_name_is_in_the_file_and_says_which_block_holds_it() {
+        // What `deactivate` needs to say "it is still activated by the `when` block on
+        // line 4" rather than silently doing nothing.
+        let entries = read(II6_EXAMPLE, "laptop").unwrap();
+        let travel = entries.iter().find(|e| e.name == "Travel").unwrap();
+        assert_eq!(travel.gate.as_deref(), Some("host == laptop"));
+        assert_eq!(travel.line, 5);
+        assert!(travel.on);
+
+        // On another host it is still in the file, just not in force.
+        let entries = read(II6_EXAMPLE, "server").unwrap();
+        let travel = entries.iter().find(|e| e.name == "Travel").unwrap();
+        assert!(!travel.on);
+    }
+
+    #[test]
+    fn comments_and_blanks_are_skipped() {
+        assert_eq!(on("# what I am\n\nWork   # for work\n", "any"), ["Work"]);
+    }
+
+    #[test]
+    fn a_repeat_is_ignored() {
+        assert_eq!(on("Work\nWork\n", "any"), ["Work"]);
+    }
+
+    #[test]
+    fn a_lowercase_name_is_not_a_profile() {
+        let err = read("editors\n", "any").unwrap_err();
+        assert!(err.hint.unwrap().contains("profiles are Capitalized"));
+    }
+
+    #[test]
+    fn an_unclosed_or_stray_block_is_an_error() {
+        assert!(read("when host == laptop {\n  Travel\n", "laptop").is_err());
+        assert!(read("Work\n}\n", "any").is_err());
+        assert!(read("when a == b {\n when c == d {\n Work\n}\n}\n", "any").is_err());
+    }
+
+    #[test]
+    fn active_holds_names_never_expressions() {
+        // II.6: the set math lives inside profiles. `active` stays a list you can read at
+        // a glance, because it is the one file you open to know what is on.
+        assert!(read("(Work | Gaming)\n", "any").is_err());
+    }
 }

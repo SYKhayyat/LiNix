@@ -7,7 +7,7 @@ use crate::config::grammar::Origin;
 use crate::config::parser::HostFacts;
 use crate::config::Config;
 use crate::core::{CommandExecutor, Error, Journal, Result, SnapshotManager, StateRegistry};
-use crate::model::profiles::{parse_active, ProfileLoader};
+use crate::model::profiles::{parse_active, read_active, ProfileLoader};
 use crate::model::Layout;
 use crate::utils::progress::ProgressReporter;
 use std::sync::Arc;
@@ -72,58 +72,152 @@ impl ProfileManager {
         Ok(Vocab::new(&self.registry, &self.config, &priority))
     }
 
-    /// Turn profiles on, then converge. Idempotent: activating an active profile changes
-    /// nothing.
+    /// `activate NAME…` — **`active` becomes exactly this list** (II.6).
+    ///
+    /// It is the set form, so it sets: `when` blocks in the file are overwritten with the
+    /// rest. That is not an oversight and gets no extra refusal — a set form that quietly
+    /// kept part of the old file would leave the machine in a state you did not type, and
+    /// the file is in git (V.44).
     #[instrument(skip(self))]
-    pub async fn activate(&self, names: &[String]) -> Result<()> {
-        let mut active = self.active_profiles().await?;
+    pub async fn activate(&self, names: &[String], add: bool) -> Result<()> {
+        // `linix activate $PROFILE` with `$PROFILE` unset would otherwise read as "turn
+        // everything off" and be perfectly valid. The guard would catch the removals, but
+        // the guard is for decisions you meant, and nobody means this one (V.44).
+        if names.is_empty() {
+            return Err(Error::Config(
+                "activate needs a profile name. To turn everything off, edit `active` \
+                 yourself."
+                    .into(),
+            ));
+        }
         for name in names {
             self.must_exist(name).await?;
-            if !active.iter().any(|a| a == name) {
-                active.push(name.clone());
-            }
         }
-        self.write_active(&active).await?;
-        info!(
-            "Active: {}. Converging...",
-            if active.is_empty() {
-                "nothing".to_string()
-            } else {
-                active.join(", ")
-            }
-        );
+
+        if add {
+            return self.add_to_active(names).await;
+        }
+
+        self.write_active(names).await?;
+        info!("active is now {}.", names.join(", "));
         self.sync_now().await
     }
 
-    /// Turn profiles off, then converge — removing what no remaining active profile wants.
-    #[instrument(skip(self))]
-    pub async fn deactivate(&self, names: &[String]) -> Result<()> {
-        let mut active = self.active_profiles().await?;
-        let before = active.len();
-        active.retain(|a| !names.iter().any(|n| n == a));
-        if active.len() == before {
-            info!("None of [{}] were active.", names.join(", "));
+    /// `activate -a NAME…` — add to the list, leaving the rest of the file alone.
+    async fn add_to_active(&self, names: &[String]) -> Result<()> {
+        let file = self.layout.active_file();
+        let body = tokio::fs::read_to_string(&file).await.unwrap_or_default();
+        let entries = read_active(&file, &body)?;
+
+        let mut added: Vec<String> = Vec::new();
+        for name in names {
+            match entries.iter().find(|e| &e.name == name) {
+                // Not an error: the end state is what was asked for (II.6).
+                Some(e) => match &e.gate {
+                    Some(pred) => info!(
+                        "{} is already listed, inside `when {}` on line {}.",
+                        name, pred, e.line
+                    ),
+                    None => info!("{} is already active.", name),
+                },
+                None => added.push(name.clone()),
+            }
+        }
+        if added.is_empty() {
             return Ok(());
         }
-        self.write_active(&active).await?;
-        info!(
-            "Deactivated [{}]. Still active: {}. Converging...",
-            names.join(", "),
-            if active.is_empty() {
-                "nothing".to_string()
-            } else {
-                active.join(", ")
-            }
-        );
+
+        // Appended at the top level, never inside a `when` block: a block is something you
+        // wrote, and LiNix does not edit it (II.6).
+        let mut body = body;
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        for name in &added {
+            body.push_str(name);
+            body.push('\n');
+        }
+        tokio::fs::write(&file, body).await.map_err(Error::from)?;
+
+        let now = self.active_profiles().await?;
+        info!("Added {}. active is now {}.", added.join(", "), now.join(", "));
         self.sync_now().await
     }
 
-    /// Swap the whole identity: this profile and nothing else.
+    /// `deactivate NAME…` — take names out of the list, then converge.
     #[instrument(skip(self))]
-    pub async fn switch(&self, name: &str) -> Result<()> {
-        self.must_exist(name).await?;
-        self.write_active(&[name.to_string()]).await?;
-        info!("Switched to '{}'. Converging...", name);
+    pub async fn deactivate(&self, names: &[String]) -> Result<()> {
+        let file = self.layout.active_file();
+        let body = tokio::fs::read_to_string(&file).await.unwrap_or_default();
+        let entries = read_active(&file, &body)?;
+
+        let mut touched = false;
+        let mut out: Vec<String> = Vec::new();
+        let mut depth = 0usize;
+
+        for raw in body.lines() {
+            let bare = match raw.find('#') {
+                Some(i) => &raw[..i],
+                None => raw,
+            }
+            .trim();
+
+            if bare.ends_with('{') {
+                depth += 1;
+                out.push(raw.to_string());
+                continue;
+            }
+            if bare == "}" {
+                depth = depth.saturating_sub(1);
+                out.push(raw.to_string());
+                continue;
+            }
+            // Only top-level lines are LiNix's to remove. A name inside a `when` block is
+            // something you wrote, and the block is the thing that activates it.
+            if depth == 0 && names.iter().any(|n| n == bare) {
+                touched = true;
+                continue;
+            }
+            out.push(raw.to_string());
+        }
+
+        for name in names {
+            match entries.iter().find(|e| &e.name == name) {
+                Some(e) => {
+                    if let Some(pred) = &e.gate {
+                        info!(
+                            "Removed {} from the list. It is still activated by the `when {}` \
+                             block on line {}.",
+                            name, pred, e.line
+                        );
+                    }
+                }
+                // Not an error: the end state is what was asked for (II.6).
+                None => info!("{} was not active.", name),
+            }
+        }
+
+        if !touched {
+            return Ok(());
+        }
+
+        let mut new_body = out.join("\n");
+        if !new_body.is_empty() {
+            new_body.push('\n');
+        }
+        tokio::fs::write(&file, new_body)
+            .await
+            .map_err(Error::from)?;
+
+        let now = self.active_profiles().await?;
+        info!(
+            "active is now {}.",
+            if now.is_empty() {
+                "empty".to_string()
+            } else {
+                now.join(", ")
+            }
+        );
         self.sync_now().await
     }
 

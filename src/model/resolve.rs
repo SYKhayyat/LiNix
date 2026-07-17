@@ -153,7 +153,7 @@ impl<'a> Resolver<'a> {
             let r = profiles.resolve(name, &asked, &self.facts, &mut Vec::new())?;
 
             // A profile doing set math resolves to packages, not to modules: an
-            // intersection of two modules' packages is not a module (V.44). So it is
+            // intersection of two modules' packages is not a module (V.46). So it is
             // materialised here and its result joins `direct`.
             if r.does_set_math() {
                 let stmts = self.apply_set_math(&profiles, &mut loader, &r, &asked)?;
@@ -945,7 +945,7 @@ mod tests {
 
     #[test]
     fn include_says_to_write_use_instead() {
-        // V.44: `use` already means union, and two words for one thing is the disease.
+        // V.46: `use` already means union, and two words for one thing is the disease.
         let f = fx("Work\n", &[("Work", "include editors\n")], &[]);
         let err = resolve(&f).unwrap_err();
         assert!(err.to_string().contains("there is no `include`"), "{}", err);

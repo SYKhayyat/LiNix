@@ -36,72 +36,10 @@ impl Default for SandboxSettings {
     }
 }
 
-/// Which commands the removal guard is enforced on.
-///
-/// Every command that can delete a package is listed explicitly rather than implied, so
-/// the whole surface is visible in one place — a guard nobody can enumerate is a guard
-/// nobody can trust. All default to `true`; set one to `false` to opt that command out.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct EnforceOn {
-    /// `linix apply` — executing a saved plan.
-    #[serde(default = "default_true")]
-    pub apply: bool,
-    /// `linix prune` — the dedicated drift-removal command.
-    #[serde(default = "default_true")]
-    pub prune: bool,
-    /// `linix sync`, when `prune_on_sync` is enabled.
-    #[serde(default = "default_true")]
-    pub sync: bool,
-    /// `linix watch` — reconciles unattended, so nobody is present to notice.
-    #[serde(default = "default_true")]
-    pub watch: bool,
-    /// `linix upgrade`.
-    #[serde(default = "default_true")]
-    pub upgrade: bool,
-    /// `linix rollback` — reverting to an earlier generation removes packages.
-    #[serde(default = "default_true")]
-    pub rollback: bool,
-    /// `linix canary`.
-    #[serde(default = "default_true")]
-    pub canary: bool,
-    /// `linix remove` — the direct, imperative uninstall.
-    #[serde(default = "default_true")]
-    pub remove: bool,
-    /// Ghost-shell exit, which force-removes transient packages.
-    /// Spelled `shell-exit` in config.toml to match how the command reads in prose and in
-    /// `linix protected`; the underscore form is accepted too so neither spelling is a
-    /// silently-ignored typo.
-    #[serde(default = "default_true", rename = "shell-exit", alias = "shell_exit")]
-    pub shell_exit: bool,
-    /// Expired-lease sweeps, which run after every state-changing command.
-    #[serde(default = "default_true")]
-    pub leases: bool,
-}
-
-impl Default for EnforceOn {
-    fn default() -> Self {
-        Self {
-            apply: true,
-            prune: true,
-            sync: true,
-            watch: true,
-            upgrade: true,
-            rollback: true,
-            canary: true,
-            remove: true,
-            shell_exit: true,
-            leases: true,
-        }
-    }
-}
-
 /// Settings for the removal guard — the check that refuses to delete too much, or to
 /// delete something the system needs.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct GuardSettings {
-    #[serde(default)]
-    pub enforce_on: EnforceOn,
-}
+pub struct GuardSettings {}
 
 /// Feature 2: Settings for automatic system snapshot management.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -127,21 +65,6 @@ impl Default for SnapshotSettings {
             auto_prune: true,
         }
     }
-}
-
-/// Which installed packages drift removal (`prune`, or `sync` with `prune_on_sync`)
-/// is allowed to remove.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum PruneScope {
-    /// Only remove packages under LiNix management that are no longer in the desired
-    /// state. Installed-but-unmanaged software is never touched. Safe default.
-    #[default]
-    Managed,
-    /// Remove ANY installed package (across every backend) not present in the desired
-    /// state — a true "make the system exactly match my manifests" mode. Protected
-    /// packages are always spared. Dangerous: enable deliberately.
-    System,
 }
 
 /// Feature 5: Configuration for background scheduled tasks.
@@ -221,23 +144,6 @@ pub struct Config {
     /// [`crate::core::RetentionConfig`]. Empty/zero policies keep everything (default).
     #[serde(default)]
     pub retention: crate::core::RetentionConfig,
-
-    /// Whether `sync` removes drift (packages installed but no longer in the manifests).
-    /// Default false: `sync` only installs/upgrades, and drift removal is an explicit,
-    /// separate step (`linix prune`). Set true to fold pruning back into `sync`.
-    #[serde(default = "default_false")]
-    pub prune_on_sync: bool,
-
-    /// Drift-removal scope for `prune`/`sync`. `Managed` (default) only removes
-    /// LiNix-managed packages; `System` removes anything installed that isn't in your
-    /// manifests (except protected packages).
-    #[serde(default)]
-    pub prune_scope: PruneScope,
-
-    /// When true, packages you installed imperatively (`linix install ...`) are never
-    /// removed by drift pruning, even if they aren't in any manifest. Safe default: true.
-    #[serde(default = "default_true")]
-    pub protect_imperative: bool,
 
     /// Default SSH destinations for `linix fleet` when none are given on the command line.
     #[serde(default)]
@@ -487,9 +393,6 @@ impl Default for Config {
             hooks: HashMap::new(),
             hostname_backends: HashMap::new(),
             retention: crate::core::RetentionConfig::default(),
-            prune_on_sync: false,
-            prune_scope: PruneScope::default(),
-            protect_imperative: true,
             fleet_hosts: Vec::new(),
             auto_lock_checksums: true,
             show_progress: true,

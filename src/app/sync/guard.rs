@@ -40,7 +40,7 @@ pub enum GuardScope {
 }
 
 impl GuardScope {
-    /// The command name a user would recognize, for messages and for `[guard.enforce_on]`.
+    /// The command name a user would recognize, for messages.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Apply => "apply",
@@ -56,22 +56,6 @@ impl GuardScope {
         }
     }
 
-    /// Whether config enables the guard for this command.
-    pub fn is_enforced(&self, config: &Config) -> bool {
-        let e = &config.guard.enforce_on;
-        match self {
-            Self::Apply => e.apply,
-            Self::Prune => e.prune,
-            Self::Sync => e.sync,
-            Self::Watch => e.watch,
-            Self::Upgrade => e.upgrade,
-            Self::Rollback => e.rollback,
-            Self::Canary => e.canary,
-            Self::Remove => e.remove,
-            Self::ShellExit => e.shell_exit,
-            Self::Leases => e.leases,
-        }
-    }
 }
 
 /// Why a single package may not be removed.
@@ -270,23 +254,48 @@ pub async fn enforce(
     removals: &[(String, String)],
     scope: GuardScope,
 ) -> Result<()> {
-    if !scope.is_enforced(config) {
-        debug!(
-            "Guard: disabled for '{}' by config ([guard.enforce_on]).",
-            scope.as_str()
-        );
-        return Ok(());
+    let mut report = inspect(config, registry, removals).await;
+
+    // II.10: `--allow-mass-removal` answers exactly one refusal — the count. It used to
+    // clear every objection, so the flag for "yes, 50 packages is what I meant" also
+    // deleted python3. A confirmation asks; a refusal says no, and protection is a
+    // refusal (V.26): nothing overrides it.
+    if config.allow_mass_removal {
+        let before = report.objections.len();
+        report
+            .objections
+            .retain(|o| !matches!(o, Objection::TooMany { .. }));
+        if before != report.objections.len() {
+            warn!(
+                "Guard: the removal count for '{}' was allowed by --allow-mass-removal.",
+                scope.as_str()
+            );
+        }
     }
-    let report = inspect(config, registry, removals).await;
+
     if report.is_empty() {
         return Ok(());
     }
-    if config.allow_mass_removal {
-        warn!(
-            "Guard: {} objection(s) for '{}' overridden by --allow-mass-removal.",
-            report.objections.len(),
-            scope.as_str()
-        );
+    Err(Error::Other(report.message(scope)))
+}
+
+/// Enforce for `purge-unmanaged`, where the count is not the question (II.11).
+///
+/// `max_removals` catches accidents, and this command is the opposite of an accident: you
+/// typed its name and confirmed it. **`protected_packages` and OS-essential still apply** —
+/// those are not "are you sure", and the ratio check (II.11) is what asks whether you meant
+/// it at all.
+pub async fn enforce_deliberate(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    removals: &[(String, String)],
+    scope: GuardScope,
+) -> Result<()> {
+    let mut report = inspect(config, registry, removals).await;
+    report
+        .objections
+        .retain(|o| !matches!(o, Objection::TooMany { .. }));
+    if report.is_empty() {
         return Ok(());
     }
     Err(Error::Other(report.message(scope)))
@@ -393,18 +402,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enforce_refuses_without_opt_in_and_proceeds_with_it() {
-        let reg = Arc::new(BackendRegistry::new());
-        let r = pairs(&["python3"]);
-        let cfg = config_with(20);
-        assert!(enforce(&cfg, &reg, &r, GuardScope::Prune).await.is_err());
-
-        let mut allowed = config_with(20);
-        allowed.allow_mass_removal = true;
-        assert!(enforce(&allowed, &reg, &r, GuardScope::Prune).await.is_ok());
-    }
-
-    #[tokio::test]
     async fn yes_does_not_override_the_guard() {
         // The whole point: -y is what every script passes. It must not mean "purge".
         let reg = Arc::new(BackendRegistry::new());
@@ -416,15 +413,92 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn config_can_opt_a_single_command_out() {
+    async fn allow_mass_removal_answers_the_count_and_nothing_else() {
+        // II.10: `--allow-mass-removal` is the answer to ONE refusal — the count. It used
+        // to clear every objection, so the flag meaning "yes, 50 is what I meant" also
+        // deleted python3. A confirmation asks; a refusal says no (V.26).
         let reg = Arc::new(BackendRegistry::new());
-        let mut cfg = config_with(20);
-        cfg.guard.enforce_on.prune = false;
-        let r = pairs(&["python3"]);
-        // prune was opted out...
-        assert!(enforce(&cfg, &reg, &r, GuardScope::Prune).await.is_ok());
-        // ...which must not silently exempt every other command.
-        assert!(enforce(&cfg, &reg, &r, GuardScope::Apply).await.is_err());
+        let mut cfg = config_with(2);
+        cfg.allow_mass_removal = true;
+
+        // The count alone: allowed, because that is what the flag is for.
+        assert!(
+            enforce(&cfg, &reg, &pairs(&["jq", "htop", "bat"]), GuardScope::Sync)
+                .await
+                .is_ok(),
+            "the flag must let a big-but-ordinary removal through"
+        );
+
+        // A protected package, even when the flag is set and the count is fine.
+        assert!(
+            enforce(&cfg, &reg, &pairs(&["python3"]), GuardScope::Sync)
+                .await
+                .is_err(),
+            "nothing overrides protection — not even --allow-mass-removal"
+        );
+
+        // And a big removal that also touches a protected package is still refused.
+        assert!(
+            enforce(
+                &cfg,
+                &reg,
+                &pairs(&["jq", "htop", "bat", "python3"]),
+                GuardScope::Sync
+            )
+            .await
+            .is_err(),
+            "the flag must not carry a protected package in on the back of the count"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_setting_can_opt_a_command_out_of_the_guard() {
+        // `[guard.enforce_on]` used to do exactly this: a config key that switched the
+        // guard off per command, so `enforce_on.sync = false` — copied from a dotfiles repo
+        // — made a routine sync remove python3. II.10 lists nine refusals and that was not
+        // one of them; V.21 says no setting anyone can flip makes sync dangerous.
+        let reg = Arc::new(BackendRegistry::new());
+        let cfg = config_with(20);
+        for scope in [
+            GuardScope::Apply,
+            GuardScope::Sync,
+            GuardScope::Prune,
+            GuardScope::Watch,
+            GuardScope::Upgrade,
+            GuardScope::Rollback,
+            GuardScope::Canary,
+            GuardScope::Remove,
+            GuardScope::ShellExit,
+            GuardScope::Leases,
+        ] {
+            assert!(
+                enforce(&cfg, &reg, &pairs(&["python3"]), scope).await.is_err(),
+                "{:?} must be guarded, and nothing may turn that off",
+                scope
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_deliberate_purge_ignores_the_count_but_never_protection() {
+        // II.11: `max_removals` catches accidents, and `purge-unmanaged` is the opposite of
+        // an accident — you typed its name. `protected_packages` and OS-essential still
+        // apply, and the ratio check is what asks whether you meant it at all.
+        let reg = Arc::new(BackendRegistry::new());
+        let cfg = config_with(2);
+
+        assert!(
+            enforce_deliberate(&cfg, &reg, &pairs(&["a", "b", "c", "d"]), GuardScope::Prune)
+                .await
+                .is_ok(),
+            "the count is not the question here"
+        );
+        assert!(
+            enforce_deliberate(&cfg, &reg, &pairs(&["python3"]), GuardScope::Prune)
+                .await
+                .is_err(),
+            "protection still applies to a deliberate purge"
+        );
     }
 
     #[test]

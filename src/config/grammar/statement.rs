@@ -137,7 +137,7 @@ pub fn parse(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result
         }
     }
 
-    // V.44: `use` already means union, so a second word for it is two ways to do one thing.
+    // V.46: `use` already means union, so a second word for it is two ways to do one thing.
     if let Some(rest) = line.strip_prefix("include ") {
         return Err(GrammarError::new(
             origin.clone(),

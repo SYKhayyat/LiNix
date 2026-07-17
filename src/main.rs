@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
         Commands::Adopt => handle_adopt(&app).await,
         Commands::Undo => handle_undo(&app).await,
         Commands::Cockpit => handle_cockpit(&app).await,
-        Commands::Activate { profiles } => handle_activate(&app, profiles).await,
+        Commands::Activate { profiles, add } => handle_activate(&app, profiles, *add).await,
         Commands::Deactivate { profiles } => handle_deactivate(&app, profiles).await,
         Commands::Profile(args) => handle_profile(&app, &args.command).await,
         Commands::Run { packages, command } => handle_run(&app, packages, command).await,
@@ -163,6 +163,9 @@ async fn main() -> Result<()> {
         Commands::Apply { plan, yes } => handle_apply(&app, plan, *yes).await,
         Commands::Update => handle_update(&app).await,
         Commands::Unmanaged => handle_unmanaged(&app).await,
+        Commands::PurgeUnmanaged { i_really_mean_it } => {
+            handle_purge_unmanaged(&app, *i_really_mean_it).await
+        }
         Commands::Protected { packages, json } => handle_protected(&app, packages, *json).await,
         Commands::Unmanage { packages, json } => handle_unmanage(&app, packages, *json).await,
         Commands::Teleport { package, to } => handle_teleport(&app, package, to).await,
@@ -386,14 +389,11 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
 
     let mut changes = {
         let state_guard = app.state.lock().await;
-        // Drift removal during `sync` is opt-in (config `prune_on_sync`, default false).
-        // Otherwise `sync` only installs/upgrades; `linix prune` removes drift.
         let planner = linix::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
-        )
-        .with_prune(app.config.prune_on_sync);
+        );
         planner.plan(&desired, None).await?
     };
 
@@ -485,7 +485,6 @@ async fn watch_reconcile(app: &App) -> Result<usize> {
             &state_guard,
             &app.config,
         )
-        .with_prune(app.config.prune_on_sync)
         .plan(&desired, None)
         .await?
     };
@@ -2180,9 +2179,9 @@ async fn handle_cockpit(app: &App) -> Result<()> {
     }
 }
 
-async fn handle_activate(app: &App, profiles: &[String]) -> Result<()> {
+async fn handle_activate(app: &App, profiles: &[String], add: bool) -> Result<()> {
     app.profile_manager()
-        .activate(profiles)
+        .activate(profiles, add)
         .await
         .map_err(|e| e.into())
 }
@@ -2224,9 +2223,6 @@ async fn handle_profile(app: &App, cmd: &ProfileCommand) -> Result<()> {
         ProfileCommand::Save { name } => {
             pm.save_current_as(name).await?;
         }
-        ProfileCommand::Switch { name } => {
-            pm.switch(name).await?;
-        }
         ProfileCommand::Active => {
             let active = pm.active_profiles().await?;
             if active.is_empty() {
@@ -2251,13 +2247,11 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
     let desired = resolver.resolve_desired_state().await?;
     let changes = {
         let state_guard = app.state.lock().await;
-        // prune=true so drift shows in the report regardless of `prune_on_sync`.
         let planner = linix::app::sync::planner::ChangePlanner::new(
             app.registry.clone(),
             &state_guard,
             &app.config,
-        )
-        .with_prune(true);
+        );
         planner.plan(&desired, None).await?
     };
     let report = changes.generate_report();
@@ -2644,6 +2638,143 @@ async fn handle_unmanaged(app: &App) -> Result<()> {
     Ok(())
 }
 
+/// How little LiNix must manage before "delete the rest" reads as a mistake (II.11).
+///
+/// A ratio, not a count. On Alpine, `adopt` correctly took 14 packages and a mis-scoped
+/// removal scheduled all 14 — under any sane count limit, none protected, all things you
+/// would cry about. The count misses it on small machines. Manage a tenth of what you are
+/// about to delete and you have made a mistake, on every machine, at every scale (V.20).
+const PURGE_RATIO: f64 = 0.1;
+
+/// `purge-unmanaged` (II.11): delete everything LiNix does not manage.
+///
+/// The residual risk, stated plainly because the docs must state it: `adopt` is an estimate.
+/// If it missed something, this deletes it.
+async fn handle_purge_unmanaged(app: &App, i_really_mean_it: bool) -> Result<()> {
+    let unmanaged = app.get_unmanaged_packages().await?;
+    if unmanaged.is_empty() {
+        println!("Nothing to do: LiNix manages every installed package.");
+        return Ok(());
+    }
+
+    let managed = app.state.lock().await.packages.len();
+    let removals: Vec<(String, String)> = unmanaged
+        .iter()
+        .map(|p| (p.backend.clone(), p.name.clone()))
+        .collect();
+
+    // The whole list. 576 packages is 576 lines: the pain is the feature, and a summary
+    // here is a summary of what you are about to lose.
+    println!(
+        "LiNix manages {} package(s). This will remove {}:\n",
+        managed,
+        unmanaged.len()
+    );
+    for p in &unmanaged {
+        println!("  {}:{}", p.backend, p.name);
+    }
+    println!();
+
+    // The ratio check, before anything else asks anything.
+    let ratio = managed as f64 / unmanaged.len() as f64;
+    if ratio < PURGE_RATIO && !i_really_mean_it {
+        let sample: Vec<String> = unmanaged
+            .iter()
+            .take(3)
+            .map(|p| p.name.clone())
+            .collect();
+        anyhow::bail!(
+            "LiNix manages {} packages.\n\
+             This will remove {}, including {}.\n\
+             That looks like you haven't adopted this machine yet.\n\
+             Run `linix adopt` first, or --i-really-mean-it if you're sure.",
+            managed,
+            unmanaged.len(),
+            sample.join(", ")
+        );
+    }
+
+    // `max_removals` does not apply: it catches accidents, and this is deliberate. Protection
+    // and OS-essential still do — nothing overrides those (II.10, II.11).
+    linix::app::sync::guard::enforce_deliberate(
+        &app.config,
+        &app.registry,
+        &removals,
+        linix::app::sync::guard::GuardScope::Prune,
+    )
+    .await?;
+
+    if app.config.dry_run {
+        println!("[DRY-RUN] Nothing removed.");
+        return Ok(());
+    }
+
+    // Snapshots first, automatically. If none can be taken, say so — "there is no undo for
+    // this" is the most important sentence this command can print (II.11).
+    let snapshot = match app.snapshot_manager.auto_snapshot("purge-unmanaged").await {
+        Ok(Some(snap)) => {
+            println!("Snapshot taken: {}. That is your undo.\n", snap.id);
+            Some(snap.id)
+        }
+        Ok(None) => {
+            println!(
+                "THERE IS NO UNDO FOR THIS.\n  \
+                 This machine has no snapshot provider (btrfs, ZFS or Timeshift), so nothing \
+                 removed here can be brought back.\n"
+            );
+            None
+        }
+        Err(e) => {
+            println!(
+                "THERE IS NO UNDO FOR THIS.\n  \
+                 The snapshot failed ({}), so nothing removed here can be brought back.\n",
+                e
+            );
+            None
+        }
+    };
+
+    if !app.config.yes {
+        let typed: String = dialoguer::Input::new()
+            .with_prompt(format!(
+                "Type the number of packages to remove ({}) to confirm",
+                unmanaged.len()
+            ))
+            .allow_empty(true)
+            .interact_text()?;
+        if typed.trim() != unmanaged.len().to_string() {
+            println!("Aborted. Nothing was removed.");
+            return Ok(());
+        }
+    }
+
+    let (mut gone, mut failed) = (0usize, 0usize);
+    for (backend_name, name) in &removals {
+        let Some(b) = app.registry.get(backend_name) else {
+            continue;
+        };
+        let Some(inst) = b.as_installable() else {
+            continue;
+        };
+        match inst
+            .remove(std::slice::from_ref(name), b.sudo_for_write())
+            .await
+        {
+            Ok(_) => gone += 1,
+            Err(e) => {
+                failed += 1;
+                warn!("purge-unmanaged: {}:{} — {}", backend_name, name, e);
+            }
+        }
+    }
+
+    println!("\nRemoved {} package(s); {} failed.", gone, failed);
+    if let Some(id) = &snapshot {
+        println!("Undo with `linix undo {}`.", id);
+    }
+    Ok(())
+}
+
 /// Stop managing packages without uninstalling them.
 ///
 /// This exists because deleting a manifest line means "uninstall this", not "stop managing
@@ -2800,7 +2931,6 @@ async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<
                 "protected_packages": cfg.protected_packages,
                 "unprotected_packages": cfg.unprotected_packages,
                 "max_removals": cfg.max_removals,
-                "enforce_on": cfg.guard.enforce_on,
             }))?
         );
         return Ok(());
@@ -2830,43 +2960,14 @@ async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<
         n => println!("\nMaximum removals in one command: {} (max_removals).", n),
     }
 
-    // Which commands are guarded is configurable, so it has to be visible: a guard you
-    // cannot enumerate is a guard you cannot rely on.
-    let e = &cfg.guard.enforce_on;
-    let commands = [
-        ("apply", e.apply),
-        ("prune", e.prune),
-        ("sync", e.sync),
-        ("watch", e.watch),
-        ("upgrade", e.upgrade),
-        ("rollback", e.rollback),
-        ("canary", e.canary),
-        ("remove", e.remove),
-        ("shell-exit", e.shell_exit),
-        ("leases", e.leases),
-    ];
-    let off: Vec<&str> = commands
-        .iter()
-        .filter(|(_, on)| !*on)
-        .map(|(n, _)| *n)
-        .collect();
-    println!("\nGuarded commands ([guard.enforce_on]):");
-    if off.is_empty() {
-        println!("  all {} of them — nothing is opted out.", commands.len());
-    } else {
-        println!(
-            "  NOT guarded: {} — these can remove anything, without limit.",
-            off.join(", ")
-        );
-    }
-
     println!(
         "\nPackages the OS itself reports as essential are also refused, on top of this list.\n\
-         Edit `protected_packages`, `unprotected_packages`, `max_removals` or \
-         `[guard.enforce_on]` in {}.\n\
+         Every command that removes is guarded — there is no way to opt one out.\n\
+         Edit `protected_packages`, `unprotected_packages` or `max_removals` in {}.\n\
          Check one package:      linix protected apt:python3\n\
          Machine-readable:       linix protected --json\n\
-         Let one removal through: linix <command> --allow-mass-removal",
+         Allow a big removal:    linix <command> --allow-mass-removal (the count only —\n\
+                                 it never lets a protected or essential package through)",
         cfg.config_file.display()
     );
     Ok(())
@@ -2921,35 +3022,6 @@ max_removals = 20
 # "essential" flag) says otherwise. This wins over everything. Use it when you
 # genuinely manage something LiNix would otherwise refuse to touch.
 # unprotected_packages = ["python3-pip"]
-
-# Which commands the guard is enforced on. Every command that can delete is
-# listed, so the whole surface is visible here rather than implied. Set one to
-# false to opt it out — an unguarded command can remove anything, without limit.
-[guard.enforce_on]
-apply      = true
-prune      = true
-sync       = true
-watch      = true
-upgrade    = true
-rollback   = true
-canary     = true
-remove     = true
-shell-exit = true   # ghost-shell exit, which force-removes transient packages
-leases     = true   # expired-lease sweeps, which run after every command
-
-
-# Whether `sync` removes drift (packages no longer in your manifests). Default false:
-# `sync` only installs/upgrades, and `linix prune` removes drift explicitly. Set true to
-# fold pruning back into `sync`.
-prune_on_sync = false
-
-# Drift-removal scope for `prune`/`sync`. "managed" (default) only removes packages LiNix
-# manages; "system" removes ANY installed package not in your manifests (except protected).
-# prune_scope = "managed"
-
-# Never let drift pruning remove packages you installed imperatively (`linix install ...`),
-# even if they aren't in a manifest. Safe default: true.
-protect_imperative = true
 
 # Default SSH destinations for `linix fleet` when none are given on the command line.
 # fleet_hosts = ["user@web-01", "user@web-02"]
@@ -3465,14 +3537,17 @@ async fn scaffold_dirs(cfg: &linix::config::Config) -> Result<()> {
     Ok(())
 }
 
-/// The answers gathered by interactive init — a plain data record so the logic that turns
-/// answers into a `Config`/manifest is pure and unit-testable, independent of any terminal.
+/// The answers guided setup gathers.
+///
+/// Deliberately short. Almost every question the old wizard asked has stopped existing:
+/// "should sync remove drift?" (sync is drift removal — V.34), "how aggressive?" (the
+/// aggressive answer is `purge-unmanaged`, a command, not a mode — V.21), "protect
+/// imperative installs?" (they have a line now, so they are declared like everything else),
+/// "preferred default backend?" (that is `priority`, generated from what this machine has —
+/// V.15). A question whose answer LiNix can work out, or which no longer means anything, is
+/// homework (V.41).
 #[derive(Debug, Clone, Default)]
 struct InitAnswers {
-    default_backend: Option<String>,
-    prune_on_sync: bool,
-    prune_scope: linix::config::PruneScope,
-    protect_imperative: bool,
     auto_prune_snapshots: bool,
     snapshot_count: Option<u32>,
     starter_packages: Vec<String>,
@@ -3480,10 +3555,6 @@ struct InitAnswers {
 
 /// Pure: layer the interactive answers onto a base config. No I/O, so it can be tested.
 fn apply_init_answers(mut base: linix::config::Config, a: &InitAnswers) -> linix::config::Config {
-    base.default_backend = a.default_backend.clone();
-    base.prune_on_sync = a.prune_on_sync;
-    base.prune_scope = a.prune_scope;
-    base.protect_imperative = a.protect_imperative;
     base.snapshots.auto_prune = a.auto_prune_snapshots;
     if let Some(n) = a.snapshot_count {
         base.snapshots.max_count = n;
@@ -3491,26 +3562,10 @@ fn apply_init_answers(mut base: linix::config::Config, a: &InitAnswers) -> linix
     base
 }
 
-/// Pure: append packages to a keep-file body, skipping any already present (case-insensitive
-/// on the package name, comments/blanks preserved). Returns the new body.
-/// Pure: render a starter manifest body from a package list.
-fn render_starter_manifest(packages: &[String]) -> String {
-    let mut out = String::from("# LiNix manifest — one package per line.\n");
-    for pkg in packages {
-        let p = pkg.trim();
-        if !p.is_empty() {
-            out.push_str(p);
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// Guided setup: ask the user how they want LiNix to behave, then persist the answers to
-/// config.toml, and any starter packages to local.txt. Refuses to run without a TTY so
-/// CI/pipelines fall back to `linix init` (non-interactive) instead of hanging.
+/// Guided setup: write the II.1 repo, then ask the few things LiNix genuinely cannot work
+/// out. Refuses to run without a TTY so CI falls back to `linix init` instead of hanging.
 async fn interactive_init(app: &App, force: bool) -> Result<()> {
-    use dialoguer::{Confirm, Input, Select};
+    use dialoguer::{Confirm, Input};
     use std::io::IsTerminal;
 
     if !std::io::stdin().is_terminal() {
@@ -3532,52 +3587,12 @@ async fn interactive_init(app: &App, force: bool) -> Result<()> {
 
     let defaults = linix::config::Config::default();
     let mut answers = InitAnswers {
-        protect_imperative: true,
         auto_prune_snapshots: true,
         ..Default::default()
     };
 
-    // 1. Preferred/default backend.
-    let backend: String = Input::new()
-        .with_prompt("Preferred default backend (blank = auto-detect by priority)")
-        .allow_empty(true)
-        .interact_text()?;
-    let backend = backend.trim().to_string();
-    answers.default_backend = (!backend.is_empty()).then_some(backend);
-
-    // 2. Should `sync` also remove drift?
-    answers.prune_on_sync = Confirm::new()
-        .with_prompt("Should `sync` also remove packages no longer in your manifests (drift)?")
-        .default(false)
-        .interact()?;
-
-    // 3. Drift scope — only when pruning is in play.
-    if answers.prune_on_sync {
-        let choices = [
-            "managed  — only remove packages LiNix installed (safe)",
-            "system   — remove ANY installed package not in your manifests (strict)",
-        ];
-        let pick = Select::new()
-            .with_prompt("How aggressive should drift removal be?")
-            .items(&choices)
-            .default(0)
-            .interact()?;
-        answers.prune_scope = if pick == 1 {
-            linix::config::PruneScope::System
-        } else {
-            linix::config::PruneScope::Managed
-        };
-    }
-
-    // 4. Protect imperative installs from pruning.
-    answers.protect_imperative = Confirm::new()
-        .with_prompt("Protect packages you install imperatively (`linix install`) from pruning?")
-        .default(true)
-        .interact()?;
-
-    // 5. Snapshot behavior.
     answers.auto_prune_snapshots = Confirm::new()
-        .with_prompt("Automatically prune old system snapshots after successful transactions?")
+        .with_prompt("Automatically remove old system snapshots after successful changes?")
         .default(true)
         .interact()?;
     let keep: String = Input::new()
@@ -3586,9 +3601,8 @@ async fn interactive_init(app: &App, force: bool) -> Result<()> {
         .interact_text()?;
     answers.snapshot_count = keep.trim().parse::<u32>().ok();
 
-    // 6. Starter packages for local.txt.
     let starter: String = Input::new()
-        .with_prompt("Starter packages for your manifest (comma-separated, blank to skip)")
+        .with_prompt("Packages to start with (comma-separated, blank to skip)")
         .allow_empty(true)
         .interact_text()?;
     answers.starter_packages = starter
@@ -3597,7 +3611,6 @@ async fn interactive_init(app: &App, force: bool) -> Result<()> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    // Build the config from answers (pure) and persist it.
     let mut new_cfg = apply_init_answers(defaults, &answers);
     new_cfg.config_file = config_path.clone();
     new_cfg.groups_dir = app.config.groups_dir.clone();
@@ -3612,23 +3625,23 @@ async fn interactive_init(app: &App, force: bool) -> Result<()> {
         .with_context(|| format!("Failed to write config to {}", config_path.display()))?;
     println!("\n  wrote    config     {}", config_path.display());
 
-    // Persist local.txt (respecting existing unless --force).
-    let local = app.config.groups_dir.join("local.txt");
-    if !local.exists() || force {
-        tokio::fs::write(&local, render_starter_manifest(&answers.starter_packages))
-            .await
-            .with_context(|| format!("Failed to write manifest {}", local.display()))?;
-        println!("  wrote    manifest   {}", local.display());
-    } else {
+    scaffold_repo(app, force).await?;
+
+    // Starter packages go through the same door as `linix install`: one writer, so what a
+    // wizard produces and what a command produces cannot be different shapes.
+    for pkg in &answers.starter_packages {
+        app.declare(pkg, None, linix::model::Landing::Imperative)
+            .await?;
+    }
+    if !answers.starter_packages.is_empty() {
         println!(
-            "  kept     manifest   {} (exists; --force to overwrite)",
-            local.display()
+            "\nRun `linix sync` to install {}.",
+            answers.starter_packages.join(", ")
         );
     }
-
-    println!("\nDone. Review {} then run `linix sync`.", local.display());
     Ok(())
 }
+
 /// Render a package as one aligned row: backend, name, version.
 fn print_package_row(p: &linix::core::Package) {
     println!(
@@ -4238,19 +4251,11 @@ mod init_tests {
     fn answers_layer_onto_config() {
         let base = linix::config::Config::default();
         let answers = InitAnswers {
-            default_backend: Some("dnf".into()),
-            prune_on_sync: true,
-            prune_scope: linix::config::PruneScope::System,
-            protect_imperative: false,
             auto_prune_snapshots: false,
             snapshot_count: Some(42),
             starter_packages: vec![],
         };
         let cfg = apply_init_answers(base, &answers);
-        assert_eq!(cfg.default_backend.as_deref(), Some("dnf"));
-        assert!(cfg.prune_on_sync);
-        assert_eq!(cfg.prune_scope, linix::config::PruneScope::System);
-        assert!(!cfg.protect_imperative);
         assert!(!cfg.snapshots.auto_prune);
         assert_eq!(cfg.snapshots.max_count, 42);
     }
@@ -4270,12 +4275,8 @@ mod init_tests {
     #[test]
     fn config_from_answers_round_trips_through_toml() {
         // The interactive config must serialize to valid TOML and load back identically —
-        // otherwise `init -i` would write a file `linix` can't read.
+        // otherwise `init -i` writes a file `linix` cannot read.
         let answers = InitAnswers {
-            default_backend: Some("brew".into()),
-            prune_on_sync: true,
-            prune_scope: linix::config::PruneScope::Managed,
-            protect_imperative: true,
             auto_prune_snapshots: true,
             snapshot_count: Some(7),
             starter_packages: vec![],
@@ -4283,30 +4284,8 @@ mod init_tests {
         let cfg = apply_init_answers(linix::config::Config::default(), &answers);
         let toml_str = toml::to_string_pretty(&cfg).expect("serializes");
         let back: linix::config::Config = toml::from_str(&toml_str).expect("parses back");
-        assert_eq!(back.default_backend.as_deref(), Some("brew"));
-        assert!(back.prune_on_sync);
+        assert!(back.snapshots.auto_prune);
         assert_eq!(back.snapshots.max_count, 7);
-    }
-
-    #[test]
-    fn manifest_renders_and_trims_and_skips_blanks() {
-        let pkgs = vec![
-            "  ripgrep ".to_string(),
-            "".to_string(),
-            "cargo:exa".to_string(),
-        ];
-        let body = render_starter_manifest(&pkgs);
-        assert!(body.starts_with("# LiNix manifest"));
-        assert!(body.contains("\nripgrep\n"));
-        assert!(body.contains("\ncargo:exa\n"));
-        // No blank package line slipped through.
-        assert!(!body.contains("\n\n"));
-    }
-
-    #[test]
-    fn empty_manifest_is_just_the_header() {
-        let body = render_starter_manifest(&[]);
-        assert_eq!(body, "# LiNix manifest — one package per line.\n");
     }
 
     #[test]
@@ -4316,26 +4295,29 @@ mod init_tests {
         // struct silently documents settings that do nothing (as `cache_ttl` did).
         let cfg: linix::config::Config =
             toml::from_str(CONFIG_TEMPLATE).expect("CONFIG_TEMPLATE must be valid config.toml");
-
-        // The guard section must land on the real fields — `shell-exit` is hyphenated in
-        // TOML but `shell_exit` in Rust, exactly the kind of mismatch serde accepts by
-        // silently defaulting.
-        assert!(cfg.guard.enforce_on.shell_exit);
-        assert!(cfg.guard.enforce_on.leases);
-        assert!(cfg.guard.enforce_on.prune);
         assert_eq!(cfg.max_removals, 20);
     }
 
     #[test]
-    fn config_template_guard_keys_are_not_silently_ignored() {
-        // Flipping a value in the file must reach the struct. If a key were misspelled,
-        // serde's default would keep reporting `true` and the opt-out would do nothing.
-        let toml_src = CONFIG_TEMPLATE.replace("shell-exit = true", "shell-exit = false");
-        let cfg: linix::config::Config = toml::from_str(&toml_src).unwrap();
-        assert!(
-            !cfg.guard.enforce_on.shell_exit,
-            "the shell-exit key in the template does not reach EnforceOn::shell_exit"
-        );
+    fn the_template_documents_no_setting_that_would_disarm_the_guard() {
+        // Three of these used to be real, and each was a way to make a routine sync delete
+        // something: `[guard.enforce_on]` switched the guard off per command,
+        // `prune_scope = "system"` made sync remove software it never installed, and
+        // `prune_on_sync` decided whether sync was sync at all. A config file is copied
+        // between machines and pasted from the internet — it must not be able to say any
+        // of this (V.21, V.34, II.17).
+        for gone in [
+            "enforce_on",
+            "prune_on_sync",
+            "prune_scope",
+            "protect_imperative",
+        ] {
+            assert!(
+                !CONFIG_TEMPLATE.contains(gone),
+                "`{}` is deleted, but the template still offers it",
+                gone
+            );
+        }
     }
 
 }
@@ -4401,4 +4383,34 @@ async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
 
     println!("\nReady. `linix install jq` writes a line you own; `linix sync` makes it so.");
     Ok(())
+}
+
+#[cfg(test)]
+mod purge_tests {
+    /// The ratio, as `handle_purge_unmanaged` computes it.
+    fn reads_as_a_mistake(managed: usize, to_remove: usize) -> bool {
+        (managed as f64 / to_remove as f64) < super::PURGE_RATIO
+    }
+
+    #[test]
+    fn manage_three_delete_576_is_a_mistake_at_any_scale() {
+        // II.11's example, and V.20's rule: a count cannot catch this on a small machine.
+        assert!(reads_as_a_mistake(3, 576));
+    }
+
+    #[test]
+    fn the_ratio_catches_the_small_machine_a_count_misses() {
+        // Alpine: adopt correctly took 14 packages, and a mis-scoped removal scheduled all
+        // 14 — under any count limit, none protected, all things you would cry about.
+        assert!(reads_as_a_mistake(1, 14));
+        // And an adopted Alpine is fine: 14 managed, a handful of strays to clear.
+        assert!(!reads_as_a_mistake(14, 20));
+    }
+
+    #[test]
+    fn an_adopted_machine_may_purge_the_rest() {
+        // Ubuntu after `adopt`: ~103 manual packages managed, the dependency closure and
+        // whatever else is lying around unmanaged. That is the command working as intended.
+        assert!(!reads_as_a_mistake(103, 476));
+    }
 }

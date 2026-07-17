@@ -109,6 +109,19 @@ pub enum Commands {
     /// Identify all packages installed on the OS but not managed by LiNix
     Unmanaged,
 
+    /// Delete everything LiNix does not manage. Shows the whole list first.
+    ///
+    /// This is the strict "make this machine exactly match my files" command. It is a
+    /// command and not a setting on purpose: no config anyone can flip, inherit, or copy
+    /// from a dotfiles repo makes a routine `sync` delete software it did not install.
+    #[command(name = "purge-unmanaged")]
+    PurgeUnmanaged {
+        /// Proceed even though LiNix manages very little of this machine — which usually
+        /// means it has not been adopted yet, not that you want the rest deleted.
+        #[arg(long = "i-really-mean-it")]
+        i_really_mean_it: bool,
+    },
+
     /// Stop managing a package WITHOUT uninstalling it. LiNix forgets it exists; the
     /// package stays on your system. This is the counterpart to deleting a manifest line,
     /// which means "uninstall this" — not "stop managing it"
@@ -329,12 +342,23 @@ pub enum Commands {
     #[command(alias = "tui")]
     Cockpit,
 
-    /// Activate one or more profiles: add each to the active set and converge the system.
-    /// Several profiles can be active at once — their package sets are unioned. Live; no reboot.
+    /// Set what this machine is: `active` becomes exactly these profiles, then converge.
+    ///
+    /// Several profiles can be active at once — their package sets are unioned. This is the
+    /// set form: it overwrites the file, `when` blocks included, because a form that quietly
+    /// kept part of the old file would leave you somewhere you did not type. Use `-a` to add
+    /// to the list instead. Live; no reboot.
     Activate {
-        /// Profile name(s) to activate
-        #[arg(required = true)]
+        /// Profile name(s). Without `-a`, these become the whole list.
+        ///
+        /// Not `required` at the clap layer on purpose: an empty list has a specific
+        /// meaning worth a specific refusal, and clap's generic "the following required
+        /// arguments were not provided" does not teach it (II.6).
         profiles: Vec<String>,
+
+        /// Add to the list rather than replacing it.
+        #[arg(short = 'a', long = "add")]
+        add: bool,
     },
 
     /// Deactivate one or more profiles: drop each from the active set and converge, removing
@@ -733,8 +757,6 @@ pub enum ProfileCommand {
     Create { name: String },
     /// Save the current desired state as a new standalone profile
     Save { name: String },
-    /// Exclusively switch to a profile (deactivate all others), then converge
-    Switch { name: String },
     /// List only the currently-active profiles
     Active,
 }
