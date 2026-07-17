@@ -2078,14 +2078,16 @@ that says `use x`.
       apt:bar (…) -> apt:foo`, via Tarjan's SCC (self-loops handled separately). As predicted,
       `PackageSpec` needed no `Origin` field: `options["__source"]` is `file:line` and the
       planner already read it. Tests for the 2-cycle and self-loop cases.
-- [ ] The II.8 command surface (`main.rs`, ~4,370 lines). **Done so far:** `install`
-      (P1 order, `--into`, `--temp` -> `@expires`), `forget`, `teleport`, `service
-      enable/disable`, the hook, `purge-unmanaged`, and `activate` / `activate -a` /
-      `deactivate` / `why` — all three `activate` decisions were taken and are recorded above.
-      `uninstall` (P1 order, both II.8 warnings, `--temp` -> `absent:@until`), `module`,
-      `adopt`, `bundle`. **Left:** the read-only verbs (`status`, `list`, `unmanaged`) have
-      not been checked against II.8 at all, and **E6** — `unmanaged` has two implementations
-      that will disagree.
+- [x] **The II.8 command surface is built.** `install` (P1 order, `--into`, `--temp` ->
+      `@expires`), `forget`, `teleport`, `service enable/disable`, the hook, `purge-unmanaged`,
+      `activate` / `activate -a` / `deactivate` / `why`, `uninstall` (P1 order, both II.8
+      warnings, `--temp` -> `absent:@until`), `module`, `adopt`, `bundle`. **Read-only verbs
+      reviewed against II.8 (Phase 2v):** `status`/`list`/`plan` are read-only and correct,
+      `unmanaged` is E6-fixed (*"what adopt would adopt"*), and the two II.8 verbs that did not
+      exist — `check` (*"parse everything, report errors"*) and `absent` (*"every absent: line
+      in force, and its module"*) — were built. Verified against the binary: `check` flags a
+      backend missing from `priority`; `absent` lists each absent spec with its `__source`.
+      *(The retired `lease` command was deleted in 2s.)*
 
 ## Decisions the owner has made — do not re-open
 
