@@ -923,10 +923,14 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   `enforce_policy` and `handle_policy` read `[guard]`, not `policy.toml`.** `Objection`
   (`guard.rs`) ~~has **two variants**~~ **now has four (`Protected`, `TooMany`, `TooManyInstalls`,
   `Denied`, `Unpinned`).** ~~`--allow-mass-install` (II.10:578) does not exist either.~~ **DONE.**
-  **Remaining mechanical step:** the four removal-count rules (`protected_packages`,
+  ~~**Remaining mechanical step:** the four removal-count rules (`protected_packages`,
   `unprotected_packages`, `max_removals`, `max_installs`) still sit as top-level `Config` fields;
-  renaming them under `[guard]` alongside the other four is all that is left of "one home"
-  (noted on `GuardSettings`).
+  renaming them under `[guard]` alongside the other four is all that is left of "one home".~~
+  **DONE — all nine now live in the `[guard]` table.** The four moved into `GuardSettings` with a
+  manual `Default` so the removal-safety defaults survive (an empty protected list or a zero
+  ceiling there would silently disarm the guard); `is_empty()` stays scoped to the install/change
+  rules only; the config template, `examples/config.toml`, `linix protected`, and the refusal
+  messages all read/emit `[guard]`. **"Nine refusals, one home" is now literally true.**
 - **Every removal path calls it.** ~~Today's misses: `uninstall` (C1), leases and `absent:`
   (C3), ghost-shell exit (C8), `clean`.~~ **Mostly DONE by architecture, verified 2026-07-17:
   plain `uninstall` undeclares then calls `handle_sync` → guarded (`GuardScope::Sync`); `absent:`
