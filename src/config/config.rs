@@ -109,16 +109,11 @@ pub struct Config {
     #[serde(skip)]
     pub allow_mass_removal: bool,
 
-    /// Your groups folder: the one LiNix owns. It holds the manifests you keep permanently,
-    /// and it is where LiNix's own files live — `locks.json`, `keep.txt`, `local.txt`,
-    /// `policy.toml`, and (as a sibling) `profiles/`.
-    ///
-    #[serde(default = "default_groups_dir")]
-    pub groups_dir: PathBuf,
-
-    /// Feature 3: Directory containing reusable .module.txt files.
-    #[serde(default = "default_modules_dir")]
-    pub modules_dir: PathBuf,
+    /// The root of your LiNix repo (II.1): the folder that holds `modules/`, `profiles/`,
+    /// `active`, `priority`, `locks/` and `preferences.toml`. LiNix's own data (the registry,
+    /// snapshots) lives BESIDE it, never inside it — see [`safe_data_dir`].
+    #[serde(default = "default_config_root")]
+    pub config_root: PathBuf,
 
     #[serde(skip)]
     pub config_file: PathBuf,
@@ -236,11 +231,8 @@ pub struct Config {
     pub schedules: Vec<ScheduleConfig>,
 }
 
-fn default_groups_dir() -> PathBuf {
-    safe_config_dir().join("groups")
-}
-fn default_modules_dir() -> PathBuf {
-    safe_config_dir().join("modules")
+fn default_config_root() -> PathBuf {
+    safe_config_dir()
 }
 fn default_btrfs_path() -> String {
     "/.snapshots".to_string()
@@ -380,10 +372,7 @@ impl Default for Config {
             dry_run: false,
             yes: false,
             allow_mass_removal: false,
-            groups_dir: default_groups_dir(),
-
-
-            modules_dir: default_modules_dir(),
+            config_root: default_config_root(),
             config_file: safe_config_dir().join("config.toml"),
             enabled_backends: Vec::new(),
             backend_priority: default_priority(),
@@ -472,15 +461,15 @@ impl Config {
         effective.is_empty() || effective.iter().any(|b| b == backend)
     }
 
-    /// NEVER resolves to the current working directory: `Path::parent()` of a bare relative
-    /// `groups_dir` returns an empty path, and joining onto that targets whatever directory
-    /// the user is standing in.
+    /// The repo root (II.1). NEVER resolves to the current working directory: a config that
+    /// somehow carries an empty or relative `config_root` would make every `join` target
+    /// whatever directory the user is standing in, so an unusable value falls back to the
+    /// platform config dir.
     pub fn config_root(&self) -> PathBuf {
-        self.groups_dir
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty() && p.is_absolute())
-            .map(PathBuf::from)
-            .unwrap_or_else(safe_config_dir)
+        if self.config_root.as_os_str().is_empty() || !self.config_root.is_absolute() {
+            return safe_config_dir();
+        }
+        self.config_root.clone()
     }
 
     /// This run's II.1 layout: your repo, and LiNix's data beside it but never inside it.

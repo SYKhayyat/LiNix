@@ -1,21 +1,8 @@
 use crate::core::{Error, Result};
-use crate::utils::file::atomic_write;
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use tokio::fs;
-use tracing::debug;
 
-/// Represents a line in a manifest file, identifying if it's a package or a module.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ManifestLine {
-    /// A standard package specification (e.g., "apt:curl@version=1.0")
-    Package(String),
-    /// A reference to another reusable module (e.g., "@module:development")
-    Module(String),
-}
-
-/// Facts about the host used to evaluate `when` conditionals in a manifest, so a single
-/// shared manifest can serve a heterogeneous fleet (Linux + macOS + Windows).
+/// Facts about the host used to evaluate `when` conditionals, so a single shared repo can
+/// serve a heterogeneous fleet (Linux + macOS + Windows). The model reads these when it
+/// resolves `when` gates in `active`, profiles and modules (II.2).
 #[derive(Debug, Clone)]
 pub struct HostFacts {
     pub os: String,
@@ -90,100 +77,6 @@ pub fn eval_when(pred: &str, facts: &HostFacts) -> Result<bool> {
     Ok(eq != negate)
 }
 
-/// Filter manifest lines by their enclosing `when` conditionals. Supports block form:
-///
-/// ```text
-/// when os == macos
-///   brew:coreutils
-/// end
-/// ```
-///
-/// and inline form: `when os == linux then apt:htop`. Blocks nest. Pure — unit tested.
-pub fn filter_conditional_lines(lines: Vec<String>, facts: &HostFacts) -> Result<Vec<String>> {
-    let mut out = Vec::with_capacity(lines.len());
-    // Each open block records whether its own predicate held; a line is emitted only when
-    // every ancestor block is active.
-    let mut stack: Vec<bool> = Vec::new();
-    let active = |stack: &[bool]| stack.iter().all(|&b| b);
-
-    for line in lines {
-        let l = line.trim();
-        if let Some(rest) = l.strip_prefix("when ") {
-            if let Some((pred, payload)) = rest.split_once(" then ") {
-                // Inline guard — never opens a block.
-                if active(&stack) && eval_when(pred, facts)? {
-                    out.push(payload.trim().to_string());
-                }
-                continue;
-            }
-            let cond = eval_when(rest, facts)?;
-            stack.push(cond);
-            continue;
-        }
-        if l == "end" || l == "endwhen" {
-            if stack.pop().is_none() {
-                return Err(Error::Config(
-                    "manifest has an `end` with no matching `when`".into(),
-                ));
-            }
-            continue;
-        }
-        if active(&stack) {
-            out.push(line);
-        }
-    }
-    if !stack.is_empty() {
-        return Err(Error::Config(
-            "manifest has an unclosed `when` block (missing `end`)".into(),
-        ));
-    }
-    Ok(out)
-}
-
-/// Parses a package group file (.txt) or module file (.module.txt) asynchronously.
-/// Hardened for Version 3.6.0: Recognizes @module prefixes and recursive structures.
-/// Evaluates `when os/arch/host` conditional blocks against the current host.
-pub async fn parse_group_file(path: &Path) -> Result<Vec<String>> {
-    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
-        debug!("Manifest parser: File not found at {:?}", path);
-        return Ok(Vec::new());
-    }
-
-    let content = fs::read_to_string(path)
-        .await
-        .map_err(|e| Error::Io(format!("Failed to read manifest {:?}: {}", path, e)))?;
-
-    parse_group_str(&content)
-}
-
-/// Parse manifest text (already in memory) the same way [`parse_group_file`] parses a file:
-/// strip a UTF-8 BOM, drop blank/comment lines, then apply host `when` conditionals. Used for
-/// remote `include:` targets fetched over HTTP.
-pub fn parse_group_str(content: &str) -> Result<Vec<String>> {
-    // Strip a leading UTF-8 BOM so a manifest saved by a Windows editor doesn't turn the
-    // first entry's backend into "\u{feff}cargo".
-    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
-
-    let lines: Vec<String> = content
-        .lines()
-        .map(|line| line.trim())
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(|line| line.to_string())
-        .collect();
-
-    // Resolve `when`/`end` conditionals for this host before returning package lines.
-    filter_conditional_lines(lines, &HostFacts::current())
-}
-
-/// Helper to categorize a raw manifest line.
-pub fn identify_line(line: &str) -> ManifestLine {
-    if let Some(module_name) = line.strip_prefix("@module:") {
-        ManifestLine::Module(module_name.trim().to_string())
-    } else {
-        ManifestLine::Package(line.trim().to_string())
-    }
-}
-
 /// Split a removal target like `backend:name[@opts]` into `(Some(backend), bare_name)`
 /// when the prefix names a real backend, or `(None, name)` otherwise. `@options` are
 /// stripped from the name. `is_known_backend` decides whether a `prefix:` is a backend
@@ -191,7 +84,9 @@ pub fn identify_line(line: &str) -> ManifestLine {
 ///
 /// This is the parsing `remove` must use to match how `install` reads its arguments —
 /// passing the whole `backend:name` string to a backend's `info()`/`remove()` (which
-/// expect the *bare* name) silently makes `remove backend:pkg` a no-op.
+/// expect the *bare* name) silently makes `remove backend:pkg` a no-op. It consults the
+/// registry (unlike a blind `split_once(':')`), which is why it is not one of the parsers
+/// C13 retired.
 pub fn split_removal_target(
     input: &str,
     is_known_backend: impl Fn(&str) -> bool,
@@ -202,51 +97,6 @@ pub fn split_removal_target(
     };
     let bare = name_part.split('@').next().unwrap_or(name_part).to_string();
     (backend, bare)
-}
-
-/// Writes a list of packages to a manifest file atomically.
-pub async fn write_group_file(path: &Path, packages: &[String]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !tokio::fs::try_exists(parent).await.unwrap_or(false) {
-            fs::create_dir_all(parent).await.map_err(Error::from)?;
-        }
-    }
-    let content = packages.join("\n") + "\n";
-    let path_owned = path.to_path_buf();
-    tokio::task::spawn_blocking(move || atomic_write(&path_owned, &content))
-        .await
-        .map_err(|e| Error::Other(e.to_string()))??;
-    Ok(())
-}
-
-pub async fn load_all_packages(groups_dir: &Path) -> Result<HashSet<String>> {
-    let mut all_packages = HashSet::new();
-    if !tokio::fs::try_exists(groups_dir).await.unwrap_or(false) {
-        return Ok(all_packages);
-    }
-
-    let groups_dir_owned = groups_dir.to_path_buf();
-    let entries: Vec<PathBuf> = tokio::task::spawn_blocking(move || {
-        walkdir::WalkDir::new(groups_dir_owned)
-            .follow_links(true)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file())
-            .map(|e| e.path().to_path_buf())
-            .collect()
-    })
-    .await
-    .map_err(|e| Error::Other(e.to_string()))?;
-
-    for path in entries {
-        let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-
-        if file_name.ends_with(".txt") {
-            let packages = parse_group_file(&path).await?;
-            all_packages.extend(packages);
-        }
-    }
-    Ok(all_packages)
 }
 
 #[cfg(test)]
@@ -260,33 +110,6 @@ mod conditional_tests {
             host: "laptop".into(),
             family: "unix".into(),
         }
-    }
-
-    #[test]
-    fn identify_line_recognizes_modules_and_packages() {
-        assert_eq!(
-            identify_line("@module:dev"),
-            ManifestLine::Module("dev".into())
-        );
-        assert_eq!(
-            identify_line("apt:curl"),
-            ManifestLine::Package("apt:curl".into())
-        );
-    }
-
-    #[test]
-    fn deleted_prefixes_are_no_longer_special() {
-        // `group:` and `include:` are gone (V.4: `group:` was already a no-op because the
-        // resolver seeded every .txt unconditionally). Until Phase 1 makes an unknown line
-        // an error, they fall through as package specs rather than silently resolving.
-        assert_eq!(
-            identify_line("group:editors"),
-            ManifestLine::Package("group:editors".into())
-        );
-        assert_eq!(
-            identify_line("include: ./base.txt"),
-            ManifestLine::Package("include: ./base.txt".into())
-        );
     }
 
     #[test]
@@ -313,67 +136,6 @@ mod conditional_tests {
         let f = facts();
         assert!(eval_when("kernel == 6.1", &f).is_err());
         assert!(eval_when("os linux", &f).is_err());
-    }
-
-    #[test]
-    fn block_filtering_keeps_matching_and_drops_others() {
-        let f = facts();
-        let lines = vec![
-            "apt:always".to_string(),
-            "when os == linux".to_string(),
-            "apt:htop".to_string(),
-            "end".to_string(),
-            "when os == macos".to_string(),
-            "brew:coreutils".to_string(),
-            "end".to_string(),
-        ];
-        let out = filter_conditional_lines(lines, &f).unwrap();
-        assert_eq!(out, vec!["apt:always", "apt:htop"]);
-    }
-
-    #[test]
-    fn nested_blocks_require_all_ancestors() {
-        let f = facts();
-        let lines = vec![
-            "when os == linux".to_string(),
-            "when arch == arm64".to_string(),
-            "apt:only-arm".to_string(),
-            "end".to_string(),
-            "apt:any-linux".to_string(),
-            "end".to_string(),
-        ];
-        let out = filter_conditional_lines(lines, &f).unwrap();
-        assert_eq!(out, vec!["apt:any-linux"]);
-    }
-
-    #[test]
-    fn inline_then_guard() {
-        let f = facts();
-        let lines = vec![
-            "when os == linux then apt:htop".to_string(),
-            "when os == windows then winget:foo".to_string(),
-        ];
-        let out = filter_conditional_lines(lines, &f).unwrap();
-        assert_eq!(out, vec!["apt:htop"]);
-    }
-
-    #[test]
-    fn unbalanced_blocks_error() {
-        let f = facts();
-        assert!(filter_conditional_lines(vec!["when os == linux".into()], &f).is_err());
-        assert!(filter_conditional_lines(vec!["end".into()], &f).is_err());
-    }
-
-    #[tokio::test]
-    async fn parse_group_file_strips_utf8_bom() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("local.txt");
-        // A manifest saved by a Windows editor with a UTF-8 BOM on the first line.
-        tokio::fs::write(&path, "\u{feff}cargo:ripgrep\napt:htop\n")
-            .await
-            .unwrap();
-        let lines = parse_group_file(&path).await.unwrap();
-        assert_eq!(lines, vec!["cargo:ripgrep", "apt:htop"]);
     }
 }
 

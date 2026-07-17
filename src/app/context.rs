@@ -190,7 +190,7 @@ impl App {
             self.snapshot_manager.clone(),
             self.state.clone(),
             self.executor.clone(),
-            self.config.groups_dir.clone(),
+            self.config.config_root(),
         )
     }
 
@@ -708,13 +708,12 @@ impl App {
         Ok(())
     }
 
-    /// A [`GitManager`] scoped to the LiNix config directory (the parent of the groups dir),
-    /// which holds `config.toml`, `groups/`, `modules/`, and `profiles/`.
+    /// A [`GitManager`] scoped to the LiNix repo root (II.1), which holds `modules/`,
+    /// `profiles/`, `active`, `priority` and `locks/`.
     ///
-    /// Safety: this must NEVER resolve to the current working directory. `Path::parent()` of a
-    /// bare relative `groups_dir` (e.g. "groups") returns an *empty* path, which would make git
-    /// operate on `.` — i.e. whatever repo the user happens to be standing in. We therefore
-    /// reject an empty/relative parent and fall back to the canonical config dir instead.
+    /// Safety: `config_root()` never resolves to the current working directory — an empty or
+    /// relative stored root falls back to the platform config dir — so git never operates on
+    /// whatever repo the user happens to be standing in.
     pub fn git_manager(&self) -> crate::core::GitManager {
         crate::core::GitManager::new(self.config.config_root())
     }

@@ -29,7 +29,7 @@ impl<'a> StateResolver<'a> {
         let mut locks = HashMap::new();
 
         if locked {
-            let lock_path = config.groups_dir.join("locks.json");
+            let lock_path = config.config_root().join("locks.json");
             debug!(
                 "Resolver: Locked mode active. Probing for locks at {:?}",
                 lock_path
@@ -416,8 +416,8 @@ mod tests {
             std::fs::write(full, body).unwrap();
         }
         let config = Config {
-            // `config_root` is this file's parent, which is what the layout hangs off.
-            groups_dir: root.join("groups"),
+            // `root` is the repo root the layout hangs off (modules/, profiles/, active).
+            config_root: root.clone(),
             ..Config::default()
         };
         Repo { _tmp: tmp, config }

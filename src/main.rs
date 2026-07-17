@@ -548,12 +548,12 @@ async fn handle_watch(
     let interval = interval.max(1);
     println!(
         "linix watch: reconciling {} every {}s{}{}. Ctrl-C to stop.",
-        app.config.groups_dir.display(),
+        app.config.config_root().display(),
         interval,
         if pull { " (git pull each tick)" } else { "" },
         if on_change { " (on change only)" } else { "" },
     );
-    let mut last_sig = manifest_signature(&app.config.groups_dir).await;
+    let mut last_sig = manifest_signature(&app.config.config_root().join("modules")).await;
     let mut first = true;
     loop {
         if pull {
@@ -565,7 +565,7 @@ async fn handle_watch(
                 }
             }
         }
-        let sig = manifest_signature(&app.config.groups_dir).await;
+        let sig = manifest_signature(&app.config.config_root().join("modules")).await;
         let changed = sig != last_sig;
         // Reconcile on the first pass and whenever something changed; with --on-change we skip
         // ticks where nothing moved (the manifests and, after a pull, the repo are unchanged).
@@ -1938,7 +1938,7 @@ async fn rollback_to(
     if full_scope {
         linix::app::generation::write_manifests_with_backup(
             &generation.manifests,
-            &app.config.groups_dir,
+            &app.config.config_root(),
         )
         .await?;
     }
@@ -2665,9 +2665,9 @@ async fn build_and_write_locks(app: &App) -> Result<usize> {
         }
     }
     let count = locks.len();
-    tokio::fs::create_dir_all(&app.config.groups_dir).await.ok();
+    tokio::fs::create_dir_all(&app.config.config_root()).await.ok();
     let doc = serde_json::json!({ "locks": locks });
-    let path = app.config.groups_dir.join("locks.json");
+    let path = app.config.config_root().join("locks.json");
     tokio::fs::write(&path, serde_json::to_string_pretty(&doc)?)
         .await
         .with_context(|| format!("Failed to write {}", path.display()))?;
@@ -2679,7 +2679,7 @@ async fn handle_lock(app: &App) -> Result<()> {
     info!(
         "Lock: pinned {} package version(s) to {}",
         count,
-        app.config.groups_dir.join("locks.json").display()
+        app.config.config_root().join("locks.json").display()
     );
     Ok(())
 }
@@ -3377,7 +3377,7 @@ async fn enforce_policy(
     app: &App,
     desired: &HashMap<String, Vec<linix::core::PackageSpec>>,
 ) -> Result<()> {
-    let path = app.config.groups_dir.join("policy.toml");
+    let path = app.config.config_root().join("policy.toml");
     let Some(policy) = linix::app::policy::Policy::load(&path).await? else {
         return Ok(());
     };
@@ -3463,7 +3463,7 @@ fn print_flight_plan(app: &App, changes: &linix::app::sync::planner::SyncChanges
 
 /// `linix policy` — report whether the desired state complies with policy.toml.
 async fn handle_policy(app: &App) -> Result<()> {
-    let path = app.config.groups_dir.join("policy.toml");
+    let path = app.config.config_root().join("policy.toml");
     let Some(policy) = linix::app::policy::Policy::load(&path).await? else {
         println!("No policy.toml at {} — no rules in effect.", path.display());
         return Ok(());
@@ -3698,8 +3698,7 @@ async fn interactive_init(app: &App, force: bool) -> Result<()> {
 
     let mut new_cfg = apply_init_answers(defaults, &answers);
     new_cfg.config_file = config_path.clone();
-    new_cfg.groups_dir = app.config.groups_dir.clone();
-    new_cfg.modules_dir = app.config.modules_dir.clone();
+    new_cfg.config_root = app.config.config_root();
 
     if let Some(parent) = config_path.parent() {
         tokio::fs::create_dir_all(parent).await.ok();
@@ -3943,8 +3942,9 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
     let mut fixes: Vec<String> = Vec::new();
 
     for (label, dir) in [
-        ("groups dir", app.config.groups_dir.clone()),
-        ("modules dir", app.config.modules_dir.clone()),
+        ("config root", app.config.config_root()),
+        ("modules dir", app.config.config_root().join("modules")),
+        ("profiles dir", app.config.config_root().join("profiles")),
     ] {
         if dir.exists() {
             system.push((label.into(), HealthStatus::Ok, None));
@@ -3971,7 +3971,7 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
 
     // ---- Lockfile integrity: does locks.json still match the managed set? ----
     {
-        let lock_path = app.config.groups_dir.join("locks.json");
+        let lock_path = app.config.config_root().join("locks.json");
         if !lock_path.exists() {
             system.push((
                 "lockfile".into(),

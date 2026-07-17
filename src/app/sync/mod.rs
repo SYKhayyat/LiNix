@@ -248,7 +248,7 @@ impl<'a> SyncEngine<'a> {
                     &rfc,
                     "",
                     &state,
-                    &self.config.groups_dir,
+                    &self.config.config_root(),
                 )
                 .await?;
         }

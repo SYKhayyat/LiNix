@@ -14,7 +14,7 @@ pub struct UndoManager {
     state: Arc<Mutex<StateRegistry>>,
     executor: CommandExecutor,
     /// Manifest directory, so a snapshot rollback can also restore the matching generation.
-    groups_dir: PathBuf,
+    config_root: PathBuf,
 }
 
 #[derive(Debug, Default)]
@@ -53,13 +53,13 @@ impl UndoManager {
         snapshot_manager: Arc<SnapshotManager>,
         state: Arc<Mutex<StateRegistry>>,
         executor: CommandExecutor,
-        groups_dir: PathBuf,
+        config_root: PathBuf,
     ) -> Self {
         Self {
             snapshot_manager,
             state,
             executor,
-            groups_dir,
+            config_root,
         }
     }
 
@@ -82,7 +82,7 @@ impl UndoManager {
         match store.nearest_at_or_before(when).await {
             Ok(Some(gen)) => {
                 let mut state = self.state.lock().await;
-                if let Err(e) = store.restore(&gen.id, &mut state, &self.groups_dir).await {
+                if let Err(e) = store.restore(&gen.id, &mut state, &self.config_root).await {
                     warn!(
                         "Undo: could not restore matching generation {}: {}",
                         gen.id, e

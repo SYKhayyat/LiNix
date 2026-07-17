@@ -26,10 +26,10 @@ use tracing::warn;
 ///
 /// Keyed by full path, not filename, so a generation records where each file came from and
 /// `rollback` can put it back there.
-pub async fn read_manifests(groups_dir: &Path) -> Result<HashMap<String, String>> {
+pub async fn read_manifests(config_root: &Path) -> Result<HashMap<String, String>> {
     let mut out = HashMap::new();
-    if tokio::fs::try_exists(groups_dir).await.unwrap_or(false) {
-        let mut entries = tokio::fs::read_dir(groups_dir).await.map_err(Error::from)?;
+    if tokio::fs::try_exists(config_root).await.unwrap_or(false) {
+        let mut entries = tokio::fs::read_dir(config_root).await.map_err(Error::from)?;
         while let Some(entry) = entries.next_entry().await.map_err(Error::from)? {
             let path = entry.path();
             if !path.extension().map(|e| e == "txt").unwrap_or(false) {
@@ -296,10 +296,10 @@ impl GenerationStore {
         timestamp: &str,
         label: &str,
         state: &StateRegistry,
-        groups_dir: &Path,
+        config_root: &Path,
     ) -> Result<Generation> {
         // The manifest repo's root is the config dir, i.e. the parent of the groups dir.
-        let git_commit = groups_dir
+        let git_commit = config_root
             .parent()
             .map(crate::core::GitManager::new)
             .filter(|g| g.is_repo())
@@ -311,7 +311,7 @@ impl GenerationStore {
             label: label.to_string(),
             pinned: false,
             packages: state.packages.clone(),
-            manifests: read_manifests(groups_dir).await?,
+            manifests: read_manifests(config_root).await?,
             git_commit,
         };
         tokio::fs::create_dir_all(&self.dir)
@@ -390,7 +390,7 @@ impl GenerationStore {
     }
 
     /// Roll back to a generation: restore its realized package set into `state` and write
-    /// its frozen manifests back into `groups_dir`. Existing manifest files that the
+    /// its frozen manifests back into `config_root`. Existing manifest files that the
     /// generation would overwrite are backed up once to `<file>.linix-backup` first, so a
     /// rollback never silently discards uncommitted manifest edits.
     pub async fn restore(

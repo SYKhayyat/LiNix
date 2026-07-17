@@ -38,8 +38,7 @@ impl TestKernel {
         let registry_path = tmp.path().join("registry.json");
 
         let mut config = Config::default();
-        config.groups_dir = tmp.path().join("groups");
-        config.modules_dir = tmp.path().join("modules");
+        config.config_root = tmp.path().to_path_buf();
         config.tmp_dir = tmp.path().join("tmp");
         config.dry_run = true;
 

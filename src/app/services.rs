@@ -74,7 +74,7 @@ impl AppServices {
                 app.snapshot_manager.clone(),
                 app.state.clone(),
                 app.executor.clone(),
-                app.config.groups_dir.clone(),
+                app.config.config_root(),
             ),
             profile_manager: ProfileManager::new(
                 app.registry.clone(),
