@@ -1419,8 +1419,8 @@ verified against the tree at the commit that last touched this section, not reca
 
 ## The state at `HEAD` (2026-07-17)
 
-- **26 commits** since `d49d28c`.
-- **517 tests passing, 0 failing. `cargo clippy --all-targets` silent.** *(The audit above
+- **35 commits** since `d49d28c`.
+- **525 tests passing, 0 failing. `cargo clippy --all-targets` silent.** *(The audit above
   caught this tree mid-deletion and said so rather than filing it as a finding — that was the
   right call, and the deletion has landed.)*
 - *Those two numbers tell you nothing about the line below them, and never could — every false
@@ -1473,43 +1473,44 @@ problem.**
 > this a command you run rather than a paragraph you trust. See "A warning about this
 > document" below.)*
 
-### Phase 1 ✅ / C13 "done" — "one `backend:name` parser". There are nine.
+### Phase 1 ✅ / C13 "done" — "one `backend:name` parser". Was nine; one skipper left.
 
-**This one blocks the next action, so it comes first.** The grammar parser was **added
-alongside** the eight, not substituted for them — and **six still trust the prefix without
-validating it**, which is the entire defect C13 names.
+**This all but closed itself while the audit was being written.** The grammar parser was
+**added alongside** the eight, not substituted for them — but the phases that deleted the old
+model took the skippers with them, and **one non-validating parser now remains.** This no
+longer blocks the next action; it is nearly done, and the doc had not caught up.
 
-**Re-run 2026-07-17: the finding stands and every number and line in it was wrong.** It said
-nine sites and six skippers. It is **eight hits — 7 code + 1 comment — and three skippers**,
-and **four of the six sites it named do not exist** (`config/manifest.rs:218` is past the end
-of a 178-line file). Corrected:
+**Third pass 2026-07-17 (after Phase 2o): two of the three skippers are gone.**
+`app/insight.rs:428` died in **Phase 2j** (the `why` rewrite) and `config/manifest.rs:90` died
+in **Phase 2n** (ManifestEngine deleted). The grep is now **7 hits (6 code + 1 comment), and
+exactly one skips validation:**
 
 | | site |
 |---|---|
-| **validates** | `grammar/statement.rs:304` (the new one, the one to keep) · `config/parser.rs:199` `split_removal_target` — *consults the registry, and is not a defect* · `main.rs:643` — `registry.get(b).is_some()` |
-| **skips validation** | `app/insight.rs:428` · `config/manifest.rs:90` · `main.rs:1378` (`lease set`) |
-| **uncounted, and new** | `model/resolve.rs:491` — `same_package`, in the **new model**. A name-comparison helper, not a backend parser; judge it, don't just count it. |
+| **validates** | `grammar/statement.rs:328` (the grammar keeper — `is_backend(prefix)` at `:329`) · `grammar/statement.rs:187` (`repo:` parse, new in 2o — validates at `:201`) · `config/parser.rs:199` `split_removal_target` — *consults the registry, and is not a defect* · `main.rs:649` — `registry.get(b).is_some()` · `model/resolve.rs:501` — `same_package`, a name-comparison helper in the new model, not a backend parser |
+| **skips validation** | `main.rs:1410` (`lease set`, was `:1378`) — **the last one.** It splits `backend:package` and trusts it, and it is **the same path S19 flags**: `@lease` can uninstall your package on a route C3 says bypasses the guard. Fixing S19 fixes this. |
+| **comment** | `grammar/statement.rs:530` — the test comment, not a parser. |
 
 ```
 grep -rn "split_once(':')" src/ | grep -v "^src/parsers/"
 ```
-**Now: 8 (7 code + 1 comment). Fixed when: 3 remain** — `grammar/statement.rs`,
-`config/parser.rs:199` (validates, belongs) and `model/resolve.rs:491` (a helper).
-**"Fixed when: 1" was never reachable and would have driven someone to delete a working
-validator.** *(`src/parsers/` is excluded deliberately: it parses backend CLI **output**, a
-different concern that happens to share a word. Do not count it, and do not delete it.)*
+**Now: 7 (6 code + 1 comment). Fixed when: `main.rs:1410` (`lease set`) validates** — every
+other hit either checks the registry or is a helper/comment that never trusted a prefix.
+**Do not delete the validators to hit a number:** the earlier "Fixed when: 1" / "3 remain"
+targets were both wrong, in both directions, and either would have had someone delete working
+code. *(`src/parsers/` is excluded deliberately: it parses backend CLI **output**, a different
+concern that happens to share a word. Do not count it, and do not delete it.)*
 
-**The "why it blocks II.8" argument this entry used to make was built on a function that no
-longer exists.** It cited `remove_package_from_local` comparing the backend half — `grep -rn
-"remove_package_from_local" src/` is **empty**; it died in Phase 2e, and **S9 died with it**,
-of `model/edit.rs`, not of `local.txt`. The two remaining skippers were checked for S9's shape
-and **do not have it**: `insight.rs:429` requires both halves (`b == backend && n == name`) and
-`manifest.rs:90` matches the *name* half. **The reason to finish C13 is C13, not S9** — do not
-re-argue this from the old text.
+**S9 is not why this matters — C13 is.** The old "why it blocks II.8" argument rested on
+`remove_package_from_local` (`grep` empty; died in Phase 2e, and **S9 died with it**, of
+`model/edit.rs`). The one surviving skipper was never S9's shape either: `lease set` is a
+suspension path, not a removal that compares a backend half. **The reason to finish this is
+that a `lease` can act on an unvalidated `backend:package` — which is S19 — not S9.**
 
-**The test at `grammar/statement.rs:472` still says the quiet part:** *"Six of the **eight old**
-parsers did `split_once(':')` and trusted the prefix."* **Both numbers are now wrong and the
-word "old" is still unearned** — it is three, of eight, and they are current.
+**The test comment at `grammar/statement.rs:530` still says the quiet part:** *"Six of the
+**eight old** parsers did `split_once(':')` and trusted the prefix."* **All of it is now wrong**
+— it is **one**, not six; the parsers are **current**, not old; and that one is `lease set`,
+which the sentence predates. Update the comment when `lease set` is fixed and this entry goes.
 
 ### Phase 0 ✅ — "delete everything in II.17". Roughly 15% happened.
 
@@ -1520,7 +1521,7 @@ word "old" is still unearned** — it is three, of eight, and they are current.
 | `keep.txt` (V.6) | ~~alive~~ — **dead as of Phase 2e.** It was never *read*: the whole `RESERVED_MANIFEST_NAMES` / `is_reserved_manifest` mechanism existed only to keep one file out of a crawl. Mechanism and all four exclusion sites deleted. | fixed |
 | `_active_profiles.txt` | ~~still written on every `activate`~~ — **dead as of Phase 2f.** `materialize()`, `compose()` (the second profile engine) and `RESERVED_MANIFEST` are deleted; `ProfileManager` runs on the model and `activate` edits one file, `active`. 657 lines -> 348. | fixed |
 | `prune` (V.34) | **partly fixed in Phase 2h.** `prune_on_sync`, `prune_scope` and `protect_imperative` are deleted, and sync removes drift by definition. `snapshot prune` stays — V.34 says deleting the command leaves exactly one meaning of the word ("delete old history"), and that is it. `auto_prune` is snapshot retention, the same one surviving meaning. | fixed |
-| `migrate` | **606 live lines**, called by `adopt`. Renamed, not deleted — and `migrate.rs:283` still tells the user to *"run `linix migrate` again"*, a command that does not exist. | `main.rs:2153` |
+| `migrate` | **696 live lines**, called by `adopt`. Renamed, not deleted. ~~`migrate.rs:283` still tells the user to *"run `linix migrate` again"*~~ — **that message is gone (Phase 2k rewired `adopt` onto the new model);** `grep -rn "linix migrate" src/app/migrate.rs` is empty. The file **grew** (606→696) doing that rewiring, so this is not the pending deletion it reads as — it is live, working code the plan no longer wants to delete. | `main.rs:2153` |
 | `clone` (V.33) | ~~a CLI command~~ — the command was gone, but **`fleet::clone` + `install_one` were still `pub` with zero callers**: Phase 0 deleted the flag and left the implementation. Deleted in Phase 2e. | fixed |
 | ~884 marketing comments | **≈3,700 comment lines remain** in ≈41,600 lines of `src/` (~8.9%). **The count proves nothing on its own and is not the finding** — this one cannot be greped, so judge it by reading. The finding is that **the new `model/` files are writing spec-narration comments as the rule against them is being implemented**: `model/layout.rs:9` *"the fix for the shape of Monday's bug"*, `:135` *"which is Monday's bug (V.1)"*, `model/resolve.rs:162` *"the cost II.4 accepts knowingly"*. **V.42 is being broken by the code that cites V.42.** | `model/layout.rs:9,135` |
 
@@ -1790,10 +1791,11 @@ applied by the `SyncEngine` around the package graph, not inside it. `RepoManage
 exists (`core/manager.rs:120`); services have `service_apply` (`main.rs:1413`); shims have
 `ShimManager` and already reconcile in sync; links have the `link` backend.
 
-**The remaining deletions** are smaller and independent: `groups_dir` (64 refs, down from
-84), whose `config_root()` is still `groups_dir.parent()`; the **six** non-validating
-`split_once(':')` parsers; and `migrate` (606 lines, renamed to `adopt`, still telling users
-to run a command that does not exist).
+**The remaining deletions** are smaller and independent: `groups_dir` (**41** refs, down from
+84), whose `config_root()` is still `groups_dir.parent()`; and the **one** non-validating
+`split_once(':')` parser left (`lease set`, `main.rs:1410` — fixed with S19). `migrate` is no
+longer on this list: it was rewired onto the new model in Phase 2k (now 696 lines, called by
+`adopt`), not deleted, and the "run `linix migrate` again" message is gone.
 
 ## Done in Phase 2l — `uninstall`, and the symmetric pair is symmetric again
 
