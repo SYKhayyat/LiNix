@@ -651,6 +651,14 @@ Run `linix lock fonts` to see the new script and approve it.
 
 **Hash everything, including your own scripts.** One rule, no exceptions.
 
+**Two kinds of hook, by when they run — both go through the ledger.** Whole-sync lifecycle
+hooks live in the `[hooks]` config block (`before_sync`/`after_sync`, target `*`, run once
+around the entire sync). Per-package hooks are attached to a declaration
+(`apt:nginx { after_install = ./setup.sh }`) and fire inside the engine for that one package,
+keyed per package (`after_install:nginx` ≠ `after_install:redis`). These are **not duplicates**
+— a per-package hook cannot express "before the whole sync", so `[hooks]` stays (owner ruling
+2026-07-17; that is why it is not on II.17's delete list).
+
 **`plan` shows the trust, before anything happens:**
 
 ```
@@ -759,7 +767,7 @@ real work and must stay.
 **Syntax:** `group:` · `include:` · `host-*.txt` · `_active_profiles.txt` · `local.txt`'s
 special status · `-vim` in modules
 
-**Config:** `[groups]` · `[hostname_packages]` · `[managed_files]` · `[hooks]` ·
+**Config:** `[groups]` · `[hostname_packages]` · `[managed_files]` ·
 `[schedules]` · `backend_priority` · `enabled_backends` · `hostname_backends` ·
 `default_backend` · `prune_on_sync` · `prune_scope` · `purge_orphans` · `cache_ttl` ·
 `confirm_destructive` · `protect_imperative` · `remove_bloatware` · `timeshift_path` ·
@@ -769,6 +777,12 @@ optional concurrency cap. See II.1 and V.41.)*
 
 **Files:** `keep.txt` (→ `forget`) · `policy.toml` (→ `[guard]`) · `bloatware.txt` (→
 `absent:`) · `.linix-lock.key` · `locks.json` (→ `locks/`) · `ghosts.json`
+
+*(`[hooks]` was struck from the config delete list by owner ruling 2026-07-17. It is **not** a
+duplicate of module hooks — the two are different features by *when they run*: `[hooks]` holds
+whole-sync lifecycle hooks (`before_sync`/`after_sync`, target `*`), while `before_install`/
+`after_install` are per-package hooks attached to a declaration. Deleting `[hooks]` would remove
+the whole-sync kind, which modules cannot express. See II.12.)*
 
 **Code:** `locksig.rs` · the generation format · `ManifestArchive` · `quick()` ·
 `ScopedFilter::None` as a spare-everything switch · every legacy branch
@@ -976,9 +990,12 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
     clean; **11 unit tests written but NOT executed this session** (no-run constraint) — they
     cover hash stability/sensitivity, the New/Approved/Changed verdicts, identity isolation,
     re-approval, TOML round-trip, missing-file load, and both refusal messages. **Honest gaps:**
-    (1) it currently hashes the **inline `config.hooks`** scripts (source tag `"config"`); the
-    II.12 examples show **module-attached** hooks from `github:x/y` — the mechanism is identical
-    and reusable, but wiring module hooks is not done. (2) `plan` does not yet show the trust
+    (1) it currently hashes the **inline `config.hooks`** scripts (source tag `"config"`) — the
+    whole-sync `before_sync`/`after_sync` kind. Per owner ruling 2026-07-17 that source **stays**
+    (II.12's two kinds; `[hooks]` is off the delete list), so this is done and correct, not a
+    to-be-migrated surface. **Still owed:** the *per-package* hooks (`before_install`/`after_install`,
+    including module-attached ones from `github:x/y`) are not yet run through the ledger — the
+    mechanism is identical and reusable, but that wiring is the remaining half. (2) `plan` does not yet show the trust
     block (II.12's "adds repository / runs script [approved|CHANGED]"). (3) **Behaviour change:**
     a user with existing `config.hooks` must now run `linix lock` once before the next sync — the
     intended II.12 behaviour, but a change. (4) The version-pin `locks.json` still sits beside
