@@ -1,0 +1,7 @@
+# Give the Windows main thread an 8 MB stack (matches the Linux/macOS default).
+# The MSVC default is only 1 MB, and debug builds' unoptimized stack frames —
+# combined with clap building the full command tree before parsing even
+# `--version` — overflow it. Release fits in 1 MB, but this keeps debug/`cargo
+# run` working on Windows too. See BEHAVIOR.org / the stack-overflow note.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-args=/STACK:8388608"]
