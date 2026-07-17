@@ -1005,7 +1005,18 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
 - `linix diff COMMIT COMMIT` in packages, not text.
 - `bundle` = `git bundle` + artifacts + registry, **honest per-backend about what can't be
   bundled**.
-- One retention engine.
+- ~~One retention engine.~~ **DONE, 2026-07-17.** There were two: generations and the `sync`-time
+  snapshot prune both used `core::RetentionPolicy` (the correct engine, with the "always keep the
+  newest" floor and the LiNix-ownership filter), but `App::prune_snapshots` (the `auto_prune`
+  maintenance path) used a **separate** `SnapshotManager::prune_stale_snapshots` with different
+  semantics — notably **no newest-floor**, so if every snapshot was older than `max_age_days` it
+  deleted them all, leaving no rollback point. Deleted that duplicate; `prune_snapshots` now goes
+  through `prune_with_policy` like `sync` does. Config was also doubled (`[snapshots]`
+  `max_age_days`/`max_count` vs `[retention.snapshots]`): new `Config::snapshot_retention()`
+  resolves both dialects to one `RetentionPolicy` (modern preferred, legacy mapped so existing
+  configs keep working), used by both call sites — one engine, one answer. **Checked:** `cargo
+  check --lib`/`--bin` clean, no warnings; **1 unit test written but NOT run** (modern-wins /
+  legacy-maps). The OS-level delete is untestable here; the policy resolution + selection is pure.
 
 **Exit:** an air-gapped container restores from a bundle, or bundle says why it can't.
 
@@ -1583,7 +1594,9 @@ and a user who can see which of the three lines they meant to delete.
 - `config.toml` never travels with history.
 - "Rollback" means two things depending on flags; `undo` assigns the registry by fiat.
 - Manifests stored twice on independent budgets.
-- Two snapshot retention engines. **(E4)**
+- ~~Two snapshot retention engines. **(E4)**~~ **DONE 2026-07-17** — the duplicate
+  `prune_stale_snapshots` is deleted; all pruning goes through `prune_with_policy` +
+  `Config::snapshot_retention()`. See the Phase 4 "one retention engine" note.
 - Every bundle restore is unverified by construction. **(H1)**
 - `linix repo add` records nothing → modules are not portable.
 - `linix shim --source` is required, documented, and thrown away. **(verified)**

@@ -893,15 +893,20 @@ impl App {
     }
 
     pub async fn prune_snapshots(&self, force: bool) -> Result<()> {
-        let settings = &self.config.snapshots;
         let is_dry_run = if force { false } else { self.config.dry_run };
+        let policy = self.config.snapshot_retention();
         info!(
-            "Kernel: Commencing snapshot maintenance cycle (Limit: {} days / {} count).",
-            settings.max_age_days, settings.max_count
+            "Kernel: Commencing snapshot maintenance cycle (keep_last {} / keep_days {}).",
+            policy.keep_last, policy.keep_days
         );
+        // One retention engine: the same `RetentionPolicy` + `prune_with_policy` that `sync`
+        // uses, which always keeps the most-recent snapshot (a floor the old
+        // `prune_stale_snapshots` lacked — it could delete the last rollback point) and only
+        // ever reaps LiNix-owned snapshots.
         self.snapshot_manager
-            .prune_stale_snapshots(settings.max_age_days, settings.max_count, is_dry_run)
+            .prune_with_policy(&policy, chrono::Utc::now(), is_dry_run)
             .await
+            .map(|_| ())
     }
 
     /// The backends this host uses, in priority order (II.6's `priority` file). Empty only

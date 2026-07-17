@@ -1,9 +1,8 @@
 use crate::config::Config;
 use crate::core::{CommandExecutor, Error, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Duration as ChronoDuration, Local, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command as StdCommand;
 use tracing::{debug, info};
@@ -464,52 +463,6 @@ impl SnapshotManager {
     /// safety net rather than performing an unrecoverable change.
     pub fn has_provider(&self) -> bool {
         self.provider.is_some()
-    }
-
-    pub async fn prune_stale_snapshots(
-        &self,
-        max_age_days: u32,
-        max_count: u32,
-        is_dry_run: bool,
-    ) -> Result<()> {
-        let p = match &self.provider {
-            Some(p) => p,
-            None => return Ok(()),
-        };
-        let mut list = p.list().await?;
-        if list.is_empty() {
-            return Ok(());
-        }
-
-        list.sort_by_key(|s| s.parse_time().unwrap_or(Utc::now()));
-        let mut to_delete = HashSet::new();
-        let now = Utc::now();
-        let age_limit = ChronoDuration::days(max_age_days as i64);
-
-        for s in &list {
-            if let Some(time) = s.parse_time() {
-                if now.signed_duration_since(time) > age_limit {
-                    to_delete.insert(s.id.clone());
-                }
-            }
-        }
-
-        let remaining: Vec<_> = list.iter().filter(|s| !to_delete.contains(&s.id)).collect();
-        if remaining.len() > max_count as usize {
-            let overflow = remaining.len() - max_count as usize;
-            for snap in remaining.iter().take(overflow) {
-                to_delete.insert(snap.id.clone());
-            }
-        }
-
-        for id in to_delete {
-            if is_dry_run {
-                debug!("Snapshot: [DRY-RUN] Would prune {}", id);
-            } else {
-                p.delete(&id).await?;
-            }
-        }
-        Ok(())
     }
 
     pub async fn list_snapshots(&self) -> Result<Vec<Snapshot>> {

@@ -274,7 +274,7 @@ impl<'a> SyncEngine<'a> {
 
         match self
             .snapshot_manager
-            .prune_with_policy(&self.config.retention.snapshots, ts, false)
+            .prune_with_policy(&self.config.snapshot_retention(), ts, false)
             .await
         {
             Ok(r) if !r.is_empty() => debug!("Sync: pruned {} snapshot(s).", r.len()),
