@@ -212,6 +212,20 @@ impl GitManager {
         Ok(parse_manifest_changes(&raw))
     }
 
+    /// Write a `git bundle` of the whole repo to `dest` — every commit and ref in one file,
+    /// for an air-gapped transfer. `git clone <dest>` on the far side reconstructs the repo
+    /// with its full history, so the recipient can `rollback` to any past commit, not just
+    /// restore the current manifests. Returns `Ok(false)` (nothing written) when there is no
+    /// repo or no commits yet — a bundle honestly reports what it could not include.
+    pub fn bundle(&self, dest: &Path) -> Result<bool> {
+        if !self.is_repo() || self.head()?.is_none() {
+            return Ok(false);
+        }
+        let dest = dest.to_string_lossy().to_string();
+        self.run_checked(&["bundle", "create", &dest, "--all"])?;
+        Ok(true)
+    }
+
     /// The manifest lines that differ between two commits — `linix diff <from> <to>` in
     /// packages, not text (Phase 4). `from` is the older baseline; pass `to = None` to diff
     /// `from` against the working tree (committed + uncommitted). Limited to the config files,

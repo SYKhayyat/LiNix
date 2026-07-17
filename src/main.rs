@@ -3426,6 +3426,23 @@ async fn handle_bundle(app: &App, out: &str, artifacts: bool, archive: bool) -> 
         report.files_copied,
         report.package_count
     );
+    // Honest per-part reporting: say plainly what did and did NOT make it into the bundle.
+    println!(
+        "  manifest history (git bundle): {}",
+        if report.git_history_included {
+            "included (config.bundle) — `git clone` it to roll back to any past commit"
+        } else {
+            "NOT included — the config is not a git repo (or has no commits); run `linix git init`"
+        }
+    );
+    println!(
+        "  ownership registry (registry.json): {}",
+        if report.registry_included {
+            "included"
+        } else {
+            "NOT included — none found"
+        }
+    );
     if artifacts {
         println!(
             "Artifacts: {} fetched, {} skipped.",
