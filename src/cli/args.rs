@@ -406,15 +406,10 @@ pub enum Commands {
     /// (drive backends), and for a full rollback also restores its manifests. Scope with
     /// `--package` and/or the global `--backend` to roll back just part of the system.
     Rollback {
-        /// Generation id to restore (see `linix generation list`)
-        id: String,
-        /// Only roll back this package (name or backend:name)
-        #[arg(long)]
-        package: Option<String>,
-        /// Also check out the manifest git commit stamped on this generation, so config and
-        /// system are rolled back together (the "grab the other half" convenience).
-        #[arg(long)]
-        with_config: bool,
+        /// The git commit (or ref like HEAD~1) to roll back to. See `linix git log`.
+        /// Rollback checks out the manifests at that commit, then syncs the machine to match —
+        /// one mechanism, no separate generation history (II.1: git IS the history).
+        reference: String,
     },
 
     /// Version-control your manifests/config directory with git: init, status, log, commit,

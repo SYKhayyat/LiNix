@@ -128,11 +128,7 @@ async fn main() -> Result<()> {
         Commands::Schedule(args) => handle_schedule(&app, &args.command).await,
         Commands::Snapshot(args) => handle_snapshot(&app, &args.command).await,
         Commands::Generation(args) => handle_generation(&app, &args.command).await,
-        Commands::Rollback {
-            id,
-            package,
-            with_config,
-        } => handle_rollback(&app, id, package.as_deref(), *with_config).await,
+        Commands::Rollback { reference } => handle_rollback(&app, reference).await,
         Commands::Git(args) => handle_git(&app, &args.command).await,
         Commands::Repo(args) => handle_repo(&app, &args.command).await,
         Commands::Search {
@@ -2089,14 +2085,28 @@ async fn handle_generation(app: &App, cmd: &GenerationCommand) -> Result<()> {
     Ok(())
 }
 
-async fn handle_rollback(
-    app: &App,
-    id: &str,
-    package: Option<&str>,
-    with_config: bool,
-) -> Result<()> {
-    let store = generation_store(app).await;
-    rollback_to(app, &store, id, package, with_config).await
+/// `linix rollback <ref>` — the one rollback (owner decision, Phase 4): check out the manifests
+/// at a past git commit, then `sync` the machine to match. There is no separate generation
+/// history — git IS the history (II.1), so a rollback is "point the manifests at then, converge
+/// now". Whole-config by nature: git checkout is all-or-nothing, which is why the old
+/// per-package / with-config flags are gone.
+async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
+    let git = app.git_manager();
+    if !git.is_repo() {
+        anyhow::bail!(
+            "Rollback needs manifest history. Run `linix git init` once to start version-\
+             controlling your config; after that every sync commits, and you can roll back to \
+             any commit."
+        );
+    }
+    info!("Rollback: checking out manifests at {}.", reference);
+    git.checkout_files(reference)?;
+    println!(
+        "Manifests restored to {}. Converging the system to match…",
+        reference
+    );
+    // The rollback is not complete until the machine matches the restored manifests.
+    handle_sync(app, false, false).await
 }
 
 async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
