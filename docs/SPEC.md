@@ -1121,6 +1121,14 @@ implementing agent's call; that it goes is not.**
   (`args.rs:36`,`:43`). Rename it into that family — `--allow-mass-purge` — and update the flag, its
   handler param, and the hint text at `main.rs:2819`. One vocabulary for the guard, no jokes.
 
+- **R9 — General rule: no emoji and no self-branding in user-facing output.** Output states the
+  plain fact and the action to take; it does not decorate with emoji or narrate itself as "LiNix
+  Insight" / "Semantic analysis". Concrete sites: the dependency hints at `diagnostics.rs:134`,`:235`
+  (`💡 LiNix Insight: Semantic analysis identified a missing dependency` → `missing dependency: X —
+  try: linix install X`), and the notification emoji at `notify.rs:23-26`,`:151` (covered by R6).
+  A sweep confirmed those are the only two files with emoji, but this is a **standing rule** for all
+  new output too: plain text, name the problem, name the fix.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
