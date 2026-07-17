@@ -37,6 +37,7 @@ pub enum GuardScope {
     Remove,
     ShellExit,
     Leases,
+    Heal,
 }
 
 impl GuardScope {
@@ -53,6 +54,7 @@ impl GuardScope {
             Self::Remove => "remove",
             Self::ShellExit => "shell-exit",
             Self::Leases => "leases",
+            Self::Heal => "heal",
         }
     }
 
@@ -573,6 +575,7 @@ mod tests {
             GuardScope::Remove,
             GuardScope::ShellExit,
             GuardScope::Leases,
+            GuardScope::Heal,
         ] {
             assert!(
                 enforce(&cfg, &reg, &pairs(&["python3"]), scope).await.is_err(),

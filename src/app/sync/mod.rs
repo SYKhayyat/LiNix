@@ -407,6 +407,9 @@ impl<'a> SyncEngine<'a> {
         );
         let mut recovered: Vec<String> = Vec::new();
         let mut failed: Vec<String> = Vec::new();
+        // Packages whose interrupted removal the guard refused: kept, not removed (owner
+        // decision), and the entry resolved so heal completes rather than sticking.
+        let mut kept: Vec<String> = Vec::new();
         for entry in incomplete_actions {
             let (backend, package, is_install) = match &entry.action {
                 crate::core::journal::JournalAction::Install(spec) => {
@@ -421,6 +424,34 @@ impl<'a> SyncEngine<'a> {
             if let Some(backend_cap) = self.registry.get(&backend) {
                 if let Some(handler) = backend_cap.as_installable() {
                     let sudo = backend_cap.sudo_for_write();
+
+                    // Owner decision: completing an interrupted *removal* routes through the
+                    // guard, so a protected package is never removed even during recovery. On
+                    // refusal we KEEP the package and treat the entry as resolved — recovery
+                    // completes, protection holds, and heal never gets stuck retrying a removal
+                    // it will always refuse. (The remove-before-reinstall of the install path is
+                    // not a removal of intent — the same package is reinstalled next — so it is
+                    // not guarded here.)
+                    if !is_install {
+                        let removal = [(backend.clone(), package.clone())];
+                        if let Err(objection) =
+                            guard::enforce(self.config, &self.registry, &removal, guard::GuardScope::Heal)
+                                .await
+                        {
+                            let reason = objection
+                                .to_string()
+                                .lines()
+                                .find(|l| l.trim_start().starts_with("- "))
+                                .map(|l| l.trim().trim_start_matches("- ").to_string())
+                                .unwrap_or_else(|| "protected".to_string());
+                            info!("Heal: keeping {} — its interrupted removal is refused ({}).", key, reason);
+                            let mut j = self.journal.lock().await;
+                            let _ = j.record_success(&entry.id, std::collections::HashMap::new());
+                            kept.push(key.clone());
+                            continue;
+                        }
+                    }
+
                     let remediation_res = if is_install {
                         // Remove before reinstalling: the interrupted install may have left a
                         // half-written package that a plain install would refuse or skip.
@@ -458,6 +489,13 @@ impl<'a> SyncEngine<'a> {
         // changed, in one line.
         if !recovered.is_empty() {
             info!("Heal: recovered {} operation(s): {}.", recovered.len(), recovered.join(", "));
+        }
+        if !kept.is_empty() {
+            info!(
+                "Heal: kept {} protected package(s) whose interrupted removal was refused: {}.",
+                kept.len(),
+                kept.join(", ")
+            );
         }
         if !failed.is_empty() {
             warn!(
