@@ -1216,6 +1216,13 @@ implementing agent's call; that it goes is not.**
     The exact command topology is the implementing agent's call; that both exist and that orphan
     removal previews + respects the guard is the ruling.
 
+- **R20 — Auto-remediation swallows its state-save failure.** When failure diagnostics auto-installs
+  a suggested package and persists the registry, `diagnostics.rs:206` writes
+  `let _ = spawn_blocking(|| state_snapshot.save()).await.map_err(…)?` — the `?` catches only the task
+  panic; the `let _ =` discards `save()`'s own `Result`. A disk-write failure (full/read-only/permission)
+  is swallowed: the package is installed and in memory but never recorded, so the next `sync` treats it
+  as unmanaged drift. The sibling save at `sync/mod.rs:136` propagates correctly with `??`. Fix: `?` → `??`.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
