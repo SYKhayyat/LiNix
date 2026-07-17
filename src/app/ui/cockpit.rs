@@ -1,22 +1,24 @@
 // src/app/ui/cockpit.rs
 //
-// The generation cockpit: a time-travel dashboard for LiNix's history.
+// The cockpit: a time-travel dashboard over LiNix's history. That history is now git (the
+// generation format was deleted — II.1: git IS the history), so the timeline is your commit
+// log and each entry shows what that commit changed in your manifests.
 //
-//   ┌ Generations ─┐┌ Selected generation ───────────────┐
-//   │ > g3  (now)  ││ 42 packages · git a1b2c3d            │
-//   │   g2         ││ apt:curl 8.4.0                       │
-//   │   g1         ││ cargo:ripgrep 14.1                   │
-//   │              ││ … changes vs previous generation …  │
-//   └──────────────┘└─────────────────────────────────────┘
+//   ┌ Commits ─────┐┌ Selected commit ────────────────────┐
+//   │ > a1b2c3d     ││ Commit  : a1b2c3d                    │
+//   │   9f8e7d6     ││ When    : 2026-07-15                 │
+//   │   4c5b6a7     ││ Message : add ripgrep, drop nano     │
+//   │              ││ Manifest changes in this commit:      │
+//   └──────────────┘└─ + cargo:ripgrep   - apt:nano ───────┘
 //   ┌ Shell ───────────────────────────────────────────────┐
 //   │ $ _                                                   │
 //   └───────────────────────────────────────────────────────┘
 //
-// Left: the generation timeline. Right: the selected generation's realized package set, its
-// stamped git commit, and a diff against the previous generation. Bottom: a shell line for
-// running commands (linix or anything) without leaving the cockpit.
+// Left: the commit timeline (newest first). Right: the selected commit's metadata and the
+// manifest lines it added/removed. Bottom: a shell line for running commands without leaving
+// the cockpit. Rollback ('r') checks out the selected commit and syncs.
 //
-// The rendering/diff logic is pure and unit-tested; the ratatui event loop is a thin shell.
+// The rendering logic is pure and unit-tested; the ratatui event loop is a thin shell.
 
 use crate::core::Result;
 use crossterm::{
@@ -33,104 +35,60 @@ use ratatui::{
 };
 use std::io;
 
-/// A decoupled, display-ready view of one generation (so the TUI never depends on the store).
+/// A display-ready view of one git commit (the cockpit's timeline is git history now).
 #[derive(Debug, Clone)]
-pub struct GenView {
-    pub id: String,
-    pub timestamp: String,
-    pub label: String,
-    pub pinned: bool,
-    /// Rendered package identifiers, e.g. "apt:curl 8.4.0".
-    pub packages: Vec<String>,
-    pub git_commit: Option<String>,
+pub struct CommitView {
+    /// Short commit hash — the row's identifier.
+    pub short: String,
+    /// Commit date.
+    pub date: String,
+    /// Commit subject (the change's message).
+    pub subject: String,
+    /// Full commit hash — what a rollback checks out.
+    pub full_hash: String,
+    /// The manifest lines this commit added or removed (`+ apt:curl`, `- apt:nano`).
+    pub changes: Vec<String>,
 }
 
 /// What the cockpit asks the async caller to do after it exits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CockpitAction {
     Quit,
-    /// Roll back to a generation; `with_config` also checks out its git commit.
-    Rollback {
-        id: String,
-        with_config: bool,
-    },
+    /// Roll back to a commit: check out its manifests, then sync the machine to match.
+    Rollback { reference: String },
 }
 
-/// One row in the left-hand timeline.
-pub fn gen_row(g: &GenView) -> String {
-    let pin = if g.pinned { "📌" } else { "  " };
-    let label = if g.label.is_empty() {
-        String::new()
+/// One row in the left-hand timeline: the short hash and the commit subject.
+pub fn commit_row(c: &CommitView) -> String {
+    format!("{}  {}", c.short, c.subject)
+}
+
+/// The right-hand detail lines for a commit: its metadata and the manifest lines it changed.
+pub fn detail_lines(current: &CommitView) -> Vec<String> {
+    let mut lines = vec![
+        format!("Commit  : {}", current.short),
+        format!("When    : {}", current.date),
+        format!("Message : {}", current.subject),
+        format!(
+            "Full    : {}",
+            &current.full_hash[..current.full_hash.len().min(12)]
+        ),
+        String::new(),
+    ];
+    if current.changes.is_empty() {
+        lines.push("No manifest changes in this commit.".to_string());
     } else {
-        format!("  {}", g.label)
-    };
-    format!("{} {}  ({} pkgs){}", pin, g.id, g.packages.len(), label)
-}
-
-/// The right-hand detail lines for a generation, plus a diff against the previous one.
-pub fn detail_lines(current: &GenView, previous: Option<&GenView>) -> Vec<String> {
-    let mut lines = Vec::new();
-    lines.push(format!("Generation : {}", current.id));
-    lines.push(format!("When       : {}", current.timestamp));
-    if !current.label.is_empty() {
-        lines.push(format!("Label      : {}", current.label));
-    }
-    match &current.git_commit {
-        Some(c) => lines.push(format!("Git commit : {}", &c[..c.len().min(12)])),
-        None => lines.push("Git commit : (config not under git)".to_string()),
-    }
-    lines.push(format!("Packages   : {}", current.packages.len()));
-    lines.push(String::new());
-
-    if let Some(prev) = previous {
-        let (added, removed) = pkg_set_diff(&prev.packages, &current.packages);
-        if added.is_empty() && removed.is_empty() {
-            lines.push("No package changes vs previous generation.".to_string());
-        } else {
-            lines.push(format!(
-                "Changes vs {} : +{} / -{}",
-                prev.id,
-                added.len(),
-                removed.len()
-            ));
-            for a in &added {
-                lines.push(format!("  + {}", a));
-            }
-            for r in &removed {
-                lines.push(format!("  - {}", r));
-            }
+        lines.push("Manifest changes in this commit:".to_string());
+        for c in &current.changes {
+            lines.push(format!("  {}", c));
         }
-        lines.push(String::new());
-    }
-
-    lines.push("Package set:".to_string());
-    for p in &current.packages {
-        lines.push(format!("  {}", p));
     }
     lines
 }
 
-/// Diff two package-identifier lists into (added, removed), preserving order.
-pub fn pkg_set_diff(older: &[String], newer: &[String]) -> (Vec<String>, Vec<String>) {
-    use std::collections::HashSet;
-    let old_set: HashSet<&String> = older.iter().collect();
-    let new_set: HashSet<&String> = newer.iter().collect();
-    let added = newer
-        .iter()
-        .filter(|p| !old_set.contains(*p))
-        .cloned()
-        .collect();
-    let removed = older
-        .iter()
-        .filter(|p| !new_set.contains(*p))
-        .cloned()
-        .collect();
-    (added, removed)
-}
-
 /// Cockpit UI state.
 pub struct Cockpit {
-    gens: Vec<GenView>,
+    commits: Vec<CommitView>,
     list_state: ListState,
     /// The shell input buffer.
     input: String,
@@ -141,51 +99,44 @@ pub struct Cockpit {
 }
 
 impl Cockpit {
-    pub fn new(gens: Vec<GenView>) -> Self {
+    pub fn new(commits: Vec<CommitView>) -> Self {
         let mut list_state = ListState::default();
-        if !gens.is_empty() {
+        if !commits.is_empty() {
             list_state.select(Some(0));
         }
         Self {
-            gens,
+            commits,
             list_state,
             input: String::new(),
             command_mode: false,
-            status: "[j/k] move  [r] rollback  [R] rollback+config  [:] shell  [q] quit".into(),
+            status: "[j/k] move  [r] rollback (checkout + sync)  [:] shell  [q] quit".into(),
         }
     }
 
-    fn selected(&self) -> Option<&GenView> {
-        self.list_state.selected().and_then(|i| self.gens.get(i))
-    }
-
-    fn selected_previous(&self) -> Option<&GenView> {
-        // Generations are newest-first, so the "previous" (older) one is the next index.
-        self.list_state
-            .selected()
-            .and_then(|i| self.gens.get(i + 1))
+    fn selected(&self) -> Option<&CommitView> {
+        self.list_state.selected().and_then(|i| self.commits.get(i))
     }
 
     fn next(&mut self) {
-        if self.gens.is_empty() {
+        if self.commits.is_empty() {
             return;
         }
         let i = self
             .list_state
             .selected()
-            .map(|i| (i + 1) % self.gens.len())
+            .map(|i| (i + 1) % self.commits.len())
             .unwrap_or(0);
         self.list_state.select(Some(i));
     }
 
     fn previous(&mut self) {
-        if self.gens.is_empty() {
+        if self.commits.is_empty() {
             return;
         }
         let i = self
             .list_state
             .selected()
-            .map(|i| if i == 0 { self.gens.len() - 1 } else { i - 1 })
+            .map(|i| if i == 0 { self.commits.len() - 1 } else { i - 1 })
             .unwrap_or(0);
         self.list_state.select(Some(i));
     }
@@ -246,19 +197,10 @@ impl Cockpit {
                         self.command_mode = true;
                         self.input.clear();
                     }
-                    KeyCode::Char('r') => {
-                        if let Some(g) = self.selected() {
+                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                        if let Some(c) = self.selected() {
                             return Ok(CockpitAction::Rollback {
-                                id: g.id.clone(),
-                                with_config: false,
-                            });
-                        }
-                    }
-                    KeyCode::Char('R') => {
-                        if let Some(g) = self.selected() {
-                            return Ok(CockpitAction::Rollback {
-                                id: g.id.clone(),
-                                with_config: true,
+                                reference: c.full_hash.clone(),
                             });
                         }
                     }
@@ -315,18 +257,14 @@ impl Cockpit {
             .constraints([Constraint::Percentage(38), Constraint::Percentage(62)].as_ref())
             .split(rows[0]);
 
-        // Left: generations timeline.
+        // Left: the commit timeline.
         let items: Vec<ListItem> = self
-            .gens
+            .commits
             .iter()
-            .map(|g| ListItem::new(gen_row(g)))
+            .map(|c| ListItem::new(commit_row(c)))
             .collect();
         let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Generations "),
-            )
+            .block(Block::default().borders(Borders::ALL).title(" Commits "))
             .highlight_style(
                 Style::default()
                     .bg(Color::Rgb(40, 40, 40))
@@ -335,16 +273,17 @@ impl Cockpit {
             .highlight_symbol("> ");
         f.render_stateful_widget(list, cols[0], &mut self.list_state);
 
-        // Right: detail + diff.
+        // Right: the selected commit's detail.
         let detail = match self.selected() {
-            Some(g) => detail_lines(g, self.selected_previous()).join("\n"),
-            None => "No generations yet. They are created after each `sync`.".to_string(),
+            Some(c) => detail_lines(c).join("\n"),
+            None => "No commits yet. Run `linix git init`, then `sync` commits your history."
+                .to_string(),
         };
         let detail_widget = Paragraph::new(detail)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Selected generation "),
+                    .title(" Selected commit "),
             )
             .wrap(Wrap { trim: false });
         f.render_widget(detail_widget, cols[1]);
@@ -370,81 +309,65 @@ impl Cockpit {
 mod tests {
     use super::*;
 
-    fn gv(id: &str, pkgs: &[&str]) -> GenView {
-        GenView {
-            id: id.into(),
-            timestamp: "2026-07-15T00:00:00Z".into(),
-            label: String::new(),
-            pinned: false,
-            packages: pkgs.iter().map(|s| s.to_string()).collect(),
-            git_commit: None,
+    fn cv(short: &str, subject: &str, changes: &[&str]) -> CommitView {
+        CommitView {
+            short: short.into(),
+            date: "2026-07-15".into(),
+            subject: subject.into(),
+            full_hash: format!("{}0000000000000000000000000000000000000", short),
+            changes: changes.iter().map(|s| s.to_string()).collect(),
         }
     }
 
     #[test]
-    fn gen_row_shows_id_and_count() {
-        let row = gen_row(&gv("g3", &["apt:curl", "cargo:rg"]));
-        assert!(row.contains("g3"));
-        assert!(row.contains("(2 pkgs)"));
+    fn commit_row_shows_hash_and_subject() {
+        let row = commit_row(&cv("a1b2c3d", "add ripgrep", &["+ cargo:rg"]));
+        assert!(row.contains("a1b2c3d"));
+        assert!(row.contains("add ripgrep"));
     }
 
     #[test]
-    fn gen_row_marks_pinned() {
-        let mut g = gv("g1", &[]);
-        g.pinned = true;
-        assert!(gen_row(&g).contains("📌"));
-    }
-
-    #[test]
-    fn pkg_set_diff_reports_added_and_removed() {
-        let older = vec!["apt:curl".to_string(), "apt:nano".to_string()];
-        let newer = vec!["apt:curl".to_string(), "cargo:rg".to_string()];
-        let (added, removed) = pkg_set_diff(&older, &newer);
-        assert_eq!(added, vec!["cargo:rg"]);
-        assert_eq!(removed, vec!["apt:nano"]);
-    }
-
-    #[test]
-    fn detail_lines_include_git_and_diff() {
-        let mut cur = gv("g2", &["apt:curl", "cargo:rg"]);
-        cur.git_commit = Some("a1b2c3d4e5f6a7b8".into());
-        let prev = gv("g1", &["apt:curl", "apt:nano"]);
-        let lines = detail_lines(&cur, Some(&prev));
-        let joined = lines.join("\n");
-        assert!(joined.contains("Git commit : a1b2c3d4e5f6")); // truncated to 12
-        assert!(joined.contains("+1 / -1"));
+    fn detail_lines_show_metadata_and_changes() {
+        let c = cv("a1b2c3d", "swap nano for ripgrep", &["+ cargo:rg", "- apt:nano"]);
+        let joined = detail_lines(&c).join("\n");
+        assert!(joined.contains("Commit  : a1b2c3d"));
+        assert!(joined.contains("Message : swap nano for ripgrep"));
+        assert!(joined.contains("Manifest changes in this commit:"));
         assert!(joined.contains("+ cargo:rg"));
         assert!(joined.contains("- apt:nano"));
     }
 
     #[test]
-    fn detail_lines_without_git_says_so() {
-        let cur = gv("g1", &["apt:curl"]);
-        let lines = detail_lines(&cur, None);
-        assert!(lines.iter().any(|l| l.contains("config not under git")));
+    fn detail_lines_note_a_commit_with_no_manifest_changes() {
+        let c = cv("a1b2c3d", "docs only", &[]);
+        assert!(detail_lines(&c)
+            .iter()
+            .any(|l| l.contains("No manifest changes")));
     }
 
     #[test]
-    fn navigation_wraps_and_tracks_previous() {
-        let c = Cockpit::new(vec![gv("g2", &["a"]), gv("g1", &["b"])]);
-        // Newest-first: index 0 is g2, its "previous" (older) is g1 at index 1.
-        assert_eq!(c.selected().unwrap().id, "g2");
-        assert_eq!(c.selected_previous().unwrap().id, "g1");
+    fn a_rollback_targets_the_full_hash() {
+        // The row shows the short hash, but a rollback must check out the full commit.
+        let mut c = Cockpit::new(vec![cv("a1b2c3d", "x", &[])]);
+        c.next(); // stays on 0
+        let sel = c.selected().unwrap();
+        assert!(sel.full_hash.starts_with("a1b2c3d"));
+        assert!(sel.full_hash.len() > 7);
+    }
+
+    #[test]
+    fn navigation_wraps() {
+        let mut c = Cockpit::new(vec![cv("c3", "", &[]), cv("c2", "", &[]), cv("c1", "", &[])]);
+        assert_eq!(c.selected().unwrap().short, "c3");
+        c.previous(); // from 0 wraps to last
+        assert_eq!(c.selected().unwrap().short, "c1");
+        c.next(); // wraps back to 0
+        assert_eq!(c.selected().unwrap().short, "c3");
     }
 
     #[test]
     fn empty_cockpit_has_no_selection() {
         let c = Cockpit::new(vec![]);
         assert!(c.selected().is_none());
-        assert!(c.selected_previous().is_none());
-    }
-
-    #[test]
-    fn next_previous_wrap_around() {
-        let mut c = Cockpit::new(vec![gv("g3", &[]), gv("g2", &[]), gv("g1", &[])]);
-        c.previous(); // from 0 wraps to last
-        assert_eq!(c.selected().unwrap().id, "g1");
-        c.next(); // wraps back to 0
-        assert_eq!(c.selected().unwrap().id, "g3");
     }
 }

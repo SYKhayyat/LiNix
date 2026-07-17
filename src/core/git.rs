@@ -187,6 +187,48 @@ impl GitManager {
         }
         self.run_checked(&["status", "--porcelain"])
     }
+
+    /// The manifest lines a commit added or removed — the package-level story of that commit,
+    /// for the cockpit's detail pane. `git show` limited to the config files, keeping only the
+    /// `+`/`-` content lines (diff headers and comments dropped). Empty for a commit that
+    /// touched no manifests. This is what replaced the generation format's stored package sets:
+    /// git already records exactly what each change did to your manifests.
+    pub fn commit_manifest_changes(&self, reference: &str) -> Result<Vec<String>> {
+        if !self.is_repo() {
+            return Ok(vec![]);
+        }
+        let raw = self.run_checked(&[
+            "show",
+            "--format=",
+            "--no-color",
+            reference,
+            "--",
+            "modules",
+            "profiles",
+            "active",
+            "priority",
+            "schedules",
+        ])?;
+        Ok(parse_manifest_changes(&raw))
+    }
+}
+
+/// Extract the `+`/`-` content lines from a `git show` diff — the added and removed manifest
+/// lines — skipping the `+++`/`---` file headers and blank/comment lines.
+fn parse_manifest_changes(diff: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in diff.lines() {
+        let keep_plus = line.starts_with('+') && !line.starts_with("+++");
+        let keep_minus = line.starts_with('-') && !line.starts_with("---");
+        if keep_plus || keep_minus {
+            let (sign, body) = line.split_at(1);
+            let body = body.trim();
+            if !body.is_empty() && !body.starts_with('#') {
+                out.push(format!("{} {}", sign, body));
+            }
+        }
+    }
+    out
 }
 
 fn parse_log(raw: &str) -> Vec<GitCommit> {
@@ -212,6 +254,23 @@ fn parse_log(raw: &str) -> Vec<GitCommit> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn parse_manifest_changes_keeps_content_lines_drops_headers() {
+        // A realistic `git show` diff body: file headers, hunk header, context, +/- lines.
+        let diff = "diff --git a/modules/dev.txt b/modules/dev.txt\n\
+                    index 111..222 100644\n\
+                    --- a/modules/dev.txt\n\
+                    +++ b/modules/dev.txt\n\
+                    @@ -1,3 +1,3 @@\n\
+                    \x20apt:curl\n\
+                    -apt:nano\n\
+                    +cargo:ripgrep\n\
+                    +# a comment line, not a package\n";
+        let changes = parse_manifest_changes(diff);
+        // Kept: the real +/- package lines. Dropped: ---/+++ headers, context, and the comment.
+        assert_eq!(changes, vec!["- apt:nano".to_string(), "+ cargo:ripgrep".to_string()]);
+    }
 
     #[test]
     fn parse_log_handles_subjects_with_spaces_and_separators() {

@@ -3,4 +3,4 @@ pub mod preview;
 
 pub use self::preview::TuiPreview;
 
-pub use self::cockpit::{Cockpit, CockpitAction, GenView};
+pub use self::cockpit::{Cockpit, CockpitAction, CommitView};

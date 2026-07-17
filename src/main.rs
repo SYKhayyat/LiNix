@@ -2191,43 +2191,44 @@ async fn handle_undo(app: &App) -> Result<()> {
         .map_err(|e| e.into())
 }
 async fn handle_cockpit(app: &App) -> Result<()> {
-    use linix::app::ui::{Cockpit, CockpitAction, GenView};
+    use linix::app::ui::{Cockpit, CockpitAction, CommitView};
 
-    let store = generation_store(app).await;
-    let gens: Vec<GenView> = store
-        .list()
-        .await?
-        .into_iter()
-        .map(|g| GenView {
-            id: g.id,
-            timestamp: g.timestamp,
-            label: g.label,
-            pinned: g.pinned,
-            packages: g
-                .packages
-                .iter()
-                .map(|p| {
-                    let ver = p.version.as_deref().unwrap_or("");
-                    format!("{}:{} {}", p.backend, p.name, ver)
-                        .trim()
-                        .to_string()
-                })
-                .collect(),
-            git_commit: g.git_commit,
-        })
-        .collect();
-
-    if gens.is_empty() {
-        println!("No generations to browse yet. Run `linix sync` to create the first one.");
+    let git = app.git_manager();
+    if !git.is_repo() {
+        println!(
+            "The cockpit browses your manifest history, which is git. Run `linix git init` \
+             once; after that every `sync` commits, and the cockpit shows the timeline."
+        );
         return Ok(());
     }
 
-    let action = Cockpit::new(gens).run()?;
+    // The timeline is the commit log; each row carries the manifest lines that commit changed.
+    let commits: Vec<CommitView> = git
+        .log(200)?
+        .into_iter()
+        .map(|c| {
+            let changes = git.commit_manifest_changes(&c.hash).unwrap_or_default();
+            CommitView {
+                short: c.short,
+                date: c.date,
+                subject: c.subject,
+                full_hash: c.hash,
+                changes,
+            }
+        })
+        .collect();
+
+    if commits.is_empty() {
+        println!("No commits yet. Run `linix sync` (it commits after each successful change).");
+        return Ok(());
+    }
+
+    let action = Cockpit::new(commits).run()?;
     match action {
         CockpitAction::Quit => Ok(()),
-        CockpitAction::Rollback { id, with_config } => {
-            println!("Rolling back to generation {id}...");
-            rollback_to(app, &store, &id, None, with_config).await
+        CockpitAction::Rollback { reference } => {
+            println!("Rolling back to {reference}…");
+            handle_rollback(app, &reference).await
         }
     }
 }
