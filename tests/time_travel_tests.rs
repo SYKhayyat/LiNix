@@ -68,6 +68,7 @@ async fn test_lease_expiration_pruning_logic() {
             backend: "brew".into(),
             options: HashMap::new(),
             requires: vec![],
+            present: true,
         }],
     );
 
@@ -162,6 +163,7 @@ async fn test_lease_manifest_override_logic() {
             backend: "brew".into(),
             options: HashMap::new(),
             requires: vec![],
+            present: true,
         }],
     );
 

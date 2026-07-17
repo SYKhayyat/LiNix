@@ -42,6 +42,9 @@ pub struct App {
 }
 
 impl App {
+    /// `state_path` overrides where LiNix's own data lives. `None` means the real data
+    /// dir; a test passes a temp path so it never touches — or accumulates in — the
+    /// user's.
     pub async fn new_with_executor_and_state_path(
         config: Config,
         executor: CommandExecutor,
@@ -54,6 +57,14 @@ impl App {
         let registry =
             Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
         let progress = create_progress_reporter(config.show_progress);
+
+        // The journal lives beside the registry: both are LiNix's record of what it did,
+        // so isolating one and not the other left the WAL pointing at real user data.
+        let journal_path = state_path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(|d| d.join("journal.json"))
+            .unwrap_or_else(|| crate::utils::safe_data_dir().join("journal.json"));
 
         let state_registry = if let Some(path) = state_path {
             tokio::task::spawn_blocking(move || StateRegistry::load_from(&path))
@@ -71,7 +82,7 @@ impl App {
         let state = Arc::new(Mutex::new(state_registry));
 
         let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate(), &config).await);
-        let journal = Arc::new(Mutex::new(Journal::new()?));
+        let journal = Arc::new(Mutex::new(Journal::at(journal_path)?));
 
         let scheduler = Arc::new(SchedulerManager::new()?);
         let config_arc = Arc::new(config);
@@ -377,6 +388,7 @@ impl App {
             backend: backend.to_string(),
             options: std::collections::HashMap::new(),
             requires: Vec::new(),
+            present: true,
         };
         inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
             .await

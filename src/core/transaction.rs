@@ -508,6 +508,7 @@ impl Transaction {
                                 backend: backend.clone(),
                                 options: HashMap::new(),
                                 requires: vec![],
+                                present: true,
                             };
                             let _ = h.install(&[spec], b.sudo_for_write()).await;
                         }

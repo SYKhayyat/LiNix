@@ -26,6 +26,7 @@ fn pinned_spec(backend: &str, name: &str, version: &str) -> PackageSpec {
         backend: backend.into(),
         options,
         requires: vec![],
+        present: true,
     }
 }
 

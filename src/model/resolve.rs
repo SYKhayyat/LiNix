@@ -19,11 +19,9 @@ use std::collections::{BTreeMap, HashMap};
 /// the model changed underneath them.
 #[derive(Debug, Clone, Default)]
 pub struct DesiredState {
-    /// What must be installed, by backend.
-    pub present: HashMap<String, Vec<PackageSpec>>,
-    /// What must NOT exist (II.2's `absent:`). The one thing LiNix may remove that it does
-    /// not manage, because you named it (V.7).
-    pub absent: HashMap<String, Vec<PackageSpec>>,
+    /// Every declaration, by backend. `absent:` lines are in here too, carrying
+    /// `present: false` — one map, because the map type is the seam.
+    pub packages: HashMap<String, Vec<PackageSpec>>,
     /// Repositories, shims, links, services and schedules, in declaration order.
     pub extras: Vec<(Statement, Origin)>,
     /// Dated lines whose date has passed. They linger — **LiNix must not rewrite your
@@ -32,8 +30,30 @@ pub struct DesiredState {
 }
 
 impl DesiredState {
+    /// What must be installed.
+    pub fn present(&self) -> impl Iterator<Item = &PackageSpec> {
+        self.packages.values().flatten().filter(|p| p.present)
+    }
+
+    /// What must not exist (II.2's `absent:`).
+    pub fn absent(&self) -> impl Iterator<Item = &PackageSpec> {
+        self.packages.values().flatten().filter(|p| !p.present)
+    }
+
     pub fn total_present(&self) -> usize {
-        self.present.values().map(Vec::len).sum()
+        self.present().count()
+    }
+
+    /// The seam: `HashMap<backend, Vec<PackageSpec>>`, install intents only. What the
+    /// planner has always consumed.
+    pub fn into_install_map(self) -> HashMap<String, Vec<PackageSpec>> {
+        self.packages
+            .into_iter()
+            .filter_map(|(b, specs)| {
+                let keep: Vec<PackageSpec> = specs.into_iter().filter(|p| p.present).collect();
+                (!keep.is_empty()).then_some((b, keep))
+            })
+            .collect()
     }
 }
 
@@ -156,13 +176,14 @@ impl<'a> Resolver<'a> {
                 continue;
             }
             let backend = backend.unwrap_or_else(|| key.split(':').next().unwrap_or("").to_string());
-            let spec = to_spec(&backend, &selector, &declared.options, &declared.origin);
-            let bucket = if declared.present {
-                &mut out.present
-            } else {
-                &mut out.absent
-            };
-            bucket.entry(backend).or_default().push(spec);
+            let spec = to_spec(
+                &backend,
+                &selector,
+                &declared.options,
+                &declared.origin,
+                declared.present,
+            );
+            out.packages.entry(backend).or_default().push(spec);
         }
 
         Ok(out)
@@ -206,7 +227,13 @@ impl<'a> Resolver<'a> {
 /// hands these to the prober, which replaces it with the lock's answer or `priority`'s.
 pub const BARE: &str = "?";
 
-fn to_spec(backend: &str, selector: &Selector, options: &Options, origin: &Origin) -> PackageSpec {
+fn to_spec(
+    backend: &str,
+    selector: &Selector,
+    options: &Options,
+    origin: &Origin,
+    present: bool,
+) -> PackageSpec {
     let mut properties: HashMap<String, String> = HashMap::new();
     for (k, vs) in options.iter() {
         // `requires` is a list; the rest are single values. Joined with `;` because that is
@@ -222,6 +249,7 @@ fn to_spec(backend: &str, selector: &Selector, options: &Options, origin: &Origi
         backend: backend.to_string(),
         requires: options.all("requires").to_vec(),
         options: properties,
+        present,
     }
 }
 
@@ -278,10 +306,10 @@ mod tests {
 
     fn names(d: &DesiredState, backend: &str) -> Vec<String> {
         let mut v: Vec<String> = d
-            .present
-            .get(backend)
-            .map(|s| s.iter().map(|p| p.name.clone()).collect())
-            .unwrap_or_default();
+            .present()
+            .filter(|p| p.backend == backend)
+            .map(|p| p.name.clone())
+            .collect();
         v.sort();
         v
     }
@@ -349,7 +377,8 @@ mod tests {
         );
         let d = resolve(&f).unwrap();
         assert_eq!(names(&d, "apt"), ["curl"]);
-        assert_eq!(d.absent["apt"][0].name, "libreoffice");
+        let absent: Vec<&str> = d.absent().map(|p| p.name.as_str()).collect();
+        assert_eq!(absent, ["libreoffice"]);
     }
 
     #[test]
@@ -409,7 +438,7 @@ mod tests {
             &[("base.txt", "ripgrep\n")],
         );
         let d = resolve(&f).unwrap();
-        assert_eq!(d.present[BARE][0].name, "ripgrep");
+        assert_eq!(names(&d, BARE), ["ripgrep"]);
     }
 
     #[test]
@@ -420,7 +449,8 @@ mod tests {
             &[("fonts.txt", "apt:re:^fonts-\n")],
         );
         let d = resolve(&f).unwrap();
-        assert_eq!(d.present["apt"][0].options["__regex"], "^fonts-");
+        let spec = d.present().find(|p| p.name == "^fonts-").unwrap();
+        assert_eq!(spec.options["__regex"], "^fonts-");
     }
 
     #[test]
@@ -432,6 +462,7 @@ mod tests {
             &[("base.txt", "apt:curl\n")],
         );
         let d = resolve(&f).unwrap();
-        assert!(d.present["apt"][0].options["__source"].contains("base.txt:1"));
+        let spec = d.present().find(|p| p.name == "curl").unwrap();
+        assert!(spec.options["__source"].contains("base.txt:1"));
     }
 }

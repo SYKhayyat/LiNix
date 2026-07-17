@@ -156,6 +156,7 @@ async fn test_planner_template_logic_integration() {
         backend: "link".to_string(),
         options,
         requires: vec![],
+        present: true,
     };
 
     // 3. Ensure the 'link' backend binary is "available"

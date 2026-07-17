@@ -25,6 +25,7 @@ async fn run_capability_test(backend: Arc<BackendCapabilities>, package_name: &s
         backend: backend.name().to_string(),
         options: HashMap::new(),
         requires: vec![],
+        present: true,
     };
 
     let inst_res = installer.install(&[spec], backend.needs_root()).await;
@@ -194,6 +195,7 @@ async fn test_link_backend_vfs_integrity() {
         backend: "link".to_string(),
         options,
         requires: vec![],
+        present: true,
     };
 
     let installer = backend.as_installable().unwrap();

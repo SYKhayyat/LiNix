@@ -403,6 +403,7 @@ mod tests {
             backend: "link".into(),
             options,
             requires: vec![],
+            present: true,
         }
     }
 
@@ -448,6 +449,7 @@ mod tests {
             backend: "link".into(),
             options,
             requires: vec![],
+            present: true,
         }
     }
 

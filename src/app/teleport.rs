@@ -80,6 +80,7 @@ impl Teleporter {
             backend: target_backend_name.to_string(),
             options: HashMap::new(),
             requires: vec![],
+            present: true,
         };
         let install_node = graph.add_node(GraphAction::Install(target_spec.clone()));
         graph.add_edge(remove_node, install_node, ());

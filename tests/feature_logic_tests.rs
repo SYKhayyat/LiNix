@@ -141,6 +141,7 @@ async fn test_sync_report_generation_schema_fidelity() {
             backend: "brew".into(),
             options: HashMap::from([("__source".into(), "module:dev-tools".into())]),
             requires: vec![],
+            present: true,
         }],
     );
 
@@ -199,12 +200,14 @@ async fn test_scoped_planner_filtering_accuracy() {
                 backend: "brew".into(),
                 options: HashMap::from([("__source".into(), "manifest:work.txt".into())]),
                 requires: vec![],
+                present: true,
             },
             PackageSpec {
                 name: "pkg-home".into(),
                 backend: "brew".into(),
                 options: HashMap::from([("__source".into(), "manifest:home.txt".into())]),
                 requires: vec![],
+                present: true,
             },
         ],
     );

@@ -213,5 +213,6 @@ pub fn create_dummy_spec(name: &str, backend: &str, source: Option<&str>) -> Pac
         backend: backend.to_string(),
         options,
         requires: Vec::new(),
+        present: true,
     }
 }

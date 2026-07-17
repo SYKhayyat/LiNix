@@ -159,6 +159,7 @@ async fn test_ghost_shell_mount_point_resolution() {
         backend: "brew".into(),
         options: HashMap::new(),
         requires: vec![],
+        present: true,
     };
 
     let result = shell

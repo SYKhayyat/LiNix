@@ -47,8 +47,16 @@ pub struct Journal {
 
 impl Journal {
     pub fn new() -> Result<Self> {
-        let path = crate::utils::safe_data_dir().join("journal.json");
-        debug!("Journal: Initializing mission-critical WAL at {:?}", path);
+        Self::at(crate::utils::safe_data_dir().join("journal.json"))
+    }
+
+    /// The WAL at an explicit path. Injected rather than always derived, so a test kernel
+    /// gets its own: `TestKernel` isolated the registry and the groups dir but not this,
+    /// so every `cargo test` run appended to the developer's real `journal.json` — 733KB
+    /// of test noise in real user data, and a format change to `PackageSpec` then made
+    /// that file unparseable and bricked every test at bootstrap.
+    pub fn at(path: PathBuf) -> Result<Self> {
+        debug!("Journal: Initializing WAL at {:?}", path);
 
         let mut journal = Self {
             path,

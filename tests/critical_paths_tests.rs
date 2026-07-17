@@ -45,6 +45,7 @@ async fn test_planner_recursive_native_dependencies() {
             backend: "brew".into(),
             options: HashMap::new(),
             requires: vec![],
+            present: true,
         }],
     );
 
@@ -79,12 +80,14 @@ async fn test_dag_cycle_detection_logic() {
         backend: "brew".into(),
         options: HashMap::new(),
         requires: vec!["brew:pkg-b".into()],
+        present: true,
     };
     let spec_b = PackageSpec {
         name: "pkg-b".into(),
         backend: "brew".into(),
         options: HashMap::new(),
         requires: vec!["brew:pkg-a".into()],
+        present: true,
     };
 
     desired.insert("brew".to_string(), vec![spec_a, spec_b]);
@@ -120,6 +123,7 @@ async fn test_transaction_rollback_fidelity() {
         backend: "brew".into(),
         options: HashMap::new(),
         requires: vec![],
+        present: true,
     };
 
     // Set response to failure
@@ -165,6 +169,7 @@ async fn test_journal_self_healing_logic() {
             backend: "brew".into(),
             options: HashMap::new(),
             requires: vec![],
+            present: true,
         };
         let _ = j.record_start(JournalAction::Install(spec));
     }

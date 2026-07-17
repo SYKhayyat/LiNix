@@ -24,18 +24,21 @@ async fn test_dag_execution_order_wiring() {
         backend: "brew".into(),
         options: HashMap::new(),
         requires: vec![],
+        present: true,
     };
     let spec_b = PackageSpec {
         name: "build-system".into(),
         backend: "brew".into(),
         options: HashMap::new(),
         requires: vec![],
+        present: true,
     };
     let spec_c = PackageSpec {
         name: "complex-app".into(),
         backend: "brew".into(),
         options: HashMap::new(),
         requires: vec!["brew:compiler-core".into(), "brew:build-system".into()],
+        present: true,
     };
 
     // 3. Construct the DAG
@@ -102,12 +105,14 @@ async fn test_circular_dependency_detection_wiring() {
                 backend: "brew".into(),
                 options: HashMap::new(),
                 requires: vec!["brew:loop-b".into()],
+                present: true,
             },
             PackageSpec {
                 name: "loop-b".into(),
                 backend: "brew".into(),
                 options: HashMap::new(),
                 requires: vec!["brew:loop-a".into()],
+                present: true,
             },
         ],
     );

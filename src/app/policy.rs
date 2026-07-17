@@ -113,6 +113,7 @@ mod tests {
             backend: backend.into(),
             options,
             requires: vec![],
+            present: true,
         }
     }
 

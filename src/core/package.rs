@@ -11,7 +11,7 @@ pub struct Package {
     pub properties: HashMap<String, String>,
 }
 
-/// The intent to have a package installed with specific metadata.
+/// One declaration: a package, and whether it must exist.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PackageSpec {
     pub name: String,
@@ -19,6 +19,29 @@ pub struct PackageSpec {
     /// Parsed from the manifest entry's '@' tag.
     pub options: HashMap<String, String>,
     pub requires: Vec<String>,
+    /// `false` for an `absent:` line — declare it must NOT exist (SPEC II.2).
+    ///
+    /// It lives here rather than in a second map beside the desired state because the map
+    /// type IS the seam: everything upstream produces `HashMap<backend, Vec<PackageSpec>>`
+    /// and everything downstream consumes it, so `absent:` arriving as a field means most
+    /// of the codebase never notices the model changed.
+    ///
+    /// `absent:` is the one exception to "LiNix only removes what it manages" — because
+    /// you named it (V.7).
+    pub present: bool,
+}
+
+impl Default for PackageSpec {
+    /// **A bare line already means present. There is no `present:`** (II.3).
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            backend: String::new(),
+            options: HashMap::new(),
+            requires: Vec::new(),
+            present: true,
+        }
+    }
 }
 
 impl Package {

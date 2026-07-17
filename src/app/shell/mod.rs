@@ -321,6 +321,7 @@ impl GhostShell {
                             backend: s.backend.clone(),
                             options: HashMap::new(),
                             requires: Vec::new(),
+                            present: true,
                         };
                         inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
                             .await

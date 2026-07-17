@@ -156,6 +156,7 @@ pub fn plan_rollback(
                 backend: tp.backend.clone(),
                 options,
                 requires: vec![],
+                present: true,
             }));
         }
     }

@@ -267,6 +267,7 @@ impl<'a> StateResolver<'a> {
             backend,
             options,
             requires,
+            present: true,
         })
     }
 

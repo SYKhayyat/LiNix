@@ -156,6 +156,7 @@ async fn test_concurrent_transaction_safety_e2e() {
             backend: "brew".into(),
             options: HashMap::new(),
             requires: vec![],
+            present: true,
         };
 
         // Setup expected responses in mock layer

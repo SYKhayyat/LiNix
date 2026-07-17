@@ -446,6 +446,7 @@ impl<'a> ChangePlanner<'a> {
                         backend: spec.backend.clone(),
                         options: HashMap::new(),
                         requires: Vec::new(),
+                        present: true,
                     });
                 }
             }
