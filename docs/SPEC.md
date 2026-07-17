@@ -1344,7 +1344,8 @@ and a user who can see which of the three lines they meant to delete.
 | **C9** | lease expiry implemented twice with different semantics; the sweep runs on every state-changing command → **Phase 3** |
 | **C13** | ~~five~~ ~~**eight**~~ ~~**NINE**~~ **EIGHT** `split_once(':')` sites outside `src/parsers/` (7 code + 1 comment); ~~six~~ **three** skip validation. ~~**Phase 1** ✅ done~~ — **NOT done.** Phase 1 *added* `grammar/statement.rs:304` alongside the others; it removed none. **Re-audited 2026-07-17: four of the six sites this row named did not exist** (`config/manifest.rs:218` is past the end of a 178-line file). The three live non-validators: **`app/insight.rs:428`, `config/manifest.rs:90`, `main.rs:1378`**. *(`config/parser.rs:199` validates — do not delete it. `model/resolve.rs:491` is a new-model name helper.)* ~~**Blocks II.8**~~ — **that argument rested on `remove_package_from_local`, which no longer exists; S9 is fixed.** → **Phase 2** |
 | **B3** | `unprotected_packages` doesn't beat OS-essential; `linix protected` reports the opposite of what the guard does → **Phase 3** |
-| **E6** | "unmanaged" has two implementations that will disagree. Resolve as *"what `adopt` would adopt"* — one function → **Phase 2** |
+| **E7** | Adopt consulted `protected_packages`, so "protected" meant *never remove* in the guard and *never adopt* in `migrate.rs` — a package you could not adopt and could not remove, for the same reason. **FIXED (Phase 2m):** adopt takes every manual package, protected ones included (protection stops the removal, not the adoption — V.26); only OS-essential is held back, in the commented-out second section II.9 specifies → **Phase 2** (fixed) |
+| **E6** | "unmanaged" had two implementations that disagreed. **FIXED (Phase 2m).** `unmanaged` (II.8) is now *"what `adopt` would adopt"* — one crawl, `discover().adopt`, ~103 on a stock Ubuntu. The other question — every installed package LiNix does not manage, dependency closure and all, ~476 — is `installed_but_unmanaged()`, wanted only by `purge-unmanaged` (II.11). Same word, two questions, one answer each → **Phase 2** (fixed) |
 | **E11** | suspension restore implemented twice → **Phase 3** |
 | **F1** | `network_timeout_secs` lies (`.max(10)` floor); `max_parallel` detected; `priority` reason in a comment → **Phase 5** |
 | **F3** | ~884 marketing comments + **32 false ones** → **Phase 0**. The rule → `CLAUDE.md` → **Phase 5** |
@@ -2029,6 +2030,14 @@ looking, never as proof — **grep the symbol, don't trust the line.** Every cyc
 citation on Phase 2's checklist has rotted the same way (`planner.rs:323` → `:276`,
 `profiles.rs:62` → `:88`, `modules.rs:146` → `:165`); the claim they support — *"already caught
 in all three places, do not rewrite"* — **re-verified true.**
+
+**Four tests have now encoded a bug as an expectation** — asserting the broken behaviour so
+review saw a green suite and moved on: `enforce_refuses_without_opt_in_and_proceeds_with_it`
+(the guard letting `--allow-mass-removal` delete python3, S16), the `prune`/`protect_imperative`
+gate tests (sync configured not to converge), and `protected_packages_are_never_adopted` (E7).
+**A test named for the behaviour is not evidence the behaviour is right** — it is evidence
+someone wrote the code and the test together, believing the same wrong thing. When a test's
+name asserts a Part II rule, check it against Part II before trusting it.
 
 **Verify any Part II–VI citation against `HEAD` before you act on it.** Part V's *reasoning*
 has been consistently right and is worth following; its *measurements* are not.

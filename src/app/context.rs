@@ -340,7 +340,13 @@ impl App {
         Ok(None)
     }
 
-    pub async fn get_unmanaged_packages(&self) -> Result<Vec<Package>> {
+    /// Everything installed that LiNix does not manage — the dependency closure included.
+    ///
+    /// **This is not `unmanaged` (II.8), which is "what `adopt` would adopt".** They are two
+    /// questions with very different answers: on a stock Ubuntu this is ~476 packages and
+    /// `adopt` is ~103. Only `purge-unmanaged` wants this one, and its whole job is deleting
+    /// all of it (II.11) — which is why the ratio check exists.
+    pub async fn installed_but_unmanaged(&self) -> Result<Vec<Package>> {
         let mut unmanaged = Vec::new();
         let state = self.state.lock().await;
         for backend in self.registry.available() {

@@ -2281,7 +2281,7 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
         planner.plan(&desired, None).await?
     };
     let report = changes.generate_report();
-    let unmanaged = app.get_unmanaged_packages().await.unwrap_or_default();
+    let unmanaged = app.installed_but_unmanaged().await.unwrap_or_default();
 
     if json {
         let out = serde_json::json!({
@@ -2651,15 +2651,37 @@ async fn handle_update(app: &App) -> Result<()> {
     app.update().await.map_err(|e| e.into())
 }
 
+/// `unmanaged` — **what `adopt` would adopt** (II.8), which is the definition E6 asks for.
+///
+/// It used to answer a different question: every installed package LiNix does not manage,
+/// dependency closure and all. On a stock Ubuntu that is ~476 packages where `adopt` takes
+/// ~103 — so `unmanaged` and `adopt` disagreed by a factor of four about the same word, and
+/// the number you read here was not the number `adopt` would act on. Same crawl, one answer.
 async fn handle_unmanaged(app: &App) -> Result<()> {
-    let pkgs = app.get_unmanaged_packages().await?;
-    if pkgs.is_empty() {
-        info!("Unmanaged: every installed package is under LiNix management.");
+    let found = app.migrator().discover().await?;
+
+    if found.adopt.is_empty() {
+        println!("Nothing to adopt: LiNix already manages everything you chose to install.");
     } else {
+        println!(
+            "{} package(s) `linix adopt` would take:\n",
+            found.adopt.len()
+        );
         println!("{:<15} PACKAGE", "BACKEND");
-        for p in pkgs {
+        for p in &found.adopt {
             println!("{:<15} {}", p.backend, p.name);
         }
+        println!("\nThis is an estimate — each backend's answer came from:");
+        for (backend, source) in &found.sources {
+            println!("  {:<10} {}", backend, source);
+        }
+    }
+
+    if !found.skipped.is_empty() {
+        println!(
+            "\n{} package(s) the OS reports as essential are left alone.",
+            found.skipped.len()
+        );
     }
     Ok(())
 }
@@ -2677,7 +2699,7 @@ const PURGE_RATIO: f64 = 0.1;
 /// The residual risk, stated plainly because the docs must state it: `adopt` is an estimate.
 /// If it missed something, this deletes it.
 async fn handle_purge_unmanaged(app: &App, i_really_mean_it: bool) -> Result<()> {
-    let unmanaged = app.get_unmanaged_packages().await?;
+    let unmanaged = app.installed_but_unmanaged().await?;
     if unmanaged.is_empty() {
         println!("Nothing to do: LiNix manages every installed package.");
         return Ok(());

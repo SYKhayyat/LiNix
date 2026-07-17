@@ -123,20 +123,30 @@ impl Migrator {
             }
         }
 
-        // Ask the same question the removal guard asks, through the same function, so
-        // "protected" means one thing across the whole tool: a package LiNix does not
-        // touch. It will not adopt it, and it will not remove it. Two separate notions of
-        // protection is how a package ends up adoptable but unremovable, or the reverse.
+        // E7/II.9: **protection means one thing — never remove.** Adopt takes every manual
+        // package, protected ones included: the line belongs in your file, and deleting it
+        // is what the guard then refuses (V.26). Routing adoption through
+        // `guard::protection_of` unified the code while keeping the word ambiguous — a
+        // package you could not adopt and could not remove, for the same reason, which is
+        // two opposite meanings wearing one name.
+        //
+        // OS-essential is different, and II.9 says what to do with it: a second section,
+        // commented out. Base-image packages like `grub-pc` ARE adopted — they keep the
+        // machine bootable and `purge-unmanaged` deletes what is not declared — but what
+        // the OS itself calls essential is not something to hand someone as a line whose
+        // deletion means "uninstall".
         let backends: HashSet<String> = candidates.iter().map(|p| p.backend.clone()).collect();
         let os_essential = guard::essential_names(&self.registry, &backends).await;
 
         for pkg in candidates {
-            match guard::protection_of(&self.config, &pkg.backend, &pkg.name, &os_essential) {
-                Some(p) => found.skipped.push(Skipped {
-                    reason: p.reason(),
+            let key = format!("{}:{}", pkg.backend, pkg.name);
+            if os_essential.contains(&key) {
+                found.skipped.push(Skipped {
+                    reason: format!("{} reports it as essential to the system", pkg.backend),
                     package: pkg,
-                }),
-                None => found.adopt.push(pkg),
+                });
+            } else {
+                found.adopt.push(pkg);
             }
         }
 
@@ -282,11 +292,11 @@ impl Migrator {
         if !found.skipped.is_empty() {
             out.push_str(
                 "\n\
-# === Not adopted: LiNix leaves these alone ===\n\
-#   These came back in the answers above, but LiNix will neither manage nor remove\n\
-#   them. They stay installed. Listed so you know they exist and why they were\n\
-#   skipped. To take one over anyway, add it to `unprotected_packages` in\n\
-#   config.toml and run `linix migrate` again.\n\
+# === The OS says these are essential ===\n\
+#   Commented out on purpose: they are listed so you know they exist, not handed to\n\
+#   you as lines whose deletion means \"uninstall\". They stay installed either way.\n\
+#   Uncomment one to manage it — the guard still refuses to remove it unless you put\n\
+#   it in `unprotected_packages`.\n\
 #\n",
             );
             for s in &found.skipped {
@@ -314,7 +324,6 @@ mod tests {
     };
     use crate::core::executor::{DryRunOutput, MockExecutor};
     use crate::core::{BackendCapabilities, CommandExecutor};
-    use crate::parsers::LambdaParser;
     use dashmap::DashMap;
     use std::path::PathBuf;
 
@@ -330,7 +339,10 @@ mod tests {
             remove_args: vec![],
             list_args: vec!["-W".into()],
             manual: ManualListing::AllInstalled,
-            essential_args: None,
+            essential_args: Some(vec![
+                "-W".into(),
+                "-f=${Essential} ${Priority} ${Package}\\n".into(),
+            ]),
             search_args: vec![],
             search_binary: None,
             list_binary: Some("dpkg-query".into()),
@@ -352,10 +364,10 @@ mod tests {
             name: "apt".into(),
             executor: exec,
             config,
-            parser: Arc::new(LambdaParser {
-                installed_fn: crate::parsers::apt::parse_list,
-                search_fn: crate::parsers::apt::parse_search,
-            }),
+            // apt's real parser: `LambdaParser` has no `parse_essential`, so it inherits
+            // the trait default and answers "nothing is essential" — which would make a
+            // test about essential packages pass for the wrong reason.
+            parser: Arc::new(crate::parsers::apt::AptParser),
         });
         let mut reg = BackendRegistry::new();
         reg.register(Arc::new(
@@ -450,7 +462,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn protected_packages_are_never_adopted() {
+    async fn a_protected_package_is_adopted_like_any_other() {
+        // E7/II.9. This test used to assert the opposite — that `protected_packages` kept a
+        // package out of the manifest — which made "protected" mean two contradictory
+        // things: *never remove* in the guard, *never adopt* here. A package you could not
+        // adopt and could not remove, for the same reason.
+        //
+        // Protection means one thing: never remove. `python3` belongs in your file like
+        // everything else you chose, and deleting that line is what the guard refuses
+        // (V.26).
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs));
         mock.set_response(
@@ -481,19 +501,37 @@ mod tests {
             .into_iter()
             .map(|p| p.name)
             .collect();
-        assert_eq!(names, vec!["jq"]);
+        assert_eq!(
+            names,
+            vec!["jq", "python3"],
+            "adopt must take a protected package: protection stops its REMOVAL, not its \
+             adoption"
+        );
     }
 
     #[tokio::test]
-    async fn a_skipped_package_is_reported_rather_than_silently_dropped() {
-        // Adoption skipping something is the *right* call, but a silent skip leaves the
-        // user with a manifest that is quietly incomplete and no way to know why.
+    async fn an_os_essential_package_is_reported_rather_than_silently_dropped() {
+        // Leaving something out of the manifest is the right call for what the OS itself
+        // calls essential (II.9), but a silent skip leaves the user with a list that is
+        // quietly incomplete and no way to know why.
+        //
+        // This test used to manufacture its skip with `protected_packages`, which is E7's
+        // confusion: protection stops a REMOVAL, and has nothing to say about adoption.
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs));
         mock.set_response(
             "apt-mark showmanual",
             Ok(DryRunOutput {
-                stdout: b"jq\npython3\n".to_vec(),
+                stdout: b"jq\nbash\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        // The OS's own answer, in dpkg's real format: bash is Essential, jq is not.
+        mock.set_response(
+            "dpkg-query -W -f=${Essential} ${Priority} ${Package}\\n",
+            Ok(DryRunOutput {
+                stdout: b"yes required bash\nno optional jq\n".to_vec(),
                 stderr: vec![],
             }
             .into()),
@@ -506,19 +544,20 @@ mod tests {
             },
             mock,
         );
-        let config = Config {
-            protected_packages: vec!["python3".into()],
-            ..Config::default()
-        };
-        let m = Migrator::new(reg, Arc::new(Mutex::new(StateRegistry::default())), &config);
+        let m = Migrator::new(
+            reg,
+            Arc::new(Mutex::new(StateRegistry::default())),
+            &Config::default(),
+        );
         let found = m.discover().await.unwrap();
 
-        assert_eq!(found.adopt.len(), 1);
-        assert_eq!(found.skipped.len(), 1);
-        assert_eq!(found.skipped[0].package.name, "python3");
+        assert_eq!(found.adopt.len(), 1, "jq is adopted");
+        assert_eq!(found.adopt[0].name, "jq");
+        assert_eq!(found.skipped.len(), 1, "bash is reported, not dropped");
+        assert_eq!(found.skipped[0].package.name, "bash");
         assert!(
-            found.skipped[0].reason.contains("python3"),
-            "the reason must cite the rule that fired, got: {}",
+            found.skipped[0].reason.contains("essential"),
+            "the reason must say why, got: {}",
             found.skipped[0].reason
         );
     }
@@ -545,11 +584,13 @@ mod tests {
             },
             mock,
         );
-        let config = Config {
-            protected_packages: vec!["python3".into()],
-            ..Config::default()
-        };
-        let m = Migrator::new(reg, Arc::new(Mutex::new(StateRegistry::default())), &config);
+        // No `protected_packages` here: protection has nothing to say about the manifest
+        // (E7/II.9). What is commented out is what the OS calls essential.
+        let m = Migrator::new(
+            reg,
+            Arc::new(Mutex::new(StateRegistry::default())),
+            &Config::default(),
+        );
         let text = m.render_manifest(&m.discover().await.unwrap());
 
         assert!(text.contains("THIS IS AN ESTIMATE"), "{}", text);
@@ -557,14 +598,57 @@ mod tests {
         assert!(text.contains("linix unmanage"), "{}", text);
         // The source of the estimate, so a reader can reproduce it.
         assert!(text.contains("apt-mark showmanual"), "{}", text);
-        // Adopted packages are live lines; skipped ones are commented out and explained.
+        // Every manual package is a live line — a PROTECTED one too, if it were listed:
+        // protection stops the removal, not the adoption (V.26). Here both are just manual.
         assert!(text.contains("\napt:jq\n"), "{}", text);
+        assert!(text.contains("\napt:python3\n"), "{}", text);
+    }
+
+    #[tokio::test]
+    async fn the_os_essential_section_is_commented_out() {
+        // II.9: a second section lists OS-essential packages, commented out — listed so you
+        // know they exist, not handed to you as lines whose deletion means "uninstall".
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs));
+        mock.set_response(
+            "apt-mark showmanual",
+            Ok(DryRunOutput {
+                stdout: b"jq\nbash\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        mock.set_response(
+            "dpkg-query -W -f=${Essential} ${Priority} ${Package}\\n",
+            Ok(DryRunOutput {
+                stdout: b"yes required bash\nno optional jq\n".to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let reg = registry_with(
+            ManualListing::Command {
+                binary: Some("apt-mark".into()),
+                args: vec!["showmanual".into()],
+                format: ManualFormat::BareNames,
+            },
+            mock,
+        );
+        let m = Migrator::new(
+            reg,
+            Arc::new(Mutex::new(StateRegistry::default())),
+            &Config::default(),
+        );
+        let text = m.render_manifest(&m.discover().await.unwrap());
+
+        assert!(text.contains("\napt:jq\n"), "jq is a live line:\n{}", text);
         assert!(
-            !text.contains("\napt:python3\n"),
-            "a skipped package must not be a live line:\n{}",
+            !text.contains("\napt:bash\n"),
+            "an OS-essential package must not be a live line:\n{}",
             text
         );
-        assert!(text.contains("#   apt:python3 — protected"), "{}", text);
+        assert!(text.contains("#   apt:bash — "), "bash is commented, with a reason:\n{}", text);
+        assert!(text.contains("essential"), "{}", text);
     }
 
     #[tokio::test]
