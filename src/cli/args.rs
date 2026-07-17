@@ -35,6 +35,13 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub allow_mass_removal: bool,
 
+    /// Carry out an install the guard refuses for being over `max_installs` (II.10). The
+    /// symmetric partner to --allow-mass-removal, and — like it — NOT implied by --yes: a
+    /// script passing -y everywhere must not also silently green-light a ten-thousand-package
+    /// install a mis-globbed manifest produced.
+    #[arg(long, global = true)]
+    pub allow_mass_install: bool,
+
     /// Toggle progress indicators
     #[arg(long, global = true, default_value = "true")]
     pub progress: bool,

@@ -182,6 +182,20 @@ pub struct Config {
     #[serde(default = "default_max_removals")]
     pub max_removals: usize,
 
+    /// Refuse a plan that installs more than this many packages at once unless it is
+    /// explicitly opted into (II.10). The symmetric partner to `max_removals`: a manifest
+    /// that accidentally globs `re:^lib` schedules tens of thousands of installs, and the
+    /// count is the fact that explains it. Default `0` (unset) — installs are additive and
+    /// far less dangerous than removals, so this stays off until a user asks for it.
+    #[serde(default)]
+    pub max_installs: usize,
+
+    /// Carry out an install the guard would refuse for being over `max_installs`. CLI-only
+    /// (`--allow-mass-install`), and — like [`allow_mass_removal`] — deliberately kept out
+    /// of the config file: a permanently-on "install anything" switch defeats the ceiling.
+    #[serde(skip)]
+    pub allow_mass_install: bool,
+
     /// Which commands the removal guard is enforced on. See `EnforceOn`.
     #[serde(default)]
     pub guard: GuardSettings,
@@ -359,6 +373,8 @@ impl Default for Config {
             protected_packages: default_protected_packages(),
             unprotected_packages: Vec::new(),
             max_removals: default_max_removals(),
+            max_installs: 0,
+            allow_mass_install: false,
             guard: GuardSettings::default(),
             btrfs_path: default_btrfs_path(),
             zfs_dataset: None,
@@ -436,6 +452,7 @@ impl Config {
         config_path: Option<PathBuf>,
         verbose: Option<bool>,
         allow_mass_removal: Option<bool>,
+        allow_mass_install: Option<bool>,
     ) -> Result<()> {
         if let Some(dr) = dry_run {
             self.dry_run = dr;
@@ -445,6 +462,9 @@ impl Config {
         }
         if let Some(a) = allow_mass_removal {
             self.allow_mass_removal = a;
+        }
+        if let Some(a) = allow_mass_install {
+            self.allow_mass_install = a;
         }
         if let Some(cp) = config_path {
             self.config_file = cp;

@@ -3074,7 +3074,9 @@ async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<
          Check one package:      linix protected apt:python3\n\
          Machine-readable:       linix protected --json\n\
          Allow a big removal:    linix <command> --allow-mass-removal (the count only —\n\
-                                 it never lets a protected or essential package through)",
+                                 it never lets a protected or essential package through)\n\
+         Allow a big install:    linix <command> --allow-mass-install (answers `max_installs`,\n\
+                                 off unless you set it)",
         cfg.config_file.display()
     );
     Ok(())
@@ -4190,6 +4192,7 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
         None,
         Some(cli.verbose),
         Some(cli.allow_mass_removal),
+        Some(cli.allow_mass_install),
     )?;
     // --quiet has no config-file merge counterpart; apply it directly (a set flag wins).
     if cli.quiet {

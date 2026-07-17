@@ -101,6 +101,11 @@ impl<'a> SyncEngine<'a> {
         )
         .await?;
 
+        // The install-side ceiling (II.10): a mis-globbed manifest schedules a flood of
+        // installs, and the count is the fact that explains it. Off by default; when set,
+        // only `--allow-mass-install` clears it.
+        guard::enforce_installs(self.config, changes.total_install(), scope).await?;
+
         // The pre-sync snapshot is a safety NET, not a precondition: a Windows System
         // Restore checkpoint needs admin (and System Restore enabled), and btrfs/timeshift
         // may be unavailable — none of which should abort a package sync. Policies that

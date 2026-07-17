@@ -114,6 +114,10 @@ pub fn protection_of(
 pub enum Objection {
     Protected { key: String, reason: String },
     TooMany { count: usize, limit: usize },
+    /// The plan installs more packages at once than `max_installs` allows (II.10). The
+    /// install-side twin of `TooMany`: a mis-globbed manifest schedules a flood of
+    /// installs, and the count is the fact that explains it.
+    TooManyInstalls { count: usize, limit: usize },
 }
 
 /// The guard's verdict over a removal set.
@@ -277,6 +281,45 @@ pub async fn enforce(
         return Ok(());
     }
     Err(Error::Other(report.message(scope)))
+}
+
+/// Refuse an oversized install set (II.10). The install-side twin of the count check in
+/// [`enforce`]: `max_installs` catches a manifest that accidentally globs its way into tens
+/// of thousands of installs. `Ok(())` means the install may proceed.
+///
+/// The override is `config.allow_mass_install` (`--allow-mass-install`), never `--yes` —
+/// the same rule the removal ceiling follows, and for the same reason: `-y` is what every
+/// script passes.
+///
+/// Unlike removals, installs have no protection or OS-essential dimension — nothing is
+/// *installed* that the system forbids here — so the only question is the count, and `0`
+/// (unset) disables it.
+pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) -> Result<()> {
+    if config.max_installs == 0 || count <= config.max_installs {
+        return Ok(());
+    }
+    if config.allow_mass_install {
+        warn!(
+            "Guard: the install count for '{}' ({}) was allowed by --allow-mass-install.",
+            scope.as_str(),
+            count
+        );
+        return Ok(());
+    }
+
+    Err(Error::Other(format!(
+        "{}: refusing this install.\n  \
+         - it installs {} packages, over the limit of {} (config: max_installs)\n\n\
+         This usually means a manifest matched more than you meant — run `linix plan` and \
+         read the counts before proceeding.\n\n\
+         What to do:\n  \
+         linix plan                     see exactly what would be installed\n  \
+         {} --allow-mass-install carry out this install anyway",
+        scope.as_str(),
+        count,
+        config.max_installs,
+        scope.as_str(),
+    )))
 }
 
 /// Enforce for `purge-unmanaged`, where the count is not the question (II.11).
@@ -499,6 +542,53 @@ mod tests {
                 .is_err(),
             "protection still applies to a deliberate purge"
         );
+    }
+
+    #[tokio::test]
+    async fn install_ceiling_is_off_by_default() {
+        // max_installs defaults to 0 (unset). Installs are additive and far less dangerous
+        // than removals, so the ceiling stays off until a user asks for it.
+        let cfg = config_with(20); // max_installs is 0 here
+        assert!(enforce_installs(&cfg, 10_000, GuardScope::Sync).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn install_over_the_ceiling_is_refused() {
+        let mut cfg = config_with(20);
+        cfg.max_installs = 50;
+        let err = enforce_installs(&cfg, 51, GuardScope::Sync)
+            .await
+            .expect_err("51 installs over a limit of 50 must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("installs 51 packages"), "{}", msg);
+        assert!(msg.contains("max_installs"), "{}", msg);
+        assert!(msg.contains("--allow-mass-install"), "{}", msg);
+    }
+
+    #[tokio::test]
+    async fn install_at_the_ceiling_is_allowed() {
+        // The limit is inclusive: exactly `max_installs` is fine; over it is not.
+        let mut cfg = config_with(20);
+        cfg.max_installs = 50;
+        assert!(enforce_installs(&cfg, 50, GuardScope::Sync).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn allow_mass_install_clears_the_install_ceiling() {
+        // Symmetric to --allow-mass-removal answering the removal count.
+        let mut cfg = config_with(20);
+        cfg.max_installs = 50;
+        cfg.allow_mass_install = true;
+        assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn yes_does_not_override_the_install_ceiling() {
+        // -y is what every script passes; it must not green-light a manifest-globbed flood.
+        let mut cfg = config_with(20);
+        cfg.max_installs = 50;
+        cfg.yes = true;
+        assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync).await.is_err());
     }
 
     #[test]
