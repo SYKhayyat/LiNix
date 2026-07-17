@@ -84,17 +84,44 @@ impl Journal {
             return Ok(());
         }
 
-        self.entries = serde_json::from_str(&data).map_err(|e| {
-            Error::Other(format!(
-                "WAL Journal is corrupted and cannot be parsed: {}",
-                e
-            ))
-        })?;
-
-        debug!(
-            "Journal: Successfully loaded {} historical log entries.",
-            self.entries.len()
-        );
+        match serde_json::from_str(&data) {
+            Ok(entries) => {
+                self.entries = entries;
+                debug!(
+                    "Journal: Successfully loaded {} historical log entries.",
+                    self.entries.len()
+                );
+            }
+            Err(e) => {
+                // S10: a corrupt WAL must NOT brick every command. It used to return Err,
+                // which failed `App::new`, which failed everything — with no message saying
+                // which file to delete. The WAL only records in-flight actions for crash
+                // recovery; a corrupt one means we cannot auto-recover an interrupted run, but
+                // that is no reason to refuse `list`, `plan`, or anything else. So: move the
+                // bad file aside (preserved for inspection, and so it stops re-triggering),
+                // say so loudly (P3 — fail loud), and start fresh.
+                let backup = {
+                    let mut s = self.path.clone().into_os_string();
+                    s.push(".corrupt");
+                    std::path::PathBuf::from(s)
+                };
+                let moved = std::fs::rename(&self.path, &backup).is_ok();
+                self.entries = HashMap::new();
+                warn!(
+                    "Journal: the WAL at {:?} is corrupt and could not be parsed ({}). {} \
+                     Starting a fresh journal so commands still run; an operation interrupted \
+                     before this cannot be auto-recovered — re-run `linix sync` to reconcile.",
+                    self.path,
+                    e,
+                    if moved {
+                        format!("It has been moved to {:?} for inspection.", backup)
+                    } else {
+                        "It could not be moved aside; it will be overwritten on the next write."
+                            .to_string()
+                    },
+                );
+            }
+        }
         Ok(())
     }
 
@@ -252,5 +279,41 @@ impl Journal {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn a_corrupt_wal_does_not_brick_every_command() {
+        // S10: a bad parse used to fail App::new and therefore every command. It must
+        // instead recover: move the bad file aside, start fresh, and still construct.
+        let tmp = tempdir().unwrap();
+        let path = tmp.path().join("journal.json");
+        std::fs::write(&path, b"{ this is not valid json ]]").unwrap();
+
+        let journal = Journal::at(path.clone()).expect("a corrupt WAL must not fail construction");
+
+        // Started fresh...
+        assert!(!journal.needs_recovery());
+        // ...the bad file was set aside for inspection...
+        let backup = {
+            let mut s = path.clone().into_os_string();
+            s.push(".corrupt");
+            std::path::PathBuf::from(s)
+        };
+        assert!(backup.exists(), "the corrupt WAL should be preserved at {:?}", backup);
+        // ...and it is no longer at the live path (so it won't re-trigger).
+        assert!(!path.exists(), "the corrupt WAL should have been moved off the live path");
+    }
+
+    #[test]
+    fn a_missing_wal_starts_fresh_without_error() {
+        let tmp = tempdir().unwrap();
+        let journal = Journal::at(tmp.path().join("nope.json")).unwrap();
+        assert!(!journal.needs_recovery());
     }
 }
