@@ -1299,6 +1299,14 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   `&target_str[2..]` on a bare `"~"` (len 1) is an out-of-bounds slice → **panic** on a malformed spec,
   and `"~x"` silently drops the `x` (use `strip_prefix("~/")`, guard the length). **Solution TBD.**
 
+- **SEC4 — SSH host argument injection (fleet), semi-trusted input.** `fleet.rs:24-28` passes `host`
+  to `ssh` with no `--` separator: `.arg("-o").arg("BatchMode=yes").arg(host).arg(remote_cmd)`. A host
+  like `-oProxyCommand=<cmd>` or `-oPermitLocalCommand=…` is parsed by ssh as an option and runs a
+  command on the **local** machine. The `remote_cmd` side is a LiNix constant (`linix status --json` /
+  `linix sync -y`), so only `host` is the vector. Hosts come from the user's own `fleet_hosts` config
+  or CLI (semi-trusted), so lower severity — but a fleet list from a shared/generated source makes it
+  reachable. **Solution TBD** (insert `--` before `host`, or reject hosts beginning with `-`).
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
