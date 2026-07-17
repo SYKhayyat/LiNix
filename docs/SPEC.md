@@ -1223,6 +1223,15 @@ implementing agent's call; that it goes is not.**
   is swallowed: the package is installed and in memory but never recorded, so the next `sync` treats it
   as unmanaged drift. The sibling save at `sync/mod.rs:136` propagates correctly with `??`. Fix: `?` → `??`.
 
+- **R21 — File-backed backends report removal success when the file delete failed.** `github.rs:347-359`
+  (and the same shape in `web.rs:260-268`, `appimage.rs:143`,`:176-177`): `remove()` drops the package
+  from LiNix state, then best-effort deletes the binary and install dir with `let _ =`, logs "Purged",
+  saves state, returns `Ok`. If the delete fails — locked binary (common on Windows), permission denied
+  — the package vanishes from LiNix's view but the executable stays on disk and on PATH, and since
+  queries read from LiNix state it becomes invisible drift no `sync` catches. Fix across all three
+  backends: surface the delete failure — warn and do not record it as a clean removal; better, return
+  the error so state is not updated as if the package is gone.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
