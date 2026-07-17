@@ -654,9 +654,11 @@ Delete everything in II.17. Delete the ~884 marketing comments. Delete every leg
 **C13 and the grammar are one job, not two.** The grammar *is* the parser; unifying five
 parsers against the old grammar just to rewrite them is work done twice.
 
-- One `backend:name` parser. **(verified)** Five exist today; three skip backend validation,
-  including the manifest hot path. Every new prefix (`absent:`, `repo:`, `shim:`,
-  `schedule:`, `re:`) is a thing a non-validating parser reads as a backend name.
+- One `backend:name` parser. **(re-measured 2026-07-16: EIGHT exist, SIX skip backend
+  validation)** — including `resolver.rs:212`, the one that builds every `PackageSpec`.
+  Only `split_removal_target` and one inline site at `main.rs:647` consult the registry.
+  Every new prefix (`absent:`, `repo:`, `shim:`, `schedule:`, `re:`) is a thing a
+  non-validating parser reads as a backend name. *(The first draft said five and three.)*
 - Reserve `re` against the onboarder's custom backends.
 - `{ }` blocks. Header decides body kind (keyword → lines, declaration → options).
 - Comments: whole-line, trailing on statements, **never inside block values**.
@@ -1051,7 +1053,7 @@ correctly. The measured 32 are the ones that remain.)*
 | **C3** | lease and `absent:` removals skip protection, three lines above a drift branch that checks it → **Phase 3** |
 | **C8** | ghost-shell exit force-removes with no protection, no guard, no confirmation → **Phase 3** |
 | **C9** | lease expiry implemented twice with different semantics; the sweep runs on every state-changing command → **Phase 3** |
-| **C13** | five `backend:name` parsers, three skip validation → **Phase 1** |
+| **C13** | ~~five~~ **eight** `backend:name` parsers, ~~three~~ **six** skip validation. **(re-measured)** → **Phase 1** ✅ done |
 | **B3** | `unprotected_packages` doesn't beat OS-essential; `linix protected` reports the opposite of what the guard does → **Phase 3** |
 | **E6** | "unmanaged" has two implementations that will disagree. Resolve as *"what `adopt` would adopt"* — one function → **Phase 2** |
 | **E11** | suspension restore implemented twice → **Phase 3** |
@@ -1080,6 +1082,7 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S6** | **`sync` heals without asking.** `Journal::needs_recovery` was documented as "LiNix will prompt the user to run `heal`"; there is no prompt — `handle_sync` calls `heal()` unconditionally. Comment fixed in Phase 0e, but the behaviour is undecided: `heal` completes or rolls back an interrupted transaction, which is a change nobody asked for in this run → **Phase 3** (decide: is heal a refusal, a confirmation, or automatic?) |
 | **S7** | **A crash left unhealed for 4 hours becomes unhealable.** `Journal::cleanup` reclassifies stale `InProgress` entries to `Abandoned`, and `get_incomplete_actions` (what `heal` acts on) excludes `Abandoned`. So the window to recover a crashed transaction silently closes. The 4h threshold is also a magic number with no stated reason (P5) → **Phase 5** |
 | **S8** | **`undo`'s `FORBIDDEN_PATHS` guarantee is local, not global.** It guards `validate_snapshot_path`, reached only from the read path (`show_diff_and_confirm`). `execute_restore` never calls it and hands the snapshot to btrfs/timeshift, which restore over `/` — i.e. over every path the list claims is never touched. Comments scoped honestly in Phase 0f; whether restore should be gated is undecided → **Phase 3** |
+| **S9** | **`remove_package_from_local` (`parser.rs:290`) matches a bare target against the BACKEND prefix**: `\|\| b == package_name`. So removing a package named `npm` deletes every `npm:*` line in `local.txt`. Dies with `local.txt` itself → **Phase 2** |
 
 ## VI.3 Do not re-decide these
 
