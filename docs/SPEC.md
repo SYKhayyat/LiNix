@@ -1066,6 +1066,21 @@ correctly. The measured 32 are the ones that remain.)*
 | — | `bundle` has no restore code and no end-to-end test → **Phase 4** |
 | — | air-gap artifacts need the whole dependency tree, and most backends can't → **Phase 4** |
 
+### Found during implementation
+
+Each verified against the code at the time it was found, with the evidence in the commit
+that recorded it. Assigned to the phase that owns the mechanism, not the phase that found it.
+
+| | |
+|---|---|
+| **S2** | **Age-based snapshot retention is dead for btrfs and ZFS.** Both providers' `list()` hardcode `timestamp: Utc::now()`, so `Snapshot::parse_time()` always returns *now* and every snapshot reads as zero seconds old. `max_age_days` and `RetentionPolicy::keep_days` can therefore never fire; only `keep_last` works. `retention.rs` is correct — the data feeding it is not. A retention policy that silently keeps everything is exactly P3's failure mode → **Phase 4** (one retention engine) |
+| **S3** | **Snapshot retention never prunes Windows restore points.** The ownership filter is `id.contains("linix")`, but `WindowsRestoreProvider` sets `id` to a bare `SequenceNumber` (`"12"`) and puts the `LiNix:` marker in `description`. Nothing LiNix creates on Windows is ever reclaimed → **Phase 4** |
+| **S4** | **`create_shim` overwrites any existing file at the target without asking.** Deliberate for redeploying a shim, but it silently destroys a same-named binary the user owns in `~/.local/bin`. `remove_shim` was fixed in Phase 0f to test ownership; the create path still does not. Once shims are declared lines (II.16), this is an install that clobbers an unmanaged file, and belongs behind the guard → **Phase 3** |
+| **S5** | **`--progress` is a lie.** `#[arg(long, global = true, default_value = "true")]` on a `bool` — clap derives `ArgAction::SetTrue`, so it is always true and there is no way to turn it off. A setting that cannot be changed is F1's shape → **Phase 5** |
+| **S6** | **`sync` heals without asking.** `Journal::needs_recovery` was documented as "LiNix will prompt the user to run `heal`"; there is no prompt — `handle_sync` calls `heal()` unconditionally. Comment fixed in Phase 0e, but the behaviour is undecided: `heal` completes or rolls back an interrupted transaction, which is a change nobody asked for in this run → **Phase 3** (decide: is heal a refusal, a confirmation, or automatic?) |
+| **S7** | **A crash left unhealed for 4 hours becomes unhealable.** `Journal::cleanup` reclassifies stale `InProgress` entries to `Abandoned`, and `get_incomplete_actions` (what `heal` acts on) excludes `Abandoned`. So the window to recover a crashed transaction silently closes. The 4h threshold is also a magic number with no stated reason (P5) → **Phase 5** |
+| **S8** | **`undo`'s `FORBIDDEN_PATHS` guarantee is local, not global.** It guards `validate_snapshot_path`, reached only from the read path (`show_diff_and_confirm`). `execute_restore` never calls it and hands the snapshot to btrfs/timeshift, which restore over `/` — i.e. over every path the list claims is never touched. Comments scoped honestly in Phase 0f; whether restore should be gated is undecided → **Phase 3** |
+
 ## VI.3 Do not re-decide these
 
 Three suspicions did not survive scrutiny:
