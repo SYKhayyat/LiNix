@@ -1879,6 +1879,32 @@ reconciling away a `service:`/`link:`/`shim:` line the user *removed* (the forwa
 is done; the teardown is not, because the planner tracks package drift, not extra drift). A
 Phase 2 follow-up.
 
+## Done in Phase 2q/2r/2s — the grammar's last gaps and the old-model teardown
+
+**2q — the last two unenforced II.2 grammar rules.** The 2026-07-17 audit found three II.2
+rules whose implementation was a comment, not a check. One (`@versionn` key whitelist) was
+already fixed by S19. The other two are now enforced: **`@until` is refused on a present line**
+(`validate_options` takes `absent: bool`, threaded from `parse`'s `absent:` branch, and points
+you at `@expires`), and **`link:` no longer parses as set math** — the expression check yields
+to any typed-statement prefix, so `link:C:\Users\me\.vimrc` (full of `\`, which
+`looks_like_expression` fires on) is a `Statement::Link` again. Tests for both.
+
+**2r — the old-model crawl is gone.** `config/parser.rs` 437 → 215 lines: the whole
+`@module:`/`groups/` crawl (`ManifestLine`, `identify_line`, `parse_group_file`,
+`filter_conditional_lines`, `load_all_packages`, `write_group_file`) deleted with its 7 tests;
+kept `HostFacts` + `eval_when` (the model's `when` engine) and `split_removal_target` (the one
+colon-parser that validates against the registry). **`Config::groups_dir` and
+`Config::modules_dir` fields deleted** — one `config_root` field replaces them, `config_root()`
+returns it directly (was `groups_dir.parent()`) with the never-resolve-to-CWD guard kept, and
+all 29 call sites (locks, policy, generation restore, `watch`, the doctor) moved onto it.
+Binary verified against a bare `config_root` with no `groups/` subdir.
+
+**2s — the retired `lease` command is deleted.** II.16 replaced leases with dated lines and
+S19 stopped `state.add` reading `@lease`; the imperative `lease set`/`lease list` was the last
+of the concept, and `lease set` was the last non-validating `split_once(':')` parser (C13). Gone:
+`Commands::Lease`, `handle_lease`, `LeaseArgs`/`LeaseCommand`, `StateRegistry::update_lease`.
+`install --temp`'s help now says `@expires`, not `@lease`.
+
 ## Done in Phase 2j/2k — the commands that still read the deleted model
 
 **`why` asks the model** — the audit's worst finding, answered in full above.
