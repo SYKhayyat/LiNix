@@ -911,21 +911,30 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   in `src/`**~~ — **DONE (install ceiling): `Config::max_installs` (default 0 = unset) +
   `guard::enforce_installs` + `Objection::TooManyInstalls`, enforced at the one sync choke point
   (`SyncEngine::sync`), with `--allow-mass-install` (CLI-only, mirrors `allow_mass_removal`). Five
-  tests.** `policy.rs:25` also has a **tenth rule the spec never mentions**
-  (`allow_backends`). **"One decision function" is the work, not the summary:** today there are
-  three (`guard::protection_of`, `guard::inspect`, `Policy::check_specs`), and the real ceiling
-  is `Objection` (`guard.rs:114`), which ~~has **two variants** — `Protected` and `TooMany`~~
-  **now has three (`Protected`, `TooMany`, `TooManyInstalls`) — the enum change has begun, count
-  refusals first.** Nine refusals cannot be expressed by a two-variant verdict; **the remaining
-  work is folding `policy.rs`'s four spec-rules into it and giving the install paths their own
-  `inspect` (deny_packages / pinned_only), so there is genuinely ONE decision surface.**
-  ~~`--allow-mass-install` (II.10:578) does not exist either.~~ **DONE — see above.**
+  tests.** ~~`policy.rs:25` also has a **tenth rule the spec never mentions**
+  (`allow_backends`).~~ **DONE — `allow_backends` deleted, not migrated: the `priority` file is
+  what "only these backends" means now (V.15).** **"One decision function" is the work, not the
+  summary:** ~~today there are three (`guard::protection_of`, `guard::inspect`,
+  `Policy::check_specs`)~~ — **DONE (consolidation): `policy.rs` is deleted and its four rules now
+  populate `GuardSettings` (the `[guard]` table, their II.17 home). The guard owns the spec-level
+  checks — `guard::inspect_desired` → `Objection::Denied`/`Unpinned`, rendered by
+  `describe_objection`; `require_snapshot`/`deny_vulnerable` stay in `enforce_policy` (they need
+  the snapshot provider + audit report) but read `config.guard` and share the violation list.
+  `enforce_policy` and `handle_policy` read `[guard]`, not `policy.toml`.** `Objection`
+  (`guard.rs`) ~~has **two variants**~~ **now has four (`Protected`, `TooMany`, `TooManyInstalls`,
+  `Denied`, `Unpinned`).** ~~`--allow-mass-install` (II.10:578) does not exist either.~~ **DONE.**
+  **Remaining mechanical step:** the four removal-count rules (`protected_packages`,
+  `unprotected_packages`, `max_removals`, `max_installs`) still sit as top-level `Config` fields;
+  renaming them under `[guard]` alongside the other four is all that is left of "one home"
+  (noted on `GuardSettings`).
 - **Every removal path calls it.** Today's misses: `uninstall` (C1), leases and `absent:`
   (C3), ghost-shell exit (C8), `clean`.
 - One lease-expiry implementation (C9 — two exist today with different semantics).
 - The ratio check and `purge-unmanaged` (II.11).
-- `unprotected_packages` must beat OS-essential (B3 — the code clears the config rule, then
-  falls through to the OS check, which fires anyway).
+- ~~`unprotected_packages` must beat OS-essential (B3 — the code clears the config rule, then
+  falls through to the OS check, which fires anyway).~~ **DONE — `guard::protection_of` checks
+  `unprotect_rule` first and returns `None`, before the OS-essential check runs; proven by the
+  `unprotect_wins_over_the_os_essential_flag` test.**
 
 **Exit:** a test per removal path proving the guard fires.
 
