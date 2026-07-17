@@ -1028,7 +1028,17 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
     intended II.12 behaviour, but a change. (4) The version-pin `locks.json` still sits beside
     `locks/` — its migration under `locks/` (below) is unchanged.
 - Commit on successful sync only. snapshot → apply → commit. Tag the snapshot.
-- `git checkout` + `sync` = rollback. Delete the generation format.
+- ~~`git checkout` + `sync` = rollback. Delete the generation format.~~ **DONE, 2026-07-17
+  (owner-approved migration, steps A–C).** (A) `linix rollback <ref>` checks out the manifests at
+  a git commit then syncs — the one rollback; the per-package/`--with-config` flags are gone
+  (git checkout is whole-config). (B) The `cockpit` TUI was rebuilt on git history (timeline =
+  commit log; each row shows the manifest lines that commit changed, via
+  `GitManager::commit_manifest_changes`; rollback checks out + syncs). (C) `src/app/generation.rs`
+  (745 lines) and the whole subsystem deleted — `record_generation`, `rollback_to`,
+  `generation_store`, `handle_generation`, the `generation` CLI command + args,
+  `RetentionConfig.generations`, and `undo`'s `restore_matching_generation` (a whole-`/` snapshot
+  already reverts manifests + registry). **Checked:** `cargo check --lib`/`--bin`/`--tests` all
+  clean, no warnings; unit tests written (cockpit render + `parse_manifest_changes`), not run.
 - `linix diff COMMIT COMMIT` in packages, not text.
 - `bundle` = `git bundle` + artifacts + registry, **honest per-backend about what can't be
   bundled**.
