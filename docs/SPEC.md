@@ -927,10 +927,24 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   `unprotected_packages`, `max_removals`, `max_installs`) still sit as top-level `Config` fields;
   renaming them under `[guard]` alongside the other four is all that is left of "one home"
   (noted on `GuardSettings`).
-- **Every removal path calls it.** Today's misses: `uninstall` (C1), leases and `absent:`
-  (C3), ghost-shell exit (C8), `clean`.
-- One lease-expiry implementation (C9 — two exist today with different semantics).
-- The ratio check and `purge-unmanaged` (II.11).
+- **Every removal path calls it.** ~~Today's misses: `uninstall` (C1), leases and `absent:`
+  (C3), ghost-shell exit (C8), `clean`.~~ **Mostly DONE by architecture, verified 2026-07-17:
+  plain `uninstall` undeclares then calls `handle_sync` → guarded (`GuardScope::Sync`); `absent:`
+  becomes drift removed by sync → guarded; ghost-shell `suspend_for_session` calls
+  `guard::enforce` explicitly (`main.rs:1222`); leases were deleted in Phase 2, so C3's lease
+  half no longer exists. THE ONE REAL MISS IS `clean`** — it calls `clean_orphans` directly, and
+  routing it through the guard needs a backend `list_orphans` capability (list intended orphans,
+  check against protection, refuse if any is protected) that does not exist yet — a ~20-backend
+  trait addition, its own chunk.
+- ~~One lease-expiry implementation (C9 — two exist today with different semantics).~~ **Moot —
+  leases were removed entirely in Phase 2 (the `lease` command, `LeaseArgs`, and both expiry
+  paths are gone; timed absence is now the dated-line machinery, `@expires`/`@until`).**
+- ~~The ratio check and `purge-unmanaged` (II.11).~~ **DONE — `handle_purge_unmanaged` prints the
+  whole list, applies the ratio check (`PURGE_RATIO = 0.1`) with II.11's exact message before
+  anything else, uses `enforce_deliberate` (protection + OS-essential apply, `max_removals` does
+  not), takes a snapshot first or prints "THERE IS NO UNDO FOR THIS", and requires a typed
+  count. Tests in `main.rs::purge_tests` (3/576 and 1/14 refused, 103/476 and adopted-Alpine
+  allowed).**
 - ~~`unprotected_packages` must beat OS-essential (B3 — the code clears the config rule, then
   falls through to the OS check, which fires anyway).~~ **DONE — `guard::protection_of` checks
   `unprotect_rule` first and returns `None`, before the OS-essential check runs; proven by the
