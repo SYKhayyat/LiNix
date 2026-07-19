@@ -36,7 +36,7 @@ pub use self::migrate::Migrator;
 pub use self::shim_manager::ShimManager;
 pub use self::undo::UndoManager;
 pub use self::profile::ProfileManager;
-pub use self::shell::GhostShell;
+pub use self::shell::EphemeralShell;
 
 pub const APP_NAME: &str = "linix";
 pub const DEFAULT_CONFIG_NAME: &str = "config.toml";

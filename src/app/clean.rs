@@ -12,37 +12,37 @@ impl<'a> Cleaner<'a> {
     }
 
     pub async fn clean(&self) -> Result<()> {
-        info!("Cleaner: Initiating deep system cleanup...");
+        debug!("starting cleanup");
 
         // A backend with no orphan concept returns Error::Unsupported — a benign skip that
         // must not be counted or reported like a real failure.
         let (mut cleaned, mut skipped, mut failed) = (0u32, 0u32, 0u32);
         for backend in self.app.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
-                debug!("Cleaner: Requesting orphan pruning for {}...", backend.name());
+                debug!("Requesting orphan pruning for {}...", backend.name());
                 let sudo = backend.sudo_for_write();
                 match upgradable.clean_orphans(sudo).await {
                     Ok(()) => { cleaned += 1; }
                     Err(Error::Unsupported(_)) => {
                         skipped += 1;
-                        debug!("Cleaner: {} has no orphan-cleanup concept — skipping.", backend.name());
+                        debug!("{} has no orphan-cleanup concept — skipping.", backend.name());
                     }
                     Err(e) => {
                         failed += 1;
-                        warn!("Cleaner: Failed to clean orphans for {}: {}", backend.name(), e);
+                        warn!("Failed to clean orphans for {}: {}", backend.name(), e);
                     }
                 }
             }
         }
-        info!("Cleaner: orphan pass complete — {} cleaned, {} not applicable, {} failed.",
+        info!("orphan pass complete — {} cleaned, {} not applicable, {} failed.",
               cleaned, skipped, failed);
 
-        debug!("Cleaner: Clearing LiNix metadata cache...");
+        debug!("Clearing LiNix metadata cache...");
         self.app.cache.clear_all().await;
 
         self.clean_temp_dirs().await?;
 
-        info!("Cleaner: System cleanup completed successfully.");
+        debug!("cleanup complete");
         Ok(())
     }
 
@@ -50,11 +50,11 @@ impl<'a> Cleaner<'a> {
         let base_temp = &self.app.config.tmp_dir;
 
         if tokio::fs::try_exists(base_temp).await.unwrap_or(false) {
-            debug!("Cleaner: Purging temporary directory: {:?}", base_temp);
+            debug!("Purging temporary directory: {:?}", base_temp);
             tokio::fs::remove_dir_all(base_temp).await.map_err(|e| Error::Io(e.to_string()))?;
             tokio::fs::create_dir_all(base_temp).await.map_err(|e| Error::Io(e.to_string()))?;
         } else {
-            debug!("Cleaner: Temporary directory {:?} does not exist. Skipping.", base_temp);
+            debug!("Temporary directory {:?} does not exist. Skipping.", base_temp);
         }
         Ok(())
     }

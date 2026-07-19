@@ -1156,6 +1156,17 @@ implementing agent's call; that it goes is not.**
   like "kernel initialized" to `debug!` so they stop printing every run. The bar is `apt`/`dnf`:
   near-silent on a normal run.
 
+  **DONE 2026-07-19.** 149 log lines lost a `Component:` prefix, and the theatrical verbs went with
+  them ("Commencing system-wide batch upgrade" → "upgrading all packages"). Pure-status lines were
+  demoted to `debug!`: the kernel banner, the bootstrap line, service assembly, "Dropping into
+  hardened sandbox", both cleanup lines, and `Heal`'s "already verified via WAL". **One judgement
+  call the entry did not make, recorded because it is a line someone could reasonably draw
+  elsewhere: LiNix's self-branding prefixes were stripped (`Kernel:`, `GhostShell:`, `Cleaner:`,
+  `Migrator:`, `Resolver:`, `Transaction:`, `Journal:`, …) but backend-name prefixes were kept**
+  (`Cargo:`, `DNF:`, `Pacman:`). The first is the tool narrating itself; the second says *which
+  package manager acted*, which is the one thing `apt`/`dnf` output does tell you.
+  `grep -rn "Kernel:\|GhostShell\|Cleaner:" src/` is silent.
+
 - **R2 — Delete `teleport` outright.** A teleport is a prefix rewrite: `apt:nginx` → `snap:nginx`,
   then sync. The declarative model already does that — change the backend on the line and sync
   removes it from the old backend and installs it on the new. But `Teleporter` (`app/teleport.rs`)
@@ -1216,6 +1227,12 @@ implementing agent's call; that it goes is not.**
   "Mission-Critical", and the footer reads exactly "Automated Management via LiNix" — no version
   string at all (nothing to go stale).
 
+  **DONE 2026-07-19.** `NotificationLevel::emoji()` deleted outright rather than emptied — with the
+  subject rebuilt as `"{title_prefix} - {subject}"` nothing called it. `LiNix CRITICAL` → `LiNix
+  Error`, the body header → "LiNix Report", the footer → "Automated Management via LiNix". The entry
+  named one `emoji()` call site; there were **three** (the subject line plus two `info!` fallbacks
+  used when desktop notification is unavailable), and those now print the level name.
+
 - **R7 — Strip all marketing language; "mission-critical" appears nowhere.** Replace the `--help`
   tagline and crate docs with a genuinely descriptive line (what it *does*: a declarative package
   manager — edit a file, sync the machine to match). This is a sweep, not one string. Kill every
@@ -1226,11 +1243,24 @@ implementing agent's call; that it goes is not.**
   the version, don't update it. The test: help and output should describe the tool plainly, the way
   `apt`/`dnf` do, with zero adjectives selling it.
 
+  **DONE 2026-07-19.** `--help` tagline, `lib.rs` crate docs, `bin/shim.rs`, `core/state.rs`,
+  `main.rs`'s shim comment and `sync`'s "(DAG-based)" help all rewritten to say what the thing does.
+  The stale versions were deleted, not updated (`v3.6.0` in the services banner went with the banner
+  itself in R1's demotion; `v5.0.0` in the mail footer went in R6). **Two counts also went, and the
+  entry did not ask for it: "50+ backends" and "33+ backends" were stale in opposite directions and
+  disagreed with each other in the same repo.** The replacement text carries no number, so there is
+  nothing left to rot — which is F4's goal reached by deletion rather than by wiring `--help` to the
+  registry. **F4 is therefore narrower than it was, not done: the README line it also names is
+  untouched.**
+
 - **R8 — Rename `--i-really-mean-it` to `--allow-mass-purge`.** `purge-unmanaged` guards itself with
   the jokey `--i-really-mean-it` (`cli/args.rs:141`, used at `main.rs:2809`,`:2819`), while every
   sibling destructive gate is sober and consistent: `--allow-mass-removal`, `--allow-mass-install`
   (`args.rs:36`,`:43`). Rename it into that family — `--allow-mass-purge` — and update the flag, its
   handler param, and the hint text at `main.rs:2819`. One vocabulary for the guard, no jokes.
+
+  **DONE 2026-07-19.** Flag, the `allow_mass_purge` field, the handler parameter and the hint text.
+  `grep -rn "i-really-mean-it" src/` is silent.
 
 - **R9 — General rule: no emoji and no self-branding in user-facing output.** Output states the
   plain fact and the action to take; it does not decorate with emoji or narrate itself as "LiNix
@@ -1240,9 +1270,18 @@ implementing agent's call; that it goes is not.**
   A sweep confirmed those are the only two files with emoji, but this is a **standing rule** for all
   new output too: plain text, name the problem, name the fix.
 
+  **DONE 2026-07-19.** Both `diagnostics.rs` hints are plain; the notification emoji went in R6.
+  **Three non-emoji symbols were deliberately kept and are recorded here so the next sweep does not
+  read them as a miss:** `✓`/`✗` in the metrics summary, `★` marking active profiles in `profile
+  list` help, and a `✓` inside a snap-output test fixture. They carry information rather than
+  decorating, which is the distinction the rule is drawing.
+
 - **R10 — Standardize the dry-run label to `[DRY-RUN]`.** It is uppercase almost everywhere, but two
   spots print lowercase `[dry-run]` — `bisect.rs:84` and `go.rs:159`. Same concept, one spelling: make
   both `[DRY-RUN]`.
+
+  **DONE 2026-07-19 — and there was a third site the entry missed**, `main.rs`'s canary dry-run line.
+  All three now read `[DRY-RUN]`.
 
 - **R11 — Collapse `watch`'s duplicated sync pipeline into one shared reconcile.** `watch_reconcile`
   (`main.rs:515+`) hand-copies `handle_sync`'s body — resolve model, `enforce_policy`,
@@ -1259,11 +1298,19 @@ implementing agent's call; that it goes is not.**
   `history`, keep `tui` as an alias, and drop the "time-travel" wording (also covered by R7). Exact
   name is the implementing agent's call.
 
+  **DONE 2026-07-19 — the name is `history`, `tui` kept as the alias.** `browse` was the other
+  candidate and lost because the thing being browsed is the manifest history specifically, and
+  `history` says so without a second word. `ui/cockpit.rs` → `ui/history.rs`, `Cockpit` →
+  `HistoryBrowser`, `CockpitAction` → `HistoryAction`. **The help text also stopped saying
+  "generations", which no longer exist** — it browses commits (II.1: git IS the history).
+
 - **R13 — Fix `uninstall`'s help wording.** Command help says "Imperatively uninstall one or more
   packages" and the arg help says "Names of packages to purge" (`args.rs:307-309`). "purge" collides
   with the separate `purge-unmanaged` command, and "Imperatively" is jargon that also contradicts the
   model — uninstall is undeclare + sync, i.e. declarative. Plain: "Uninstall one or more packages" /
   "Names of packages to uninstall."
+
+  **DONE 2026-07-19.**
 
 - **R14 — Drop the "ghost shell" metaphor; don't clobber the user's prompt.** The `shell` command
   (ephemeral shell with packages loaded) brands itself "ghost shell" (`args.rs:353`), sets
@@ -1272,14 +1319,26 @@ implementing agent's call; that it goes is not.**
   non-intrusive session marker (an env var the user can opt into displaying) instead of overwriting
   `PROMPT_COMMAND`.
 
+  **DONE 2026-07-19.** The `PROMPT_COMMAND` override is deleted — nothing replaces it, because the
+  marker the entry asks for already existed: the session env var, renamed `LINIX_GHOST` →
+  `LINIX_EPHEMERAL_SHELL`, which a user can show in their own prompt if they want it. The type
+  `GhostShell` → `EphemeralShell` and the "ghost" wording is gone from help and comments.
+
 - **R15 — "Flight plan" → plain "Planned changes".** The change preview header prints "Flight plan:"
   (`main.rs:3515`), and the aviation metaphor recurs in `--quiet` help and config comments
   (`args.rs:58`, `config.rs:208`, `main.rs:445`). Rename to something plain like "Planned changes:"
   everywhere the phrase appears.
 
+  **DONE 2026-07-19.** The header, the `--quiet` help, the config comment and the `main.rs` comment.
+  `print_flight_plan` is still the function's name — internal, not user-facing, and renaming it
+  touches three call sites for no reader's benefit. **Flagged rather than silently left:** if the
+  next reader disagrees, it is a one-line rename.
+
 - **R16 — Tone down the shouty `THERE IS NO UNDO FOR THIS.`** Printed in all-caps at `main.rs:2859`
   and `:2867` — the loudest string in the tool. The warning is justified for a destructive command,
   but sentence case carries it: "This cannot be undone." Fix both spots.
+
+  **DONE 2026-07-19.** Both spots.
 
 - **R17 — `export` must never silently overwrite; handle the conflict.** `export()` does
   `tokio::fs::write(path, text)` with no existence check, no backup, no `--force` (`export.rs:179`);
@@ -2088,10 +2147,26 @@ named `GenerationCommand::Rollback` and `rollback_to()`, neither of which exists
 the generation command family when history moved to git. Recorded as ALREADY TRUE, not as done —
 **writing ✅ on work nobody did is how Phases 0 and 1 got their false marks.**
 
-**Suite: 558 passing, 0 failed, `cargo build --all-targets` clean** (measured 2026-07-19, after the
-R2/R3 deletions). Down from 560 because two teleport tests were deleted with the feature, not
-because anything went red. *Green here means only that the deletions did not break what remained —
-it says nothing about R1 or R5–R23, which are still open.*
+**R1 and R6–R16 done — the voice sweep.** 149 log lines lost a self-branding `Component:` prefix,
+the theatrical verbs went with them, and the pure-status lines were demoted to `debug!` so a normal
+run is quiet. `cockpit` is `history`, `GhostShell` is `EphemeralShell` and no longer overwrites the
+user's `PROMPT_COMMAND`, `--i-really-mean-it` is `--allow-mass-purge`, "Flight plan" is "Planned
+changes", and the marketing adjectives are gone from `--help`, the crate docs and every log line.
+
+**Three of those entries were wrong about their own scope, in the direction that costs a reader
+time:** R6 named one `emoji()` call site and there were three, R10 named two `[dry-run]` sites and
+there were three, and R7's backend counts ("50+" in `args.rs`, "33+" in `lib.rs`) were stale *and
+disagreed with each other*. **Each fix is recorded on its entry, including the two judgement calls
+that could reasonably have gone the other way** — keeping backend-name log prefixes while stripping
+LiNix's own, and keeping `✓`/`✗`/`★` as information-carrying symbols under R9's no-emoji rule.
+
+**Still open: R5, R11, R17–R23** (the correctness batch), and SEC1–SEC3, which remain deferred.
+
+**Suite: 558 passing, 0 failed; `cargo build --all-targets` clean; `cargo clippy --all-targets`
+silent** (measured 2026-07-19, after R1–R16). Down from 560 because two teleport tests were deleted
+with the feature, not because anything went red. *Green here says only that the sweep did not break
+what was covered — no test in this repo reads a log line's tone, so **R1 is verified by the greps in
+its entry, not by this number.***
 
 ## Done 2026-07-19 — the SEC4/SEC5/SEC6 batch
 

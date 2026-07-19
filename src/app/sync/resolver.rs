@@ -10,7 +10,7 @@ use semver::{Version, VersionReq};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::fs;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, instrument, warn};
 use version_compare::{compare as loose_compare, Cmp};
 
 pub struct StateResolver<'a> {
@@ -31,7 +31,7 @@ impl<'a> StateResolver<'a> {
         if locked {
             let lock_path = config.config_root().join("locks").join("versions.json");
             debug!(
-                "Resolver: Locked mode active. Probing for locks at {:?}",
+                "Locked mode active. Probing for locks at {:?}",
                 lock_path
             );
 
@@ -48,7 +48,7 @@ impl<'a> StateResolver<'a> {
                     }
                 }
             } else {
-                warn!("Resolver: Locked mode requested but locks/versions.json is missing.");
+                warn!("Locked mode requested but locks/versions.json is missing.");
             }
         }
 
@@ -105,7 +105,7 @@ impl<'a> StateResolver<'a> {
         let priority = self.priority(&facts).await?;
         let known = Vocab::new(&self.registry, self.config, &priority);
 
-        info!("Resolver: Resolving desired state for host '{}'.", facts.host);
+        debug!("resolving desired state for host '{}'", facts.host);
 
         // Steps 1-3 read the files. Probing needs the network, so it happens out here,
         // between reading and merging: a bare `ripgrep` and an explicit `cargo:ripgrep` are
@@ -149,7 +149,7 @@ impl<'a> StateResolver<'a> {
         }
 
         debug!(
-            "Resolver: {} declared present, {} declared absent.",
+            "{} declared present, {} declared absent.",
             state.present().count(),
             state.absent().count()
         );
@@ -217,7 +217,7 @@ impl<'a> StateResolver<'a> {
             }
             match found {
                 Some(backend) => {
-                    debug!("Resolver: bare `{}` resolved to `{}`.", name, backend);
+                    debug!("bare `{}` resolved to `{}`.", name, backend);
                     answers.insert(name, backend);
                 }
                 // No backend has it, so there is no honest answer to give. The old code

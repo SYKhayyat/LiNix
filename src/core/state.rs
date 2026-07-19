@@ -114,7 +114,7 @@ impl StateRegistry {
 
     pub fn load_from(path: &Path) -> Result<Self> {
         debug!(
-            "StateRegistry: Loading mission-critical state from {:?}",
+            "loading state from {:?}",
             path
         );
 

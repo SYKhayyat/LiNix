@@ -156,7 +156,7 @@ impl Installable for GoInstallable {
         for name in names {
             let bin = dir.join(GoBackendCore::binary_name(name));
             if self.core.executor.dry_run {
-                info!("Go: [dry-run] would delete {}", bin.display());
+                info!("Go: [DRY-RUN] would delete {}", bin.display());
                 continue;
             }
             match std::fs::remove_file(&bin) {

@@ -48,7 +48,7 @@ impl Runner {
     #[instrument(skip(self, packages, args))]
     pub async fn run(&self, packages: &[String], command: &str, args: &[String]) -> Result<()> {
         info!(
-            "Runner: Provisioning environment for command '{}'...",
+            "Provisioning environment for command '{}'...",
             command
         );
 
@@ -75,7 +75,7 @@ impl Runner {
                 queryable.info(&spec.name).await?.is_some()
             } else {
                 debug!(
-                    "Runner: Backend '{}' not queryable, assuming missing.",
+                    "Backend '{}' not queryable, assuming missing.",
                     spec.backend
                 );
                 false
@@ -84,7 +84,7 @@ impl Runner {
             if !is_present {
                 if let Some(installer) = backend_caps.as_installable() {
                     info!(
-                        "Runner: Auto-provisioning missing component: {}:{}",
+                        "Auto-provisioning missing component: {}:{}",
                         spec.backend, spec.name
                     );
                     let sudo = backend_caps.sudo_for_write();
@@ -103,7 +103,7 @@ impl Runner {
 
         let status = if sandbox_requested {
             if can_sandbox {
-                info!("Runner: Spawning command in hardware-isolated sandbox.");
+                debug!("running command in sandbox");
                 let sandbox_cfg = SandboxConfig {
                     allow_network: true,
                     allow_home: true,
@@ -121,7 +121,7 @@ impl Runner {
                 .await
                 .map_err(|e| Error::Other(format!("Sandbox thread failure: {}", e)))??
             } else if settings.fallback_allowed {
-                warn!("Runner: Sandbox requested but unavailable. Falling back to host execution.");
+                warn!("Sandbox requested but unavailable. Falling back to host execution.");
                 self.execute_standard(command, args).await?
             } else {
                 return Err(Error::UnsupportedPlatform(
@@ -135,7 +135,7 @@ impl Runner {
         if !status.success() {
             let code = status.code().unwrap_or(-1);
             error!(
-                "Runner: Environment command failed with exit code {}.",
+                "Environment command failed with exit code {}.",
                 code
             );
             return Err(Error::CommandFailed(format!(
@@ -152,7 +152,7 @@ impl Runner {
         command: &str,
         args: &[String],
     ) -> Result<std::process::ExitStatus> {
-        debug!("Runner: Spawning process: {} {:?}", command, args);
+        debug!("Spawning process: {} {:?}", command, args);
 
         let mut child = Command::new(command);
         child.args(args);
@@ -174,7 +174,7 @@ impl Runner {
     }
 
     pub async fn exec_shim(&self, shim_name: &str, args: &[String]) -> Result<()> {
-        debug!("Runner: Shim redirection for identity '{}'...", shim_name);
+        debug!("Shim redirection for identity '{}'...", shim_name);
         let packages = vec![shim_name.to_string()];
         self.run(&packages, shim_name, args).await
     }

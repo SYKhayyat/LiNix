@@ -1,6 +1,6 @@
 // src/app/bisect.rs
 //
-// System time-travel bisect: given the ordered list of snapshots (oldest -> newest) and a
+// Snapshot bisect: given the ordered list of snapshots (oldest -> newest) and a
 // test command whose success means "good", find the first snapshot where the test fails —
 // i.e. the change that introduced a regression.
 //
@@ -81,7 +81,7 @@ pub async fn bisect(app: &App, test: &str, assume_yes: bool) -> Result<()> {
     }
 
     if app.config.dry_run {
-        println!("[dry-run] Would binary-search snapshots (restoring + testing each) to find the culprit.");
+        println!("[DRY-RUN] Would binary-search snapshots (restoring + testing each) to find the culprit.");
         return Ok(());
     }
     if !assume_yes {

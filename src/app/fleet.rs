@@ -170,14 +170,14 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
         let mut ok = 0usize;
         let mut failed = 0usize;
         for h in targets {
-            info!("Fleet: syncing {} ...", h.host);
+            info!("syncing {} ...", h.host);
             match ssh_capture(&h.host, "linix sync -y").await {
                 Ok(_) => {
                     println!("  {} synced.", h.host);
                     ok += 1;
                 }
                 Err(e) => {
-                    warn!("Fleet: sync failed on {}: {}", h.host, e);
+                    warn!("sync failed on {}: {}", h.host, e);
                     failed += 1;
                 }
             }

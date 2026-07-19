@@ -18,21 +18,12 @@ pub enum NotificationLevel {
 }
 
 impl NotificationLevel {
-    fn emoji(&self) -> &'static str {
-        match self {
-            Self::Info => "ℹ️",
-            Self::Success => "✅",
-            Self::Warning => "⚠️",
-            Self::Error => "🚨",
-        }
-    }
-
     fn title_prefix(&self) -> &'static str {
         match self {
             Self::Info => "LiNix Info",
             Self::Success => "LiNix Success",
             Self::Warning => "LiNix Warning",
-            Self::Error => "LiNix CRITICAL",
+            Self::Error => "LiNix Error",
         }
     }
 }
@@ -54,7 +45,7 @@ impl NotificationManager {
         body: &str,
     ) -> Result<()> {
         let channel = channel.unwrap_or("none");
-        trace!("Notification: Level {:?} to channel '{}'", level, channel);
+        trace!("Level {:?} to channel '{}'", level, channel);
 
         match channel {
             "desktop" => {
@@ -68,10 +59,10 @@ impl NotificationManager {
                 let _ = self.send_email(level, subject, body).await;
             }
             "none" => {
-                info!("[{}] {}: {}", level.emoji(), subject, body);
+                info!("[{}] {}: {}", level.title_prefix(), subject, body);
             }
             _ => {
-                warn!("Notification: Unknown channel '{}' requested.", channel);
+                warn!("Unknown channel '{}' requested.", channel);
             }
         }
 
@@ -109,13 +100,13 @@ impl NotificationManager {
         }
 
         match note.show() {
-            Ok(_) => debug!("Notification: Desktop alert dispatched."),
+            Ok(_) => debug!("Desktop alert dispatched."),
             Err(e) => {
                 warn!(
-                    "Notification: Desktop alerts unavailable ({}). Logging to console.",
+                    "Desktop alerts unavailable ({}). Logging to console.",
                     e
                 );
-                info!("[{}] {}: {}", level.emoji(), subject, body);
+                info!("[{}] {}: {}", level.title_prefix(), subject, body);
             }
         }
 
@@ -126,7 +117,7 @@ impl NotificationManager {
         let settings = match self.config.backend_settings.get("smtp") {
             Some(s) => s,
             None => {
-                trace!("Notification: Email requested but [backend_settings.smtp] block missing.");
+                trace!("Email requested but [backend_settings.smtp] block missing.");
                 return Ok(());
             }
         };
@@ -148,17 +139,17 @@ impl NotificationManager {
             .get("to")
             .ok_or_else(|| Error::Config("SMTP: to address missing".into()))?;
 
-        let email_subject = format!("{} {} - {}", level.emoji(), level.title_prefix(), subject);
+        let email_subject = format!("{} - {}", level.title_prefix(), subject);
         let email_body = format!(
-            "LiNix Mission-Critical Report\n\
-             ==============================\n\n\
+            "LiNix Report\n\
+             ============\n\n\
              Status:    {:?}\n\
              Timestamp: {}\n\
              Host:      {}\n\n\
              Message:\n\
              {}\n\n\
              ---\n\
-             Automated Management via LiNix v5.0.0",
+             Automated Management via LiNix",
             level,
             chrono::Local::now().to_rfc2822(),
             crate::config::Config::get_hostname(),
@@ -186,8 +177,8 @@ impl NotificationManager {
             .build();
 
         match mailer.send(email).await {
-            Ok(_) => info!("Notification: Report delivered to {}.", to_addr),
-            Err(e) => error!("Notification: SMTP delivery FAILED via {}: {}", host, e),
+            Ok(_) => info!("Report delivered to {}.", to_addr),
+            Err(e) => error!("SMTP delivery FAILED via {}: {}", host, e),
         }
 
         Ok(())

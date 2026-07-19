@@ -5,7 +5,7 @@ use crate::app::profile::ProfileManager;
 use crate::app::run::Runner;
 use crate::app::scheduler::notify::NotificationManager;
 use crate::app::scheduler::SchedulerManager;
-use crate::app::shell::GhostShell;
+use crate::app::shell::EphemeralShell;
 use crate::app::shim_manager::ShimManager;
 use crate::app::sync::resolver::StateResolver;
 use crate::app::sync::SyncEngine;
@@ -72,7 +72,7 @@ impl App {
         executor: CommandExecutor,
         state_path: Option<PathBuf>,
     ) -> Result<Self> {
-        debug!("LiNix Kernel: Initiating mission-critical service bootstrap.");
+        debug!("starting up");
 
         let hooks = Arc::new(LuaHooks::new(&config)?);
 
@@ -112,7 +112,7 @@ impl App {
 
         let diagnostics = Arc::new(FailureDiagnosticEngine::init(&config_arc).await);
 
-        info!("LiNix Kernel: v6.0.0 kernel initialized successfully.");
+        debug!("ready");
 
         Ok(Self {
             config: config_arc,
@@ -144,8 +144,8 @@ impl App {
         Migrator::new(self.registry.clone(), self.state.clone(), &self.config)
     }
 
-    pub fn shell(&self) -> GhostShell {
-        GhostShell::new(
+    pub fn shell(&self) -> EphemeralShell {
+        EphemeralShell::new(
             self.registry.clone(),
             self.state.clone(),
             self.config.clone(),
@@ -326,7 +326,7 @@ impl App {
                         info!("[DRY-RUN] would deploy shim `{}`", name);
                         continue;
                     }
-                    info!("Shim: deploying `{}` ({})", name, origin);
+                    info!("deploying `{}` ({})", name, origin);
                     self.shim_manager().await?.create_shim(name).await?;
                 }
                 Statement::Service(name, opts) => {
@@ -344,7 +344,7 @@ impl App {
                     let Some(inst) = b.as_installable() else {
                         continue;
                     };
-                    info!("Service: applying `{}` ({})", name, origin);
+                    info!("applying `{}` ({})", name, origin);
                     let spec = spec_from_extra("service", name, opts);
                     inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
                         .await?;
@@ -439,9 +439,9 @@ impl App {
                 info!("[DRY-RUN] would undo removed extra `{}`", key);
                 continue;
             }
-            info!("Extras: `{}` is no longer declared — undoing it.", key);
+            info!("`{}` is no longer declared — undoing it.", key);
             if let Err(e) = self.undo_extra(kind, id).await {
-                warn!("Extras: could not undo `{}` ({}); it may still be in place.", key, e);
+                warn!("could not undo `{}` ({}); it may still be in place.", key, e);
             }
         }
 
@@ -495,7 +495,7 @@ impl App {
                 mgr.remove_repo(spec, b.sudo_for_write()).await.map(|_| ())
             }
             other => {
-                warn!("Extras: no undo known for extra kind `{}`.", other);
+                warn!("no undo known for extra kind `{}`.", other);
                 Ok(())
             }
         }
@@ -556,7 +556,7 @@ impl App {
     }
 
     pub async fn update(&self) -> Result<()> {
-        info!("Kernel: Initiating metadata synchronization across enabled backends.");
+        info!("refreshing package metadata");
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 upgradable.update(backend.sudo_for_write()).await?;
@@ -567,7 +567,7 @@ impl App {
 
     pub async fn upgrade(&self) -> Result<()> {
         let _ = self.snapshot_manager.auto_snapshot(crate::core::snapshot::SnapshotLabel::PreUpgrade).await?;
-        info!("Kernel: Commencing system-wide batch upgrade.");
+        info!("upgrading all packages");
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
                 upgradable.upgrade(backend.sudo_for_write()).await?;
@@ -589,7 +589,7 @@ impl App {
                 match queryable.list_installed().await {
                     Ok(pkgs) => all_packages.extend(pkgs),
                     Err(e) => debug!(
-                        "Kernel: Query failed for backend '{}': {}",
+                        "Query failed for backend '{}': {}",
                         backend.name(),
                         e
                     ),
@@ -661,7 +661,7 @@ impl App {
         });
         for (backend, name) in &protected {
             warn!(
-                "Kernel: lease on {}:{} expired, but it is protected — leaving it installed. \
+                "lease on {}:{} expired, but it is protected — leaving it installed. \
                  Run `linix protected {}:{}` to see why.",
                 backend, name, backend, name
             );
@@ -682,14 +682,14 @@ impl App {
         .await
         {
             warn!(
-                "Kernel: expired-lease sweep refused, leaving them installed.\n{}",
+                "expired-lease sweep refused, leaving them installed.\n{}",
                 e
             );
             return Ok(());
         }
 
         info!(
-            "Kernel: {} package(s) have expired leases — reclaiming.",
+            "{} package(s) have expired leases — reclaiming.",
             expired.len()
         );
         for (backend, name) in expired {
@@ -701,7 +701,7 @@ impl App {
                         .await
                     {
                         warn!(
-                            "Kernel: failed to remove expired {}:{}: {}",
+                            "failed to remove expired {}:{}: {}",
                             backend, name, e
                         );
                         continue;
@@ -749,7 +749,7 @@ impl App {
             return Ok(());
         }
         info!(
-            "Kernel: {} temporary uninstall(s) are due for restoration.",
+            "{} temporary uninstall(s) are due for restoration.",
             due.len()
         );
         self.restore_suspensions(due, "temporarily-removed").await
@@ -790,7 +790,7 @@ impl App {
                 }
                 Err(e) => {
                     warn!(
-                        "Kernel: could not restore {} {}:{} ({}); dropping the suspension.",
+                        "could not restore {} {}:{} ({}); dropping the suspension.",
                         occasion, s.backend, s.name, e
                     );
                     self.state
@@ -837,7 +837,7 @@ impl App {
     }
 
     pub async fn clean_orphans(&self) -> Result<()> {
-        info!("Kernel: Commencing system-wide orphan pruning cycle.");
+        info!("removing orphaned packages");
         let (mut cleaned, mut skipped, mut failed) = (0u32, 0u32, 0u32);
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
@@ -848,7 +848,7 @@ impl App {
                     Err(e) => {
                         failed += 1;
                         debug!(
-                            "Kernel: orphan cleanup failed for {}: {}",
+                            "orphan cleanup failed for {}: {}",
                             backend.name(),
                             e
                         );
@@ -857,7 +857,7 @@ impl App {
             }
         }
         info!(
-            "Kernel: orphan pruning complete — {} cleaned, {} not applicable, {} failed.",
+            "orphan pruning complete — {} cleaned, {} not applicable, {} failed.",
             cleaned, skipped, failed
         );
         Ok(())
@@ -867,7 +867,7 @@ impl App {
         let is_dry_run = if force { false } else { self.config.dry_run };
         let policy = self.config.snapshot_retention();
         info!(
-            "Kernel: Commencing snapshot maintenance cycle (keep_last {} / keep_days {}).",
+            "pruning snapshots (keep_last {} / keep_days {})",
             policy.keep_last, policy.keep_days
         );
         // One retention engine: the same `RetentionPolicy` + `prune_with_policy` that `sync`

@@ -32,18 +32,18 @@ impl DiagnosticDb {
                 Ok(content) => {
                     if let Ok(db) = serde_json::from_str::<Self>(&content) {
                         debug!(
-                            "Diagnostics: Loaded {} patterns from {:?}",
+                            "Loaded {} patterns from {:?}",
                             db.rules.len(),
                             db_path
                         );
                         return db;
                     }
                 }
-                Err(e) => warn!("Diagnostics: Failed to read Knowledge Base: {}", e),
+                Err(e) => warn!("Failed to read Knowledge Base: {}", e),
             }
         }
 
-        trace!("Diagnostics: Falling back to internal seed rules.");
+        trace!("Falling back to internal seed rules.");
         Self::seed()
     }
 
@@ -101,7 +101,7 @@ impl FailureDiagnosticEngine {
         for rule in &self.db.rules {
             if let Ok(re) = Regex::new(&rule.pattern) {
                 if re.is_match(stderr) {
-                    info!("Diagnostics: Match found: {}", rule.description);
+                    info!("Match found: {}", rule.description);
                     if let Some(pkg) = rule.suggestions.get(current_backend) {
                         suggestions.push(format!("{}:{}", current_backend, pkg));
                     } else {
@@ -131,7 +131,7 @@ impl FailureDiagnosticEngine {
             return Ok(());
         }
 
-        println!("\n💡 LiNix Insight: Semantic analysis identified a missing dependency.");
+        println!("\nmissing dependency.");
         println!(
             "Identified Issue: {}",
             self.get_description(stderr)
@@ -175,7 +175,7 @@ impl FailureDiagnosticEngine {
 
         for suggestion in suggestions {
             info!(
-                "Diagnostics: Commencing remediation for '{}'...",
+                "Commencing remediation for '{}'...",
                 suggestion
             );
             let spec = resolver.parse_and_probe_spec(suggestion).await?;
@@ -208,7 +208,7 @@ impl FailureDiagnosticEngine {
                                 .map_err(|e| Error::Other(format!("Task panic: {}", e)))?;
                         }
                         Err(e) => {
-                            warn!("Diagnostics: Remediation FAILED for {}: {}", suggestion, e)
+                            warn!("Remediation FAILED for {}: {}", suggestion, e)
                         }
                     }
                 }
@@ -232,8 +232,9 @@ impl FailureDiagnosticEngine {
         let suggestions = self.diagnose(stderr, current_backend);
         if !suggestions.is_empty() {
             println!(
-                "\n💡 LiNix Insight: suggest 'linix install {}'",
-                suggestions.join(", ")
+                "\nmissing dependency: {} — try: linix install {}",
+                suggestions.join(", "),
+                suggestions.join(" ")
             );
         }
     }

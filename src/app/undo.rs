@@ -62,7 +62,7 @@ impl UndoManager {
     }
 
     pub async fn run_interactive(&self) -> Result<()> {
-        info!("UndoManager: Querying available system snapshots...");
+        debug!("querying snapshots");
 
         let snapshots = self.snapshot_manager.list_snapshots().await?;
         if snapshots.is_empty() {

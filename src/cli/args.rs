@@ -1,15 +1,13 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-/// LiNix - Universal Mission-Critical Package Manager
-/// High-performance, DAG-based orchestration for 50+ backends.
-/// Version 6.0.0: cross-ecosystem audit/SBOM, provenance (`why`), health-gated canary
-/// upgrades, snapshot bisect, SSH clone/fleet, a policy gate, and system-scope pruning.
+/// LiNix - a declarative package manager: you edit a file listing the packages you
+/// want, and `sync` makes the machine match it.
 #[derive(Parser, Debug)]
 #[command(
     name = "linix",
     version = "6.0.0",
-    about = "Universal Mission-Critical Package Manager"
+    about = "A declarative package manager: edit a file, sync the machine to match"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -55,14 +53,14 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub verbose: bool,
 
-    /// Quiet mode: suppress the flight plan and transaction summary (errors still print)
+    /// Quiet mode: suppress the planned-changes list and transaction summary (errors still print)
     #[arg(short, long, global = true)]
     pub quiet: bool,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-    /// Synchronize system state with declarative configuration (DAG-based)
+    /// Install, remove and update packages until the machine matches your files
     Sync {
         /// Force strict version matching against locked state
         #[arg(long)]
@@ -129,8 +127,8 @@ pub enum Commands {
     PurgeUnmanaged {
         /// Proceed even though LiNix manages very little of this machine — which usually
         /// means it has not been adopted yet, not that you want the rest deleted.
-        #[arg(long = "i-really-mean-it")]
-        i_really_mean_it: bool,
+        #[arg(long = "allow-mass-purge")]
+        allow_mass_purge: bool,
     },
 
     /// Stop managing a package WITHOUT uninstalling it. LiNix forgets it exists; the
@@ -295,9 +293,9 @@ pub enum Commands {
         into: Option<String>,
     },
 
-    /// Imperatively uninstall one or more packages
+    /// Uninstall one or more packages
     Uninstall {
-        /// Names of packages to purge
+        /// Names of packages to uninstall
         packages: Vec<String>,
 
         /// Output the resulting changes as JSON (requires --dry-run)
@@ -333,17 +331,17 @@ pub enum Commands {
 
     /// Enter an ephemeral shell with specific packages loaded
     Shell {
-        /// Packages to load into the ghost shell
+        /// Packages to load into the ephemeral shell
         packages: Vec<String>,
     },
 
     /// Interactive snapshot gallery and system rollback
     Undo,
 
-    /// Time-travel cockpit: browse generations (left), inspect a generation's package set and
-    /// config diff (right), and run commands from a shell line (bottom). Roll back from within.
+    /// Browse your manifest history: commits (left), the packages and config a commit
+    /// changed (right), and a shell line (bottom). Roll back from within.
     #[command(alias = "tui")]
-    Cockpit,
+    History,
 
     /// Set what this machine is: `active` becomes exactly these profiles, then converge.
     ///
@@ -485,7 +483,7 @@ pub enum Commands {
     /// `restart` are one-shot controls.
     Service(ServiceArgs),
 
-    /// Find which system snapshot first breaks a test command (system time-travel bisect).
+    /// Find which system snapshot first breaks a test command.
     /// Restores snapshots and runs --test to converge on the change that introduced a
     /// regression. Filesystem-restore backends may require a reboot between steps.
     Bisect {

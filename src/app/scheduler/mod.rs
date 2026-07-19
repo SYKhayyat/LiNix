@@ -29,7 +29,7 @@ pub struct SchedulerManager {
 
 impl SchedulerManager {
     pub fn new() -> Result<Self> {
-        debug!("Scheduler: Detecting system-native task runner.");
+        debug!("Detecting system-native task runner.");
 
         let linix_bin_path = std::env::current_exe()
             .map_err(|e| Error::Io(format!("Failed to locate current LiNix binary: {}", e)))?;
@@ -62,7 +62,7 @@ impl SchedulerManager {
         notification: Option<String>,
     ) -> Result<()> {
         info!(
-            "Scheduler: Provisioning task '{}' with schedule '{}'.",
+            "Provisioning task '{}' with schedule '{}'.",
             name, cron
         );
 
@@ -83,7 +83,7 @@ impl SchedulerManager {
         config_mut.save()?;
 
         info!(
-            "Scheduler: Task '{}' successfully registered and active in OS.",
+            "Task '{}' successfully registered and active in OS.",
             name
         );
         Ok(())
@@ -134,7 +134,7 @@ impl SchedulerManager {
         config_mut: &mut Config,
         name: &str,
     ) -> Result<()> {
-        info!("Scheduler: Purging background task '{}' from OS.", name);
+        info!("Purging background task '{}' from OS.", name);
 
         self.provisioner.remove_task(executor, name).await?;
 
@@ -145,7 +145,7 @@ impl SchedulerManager {
     }
 
     pub async fn sync_schedules(&self, executor: &CommandExecutor, config: &Config) -> Result<()> {
-        trace!("Scheduler: Verifying OS registry for configured tasks.");
+        trace!("Verifying OS registry for configured tasks.");
         for schedule in &config.schedules {
             if !self
                 .provisioner
@@ -153,7 +153,7 @@ impl SchedulerManager {
                 .await
             {
                 warn!(
-                    "Scheduler: Task '{}' is missing from native timers. Restoring...",
+                    "Task '{}' is missing from native timers. Restoring...",
                     schedule.name
                 );
                 let _ = self

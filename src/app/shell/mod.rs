@@ -18,8 +18,8 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-/// Orchestrates ephemeral environments (The Ghost Shell).
-pub struct GhostShell {
+/// Orchestrates ephemeral shell sessions.
+pub struct EphemeralShell {
     registry: Arc<BackendRegistry>,
     pub state: Arc<Mutex<StateRegistry>>,
     config: Arc<Config>,
@@ -32,7 +32,7 @@ pub struct GhostShell {
     diagnostics: Arc<FailureDiagnosticEngine>,
 }
 
-impl GhostShell {
+impl EphemeralShell {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         registry: Arc<BackendRegistry>,
@@ -64,7 +64,7 @@ impl GhostShell {
     pub async fn enter(&self, packages: &[String]) -> Result<()> {
         let session_id = format!("shell-{}", Uuid::new_v4().simple());
         info!(
-            "GhostShell: Initializing isolated session '{}'...",
+            "starting ephemeral shell '{}'",
             session_id
         );
 
@@ -73,7 +73,7 @@ impl GhostShell {
             state_guard.active_session_id = Some(session_id.clone());
         }
 
-        info!("GhostShell: Installing transient components...");
+        info!("installing session packages");
         self.provision_transient_env(packages, &session_id).await?;
 
         let mut store_paths = Vec::new();
@@ -81,7 +81,7 @@ impl GhostShell {
             let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
             if let Ok(spec) = resolver.parse_and_probe_spec(pkg_req).await {
                 if let Some(path) = self.locate_package_root(&spec).await? {
-                    debug!("GhostShell: Mapping root for {}: {:?}", spec.name, path);
+                    debug!("Mapping root for {}: {:?}", spec.name, path);
                     store_paths.push((path.to_string_lossy().to_string(), spec.name.clone()));
                 }
             }
@@ -98,11 +98,11 @@ impl GhostShell {
         let can_sandbox = Sandbox::is_available(&self.config.sandbox).await;
 
         if can_sandbox {
-            info!("GhostShell: Dropping into hardened sandbox.");
+            debug!("using sandbox isolation");
             self.launch_sandboxed_shell(&shell_bin, &session_id, &store_paths)
                 .await?;
         } else if self.config.sandbox.fallback_allowed {
-            warn!("GhostShell: Sandbox unavailable. Using PATH-only isolation.");
+            warn!("sandbox unavailable — falling back to PATH-only isolation");
             self.spawn_fallback_shell(&shell_bin, &session_id, &store_paths)
                 .await?;
         } else {
@@ -111,23 +111,23 @@ impl GhostShell {
             ));
         }
 
-        info!("GhostShell: Session terminated. Purging ephemeral state...");
+        info!("session ended — removing session packages");
         self.cleanup_transient_env(&session_id).await?;
 
         // Restore anything the user temporarily uninstalled for the duration of this
-        // session (`remove --temp` with no duration inside a ghost shell).
+        // session (`remove --temp` with no duration inside a ephemeral shell).
         if let Err(e) = self.restore_session_suspensions(&session_id).await {
-            warn!("GhostShell: session suspension restore failed: {}", e);
+            warn!("session suspension restore failed: {}", e);
         }
 
         {
             let mut state_guard = self.state.lock().await;
             state_guard.active_session_id = None;
             // Don't drop this write silently (H2): if it fails, `active_session_id` stays
-            // set on disk and the next run believes a ghost session is still live.
+            // set on disk and the next run believes an ephemeral session is still live.
             if let Err(e) = state_guard.save() {
                 warn!(
-                    "GhostShell: could not persist session teardown ({}); the on-disk state \
+                    "could not persist session teardown ({}); the on-disk state \
                      still marks a session active, which the next `linix shell` will clear \
                      when it starts a new one.",
                     e
@@ -135,7 +135,7 @@ impl GhostShell {
             }
         }
 
-        info!("GhostShell: Cleanup successful. Host system remains consistent.");
+        debug!("session packages removed");
         Ok(())
     }
 
@@ -170,9 +170,8 @@ impl GhostShell {
             let mut bwrap = Sandbox::wrap(&shell_owned, &[], &sandbox_cfg, &settings_clone)?;
             bwrap
                 .env("PATH", internal_path)
-                .env("LINIX_GHOST", "true")
-                .env("LINIX_SESSION_ID", session_owned)
-                .env("PROMPT_COMMAND", "echo -n '(linix-ghost) '");
+                .env("LINIX_EPHEMERAL_SHELL", "1")
+                .env("LINIX_SESSION_ID", session_owned);
             let mut handle = bwrap
                 .spawn()
                 .map_err(|e| Error::CommandFailed(format!("Sandbox error: {}", e)))?;
@@ -215,7 +214,7 @@ impl GhostShell {
         let mut child = tokio::process::Command::new(shell);
         child
             .env("PATH", new_path_env)
-            .env("LINIX_GHOST", "true")
+            .env("LINIX_EPHEMERAL_SHELL", "1")
             .env("LINIX_SESSION_ID", session_id)
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
@@ -313,7 +312,7 @@ impl GhostShell {
     }
 
     /// Reinstall packages the user temporarily uninstalled for the lifetime of this
-    /// ghost-shell session (`remove --temp` with no duration). Best-effort: a package the
+    /// ephemeral shell session (`remove --temp` with no duration). Best-effort: a package the
     /// backend can no longer install is warned about and its suspension dropped, matching
     /// the timed-restore contract in `App::sweep_due_suspensions`.
     pub async fn restore_session_suspensions(&self, session_id: &str) -> Result<()> {
@@ -347,7 +346,7 @@ impl GhostShell {
             match restored {
                 Ok(()) => {
                     info!(
-                        "GhostShell: restored session-suspended {}:{}",
+                        "restored session-suspended {}:{}",
                         s.backend, s.name
                     );
                     state.add(
@@ -360,7 +359,7 @@ impl GhostShell {
                     );
                 }
                 Err(e) => warn!(
-                    "GhostShell: could not restore {}:{} ({}); dropping suspension.",
+                    "could not restore {}:{} ({}); dropping suspension.",
                     s.backend, s.name, e
                 ),
             }
@@ -372,7 +371,7 @@ impl GhostShell {
     pub async fn auto_shell(&self) -> Result<()> {
         let local_config = Path::new("linix.txt");
         if tokio::fs::try_exists(local_config).await.unwrap_or(false) {
-            info!("GhostShell: Project-local manifest 'linix.txt' found.");
+            debug!("using project-local linix.txt");
             let content = tokio::fs::read_to_string(local_config).await?;
             let pkgs: Vec<String> = content
                 .lines()

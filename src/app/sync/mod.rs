@@ -93,7 +93,7 @@ impl<'a> SyncEngine<'a> {
         let _ = self.hooks.run_before_sync().await;
 
         if changes.is_empty() {
-            info!("Sync: OS state is consistent with declarative manifests.");
+            info!("already up to date");
             return Ok(());
         }
 
@@ -119,7 +119,7 @@ impl<'a> SyncEngine<'a> {
         // proceed so a missing restore point never blocks the actual work.
         if let Err(e) = self.snapshot_manager.auto_snapshot(crate::core::snapshot::SnapshotLabel::PreSync).await {
             warn!(
-                "Sync: pre-sync safety snapshot unavailable ({}); proceeding without a restore point.",
+                "pre-sync safety snapshot unavailable ({}); proceeding without a restore point.",
                 e
             );
         }
@@ -130,7 +130,7 @@ impl<'a> SyncEngine<'a> {
         };
 
         if result.is_ok() {
-            debug!("Sync: Finalizing transaction state and persistence.");
+            debug!("Finalizing transaction state and persistence.");
 
             let state_to_save = self.state.lock().await.clone();
             tokio::task::spawn_blocking(move || state_to_save.save())
@@ -189,7 +189,7 @@ impl<'a> SyncEngine<'a> {
             return;
         }
         info!(
-            "Sync: running {} post-install health probe(s)...",
+            "running {} post-install health probe(s)...",
             probes.len()
         );
         let mut failed = Vec::new();
@@ -203,7 +203,7 @@ impl<'a> SyncEngine<'a> {
         }
         if !failed.is_empty() {
             warn!(
-                "Sync: {} package(s) failed their @check probe: {}.",
+                "{} package(s) failed their @check probe: {}.",
                 failed.len(),
                 failed.join(", ")
             );
@@ -241,8 +241,8 @@ impl<'a> SyncEngine<'a> {
             .prune_with_policy(&self.config.snapshot_retention(), ts, false)
             .await
         {
-            Ok(r) if !r.is_empty() => debug!("Sync: pruned {} snapshot(s).", r.len()),
-            Err(e) => warn!("Sync: snapshot retention prune failed: {}", e),
+            Ok(r) if !r.is_empty() => debug!("pruned {} snapshot(s).", r.len()),
+            Err(e) => warn!("snapshot retention prune failed: {}", e),
             _ => {}
         }
     }
@@ -324,7 +324,7 @@ impl<'a> SyncEngine<'a> {
         let mut worker_set = JoinSet::new();
 
         debug!(
-            "Sync: Initiating parallel shim audit for {} packages.",
+            "Initiating parallel shim audit for {} packages.",
             state.packages.len()
         );
 
@@ -339,9 +339,9 @@ impl<'a> SyncEngine<'a> {
 
         while let Some(res) = worker_set.join_next().await {
             if let Err(e) = res {
-                error!("Sync: Shim worker task panicked: {}", e);
+                error!("Shim worker task panicked: {}", e);
             } else if let Ok(Err(e)) = res {
-                warn!("Sync: Non-critical shim reconciliation failure: {}", e);
+                warn!("Non-critical shim reconciliation failure: {}", e);
             }
         }
 
@@ -355,7 +355,7 @@ impl<'a> SyncEngine<'a> {
         };
 
         if incomplete_actions.is_empty() {
-            info!("Heal: System consistency is already verified via WAL.");
+            debug!("nothing to heal");
             return Ok(());
         }
 
@@ -364,7 +364,7 @@ impl<'a> SyncEngine<'a> {
         // automatic is not silent: a recovery nobody sees is exactly the class of bug this
         // whole document is about (P3). Report every action taken, by name, and summarize.
         info!(
-            "Heal: recovering {} interrupted operation(s) from a previous run.",
+            "recovering {} interrupted operation(s) from a previous run.",
             incomplete_actions.len()
         );
         let mut recovered: Vec<String> = Vec::new();
@@ -406,7 +406,7 @@ impl<'a> SyncEngine<'a> {
                                 .find(|l| l.trim_start().starts_with("- "))
                                 .map(|l| l.trim().trim_start_matches("- ").to_string())
                                 .unwrap_or_else(|| "protected".to_string());
-                            info!("Heal: keeping {} — its interrupted removal is refused ({}).", key, reason);
+                            info!("keeping {} — its interrupted removal is refused ({}).", key, reason);
                             let mut j = self.journal.lock().await;
                             let _ = j.record_success(&entry.id, std::collections::HashMap::new());
                             kept.push(key.clone());
@@ -431,12 +431,12 @@ impl<'a> SyncEngine<'a> {
                     if remediation_res.is_ok() {
                         let mut j = self.journal.lock().await;
                         let _ = j.record_success(&entry.id, std::collections::HashMap::new());
-                        info!("Heal: {} {} (completing an interrupted {}).", verb, key,
+                        info!("{} {} (completing an interrupted {}).", verb, key,
                             if is_install { "install" } else { "removal" });
                         recovered.push(format!("{} {}", verb, key));
                     } else {
                         error!(
-                            "Heal: could not recover {} — {:?}. The system may be in a partial \
+                            "could not recover {} — {:?}. The system may be in a partial \
                              state for this package; re-run `linix sync`.",
                             key,
                             remediation_res.err()
@@ -450,18 +450,18 @@ impl<'a> SyncEngine<'a> {
         // The summary a reader sees whether or not they had `--verbose` on: what actually
         // changed, in one line.
         if !recovered.is_empty() {
-            info!("Heal: recovered {} operation(s): {}.", recovered.len(), recovered.join(", "));
+            info!("recovered {} operation(s): {}.", recovered.len(), recovered.join(", "));
         }
         if !kept.is_empty() {
             info!(
-                "Heal: kept {} protected package(s) whose interrupted removal was refused: {}.",
+                "kept {} protected package(s) whose interrupted removal was refused: {}.",
                 kept.len(),
                 kept.join(", ")
             );
         }
         if !failed.is_empty() {
             warn!(
-                "Heal: {} operation(s) could NOT be recovered: {}. Re-run `linix sync`.",
+                "{} operation(s) could NOT be recovered: {}. Re-run `linix sync`.",
                 failed.len(),
                 failed.join(", ")
             );

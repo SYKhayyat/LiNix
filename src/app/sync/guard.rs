@@ -205,7 +205,7 @@ pub async fn essential_names(
         match q.essential().await {
             Ok(names) => {
                 debug!(
-                    "Guard: backend '{}' reports {} essential package(s).",
+                    "backend '{}' reports {} essential package(s).",
                     name,
                     names.len()
                 );
@@ -213,7 +213,7 @@ pub async fn essential_names(
             }
             Err(e) => {
                 // Not fatal: the protected list and the count limit still apply.
-                warn!("Guard: backend '{}' essential query failed: {}", name, e);
+                warn!("backend '{}' essential query failed: {}", name, e);
             }
         }
     }
@@ -277,7 +277,7 @@ pub async fn enforce(
             .retain(|o| !matches!(o, Objection::TooMany { .. }));
         if before != report.objections.len() {
             warn!(
-                "Guard: the removal count for '{}' was allowed by --allow-mass-removal.",
+                "the removal count for '{}' was allowed by --allow-mass-removal.",
                 scope.as_str()
             );
         }
@@ -359,7 +359,7 @@ pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) 
     }
     if config.allow_mass_install {
         warn!(
-            "Guard: the install count for '{}' ({}) was allowed by --allow-mass-install.",
+            "the install count for '{}' ({}) was allowed by --allow-mass-install.",
             scope.as_str(),
             count
         );

@@ -283,7 +283,7 @@ impl<'a> ChangePlanner<'a> {
                 // per-branch, which is how the lease and bloatware paths came to skip it.
                 if self.config.is_protected(&pkg.name) {
                     debug!(
-                        "Planner: '{}' is protected — never scheduling removal.",
+                        "'{}' is protected — never scheduling removal.",
                         key
                     );
                     continue;
@@ -294,7 +294,7 @@ impl<'a> ChangePlanner<'a> {
 
                 if is_expired {
                     info!(
-                        "Planner: Lease for '{}' expired, not in desired. Scheduling removal.",
+                        "Lease for '{}' expired, not in desired. Scheduling removal.",
                         key
                     );
                     changes.removal_tracker.insert(key.clone());
@@ -312,7 +312,7 @@ impl<'a> ChangePlanner<'a> {
                     // It has a line now (`modules/imperative.txt`), so it is declared like
                     // everything else and the setting protected against a bug that no
                     // longer exists (II.17).
-                    debug!("Planner: Scheduling drift removal: {}", key);
+                    debug!("Scheduling drift removal: {}", key);
                     changes.removal_tracker.insert(key.clone());
                     changes.graph.add_node(GraphAction::Remove {
                         name: pkg.name.clone(),
@@ -323,7 +323,7 @@ impl<'a> ChangePlanner<'a> {
 
         } else {
             debug!(
-                "Planner: Scoped plan ({:?}) — skipping all removal planning (non-destructive).",
+                "Scoped plan ({:?}) — skipping all removal planning (non-destructive).",
                 scope
             );
         }

@@ -46,7 +46,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    // 2. High-Performance Shim Hijack
+    // 2. Shim hijack
     if let Some(res) = attempt_shim_hijack().await? {
         return res;
     }
@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
         Commands::Doctor { fix, json } => handle_doctor(&app, *fix, *json).await,
         Commands::Adopt => handle_adopt(&app).await,
         Commands::Undo => handle_undo(&app).await,
-        Commands::Cockpit => handle_cockpit(&app).await,
+        Commands::History => handle_history(&app).await,
         Commands::Activate { profiles, add } => handle_activate(&app, profiles, *add).await,
         Commands::Deactivate { profiles } => handle_deactivate(&app, profiles).await,
         Commands::Profile(args) => handle_profile(&app, &args.command).await,
@@ -159,8 +159,8 @@ async fn main() -> Result<()> {
         Commands::Unmanaged => handle_unmanaged(&app).await,
         Commands::Check => handle_check(&app).await,
         Commands::Absent => handle_absent(&app).await,
-        Commands::PurgeUnmanaged { i_really_mean_it } => {
-            handle_purge_unmanaged(&app, *i_really_mean_it).await
+        Commands::PurgeUnmanaged { allow_mass_purge } => {
+            handle_purge_unmanaged(&app, *allow_mass_purge).await
         }
         Commands::Protected { packages, json } => handle_protected(&app, packages, *json).await,
         Commands::Unmanage { packages, json } => handle_unmanage(&app, packages, *json).await,
@@ -410,7 +410,7 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
         // *removed* — deleting the last `service:` line is a real change (S20). Reconcile the
         // applied-extras ledger so that undo still happens; it is a cheap no-op otherwise.
         app.reconcile_extras(&state).await?;
-        info!("Success: System matches declarative manifests.");
+        info!("already up to date");
         return Ok(());
     }
 
@@ -435,7 +435,7 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
     }
 
     // The package plan runs only when it has something in it — a dependents-only sync skips
-    // straight to phase 3, with no flight plan and no confirmation to answer.
+    // straight to phase 3, with no planned-changes list and no confirmation to answer.
     if !changes.is_empty() {
         // Interactive confirmation — but only with a real terminal. A non-interactive caller
         // (pipe/CI/script) must pass --yes (or --json); otherwise we neither hang on a TUI
@@ -1854,7 +1854,7 @@ async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
              any commit."
         );
     }
-    info!("Rollback: checking out manifests at {}.", reference);
+    info!("checking out manifests at {}.", reference);
     git.checkout_files(reference)?;
     println!(
         "Manifests restored to {}. Converging the system to match…",
@@ -1977,14 +1977,14 @@ async fn handle_undo(app: &App) -> Result<()> {
         .await
         .map_err(|e| e.into())
 }
-async fn handle_cockpit(app: &App) -> Result<()> {
-    use linix::app::ui::{Cockpit, CockpitAction, CommitView};
+async fn handle_history(app: &App) -> Result<()> {
+    use linix::app::ui::{HistoryBrowser, HistoryAction, CommitView};
 
     let git = app.git_manager();
     if !git.is_repo() {
         println!(
-            "The cockpit browses your manifest history, which is git. Run `linix git init` \
-             once; after that every `sync` commits, and the cockpit shows the timeline."
+            "The history browses your manifest history, which is git. Run `linix git init` \
+             once; after that every `sync` commits, and the history shows the timeline."
         );
         return Ok(());
     }
@@ -2010,10 +2010,10 @@ async fn handle_cockpit(app: &App) -> Result<()> {
         return Ok(());
     }
 
-    let action = Cockpit::new(commits).run()?;
+    let action = HistoryBrowser::new(commits).run()?;
     match action {
-        CockpitAction::Quit => Ok(()),
-        CockpitAction::Rollback { reference } => {
+        HistoryAction::Quit => Ok(()),
+        HistoryAction::Rollback { reference } => {
             println!("Rolling back to {reference}…");
             handle_rollback(app, &reference).await
         }
@@ -2590,7 +2590,7 @@ const PURGE_RATIO: f64 = 0.1;
 ///
 /// The residual risk, stated plainly because the docs must state it: `adopt` is an estimate.
 /// If it missed something, this deletes it.
-async fn handle_purge_unmanaged(app: &App, i_really_mean_it: bool) -> Result<()> {
+async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) -> Result<()> {
     let unmanaged = app.installed_but_unmanaged().await?;
     if unmanaged.is_empty() {
         println!("Nothing to do: LiNix manages every installed package.");
@@ -2617,7 +2617,7 @@ async fn handle_purge_unmanaged(app: &App, i_really_mean_it: bool) -> Result<()>
 
     // The ratio check, before anything else asks anything.
     let ratio = managed as f64 / unmanaged.len() as f64;
-    if ratio < PURGE_RATIO && !i_really_mean_it {
+    if ratio < PURGE_RATIO && !allow_mass_purge {
         let sample: Vec<String> = unmanaged
             .iter()
             .take(3)
@@ -2627,7 +2627,7 @@ async fn handle_purge_unmanaged(app: &App, i_really_mean_it: bool) -> Result<()>
             "LiNix manages {} packages.\n\
              This will remove {}, including {}.\n\
              That looks like you haven't adopted this machine yet.\n\
-             Run `linix adopt` first, or --i-really-mean-it if you're sure.",
+             Run `linix adopt` first, or --allow-mass-purge if you're sure.",
             managed,
             unmanaged.len(),
             sample.join(", ")
@@ -2658,7 +2658,7 @@ async fn handle_purge_unmanaged(app: &App, i_really_mean_it: bool) -> Result<()>
         }
         Ok(None) => {
             println!(
-                "THERE IS NO UNDO FOR THIS.\n  \
+                "This cannot be undone.\n  \
                  This machine has no snapshot provider (btrfs, ZFS or Timeshift), so nothing \
                  removed here can be brought back.\n"
             );
@@ -2666,7 +2666,7 @@ async fn handle_purge_unmanaged(app: &App, i_really_mean_it: bool) -> Result<()>
         }
         Err(e) => {
             println!(
-                "THERE IS NO UNDO FOR THIS.\n  \
+                "This cannot be undone.\n  \
                  The snapshot failed ({}), so nothing removed here can be brought back.\n",
                 e
             );
@@ -3096,14 +3096,14 @@ async fn handle_canary(app: &App, scope: Option<PlannerScope>, test: &Option<Str
         planner.plan(&desired, scope).await?
     };
     if changes.is_empty() {
-        info!("Canary: nothing to upgrade.");
+        info!("nothing to upgrade.");
         return Ok(());
     }
     print_flight_plan(app, &changes);
 
     if app.config.dry_run {
         println!(
-            "[dry-run] Would snapshot, upgrade, run `{}`, and roll back on failure.",
+            "[DRY-RUN] Would snapshot, upgrade, run `{}`, and roll back on failure.",
             test
         );
         return Ok(());
@@ -3114,19 +3114,19 @@ async fn handle_canary(app: &App, scope: Option<PlannerScope>, test: &Option<Str
         .auto_snapshot(linix::core::snapshot::SnapshotLabel::PreCanary)
         .await?
         .ok_or_else(|| anyhow::anyhow!("failed to create pre-canary snapshot"))?;
-    info!("Canary: snapshot {} taken; applying upgrade...", snap.id);
+    info!("snapshot {} taken; applying upgrade...", snap.id);
     app.sync_engine()
         .await
         .sync(changes, linix::app::sync::guard::GuardScope::Canary)
         .await?;
 
-    info!("Canary: running health check: {}", test);
+    info!("running health check: {}", test);
     if linix::app::bisect::run_test(&test).await {
         println!("Canary: health check passed — upgrade kept.");
         perform_maintenance(app).await
     } else {
         warn!(
-            "Canary: health check FAILED — rolling back to snapshot {}...",
+            "health check FAILED — rolling back to snapshot {}...",
             snap.id
         );
         app.snapshot_manager.restore_snapshot(&snap.id).await?;
@@ -3264,7 +3264,7 @@ async fn enforce_policy(
                     ));
                 }
             }
-            Err(e) => warn!("Guard: vulnerability check skipped ({}).", e),
+            Err(e) => warn!("vulnerability check skipped ({}).", e),
         }
     }
     if violations.is_empty() {
@@ -3303,7 +3303,7 @@ fn print_flight_plan(app: &App, changes: &linix::app::sync::planner::SyncChanges
             service_ops += 1;
         }
     }
-    println!("Flight plan:");
+    println!("Planned changes:");
     println!(
         "  install {}   remove {}   (total {} change(s))",
         report.install.len(),

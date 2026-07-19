@@ -203,7 +203,7 @@ pub struct Config {
     #[serde(default)]
     pub verbose: bool,
 
-    /// Suppress non-essential output (flight plan, transaction summary). Errors still print.
+    /// Suppress non-essential output (planned changes, transaction summary). Errors still print.
     #[serde(default)]
     pub quiet: bool,
 

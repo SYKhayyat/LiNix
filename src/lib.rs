@@ -1,7 +1,7 @@
-//! LiNix - Universal Mission-Critical Package Manager
+//! LiNix - a declarative package manager.
 //!
-//! A high-performance, Directed Acyclic Graph (DAG) based orchestration engine
-//! for managing packages across 33+ backends and multiple platforms.
+//! You list the packages you want in a file; `sync` installs what is missing and
+//! removes what is no longer listed, across every supported package manager.
 
 pub mod app;
 pub mod backends;

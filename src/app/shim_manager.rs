@@ -21,7 +21,7 @@ impl ShimManager {
 
     pub async fn with_bin_dir(bin_dir: PathBuf) -> Result<Self> {
         if !tokio::fs::try_exists(&bin_dir).await.unwrap_or(false) {
-            debug!("ShimManager: Creating shim directory at {:?}", bin_dir);
+            debug!("Creating shim directory at {:?}", bin_dir);
             fs::create_dir_all(&bin_dir).await.map_err(Error::from)?;
         }
 
@@ -109,7 +109,7 @@ impl ShimManager {
         }
 
         info!(
-            "ShimManager: Deploying shim for '{}' -> {:?}",
+            "Deploying shim for '{}' -> {:?}",
             binary_name, target_path
         );
 
@@ -120,7 +120,7 @@ impl ShimManager {
             // shimmed tool. Copy is the fallback since a link cannot cross filesystems.
             if let Err(e) = fs::hard_link(&current_exe, &target_path).await {
                 debug!(
-                    "ShimManager: Hard link failed ({}), falling back to copy...",
+                    "Hard link failed ({}), falling back to copy...",
                     e
                 );
                 fs::copy(&current_exe, &target_path)
@@ -165,14 +165,14 @@ impl ShimManager {
         }
         if !Self::is_deployed_shim(&target_path).await {
             debug!(
-                "ShimManager: {:?} is not a LiNix shim — leaving it alone.",
+                "{:?} is not a LiNix shim — leaving it alone.",
                 target_path
             );
             return Ok(());
         }
-        debug!("ShimManager: Removing shim {:?}", target_path);
+        debug!("Removing shim {:?}", target_path);
         fs::remove_file(&target_path).await.map_err(Error::from)?;
-        info!("ShimManager: Successfully removed shim '{}'", binary_name);
+        info!("Successfully removed shim '{}'", binary_name);
         Ok(())
     }
 

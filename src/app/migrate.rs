@@ -87,7 +87,7 @@ impl Migrator {
             // them their system.
             if !queryable.tracks_manual() {
                 info!(
-                    "Migrator: backend '{}' cannot distinguish user-chosen packages from \
+                    "backend '{}' cannot distinguish user-chosen packages from \
                      dependencies — skipping adoption. Add its packages to a manifest by \
                      hand if you want them managed.",
                     backend.name()
@@ -95,7 +95,7 @@ impl Migrator {
                 continue;
             }
 
-            debug!("Migrator: probing backend '{}'...", backend.name());
+            debug!("probing backend '{}'...", backend.name());
 
             match queryable.list_manual().await {
                 Ok(pkgs) => {
@@ -108,14 +108,14 @@ impl Migrator {
                         if !state_guard.is_managed(&pkg.backend, &pkg.name)
                             && seen_keys.insert(key.clone())
                         {
-                            trace!("Migrator: candidate: {}", key);
+                            trace!("candidate: {}", key);
                             candidates.push(pkg);
                         }
                     }
                 }
                 Err(e) => {
                     warn!(
-                        "Migrator: backend '{}' discovery failed: {}. Continuing crawl.",
+                        "backend '{}' discovery failed: {}. Continuing crawl.",
                         backend.name(),
                         e
                     );
@@ -165,11 +165,11 @@ impl Migrator {
     /// Discovery -> manifest -> acquisition.
     #[instrument(skip(self))]
     pub async fn migrate(&self) -> Result<()> {
-        info!("Migrator: initiating system discovery.");
+        debug!("scanning for packages to adopt");
         let found = self.discover().await?;
 
         if found.adopt.is_empty() {
-            info!("Migrator: discovery complete. Nothing new to adopt.");
+            info!("nothing new to adopt");
             println!("Nothing to adopt: every package your managers report as user-chosen is");
             println!("already managed, or is protected and deliberately left alone.");
             if !found.skipped.is_empty() {
@@ -181,7 +181,7 @@ impl Migrator {
             return Ok(());
         }
 
-        info!("Migrator: {} candidate(s) for adoption.", found.adopt.len());
+        info!("{} candidate(s) for adoption.", found.adopt.len());
 
         // II.9: **one** `modules/adopted.txt`. It used to be `migrated_<timestamp>.txt` in
         // the groups folder — a folder nothing reads any more, under a name that made the
@@ -226,7 +226,7 @@ impl Migrator {
                 .map_err(|e| Error::Other(format!("State-save thread failure: {}", e)))??;
         }
 
-        info!("Migrator: state registry aligned.");
+        debug!("state registry aligned");
 
         println!("\nAdopted {} package(s).", found.adopt.len());
         println!("{:-<64}", "");

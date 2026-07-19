@@ -1,10 +1,9 @@
 use std::env;
 use std::process::{exit, Command};
 
-/// LiNix High-Performance Binary Shim (Phase 4.2)
+/// A PATH stand-in that forwards to a package LiNix manages.
 ///
-/// This is a tiny, sub-millisecond Rust binary intended to be compiled
-/// and placed in ~/.local/bin. It replaces slower shell-script shims.
+/// Deployed into ~/.local/bin for a line carrying `@shim=true`.
 ///
 /// It performs:
 /// 1. Zero-cost argument forwarding.

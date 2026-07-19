@@ -126,27 +126,27 @@ impl Transaction {
         let start_time = Instant::now();
 
         info!(
-            "Transaction: Initializing parallel execution for {} nodes.",
+            "Initializing parallel execution for {} nodes.",
             self.graph.node_count()
         );
 
         match tokio::time::timeout(total_timeout, self.execute_internal()).await {
             Ok(res) => {
                 debug!(
-                    "Transaction: DAG closure reached in {:?}",
+                    "DAG closure reached in {:?}",
                     start_time.elapsed()
                 );
                 res
             }
             Err(_) => {
                 error!(
-                    "Transaction: CRITICAL FAILURE - Global timeout of {:?} reached.",
+                    "CRITICAL FAILURE - Global timeout of {:?} reached.",
                     total_timeout
                 );
                 self.cancellation_token.cancel();
                 if self.config.auto_rollback {
                     if let Err(e) = self.rollback().await {
-                        error!("Transaction: {}", e);
+                        error!("{}", e);
                     }
                 }
                 Err(Error::Transaction(format!(
@@ -174,7 +174,7 @@ impl Transaction {
                 worker_pool.abort_all();
                 if self.config.auto_rollback {
                     if let Err(e) = self.rollback().await {
-                        error!("Transaction: {}", e);
+                        error!("{}", e);
                     }
                 }
                 return Err(Error::Transaction("Transaction cancelled.".into()));
@@ -260,10 +260,10 @@ impl Transaction {
                     telemetry_results.push(task_data);
 
                     if self.config.auto_rollback {
-                        info!("Transaction: Commencing auto-rollback...");
+                        info!("rolling back");
                         worker_pool.abort_all();
                         if let Err(e) = self.rollback().await {
-                            error!("Transaction: {}", e);
+                            error!("{}", e);
                         }
                     }
                     return Err(final_err);
@@ -493,7 +493,7 @@ impl Transaction {
     }
 
     async fn rollback(&mut self) -> Result<()> {
-        info!("Transaction: Reverting modification history.");
+        debug!("reverting modification history");
         // A compensating action that itself fails leaves the system in a partial state —
         // most dangerously, a package the user HAD, that this transaction removed, and that
         // the reinstall could not bring back. Swallowing that error (the old `let _ =`) is
@@ -512,7 +512,7 @@ impl Transaction {
                                 .await
                             {
                                 error!(
-                                    "Transaction: rollback could not remove {}:{} that this \
+                                    "rollback could not remove {}:{} that this \
                                      run installed — it remains on the system: {}",
                                     spec.backend, spec.name, e
                                 );
@@ -533,7 +533,7 @@ impl Transaction {
                             };
                             if let Err(e) = h.install(&[spec], b.sudo_for_write()).await {
                                 error!(
-                                    "Transaction: rollback could not reinstall {}:{} that this \
+                                    "rollback could not reinstall {}:{} that this \
                                      run removed — it is now MISSING: {}",
                                     backend, name, e
                                 );

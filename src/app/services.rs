@@ -1,7 +1,7 @@
 use crate::app::scheduler::notify::NotificationManager;
 use crate::app::scheduler::SchedulerManager;
 use crate::app::{
-    diagnostics::FailureDiagnosticEngine, GhostShell, LuaHooks, MetricsCollector, Migrator,
+    diagnostics::FailureDiagnosticEngine, EphemeralShell, LuaHooks, MetricsCollector, Migrator,
     ProfileManager, ShimManager, UndoManager,
 };
 use crate::backends::{create_default_registry, BackendRegistry};
@@ -13,7 +13,7 @@ use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::debug;
 
 #[derive(Clone)]
 pub struct AppCore {
@@ -34,7 +34,7 @@ pub struct AppCore {
 
 pub struct AppServices {
     pub migrator: Migrator,
-    pub shell: GhostShell,
+    pub shell: EphemeralShell,
     pub shim_manager: ShimManager,
     pub undo_manager: UndoManager,
     pub profile_manager: ProfileManager,
@@ -43,13 +43,13 @@ pub struct AppServices {
 
 impl AppServices {
     pub async fn new(app: &crate::App) -> Result<Self> {
-        debug!("AppServices: Assembling logic engines from kernel context.");
+        debug!("assembling services");
 
         let shim_manager = ShimManager::new().await?;
 
         Ok(Self {
             migrator: Migrator::new(app.registry.clone(), app.state.clone(), &app.config),
-            shell: GhostShell::new(
+            shell: EphemeralShell::new(
                 app.registry.clone(),
                 app.state.clone(),
                 app.config.clone(),
@@ -86,7 +86,7 @@ impl AppServices {
 
 impl AppCore {
     pub async fn from_config(config: Config) -> Result<Self> {
-        info!("AppCore: Initializing LiNix v3.6.0 mission-critical kernel.");
+        debug!("assembling services");
 
         let executor = CommandExecutor::new(config.dry_run, config.verbose);
         let hooks = Arc::new(LuaHooks::new(&config)?);

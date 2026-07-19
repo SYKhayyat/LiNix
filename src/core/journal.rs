@@ -56,7 +56,7 @@ impl Journal {
     /// of test noise in real user data, and a format change to `PackageSpec` then made
     /// that file unparseable and bricked every test at bootstrap.
     pub fn at(path: PathBuf) -> Result<Self> {
-        debug!("Journal: Initializing WAL at {:?}", path);
+        debug!("Initializing WAL at {:?}", path);
 
         let mut journal = Self {
             path,
@@ -66,7 +66,7 @@ impl Journal {
         if journal.path.exists() {
             journal.load_sync()?;
         } else {
-            trace!("Journal: No existing WAL found, starting fresh.");
+            trace!("No existing WAL found, starting fresh.");
         }
 
         Ok(journal)
@@ -88,7 +88,7 @@ impl Journal {
             Ok(entries) => {
                 self.entries = entries;
                 debug!(
-                    "Journal: Successfully loaded {} historical log entries.",
+                    "Successfully loaded {} historical log entries.",
                     self.entries.len()
                 );
             }
@@ -108,7 +108,7 @@ impl Journal {
                 let moved = std::fs::rename(&self.path, &backup).is_ok();
                 self.entries = HashMap::new();
                 warn!(
-                    "Journal: the WAL at {:?} is corrupt and could not be parsed ({}). {} \
+                    "the WAL at {:?} is corrupt and could not be parsed ({}). {} \
                      Starting a fresh journal so commands still run; an operation interrupted \
                      before this cannot be auto-recovered — re-run `linix sync` to reconcile.",
                     self.path,
@@ -127,7 +127,7 @@ impl Journal {
 
     /// Atomic because a torn write of the WAL loses the record of an in-flight action.
     pub fn flush(&self) -> Result<()> {
-        trace!("Journal: Initiating atomic WAL flush.");
+        trace!("Initiating atomic WAL flush.");
 
         let data = serde_json::to_string_pretty(&self.entries)
             .map_err(|e| Error::Other(format!("Failed to serialize Journal: {}", e)))?;
@@ -162,7 +162,7 @@ impl Journal {
         self.entries.insert(id.clone(), entry);
         self.flush()?;
 
-        debug!("Journal: Operation {} marked as InProgress in WAL.", id);
+        debug!("Operation {} marked as InProgress in WAL.", id);
         Ok(id)
     }
 
@@ -172,10 +172,10 @@ impl Journal {
             entry.finished_at_unix = Some(Utc::now().timestamp());
             entry.staged_properties = properties;
             self.flush()?;
-            trace!("Journal: Operation {} marked as Completed.", id);
+            trace!("Operation {} marked as Completed.", id);
         } else {
             warn!(
-                "Journal: Attempted to mark unknown operation {} as successful.",
+                "Attempted to mark unknown operation {} as successful.",
                 id
             );
         }
@@ -189,12 +189,12 @@ impl Journal {
             entry.error = Some(err.to_string());
             self.flush()?;
             warn!(
-                "Journal: Operation {} recorded as Failed in WAL: {}",
+                "Operation {} recorded as Failed in WAL: {}",
                 id, err
             );
         } else {
             warn!(
-                "Journal: Attempted to record failure for unknown operation {}.",
+                "Attempted to record failure for unknown operation {}.",
                 id
             );
         }
@@ -236,7 +236,7 @@ impl Journal {
             if is_terminal {
                 let terminal_time = entry.finished_at_unix.unwrap_or(entry.started_at_unix);
                 if terminal_time < cutoff_ts {
-                    trace!("Journal: Pruning expired log record: {}", id);
+                    trace!("Pruning expired log record: {}", id);
                     return false;
                 }
             }
@@ -246,7 +246,7 @@ impl Journal {
         let purged = initial_count - self.entries.len();
         if purged > 0 {
             info!(
-                "Journal: Maintenance complete. Purged {} historical records older than {} days.",
+                "Maintenance complete. Purged {} historical records older than {} days.",
                 purged, days_threshold
             );
             self.flush()?;
@@ -256,7 +256,7 @@ impl Journal {
     }
 
     pub fn cleanup(&mut self) -> Result<()> {
-        debug!("Journal: Commencing routine maintenance.");
+        debug!("Commencing routine maintenance.");
 
         // An InProgress entry older than this is read as a crashed process, not a slow one:
         // the wrong call either abandons a live install or waits forever on a dead one.
@@ -265,7 +265,7 @@ impl Journal {
 
         for entry in self.entries.values_mut() {
             if entry.status == ActionStatus::InProgress && entry.started_at_unix < stale_ts {
-                debug!("Journal: Marking stale task {} as Abandoned.", entry.id);
+                debug!("Marking stale task {} as Abandoned.", entry.id);
                 entry.status = ActionStatus::Abandoned;
                 entry.finished_at_unix = Some(Utc::now().timestamp());
             }
@@ -274,7 +274,7 @@ impl Journal {
         self.cleanup_expired_logs(7)?;
 
         if self.entries.is_empty() && self.path.exists() {
-            trace!("Journal: WAL is empty. Removing journal file.");
+            trace!("WAL is empty. Removing journal file.");
             let _ = std::fs::remove_file(&self.path);
         }
 

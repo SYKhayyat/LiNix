@@ -1,6 +1,6 @@
-// src/app/ui/cockpit.rs
+// src/app/ui/history.rs
 //
-// The cockpit: a time-travel dashboard over LiNix's history. That history is now git (the
+// A browser over LiNix's history. That history is now git (the
 // generation format was deleted — II.1: git IS the history), so the timeline is your commit
 // log and each entry shows what that commit changed in your manifests.
 //
@@ -16,7 +16,7 @@
 //
 // Left: the commit timeline (newest first). Right: the selected commit's metadata and the
 // manifest lines it added/removed. Bottom: a shell line for running commands without leaving
-// the cockpit. Rollback ('r') checks out the selected commit and syncs.
+// the history. Rollback ('r') checks out the selected commit and syncs.
 //
 // The rendering logic is pure and unit-tested; the ratatui event loop is a thin shell.
 
@@ -35,7 +35,7 @@ use ratatui::{
 };
 use std::io;
 
-/// A display-ready view of one git commit (the cockpit's timeline is git history now).
+/// A display-ready view of one git commit (the history's timeline is git history now).
 #[derive(Debug, Clone)]
 pub struct CommitView {
     /// Short commit hash — the row's identifier.
@@ -50,9 +50,9 @@ pub struct CommitView {
     pub changes: Vec<String>,
 }
 
-/// What the cockpit asks the async caller to do after it exits.
+/// What the history asks the async caller to do after it exits.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CockpitAction {
+pub enum HistoryAction {
     Quit,
     /// Roll back to a commit: check out its manifests, then sync the machine to match.
     Rollback { reference: String },
@@ -86,8 +86,8 @@ pub fn detail_lines(current: &CommitView) -> Vec<String> {
     lines
 }
 
-/// Cockpit UI state.
-pub struct Cockpit {
+/// HistoryBrowser UI state.
+pub struct HistoryBrowser {
     commits: Vec<CommitView>,
     list_state: ListState,
     /// The shell input buffer.
@@ -98,7 +98,7 @@ pub struct Cockpit {
     status: String,
 }
 
-impl Cockpit {
+impl HistoryBrowser {
     pub fn new(commits: Vec<CommitView>) -> Self {
         let mut list_state = ListState::default();
         if !commits.is_empty() {
@@ -141,8 +141,8 @@ impl Cockpit {
         self.list_state.select(Some(i));
     }
 
-    /// Launch the cockpit; returns the action the caller should perform.
-    pub fn run(&mut self) -> Result<CockpitAction> {
+    /// Launch the history; returns the action the caller should perform.
+    pub fn run(&mut self) -> Result<HistoryAction> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -164,7 +164,7 @@ impl Cockpit {
     fn event_loop(
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    ) -> Result<CockpitAction> {
+    ) -> Result<HistoryAction> {
         loop {
             terminal.draw(|f| self.draw(f))?;
             if let Event::Key(key) = event::read()? {
@@ -190,7 +190,7 @@ impl Cockpit {
                     continue;
                 }
                 match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(CockpitAction::Quit),
+                    KeyCode::Char('q') | KeyCode::Esc => return Ok(HistoryAction::Quit),
                     KeyCode::Down | KeyCode::Char('j') => self.next(),
                     KeyCode::Up | KeyCode::Char('k') => self.previous(),
                     KeyCode::Char(':') | KeyCode::Char('/') => {
@@ -199,7 +199,7 @@ impl Cockpit {
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         if let Some(c) = self.selected() {
-                            return Ok(CockpitAction::Rollback {
+                            return Ok(HistoryAction::Rollback {
                                 reference: c.full_hash.clone(),
                             });
                         }
@@ -211,7 +211,7 @@ impl Cockpit {
     }
 
     /// Run a command from the shell line: drop out of the alternate screen, execute it via the
-    /// system shell, wait for a keypress, then restore the cockpit.
+    /// system shell, wait for a keypress, then restore the history.
     fn run_shell(
         &mut self,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -233,7 +233,7 @@ impl Cockpit {
             Ok(s) => self.status = format!("`{}` exited with {}", cmd, s),
             Err(e) => self.status = format!("`{}` failed to run: {}", cmd, e),
         }
-        println!("\n[press Enter to return to the cockpit]");
+        println!("\n[press Enter to return to the history]");
         let _ = io::stdin().read_line(&mut String::new());
 
         enable_raw_mode()?;
@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn a_rollback_targets_the_full_hash() {
         // The row shows the short hash, but a rollback must check out the full commit.
-        let mut c = Cockpit::new(vec![cv("a1b2c3d", "x", &[])]);
+        let mut c = HistoryBrowser::new(vec![cv("a1b2c3d", "x", &[])]);
         c.next(); // stays on 0
         let sel = c.selected().unwrap();
         assert!(sel.full_hash.starts_with("a1b2c3d"));
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn navigation_wraps() {
-        let mut c = Cockpit::new(vec![cv("c3", "", &[]), cv("c2", "", &[]), cv("c1", "", &[])]);
+        let mut c = HistoryBrowser::new(vec![cv("c3", "", &[]), cv("c2", "", &[]), cv("c1", "", &[])]);
         assert_eq!(c.selected().unwrap().short, "c3");
         c.previous(); // from 0 wraps to last
         assert_eq!(c.selected().unwrap().short, "c1");
@@ -366,8 +366,8 @@ mod tests {
     }
 
     #[test]
-    fn empty_cockpit_has_no_selection() {
-        let c = Cockpit::new(vec![]);
+    fn empty_history_has_no_selection() {
+        let c = HistoryBrowser::new(vec![]);
         assert!(c.selected().is_none());
     }
 }
