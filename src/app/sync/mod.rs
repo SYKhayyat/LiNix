@@ -117,7 +117,7 @@ impl<'a> SyncEngine<'a> {
         // may be unavailable — none of which should abort a package sync. Policies that
         // TRULY require a snapshot gate on `has_provider()` upstream; here we warn and
         // proceed so a missing restore point never blocks the actual work.
-        if let Err(e) = self.snapshot_manager.auto_snapshot("pre_sync").await {
+        if let Err(e) = self.snapshot_manager.auto_snapshot(crate::core::snapshot::SnapshotLabel::PreSync).await {
             warn!(
                 "Sync: pre-sync safety snapshot unavailable ({}); proceeding without a restore point.",
                 e
@@ -139,10 +139,10 @@ impl<'a> SyncEngine<'a> {
                     Error::Other(format!("Kernel panic during state persistence: {}", e))
                 })??;
 
-            // Scope the state guard to shim reconciliation ONLY. `record_generation()`
-            // below re-acquires `self.state` internally, and `tokio::sync::Mutex` is not
-            // re-entrant — holding the guard across that call self-deadlocks the whole
-            // sync/prune/upgrade after the transaction has already succeeded.
+            // Scope the state guard to shim reconciliation ONLY. Steps below (the health
+            // probes and snapshot retention) re-acquire `self.state` internally, and
+            // `tokio::sync::Mutex` is not re-entrant — holding the guard across those calls
+            // self-deadlocks the whole sync/prune/upgrade after the transaction has succeeded.
             {
                 let final_state = self.state.lock().await;
                 self.reconcile_all_shims(&final_state).await?;

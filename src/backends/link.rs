@@ -222,9 +222,6 @@ impl Installable for LinkInstallable {
                 .get("target")
                 .ok_or_else(|| Error::Other("Link requires @target".into()))?;
 
-            // SEC3 (robustness half): expand a leading `~/`. The old `&target_str[2..]` panicked
-            // on a bare `"~"` (a len-1 out-of-bounds slice) and silently dropped the char in
-            // `"~x"`. `strip_prefix("~/")` handles `~/foo`; a bare `~` means the home dir itself.
             let target_path = if let Some(rest) = target_str.strip_prefix("~/") {
                 dirs::home_dir()
                     .ok_or_else(|| Error::Other("Could not find home".into()))?
