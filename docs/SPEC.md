@@ -2298,8 +2298,13 @@ could not start.* Three help strings were stale in the same place and went with 
 "Imperatively", `rollback`'s `--package`/`--with-config` (flags it no longer has), and `profile`'s
 advertisement of `switch`, which the owner ruled dead.
 
-**Still open: SEC1–SEC3, which remain deferred**, plus the Phase 5 docs work (README/CHANGELOG) and
-Phase 6's containers.
+**Phase 5 docs are done (2026-07-19).** README and CHANGELOG were rewritten rather than patched —
+see "Not started, and owed" below, which is now retired. Writing them found S22 (a phantom
+package from an empty-result banner) and one wrong assumption of my own about module/profile
+indirection, both recorded there.
+
+**Still open: SEC1–SEC3, which remain deferred**, F4/F5 (the generated `--help` backend count and
+the false doc comments), and Phase 6's containers.
 
 **Suite: 561 passing, 0 failed; `cargo build --all-targets` clean; `cargo clippy --all-targets`
 silent; `linix --help` and the new commands run** (measured 2026-07-19, after R1–R23). *Green says
@@ -3103,6 +3108,22 @@ has been consistently right and is worth following; its *measurements* are not.
 
 ## Bugs found while implementing
 
+**S22 — an empty-result banner parsed as a package (found 2026-07-19, fixed).** `pixi global
+list` on a machine with nothing installed prints `No global environments found.`, and
+`ecosystem::pixi_list` took the first token of every line — so LiNix reported a package named
+`No` in the `pixi` backend. It showed up in `linix status` as unmanaged drift, which means
+**`adopt` would have written `pixi:No` into a manifest and `purge-unmanaged` would have tried to
+delete it.** The fix is in the shared `is_noise_line`, so it covers every parser that takes a
+first token, not just pixi: a line reading as prose ("no …", ending in a period, more than two
+words) is not an identifier. Covered by `an_empty_result_banner_is_not_a_package`, which also
+pins that a real package named `nodejs` still parses.
+
+**Found by running the tool while writing its README** — not by a test, and not by reading. The
+suite was green with the phantom package in it, because no test runs a real backend that has
+nothing installed.
+
+
+
 **S1–S11 in VI.2 → "Found during implementation".** Each is assigned to the phase that owns
 the mechanism. Four were live defects already fixed (S1 shim deletion, S10 tests writing to
 the real data dir, and two parser bugs); the rest are scheduled. Add to that table rather
@@ -3110,6 +3131,38 @@ than to a commit message — a bug recorded only in a commit message is a bug no
 
 ## Not started, and owed
 
-`README.md` (28k) still documents `-g`, `prune`, `clone` and `migrate` — **all four deleted in
+~~`README.md` (28k) still documents `-g`, `prune`, `clone` and `migrate` — **all four deleted in
 Phase 0.** `CHANGELOG.md` likewise. Both are Phase 5 (docs), and both are cleanly separable
-from the code work if a second session ever runs in parallel.
+from the code work if a second session ever runs in parallel.~~ — **DONE 2026-07-19. Both were
+rewritten, not patched.**
+
+The README described v5/v6: `prune`, `clone`, `migrate`, `generation`, `teleport`, `shim`, the
+`-g` flag, a grammar that no longer exists (`@module:`, `group:`, `include:`, `when … end`,
+`-pkg`), paths that no longer exist (`groups/local.txt`), and — the one that mattered — **"sync
+never removes anything by default", which is the exact opposite of the model.** A patch pass
+would have left a document that was wrong in a subtler way, so it was rewritten against the
+real `--help` and a real `linix init`. Every command it names was checked by running
+`linix <cmd> --help`; **it carries no backend count**, because the count is platform-dependent
+(43 registered on the Windows box this was written on) and a typed number is the thing that has
+gone stale seven times in this document. It points at `linix doctor` instead.
+
+The CHANGELOG's `[Unreleased]` section advertised a "v7 feature wave" of things that are now
+deleted — `lease list`, `managed strict`, the `groups/keep.txt` keep-list, `cockpit`,
+`generation rollback --with-config`, `local.txt`. All four of those commands answer GONE to
+`--help`. It was replaced with an honest v7 section (the model, safety, what was removed and
+why, what was fixed); the released 6.0.0 / 5.0.0 history is real history and was left alone.
+
+**Writing the README found a live bug and a wrong assumption of my own.** The bug is S22 below
+(an empty-result banner parsed as a package). The assumption was mine, and it is worth recording
+because it is the documentation version of every false ✅ in this file:
+
+**The README's opening example was wrong, and I wrote it from the spec rather than from the
+tool.** It showed a module file and a `sync` that installed it — but **a module in `modules/`
+is inert until an active profile `use`s it**, so the example as written installs nothing.
+`linix check` says `0 present` and gives no hint why. I found it only because I ran the quick
+start end to end in a scratch config instead of trusting what I had just written; the corrected
+README calls the indirection out explicitly and points at `check` as the way to see it.
+
+*Part II says this plainly (II.3: a module is a list of lines; II.4: profiles choose). I read
+it, summarised it, and still produced an example that does not work — which is the exact
+failure mode rule 9 describes, in prose instead of a ✅.*

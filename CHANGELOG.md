@@ -2,362 +2,90 @@
 
 All notable changes to LiNix are documented here.
 
-## [Unreleased]
+## [Unreleased] — v7, the declarative rewrite
 
-### Added (v7 feature wave)
-- **Temporary install & uninstall (symmetric).** `linix install --temp <dur> <pkg>` installs a
-  package into the real system that removes itself when the lease elapses (swept on every
-  maintenance run); it is kept out of the manifest so `sync` won't resurrect it. Its mirror,
-  `linix remove --temp=<dur> <pkg>`, removes a package now and reinstalls it later — on a timer,
-  or (bare `--temp` inside a `linix shell`) when the ephemeral session ends. Restore is
-  best-effort reinstall-by-name; a package the backend can no longer provide warns and is
-  dropped. Both surfaces show up in `linix lease list`.
-- **Interactive init.** `linix init -i` walks through preferred backend, drift/prune behavior,
-  snapshot retention, and starter packages, writing the answers into `config.toml` and
-  `local.txt`. Refuses to run without a TTY so CI falls back to plain `linix init`.
-- **Profile set-expressions.** Profiles gain an `intersect <name>` directive and a full set
-  expression language with `|` (union), `&` (intersect), `\` (difference), the function forms
-  `union()/intersect()/diff()`, and parentheses that nest infinitely — e.g.
-  `(work | gaming) & security`. Evaluation order is union → intersect → subtract; `&` binds
-  tighter than `|`. Package atoms with `+`/`:` (`apt:g++`) tokenize correctly.
-- **Management modes + keep-list.** `linix managed strict` (prune anything not in your
-  manifests) vs `linix managed linix-only` (prune only what LiNix installed), plus a
-  file-based keep-list (`groups/keep.txt`, edited via `linix managed keep/unkeep`) whose
-  entries are folded into the protected set and never auto-removed.
-- **Git-versioned manifests.** `linix git init/status/log/commit/checkout` version-controls the
-  config directory; after `git init`, manifest changes auto-commit on every command. Each
-  generation is stamped with its manifest commit, so `linix rollback <gen> --with-config` (or
-  the `linix git checkout <commit>` hint) rolls config and system back together — or
-  independently, by design.
-- **Package-manager interception.** `linix hooks install` drops native hooks for pacman, apt,
-  dnf, zypper, apk, xbps, portage, and eopkg that record manual installs into LiNix;
-  `linix hooks shell-init <shell>` prints shell wrappers as a fallback and an auto-learn path
-  (`linixlearn <any-manager> …`). Local-file installs (`.deb`/`.rpm`/AppImage/…) are recorded
-  imperatively and protected from pruning, distinct from tracked repo installs.
-- **Generation cockpit TUI.** `linix cockpit` (alias `tui`) — generations timeline on the left,
-  the selected generation's package set + git commit + diff-vs-previous on the right, and a
-  shell line on the bottom. Roll back to any generation from within (`r`, or `R` for
-  config-too).
+v7 is a rewrite, not an upgrade. The model changed: **one file says what should be installed,
+and `sync` makes the machine match it.** Everything that used to be a separate mechanism for
+getting there is gone, because editing the file and syncing already did it.
 
-### Added (v9 feature wave)
-- **Generation time-travel UX.** `linix generation log [--oneline] [--json]` prints history
-  git-log style, and `linix generation diff <from> [<to>] [--json]` shows exactly which packages
-  were added, removed, or version-changed between two generations (omit `<to>` to diff against
-  the live system). Backed by a pure, tested `diff_package_sets`.
-- **Interactive diff-review before applying.** Rollbacks and `apply` now route through the same
-  toggle-to-deselect review screen `sync` uses, so a bulk change is never blind — space to drop
-  individual actions, Enter to apply, `q` to cancel. Skipped with `--yes` / no TTY; `--dry-run`
-  previews without applying.
-- **Cross-backend conflict detection.** `linix conflicts [--json]` finds clashes no single-backend
-  resolver can see: the same tool pinned to different versions by different backends
-  (`apt:nodejs@18` vs `nix:node@20`), or provided by more than one (a PATH-shadowing risk),
-  with a small equivalence table (nodejs/node, python3/python, golang/go, …).
-- **`watch` daemon (GitOps for one machine).** `linix watch [--interval N] [--on-change] [--pull]
-  [--once]` continuously reconciles the system to your manifests, optionally `git pull --ff-only`
-  first, applying changes unattended. `--on-change` reconciles only when a manifest actually
-  changed (mtime/size fingerprint).
-- **Fleet-wide apply.** `linix fleet --apply` pushes `linix sync -y` to every reachable host
-  (not just the drifted ones that `--sync` targets), reporting successes and failures.
-- **Package holds.** `linix hold <pkg>…` / `linix unhold <pkg>…` (run `hold` with no args to list)
-  freeze packages so `upgrade` never bumps them — honored by targeted upgrades, the declarative
-  planner, and skipped-with-a-loud-warning by `--security`; naming a held package explicitly in
-  `upgrade <pkg>` still upgrades it. Native whole-system upgrades can't enforce holds and say so.
-- **Exact-version security pinning.** `upgrade --security` now pins each vulnerable package to the
-  **highest** fixed version OSV reports across its advisories (so it clears them all), instead of
-  jumping blindly to latest.
-- **`export` to native manifests.** `linix export [--format brew|pip|npm|apt] [--out DIR]
-  [--stdout]` emits Brewfile / requirements.txt / package.json / Aptfile from your managed set —
-  the no-lock-in escape hatch and a way to interop with other tools.
-- **`list --outdated` and `search --installed`.** Show managed packages with a newer version
-  available (installed vs latest, honestly skipping backends that report no "latest"), and filter
-  search results to what you already manage.
-- **Tamper-evident lockfiles.** `linix lock` now signs `locks.json` with a machine-local key;
-  `sync --locked` refuses a locally-edited lockfile (fails closed). A fresh machine with no key
-  (e.g. restoring a bundle) proceeds unverified rather than breaking reproducibility. The key is
-  gitignored and excluded from bundles.
-- **Command aliases.** A config `[command_aliases]` table (e.g. `up = "upgrade --all"`) is
-  expanded before parsing; built-in subcommands always win, so an alias can't mask a real command.
-- **`config edit`, `self-upgrade`, tar.gz bundles, why --json, doctor lockfile heal, per-backend
-  timing, `--quiet`, colored doctor output, `@check=` health probes.** `config edit` opens
-  `$EDITOR` and re-validates on save; `self-upgrade` rebuilds from source via cargo; `bundle
-  --archive` packs a single portable `.tar.gz`; `why --json` matches the other machine-readable
-  commands; `doctor --fix` now reconciles a drifted/stale lockfile; the transaction summary adds
-  an honest per-backend work-time rollup (labeled as summed work, since backends run in parallel);
-  `--quiet` suppresses the flight plan and summary (errors still print); doctor status labels are
-  colored (honoring `NO_COLOR` and non-TTY); and a manifest package can declare `@check=port:N` or
-  `@check=cmd:…` to be probed after install, with the pre-sync snapshot available to revert.
-- **Manifest `include:`.** A manifest line `include: ./base.txt` or `include: https://…/base.txt`
-  splices another manifest (local path or remote URL) in place, so teams compose a shared base
-  with per-role overlays; cycles are caught by the existing expansion guard.
+There is no migration path and no compatibility shim. Nothing reads a v6 config.
 
-### Added (v8 feature wave)
-- **Full upgrade surface.** `linix upgrade` now spans every granularity: bare `upgrade` (and
-  `--all`) runs each backend's native whole-system upgrade — the path that actually bumps
-  `latest`-pinned packages; `upgrade <pkg>…` upgrades named packages; `--backend <b>` scopes to
-  one manager; and `--security` upgrades exactly the packages `audit` flags as vulnerable to a
-  fixed version. `--except <pkg>` holds packages back from any of these (the audit→upgrade
-  bridge you asked for).
-- **Declarative services (all init systems).** `linix service enable/disable/start/stop/restart/
-  status/list` drives services across **systemd, OpenRC, SysVinit, launchd, and Windows `sc`**
-  from one command; `enable`/`disable` persist to your manifest. Manifests also accept
-  `service:<name>@enabled=…,status=…`. The command mapping is a pure, unit-tested table.
-- **Host-conditional manifests.** A single shared manifest can serve a heterogeneous fleet with
-  `when os == linux` / `when arch != x86_64` / `when host in [laptop, desktop]` blocks
-  (nestable) and the inline `when <pred> then <pkg>` form — evaluated at parse time against the
-  running host.
-- **Encrypted secrets.** The `link` backend gains decrypt-on-place: `link:/path/secret.age@
-  target=~/.config/app/token,decrypt=age` (or `decrypt=sops`) decrypts by shelling out to the
-  `age`/`sops` binary and writes the plaintext `0600`, reusing the existing backup + atomic-write.
-- **Remote module registry.** `linix module add github:user/repo` (or `@ref`/path, or a raw
-  https URL) fetches a shared module into your local modules for `@module:<name>` — enabling
-  community-maintained package sets.
-- **Deep doctor + bootstrap.** `linix doctor` now uses each backend's real health probe with
-  OK/WARN/FAIL severity and messages, adds system/directory checks, `--fix` (create missing
-  dirs, refresh metadata) and `--json`. New `scripts/install.sh` / `install.ps1` give a
-  curl-to-shell first run that installs, health-checks, and offers `migrate`.
-- **Supply-chain audit → upgrade.** `linix audit` (cross-ecosystem OSV.dev scan) feeds
-  `linix upgrade --security` for one-command remediation; `linix sbom` emits CycloneDX. (Both
-  audit/sbom pre-existed; the upgrade bridge and provenance depth are new.)
-- **Sharper `why`.** Provenance is interpreted into specific sentences (`pulled in by module
-  \`dev\``) and augmented with a live scan of every manifest/module/group that declares the
-  package — not just the single recorded origin.
-- **Saved plan / apply.** `linix plan --out plan.json` freezes exactly what `sync` would do;
-  `linix apply plan.json` executes that captured set, with a content hash that rejects
-  hand-edited plans and warns when the system has drifted since capture.
-- **Offline / air-gapped bundle.** `linix bundle` packs a portable copy of your manifests,
-  lockfile, resolved package list and a saved plan; `--artifacts` additionally pre-downloads
-  package files for the backends with an offline fetch (apt/dnf/pip/npm/brew/pacman/apk),
-  honestly reporting which backends it cannot bundle.
-- **Robustness.** Manifest parsing now strips a leading UTF-8 BOM, so a manifest saved by a
-  Windows editor no longer turns the first entry's backend into `\u{feff}cargo`.
+### The model
 
-### Added (isolation / testability)
-- **`LINIX_DATA_DIR` / `LINIX_CONFIG_DIR`** environment overrides for the global state-registry
-  and config directories (honored by `safe_data_dir()` / `safe_config_dir()`). Setting
-  `LINIX_DATA_DIR` to a throwaway path gives a run an isolated state registry, so a
-  system-global `prune`/`activate` only reconciles the packages that run installed — never the
-  user's pre-existing state — and nothing accumulates across runs. The integration harnesses
-  set `LINIX_DATA_DIR` so they are non-destructive and repeatable on a real machine.
+- **One grammar, one parser.** `backend:name` is parsed in exactly one place. Options take a
+  short form (`@version=1.6`) or a block form for anything containing a comma; an unrecognised
+  line is an error naming the file, the line, and what was expected, rather than being read as
+  a package name.
+- **`when` gates lines everywhere it appears** — packages in a module, imports in a profile,
+  backends in `priority`, profile names in `active`. One rule, no per-file exceptions.
+- **The repo layout is `modules/`, `profiles/`, `active`, `priority`, `schedules`, `locks/`.**
+  A module is a list; it does nothing until an active profile `use`s it.
+- **History is git.** `linix git init` makes the config directory a repo, every sync commits,
+  and `linix rollback <commit>` restores those manifests and converges the machine. There is no
+  second generation store.
+- **`activate` sets, `activate -a` adds, `deactivate` removes.** Several profiles can be active
+  at once; their package sets are unioned, and deactivating one removes only what nothing else
+  still needs.
 
-### Added (release-readiness test harness)
-- **Real-by-default integration coverage.** The Docker and native sweeps now run a genuine
-  install → list → manifest-coherence → remove → verify-gone lifecycle for *every backend that
-  can physically run on the platform* — including the source-compiling ecosystems (cargo, go,
-  opam, nimble, spack) and downloaded/prebuilt ones (composer, dotnet, pub, krew, mix, conda,
-  nix, github). cabal (no uninstall verb) asserts its removal reports a graceful *unsupported*;
-  `link` creates and deletes a real symlink; `github` downloads a real release asset. Only the
-  genuinely-impossible-here set (distro-native managers on the wrong distro, Windows/macOS-only
-  backends, snap/service/btrfs where the daemon/FS is absent) falls back to plan-smoke, each
-  named explicitly. `FAST=1` downgrades the heaviest source-compiles for a quick pass.
-- **Full feature coverage.** Every `linix` subcommand is now exercised at least once by the
-  harness (completions for all six shells, heal, clean, upgrade + `--canary --test`, repo,
-  migrate, teleport, module, snapshot prune, generation pin/unpin, rollback, lease, schedule,
-  run, shim, sbom, audit, why, policy — plus the existing install/sync/profile surface).
-- **Self-checking coverage audit.** The sweep enumerates every `[READY]` backend from `doctor`
-  and HARD-fails if any went untouched by a real lifecycle or plan-smoke, and likewise fails on
-  any subcommand never exercised (outside a documented interactive/remote-SSH exempt set). A
-  backend or command added in the future fails the audit until it is covered.
-- **`Dockerfile.tools` now initializes** each ecosystem so real installs resolve: opam switch,
-  cabal/nimble index refresh, spack compiler detection, conda channels, flathub remote, krew
-  index, `nix` made READY (binaries symlinked onto PATH, flakes enabled), and the go/dotnet/pub
-  global-bin dirs exported.
-- **One-shot release gate:** `scripts/release-check.sh` (Linux/macOS) and
-  `scripts/release-check.ps1` (Windows) run the hermetic gates (fmt/clippy/test/build) **and**
-  the full integration matrix, then print a single GO / NO-GO verdict with a non-zero exit on
-  any hard failure.
+### Safety
 
-### Added (backends — ecosystem expansion)
-- **Go** (`go`) — dedicated backend: `go install pkg@version`; installed binaries are
-  discovered by enumerating the Go bin dir (`GOBIN` → `go env GOPATH`/bin → `~/go/bin`)
-  and reading each binary's module path via `go version -m`; removal deletes the binary
-  (Go ships no uninstaller); no CLI search (pkg.go.dev is web-only).
-- **Composer** (`composer`) — PHP/Packagist global packages via `composer global`
-  require/remove/show/search/update, with `name:version` pinning.
-- **Portage/emerge** (`emerge`, Linux) — Gentoo; installed set read via `qlist -I`.
-- **GNU Guix** (`guix`, Linux), **eopkg** (Solus, Linux), **slackpkg** (Slackware, Linux)
-  — distro package systems, gated on their binaries.
-- **opam** (OCaml), **LuaRocks** (Lua), **Nimble** (Nim), **mix/Hex** (Elixir),
-  **Cabal** and **Stack** (Haskell), **Dart pub** (`pub`), **Spack**, **pixi**, **asdf**,
-  **Helm plugins** (`helm`), and **krew** (kubectl plugins) — cross-platform, each gated on
-  its binary. cabal/stack have no uninstall verb, so removal reports `Unsupported` rather
-  than running a wrong command. Dedicated modules for `pub` (invoked via `dart`) and
-  `krew` (via `kubectl`) since their CLIs are subcommands of another binary.
-- SBOM (purl) and OSV vulnerability-ecosystem mappings extended to cover go, composer,
-  pub, mix (Hex), cabal/stack (Hackage), and luarocks where standardized.
+- **One guard, every removal path.** Removal count ceilings, the protected list, and the OS's
+  own essential flags are enforced in a single function that every deleting command calls.
+  `--allow-mass-removal` answers the count and nothing else; protection is a refusal, not a
+  confirmation, so nothing overrides it.
+- **`remove-orphans` previews, guards, then asks.** It lists what each manager considers
+  orphaned, puts the whole set through the guard, and removes exactly what it showed.
+- **`export` never silently overwrites.** A taken filename is written beside the real file
+  (`package.linix.json`); `--force` overwrites deliberately.
+- **File-backed backends no longer report a removal that failed.** If the binary could not be
+  deleted, the package stays recorded rather than becoming drift nothing can see.
+- **A crash aged out of the write-ahead log is still healable**, so an interrupted run left
+  unattended for hours is still repaired rather than dropped.
+- **`sync`, `rollback` and `remove-orphans` refuse to apply unconfirmed** in a non-interactive
+  shell without `--yes`.
+
+### Removed
+
+Each of these was a second way to do something the model already does. Deleted, not deprecated.
+
+- **`teleport`** — a backend move is "rewrite the prefix, sync". It also built its own
+  transaction graph and executed it **without calling the guard**, so it could remove a
+  protected package that every other path refused to touch.
+- **`shim`** — shims are declarative (`@shim=true` on a line). The imperative command was a
+  second path that the next sync undid, and its required `--source` flag was never read.
+- **`clean`** — split into `remove-orphans` and `clean-cache`. The old command ran
+  `apt autoremove -y` / `pacman -Rs --noconfirm` across every backend with no preview and
+  outside the guard, and on four backends it was cleaning *caches* while reporting orphan
+  removal.
+- **`generation` and `lease`** — history is git; leases are `@expires` on the line.
+- **`managed` modes and the keep-list file** — the manifest says what is managed.
+- **`prune`, `clone`, `migrate`, and the `-g` flag** — drift removal is what `sync` does,
+  `adopt` takes over a machine, and `fleet` compares machines.
+- **`cockpit`** — renamed `history` (alias `tui` kept), because it browses your manifest
+  history and the old name did not say so.
+- **Marketing language, emoji, and the theatrical house voice.** 149 log lines lost a
+  `Component:` prefix, status lines were demoted to debug, and a normal run is now quiet the
+  way `apt` and `dnf` are.
 
 ### Fixed
-- **Removing a package from a backend that has no `Queryable` capability** (notably `link`) was
-  a silent no-op: `handle_remove` only removed a package after confirming it was installed via
-  `as_queryable().info()`, and `link` has no Queryable — so `linix remove link:/path` reported
-  success while leaving the symlink in place. Removal now attempts directly when the backend is
-  explicitly scoped and can't be queried (unscoped removal still requires a query hit, so a bare
-  name never fans a blind remove across every backend). Caught by the real link lifecycle.
-- **Stale `test_metadata_provider_resolution`** (Linux-only, so green on the Windows CI) expected
-  apt to expand dependencies, but apt sets `depends_args: None` on purpose (that expansion caused
-  a recursive `apt depends` hang). The test now asserts the intended empty result, documenting
-  the anti-hang decision; generic depends-parsing stays covered by a backend that enables it.
-- **`link` install/remove from the CLI with an absolute path** now works. The package-name
-  security validator rejected any name starting with `/` as a traversal attempt — but the
-  `link` backend's name IS a filesystem path, so `install link:/home/me/.vimrc@target=…` (and
-  the matching remove) were refused. Validation is now backend-aware
-  (`validate_package_name_for`): path/URL-oriented backends (`link`, `web`, `github`,
-  `appimage`) may use absolute paths, while `..` traversal, the character allowlist, and
-  shell-injection blocking still apply to every backend. Caught by the integration harness's
-  real link lifecycle.
-- **`output_signals_failure` / `is_benign_exit`** mis-handled Windows shim paths on non-Windows
-  hosts: `Path::file_stem` doesn't split on `\`, so `C:\…\scoop.ps1` didn't resolve to `scoop`
-  on Linux and a unit test failed there (blocking `cargo test` in Linux CI). Both now normalize
-  `\`→`/` before taking the basename.
-- **`completions powershell`** now works. clap derived the shell value name from the enum
-  variant as kebab-case (`power-shell`), so the universal one-word spelling `powershell` was
-  rejected with a parse error (rc=2). `powershell` is now the canonical value, with
-  `power-shell` kept as an alias. Caught by the integration harness's feature-coverage pass.
-- **pixi** removal used `pixi global remove` (which removes a package from an environment and
-  needs `--environment`) instead of `pixi global uninstall` for a global tool — so removing a
-  pixi-installed tool errored. Caught by the real install→list→remove integration lifecycle.
-- **pnpm** `info()` built the package `install_path` as `<root>/node_modules/<name>` from
-  `pnpm root -g`, which already returns the global `node_modules` dir — a double
-  `node_modules`. Corrected, and a `bin_path` (`pnpm bin -g`) is now recorded.
-- **yarn** `info()` now records `bin_path` (`yarn global bin`); wires up a previously
-  dead helper. Removed leftover `#[allow(dead_code)]` helpers in both backends.
 
-### Added (backends)
-- **MacPorts** (`macports`, macOS) — install/remove/list/search/upgrade via `port`.
-- **pkgsrc** (`pkgin`) — cross-platform pkgsrc binary packages; gated on the `pkgin` binary.
-- **.NET global tools** (`dotnet`) — `dotnet tool` install/list/search/upgrade, with
-  `--version` pinning. Cross-platform; the plain (project-scoped) NuGet surface is out of
-  scope by design.
-- **Conda** (`conda`) — environment-scoped install/remove/list/search/upgrade over
-  `--json`. The target environment is configurable via `backend_settings.conda.env`
-  (default `base`).
-- **PowerShell Gallery** (`psresource`, Windows) — modules via the modern PSResourceGet
-  cmdlets (`Install-PSResource`, …), invoked through PowerShell with strict name
-  validation to foreclose command injection.
-- **uv** (`uv`) — Astral's fast Python application installer (`uv tool`), the modern
-  successor to pipx. Install/remove/list/upgrade with `name==version` pinning.
-  Cross-platform; gated on the `uv` binary. Project/venv-scoped `uv pip` is out of scope
-  by design, mirroring the `dotnet` global-tools decision.
-- **XBPS** (`xbps`, Linux) — Void Linux's package system. Full install/remove/list/
-  search/upgrade + orphan cleanup across its `xbps-install`/`xbps-remove`/`xbps-query`
-  binaries. Rolling, so no version pinning (matches pacman).
-- **AUR helpers** (`yay`, `paru`, Linux) — Arch's user repository, as first-class
-  backends (`yay:pkg` / `paru:pkg`). They speak pacman's syntax, so they reuse the pacman
-  parsers but label packages with their own backend. Run unprivileged (never as root).
-
-### Added (composition)
-- **Module/group exclusion** — `@module:dev -vim` (or `-apt:vim`) includes a module but
-  drops a package from *its* contribution. Exclusions are scoped to that module's whole
-  recursive expansion and propagate through `requires`, but are **not** global: if another
-  source independently asks for the package, it still gets installed. Lets you reuse a
-  shared module and trim it per machine instead of forking it.
-
-### Added (generations & retention)
-- **Generations** — after each change, LiNix records a generation capturing the realized
-  state (exact installed set) *and* a frozen copy of the manifests that produced it. Manage
-  them with `linix generation list|pin|unpin|rollback`, or the shorthand `linix rollback
-  <id>`.
-- **Rollback that realizes the change** — `linix rollback <id>` drives the backends to make
-  the system match the generation (installing, removing, and *downgrading to the recorded
-  version* where the backend supports pinning), through the normal transaction engine so it
-  keeps snapshot + WAL safety and records itself as a new generation. A full rollback also
-  restores the manifests (backing up any drifted file first) so a later `sync` won't undo
-  it. **Scoped rollback** — `--package <name|backend:name>` and/or the global `--backend`
-  roll back just one package or one backend, leaving everything else untouched.
-- **Manifest archive** — an independent history of the manifest files themselves
-  (`[retention.manifests]`), captured after each change with de-duplication so an unchanged
-  manifest never spawns a redundant entry.
-- **Declarative retention** (`[retention.generations|snapshots|manifests]`) — each history
-  keeps its own policy: `keep_last`, `keep_days`, and a `keep` pin list. Rules combine as a
-  union (kept if it matches any), the most-recent entry is always kept, and an empty policy
-  keeps everything. All three are enforced automatically after each sync; snapshot
-  retention only ever deletes LiNix-created snapshots.
-- **Snapshot ↔ generation pairing** — restoring a filesystem snapshot via `linix undo` also
-  restores the generation that was current at that snapshot's time, so the manifests and
-  state record match the system you rolled back to.
-
-### Added (config-file management)
-- **Backup-before-overwrite for the `link` backend.** Before LiNix replaces a file that
-  was already on disk (a real file it didn't create), it saves the original once to
-  `<target>.linix-backup` and logs where it went — so adopting a machine can never
-  silently destroy a config file you'd written. Symlinks and directories are skipped; the
-  original is preserved even across repeated syncs and later hand-edits. Honors `--dry-run`.
-- **Inline config-file contents** (`[managed_files]` in config) — declare a file's body
-  directly (`"~/.gitconfig" = '''…'''`) instead of pointing `link` at a separate source
-  file. Each entry is materialized as a managed `link` file that installs, self-heals on
-  drift, shows up in `status`, and is removed by `prune` when you delete the entry — the
-  same lifecycle as any other managed item.
-
-### Added (multi-machine)
-- **Per-host backend allow-lists** (`[hostname_backends]`) — a machine can manage only a
-  subset of backends. A non-empty per-host entry overrides the global `enabled_backends`;
-  manifest entries for non-managed backends are skipped on that host (not an error), and
-  search / system-scope prune respect the same set. Empty = all backends (unchanged
-  default). Complements the existing `[hostname_packages]`.
-
-### Added (interface)
-- **NuShell shell completions** — `linix completions nushell` now emits a NuShell
-  completion script, alongside Bash, Zsh, Fish, PowerShell, and Elvish.
-
-### Fixed
-- **Backends no longer read as OFFLINE on minimal images that lack `which`.** Availability
-  was checked by spawning the external `which`/`where` program, absent from minimal
-  fedora/arch/alpine — so every backend showed OFFLINE and `remove` (which only searches
-  *available* backends) found nothing, even for installed packages. Now resolved in-process
-  via the `which` crate (PATH/PATHEXT), no external program needed.
-- **Dropped the OpenSSL dependency** (switched `reqwest` to rustls). OpenSSL made static
-  musl/Alpine builds fail to link and required `openssl-dev` on every distro; rustls is
-  pure-Rust and matches what the email path (lettre) already uses.
-- **apt (and any manager whose query tool is a separate binary) can now list installed
-  packages.** The generic backend ran the list command as `apt dpkg-query …` (backend name
-  + args), but `dpkg-query` is its own program, not an apt subcommand — so apt's
-  `list`/`info`/`status`/`migrate`/`remove` silently saw *zero* installed packages. Added a
-  `list_binary` option to the generic config; apt now lists via `dpkg-query`. Verified on
-  real Linux (0 → 609 packages visible). Found by the container harness.
-- **No more "Aborted (core dumped)" when output is piped to `head`/`less`.** A closed
-  output pipe made `println!` panic with EPIPE, and `panic = "abort"` turned it into a core
-  dump. A panic hook now exits quietly on a broken pipe (SIGPIPE stays ignored for sockets,
-  so network I/O is unaffected).
-- **`linix remove backend:pkg` now actually removes the package** (affected *every*
-  backend). `remove` passed the whole `"backend:name"` string to backends' `info()`/
-  `remove()`, which expect the *bare* name — so it silently found nothing and reported
-  "not under active management", while `install backend:pkg` worked. `remove` now parses
-  the `backend:name[@opts]` syntax the same way `install` does (a recognized prefix scopes
-  the removal to that backend; the bare name is what's queried/removed). Found by the
-  container harness (apt) and confirmed on Windows (uv, scoop); regression-tested via
-  `split_removal_target`.
-- **`sync` no longer hangs in non-interactive shells.** It unconditionally launched the
-  ratatui confirmation TUI (unless `--yes`/`--json`), which blocks forever with no TTY
-  (CI, pipes, scripts) — and it did so even under `--dry-run`. Now: `--dry-run` prints the
-  plan (or JSON) and exits without prompting; the interactive TUI runs only with a real
-  terminal; and a non-interactive run without `--yes` errors cleanly ("pass --yes to
-  proceed, or --dry-run to preview") instead of hanging or silently applying. Found while
-  building the container integration harness.
-- **Windows scoop backend now actually works** (three stacked bugs, all found by running
-  the real binary against a live Windows machine):
-  1. *Couldn't launch.* `scoop` ships as `scoop.ps1`; `where`/`which` find it (so it showed
-     `[READY]` in `doctor`) but `CreateProcess` can't launch a `.ps1`, so every scoop op
-     failed "program not found". The real-execution path now routes `.ps1` (and `.cmd`/
-     `.bat`) shims through their interpreter.
-  2. *No output captured.* scoop emits PowerShell objects that only render through the
-     formatter; `-File` and a trailing `; exit` both drop the table when stdout is piped.
-     It's now invoked by bare name through `-Command`, captured via `Out-String`, then
-     exits with the tool's code — args single-quoted (no injection surface).
-  3. *Parser out of date.* `scoop search`/`list` parsers expected the old `name (version)`
-     format and dropped the modern table (`Name Version Source Binaries`); they now parse
-     the table and skip its header/separator.
-- **Per-package `before_install` / `after_install` hooks now actually fire.** These were
-  documented in the example config but only `before_sync` / `after_sync` were ever
-  executed. Hooks now run per package at the moment it installs — interleaved with the
-  parallel transaction engine, keyed by package name with a `*` wildcard fallback. A
-  failing `before_install` aborts that package's install (its prerequisite was not met);
-  an `after_install` failure is logged without undoing a healthy install.
-
-### Added (extensibility)
-- **The onboarder** — teach LiNix any CLI package manager entirely from
-  `~/.config/linix/custom_backends.toml`, no source changes. Each `[[backend]]` supplies
-  the argv templates plus a declarative `parser` (`lines` | `columns` | `json` | `regex`)
-  interpreted at runtime. Custom backends load last and never override a built-in
-  (collisions are skipped with a warning).
+- **`linix --help` panicked on every debug build.** `status` carried an alias `diff` that
+  collided with the real `diff` command; clap's debug assertions aborted before `main`. The
+  test suite stayed green throughout, because nothing in it ran the binary.
+- **A manager reporting "No packages found." was parsed as a package named `No`** — a phantom
+  entry that `adopt` would write into a manifest and `purge-unmanaged` would try to delete.
+- **`rollback` overwrote your manifests before the confirmation gate**, so a non-interactive
+  run without `--yes` rolled the files back and then refused to converge the machine.
+- **Failed snapshot deletions were counted as pruned.** `prune` now reports only what it
+  actually removed and names what it could not.
+- **A rollback that could not reinstall a just-removed package said nothing.** It now reports
+  every compensating failure by name and returns an error.
+- **A failed state write during auto-remediation was discarded**, leaving a package installed,
+  in memory, and unrecorded — so the next sync read it as drift.
+- **`unmanage` always printed "0 lines removed"** — the writer and the reader used different
+  JSON keys.
+- **`network_timeout_secs` was ignored below 10**, and `max_parallel` did not detect the core
+  count.
 
 ## [6.0.0] — 2026-07-02
 

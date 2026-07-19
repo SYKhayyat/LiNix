@@ -29,6 +29,18 @@ fn is_noise_line(line: &str) -> bool {
         || t.starts_with('#')
         || t.chars()
             .all(|c| matches!(c, '-' | '=' | '─' | '│' | '├' | '└' | ' '))
+        || is_empty_result_sentence(t)
+}
+
+/// "No global environments found." — a manager saying it has nothing, not a package called
+/// `No`. Every parser here takes the first token of a line, so an unfiltered empty-result
+/// banner becomes a phantom package that `adopt` would write into a manifest and
+/// `purge-unmanaged` would try to delete.
+///
+/// Prose, not identifiers: a package line is tokens, never a sentence ending in a period.
+fn is_empty_result_sentence(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    lower.starts_with("no ") && lower.ends_with('.') && line.split_whitespace().count() > 2
 }
 
 /// One package name per line, taking the first whitespace token. For managers whose list/
@@ -410,6 +422,24 @@ mod tests {
         assert_eq!(pkgs[0].name, "python");
         assert_eq!(pkgs[0].version.as_deref(), Some("3.11.0"));
         assert_eq!(pkgs[1].name, "ripgrep");
+    }
+
+    #[test]
+    fn an_empty_result_banner_is_not_a_package() {
+        // `pixi global list` on a machine with nothing installed prints a sentence, and the
+        // parser used to take its first token -- reporting a phantom `pixi:No` that `adopt`
+        // would write to a manifest and `purge-unmanaged` would try to delete.
+        assert!(pixi_list("No global environments found.
+", "pixi").is_empty());
+        assert!(names_only("No packages found.
+", "spack").is_empty());
+
+        // A real listing that merely starts with a package beginning "no" still parses.
+        let pkgs = names_only("nodejs
+nom
+", "spack");
+        assert_eq!(pkgs.len(), 2);
+        assert_eq!(pkgs[0].name, "nodejs");
     }
 
     #[test]
