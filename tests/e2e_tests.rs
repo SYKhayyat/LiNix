@@ -83,66 +83,6 @@ async fn test_e2e_sync_flow_hermetic() {
 }
 
 // ============================================================================
-// E2E LOGIC TESTS: CROSS-BACKEND TRANSITIONS
-// ============================================================================
-
-/// Verifies the 'teleport' meta-transaction: moving a package across backends
-/// with atomic safety and ghost metadata archival.
-#[tokio::test]
-async fn test_e2e_cross_backend_teleport() {
-    let kernel = TestKernel::new().await;
-    let teleporter = kernel.app.teleporter();
-
-    // 1. Setup Mock: Source backend (brew) reports package as installed
-    let mock_info = "name: curl\nversion: 8.0.1\ninstall_path: /mock/brew/curl";
-    kernel.mock_executor.set_response(
-        "brew info curl",
-        Ok(DryRunOutput {
-            stdout: mock_info.as_bytes().to_vec(),
-            stderr: vec![],
-        }
-        .into()),
-    );
-
-    // 2. Prime Mocks: Removal from source, installation in target (cargo)
-    kernel
-        .mock_executor
-        .set_response("brew uninstall curl", Ok(DryRunOutput::default().into()));
-    kernel
-        .mock_executor
-        .set_response("cargo install curl", Ok(DryRunOutput::default().into()));
-
-    // 3. Execute Teleportation
-    let result = teleporter.teleport("curl", "cargo").await;
-
-    // 4. Verification: Resolves E0382 (borrow after move)
-    // We check the status using as_ref() to avoid consuming the Result object
-    let is_ok = result.is_ok();
-    let is_not_found = matches!(
-        result.as_ref().err(),
-        Some(linix::core::Error::PackageNotFound(_))
-    );
-
-    assert!(
-        is_ok || is_not_found,
-        "Teleport logic failed with unexpected error: {:?}",
-        result.err()
-    );
-
-    if is_ok {
-        let state = kernel.state.lock().await;
-        assert!(
-            state.is_managed("cargo", "curl"),
-            "Teleportation failed to acquire target ownership."
-        );
-        assert!(
-            !state.is_managed("brew", "curl"),
-            "Teleportation failed to purge source ownership."
-        );
-    }
-}
-
-// ============================================================================
 // E2E LOGIC TESTS: CONCURRENCY & PARALLEL INTEGRITY
 // ============================================================================
 

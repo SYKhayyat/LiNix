@@ -2,7 +2,7 @@ use crate::app::scheduler::notify::NotificationManager;
 use crate::app::scheduler::SchedulerManager;
 use crate::app::{
     diagnostics::FailureDiagnosticEngine, GhostShell, LuaHooks, MetricsCollector, Migrator,
-    ProfileManager, ShimManager, Teleporter, UndoManager,
+    ProfileManager, ShimManager, UndoManager,
 };
 use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::Config;
@@ -34,7 +34,6 @@ pub struct AppCore {
 
 pub struct AppServices {
     pub migrator: Migrator,
-    pub teleporter: Teleporter,
     pub shell: GhostShell,
     pub shim_manager: ShimManager,
     pub undo_manager: UndoManager,
@@ -50,13 +49,6 @@ impl AppServices {
 
         Ok(Self {
             migrator: Migrator::new(app.registry.clone(), app.state.clone(), &app.config),
-            teleporter: Teleporter::new(
-                app.registry.clone(),
-                app.journal.clone(),
-                app.state.clone(),
-                app.diagnostics.clone(),
-                app.config.clone(),
-            ),
             shell: GhostShell::new(
                 app.registry.clone(),
                 app.state.clone(),

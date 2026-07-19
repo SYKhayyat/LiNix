@@ -103,15 +103,6 @@ pub enum Commands {
         command: String,
     },
 
-    /// Create a permanent high-performance Rust shim for a package
-    Shim {
-        /// The name of the binary to create
-        binary: String,
-        /// The source package spec (e.g. "cargo:ripgrep")
-        #[arg(short, long)]
-        source: String,
-    },
-
     /// Recover the system from an interrupted or crashed transaction (WAL)
     Heal,
 
@@ -339,14 +330,6 @@ pub enum Commands {
 
     /// Take over the machine: write the packages you installed by hand into a module
     Adopt,
-
-    /// Move a package from one backend to another (e.g. apt -> snap)
-    Teleport {
-        /// Name of the package to move
-        package: String,
-        /// Name of the destination backend
-        to: String,
-    },
 
     /// Enter an ephemeral shell with specific packages loaded
     Shell {

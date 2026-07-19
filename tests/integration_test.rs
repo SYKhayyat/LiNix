@@ -1,7 +1,6 @@
 use chrono::Utc;
 use linix::app::sync::planner::ChangePlanner;
 use linix::app::MetricsCollector;
-use linix::core::executor::DryRunOutput;
 use linix::core::{PackageSpec, StateRegistry, Validator};
 use std::collections::HashMap;
 use tokio::fs;
@@ -178,32 +177,3 @@ async fn test_planner_template_logic_integration() {
     );
 }
 
-// ============================================================================
-// TELEPORTATION CONSISTENCY
-// ============================================================================
-
-/// Verifies that the Teleport API correctly handles edge cases where a package
-/// is completely missing from all system backends.
-#[tokio::test]
-async fn test_teleport_api_consistency_on_missing_package() {
-    let kernel = TestKernel::new().await;
-    let teleporter = kernel.app.teleporter();
-
-    // 1. Prime mocks to report "Package Not Found" across all queryable backends
-    kernel.mock_executor.set_response(
-        "brew info nonexistent-identity",
-        Ok(DryRunOutput::default().into()),
-    );
-    kernel
-        .mock_executor
-        .set_response("cargo list", Ok(DryRunOutput::default().into()));
-
-    // 2. Execute Teleport
-    let result = teleporter.teleport("nonexistent-identity", "cargo").await;
-
-    // 3. Verification: Correct error propagation
-    assert!(
-        result.is_err(),
-        "Logic Error: Teleport should have failed for a package that does not exist."
-    );
-}

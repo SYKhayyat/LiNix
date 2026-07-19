@@ -512,7 +512,6 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
             Some("imperative") => "installed by `linix install`".to_string(),
             Some("hook") => "installed behind LiNix's back, and caught by the hook".to_string(),
             Some("adopt") | Some("migrate") => "adopted from this machine".to_string(),
-            Some("teleport") => "moved here by `linix teleport`".to_string(),
             Some(other) if !other.is_empty() => format!("recorded by {}", other),
             _ => "origin unknown (recorded before LiNix tracked it)".to_string(),
         };

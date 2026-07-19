@@ -9,7 +9,6 @@ use crate::app::shell::GhostShell;
 use crate::app::shim_manager::ShimManager;
 use crate::app::sync::resolver::StateResolver;
 use crate::app::sync::SyncEngine;
-use crate::app::teleport::Teleporter;
 use crate::app::undo::UndoManager;
 use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::Config;
@@ -143,16 +142,6 @@ impl App {
 
     pub fn migrator(&self) -> Migrator {
         Migrator::new(self.registry.clone(), self.state.clone(), &self.config)
-    }
-
-    pub fn teleporter(&self) -> Teleporter {
-        Teleporter::new(
-            self.registry.clone(),
-            self.journal.clone(),
-            self.state.clone(),
-            self.diagnostics.clone(),
-            self.config.clone(),
-        )
     }
 
     pub fn shell(&self) -> GhostShell {
@@ -913,8 +902,4 @@ impl App {
         searcher.search(query).await
     }
 
-    pub async fn create_shim(&self, binary_name: &str, _source_spec: &str) -> Result<()> {
-        let manager = self.shim_manager().await?;
-        manager.create_shim(binary_name).await
-    }
 }

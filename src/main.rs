@@ -164,8 +164,6 @@ async fn main() -> Result<()> {
         }
         Commands::Protected { packages, json } => handle_protected(&app, packages, *json).await,
         Commands::Unmanage { packages, json } => handle_unmanage(&app, packages, *json).await,
-        Commands::Teleport { package, to } => handle_teleport(&app, package, to).await,
-        Commands::Shim { binary, source } => handle_shim(&app, binary, source).await,
         Commands::Config(args) => handle_config(&app, &args.command).await,
         Commands::Init { force, interactive } => handle_init(&app, *force, *interactive).await,
         Commands::Audit { json } => handle_audit(&app, *json).await,
@@ -2915,17 +2913,6 @@ async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<
         cfg.config_file.display()
     );
     Ok(())
-}
-
-async fn handle_teleport(app: &App, package: &str, to: &str) -> Result<()> {
-    app.teleporter()
-        .teleport(package, to)
-        .await
-        .map_err(|e| e.into())
-}
-
-async fn handle_shim(app: &App, binary: &str, source: &str) -> Result<()> {
-    app.create_shim(binary, source).await.map_err(|e| e.into())
 }
 
 const CONFIG_TEMPLATE: &str = r#"# LiNix configuration file (config.toml)

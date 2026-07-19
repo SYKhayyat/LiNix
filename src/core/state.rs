@@ -14,7 +14,6 @@ pub struct GhostMetadata {
     pub properties: HashMap<String, String>,
     pub requires: Vec<String>,
     pub removed_at: u64,
-    pub teleported_to: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,7 +246,6 @@ impl StateRegistry {
                     properties: HashMap::new(),
                     requires: Vec::new(),
                     removed_at: Self::now(),
-                    teleported_to: None,
                 },
             );
             debug!(

@@ -1168,6 +1168,14 @@ implementing agent's call; that it goes is not.**
   convenience verb is ever wanted it must route through `handle_sync` (guard included), never its
   own transaction.
 
+  **DONE 2026-07-19.** `src/app/teleport.rs` deleted; `App::teleporter`, `AppServices::teleporter`,
+  the `mod`/`pub use`, the CLI variant and `handle_teleport` all removed. Two things went with it
+  that the entry did not name: `GhostMetadata::teleported_to` (a field only ever written `None` —
+  dead the moment the writer left) and the `Some("teleport")` provenance arm in `insight.rs`, which
+  described a source nothing can produce any more. The two tests that named the feature
+  (`test_e2e_cross_backend_teleport`, `test_teleport_api_consistency_on_missing_package`) were
+  deleted with it, not ported. `grep -rni teleport src/ tests/` is silent.
+
 - **R3 — Delete the imperative `shim` command; shims are declarative only.** A shim is a small
   PATH stand-in that forwards to a managed tool. It is already produced declaratively: `@shim=true`
   on a package line, and `sync`'s `reconcile_all_shims` (`sync/mod.rs:148`,`:360`) creates it — and
@@ -1177,11 +1185,22 @@ implementing agent's call; that it goes is not.**
   never reads it) — a mandatory flag that does nothing. Owner ruling: go fully declarative. Delete
   the command and the dead flag; `@shim=true` + sync is the only way to make a shim.
 
+  **DONE 2026-07-19.** The `Shim` CLI variant, `handle_shim`, and the `App::create_shim(binary,
+  _source_spec)` wrapper that swallowed the dead flag are gone. `ShimManager::create_shim` stays —
+  it is what `sync`'s `reconcile_all_shims` calls, and it never took a source in the first place.
+
 - **R4 — Delete `generation rollback`; it is a subset of top-level `rollback`.** Both dispatch to
   the same `rollback_to()` (`main.rs:135` and `:1986`); `generation rollback` just hardcodes
   `with_config = false` (`:1986`). Top-level `rollback` takes `--package` and `--with-config`, so it
   does everything the generation form does and more. Owner ruling: delete `GenerationCommand::Rollback`,
   keep the top-level `rollback`.
+
+  **ALREADY TRUE 2026-07-19 — nothing to delete, and the entry was describing a tree that no longer
+  exists.** There is no `GenerationCommand`, no `Commands::Generation`, and no `rollback_to`
+  anywhere in `src/`: Phase 4 moved history onto git, and the whole generation command family went
+  with it. Top-level `rollback` now takes a git `reference`, not the `--package`/`--with-config`
+  pair this entry credits it with. **This is the stale-in-the-other-direction failure the Part VII
+  warning describes** — the fix was to check, and the check was three greps.
 
 - **R5 — Fix `unmanage`'s broken confirmation output (key mismatch).** The result JSON is built
   with key `"lines_removed"` (`main.rs:2950`) but the human printer reads `"manifest_lines_removed"`
@@ -2056,6 +2075,24 @@ Three suspicions did not survive scrutiny:
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
+## In progress 2026-07-19 — R1–R23
+
+**R2, R3 done; R4 was already done and the entry was stale.** Each entry in Part III carries what
+landed. The one with teeth is closed: **`teleport` no longer exists**, so the guard bypass it
+carried (its own `StableDiGraph` into `Transaction::execute()`, no `enforce` call anywhere on the
+path) is gone by deletion rather than by adding a guard call to a command nobody needed. `grep
+-rni teleport src/ tests/` is silent.
+
+**R4 is the second time this session a Part III entry described a tree that had moved on** — it
+named `GenerationCommand::Rollback` and `rollback_to()`, neither of which exists; Phase 4 deleted
+the generation command family when history moved to git. Recorded as ALREADY TRUE, not as done —
+**writing ✅ on work nobody did is how Phases 0 and 1 got their false marks.**
+
+**Suite: 558 passing, 0 failed, `cargo build --all-targets` clean** (measured 2026-07-19, after the
+R2/R3 deletions). Down from 560 because two teleport tests were deleted with the feature, not
+because anything went red. *Green here means only that the deletions did not break what remained —
+it says nothing about R1 or R5–R23, which are still open.*
+
 ## Done 2026-07-19 — the SEC4/SEC5/SEC6 batch
 
 **The one thing the owner had cleared to land ahead of the deferred security pass, landed.**
@@ -2073,10 +2110,12 @@ Each entry in Part III's security section carries what was built; the shape of i
   status line below. Both were stale tests, and one of them (`locks.json`) was a site Phase 4's
   own "all sites updated" claim had missed.
 
-**Not done, and next in Phase 5:** R1–R23 are entirely unstarted — a grep for `Kernel:
+~~**Not done, and next in Phase 5:** R1–R23 are entirely unstarted — a grep for `Kernel:
 Commencing`, `--i-really-mean-it`, `Flight plan:` and `src/app/teleport.rs` all still hit.
 R2 (delete `teleport`) is the one with teeth: it is a second transaction engine that **bypasses
-the guard**, so it is a safety item wearing a tidiness label.
+the guard**, so it is a safety item wearing a tidiness label.~~ — **started 2026-07-19; see the
+R1–R23 section at the top of Part VII.** `src/app/teleport.rs` no longer hits; the other three
+greps still do.
 
 ## The state at `HEAD` (2026-07-17)
 

@@ -20,7 +20,6 @@ pub mod search;
 pub mod services;
 pub mod shim_manager;
 pub mod sync;
-pub mod teleport;
 pub mod ui;
 pub mod undo;
 
@@ -34,7 +33,6 @@ pub use self::search::UniversalSearch;
 pub use self::sync::SyncEngine;
 pub use self::run::Runner;
 pub use self::migrate::Migrator;
-pub use self::teleport::Teleporter;
 pub use self::shim_manager::ShimManager;
 pub use self::undo::UndoManager;
 pub use self::profile::ProfileManager;
