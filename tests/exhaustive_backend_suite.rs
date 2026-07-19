@@ -122,7 +122,7 @@ impl SnapshotProvider for MockSnapshotProvider {
     async fn is_available(&self) -> bool {
         true
     }
-    async fn create(&self, label: &str) -> Result<Snapshot> {
+    async fn create(&self, label: linix::core::snapshot::SnapshotLabel) -> Result<Snapshot> {
         let s = Snapshot {
             id: format!("snap_{}", Utc::now().timestamp()),
             timestamp: Utc::now().to_rfc3339(),

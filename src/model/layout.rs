@@ -1,5 +1,47 @@
 use std::path::{Path, PathBuf};
 
+/// A validated module name (II.5): lowercase letters, digits, `-` and `_`.
+///
+/// `module_file` joins the name into a path and cannot fail, so the check has to happen
+/// before the name reaches it — that is what this type is. Excluding `.` rules out `..`
+/// and a second extension together, rather than enumerating separators and hoping the
+/// list is complete.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ModuleName(String);
+
+impl ModuleName {
+    pub fn new(name: &str) -> Result<Self, String> {
+        let lowered = name.to_lowercase();
+        if lowered.is_empty()
+            || !lowered
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
+            return Err(format!(
+                "`{}` is not a module name — modules are lowercase letters, digits, `-` and `_`.",
+                name
+            ));
+        }
+        Ok(Self(lowered))
+    }
+
+    /// For names fixed in the source. Panics on an invalid one, which is a bug in this crate,
+    /// not a user error.
+    pub fn literal(name: &'static str) -> Self {
+        Self::new(name).expect("a module name written into LiNix must satisfy II.5")
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ModuleName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// Where everything lives (SPEC II.1).
 ///
 /// Two roots, and the split is load-bearing. **Your repo** holds what you wrote and is a
@@ -99,8 +141,8 @@ impl Layout {
     }
 
     /// The module file for `name`. II.3: the filename is the module name, lowercased.
-    pub fn module_file(&self, name: &str) -> PathBuf {
-        self.modules_dir().join(format!("{}.txt", name.to_lowercase()))
+    pub fn module_file(&self, name: &ModuleName) -> PathBuf {
+        self.modules_dir().join(format!("{}.txt", name))
     }
 
     pub fn profile_file(&self, name: &str) -> PathBuf {
@@ -142,8 +184,33 @@ mod tests {
     fn a_module_file_is_its_name_lowercased() {
         // II.3: `Editors.txt` -> module `editors`.
         assert_eq!(
-            layout().module_file("Editors"),
+            layout().module_file(&ModuleName::new("Editors").unwrap()),
             PathBuf::from("/cfg/modules/editors.txt")
         );
+    }
+
+    #[test]
+    fn a_module_name_cannot_climb_out_of_the_modules_folder() {
+        // SEC6. `module add --name ../../foo` wrote outside `modules/`; the type is what
+        // stops it, so no call site can lose the check.
+        let err = ModuleName::new("../../foo").unwrap_err();
+        assert!(err.contains("is not a module name"), "{}", err);
+        assert!(
+            err.contains("lowercase letters, digits"),
+            "teach the rule: {}",
+            err
+        );
+
+        for bad in ["", "a/b", "a\\b", "a.b", "..", "a b", "Ünicode"] {
+            assert!(ModuleName::new(bad).is_err(), "`{}` must be refused", bad);
+        }
+        for good in ["editors", "Editors", "web-dev", "py_3", "x9"] {
+            assert!(ModuleName::new(good).is_ok(), "`{}` must be accepted", good);
+        }
+    }
+
+    #[test]
+    fn a_module_name_is_lowercased_once_at_construction() {
+        assert_eq!(ModuleName::new("Editors").unwrap().as_str(), "editors");
     }
 }

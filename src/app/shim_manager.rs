@@ -257,7 +257,9 @@ mod tests {
         let bin = tmp.path().join("bin");
         let mgr = ShimManager::with_bin_dir(bin.clone()).await.unwrap();
 
-        let victim = bin.join("jq");
+        // Windows shims carry `.exe`, so the file in the way is `jq.exe` there. Naming the
+        // victim `jq` on Windows tests a path `create_shim` never touches.
+        let victim = bin.join(if cfg!(windows) { "jq.exe" } else { "jq" });
         let contents = b"#!/bin/sh\necho the user's own jq\n";
         tokio::fs::write(&victim, contents).await.unwrap();
 

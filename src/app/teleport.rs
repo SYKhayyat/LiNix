@@ -61,10 +61,12 @@ impl Teleporter {
 
         // Put the new line where the old one was, so a teleported package stays in the
         // module you chose to keep it in rather than migrating to `imperative`.
-        let target = match removed.first().and_then(|e| e.file.file_stem()) {
-            Some(stem) => crate::model::Target::Module(stem.to_string_lossy().into_owned()),
-            None => Landing::Imperative.target(),
-        };
+        let target = removed
+            .first()
+            .and_then(|e| e.file.file_stem())
+            .and_then(|stem| crate::model::ModuleName::new(&stem.to_string_lossy()).ok())
+            .map(crate::model::Target::Module)
+            .unwrap_or_else(|| Landing::Imperative.target());
         let edit = editor
             .add(&target, &format!("{}:{}", target_backend, package_name))
             .map_err(Error::from)?;

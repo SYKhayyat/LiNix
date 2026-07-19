@@ -364,7 +364,12 @@ impl<'a> Resolver<'a> {
             return self.apply_set_math(profiles, loader, &r, origin);
         }
 
-        if self.layout.module_file(atom).is_file() {
+        // A name that cannot be a module is not a broken module — it falls through to the
+        // package parse below, which is where `(Work | apt:jq)` is meant to land.
+        let is_module = super::ModuleName::new(atom)
+            .map(|m| self.layout.module_file(&m).is_file())
+            .unwrap_or(false);
+        if is_module {
             return expand(loader, atom, origin, &self.facts, &mut Vec::new());
         }
 

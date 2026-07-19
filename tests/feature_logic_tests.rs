@@ -235,11 +235,16 @@ async fn test_locked_mode_version_conflict_enforcement() {
 
     // 1. Setup a lock file with version 1.2.3
     let lock_content = r#"{ "locks": { "brew:vim": "1.2.3" } }"#;
-    fs::create_dir_all(kernel.app.config.config_root())
+    fs::create_dir_all(kernel.app.config.config_root().join("locks"))
         .await
         .unwrap();
     fs::write(
-        kernel.app.config.config_root().join("locks.json"),
+        kernel
+            .app
+            .config
+            .config_root()
+            .join("locks")
+            .join("versions.json"),
         lock_content,
     )
     .await

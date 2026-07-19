@@ -1,29 +1,41 @@
 // src/app/fleet.rs
 //
-// Cross-machine operations that only make sense because LiNix already models a machine's
-// whole package universe declaratively:
+// `fleet` — compare many machines over SSH against their manifests and report drift,
+// optionally reconciling each with `linix sync`. It assumes `linix` is installed on the
+// remote hosts and SSH is configured non-interactively (keys/agent). Remote invocations
+// are read-only unless you pass the flags that opt into changes.
 //
-//   * `clone` — reproduce another machine's installed packages onto this one over SSH,
-//               translating each package to a backend that exists locally (so an
-//               apt: package from a Linux box installs via brew:/cargo: on a Mac).
-//   * `fleet` — compare many machines over SSH against their manifests and report drift,
-//               optionally reconciling each with `linix sync`.
-//
-// Both assume `linix` is installed on the remote hosts and SSH is configured
-// non-interactively (keys/agent). Remote invocations are read-only unless you pass the
-// flags that opt into changes.
+// There is no `clone` command. It was removed, implementation and all, because copying the
+// installed set without the intent produces a machine nobody can explain; `git clone` of the
+// manifests plus `linix sync` is the supported path. Do not reintroduce it here.
 
 use crate::app::App;
 use crate::core::{Error, Result};
 use serde_json::Value;
 use tracing::{info, warn};
 
+/// Reject a host `ssh` would read as an option. A value like `-oProxyCommand=…` runs a command
+/// on THIS machine, not the remote one.
+fn check_host(host: &str) -> Result<()> {
+    if host.starts_with('-') {
+        return Err(Error::Config(format!(
+            "`{}` is not a host name — a host cannot begin with `-`, because ssh would read it \
+             as an option and run a command on this machine instead of the remote one.",
+            host
+        )));
+    }
+    Ok(())
+}
+
 /// Run a command on a remote host over SSH and return its stdout.
 async fn ssh_capture(host: &str, remote_cmd: &str) -> Result<String> {
-    // `-o BatchMode=yes` fails fast instead of hanging on a password prompt.
+    check_host(host)?;
+    // `-o BatchMode=yes` fails fast instead of hanging on a password prompt. `--` must follow
+    // it, not precede it, or ssh stops reading the `-o` pair as options.
     let out = tokio::process::Command::new("ssh")
         .arg("-o")
         .arg("BatchMode=yes")
+        .arg("--")
         .arg(host)
         .arg(remote_cmd)
         .output()
@@ -81,6 +93,9 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
         return Err(Error::Config(
             "no hosts given and `fleet_hosts` is empty in config.toml".into(),
         ));
+    }
+    for host in &hosts {
+        check_host(host)?;
     }
 
     let mut report = Vec::new();
@@ -189,6 +204,19 @@ mod tests {
     #[test]
     fn parse_status_tolerates_missing_keys() {
         assert_eq!(parse_status("{}").unwrap(), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_host_that_looks_like_an_ssh_option_is_refused() {
+        let err = check_host("-oProxyCommand=touch /tmp/pwned").unwrap_err();
+        assert!(
+            err.to_string().contains("cannot begin with `-`"),
+            "the error must say why: {}",
+            err
+        );
+        assert!(check_host("-").is_err());
+        check_host("build-01.example.com").unwrap();
+        check_host("user@10.0.0.4").unwrap();
     }
 
     #[test]

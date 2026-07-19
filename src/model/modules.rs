@@ -1,4 +1,4 @@
-use super::layout::Layout;
+use super::layout::{Layout, ModuleName};
 use crate::config::grammar::{
     parse_document, BackendNames, Document, GrammarError, Origin, Reference, Result, Statement,
 };
@@ -37,7 +37,8 @@ impl<'a> ModuleLoader<'a> {
     }
 
     fn read(&self, name: &str, asked_by: &Origin) -> Result<Document> {
-        let path = self.layout.module_file(name);
+        let module = ModuleName::new(name).map_err(|e| GrammarError::new(asked_by.clone(), e))?;
+        let path = self.layout.module_file(&module);
         let body = std::fs::read_to_string(&path).map_err(|_| {
             GrammarError::new(asked_by.clone(), format!("no module named `{}`", name))
                 .with_hint(self.suggest(name))
@@ -165,7 +166,12 @@ pub fn expand<'a>(
     if seen.contains(&key) {
         return Err(GrammarError::new(
             asked_by.clone(),
-            format!("module `{}` ends up using itself: {} -> {}", name, seen.join(" -> "), key),
+            format!(
+                "module `{}` ends up using itself: {} -> {}",
+                name,
+                seen.join(" -> "),
+                key
+            ),
         )
         .with_hint("a module cannot use itself, directly or through another."));
     }
@@ -289,7 +295,9 @@ mod tests {
         // II.5: "no profile named `Editors` — did you mean the module `editors`?"
         let f = fixture(&[("editors.txt", "apt:neovim\n")]);
         let mut loader = ModuleLoader::new(&f.layout, &known);
-        let err = loader.load("EDITORS_TYPO", &Origin::argument()).unwrap_err();
+        let err = loader
+            .load("EDITORS_TYPO", &Origin::argument())
+            .unwrap_err();
         assert!(err.hint.is_some());
     }
 

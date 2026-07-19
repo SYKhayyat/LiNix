@@ -1324,6 +1324,10 @@ fn refuse_overwrite(path: &std::path::Path, name: &str, force: bool) -> Result<(
     )
 }
 
+fn module_name(name: &str) -> Result<linix::model::ModuleName> {
+    linix::model::ModuleName::new(name).map_err(|e| anyhow::anyhow!(e))
+}
+
 async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
     let layout = app.config.layout();
     match cmd {
@@ -1345,14 +1349,14 @@ async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
             }
         }
         ModuleCommand::Show { name } => {
-            let path = layout.module_file(name);
+            let path = layout.module_file(&module_name(name)?);
             let body = tokio::fs::read_to_string(&path).await.with_context(|| {
                 format!("no module `{}` — looked in {}", name, path.display())
             })?;
             println!("{}", body);
         }
         ModuleCommand::Create { name, force } => {
-            let path = layout.module_file(name);
+            let path = layout.module_file(&module_name(name)?);
             refuse_overwrite(&path, name, *force)?;
             tokio::fs::create_dir_all(layout.modules_dir()).await.ok();
             tokio::fs::write(
@@ -1380,7 +1384,7 @@ async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
             use linix::app::module_registry;
             let (url, default_name) = module_registry::resolve_module_source(source)?;
             let final_name = name.clone().unwrap_or(default_name);
-            let path = layout.module_file(&final_name);
+            let path = layout.module_file(&module_name(&final_name)?);
             refuse_overwrite(&path, &final_name, *force)?;
 
             let client = reqwest::Client::builder()
@@ -2649,7 +2653,7 @@ async fn handle_purge_unmanaged(app: &App, i_really_mean_it: bool) -> Result<()>
 
     // Snapshots first, automatically. If none can be taken, say so — "there is no undo for
     // this" is the most important sentence this command can print (II.11).
-    let snapshot = match app.snapshot_manager.auto_snapshot("purge-unmanaged").await {
+    let snapshot = match app.snapshot_manager.auto_snapshot(linix::core::snapshot::SnapshotLabel::PurgeUnmanaged).await {
         Ok(Some(snap)) => {
             println!("Snapshot taken: {}. That is your undo.\n", snap.id);
             Some(snap.id)
@@ -3120,7 +3124,7 @@ async fn handle_canary(app: &App, scope: Option<PlannerScope>, test: &Option<Str
 
     let snap = app
         .snapshot_manager
-        .auto_snapshot("pre_canary")
+        .auto_snapshot(linix::core::snapshot::SnapshotLabel::PreCanary)
         .await?
         .ok_or_else(|| anyhow::anyhow!("failed to create pre-canary snapshot"))?;
     info!("Canary: snapshot {} taken; applying upgrade...", snap.id);

@@ -85,11 +85,39 @@ fn local_naive_to_utc(naive: NaiveDateTime) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+/// Why LiNix took a snapshot. There are exactly these four, and they are the only text that
+/// reaches the Windows provider's PowerShell interpolation — a `&str` there would put a future
+/// `--label` flag one hop from an elevated shell (SEC5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotLabel {
+    PreSync,
+    PreUpgrade,
+    PurgeUnmanaged,
+    PreCanary,
+}
+
+impl SnapshotLabel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SnapshotLabel::PreSync => "pre_sync",
+            SnapshotLabel::PreUpgrade => "pre_upgrade",
+            SnapshotLabel::PurgeUnmanaged => "purge-unmanaged",
+            SnapshotLabel::PreCanary => "pre_canary",
+        }
+    }
+}
+
+impl std::fmt::Display for SnapshotLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[async_trait]
 pub trait SnapshotProvider: Send + Sync {
     fn name(&self) -> &str;
     async fn is_available(&self) -> bool;
-    async fn create(&self, label: &str) -> Result<Snapshot>;
+    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot>;
     async fn list(&self) -> Result<Vec<Snapshot>>;
     async fn delete(&self, id: &str) -> Result<()>;
     async fn restore(&self, id: &str) -> Result<()>;
@@ -112,7 +140,7 @@ impl SnapshotProvider for BtrfsProvider {
             && Path::new(&self.snapshot_root).exists()
     }
 
-    async fn create(&self, label: &str) -> Result<Snapshot> {
+    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
         let ts_id = Local::now().format("%Y%m%d%H%M%S").to_string();
         let id = format!("linix_pre_{}_{}", label, ts_id);
         let path = format!("{}/{}", self.snapshot_root, id);
@@ -185,7 +213,7 @@ impl SnapshotProvider for ZfsProvider {
         self.executor.command_exists("zfs").await
     }
 
-    async fn create(&self, label: &str) -> Result<Snapshot> {
+    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
         let id = format!(
             "{}@linix_{}",
             self.dataset,
@@ -257,12 +285,12 @@ impl SnapshotProvider for TimeshiftProvider {
         cfg!(target_os = "linux") && self.executor.command_exists("timeshift").await
     }
 
-    async fn create(&self, label: &str) -> Result<Snapshot> {
+    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
         let out = self
             .executor
             .run_output(
                 "timeshift",
-                &["--create", "--comments", label, "--tags", "D"],
+                &["--create", "--comments", label.as_str(), "--tags", "D"],
                 true,
             )
             .await?;
@@ -340,7 +368,8 @@ impl SnapshotProvider for WindowsRestoreProvider {
         cfg!(target_os = "windows")
     }
 
-    async fn create(&self, label: &str) -> Result<Snapshot> {
+    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
+        // `label` is an enum, so no caller can bring a `'` to this interpolation (SEC5).
         let ps_cmd = format!(
             "Checkpoint-Computer -Description 'LiNix: {}' -RestorePointType 'APPLICATION_INSTALL'",
             label
@@ -369,8 +398,18 @@ impl SnapshotProvider for WindowsRestoreProvider {
         let mut list = Vec::new();
         if let Some(items) = json.as_array() {
             for item in items {
+                // Parsed at the boundary Windows hands it over, so nothing downstream carries
+                // a SequenceNumber that was never a number (SEC5). `to_string()` here kept the
+                // JSON quotes when the field came back as a string.
+                let seq = item["SequenceNumber"]
+                    .as_u64()
+                    .or_else(|| item["SequenceNumber"].as_str()?.trim().parse().ok());
+                let Some(seq) = seq else {
+                    debug!("skipping a restore point with no usable SequenceNumber: {item}");
+                    continue;
+                };
                 list.push(Snapshot {
-                    id: item["SequenceNumber"].to_string(),
+                    id: seq.to_string(),
                     timestamp: item["CreationTime"].as_str().unwrap_or("").to_string(),
                     description: item["Description"].as_str().unwrap_or("").to_string(),
                     backend: "windows_restore".into(),
@@ -381,7 +420,8 @@ impl SnapshotProvider for WindowsRestoreProvider {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        let ps_cmd = format!("Get-WmiObject -Namespace root\\default -Class SystemRestore | ForEach-Object {{ $_.DeleteStatus({}) }}", id);
+        let seq = Self::sequence_number(id)?;
+        let ps_cmd = format!("Get-WmiObject -Namespace root\\default -Class SystemRestore | ForEach-Object {{ $_.DeleteStatus({}) }}", seq);
         self.executor
             .run("powershell", &["-Command", &ps_cmd], true)
             .await
@@ -389,11 +429,26 @@ impl SnapshotProvider for WindowsRestoreProvider {
     }
 
     async fn restore(&self, id: &str) -> Result<()> {
-        let ps_cmd = format!("Restore-Computer -RestorePoint {} -Confirm:$false", id);
+        let seq = Self::sequence_number(id)?;
+        let ps_cmd = format!("Restore-Computer -RestorePoint {} -Confirm:$false", seq);
         self.executor
             .run("powershell", &["-Command", &ps_cmd], true)
             .await
             .map(|_| ())
+    }
+}
+
+impl WindowsRestoreProvider {
+    /// A Windows restore point is a `SequenceNumber`. Both PowerShell commands below
+    /// interpolate it unquoted and run elevated, so it becomes a number here or it does not
+    /// reach them at all — there is no quoting to get right for a `u32` (SEC5).
+    fn sequence_number(id: &str) -> Result<u32> {
+        id.trim().parse::<u32>().map_err(|_| {
+            Error::Validation(format!(
+                "`{}` is not a Windows restore point — an id is a SequenceNumber, a plain number.",
+                id
+            ))
+        })
     }
 }
 
@@ -450,7 +505,7 @@ impl SnapshotManager {
         Self { provider: active }
     }
 
-    pub async fn auto_snapshot(&self, label: &str) -> Result<Option<Snapshot>> {
+    pub async fn auto_snapshot(&self, label: SnapshotLabel) -> Result<Option<Snapshot>> {
         if let Some(ref p) = self.provider {
             Ok(Some(p.create(label).await?))
         } else {
@@ -527,6 +582,44 @@ impl SnapshotManager {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_restore_point_id_that_is_not_a_number_never_reaches_powershell() {
+        // SEC5. Both PowerShell strings interpolate the id unquoted and run elevated.
+        assert_eq!(WindowsRestoreProvider::sequence_number("42").unwrap(), 42);
+        assert_eq!(WindowsRestoreProvider::sequence_number("  7 ").unwrap(), 7);
+        for bad in [
+            "1); Start-Process calc; #",
+            "-1",
+            "1 2",
+            "",
+            "$(whoami)",
+            "0x10",
+        ] {
+            assert!(
+                WindowsRestoreProvider::sequence_number(bad).is_err(),
+                "`{}` must be refused",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn every_snapshot_label_is_a_fixed_string() {
+        // SEC5: the enum is the guard, so the set is closed and quote-free by construction.
+        for l in [
+            SnapshotLabel::PreSync,
+            SnapshotLabel::PreUpgrade,
+            SnapshotLabel::PurgeUnmanaged,
+            SnapshotLabel::PreCanary,
+        ] {
+            assert!(
+                !l.as_str().contains('\'') && !l.as_str().is_empty(),
+                "{} must be safe inside a single-quoted PowerShell string",
+                l
+            );
+        }
+    }
+
     // Build ids the way `create()` does, from a known local time, so a round-trip proves the
     // parse regardless of the test machine's timezone.
     fn btrfs_id(local: DateTime<Local>) -> String {
@@ -583,8 +676,12 @@ mod tests {
     #[test]
     fn ownership_is_recognized_across_every_provider() {
         // S3: the marker lands in different fields per provider. All of these are LiNix's.
-        assert!(snap("linix_pre_pre_sync_20260717143022", "BTRFS System State", "btrfs")
-            .is_linix_owned());
+        assert!(snap(
+            "linix_pre_pre_sync_20260717143022",
+            "BTRFS System State",
+            "btrfs"
+        )
+        .is_linix_owned());
         assert!(snap("tank/root@linix_20260717_143022", "ZFS Snapshot", "zfs").is_linix_owned());
         // Windows: id is a bare sequence number, marker is in the description — the case the
         // old id-only filter missed entirely.

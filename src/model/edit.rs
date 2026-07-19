@@ -1,4 +1,4 @@
-use super::layout::Layout;
+use super::layout::{Layout, ModuleName};
 use super::modules::ModuleLoader;
 use super::profiles::{parse_active, ProfileLoader};
 use crate::config::grammar::{statement, BackendNames, GrammarError, Origin, Result, Statement};
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 /// Case decides, everywhere: `Editors` is a profile, `editors` is a module (II.5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    Module(String),
+    Module(ModuleName),
     Profile(String),
 }
 
@@ -18,7 +18,9 @@ impl Target {
     pub fn parse(name: &str, origin: &Origin) -> Result<Self> {
         match name.chars().next() {
             Some(c) if c.is_uppercase() => Ok(Target::Profile(name.to_string())),
-            Some(c) if c.is_lowercase() => Ok(Target::Module(name.to_string())),
+            Some(c) if c.is_lowercase() => Ok(Target::Module(
+                ModuleName::new(name).map_err(|e| GrammarError::new(origin.clone(), e))?,
+            )),
             _ => Err(GrammarError::new(
                 origin.clone(),
                 format!("`{}` is neither a module nor a profile", name),
@@ -29,7 +31,8 @@ impl Target {
 
     pub fn name(&self) -> &str {
         match self {
-            Target::Module(n) | Target::Profile(n) => n,
+            Target::Module(n) => n.as_str(),
+            Target::Profile(n) => n,
         }
     }
 
@@ -62,7 +65,7 @@ impl Landing {
     }
 
     pub fn target(self) -> Target {
-        Target::Module(self.module().to_string())
+        Target::Module(ModuleName::literal(self.module()))
     }
 
     /// Why this file exists, written into it the first time LiNix creates it.
@@ -104,9 +107,12 @@ impl Edit {
     pub fn describe(&self, verb: &str) -> String {
         let mut s = format!("{} {} in {}", verb, self.line, self.file.display());
         if let Some(p) = &self.wired_into {
-            s.push_str(&format!("\n  Added `use {}` to profile {} — that module is now part \
+            s.push_str(&format!(
+                "\n  Added `use {}` to profile {} — that module is now part \
                                  of this machine. It is a normal line you can read and delete.",
-                self.module_name().unwrap_or_default(), p));
+                self.module_name().unwrap_or_default(),
+                p
+            ));
         }
         s
     }
@@ -282,7 +288,7 @@ impl<'a> Editor<'a> {
     ///
     /// `None` = already reached, nothing to do. `Some(p)` = add it to `p` and say so
     /// (II.8: a normal line you can read and delete — never implicit).
-    fn reachable_via(&self, module: &str) -> Result<Option<String>> {
+    fn reachable_via(&self, module: &ModuleName) -> Result<Option<String>> {
         let active_file = self.layout.active_file();
         let body = std::fs::read_to_string(&active_file).unwrap_or_default();
         let active = parse_active(&active_file, &body)?;
@@ -326,7 +332,7 @@ impl<'a> Editor<'a> {
     }
 
     /// Whether any active profile already reaches this module.
-    fn reaches(&self, active: &[String], module: &str) -> bool {
+    fn reaches(&self, active: &[String], module: &ModuleName) -> bool {
         let profiles = ProfileLoader::new(self.layout, self.backends);
         let mut loader = ModuleLoader::new(self.layout, self.backends);
         let asked = Origin::new(self.layout.active_file(), 0);
@@ -336,7 +342,7 @@ impl<'a> Editor<'a> {
                 continue;
             };
             for m in &r.modules {
-                if m.eq_ignore_ascii_case(module) {
+                if m.eq_ignore_ascii_case(module.as_str()) {
                     return true;
                 }
                 // A module reached through another module is reached.
@@ -432,10 +438,7 @@ impl<'a> Editor<'a> {
         };
 
         match (wanted, &stmt) {
-            (
-                Match::Package { backend, name },
-                Statement::Package(d) | Statement::Absent(d),
-            ) => {
+            (Match::Package { backend, name }, Statement::Package(d) | Statement::Absent(d)) => {
                 if d.selector.as_str() != name {
                     return false;
                 }
@@ -493,11 +496,14 @@ fn write(path: &std::path::Path, body: &str) -> Result<()> {
 }
 
 fn io_error(path: &std::path::Path, e: &std::io::Error) -> GrammarError {
-    GrammarError::new(Origin::new(path, 0), format!("could not write this file: {}", e))
+    GrammarError::new(
+        Origin::new(path, 0),
+        format!("could not write this file: {}", e),
+    )
 }
 
-fn landing_of(module: &str) -> Option<Landing> {
-    match module {
+fn landing_of(module: &ModuleName) -> Option<Landing> {
+    match module.as_str() {
         "imperative" => Some(Landing::Imperative),
         "hooks" => Some(Landing::Hooks),
         "adopted" => Some(Landing::Adopted),
@@ -571,7 +577,10 @@ pub fn inactive_declarations(
     let mut out: Vec<String> = Vec::new();
     let loader = ModuleLoader::new(layout, backends);
     for name in loader.available() {
-        let path = layout.module_file(&name);
+        let Ok(module) = ModuleName::new(&name) else {
+            continue;
+        };
+        let path = layout.module_file(&module);
         if reached.contains(&path) {
             continue;
         }
@@ -663,7 +672,10 @@ mod tests {
             .add(&Landing::Imperative.target(), "apt:jq")
             .unwrap();
         assert_eq!(edit.wired_into, None);
-        assert_eq!(read(&f, "profiles/Work").matches("use imperative").count(), 1);
+        assert_eq!(
+            read(&f, "profiles/Work").matches("use imperative").count(),
+            1
+        );
     }
 
     #[test]
@@ -745,11 +757,8 @@ mod tests {
         // S9. `remove_package_from_local` compared the target against the BACKEND half, so
         // `uninstall npm` deleted every `npm:*` line. The package manager's whole package
         // set, gone, because one package shares its name.
-        let f = fx(&[(
-            "modules/dev.txt",
-            "npm:typescript\nnpm:eslint\napt:npm\n",
-        )]);
-        let file = f.layout.module_file("dev");
+        let f = fx(&[("modules/dev.txt", "npm:typescript\nnpm:eslint\napt:npm\n")]);
+        let file = f.layout.module_file(&ModuleName::literal("dev"));
         let edits = editor(&f).remove_from(&[file], "npm").unwrap();
 
         let body = read(&f, "modules/dev.txt");
@@ -762,7 +771,7 @@ mod tests {
     #[test]
     fn a_bare_target_removes_the_package_under_any_backend() {
         let f = fx(&[("modules/dev.txt", "cargo:ripgrep\napt:curl\n")]);
-        let file = f.layout.module_file("dev");
+        let file = f.layout.module_file(&ModuleName::literal("dev"));
         editor(&f).remove_from(&[file], "ripgrep").unwrap();
         let body = read(&f, "modules/dev.txt");
         assert!(!body.contains("ripgrep"), "{}", body);
@@ -772,7 +781,7 @@ mod tests {
     #[test]
     fn an_explicit_target_removes_only_that_backends_line() {
         let f = fx(&[("modules/dev.txt", "cargo:ripgrep\napt:ripgrep\n")]);
-        let file = f.layout.module_file("dev");
+        let file = f.layout.module_file(&ModuleName::literal("dev"));
         editor(&f).remove_from(&[file], "apt:ripgrep").unwrap();
         let body = read(&f, "modules/dev.txt");
         assert!(body.contains("cargo:ripgrep"), "{}", body);
@@ -786,7 +795,7 @@ mod tests {
             "modules/dev.txt",
             "# my tools\n\napt:curl   # needed for work\napt:jq\n",
         )]);
-        let file = f.layout.module_file("dev");
+        let file = f.layout.module_file(&ModuleName::literal("dev"));
         editor(&f).remove_from(&[file], "jq").unwrap();
         let body = read(&f, "modules/dev.txt");
         assert!(body.contains("# my tools"), "{}", body);
@@ -804,13 +813,13 @@ mod tests {
             ("modules/unused.txt", "apt:steam\n"),
         ]);
         let files = active_module_files(&f.layout, &known, &facts());
-        assert!(files.contains(&f.layout.module_file("dev")));
+        assert!(files.contains(&f.layout.module_file(&ModuleName::literal("dev"))));
         assert!(
-            files.contains(&f.layout.module_file("base")),
+            files.contains(&f.layout.module_file(&ModuleName::literal("base"))),
             "a module reached through another is still active"
         );
         assert!(
-            !files.contains(&f.layout.module_file("unused")),
+            !files.contains(&f.layout.module_file(&ModuleName::literal("unused"))),
             "nothing is active unless a profile reaches it"
         );
         assert!(
@@ -829,7 +838,7 @@ mod tests {
             .unwrap();
         assert!(read(&f, "modules/imperative.txt").contains("service:nginx"));
 
-        let file = f.layout.module_file("imperative");
+        let file = f.layout.module_file(&ModuleName::literal("imperative"));
         let edits = e.remove_from(&[file], "service:nginx").unwrap();
         assert_eq!(edits.len(), 1);
         assert!(!read(&f, "modules/imperative.txt").contains("service:nginx"));
@@ -855,7 +864,7 @@ mod tests {
         let o = Origin::argument();
         assert_eq!(
             Target::parse("editors", &o).unwrap(),
-            Target::Module("editors".into())
+            Target::Module(ModuleName::literal("editors"))
         );
         assert_eq!(
             Target::parse("Work", &o).unwrap(),

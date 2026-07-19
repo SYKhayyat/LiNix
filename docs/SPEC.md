@@ -1330,18 +1330,28 @@ implementing agent's call; that it goes is not.**
   compensate started-but-not-completed nodes, or make an `Abandoned` entry still trigger a heal/warn
   rather than dropping it from recovery.
 
-### Security — the 2026-07-17 review pass (PROBLEMS RECORDED, solutions NOT yet decided)
+### Security — the 2026-07-17 review pass (PROBLEMS RECORDED, approaches DECIDED, most unimplemented)
 
 > **DEFERRED BY THE OWNER (2026-07-17): SEC1–SEC6 are consciously parked, to be decided and
 > fixed in a later dedicated pass — not forgotten.** The owner reviewed a proposed decision batch
 > (SEC1 traversal confinement, SEC2 download strictness, SEC3/SEC6 path confinement, SEC4/SEC5
 > injection hardening) and chose to handle them later. **Do not implement SEC1–SEC6 until that
 > pass.** Already resolved and out of this set: **SEC7** (dead Lua code-exec path — deleted) and
-> the **SEC3 panic** (bare `~` out-of-bounds slice — fixed; only the `@target` *confinement*
-> question remains deferred).
+> the **SEC3 panic** (bare `~` out-of-bounds slice — fixed). **Every approach SEC1–SEC6 is now
+> decided** (see their entries) — implementation still waits for the pass, except for the
+> **no-escape-hatch batch (SEC4, SEC5, SEC6)**, which trades nothing away and is cleared to land
+> early, together. SEC3 is decided as **won't-fix**: `@target` stays unconfined, and only its
+> outside-home confirmation is to be built.
+>
+> **The early batch LANDED 2026-07-19: SEC4, SEC5 and SEC6 are built, each with tests, suite
+> green and clippy silent.** Read each entry for what was built — **SEC5's `id` half deviates
+> from the ruling's letter and its entry says how and why.** What is left in this section is
+> exactly the deferred pass: **SEC1** (`@bin` confinement), **SEC2** (HTTPS + checksum by
+> default), and **SEC3's** outside-home confirmation. Nothing in the deferred set was touched.
 
-Unlike R1–R23 above (owner-approved fixes), these are **recorded vulnerabilities awaiting a
-solution decision**. Do not implement a fix until the owner rules on the approach. A pass 5
+Unlike R1–R23 above (owner-approved fixes), these were recorded vulnerabilities held back from
+implementation until the owner ruled on the approach. **All six approaches are now ruled on;**
+what remains is the deferred pass for SEC1–SEC3, and the early batch for SEC4–SEC6. A pass 5
 security review confirmed the core is sound — every package-manager command is built as argv
 (no `sh -c`, no `format!`-into-shell), the II.12 hook-approval ledger is enforced on every
 hook-exec path, sudo is argv not a string, and archive extraction rejects `..`/absolute members.
@@ -1359,8 +1369,10 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   `../../.config/systemd/user/…` all work identically. It is user-level (not root), but it is a clean
   single-line RCE from a copied install spec, and it fires **even when the download is HTTPS and
   checksummed** — the traversal is in the destination, not the source. Reachable, high confidence.
-  **Solution TBD** (candidates: reject `@bin`/`@target` values containing a path separator or `..`;
-  or resolve the final path and refuse if it escapes `~/.local/bin`). Do not implement until decided.
+  ~~**Solution TBD.**~~ **DECIDED 2026-07-17 (owner): resolve the final destination and refuse it if
+  it escapes `~/.local/bin`.** Gated by a config key that turns the protection on and off; on by
+  default. Off restores today's unchecked behaviour — the escape hatch is the user's to open.
+  Still deferred to the dedicated security pass for implementation.
 
 - **SEC2 — SERIOUS. Download-and-execute with no integrity check; plaintext HTTP allowed
   (appimage/web).** `appimage.rs:108-148`: `url = spec.name`, `client.get(url)` accepts any `http://`
@@ -1371,9 +1383,42 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   a bare `web:` spec is download-and-run-unverified. `github.rs` is the same optional-checksum pattern
   but over HTTPS to api.github.com (lower risk). `core/security.rs::verify_checksum` is correct — the
   gap is that nothing forces it to run and nothing forbids `http://`; reqwest also follows up to 10
-  redirects, so an `https://` seed can be bounced to `http://`. Reachable, high confidence. **Solution
-  TBD** (candidates: reject non-`https` unless explicit opt-in; require `@sha256` or loudly mark an
-  unverified install; wire appimage into `verify_checksum`). Do not implement until decided.
+  redirects, so an `https://` seed can be bounced to `http://`. Reachable, high confidence.
+  ~~**Solution TBD.**~~ **DECIDED 2026-07-19 (owner): a remote download is HTTPS and checksummed by
+  default; each relaxation is a separate opt-out, and the opt-out lives on the individual spec line —
+  there is no config key that disarms the class.** Three rules, for `web:`/`appimage:`/`github:`:
+
+  1. **The URL must be `https://`.** Opt out per spec with the bare flag `@allow_http`.
+  2. **No downgrade across redirects.** The scheme check applies to the URL actually fetched, not
+     just the one that was typed — an `https://` seed that lands on `http://` is refused. Cheapest
+     correct form is to check every hop, which also covers the middle of a redirect chain; the
+     binding requirement is that the *final* download is what gets verified. Same `@allow_http` opt-out.
+  3. **A checksum is required.** Opt out per spec with the bare flag `@unverified`.
+
+  `@allow_http` and `@unverified` are **separate flags and never imply each other** — allowing plain
+  HTTP for a host that only serves HTTP must not silently also drop the checksum, and that combination
+  is exactly the one where the checksum is doing the most work.
+
+  Consequences to implement in the pass:
+  - `appimage` has **no `@sha256` option at all** today. The option must be added, not merely enforced.
+  - `appimage` must be wired into `core/security.rs::verify_checksum`; `web`/`github` already call it,
+    and only the "required" half changes for them.
+  - An install that used `@unverified` is **recorded as unverified in the registry** and shown as such
+    by `status`. Once the install finishes, a checksummed and an unchecksummed binary are otherwise
+    indistinguishable, and the flag is only a real decision if it stays visible after the fact.
+  - The bare-flag form already parses (`config/grammar/options.rs`, `@hold` → `"true"`); no grammar
+    change is needed, only the II.2 option table.
+
+  *Why per-spec and not a config key:* a global "require checksums" switch with an off position gets
+  turned off once, by the first person who hits a publisher that doesn't publish hashes, and never
+  gets turned back on — leaving a system that looks protected and isn't. A per-line flag has to be
+  written for each spec that needs it, and it stays in the config file where the next reader sees it.
+  This is the same shape as SEC1's decided escape hatch: refuse by default, and the opening is the
+  user's to make explicitly. Still deferred to the dedicated security pass for implementation.
+
+  Not covered by this decision: HTTPS and checksums do **not** address SEC1 — that traversal is in the
+  `@bin` destination, not the source, and a fully verified HTTPS download still lands wherever `@bin`
+  points. The two fixes are independent; landing this one does not close that one.
 
 - **SEC3 — `@target` (link backend) has no path confinement, and a bare `~` panics.** `link.rs:225-231`
   uses `@target` raw: `~`-prefixed → `home_dir().join(&target_str[2..])`, otherwise
@@ -1383,8 +1428,20 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   confine it at all — an explicit decision, not a clear exploit. Separately a robustness bug:
   `&target_str[2..]` on a bare `"~"` (len 1) is an out-of-bounds slice → **panic** on a malformed spec,
   and `"~x"` silently drops the `x` (use `strip_prefix("~/")`, guard the length). ~~**Solution TBD.**~~
-  **Panic half FIXED 2026-07-17** (`strip_prefix("~/")`; bare `~` → home dir). **The confinement
-  half remains DEFERRED** — see the owner note at the top of this section.
+  **Panic half FIXED 2026-07-17** (`strip_prefix("~/")`; bare `~` → home dir).
+
+  **Confinement half DECIDED 2026-07-19 (owner): do not confine `@target`. SEC3 is closed —
+  no path allowlist, now or in the security pass.** An arbitrary destination *is* the link
+  backend's purpose: `~/.gitconfig`, `~/.config/nvim/`, `/etc/…` are the intended uses, so an
+  allowlist would be removing the feature, and the escape hatch added to compensate would make
+  the list decoration. This is the line between SEC3 and SEC1: `@bin` names a file *inside*
+  `~/.local/bin` and traversal makes it mean something else — a gap between what the user typed
+  and where the file lands. `@target=/etc/cron.d/x` has no such gap; it says exactly what it does.
+
+  One addition, and it is the whole of the fix: **a `@target` that resolves outside the home
+  directory prompts for confirmation on first install** — a confirmation, not a refusal, and not
+  gated by a config key. Free for the dotfiles case (all under `~`), and it puts a beat between a
+  pasted spec line and a system path. This is the only part of SEC3 the security pass implements.
 
 - **SEC4 — SSH host argument injection (fleet), semi-trusted input.** `fleet.rs:24-28` passes `host`
   to `ssh` with no `--` separator: `.arg("-o").arg("BatchMode=yes").arg(host).arg(remote_cmd)`. A host
@@ -1392,7 +1449,28 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   command on the **local** machine. The `remote_cmd` side is a LiNix constant (`linix status --json` /
   `linix sync -y`), so only `host` is the vector. Hosts come from the user's own `fleet_hosts` config
   or CLI (semi-trusted), so lower severity — but a fleet list from a shared/generated source makes it
-  reachable. **Solution TBD** (insert `--` before `host`, or reject hosts beginning with `-`).
+  reachable. ~~**Solution TBD.**~~ **DECIDED 2026-07-19 (owner): do both halves — reject the input
+  *and* terminate the option list.** **BUILT 2026-07-19 — both halves.** `check_host` refuses any
+  host beginning with `-` and is called from `ssh_capture` (so no call site can skip it) *and* over
+  the whole resolved host list in `fleet()` before the first connection, which is what turns a
+  silent local command into one error naming the host. `--` sits after the `-o BatchMode=yes` pair.
+  Test: `a_host_that_looks_like_an_ssh_option_is_refused`. They are not alternatives:
+
+  1. **Refuse a host beginning with `-`**, where the host list is read (both the CLI argument and
+     `fleet_hosts`). This is the half that produces a comprehensible error instead of a silent
+     local command.
+  2. **Pass `--` before `host`** in `ssh_capture`. Defence in depth against a future second call
+     site that skips the validation. It must sit *after* the `-o BatchMode=yes` pair:
+     `.arg("-o").arg("BatchMode=yes").arg("--").arg(host).arg(remote_cmd)`.
+
+  `ssh_capture` (`fleet.rs:22`) is currently the only spawn of `ssh` in the tree and both `fleet`
+  call sites (`:88`, `:159`) go through it, so rule 2 is a one-line change today. Rule 1 is what
+  keeps that true: a guard on one call site is a guard on nothing.
+
+  **No config key, no per-spec opt-out, no escape hatch.** This is the one item in SEC1–SEC6 with
+  nothing to trade away — there is no legitimate host named `-oProxyCommand=…`, so refusing it costs
+  no real usage. It therefore needs none of the machinery SEC1 and SEC2 do, and may land ahead of
+  the dedicated security pass rather than inside it.
 
 - **SEC5 — Latent PowerShell injection in snapshot ops (Windows, elevated).** `snapshot.rs` builds
   PowerShell by interpolation and runs it via `-Command` with elevation: `Checkpoint-Computer
@@ -1401,15 +1479,70 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   `label` is always a compile-time constant (`pre_sync`, `pre_upgrade`, `purge-unmanaged`, `pre_canary`)
   and `id` comes from the system's own `SequenceNumber` via list/bisect/canary/undo — **not currently
   attacker-reachable**, so this is latent, not live. But the day any command lets a user pass a
-  snapshot label or id straight through, it becomes an elevated-PowerShell injection. **Solution TBD**
-  (bind values as args / validate `id` is numeric); harden now while it is still latent.
+  snapshot label or id straight through, it becomes an elevated-PowerShell injection.
+  **Approach decided (2026-07-19); BUILT 2026-07-19 — make both values untypeable as injection
+  rather than validating them:**
+  1. **`id` becomes `u32`, not a string.** Parse the `SequenceNumber` at the boundary where Windows
+     returns it and keep it typed through list/bisect/canary/undo. That closes `:384`/`:392` with no
+     validation logic to forget at a future call site — the type is the guard.
+  2. **`label` becomes an enum**, not a `&str`. There are exactly four values (`pre_sync`,
+     `pre_upgrade`, `purge-unmanaged`, `pre_canary`); an enum with `as_str()` means no caller — a
+     future `--label` flag included — can reach `:344`'s interpolation with a quote in hand.
+
+  Both are pure hardening: no behaviour change, no config key, no escape hatch. By the SEC4 argument
+  (nothing to trade away) **the owner cleared this to land ahead of the pass (2026-07-19)**, in one
+  batch with SEC4 and SEC6.
+
+  **What was built, and the one place it departs from the ruling above.** `SnapshotLabel` is an enum
+  with the four values and an `as_str()`; `SnapshotProvider::create` takes it, so no caller can reach
+  `:344` with a quote (rule 2, as written). **Rule 1 was implemented as a parse at the Windows
+  boundary rather than a `u32` threaded through `Snapshot`, and that is a deviation worth reading.**
+  `Snapshot.id` is one field shared by four providers, and the other three have genuinely
+  non-numeric ids — btrfs `linix_pre_…`, zfs `dataset@linix_…`, timeshift a comment string. Typing
+  the field `u32` would have made the id meaningless for three of the four, so the number is parsed
+  where Windows produces it (`list` reads `SequenceNumber` as a number and drops a restore point
+  that has none) and again where it is consumed (`sequence_number()` in `delete`/`restore`). **The
+  binding property the ruling asked for holds — nothing but a `u32` reaches either interpolation —
+  but "keep it typed through list/bisect/canary/undo" is not literally what the code does**, and a
+  future reader looking for a `u32` on the struct will not find one. Tests:
+  `a_restore_point_id_that_is_not_a_number_never_reaches_powershell`,
+  `every_snapshot_label_is_a_fixed_string`.
 
 - **SEC6 — Module name traversal via `--name` (low).** `layout.rs:102-103`: `module_file(name)` =
   `modules_dir().join(format!("{}.txt", name.to_lowercase()))`. `module add --name ../../foo` writes
   the remote-fetched body to `modules_dir()/../../foo.txt`, up out of `modules/`. Bounded: the forced
   `.txt` suffix defuses most sensitive targets, `refuse_overwrite` (`main.rs:1383`) blocks clobbering
   existing files, and `--name` is user-typed (the `github:`/URL default can't inject a `/`). Low
-  severity. **Solution TBD** (reject path separators in `name`).
+  severity. ~~**Solution TBD.**~~ **DECIDED 2026-07-19 (owner): a `ModuleName` newtype whose only
+  constructor validates, and `module_file` takes that type instead of `&str`.** **BUILT 2026-07-19**
+  — `ModuleName` lives in `model/layout.rs` beside the function that requires it; `module_file` takes
+  `&ModuleName`, so the check cannot be lost at a call site. It lowercases once, at construction, so
+  II.3's "the filename is the name, lowercased" happens in one place instead of at every join.
+  `Target::Module` holds a `ModuleName` (validated in `Target::parse`, which already returned
+  `Result`), `ModuleLoader::read` validates so a `use ../../foo` in a module file is a grammar error
+  naming the file and line, and `ModuleName::literal` covers the three `Landing` names fixed in the
+  source. `resolve.rs`'s set-math atom check now reads "is this a valid module name that is a file?"
+  — a name that cannot be a module falls through to the package parse, which is where `(Work | jq)`
+  was always meant to land. Tests: `a_module_name_cannot_climb_out_of_the_modules_folder`,
+  `a_module_name_is_lowercased_once_at_construction`. SEC6 is SEC4-shaped,
+  not SEC1-shaped — there is no legitimate module named `../../foo`, so there is **no config key and
+  no opt-out**, and it lands early with SEC4 and SEC5.
+
+  1. **The guard is the type, not the call site.** Eight callers reach `module_file`
+     (`main.rs:1348`,`:1355`,`:1383`, `edit.rs:38`,`:574`, `modules.rs:40`, `resolve.rs:367`), and a
+     guard on one of them is a guard on nothing. `module_file` returns a `PathBuf` and cannot fail,
+     so validation cannot live inside it; it moves to the constructor, and every present and future
+     caller has to pass through it. Same shape as SEC5's `id: u32` and `label` enum.
+  2. **The rule is II.5's rule, spelled out:** non-empty, and after `to_lowercase()` only
+     `[a-z0-9_-]`. That is stricter than "reject path separators" — it also rules out `.`, which
+     kills `..` and the second extension in one stroke, rather than enumerating separators and
+     hoping the list is complete.
+  3. **The error teaches the rule**, per II.5: *"`../../foo` is not a module name — modules are
+     lowercase letters, digits, `-` and `_`."*
+
+  The `.txt` suffix, `refuse_overwrite` (`main.rs:1383`) and the separator-free URL-derived default
+  are what make this low severity today. None of them is the guard; all three are accidents of the
+  current call sites, and the newtype is what stops the next call site from losing them.
 
 - **SEC7 — DONE, 2026-07-17.** `LuaHooks::render_template` deleted (and the now-unused `regex::Regex`
   import). Verified zero callers first — the only `.render_template(` in the tree is the link
@@ -1923,14 +2056,50 @@ Three suspicions did not survive scrutiny:
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
+## Done 2026-07-19 — the SEC4/SEC5/SEC6 batch
+
+**The one thing the owner had cleared to land ahead of the deferred security pass, landed.**
+Each entry in Part III's security section carries what was built; the shape of it:
+
+- **SEC4** (ssh option injection) and **SEC6** (module-name traversal) are built exactly as
+  ruled. **SEC5** is built with one deviation from the ruling's letter — `Snapshot.id` did not
+  become a `u32`, because that field is shared with three providers whose ids are genuinely not
+  numbers; the parse moved to the Windows boundary instead. **The property the ruling asked for
+  holds; the mechanism named in it does not exist. Its entry says so** rather than reporting the
+  ruling as implemented — which is the failure mode this document exists to stop.
+- **SEC1, SEC2 and SEC3's confirmation were NOT touched.** They are the deferred pass, and it is
+  still owed.
+- **Two red tests on HEAD, found by running the suite rather than reading about it** — see the
+  status line below. Both were stale tests, and one of them (`locks.json`) was a site Phase 4's
+  own "all sites updated" claim had missed.
+
+**Not done, and next in Phase 5:** R1–R23 are entirely unstarted — a grep for `Kernel:
+Commencing`, `--i-really-mean-it`, `Flight plan:` and `src/app/teleport.rs` all still hit.
+R2 (delete `teleport`) is the one with teeth: it is a second transaction engine that **bypasses
+the guard**, so it is a safety item wearing a tidiness label.
+
 ## The state at `HEAD` (2026-07-17)
 
 - **68 commits** since `d49d28c`. *(The "49" that stood here was stale by 19 commits — an
   adversarial audit on 2026-07-17 ran `git rev-list --count d49d28c..HEAD`. The header drifted
   behind the tree it heads.)*
-- **522 tests passing, 0 failing. `cargo clippy --all-targets` silent.** *(Measured on HEAD
-  2026-07-17 after Phase 2x. The Phase-2-holding note below says "≈521" and Phase 2x's commit
-  said "521" — the exact figure is 522; treat any single count as a tripwire, not a target.)*
+- ~~**522 tests passing, 0 failing.**~~ — **the "0 failing" was false, and it is the first time
+  this document has been wrong about a number it could have checked by running one command.**
+  On 2026-07-19 a plain `cargo test` on untouched HEAD had **two failing tests**, both stale
+  rather than newly broken, and both fixed in the SEC4–6 commit:
+  - `create_shim_refuses_to_clobber_a_file_linix_did_not_deploy` — the guard is correct; the
+    **test** built its victim file at `bin/jq` while `create_shim` targets `bin/jq.exe` on
+    Windows, so it exercised a path the code never touches. A Unix-shaped test on a Windows
+    box, red since whenever this repo was last run on Linux.
+  - `test_locked_mode_version_conflict_enforcement` — wrote its fixture to
+    `config_root/locks.json`, **the path Phase 4 deleted** when it moved version pins to
+    `locks/versions.json`. Phase 4's own entry claims "all read/write/doctor/help sites
+    updated"; the test was a site nobody counted.
+  **Both are the NO-LEGACY failure in test form** — a test still naming what the code stopped
+  doing — and neither would have been found by reading. **Now: 560 passing, 0 failing,
+  `cargo clippy --all-targets` silent** (measured 2026-07-19). *(Treat any single count as a
+  tripwire, not a target — and note that this line's predecessor proves a count can be stale
+  in the one direction "green means nothing" does not cover: it was not green.)*
 - *Those two numbers tell you nothing about the line below them, and never could — every false
   ✅ in this document was green when it was written (rule 11). They are here because a **red**
   suite would be worth reporting, not because a green one is progress. **The 2026-07-17 audit

@@ -16,6 +16,6 @@ pub mod schedule;
 
 pub use conflict::Declared;
 pub use edit::{active_module_files, inactive_declarations, Edit, Editor, Landing, Target};
-pub use layout::Layout;
+pub use layout::{Layout, ModuleName};
 pub use priority::Priority;
 pub use resolve::{DesiredState, Reached, Resolver};

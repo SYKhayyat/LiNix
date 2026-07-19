@@ -577,7 +577,7 @@ impl App {
     }
 
     pub async fn upgrade(&self) -> Result<()> {
-        let _ = self.snapshot_manager.auto_snapshot("pre_upgrade").await?;
+        let _ = self.snapshot_manager.auto_snapshot(crate::core::snapshot::SnapshotLabel::PreUpgrade).await?;
         info!("Kernel: Commencing system-wide batch upgrade.");
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
