@@ -217,8 +217,22 @@ impl Upgradable for XbpsUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
-        info!("XBPS: Removing orphaned packages...");
+    async fn list_orphans(&self) -> Result<Vec<String>> {
+        let out = self
+            .core
+            .executor
+            .run_output("xbps-query", &["-O"], false)
+            .await?;
+        Ok(out
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect())
+    }
+
+    async fn clean_cache(&self, sudo: bool) -> Result<()> {
+        info!("XBPS: Clearing the package cache...");
         self.core
             .executor
             .run_exclusive("xbps", "xbps-remove", &["-Oy"], sudo)

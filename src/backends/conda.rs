@@ -201,10 +201,6 @@ impl Upgradable for CondaUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        // Conda has no orphan concept; `conda clean` only clears caches. Report honestly.
-        Err(crate::core::Error::Unsupported("conda".into()))
-    }
 }
 
 /// Reads the target Conda environment from `backend_settings.conda.env`, defaulting to

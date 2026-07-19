@@ -10,7 +10,7 @@
 //   * search  — unsupported (pub.dev has no CLI search)
 
 use crate::core::{
-    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec,
     Queryable, Result, Upgradable,
 };
 use async_trait::async_trait;
@@ -155,9 +155,6 @@ impl Upgradable for PubUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        Err(Error::Unsupported("pub".into()))
-    }
 }
 
 /// Search is omitted: pub.dev has no CLI search.

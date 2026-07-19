@@ -1219,6 +1219,8 @@ implementing agent's call; that it goes is not.**
   declaration … from …" lines never show. The command does the work; only its output lies. Make the
   keys agree.
 
+  **DONE 2026-07-19.** The writer's key won; both readers now say `lines_removed`.
+
 - **R6 — Plain notification emails; no emoji, no "Mission-Critical", no version.** The email
   subject bakes in emoji (`🚨 LiNix CRITICAL - …`, `notify.rs:151`), the body is titled "LiNix
   Mission-Critical Report" (`:153`), and the error level is "LiNix CRITICAL" (`:35`) — theatrical
@@ -1292,6 +1294,14 @@ implementing agent's call; that it goes is not.**
   both. Not a deletion — a consolidation: extract one shared reconcile that both `handle_sync` and
   `watch_reconcile` call, with `watch` passing an unattended/no-confirm scope. Delete the copy.
 
+  **DONE 2026-07-19.** One `reconcile(app, Reconcile { locked, json, scope, confirm })`;
+  `handle_sync` passes `confirm: true` / `GuardScope::Sync`, `watch_reconcile` passes
+  `confirm: false` / `GuardScope::Watch`, and the copy is gone. **The copy had already drifted,
+  which is the entry's own prediction coming true:** `watch`'s "nothing to do" test checked
+  packages and dependents but not schedules, so a config whose only change was a `schedule:` line
+  read as a no-op on a watch tick and as real work under `sync`. Both now use sync's three-way
+  test.
+
 - **R12 — Rename `cockpit` to a descriptive name.** The command (alias `tui`, `args.rs:360-363`)
   opens an interactive browser for generations, but is named "Time-travel cockpit" — nobody scanning
   `--help` guesses `cockpit` = "browse my generations." Rename to something plain like `browse` or
@@ -1352,6 +1362,23 @@ implementing agent's call; that it goes is not.**
   (e.g. appending `Brewfile` lines), never a blind replace; (c) `--force` for a deliberate plain
   overwrite. The default must be conflict-safe, not destructive.
 
+  **DONE 2026-07-19 - the non-colliding-name option, not merge.** `export` returns an `Outcome`
+  per format (`NoPackages` / `Wrote` / `WroteBeside` / `WouldWrite`) instead of a bare `wrote?`
+  flag, so the caller can say where the bytes actually went. A taken name goes to
+  `package.linix.json`, and if *that* is taken too, `package.linix.json.2` - a second export must
+  not clobber the first export's fallback either. `--force` overwrites deliberately; `--dry-run`
+  writes nothing and names the path it would have used.
+
+  **Merge was rejected**: it is well-defined for `Brewfile` and `requirements.txt` and not for
+  `package.json`, where merging LiNix's stub into a real project's dependency tree is a
+  destructive edit wearing a safe word. One rule across four formats beats two rules and a
+  footnote.
+
+  **Verified against the real binary, not only unit tests** - in a scratch directory holding a
+  genuine `package.json`: dry-run wrote nothing, the plain run left the real file byte-identical
+  and wrote `package.linix.json`, a second run wrote `package.linix.json.2`, and `--force`
+  replaced the original. Unit tests cover `beside()` and `free_path()`.
+
 - **R18 — `rollback` must refuse to apply unconfirmed in a non-interactive shell, like `sync` does.**
   In `rollback_to` (`main.rs:1897-1911`) the confirmation TUI runs only `if stdin().is_terminal()`, so
   a non-interactive shell (pipe/CI/cron) without `--yes` skips the check and falls through to apply.
@@ -1359,6 +1386,15 @@ implementing agent's call; that it goes is not.**
   non-interactive shell", `main.rs:450-457`). So `echo | linix rollback <gen>` applies unprompted. It
   still routes through `GuardScope::Rollback` (protected packages safe), but the missing confirmation
   is a real sibling inconsistency. Fix: mirror `sync` — bail without `--yes` in a non-interactive shell.
+
+  **DONE 2026-07-19, and the entry described code that no longer exists.** There is no
+  `rollback_to`: Phase 4 rebuilt `rollback` on git, and it now delegates to `handle_sync`, which
+  already carries the non-interactive bail. **So the reported bug was fixed - but a worse one had
+  taken its place underneath it.** `handle_rollback` runs `git.checkout_files(reference)` *before*
+  calling `handle_sync`, so a non-interactive `linix rollback <ref>` without `--yes` overwrote the
+  manifests and only then refused to converge the machine - leaving the files rolled back and the
+  system not, which is the half-applied state rollback exists to avoid. The bail now runs before
+  the checkout.
 
 - **R19 — `clean` must preview, respect the guard, and stop being blind.** Today `clean_orphans`
   (`context.rs:851-856`) loops **every** available backend and runs native orphan removal with
@@ -1375,12 +1411,51 @@ implementing agent's call; that it goes is not.**
     The exact command topology is the implementing agent's call; that both exist and that orphan
     removal previews + respects the guard is the ruling.
 
+  **DONE 2026-07-19 - two commands: `remove-orphans` and `clean-cache`.** `clean` is deleted.
+  `remove-orphans` lists every backend's orphan set, prints it under "Planned changes:", puts the
+  whole set through `guard::enforce` (so the protected list and the removal ceiling judge the
+  total, not one backend at a time), asks, and then removes **exactly the names it showed** via
+  each backend's ordinary `remove` - not the native `autoremove`, whose set can move between the
+  preview and the answer. `clean-cache` needs no preview and no guard because it removes no
+  installed package.
+
+  **The trait split is what made the preview possible.** `Upgradable::clean_orphans` did the
+  listing and the removing in one call, which is why there was nothing to show: it was replaced by
+  `list_orphans()` (names, no side effects) and `clean_cache()`. Twelve backends' `clean_orphans`
+  stubs were deleted outright - they returned `Unsupported`, which is now the trait default.
+
+  **Three operations were misfiled as orphan removal and are cache cleaning**: `mise prune`,
+  `pnpm store prune`, and `nix-collect-garbage`. So was `xbps-remove -Oy` - `-O` cleans the cache;
+  orphan *removal* on xbps is `-o`. **The old `clean` had been cleaning caches on four backends
+  while reporting orphan removal, and removing real packages on the others, under one name.**
+
+  **The judgement call, recorded because it could reasonably go the other way:** `emacs`, `flatpak`
+  and generic-with-`orphan_args` (apt) remove orphans natively but cannot enumerate them. Deleting
+  that capability would have been a feature removal nobody approved (rule 4); folding it into a
+  list the user was shown would be a lie, since those packages are not in it. So they run *after*
+  a confirmation that names them and says plainly that their removals could not be previewed or
+  checked against the protected list. **If the owner would rather those backends simply lose orphan
+  removal until they can list, that is a one-line change** - the predicate is
+  `Upgradable::has_native_orphan_removal`.
+
+  **`has_native_orphan_removal` exists because of a bug in this session's own first draft:** the
+  code asked whether a backend supported unlistable removal by *calling* `clean_orphans` and
+  checking for `Unsupported` - which performed the removal it was seeking permission for. A
+  side-effect-free predicate replaced the probe.
+
+  **Also deleted: `src/app/clean.rs`.** A second, 60-line orphan-cleaning implementation that was
+  not listed in `app/mod.rs` and therefore never compiled or ran. Two of everything, where the
+  second one was already dead.
+
 - **R20 — Auto-remediation swallows its state-save failure.** When failure diagnostics auto-installs
   a suggested package and persists the registry, `diagnostics.rs:206` writes
   `let _ = spawn_blocking(|| state_snapshot.save()).await.map_err(…)?` — the `?` catches only the task
   panic; the `let _ =` discards `save()`'s own `Result`. A disk-write failure (full/read-only/permission)
   is swallowed: the package is installed and in memory but never recorded, so the next `sync` treats it
   as unmanaged drift. The sibling save at `sync/mod.rs:136` propagates correctly with `??`. Fix: `?` → `??`.
+
+  **DONE 2026-07-19.** Exactly as written: `let _ = ... ?` became `... ??`, so a failed state
+  write now propagates instead of leaving the package installed, in memory, and unrecorded.
 
 - **R21 — File-backed backends report removal success when the file delete failed.** `github.rs:347-359`
   (and the same shape in `web.rs:260-268`, `appimage.rs:143`,`:176-177`): `remove()` drops the package
@@ -1391,11 +1466,25 @@ implementing agent's call; that it goes is not.**
   backends: surface the delete failure — warn and do not record it as a clean removal; better, return
   the error so state is not updated as if the package is gone.
 
+  **DONE 2026-07-19.** One shared `utils::file::remove_deployed_path` rather than the same logic
+  three times: it treats `NotFound` as success (the goal is "not on disk") and returns the path and
+  OS error otherwise. All three `remove()` paths now collect per-package failures, **put the record
+  back into state when a delete failed** - so the package stays visible to LiNix and to the next
+  `sync` instead of becoming drift nothing can see - and return `Err` naming what is still
+  installed. The `appimage.rs:143` site the entry also names is on the *install* path (clearing a
+  stale link before making the new one); it now surfaces its failure too, since a silent failure
+  there records a package whose link still points at the previous version.
+
 - **R22 — Prune counts IDs as deleted even when the delete failed.** `snapshot.rs:506-514` logs a
   failed `p.delete(id)` at `debug!` only and returns the full `doomed` list; `app/generation.rs:387`
   does `let _ = tokio::fs::remove_file(self.path_for(id)).await` and returns the full `doomed`. The
   caller prints "pruned N", so a snapshot/generation the delete couldn't remove is still reported gone
   — a said-so, not a done. Fix: return only the IDs actually deleted, and surface the failures.
+
+  **DONE 2026-07-19 for snapshots; the generation half no longer exists.** `prune_with_policy`
+  returns only the ids whose `delete` succeeded, and `warn!`s the failures with the OS error and
+  the count still on disk. `app/generation.rs` - the entry's second citation - was deleted in Phase
+  4 when history moved to git, so there is nothing there to fix.
 
 - **R23 — Rollback misses a node aborted mid-mutation, and the WAL net lapses after 4h (hardening).**
   On a node failure with auto-rollback, the transaction does `abort_all()` then `rollback()`
@@ -1407,6 +1496,15 @@ implementing agent's call; that it goes is not.**
   sync within 4h + cleanup), so low severity, but a real hole. Harden: either have rollback also
   compensate started-but-not-completed nodes, or make an `Abandoned` entry still trigger a heal/warn
   rather than dropping it from recovery.
+
+  **DONE 2026-07-19 - the second option.** `get_incomplete_actions` and `needs_recovery` now
+  include `Abandoned`, so a crash aged out at 4h is still healed instead of dropped. The first
+  option (compensating started-but-not-completed nodes in `rollback`) was rejected because the
+  transaction cannot know whether an aborted node's OS mutation ran; the WAL can, and it is
+  already the authority `heal` reads. **The `ActionStatus::Abandoned` doc comment said "no longer
+  healable" and the `get_incomplete_actions` comment spelled the hole out in full** - the bug was
+  documented in the code before it was found in review. Both comments now state the rule that
+  holds. Covered by `an_aged_out_crash_is_still_healable`.
 
 ### Security — the 2026-07-17 review pass (PROBLEMS RECORDED, approaches DECIDED, most unimplemented)
 
@@ -2160,13 +2258,54 @@ disagreed with each other*. **Each fix is recorded on its entry, including the t
 that could reasonably have gone the other way** — keeping backend-name log prefixes while stripping
 LiNix's own, and keeping `✓`/`✗`/`★` as information-carrying symbols under R9's no-emoji rule.
 
-**Still open: R5, R11, R17–R23** (the correctness batch), and SEC1–SEC3, which remain deferred.
+**R5, R11, R17–R23 done — the correctness batch.** Each entry carries what landed. The shape of it:
 
-**Suite: 558 passing, 0 failed; `cargo build --all-targets` clean; `cargo clippy --all-targets`
-silent** (measured 2026-07-19, after R1–R16). Down from 560 because two teleport tests were deleted
-with the feature, not because anything went red. *Green here says only that the sweep did not break
-what was covered — no test in this repo reads a log line's tone, so **R1 is verified by the greps in
-its entry, not by this number.***
+- **R19 was the largest and changed a trait.** `Upgradable::clean_orphans` both listed and removed
+  in one call, which is precisely why nothing could be previewed; it split into `list_orphans()`
+  (names, no side effects) and `clean_cache()`. `clean` is gone, replaced by `remove-orphans`
+  (preview → guard → confirm → remove exactly what was shown) and `clean-cache`.
+- **Four backends had been cleaning caches while reporting orphan removal** — `mise prune`,
+  `pnpm store prune`, `nix-collect-garbage`, and `xbps-remove -Oy` (where `-O` is the *cache* flag;
+  xbps orphan removal is `-o`). One command name covered two different operations depending on
+  which backend answered.
+- **Three entries described code that no longer exists** (R18's `rollback_to`, R22's
+  `app/generation.rs`, and R4 earlier) — all Phase 4 casualties. **R18 is the one that mattered:
+  the reported bug was already fixed, and a worse one had taken its place underneath.** Rollback
+  checked the manifests out *before* the confirmation gate, so a non-interactive run without
+  `--yes` rolled the files back and then refused to converge the machine.
+
+**Two incidents from this session, recorded because a clean commit hides both:**
+
+- **The first draft of `remove-orphans` probed for a capability by calling the destructive
+  function.** To decide whether a backend could remove orphans it cannot list, the code called
+  `clean_orphans` and checked for `Unsupported` — performing, in order to ask permission, the exact
+  removal it was asking permission for. Caught before commit and replaced with
+  `has_native_orphan_removal`. **The command whose entire purpose is "do not remove without asking"
+  removed without asking, in its own first implementation.**
+- **`src/main.rs` was truncated to 0 bytes mid-session** by an edit script whose output file was
+  opened for writing before the replacement expression was evaluated; the expression raised, and
+  the truncation had already happened. Roughly two hours of uncommitted work in that one file was
+  lost and redone from the session's own history. **The cost was bounded only by the commits at
+  R2/R3 and R1/R6–R16** — the argument for the spec's "commit at every major step" (rule 6), paid
+  in full rather than in theory.
+
+**Found while verifying, not in any R entry: `linix --help` panicked on every debug build.**
+`status` carried `#[command(alias = "diff")]`, and Phase 4 added a real `diff` command; clap's
+debug assertions abort on the duplicate. **Every CLI invocation of a debug binary died before
+`main`, and the suite stayed green throughout, because nothing in it runs the binary.** The stale
+alias is deleted. *This is rule 11 in its plainest form — 561 passing tests over a program that
+could not start.* Three help strings were stale in the same place and went with it: `install`'s
+"Imperatively", `rollback`'s `--package`/`--with-config` (flags it no longer has), and `profile`'s
+advertisement of `switch`, which the owner ruled dead.
+
+**Still open: SEC1–SEC3, which remain deferred**, plus the Phase 5 docs work (README/CHANGELOG) and
+Phase 6's containers.
+
+**Suite: 561 passing, 0 failed; `cargo build --all-targets` clean; `cargo clippy --all-targets`
+silent; `linix --help` and the new commands run** (measured 2026-07-19, after R1–R23). *Green says
+only that nothing covered broke. **R1 is verified by the greps in its entry, R17 by running the
+real binary against a real `package.json`, and R19 by reading the trait — not by this number**,
+which was 561 and green while `--help` could not start.*
 
 ## Done 2026-07-19 — the SEC4/SEC5/SEC6 batch
 
@@ -2188,9 +2327,8 @@ Each entry in Part III's security section carries what was built; the shape of i
 ~~**Not done, and next in Phase 5:** R1–R23 are entirely unstarted — a grep for `Kernel:
 Commencing`, `--i-really-mean-it`, `Flight plan:` and `src/app/teleport.rs` all still hit.
 R2 (delete `teleport`) is the one with teeth: it is a second transaction engine that **bypasses
-the guard**, so it is a safety item wearing a tidiness label.~~ — **started 2026-07-19; see the
-R1–R23 section at the top of Part VII.** `src/app/teleport.rs` no longer hits; the other three
-greps still do.
+the guard**, so it is a safety item wearing a tidiness label.~~ — **R1–R23 are all done as of 2026-07-19; see the
+R1–R23 section at the top of Part VII.** All four greps are now quiet.
 
 ## The state at `HEAD` (2026-07-17)
 

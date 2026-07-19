@@ -208,7 +208,7 @@ impl Upgradable for NixUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
+    async fn clean_cache(&self, sudo: bool) -> Result<()> {
         info!(
             "Nix: Performing garbage collection (GC, older than {})...",
             self.core.gc_age

@@ -836,33 +836,6 @@ impl App {
         }
     }
 
-    pub async fn clean_orphans(&self) -> Result<()> {
-        info!("removing orphaned packages");
-        let (mut cleaned, mut skipped, mut failed) = (0u32, 0u32, 0u32);
-        for backend in self.registry.available() {
-            if let Some(upgradable) = backend.as_upgradable() {
-                match upgradable.clean_orphans(backend.sudo_for_write()).await {
-                    Ok(()) => cleaned += 1,
-                    // A backend with no orphan concept is a benign skip, not a failure.
-                    Err(Error::Unsupported(_)) => skipped += 1,
-                    Err(e) => {
-                        failed += 1;
-                        debug!(
-                            "orphan cleanup failed for {}: {}",
-                            backend.name(),
-                            e
-                        );
-                    }
-                }
-            }
-        }
-        info!(
-            "orphan pruning complete — {} cleaned, {} not applicable, {} failed.",
-            cleaned, skipped, failed
-        );
-        Ok(())
-    }
-
     pub async fn prune_snapshots(&self, force: bool) -> Result<()> {
         let is_dry_run = if force { false } else { self.config.dry_run };
         let policy = self.config.snapshot_retention();

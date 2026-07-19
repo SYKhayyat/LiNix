@@ -178,10 +178,6 @@ impl Upgradable for UvUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        // uv isolates each tool in its own environment; there are no shared orphans.
-        Err(Error::Unsupported("uv".into()))
-    }
 }
 
 pub fn register(

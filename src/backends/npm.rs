@@ -175,10 +175,6 @@ impl Upgradable for NpmUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        // Global npm has no orphan concept; report honestly instead of faking success.
-        Err(crate::core::Error::Unsupported("npm".into()))
-    }
 }
 
 impl NpmBackendCore {

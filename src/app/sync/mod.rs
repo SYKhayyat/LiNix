@@ -324,7 +324,7 @@ impl<'a> SyncEngine<'a> {
         let mut worker_set = JoinSet::new();
 
         debug!(
-            "Initiating parallel shim audit for {} packages.",
+            "auditing shims for {} packages",
             state.packages.len()
         );
 

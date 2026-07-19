@@ -224,11 +224,6 @@ impl Upgradable for SnapUpgradable {
         self.update(sudo).await
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        // Snap automatically manages its own revisions and core dependencies; there is
-        // no user-driven orphan removal to perform. Report honestly rather than fake it.
-        Err(crate::core::Error::Unsupported("snap".into()))
-    }
 }
 
 pub fn register(

@@ -228,10 +228,6 @@ impl Upgradable for VscodeUpgradable {
     }
 
     // Extensions have no orphan concept managed by the CLI.
-    async fn clean_orphans(&self, _: bool) -> Result<()> {
-        // VS Code extensions have no orphan concept; report honestly.
-        Err(crate::core::Error::Unsupported("vscode".into()))
-    }
 }
 
 pub struct VscodeSearchable {

@@ -141,7 +141,8 @@ async fn main() -> Result<()> {
             outdated,
         } => handle_list(&app, backend.as_deref(), *json, *outdated).await,
         Commands::Info { package } => handle_info(&app, package).await,
-        Commands::Clean => handle_clean(&app).await,
+        Commands::RemoveOrphans => handle_remove_orphans(&app).await,
+        Commands::CleanCache => handle_clean_cache(&app).await,
         Commands::Heal => handle_heal(&app).await,
         Commands::Doctor { fix, json } => handle_doctor(&app, *fix, *json).await,
         Commands::Adopt => handle_adopt(&app).await,
@@ -172,7 +173,8 @@ async fn main() -> Result<()> {
             format,
             out,
             stdout,
-        } => handle_export(&app, format.as_deref(), out, *stdout).await,
+            force,
+        } => handle_export(&app, format.as_deref(), out, *stdout, *force).await,
         Commands::Bundle {
             out,
             artifacts,
@@ -368,18 +370,42 @@ fn expand_command_aliases(
 // COMMAND HANDLERS
 // ============================================================================
 
-async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
+/// How one reconcile pass should behave. The pass itself is identical for `sync` and
+/// `watch` — II.7's ordering phases, the guard, the same planner — and these are the only
+/// things that legitimately differ between an attended run and an unattended one.
+struct Reconcile {
+    /// Strict version matching against the lockfile.
+    locked: bool,
+    /// Emit the change report as JSON instead of a planned-changes list.
+    json: bool,
+    /// Which scope the guard reports refusals under.
+    scope: linix::app::sync::guard::GuardScope,
+    /// Whether to ask before applying. `watch` is unattended by definition and never asks;
+    /// `sync` asks unless `--yes`.
+    confirm: bool,
+}
+
+/// One reconcile pass: resolve the model, apply repos, plan, apply, then dependents,
+/// schedules and extras — II.7's ordering, in order.
+///
+/// Returns the number of package changes applied. `sync` and `watch` both call this; the
+/// copy `watch` used to carry drifted from this body every time sync's ordering changed,
+/// which is why it is one function now.
+async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     let engine = app.sync_engine().await;
     if app.journal.lock().await.needs_recovery() {
-        warn!("LiNix: Transaction journal indicates previous crash. Healing system integrity...");
+        warn!("the transaction journal records an interrupted run; healing first.");
         engine.heal().await?;
     }
 
-    let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), locked)
-            .await;
+    let resolver = linix::app::sync::resolver::StateResolver::new(
+        &app.config,
+        app.registry.clone(),
+        opts.locked,
+    )
+    .await;
     // The whole desired state, extras included — repos must be applied before packages
-    // (II.7), so `sync` needs more than the package map here.
+    // (II.7), so this needs more than the package map.
     let state = resolver.resolve_model().await?;
     let desired = state.packages.clone();
     enforce_policy(app, &desired).await?;
@@ -410,17 +436,18 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
         // *removed* — deleting the last `service:` line is a real change (S20). Reconcile the
         // applied-extras ledger so that undo still happens; it is a cheap no-op otherwise.
         app.reconcile_extras(&state).await?;
-        info!("already up to date");
-        return Ok(());
+        return Ok(0);
     }
 
-    if !json && !changes.is_empty() {
+    let applied = changes.total_install() + changes.total_remove();
+
+    if !opts.json && !changes.is_empty() {
         print_flight_plan(app, &changes);
     }
 
     // Dry-run is preview-only: never prompt, never mutate. (JSON dry-run emits the report.)
     if app.config.dry_run {
-        if json {
+        if opts.json {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&changes.generate_report())?
@@ -431,7 +458,7 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
         app.apply_dependents(&state).await?;
         app.apply_schedules(&state).await?;
         app.reconcile_extras(&state).await?;
-        return Ok(());
+        return Ok(applied);
     }
 
     // The package plan runs only when it has something in it — a dependents-only sync skips
@@ -440,24 +467,21 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
         // Interactive confirmation — but only with a real terminal. A non-interactive caller
         // (pipe/CI/script) must pass --yes (or --json); otherwise we neither hang on a TUI
         // that can't receive input nor silently apply unconfirmed changes.
-        if !app.config.yes && !json {
+        if opts.confirm && !app.config.yes && !opts.json {
             use std::io::IsTerminal;
             if !std::io::stdin().is_terminal() {
                 anyhow::bail!(
-                    "Refusing to apply changes without confirmation in a non-interactive shell. \
-                     Re-run with --yes to proceed, or --dry-run to preview."
+                    "Refusing to apply changes without confirmation in a non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview."
                 );
             }
             let mut preview = TuiPreview::new(&changes, HashMap::new());
             if !preview.run()? {
-                return Ok(());
+                return Ok(0);
             }
             changes = preview.get_filtered_changes();
         }
 
-        engine
-            .sync(changes, linix::app::sync::guard::GuardScope::Sync)
-            .await?;
+        engine.sync(changes, opts.scope).await?;
     }
 
     // Ordering phase 3: the dependent extras, now that every package they lean on is in.
@@ -466,7 +490,25 @@ async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
     app.apply_schedules(&state).await?;
     // Phase 5 (S20): undo extras that were applied before but are no longer declared.
     app.reconcile_extras(&state).await?;
-    perform_maintenance(app).await
+    perform_maintenance(app).await?;
+    Ok(applied)
+}
+
+async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
+    let applied = reconcile(
+        app,
+        Reconcile {
+            locked,
+            json,
+            scope: linix::app::sync::guard::GuardScope::Sync,
+            confirm: true,
+        },
+    )
+    .await?;
+    if applied == 0 {
+        info!("already up to date");
+    }
+    Ok(())
 }
 
 /// A cheap fingerprint of the manifest directory: (path, size, mtime) for every `*.txt`. If it
@@ -498,59 +540,20 @@ async fn manifest_signature(dir: &std::path::Path) -> Vec<(String, u64, i64)> {
     sig
 }
 
-/// One unattended reconcile pass: resolve desired state, plan, and auto-apply any changes. This
-/// is `sync` without the interactive confirmation gate — `watch` is explicitly unattended.
-///
-/// It runs the same three ordering phases `sync` does (II.7): repos before the package plan,
-/// then packages, then dependents after. `watch` reconciling only packages would leave a
-/// PPA unadded or a `service:` unenabled until someone ran `sync` by hand — which defeats the
-/// point of an unattended reconcile.
+/// One unattended reconcile pass. `watch` is unattended by definition, so it never asks —
+/// that flag is the only thing separating it from `sync`, which is why both go through the
+/// same [`reconcile`].
 async fn watch_reconcile(app: &App) -> Result<usize> {
-    let resolver =
-        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
-            .await;
-    let state = resolver.resolve_model().await?;
-    let desired = state.packages.clone();
-    enforce_policy(app, &desired).await?;
-
-    // Phase 1: repos, before the package plan.
-    app.apply_repositories(&state).await?;
-
-    let enabled = app.priority_backends().await;
-    let changes = {
-        let state_guard = app.state.lock().await;
-        linix::app::sync::planner::ChangePlanner::new(
-            app.registry.clone(),
-            &state_guard,
-            &app.config,
-        )
-        .with_enabled(enabled)
-        .plan(&desired, None)
-        .await?
-    };
-
-    // Nothing to do only when the package plan is empty AND there are no dependents to apply.
-    if changes.is_empty() && !state.has_dependents() {
-        return Ok(0);
-    }
-
-    let n = changes.total_install() + changes.total_remove();
-    if !changes.is_empty() {
-        print_flight_plan(app, &changes);
-        app.sync_engine()
-            .await
-            .sync(changes, linix::app::sync::guard::GuardScope::Watch)
-            .await?;
-    }
-
-    // Phase 3: dependents, after the packages they lean on.
-    app.apply_dependents(&state).await?;
-    // Phase 4 (S21): provision declared schedules.
-    app.apply_schedules(&state).await?;
-    // Phase 5 (S20): undo extras no longer declared.
-    app.reconcile_extras(&state).await?;
-    perform_maintenance(app).await?;
-    Ok(n)
+    reconcile(
+        app,
+        Reconcile {
+            locked: false,
+            json: false,
+            scope: linix::app::sync::guard::GuardScope::Watch,
+            confirm: false,
+        },
+    )
+    .await
 }
 
 async fn handle_watch(
@@ -1854,6 +1857,18 @@ async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
              any commit."
         );
     }
+    // The bail must come before the checkout, not after. `handle_sync` refuses unconfirmed
+    // changes in a non-interactive shell, but by the time it does the manifests have already
+    // been overwritten — leaving the files rolled back and the machine not.
+    if !app.config.yes {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "Refusing to roll back without confirmation in a non-interactive shell. \
+                 Re-run with --yes to proceed, or --dry-run to preview."
+            );
+        }
+    }
     info!("checking out manifests at {}.", reference);
     git.checkout_files(reference)?;
     println!(
@@ -2076,8 +2091,154 @@ async fn handle_profile(app: &App, cmd: &ProfileCommand) -> Result<()> {
     }
     Ok(())
 }
-async fn handle_clean(app: &App) -> Result<()> {
-    app.clean_orphans().await?;
+/// `remove-orphans` — each manager's own "no longer needed by anything" set.
+///
+/// The orphan set is the backend's opinion, not LiNix's model, which is exactly why it gets
+/// the same shape as `sync`: name every package first, put it through the guard, then ask.
+/// The old `clean` ran `apt autoremove -y` / `pacman -Rs --noconfirm` across every available
+/// backend with no preview and outside the guard.
+async fn handle_remove_orphans(app: &App) -> Result<()> {
+    use linix::app::sync::guard::{enforce, GuardScope};
+
+    let mut listed: Vec<(String, Vec<String>)> = Vec::new();
+    let mut unlistable: Vec<String> = Vec::new();
+
+    for backend in app.registry.available() {
+        let up = match backend.as_upgradable() {
+            Some(u) => u,
+            None => continue,
+        };
+        match up.list_orphans().await {
+            Ok(names) if names.is_empty() => {}
+            Ok(names) => listed.push((backend.name().to_string(), names)),
+            // A backend that cannot list but removes natively is asked about separately,
+            // because there is nothing to show. Probing by CALLING clean_orphans would
+            // perform the removal it is trying to get permission for.
+            Err(linix::core::Error::Unsupported(_)) if up.has_native_orphan_removal() => {
+                unlistable.push(backend.name().to_string());
+            }
+            Err(linix::core::Error::Unsupported(_)) => {}
+            Err(e) => warn!("could not list orphans for {}: {}", backend.name(), e),
+        }
+    }
+
+    if listed.is_empty() && unlistable.is_empty() {
+        println!("No orphaned packages.");
+        return Ok(());
+    }
+
+    let removals: Vec<(String, String)> = listed
+        .iter()
+        .flat_map(|(b, names)| names.iter().map(move |n| (b.clone(), n.clone())))
+        .collect();
+
+    if !listed.is_empty() {
+        println!("Planned changes:");
+        for (backend, names) in &listed {
+            println!("  {} — remove {} package(s):", backend, names.len());
+            for n in names {
+                println!("      {}:{}", backend, n);
+            }
+        }
+    }
+
+    // The guard sees the whole set at once, so the removal count and the protected list are
+    // judged against the total rather than per backend.
+    enforce(&app.config, &app.registry, &removals, GuardScope::Prune).await?;
+
+    if app.config.dry_run {
+        println!("
+[DRY-RUN] Nothing was removed.");
+        return Ok(());
+    }
+
+    if !confirm_orphan_removal(app, &unlistable)? {
+        println!("Nothing removed.");
+        return Ok(());
+    }
+
+    for (backend_name, names) in &listed {
+        let backend = match app.registry.get(backend_name) {
+            Some(b) => b,
+            None => continue,
+        };
+        if let Some(installable) = backend.as_installable() {
+            // Remove exactly the names that were shown and guarded — not the backend's own
+            // autoremove, whose set can have moved since the preview.
+            installable
+                .remove(names, backend.sudo_for_write())
+                .await
+                .with_context(|| format!("removing orphans from {}", backend_name))?;
+            println!("  {}: removed {} package(s)", backend_name, names.len());
+        }
+    }
+
+    for backend_name in &unlistable {
+        let backend = match app.registry.get(backend_name) {
+            Some(b) => b,
+            None => continue,
+        };
+        if let Some(up) = backend.as_upgradable() {
+            match up.clean_orphans(backend.sudo_for_write()).await {
+                Ok(()) => println!("  {}: ran its own orphan removal", backend_name),
+                Err(e) => warn!("orphan removal failed for {}: {}", backend_name, e),
+            }
+        }
+    }
+
+    perform_maintenance(app).await
+}
+
+/// Confirmation for `remove-orphans`. `unlistable` names the backends whose orphan set could
+/// not be enumerated, so the user is told those removals cannot be previewed rather than
+/// having them folded silently into a list that looks complete.
+fn confirm_orphan_removal(app: &App, unlistable: &[String]) -> Result<bool> {
+    if !unlistable.is_empty() {
+        println!(
+            "
+Also: {} cannot list what it would remove, so those packages are not in the list above and cannot be checked against your protected list.",
+            unlistable.join(", ")
+        );
+    }
+    if app.config.yes {
+        return Ok(true);
+    }
+    use std::io::IsTerminal;
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "Refusing to remove orphans without confirmation in a non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview."
+        );
+    }
+    Ok(dialoguer::Confirm::new()
+        .with_prompt("Remove these packages?")
+        .default(false)
+        .interact()?)
+}
+
+/// `clean-cache` — downloaded archives and build caches. Removes no installed package, so it
+/// needs no preview and no guard.
+async fn handle_clean_cache(app: &App) -> Result<()> {
+    if app.config.dry_run {
+        println!("[DRY-RUN] Would clear the package cache for every backend that has one.");
+        return Ok(());
+    }
+    let mut cleaned = Vec::new();
+    for backend in app.registry.available() {
+        let up = match backend.as_upgradable() {
+            Some(u) => u,
+            None => continue,
+        };
+        match up.clean_cache(backend.sudo_for_write()).await {
+            Ok(()) => cleaned.push(backend.name().to_string()),
+            Err(linix::core::Error::Unsupported(_)) => {}
+            Err(e) => warn!("cache clean failed for {}: {}", backend.name(), e),
+        }
+    }
+    if cleaned.is_empty() {
+        println!("No backend on this machine has a cache to clear.");
+    } else {
+        println!("Cleared caches: {}.", cleaned.join(", "));
+    }
     perform_maintenance(app).await
 }
 
@@ -2779,7 +2940,7 @@ async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<(
     for r in &results {
         let spec = r["package"].as_str().unwrap_or_default();
         let forgotten = r["forgotten"].as_array().map(|a| a.len()).unwrap_or(0);
-        let lines = r["manifest_lines_removed"]
+        let lines = r["lines_removed"]
             .as_array()
             .map(|a| a.len())
             .unwrap_or(0);
@@ -2797,7 +2958,7 @@ async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<(
         for f in r["forgotten"].as_array().into_iter().flatten() {
             println!("  dropped from managed state: {}", f.as_str().unwrap_or(""));
         }
-        for l in r["manifest_lines_removed"].as_array().into_iter().flatten() {
+        for l in r["lines_removed"].as_array().into_iter().flatten() {
             println!(
                 "  removed declaration `{}` from {}",
                 l["line"].as_str().unwrap_or(""),
@@ -3367,8 +3528,14 @@ async fn handle_sbom(app: &App) -> Result<()> {
     Ok(())
 }
 
-async fn handle_export(app: &App, format: Option<&str>, out: &str, stdout: bool) -> Result<()> {
-    use linix::app::export::{export, Format};
+async fn handle_export(
+    app: &App,
+    format: Option<&str>,
+    out: &str,
+    stdout: bool,
+    force: bool,
+) -> Result<()> {
+    use linix::app::export::{export, Format, Outcome};
     let fmt = match format {
         Some(s) => Some(
             Format::parse(s)
@@ -3380,12 +3547,21 @@ async fn handle_export(app: &App, format: Option<&str>, out: &str, stdout: bool)
         anyhow::bail!("--stdout needs a single --format (brew|pip|npm|apt).");
     }
     let out_dir = std::path::PathBuf::from(out);
-    let results = export(app, fmt, &out_dir, stdout).await?;
-    for (file, wrote) in &results {
-        if *wrote {
-            println!("  wrote   {}", out_dir.join(file).display());
-        } else {
-            println!("  skipped {} (no matching packages)", file);
+    let results = export(app, fmt, &out_dir, stdout, force, app.config.dry_run).await?;
+    for (file, outcome) in &results {
+        match outcome {
+            Outcome::NoPackages => println!("  skipped {} (no matching packages)", file),
+            Outcome::Wrote(path) => println!("  wrote   {}", path.display()),
+            Outcome::WouldWrite(path) => {
+                println!("  [DRY-RUN] would write {}", path.display())
+            }
+            Outcome::WroteBeside { taken, renamed } => {
+                println!("  wrote   {}", renamed.display());
+                println!(
+                    "          ({} already exists and was left alone; re-run with --force to replace it)",
+                    taken.display()
+                );
+            }
         }
     }
     Ok(())

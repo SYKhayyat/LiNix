@@ -104,8 +104,14 @@ pub enum Commands {
     /// Recover the system from an interrupted or crashed transaction (WAL)
     Heal,
 
-    /// Perform a deep system cleanup (orphans, cache, temp files)
-    Clean,
+    /// Remove packages no longer needed by anything (each manager's own orphan set).
+    /// Shows what it will remove and asks first; protected packages are never touched.
+    #[command(name = "remove-orphans")]
+    RemoveOrphans,
+
+    /// Delete downloaded package archives and caches. Frees disk; removes no package.
+    #[command(name = "clean-cache")]
+    CleanCache,
 
     /// Identify all packages installed on the OS but not managed by LiNix
     Unmanaged,
@@ -157,7 +163,6 @@ pub enum Commands {
     },
 
     /// Show what `sync` would change (to install / drift to remove / unmanaged) — read-only
-    #[command(alias = "diff")]
     Status {
         /// Output the report as JSON
         #[arg(long)]
@@ -273,7 +278,7 @@ pub enum Commands {
         package: String,
     },
 
-    /// Imperatively install one or more packages
+    /// Install one or more packages
     Install {
         /// Package strings (e.g. "apt:curl", "cargo:exa")
         packages: Vec<String>,
@@ -370,7 +375,7 @@ pub enum Commands {
         profiles: Vec<String>,
     },
 
-    /// Manage system profiles / identities (list, show, create, save, switch, active)
+    /// Manage system profiles / identities (list, show, create, save, active)
     Profile(ProfileArgs),
 
     // --- NEW FOR 3.6.0 ---
@@ -380,9 +385,8 @@ pub enum Commands {
     /// System snapshots and atomic rollbacks
     Snapshot(SnapshotArgs),
 
-    /// Roll back to a saved generation by id: realizes its package set on the system
-    /// (drive backends), and for a full rollback also restores its manifests. Scope with
-    /// `--package` and/or the global `--backend` to roll back just part of the system.
+    /// Roll back to a past commit: restore the manifests it recorded, then converge the
+    /// machine to match them.
     Rollback {
         /// The git commit (or ref like HEAD~1) to roll back to. See `linix git log`.
         /// Rollback checks out the manifests at that commit, then syncs the machine to match —
@@ -449,6 +453,11 @@ pub enum Commands {
         /// Print a single `--format` to stdout instead of writing a file
         #[arg(long)]
         stdout: bool,
+
+        /// Overwrite an existing file of the same name. Without it, an export whose
+        /// filename is taken is written beside the real file instead of replacing it.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Pack a portable, offline/air-gapped bundle of your declarative config, lockfile and

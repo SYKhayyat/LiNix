@@ -223,10 +223,6 @@ impl Upgradable for CargoUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        // cargo has no global orphan concept; report honestly instead of faking success.
-        Err(crate::core::Error::Unsupported("cargo".into()))
-    }
 }
 
 impl CargoBackendCore {

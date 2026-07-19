@@ -235,6 +235,10 @@ impl Upgradable for EmacsUpgradable {
         Ok(())
     }
 
+    fn has_native_orphan_removal(&self) -> bool {
+        true
+    }
+
     async fn clean_orphans(&self, _: bool) -> Result<()> {
         info!("Emacs: Autoremoving unused packages...");
         let lisp = "(progn (require 'package) (package-initialize) \

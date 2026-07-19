@@ -271,21 +271,23 @@ impl Upgradable for PacmanUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
+    async fn list_orphans(&self) -> Result<Vec<String>> {
         let orphans = self
             .core
             .executor
             .run_output("pacman", &["-Qdtq"], false)
             .await?;
-        let orphan_list: Vec<&str> = orphans.lines().filter(|l| !l.is_empty()).collect();
+        Ok(orphans
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect())
+    }
 
-        if orphan_list.is_empty() {
-            return Ok(());
-        }
-
-        info!("Pacman: Removing {} orphan packages...", orphan_list.len());
-        let mut args = vec!["-Rs", "--noconfirm"];
-        args.extend(orphan_list);
+    async fn clean_cache(&self, sudo: bool) -> Result<()> {
+        info!("Pacman: Clearing the package cache...");
+        let args = vec!["-Sc", "--noconfirm"];
         self.core
             .executor
             .run_exclusive("pacman", "pacman", &args, sudo)

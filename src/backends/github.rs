@@ -346,16 +346,36 @@ impl Installable for GithubInstallable {
 
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
         let mut state = self.core.load_state_internal().await;
+        let mut failures = Vec::new();
         for name in names {
             if let Some(pkg) = state.remove(name) {
+                let mut errors = Vec::new();
                 if let Some(ref bp) = pkg.bin_path {
-                    let _ = tokio::fs::remove_file(bp).await;
+                    if let Err(e) = crate::utils::remove_deployed_path(bp).await {
+                        errors.push(e);
+                    }
                 }
-                let _ = tokio::fs::remove_dir_all(pkg.install_path).await;
-                info!("Purged GitHub package: {}", name);
+                if let Err(e) = crate::utils::remove_deployed_path(&pkg.install_path).await {
+                    errors.push(e);
+                }
+                if errors.is_empty() {
+                    info!("removed {}", name);
+                } else {
+                    // The binary is still on disk and still on PATH. Dropping it from state
+                    // anyway would make it drift no `sync` can see, so put the record back.
+                    state.insert(name.clone(), pkg);
+                    failures.push(format!("{}: {}", name, errors.join("; ")));
+                }
             }
         }
         self.core.save_state_internal(&state).await?;
+        if !failures.is_empty() {
+            return Err(Error::Other(format!(
+                "could not remove {} GitHub package(s), still installed: {}",
+                failures.len(),
+                failures.join(", ")
+            )));
+        }
         Ok(())
     }
 }

@@ -157,10 +157,6 @@ impl Upgradable for PipxUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        // pipx isolates each app in its own venv; there are no shared orphans to prune.
-        Err(crate::core::Error::Unsupported("pipx".into()))
-    }
 }
 
 pub fn register(

@@ -9,7 +9,7 @@
 
 use crate::app::App;
 use crate::core::{Error, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// A managed package reduced to what the exporters need.
 pub type Pkg = (String, String, Option<String>);
@@ -144,14 +144,60 @@ impl Format {
     }
 }
 
+/// What `export` did, or would do, with one format's file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Outcome {
+    /// No package maps to this format, so no file.
+    NoPackages,
+    Wrote(PathBuf),
+    /// The natural filename was taken by a file LiNix did not write, so the export landed
+    /// beside it under `renamed`.
+    WroteBeside { taken: PathBuf, renamed: PathBuf },
+    /// `--dry-run`: this is where the bytes would have gone.
+    WouldWrite(PathBuf),
+}
+
+/// The export's filename with `.linix` inserted before the extension, used when the real
+/// filename is already taken: `package.json` -> `package.linix.json`, `Brewfile` ->
+/// `Brewfile.linix`.
+fn beside(name: &str) -> String {
+    match name.split_once('.') {
+        Some((stem, ext)) => format!("{}.linix.{}", stem, ext),
+        None => format!("{}.linix", name),
+    }
+}
+
+/// The first free name in the `beside` family, so a second export never clobbers the first
+/// export's fallback either.
+async fn free_path(out_dir: &Path, name: &str) -> PathBuf {
+    let first = out_dir.join(beside(name));
+    if !tokio::fs::try_exists(&first).await.unwrap_or(false) {
+        return first;
+    }
+    for n in 2..1000 {
+        let p = out_dir.join(format!("{}.{}", beside(name), n));
+        if !tokio::fs::try_exists(&p).await.unwrap_or(false) {
+            return p;
+        }
+    }
+    first
+}
+
 /// Emit one or all formats. When `to_stdout`, a single format is printed; otherwise files are
-/// written into `out_dir`. Returns the list of (filename, wrote?) for reporting.
+/// written into `out_dir`.
+///
+/// `export` runs in directories full of real files it did not create — the default `out_dir`
+/// is `.`, and `package.json`/`Brewfile` are exactly the names a real project already uses.
+/// So an existing file is never replaced unless `force` says to: the export goes to a
+/// non-colliding name instead, and the caller reports where.
 pub async fn export(
     app: &App,
     format: Option<Format>,
     out_dir: &Path,
     to_stdout: bool,
-) -> Result<Vec<(String, bool)>> {
+    force: bool,
+    dry_run: bool,
+) -> Result<Vec<(String, Outcome)>> {
     let pkgs = managed_pkgs(app).await;
     let formats: Vec<Format> = match format {
         Some(f) => vec![f],
@@ -169,18 +215,44 @@ pub async fn export(
         return Ok(results);
     }
 
-    tokio::fs::create_dir_all(out_dir)
-        .await
-        .map_err(Error::from)?;
+    if !dry_run {
+        tokio::fs::create_dir_all(out_dir)
+            .await
+            .map_err(Error::from)?;
+    }
     for f in formats {
-        match f.render(&pkgs) {
-            Some(text) => {
-                let path = out_dir.join(f.filename());
-                tokio::fs::write(&path, text).await.map_err(Error::from)?;
-                results.push((f.filename().to_string(), true));
+        let name = f.filename().to_string();
+        let text = match f.render(&pkgs) {
+            Some(t) => t,
+            None => {
+                results.push((name, Outcome::NoPackages));
+                continue;
             }
-            None => results.push((f.filename().to_string(), false)),
+        };
+        let natural = out_dir.join(&name);
+        let taken = tokio::fs::try_exists(&natural).await.unwrap_or(false);
+
+        let (target, outcome) = if taken && !force {
+            let alt = free_path(out_dir, &name).await;
+            let o = if dry_run {
+                Outcome::WouldWrite(alt.clone())
+            } else {
+                Outcome::WroteBeside {
+                    taken: natural.clone(),
+                    renamed: alt.clone(),
+                }
+            };
+            (alt, o)
+        } else if dry_run {
+            (natural.clone(), Outcome::WouldWrite(natural.clone()))
+        } else {
+            (natural.clone(), Outcome::Wrote(natural.clone()))
+        };
+
+        if !dry_run {
+            tokio::fs::write(&target, text).await.map_err(Error::from)?;
         }
+        results.push((name, outcome));
     }
     Ok(results)
 }
@@ -242,5 +314,29 @@ mod tests {
         let pkgs = vec![p("cargo", "ripgrep", Some("14.1"))];
         assert!(Format::Brew.render(&pkgs).is_none());
         assert!(Format::Apt.render(&pkgs).is_none());
+    }
+
+    #[test]
+    fn beside_keeps_the_extension_readable() {
+        assert_eq!(beside("package.json"), "package.linix.json");
+        assert_eq!(beside("requirements.txt"), "requirements.linix.txt");
+        assert_eq!(beside("Brewfile"), "Brewfile.linix");
+        assert_eq!(beside("Aptfile"), "Aptfile.linix");
+    }
+
+    #[tokio::test]
+    async fn free_path_steps_past_a_fallback_that_is_also_taken() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+
+        // Nothing taken: the plain `.linix` name.
+        assert_eq!(free_path(d, "package.json").await, d.join("package.linix.json"));
+
+        // The fallback itself exists, so a second export must not clobber the first one's.
+        tokio::fs::write(d.join("package.linix.json"), "first").await.unwrap();
+        assert_eq!(
+            free_path(d, "package.json").await,
+            d.join("package.linix.json.2")
+        );
     }
 }

@@ -120,7 +120,7 @@ impl StateRegistry {
 
         if !path.exists() {
             info!(
-                "StateRegistry: No state file found at {:?}. Initializing empty registry.",
+                "No state file found at {:?}. Initializing empty registry.",
                 path
             );
             return Ok(Self::new(path.to_path_buf()));
@@ -130,7 +130,7 @@ impl StateRegistry {
             .map_err(|e| Error::Io(format!("Registry Read Error at {:?}: {}", path, e)))?;
 
         if data.trim().is_empty() {
-            trace!("StateRegistry: State file is empty, returning default.");
+            trace!("State file is empty, returning default.");
             return Ok(Self::new(path.to_path_buf()));
         }
 
@@ -142,7 +142,7 @@ impl StateRegistry {
         registry.path = path.to_path_buf();
 
         debug!(
-            "StateRegistry: Successfully loaded {} managed packages and {} ghosts.",
+            "Successfully loaded {} managed packages and {} ghosts.",
             registry.packages.len(),
             registry.ghosts.len()
         );
@@ -155,7 +155,7 @@ impl StateRegistry {
     }
 
     pub fn save(&self) -> Result<()> {
-        trace!("StateRegistry: Initiating atomic save to {:?}", self.path);
+        trace!("saving state to {:?}", self.path);
 
         if let Some(parent) = self.path.parent() {
             if !parent.exists() {
@@ -211,7 +211,7 @@ impl StateRegistry {
         };
 
         trace!(
-            "StateRegistry: Finalizing addition of {}:{} (Source: {:?}, Transient: {})",
+            "Finalizing addition of {}:{} (Source: {:?}, Transient: {})",
             backend,
             name,
             new_pkg.source,
@@ -220,7 +220,7 @@ impl StateRegistry {
 
         self.packages.push(new_pkg);
         debug!(
-            "StateRegistry: Package {}:{} is now under management.",
+            "Package {}:{} is now under management.",
             backend, name
         );
     }
@@ -249,12 +249,12 @@ impl StateRegistry {
                 },
             );
             debug!(
-                "StateRegistry: Package {}:{} archived as Ghost.",
+                "Package {}:{} archived as Ghost.",
                 backend, name
             );
         } else {
             trace!(
-                "StateRegistry: Requested removal of {}:{} but it was not managed.",
+                "Requested removal of {}:{} but it was not managed.",
                 backend,
                 name
             );
@@ -276,7 +276,7 @@ impl StateRegistry {
         {
             self.packages.remove(pos);
             debug!(
-                "StateRegistry: Package {}:{} forgotten (left installed).",
+                "Package {}:{} forgotten (left installed).",
                 backend, name
             );
             true
@@ -296,7 +296,7 @@ impl StateRegistry {
 
     pub fn get_transient_packages(&self, session_id: &str) -> Vec<(String, String)> {
         trace!(
-            "StateRegistry: Scanning for transient packages in session '{}'",
+            "Scanning for transient packages in session '{}'",
             session_id
         );
         self.packages

@@ -26,7 +26,7 @@ impl<'a> UniversalSearch<'a> {
     #[instrument(skip(self, query))]
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
         info!(
-            "Search: Initiating parallel universal query for '{}'...",
+            "searching all backends for '{}'",
             query
         );
 
@@ -40,7 +40,7 @@ impl<'a> UniversalSearch<'a> {
         .collect();
 
         if searchable_backends.is_empty() {
-            debug!("Search: No searchable backends are currently available.");
+            debug!("No searchable backends are currently available.");
             return Ok(vec![]);
         }
 
@@ -59,13 +59,13 @@ impl<'a> UniversalSearch<'a> {
                     Error::Transaction(format!("Search concurrency semaphore failure: {}", e))
                 })?;
 
-                debug!("Search: Querying backend '{}'...", b.name());
+                debug!("Querying backend '{}'...", b.name());
 
                 if let Some(searchable) = b.as_searchable() {
                     match searchable.search(&query_string).await {
                         Ok(results) => {
                             trace!(
-                                "Search: Backend '{}' returned {} results.",
+                                "Backend '{}' returned {} results.",
                                 b.name(),
                                 results.len()
                             );
@@ -98,11 +98,11 @@ impl<'a> UniversalSearch<'a> {
                     }
                 }
                 Ok(Err(e)) => {
-                    warn!("Search: {}", e);
+                    warn!("{}", e);
                     failed_backends.push(e.to_string());
                 }
                 Err(panic_err) => {
-                    error!("Search: A worker thread panicked: {}", panic_err);
+                    error!("A worker thread panicked: {}", panic_err);
                     failed_backends.push(format!("worker panic: {}", panic_err));
                 }
             }
@@ -122,7 +122,7 @@ impl<'a> UniversalSearch<'a> {
         }
 
         info!(
-            "Search: Completed. Discovered {} unique candidates.",
+            "Completed. Discovered {} unique candidates.",
             all_packages.len()
         );
         Ok(all_packages)

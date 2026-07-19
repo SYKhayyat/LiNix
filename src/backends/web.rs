@@ -259,16 +259,36 @@ impl Installable for WebInstallable {
 
     async fn remove(&self, urls: &[String], _: bool) -> Result<()> {
         let mut state = self.core.load_state().await;
+        let mut failures = Vec::new();
         for url in urls {
             if let Some(entry) = state.remove(url) {
+                let mut errors = Vec::new();
                 if let Some(ref l) = entry.bin_link {
-                    let _ = tokio::fs::remove_file(l).await;
+                    if let Err(e) = crate::utils::remove_deployed_path(l).await {
+                        errors.push(e);
+                    }
                 }
-                let _ = tokio::fs::remove_dir_all(entry.local_path).await;
-                info!("Web: Removed resource: {}", url);
+                if let Err(e) = crate::utils::remove_deployed_path(&entry.local_path).await {
+                    errors.push(e);
+                }
+                if errors.is_empty() {
+                    info!("Web: Removed resource: {}", url);
+                } else {
+                    // The file is still on disk and still on PATH. Dropping it from state
+                    // anyway would make it drift no `sync` can see, so put the record back.
+                    state.insert(url.clone(), entry);
+                    failures.push(format!("{}: {}", url, errors.join("; ")));
+                }
             }
         }
         self.core.save_state(&state).await?;
+        if !failures.is_empty() {
+            return Err(Error::Other(format!(
+                "could not remove {} web resource(s), still on disk: {}",
+                failures.len(),
+                failures.join(", ")
+            )));
+        }
         Ok(())
     }
 }

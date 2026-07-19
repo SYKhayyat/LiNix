@@ -139,9 +139,11 @@ impl Installable for AppImageInstallable {
 
             let link_path = bin_dir.join(link_name);
 
-            if tokio::fs::try_exists(&link_path).await.unwrap_or(false) || link_path.is_symlink() {
-                let _ = tokio::fs::remove_file(&link_path).await;
-            }
+            // The stale link must be gone before the new one is made, or the install records
+            // a path still pointing at the previous version.
+            crate::utils::remove_deployed_path(&link_path)
+                .await
+                .map_err(|e| Error::Io(format!("could not replace {}", e)))?;
 
             #[cfg(unix)]
             {
@@ -170,18 +172,36 @@ impl Installable for AppImageInstallable {
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
         let mut state = self.core.load_state().await;
 
+        let mut failures = Vec::new();
         for name in names {
             if let Some(info) = state.remove(name) {
                 debug!("AppImage: Removing local files for {}", name);
-                let _ = tokio::fs::remove_file(&info.local_path).await;
-                let _ = tokio::fs::remove_file(&info.symlink_path).await;
-                info!("AppImage: Removed {}", name);
+                let mut errors = Vec::new();
+                if let Err(e) = crate::utils::remove_deployed_path(&info.local_path).await {
+                    errors.push(e);
+                }
+                if let Err(e) = crate::utils::remove_deployed_path(&info.symlink_path).await {
+                    errors.push(e);
+                }
+                if errors.is_empty() {
+                    info!("AppImage: Removed {}", name);
+                } else {
+                    state.insert(name.clone(), info);
+                    failures.push(format!("{}: {}", name, errors.join("; ")));
+                }
             } else {
                 warn!("AppImage: No record found for {}, skipping removal.", name);
             }
         }
 
         self.core.save_state(&state).await?;
+        if !failures.is_empty() {
+            return Err(Error::Other(format!(
+                "could not remove {} AppImage(s), still installed: {}",
+                failures.len(),
+                failures.join(", ")
+            )));
+        }
         Ok(())
     }
 }

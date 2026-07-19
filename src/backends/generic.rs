@@ -439,6 +439,10 @@ impl Upgradable for GenericUpgradable {
         Ok(())
     }
 
+    fn has_native_orphan_removal(&self) -> bool {
+        self.core.config.orphan_args.is_some()
+    }
+
     async fn clean_orphans(&self, sudo: bool) -> Result<()> {
         // If the backend declares native orphan-removal args, run them; otherwise be
         // honest that it has no orphan concept (LSP) rather than silently succeeding.

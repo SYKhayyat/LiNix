@@ -281,9 +281,6 @@ impl Upgradable for GoUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        Err(Error::Unsupported("go".into()))
-    }
 }
 
 /// Search is intentionally omitted: Go has no CLI package search (pkg.go.dev is web-only).

@@ -13,7 +13,8 @@ pub enum ActionStatus {
     InProgress,
     Completed,
     Failed,
-    /// A crash `cleanup` has given up on: no longer healable.
+    /// An `InProgress` entry `cleanup` aged out at 4h — the process that started it is
+    /// gone. Still healable: the mutation may have half-run.
     Abandoned,
 }
 
@@ -127,7 +128,7 @@ impl Journal {
 
     /// Atomic because a torn write of the WAL loses the record of an in-flight action.
     pub fn flush(&self) -> Result<()> {
-        trace!("Initiating atomic WAL flush.");
+        trace!("flushing WAL");
 
         let data = serde_json::to_string_pretty(&self.entries)
             .map_err(|e| Error::Other(format!("Failed to serialize Journal: {}", e)))?;
@@ -201,16 +202,23 @@ impl Journal {
         Ok(())
     }
 
-    /// `InProgress` and `Failed` only — what `heal` can still act on.
+    /// Everything that touched the system and did not finish — what `heal` can act on.
     ///
-    /// Deliberately not "everything that isn't Completed": `Pending` never touched the
-    /// system, and `Abandoned` is a crash `cleanup` has already given up on (4h). That
-    /// means a crash left unhealed for 4 hours stops being healable, because `cleanup`
-    /// reclassifies it out of this set.
+    /// `Pending` is excluded because it never reached a backend. `Abandoned` is included:
+    /// it is an `InProgress` entry that `cleanup` aged out at 4h, and aging out is a
+    /// statement about how long ago the process died, not about whether the package it was
+    /// mutating is still half-removed. Excluding it meant a crash left unattended over
+    /// lunch stopped being healable at all — the case where the machine is least likely to
+    /// have been put right by hand in the meantime.
     pub fn get_incomplete_actions(&self) -> Vec<JournalEntry> {
         self.entries
             .values()
-            .filter(|e| e.status == ActionStatus::InProgress || e.status == ActionStatus::Failed)
+            .filter(|e| {
+                matches!(
+                    e.status,
+                    ActionStatus::InProgress | ActionStatus::Failed | ActionStatus::Abandoned
+                )
+            })
             .cloned()
             .collect()
     }
@@ -219,7 +227,7 @@ impl Journal {
     pub fn needs_recovery(&self) -> bool {
         self.entries
             .values()
-            .any(|e| e.status == ActionStatus::InProgress)
+            .any(|e| matches!(e.status, ActionStatus::InProgress | ActionStatus::Abandoned))
     }
 
     /// InProgress and Failed entries are NEVER purged until they are resolved.
@@ -256,7 +264,7 @@ impl Journal {
     }
 
     pub fn cleanup(&mut self) -> Result<()> {
-        debug!("Commencing routine maintenance.");
+        debug!("journal maintenance");
 
         // An InProgress entry older than this is read as a crashed process, not a slow one:
         // the wrong call either abandons a live install or waits forever on a dead one.
@@ -286,6 +294,41 @@ impl Journal {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn an_aged_out_crash_is_still_healable() {
+        // R23: `cleanup` flips an InProgress entry to Abandoned after 4h. That must not take
+        // it out of heal's reach -- a node aborted mid-removal never entered the rollback
+        // history, so the WAL is the only thing that knows the package is half-removed.
+        let tmp = tempdir().unwrap();
+        let mut journal = Journal::at(tmp.path().join("journal.json")).unwrap();
+
+        let id = journal
+            .record_start(JournalAction::Remove {
+                name: "python3".into(),
+                backend: "apt".into(),
+            })
+            .unwrap();
+
+        // Backdate past the 4h staleness limit, then age it out.
+        journal.entries.get_mut(&id).unwrap().started_at_unix =
+            (Utc::now() - ChronoDuration::hours(5)).timestamp();
+        journal.cleanup().unwrap();
+
+        assert_eq!(
+            journal.entries[&id].status,
+            ActionStatus::Abandoned,
+            "cleanup should still age the entry out"
+        );
+        assert!(
+            journal.needs_recovery(),
+            "an abandoned mutation must still trigger a heal"
+        );
+        assert!(
+            journal.get_incomplete_actions().iter().any(|e| e.id == id),
+            "an abandoned mutation must still be offered to heal"
+        );
+    }
 
     #[test]
     fn a_corrupt_wal_does_not_brick_every_command() {

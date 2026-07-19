@@ -210,10 +210,26 @@ impl Upgradable for BrewUpgradable {
             .await?;
         Ok(())
     }
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
+    async fn list_orphans(&self) -> Result<Vec<String>> {
+        let out = self
+            .core
+            .executor
+            .run_output("brew", &["autoremove", "--dry-run"], false)
+            .await?;
+        // `--dry-run` prints "Would remove: a b c" plus prose; the formula names are the
+        // lines that are a bare token, which is what every other brew listing looks like.
+        Ok(out
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty() && !l.contains(' ') && !l.starts_with("==>"))
+            .map(|l| l.to_string())
+            .collect())
+    }
+
+    async fn clean_cache(&self, _sudo: bool) -> Result<()> {
         self.core
             .executor
-            .run("brew", &["autoremove"], false)
+            .run("brew", &["cleanup"], false)
             .await?;
         Ok(())
     }

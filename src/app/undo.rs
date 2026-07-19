@@ -298,7 +298,7 @@ impl UndoManager {
 
     async fn execute_restore(&self, snapshot: &Snapshot) -> Result<()> {
         info!(
-            "Undo: Commencing system restoration via {}...",
+            "restoring the filesystem via {}",
             snapshot.backend
         );
 

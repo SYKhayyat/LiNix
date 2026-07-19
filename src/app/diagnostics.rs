@@ -175,7 +175,7 @@ impl FailureDiagnosticEngine {
 
         for suggestion in suggestions {
             info!(
-                "Commencing remediation for '{}'...",
+                "installing {} to fix the failure",
                 suggestion
             );
             let spec = resolver.parse_and_probe_spec(suggestion).await?;
@@ -203,9 +203,9 @@ impl FailureDiagnosticEngine {
                                 state_guard.clone()
                             };
 
-                            let _ = tokio::task::spawn_blocking(move || state_snapshot.save())
+                            tokio::task::spawn_blocking(move || state_snapshot.save())
                                 .await
-                                .map_err(|e| Error::Other(format!("Task panic: {}", e)))?;
+                                .map_err(|e| Error::Other(format!("Task panic: {}", e)))??;
                         }
                         Err(e) => {
                             warn!("Remediation FAILED for {}: {}", suggestion, e)

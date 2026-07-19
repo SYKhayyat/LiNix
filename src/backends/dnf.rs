@@ -252,11 +252,29 @@ impl Upgradable for DnfUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
-        info!("DNF: Removing unused dependencies...");
+    async fn list_orphans(&self) -> Result<Vec<String>> {
+        let out = self
+            .core
+            .executor
+            .run_output(
+                "dnf",
+                &["repoquery", "--unneeded", "--queryformat", "%{name}"],
+                false,
+            )
+            .await?;
+        Ok(out
+            .lines()
+            .map(|l| l.trim())
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect())
+    }
+
+    async fn clean_cache(&self, sudo: bool) -> Result<()> {
+        info!("DNF: Clearing the package cache...");
         self.core
             .executor
-            .run_exclusive("dnf", "dnf", &["autoremove", "-y"], sudo)
+            .run_exclusive("dnf", "dnf", &["clean", "all"], sudo)
             .await?;
         Ok(())
     }

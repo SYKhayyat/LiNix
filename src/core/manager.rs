@@ -113,7 +113,39 @@ pub trait Upgradable: Send + Sync {
 
     async fn upgrade(&self, sudo: bool) -> Result<()>;
 
-    async fn clean_orphans(&self, sudo: bool) -> Result<()>;
+    /// The packages this backend considers orphaned — named, not removed.
+    ///
+    /// Removal is the caller's job precisely because it cannot be the backend's: a set that
+    /// nobody can enumerate cannot be shown to the user, checked against the protected list,
+    /// or counted by the guard. `Unsupported` means this backend has no orphan concept, and
+    /// a backend that cannot list its orphans never has them removed.
+    async fn list_orphans(&self) -> Result<Vec<String>> {
+        Err(crate::core::Error::Unsupported("orphan listing".into()))
+    }
+
+    /// Native orphan removal, for a backend whose orphan set cannot be enumerated.
+    ///
+    /// This is the unpreviewable path: the caller cannot show what will go or check it
+    /// against the protected list, so it must confirm by naming the backend and saying so.
+    /// A backend that implements [`Upgradable::list_orphans`] must not implement this —
+    /// the listable path previews, guards, and removes exactly what it showed.
+    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
+        Err(crate::core::Error::Unsupported("orphan removal".into()))
+    }
+
+    /// Whether [`Upgradable::clean_orphans`] would actually do something.
+    ///
+    /// The caller needs this before it asks the user, and asking the backend by *calling*
+    /// `clean_orphans` would perform the removal it is trying to get permission for.
+    fn has_native_orphan_removal(&self) -> bool {
+        false
+    }
+
+    /// Delete downloaded package archives and other caches. Frees disk and removes no
+    /// installed package — which is why it needs neither a preview nor the guard.
+    async fn clean_cache(&self, _sudo: bool) -> Result<()> {
+        Err(crate::core::Error::Unsupported("cache cleaning".into()))
+    }
 }
 
 #[async_trait]

@@ -210,9 +210,6 @@ impl Upgradable for PsResourceUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        Err(Error::Unsupported("psresource".into()))
-    }
 }
 
 pub fn register(reg: &mut crate::backends::BackendRegistry, exec: &CommandExecutor, _cfg: &Config) {

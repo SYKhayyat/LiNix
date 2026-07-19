@@ -59,3 +59,27 @@ pub fn force_remove(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+/// Delete a file or directory a backend deployed, reporting whether it is actually gone.
+///
+/// An already-absent path counts as removed: the caller's goal is "not on disk", and
+/// `NotFound` means that goal is met. Any other error means the file is still there and
+/// still on the user's PATH, which the caller must not record as a clean removal.
+pub async fn remove_deployed_path(path: impl AsRef<Path>) -> std::result::Result<(), String> {
+    let path = path.as_ref();
+    let meta = match tokio::fs::symlink_metadata(path).await {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(format!("{}: {}", path.display(), e)),
+    };
+    let outcome = if meta.is_dir() {
+        tokio::fs::remove_dir_all(path).await
+    } else {
+        tokio::fs::remove_file(path).await
+    };
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("{}: {}", path.display(), e)),
+    }
+}

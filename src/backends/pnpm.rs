@@ -192,8 +192,8 @@ impl Upgradable for PnpmUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        info!("pnpm: Cleaning global store orphans...");
+    async fn clean_cache(&self, _sudo: bool) -> Result<()> {
+        info!("pnpm: Pruning the global store...");
         self.core
             .executor
             .run("pnpm", &["store", "prune"], false)

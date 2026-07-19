@@ -5,7 +5,7 @@ use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::Command as StdCommand;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -559,14 +559,30 @@ impl SnapshotManager {
             })
             .collect();
         let doomed = policy.select_deletions(&items, now);
+        // The return value is what the caller prints as "pruned N", so it carries only the
+        // ids whose delete actually succeeded — a snapshot still on disk must never be
+        // counted as reaped.
+        let mut pruned = Vec::new();
+        let mut failed = Vec::new();
         for id in &doomed {
             if dry_run {
-                debug!("Snapshot: [DRY-RUN] retention would prune {}", id);
-            } else if let Err(e) = p.delete(id).await {
-                debug!("Snapshot: retention could not delete {}: {}", id, e);
+                debug!("[DRY-RUN] retention would prune {}", id);
+                pruned.push(id.clone());
+            } else {
+                match p.delete(id).await {
+                    Ok(()) => pruned.push(id.clone()),
+                    Err(e) => failed.push(format!("{} ({})", id, e)),
+                }
             }
         }
-        Ok(doomed)
+        if !failed.is_empty() {
+            warn!(
+                "retention could not delete {} snapshot(s), still on disk: {}",
+                failed.len(),
+                failed.join(", ")
+            );
+        }
+        Ok(pruned)
     }
 
     pub async fn restore_snapshot(&self, id: &str) -> Result<()> {

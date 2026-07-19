@@ -251,7 +251,7 @@ impl Upgradable for MiseUpgradable {
         Ok(())
     }
 
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
+    async fn clean_cache(&self, _sudo: bool) -> Result<()> {
         info!("Mise: Pruning unused tool versions from cache...");
         self.core
             .executor

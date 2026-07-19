@@ -249,6 +249,10 @@ impl Upgradable for FlatpakUpgradable {
         Ok(())
     }
 
+    fn has_native_orphan_removal(&self) -> bool {
+        true
+    }
+
     async fn clean_orphans(&self, sudo: bool) -> Result<()> {
         let mut args = self.core.scope_args();
         args.extend(["uninstall", "--unused", "-y", "--noninteractive"]);
