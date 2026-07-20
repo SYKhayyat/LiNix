@@ -39,6 +39,14 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
     resolve to a different file later.
   - Nothing matching your `formats` is an error listing what the release actually offered and
     why each asset was skipped — not a fallback to whatever came first.
+- **`linix path` and `linix edit` find your files for you**, so neither you nor your scripts
+  have to hard-code `~/.config/linix`. `linix path --set DIR` records the repo location in
+  LiNix's own settings file — the one file that lives outside the repo, because a key inside
+  the repo saying where the repo is cannot be read before you know where the repo is. That
+  file holds exactly one key and the parser refuses any other, naming `preferences.toml` as
+  where behaviour settings belong. `--config-dir` overrides it for one run; the order is
+  `--config-dir`, `$LINIX_CONFIG_DIR`, the settings file, the default, and
+  `linix path --explain` says which one won.
 
 ### Safety
 

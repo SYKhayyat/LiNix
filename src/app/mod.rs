@@ -7,6 +7,7 @@ pub mod export;
 pub mod fleet;
 pub mod hooks;
 pub mod insight;
+pub mod locate;
 pub mod metrics;
 pub mod migrate;
 pub mod module_registry;

@@ -2370,6 +2370,43 @@ Three suspicions did not survive scrutiny:
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
+## Done 2026-07-20 — X.6: finding your files
+
+**Built: `linix path`, `linix edit`, `--config-dir`, and LiNix's own settings file.**
+`src/config/settings.rs` and `src/app/locate.rs`; 19 tests.
+
+- **The settings file holds one key and the parser enforces it.** An unknown key is refused by
+  name and told where it belongs (`preferences.toml`, in the repo). K11 said the refusal should
+  be the parser's job rather than discipline, and it is.
+- **Precedence is `--config-dir` → `$LINIX_CONFIG_DIR` → settings file → default**, resolved in
+  one function that every command goes through, so `linix path` describes the run it is part of
+  rather than a separate guess.
+- **`linix path` prints one line** so `cd $(linix path)` works; `--explain` says which of the
+  four sources won and where the settings file is. `--set DIR` stores it.
+- **`linix edit [FILE]`** opens the repo or a file in it, and refuses anything that climbs out —
+  otherwise it is an arbitrary-file editor that happens to live under a package manager.
+
+**Found by running it, not by reading it: the settings file was landing inside the repo.**
+The obvious spelling — `<config dir>/linix/settings.toml` — collides with the *default repo*,
+which is `<config dir>/linix`. So on a default install the file that says where your repo is
+would have been committed to git and shared across a fleet, **carrying one machine's absolute
+path to every other** — the per-machine hand-maintained state II.1 exists to forbid. It is now
+`<config dir>/linix.settings.toml`, and **a test asserts the settings path is not under the
+default repo**, because the next person to tidy that name will not otherwise know why it is odd.
+
+**Not built from X.6:** K12's symlink case is untested, and `linix config path`/`config edit`
+still exist alongside these. **Those two answer a different question** — the path of
+`config.toml`, LiNix's settings-in-the-repo — but that only holds until the larger cleanup
+below lands, at which point they are two of everything and one must go.
+
+**Owed, and larger than it looks: `preferences.toml` still has no reader.** Part II.1 lists it;
+nothing parses it. What actually holds LiNix's behaviour is `config.toml`, which is not in the
+spec's file list at all, **lives inside the repo, and holds `config_root`** — a key inside the
+file whose location it defines, which is exactly the unresolvable ordering X.6 describes. The
+settings file above resolves the ordering; **it does not yet retire `config.toml`.** That
+rename (`config.toml` → `preferences.toml`, minus `config_root`) is the NO-LEGACY half and is
+not done.
+
 ## Done 2026-07-20 — artifact selection (Part VIII, first half)
 
 **Built: `formats`, `asset`, `bin`, `channel` — parsed, validated, and wired into the `github`

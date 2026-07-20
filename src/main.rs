@@ -166,6 +166,8 @@ async fn main() -> Result<()> {
         Commands::Protected { packages, json } => handle_protected(&app, packages, *json).await,
         Commands::Unmanage { packages, json } => handle_unmanage(&app, packages, *json).await,
         Commands::Config(args) => handle_config(&app, &args.command).await,
+        Commands::Path { explain, set } => handle_path(&cli, *explain, set.as_deref()).await,
+        Commands::Edit { file } => handle_edit(&cli, file.as_deref()).await,
         Commands::Init { force, interactive } => handle_init(&app, *force, *interactive).await,
         Commands::Audit { json } => handle_audit(&app, *json).await,
         Commands::Sbom => handle_sbom(&app).await,
@@ -3153,6 +3155,40 @@ fn default_editor() -> &'static str {
     }
 }
 
+async fn handle_path(cli: &Cli, explain: bool, set: Option<&std::path::Path>) -> Result<()> {
+    use linix::app::locate;
+
+    if let Some(dir) = set {
+        let written = locate::set_root(dir)?;
+        println!("Config repo set to {}", dir.display());
+        println!("Stored in {}", written.display());
+        return Ok(());
+    }
+
+    let resolved = locate::locate(cli.config_dir.as_deref())?;
+    println!("{}", locate::render_path(&resolved, explain));
+    Ok(())
+}
+
+async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
+    use linix::app::locate;
+
+    let resolved = locate::locate(cli.config_dir.as_deref())?;
+    let target = locate::resolve_target(&resolved.path, file)?;
+    let editor = locate::editor_command();
+
+    let status = tokio::process::Command::new(&editor)
+        .arg(&target)
+        .status()
+        .await
+        .with_context(|| format!("launching editor '{}'", editor))?;
+
+    if !status.success() {
+        anyhow::bail!("editor '{}' exited abnormally.", editor);
+    }
+    Ok(())
+}
+
 async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
     let path = app.config.config_file.clone();
     match cmd {
@@ -4241,6 +4277,11 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
     if cli.no_progress {
         config.show_progress = false;
     }
+    // Where the repo is: --config-dir, then $LINIX_CONFIG_DIR, then LiNix's settings file,
+    // then the default. Applied here so every command resolves it the same way and
+    // `linix path` is telling the truth about the run it is part of.
+    let located = linix::app::locate::locate(cli.config_dir.as_deref())?;
+    config.config_root = located.path;
     // Fold the user-editable keep-list into the protected set. It lives in the GLOBAL
     // groups folder, which `-g` no longer moves — previously `-g /tmp/foo` made this look
     // for /tmp/foo/keep.txt, found nothing, returned early, and every keep-list protection

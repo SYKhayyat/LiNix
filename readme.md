@@ -71,6 +71,12 @@ is using it.
 directory is meant to be a git repo** — `linix git init` turns on version control, after which
 every sync commits, and `linix rollback <commit>` puts the machine back.
 
+`linix path` prints where they are, so you never have to remember. To keep them somewhere else
+— a dotfiles repo, a shared drive — `linix path --set ~/dotfiles/linix` records it once and
+every later run finds it. For a single run, `--config-dir` wins over everything; the full order
+is `--config-dir`, then `$LINIX_CONFIG_DIR`, then the stored path, then the default, and
+`linix path --explain` tells you which one answered.
+
 ```
 modules/       your lists of packages       lowercase names, *.txt
 profiles/      named sets you turn on and off       Capitalized names
@@ -273,6 +279,8 @@ a number typed into a README does.
 | `absent` | Every `absent:` rule in force, and which module it comes from |
 | `conflicts` | The same tool pinned to different versions by different backends |
 | `doctor` | Per-backend readiness, config and layout integrity; `--fix` repairs what is safe |
+| `path` | Print your config repo directory, so `cd $(linix path)` works. `--explain` says what decided it; `--set DIR` stores it |
+| `edit` | Open the repo, or one file in it, in `$VISUAL`/`$EDITOR` |
 
 **Cleaning up**
 

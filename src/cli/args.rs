@@ -25,6 +25,13 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
 
+    /// Use this directory as the config repo, for this run only.
+    ///
+    /// Outranks $LINIX_CONFIG_DIR and the stored path in LiNix's settings file.
+    /// `linix path` says which of the four sources won.
+    #[arg(long, global = true, value_name = "DIR")]
+    pub config_dir: Option<PathBuf>,
+
     /// Carry out a removal the guard refuses: one over `max_removals`, or touching a
     /// protected/essential package. Global because every command that can delete needs
     /// it. Deliberately NOT implied by --yes: scripts and CI pass -y everywhere, and an
@@ -413,6 +420,26 @@ pub enum Commands {
 
     /// Inspect and scaffold the LiNix application configuration file
     Config(ConfigArgs),
+
+    /// Print the config repo directory, so `cd $(linix path)` works
+    Path {
+        /// Also say which of --config-dir, $LINIX_CONFIG_DIR, the settings file or the
+        /// built-in default decided it, and where the settings file lives
+        #[arg(long)]
+        explain: bool,
+
+        /// Store this directory in LiNix's settings file as the repo location, so every
+        /// later run finds it without a flag or an environment variable
+        #[arg(long, value_name = "DIR")]
+        set: Option<PathBuf>,
+    },
+
+    /// Open the config repo — or one file in it — in $VISUAL/$EDITOR
+    Edit {
+        /// A file inside the repo (`priority`, `active`, `modules/dev.txt`). Without one,
+        /// the repo directory itself is opened.
+        file: Option<String>,
+    },
 
     /// Scaffold the LiNix directory structure (groups, modules, data dirs) and a
     /// starter manifest, so a fresh machine is ready for `linix sync`

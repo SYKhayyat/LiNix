@@ -2,8 +2,10 @@
 pub mod config;
 pub mod grammar;
 pub mod parser;
+pub mod settings;
 
 pub use config::{Config, GuardSettings};
+pub use settings::{resolve_root, ResolvedRoot, RootSource, Settings};
 
 /// Module-level constants for configuration defaults
 pub const DEFAULT_BACKEND: &str = "apt";
