@@ -139,16 +139,13 @@ impl Installable for AppImageInstallable {
 
             let link_path = bin_dir.join(link_name);
 
-            // The stale link must be gone before the new one is made, or the install records
-            // a path still pointing at the previous version.
-            crate::utils::remove_deployed_path(&link_path)
-                .await
-                .map_err(|e| Error::Io(format!("could not replace {}", e)))?;
-
-            #[cfg(unix)]
-            {
-                tokio::fs::symlink(&dest_path, &link_path).await?;
-            }
+            crate::utils::deploy_executable(
+                &dest_path,
+                &link_path,
+                &self.core.install_dir,
+                state.get(&spec.name).map(|s| s.symlink_path.as_str()),
+            )
+            .await?;
 
             state.insert(
                 spec.name.clone(),

@@ -391,46 +391,20 @@ impl Installable for GithubInstallable {
                 .map_err(|e| Error::PackageNotFound(e.to_string()))?;
 
             {
-                let src_path = discovered;
                 #[allow(unused_mut)] // mutated only under cfg(windows)
                 let mut bin_dest = bin_dest_base.clone();
-
                 #[cfg(windows)]
-                {
-                    if bin_dest.extension().is_none() {
-                        bin_dest.set_extension("exe");
-                    }
-                    tokio::fs::copy(&src_path, &bin_dest)
-                        .await
-                        .map_err(Error::from)?;
+                if bin_dest.extension().is_none() {
+                    bin_dest.set_extension("exe");
                 }
 
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let metadata = tokio::fs::metadata(&src_path).await?;
-                    let mut perms = metadata.permissions();
-                    perms.set_mode(0o755);
-                    tokio::fs::set_permissions(&src_path, perms)
-                        .await
-                        .map_err(Error::from)?;
-
-                    if tokio::fs::try_exists(&bin_dest).await.unwrap_or(false)
-                        || bin_dest.is_symlink()
-                    {
-                        tokio::fs::remove_file(&bin_dest)
-                            .await
-                            .map_err(Error::from)?;
-                    }
-                    if let Some(parent) = bin_dest.parent() {
-                        tokio::fs::create_dir_all(parent)
-                            .await
-                            .map_err(Error::from)?;
-                    }
-                    tokio::fs::symlink(&src_path, &bin_dest)
-                        .await
-                        .map_err(Error::from)?;
-                }
+                crate::utils::deploy_executable(
+                    &discovered,
+                    &bin_dest,
+                    &self.core.install_dir,
+                    state.get(&spec.name).and_then(|s| s.bin_path.as_deref()),
+                )
+                .await?;
 
                 final_bin_path = Some(bin_dest.to_string_lossy().to_string());
             }
@@ -530,9 +504,7 @@ pub fn register(
         cfg.config_root().join("locks").join("github.toml"),
         // A secret is the environment only, never a file (II.1) — `preferences.toml` is
         // committed to the repo it lives in, so a token key there is a token in git.
-        std::env::var("LINIX_GITHUB_TOKEN")
-            .ok()
-            .filter(|t| !t.is_empty()),
+        std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty()),
     ));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())

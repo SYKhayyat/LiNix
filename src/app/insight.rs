@@ -423,11 +423,39 @@ impl Declaration {
     }
 }
 
+/// What the resolver knows about `backend:name`: where it is declared, and — on a backend
+/// that picks between artifacts — which `formats` order it will pick with.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Declared {
+    pub declarations: Vec<Declaration>,
+    /// `None` on a backend whose ecosystem publishes one artifact, where there is nothing
+    /// to choose and a `formats` line would be noise.
+    pub formats: Option<String>,
+}
+
+/// The order that applied and which of the three levels set it, as one sentence.
+///
+/// The absent tag is the built-in default: `to_spec` writes the tag only when a level above
+/// it answered.
+fn format_choice(backend: &str, options: &HashMap<String, String>) -> Option<String> {
+    if !crate::backends::artifact::capability::selects_artifacts(backend) {
+        return None;
+    }
+    let read = crate::backends::artifact::ArtifactOptions::read(options).ok()?;
+    let order = read.resolved_formats(&crate::backends::artifact::default_formats());
+    let from = match options.get("__formats_from").map(String::as_str) {
+        Some("line") => "set on the line".to_string(),
+        Some(_) => format!("set by `{}` in `priority`", backend),
+        None => "the built-in default for this machine".to_string(),
+    };
+    Some(format!("{} — {}", order, from))
+}
+
 /// Ask the resolver where `backend:name` is declared.
 ///
 /// An error is returned, never swallowed into "declared nowhere": a `why` that cannot read
 /// your files must say so, or it reports a broken config as an absent declaration.
-async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Vec<Declaration>> {
+async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declared> {
     let resolver =
         crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
@@ -436,12 +464,15 @@ async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Vec<Dec
     let lapsed_keys: Vec<&str> = state.lapsed.iter().map(|(k, _)| k.as_str()).collect();
     let key = format!("{}:{}", backend, name);
 
-    let mut out = Vec::new();
+    let mut out = Declared::default();
     for spec in state.packages.values().flatten() {
         if spec.backend != backend || spec.name != name {
             continue;
         }
-        out.push(Declaration {
+        if out.formats.is_none() {
+            out.formats = format_choice(backend, &spec.options);
+        }
+        out.declarations.push(Declaration {
             at: spec
                 .options
                 .get("__source")
@@ -504,7 +535,9 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
     for (backend, name, version, source, expires) in matches {
         // Where your files declare it, from the resolver — the same answer `sync` acts on.
         let found = declarations_of(app, &backend, &name).await?;
-        let declarations: Vec<String> = found.iter().map(|d| d.describe()).collect();
+        let formats = found.formats.clone();
+        let declarations: Vec<String> =
+            found.declarations.iter().map(|d| d.describe()).collect();
 
         // How it got into the registry, which is a different question: `adopt` took it, a
         // hook caught it, `linix install` put it there.
@@ -557,6 +590,7 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
                 "version": version,
                 "why": prov,
                 "declared_in": declarations,
+                "formats": formats,
                 "lease_expires": lease,
                 "required_by": dependents,
             }));
@@ -567,6 +601,9 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
             for (i, d) in declarations.iter().enumerate() {
                 let label = if i == 0 { "declared:" } else { "" };
                 println!("  {:<12} {}", label, d);
+            }
+            if let Some(f) = &formats {
+                println!("  formats:     {}", f);
             }
             if let Some(l) = &lease {
                 println!("  lease:       temporary — expires {}", l);
@@ -600,6 +637,52 @@ mod tests {
             name: name.into(),
             version: version.map(String::from),
         }
+    }
+
+    fn opts(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_backend_that_installs_one_artifact_gets_no_formats_line() {
+        assert_eq!(format_choice("apt", &opts(&[])), None);
+        assert_eq!(format_choice("cargo", &opts(&[("formats", "deb")])), None);
+    }
+
+    #[test]
+    fn the_line_says_so_when_the_declaration_carried_formats() {
+        let c = format_choice(
+            "github",
+            &opts(&[("formats", "deb;tarball"), ("__formats_from", "line")]),
+        )
+        .unwrap();
+        assert_eq!(c, "deb, tarball — set on the line");
+    }
+
+    #[test]
+    fn the_priority_file_says_so_when_the_backend_body_won() {
+        let c = format_choice(
+            "github",
+            &opts(&[
+                ("formats", "appimage;binary"),
+                ("__formats_from", "priority (github)"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(c, "appimage, binary — set by `github` in `priority`");
+    }
+
+    #[test]
+    fn an_absent_tag_is_the_built_in_default_and_prints_this_machines_order() {
+        let c = format_choice("github", &opts(&[])).unwrap();
+        let expected = crate::backends::artifact::default_formats();
+        assert_eq!(
+            c,
+            format!("{} — the built-in default for this machine", expected)
+        );
     }
 
     #[test]

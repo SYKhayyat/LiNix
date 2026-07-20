@@ -208,7 +208,13 @@ registry.json       what LiNix currently owns
 snapshots/          snapshot metadata, tagged with commit hashes
 ```
 
-**Secrets** — the environment only. `LINIX_GITHUB_TOKEN`. Never a file.
+**Secrets** — the environment only. `GITHUB_TOKEN`. Never a file.
+
+*This said `LINIX_GITHUB_TOKEN` until 2026-07-20, and the code never matched it. Ruled the
+other way: `GITHUB_TOKEN` is the name `gh` and CI already set, so a machine that has one gets
+the higher rate limit without being told to export it twice. The namespacing argument does not
+apply to a value that is unambiguously a GitHub credential — and one name either way, never
+both.*
 
 **Facts about this machine** — **detected, never configured.** Core count, whether btrfs /
 ZFS / Timeshift exists and where, which backends are installed. LiNix looks; it does not
@@ -2670,7 +2676,10 @@ VIII.2 actually names — had no options concept at all. `Priority` was a `Vec<S
   which is what the comment at the parse site always claimed happened.
 
 **Also recorded, not built:** `to_spec` writes `__formats_from` (`line` or `priority (github)`)
-so D14's `why` has a reason to print. Nothing reads it yet.
+so D14's `why` has a reason to print. **`why` now reads it** (`app/insight.rs`): on a backend
+that selects artifacts it prints `formats:` — the order that applied and which of the three
+levels set it, an absent tag meaning the built-in default. Backends whose ecosystem publishes
+one artifact get no such line, gated on `selects_artifacts`.
 
 **D7 and D9 are adopted** — see their register entries. Both owe a Part II home and a Part V
 entry, and neither has one yet.
@@ -2699,10 +2708,39 @@ the ref's branch (`app//branch`) rather than `--branch=`, because the install is
 command-wide flag would apply one spec's channel to every package in the batch. `snap` gained
 the test it never had.
 
-**`LINIX_GITHUB_TOKEN`, not `GITHUB_TOKEN`.** II.1 names the first; the code read the second.
-II.1 is the target state, so the code moved. *Worth a second look:* `GITHUB_TOKEN` is the name
-`gh` and most CI already set, so the spec's name may be the wrong one — but one name either
-way, never both.
+### One way onto `PATH`, and it is not `shim:` (D4, corrected)
+
+**There were four mechanisms for putting an executable on `PATH`**, and the discovery that
+started this was that D4's instruction — "reuse `shim:`" — describes something `shim:` cannot
+do. A shim is the linix binary under another name, re-dispatching by running the bare name
+through `PATH`; aimed at an extracted binary that is not on `PATH`, it finds itself. **`shim:`
+is a re-dispatch mechanism, not a deployment one.**
+
+So `github:`, `web:` and `appimage:` each hand-rolled their own symlink, and **all three had
+the same bug: they deleted whatever already sat at `~/.local/bin/<name>` without asking who put
+it there.** `ShimManager` refuses exactly that (S4), so one shared directory had opposite
+safety answers depending on which backend reached it first.
+
+**Built:** one `deploy_executable` in `utils/file.rs`, beside `remove_deployed_path`, which is
+its mirror. All three backends call it. A destination is LiNix's to replace when it is absent,
+when it is a symlink pointing inside that backend's own artifact directory, or when it is the
+exact path the backend recorded deploying last time — the last being what identifies a Windows
+copy, which carries no pointer home. Anything else is an error naming the file, and the user's
+binary survives.
+
+**Two bugs fell out of the consolidation:** `web:` on Windows copied to `tool.exe` but recorded
+`tool`, so its own removal path looked for a file that was never written; and `appimage:` used
+`remove_deployed_path` on the destination, which is the *removal* helper and does no ownership
+check at all.
+
+*(Options offered: one shared helper with `shim:` left alone, extend `ShimManager` to cover
+both, or fix the clobber in place and keep three implementations.)*
+
+**`GITHUB_TOKEN`, and II.1 was the one that moved** (owner ruling, 2026-07-20). The spec said
+`LINIX_GITHUB_TOKEN` and the code had always read `GITHUB_TOKEN`; the ruling kept the code's
+name, because it is the one `gh` and CI already set and the value is unambiguously a GitHub
+credential. *(Options offered: the conventional name, the namespaced name, or the namespaced
+one with a fallback — the fallback refused as two paths for one question.)*
 
 ## Audit 2026-07-20 — every claim in this document checked against the tree
 
@@ -3157,7 +3195,7 @@ declaration touches the state model (`GithubState` holds one `bin_path`), so the
 and flatpak backends (parsed and refused elsewhere, but the backends do not read it yet — *false
 for snap as of 2026-07-20: `snap.rs:76-78` pushes `--channel`; flatpak only*), the
 lock file half of VIII.2 (the resolved asset is recorded in the backend's own state, not in
-`locks/github`), and `why` explaining the selection (D14).
+`locks/github`) — *D14 is now built: `why` prints the order and which level set it.*
 
 **Suite: 575 lib tests *(650 as re-counted 2026-07-20; 718 total)* + integration all passing, `cargo build --all-targets` clean,
 `cargo clippy --all-targets` silent, `linix --help` and `linix check` run** (measured
@@ -4376,9 +4414,16 @@ it is the executable, and what lands on `PATH`.
 **RULED (owner, 2026-07-20): extract, find the executable, shim it — with `@bin=` to name it
 when the guess is wrong.**
 
-- LiNix extracts to its own artifact directory and **reuses `shim:` (II.2) rather than inventing
-  a second way onto `PATH`.** A second PATH mechanism is the two-of-everything failure with a
-  new name.
+- LiNix extracts to its own artifact directory and **must not invent a second way onto `PATH`.**
+  A second PATH mechanism is the two-of-everything failure with a new name.
+
+  > **Corrected 2026-07-20: this said "reuses `shim:`", and `shim:` cannot do this job.** A
+  > shim is the linix binary deployed under the target's name; on startup it reads its own
+  > filename and re-dispatches, running the bare name through `PATH`. Pointed at an extracted
+  > binary that is *not* on `PATH`, it would find itself. `shim:` is a re-dispatch mechanism,
+  > not a deployment one, and the two are different features that happen to write to the same
+  > directory. **The rule that survives is the one that mattered: one deployment mechanism, not
+  > one per backend.** See the 2026-07-20 entry in Part VII.
 - **The default guesses**, by looking for an executable whose name matches the package. The guess
   is *reported* in the plan, like D3's — the same discipline, for the same reason.
 - **`@bin=PATH` names the executable inside the archive** (`github:foo/bar@bin=build/bar`) and
@@ -5164,6 +5209,21 @@ machine is now missing declared software and the command is halfway. Snapshot-an
 (II.10's pre-sync snapshot path) is the existing mechanism and probably the answer, but it has
 to be decided, because "rebuild left me with nothing" is the review this feature gets if it is
 not.
+
+**RULED and BUILT (owner, 2026-07-20): snapshot, and revert on a failed reinstall.**
+*(Options offered: snapshot-and-revert, stop-and-report, or refuse to start without a snapshot
+provider.)* Three things the ruling settles that the question did not contain:
+
+1. **One snapshot, taken before the first removal — not one per batch.** A per-batch snapshot
+   could only restore the batch that failed, and by then an earlier backend has already been
+   rebuilt on top of it. The unit of the rollback is the rebuild, not the batch.
+2. **No snapshot provider is not a refusal.** `rebuild` still runs and says up front that a
+   failure cannot be rolled back automatically, falling back to stop-and-name-what-is-missing.
+   Refusing outright would make the command unavailable on every plain ext4 box, which is most
+   of them.
+3. **A failed *restore* is reported as its own outcome.** The machine is then both half-rebuilt
+   and un-restored, and saying "rolled back" would be a lie about the state the user is in.
+   That error names the snapshot and says to restore it by hand before anything else.
 
 **K4 — Is `clean_cache_on_remove` per-package on every backend, or only where LiNix knows the
 artifact?** LiNix knows the file for `github:`/`web:`/`appimage:` (it is in `locks/`). For apt

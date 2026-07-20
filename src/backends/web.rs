@@ -199,43 +199,22 @@ impl Installable for WebInstallable {
                     .map_err(|e| Error::Other(e.to_string()))?;
 
                 if let Some(src_path) = bin_src_result? {
-                    let bin_dest = bin_dest_base.clone();
-                    if let Some(parent) = bin_dest.parent() {
-                        tokio::fs::create_dir_all(parent)
-                            .await
-                            .map_err(Error::from)?;
-                    }
-
-                    if bin_dest.exists() || bin_dest.is_symlink() {
-                        tokio::fs::remove_file(&bin_dest)
-                            .await
-                            .map_err(Error::from)?;
-                    }
-
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        let metadata = tokio::fs::metadata(&src_path).await?;
-                        let mut perms = metadata.permissions();
-                        perms.set_mode(0o755);
-                        tokio::fs::set_permissions(&src_path, perms)
-                            .await
-                            .map_err(Error::from)?;
-                        tokio::fs::symlink(&src_path, &bin_dest)
-                            .await
-                            .map_err(Error::from)?;
-                    }
-
+                    // The recorded path has to be the one that was written, extension and
+                    // all, or the removal path looks for a file that was never there.
+                    #[allow(unused_mut)] // mutated only under cfg(windows)
+                    let mut bin_dest = bin_dest_base.clone();
                     #[cfg(windows)]
-                    {
-                        let mut win_bin_dest = bin_dest.clone();
-                        if win_bin_dest.extension().is_none() {
-                            win_bin_dest.set_extension("exe");
-                        }
-                        tokio::fs::copy(&src_path, &win_bin_dest)
-                            .await
-                            .map_err(Error::from)?;
+                    if bin_dest.extension().is_none() {
+                        bin_dest.set_extension("exe");
                     }
+
+                    crate::utils::deploy_executable(
+                        &src_path,
+                        &bin_dest,
+                        &self.core.install_dir,
+                        state.get(&spec.name).and_then(|s| s.bin_link.as_deref()),
+                    )
+                    .await?;
 
                     final_bin_link = Some(bin_dest.to_string_lossy().to_string());
                 }

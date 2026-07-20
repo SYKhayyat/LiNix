@@ -615,8 +615,8 @@ async fn handle_rebuild(
     }
     println!(
         "\nEach backend's packages are removed together, then reinstalled together. If a \
-         reinstall fails,\nthat backend's software is missing until it succeeds — later \
-         backends are not started."
+         reinstall fails,\nthe whole rebuild rolls back to a snapshot taken before the first \
+         removal — or, where no\nsnapshot provider exists, stops and names what is missing."
     );
 
     if app.config.dry_run {
@@ -637,6 +637,29 @@ async fn handle_rebuild(
         if !proceed {
             return Ok(());
         }
+    }
+
+    // K3: a rebuild removes before it installs, so a failed reinstall leaves the machine
+    // missing declared software. The snapshot is taken before the first removal, because a
+    // snapshot taken per batch could only restore the batch that failed — and by then an
+    // earlier batch may already have been rebuilt on top of it.
+    let snapshot = match app
+        .snapshot_manager
+        .auto_snapshot(linix::core::snapshot::SnapshotLabel::PreRebuild)
+        .await
+    {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("could not take a pre-rebuild snapshot ({}).", e);
+            None
+        }
+    };
+    match &snapshot {
+        Some(s) => info!("snapshot {} taken; a failed reinstall rolls back to it.", s.id),
+        None => warn!(
+            "no snapshot provider here, so a failed reinstall cannot be rolled back \
+             automatically."
+        ),
     }
 
     let engine = app.sync_engine().await;
@@ -666,18 +689,50 @@ async fn handle_rebuild(
             let idx = up.graph.add_node(GraphAction::Install(spec.clone()));
             up.install_map.insert(spec.name.clone(), idx);
         }
-        // K3: the removal has already happened. If this fails the batch's software is gone,
-        // so say which packages and stop — starting the next backend would widen a hole.
+        // The removal has already happened, so a failure here means the batch's software is
+        // gone. Roll the whole rebuild back rather than leaving a half-rebuilt machine.
         if let Err(e) = engine.sync(up, GuardScope::Rebuild).await {
+            let Some(snap) = &snapshot else {
+                anyhow::bail!(
+                    "rebuild of `{}` failed while reinstalling: {}\n\n\
+                     These packages were removed and are NOT back:\n    {}\n\n\
+                     There was no snapshot to roll back to. Re-run \
+                     `linix rebuild --backend {}` once the cause is fixed.\n\
+                     Remaining backends were not started.",
+                    batch.backend,
+                    e,
+                    batch.names().join(" "),
+                    batch.backend
+                );
+            };
+            warn!(
+                "rebuild of `{}` failed while reinstalling ({}); rolling back to snapshot {}...",
+                batch.backend, e, snap.id
+            );
+            // A failed restore is the worse outcome and must not be reported as a rollback:
+            // the machine is then both half-rebuilt and un-restored, and the user needs to
+            // know that rather than be told it was handled.
+            if let Err(restore_err) = app.snapshot_manager.restore_snapshot(&snap.id).await {
+                anyhow::bail!(
+                    "rebuild of `{}` failed while reinstalling: {}\n\
+                     AND the rollback to snapshot {} failed: {}\n\n\
+                     These packages were removed and are NOT back:\n    {}\n\n\
+                     Restore snapshot {} by hand before doing anything else.",
+                    batch.backend,
+                    e,
+                    snap.id,
+                    restore_err,
+                    batch.names().join(" "),
+                    snap.id
+                );
+            }
             anyhow::bail!(
                 "rebuild of `{}` failed while reinstalling: {}\n\n\
-                 These packages were removed and are NOT back:\n    {}\n\n\
-                 The pre-sync snapshot (if one was taken) can restore them, or re-run \
-                 `linix rebuild --backend {}` once the cause is fixed.\n\
-                 Remaining backends were not started.",
+                 Rolled back to snapshot {} — the machine is as it was before the rebuild \
+                 started.\nRe-run `linix rebuild --backend {}` once the cause is fixed.",
                 batch.backend,
                 e,
-                batch.names().join(" "),
+                snap.id,
                 batch.backend
             );
         }

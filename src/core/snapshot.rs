@@ -94,6 +94,7 @@ pub enum SnapshotLabel {
     PreUpgrade,
     PurgeUnmanaged,
     PreCanary,
+    PreRebuild,
 }
 
 impl SnapshotLabel {
@@ -103,6 +104,7 @@ impl SnapshotLabel {
             SnapshotLabel::PreUpgrade => "pre_upgrade",
             SnapshotLabel::PurgeUnmanaged => "purge-unmanaged",
             SnapshotLabel::PreCanary => "pre_canary",
+            SnapshotLabel::PreRebuild => "pre_rebuild",
         }
     }
 }
