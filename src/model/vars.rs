@@ -10,6 +10,10 @@
 use crate::config::grammar::{GrammarError, Origin, Result};
 use std::collections::{BTreeMap, HashSet};
 
+/// The name [`expand`] resolves a standalone value under. Never a real variable name — a
+/// variable is an identifier, and this is not one — so it cannot collide with a user's.
+const VALUE_PLACEHOLDER: &str = "<value>";
+
 /// One `NAME = VALUE` line. `conditional` is whether it came from inside a `when` block, which
 /// is what IX.3 turns on: a top-level line defines a name, a conditional one may only override.
 #[derive(Debug, Clone)]
@@ -149,11 +153,14 @@ fn resolve_one(
             }
             Some(referenced) => {
                 if !raw.contains_key(referenced) {
-                    return Err(GrammarError::new(
-                        def.origin.clone(),
-                        format!("`{}` refers to `${}`, which is not defined", name, referenced),
-                    )
-                    .with_hint("every variable needs a top-level default before it can be used."));
+                    let what = if name == VALUE_PLACEHOLDER {
+                        format!("`${}` is not defined", referenced)
+                    } else {
+                        format!("`{}` refers to `${}`, which is not defined", name, referenced)
+                    };
+                    return Err(GrammarError::new(def.origin.clone(), what).with_hint(
+                        "every variable needs a top-level default in `vars` before it can be used.",
+                    ));
                 }
                 resolve_one(referenced, raw, done, visiting, seen)?;
                 out.push_str(done.get(referenced).map(String::as_str).unwrap_or(""));
@@ -213,20 +220,20 @@ pub fn expand(value: &str, vars: &Vars, origin: &Origin) -> Result<String> {
     let refs: BTreeMap<String, &Definition> = as_defs.iter().map(|(k, v)| (k.clone(), v)).collect();
 
     let holder = Definition {
-        name: "<value>".to_string(),
+        name: VALUE_PLACEHOLDER.to_string(),
         value: value.to_string(),
         origin: origin.clone(),
         conditional: false,
     };
     let mut one = refs.clone();
-    one.insert("<value>".to_string(), &holder);
+    one.insert(VALUE_PLACEHOLDER.to_string(), &holder);
 
     let mut done: Vars = vars.clone();
-    done.remove("<value>");
+    done.remove(VALUE_PLACEHOLDER);
     let mut visiting = Vec::new();
     let mut seen = HashSet::new();
-    resolve_one("<value>", &one, &mut done, &mut visiting, &mut seen)?;
-    Ok(done.remove("<value>").unwrap_or_default())
+    resolve_one(VALUE_PLACEHOLDER, &one, &mut done, &mut visiting, &mut seen)?;
+    Ok(done.remove(VALUE_PLACEHOLDER).unwrap_or_default())
 }
 
 #[cfg(test)]

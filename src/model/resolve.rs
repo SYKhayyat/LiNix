@@ -306,7 +306,51 @@ impl<'a> Resolver<'a> {
             out.statements.extend(doc.statements_for(&self.facts)?);
         }
 
+        self.expand_vars(&mut out.statements)?;
         Ok(out)
+    }
+
+    /// Substitute `$name` into the values of every statement this host reached.
+    ///
+    /// Done here, once, after `when` gating and before anything reads a value — so the prober,
+    /// the merge and the backends all see the same expanded text and none of them has to know
+    /// variables exist. A line the host never reached is never expanded, which is why an unused
+    /// `when` arm cannot fail on a variable that is irrelevant to this machine.
+    fn expand_vars(&self, statements: &mut [(Statement, Origin)]) -> Result<()> {
+        if self.facts.vars.is_empty() {
+            return Ok(());
+        }
+        for (stmt, origin) in statements.iter_mut() {
+            let vars = &self.facts.vars;
+            match stmt {
+                Statement::Package(d) | Statement::Absent(d) => {
+                    for value in d.options.values_mut() {
+                        *value = crate::model::vars::expand(value, vars, origin)?;
+                    }
+                }
+                Statement::Shim(name, opts)
+                | Statement::Service(name, opts)
+                | Statement::Link(name, opts) => {
+                    *name = crate::model::vars::expand(name, vars, origin)?;
+                    for value in opts.values_mut() {
+                        *value = crate::model::vars::expand(value, vars, origin)?;
+                    }
+                }
+                Statement::Repo { spec, .. } => {
+                    *spec = crate::model::vars::expand(spec, vars, origin)?;
+                }
+                // A schedule's `run` is a command line, where `$` belongs to the shell that
+                // will run it. Set math and `use` name files, which are not values.
+                Statement::Schedule(..)
+                | Statement::Use(_)
+                | Statement::Exclude(_)
+                | Statement::Intersect(_)
+                | Statement::Subtract(_)
+                | Statement::Expr(_)
+                | Statement::Var { .. } => {}
+            }
+        }
+        Ok(())
     }
 
     /// A line keeps its file, so a package that survives an intersection still knows which
@@ -1049,6 +1093,80 @@ when $role == travel {
             .resolve()
             .unwrap();
         assert_eq!(names(&d, "apt"), vec!["curl", "mosh"]);
+    }
+
+    #[test]
+    fn a_variable_expands_inside_a_declaration_value() {
+        let f = fx(
+            "Work
+",
+            &[("Work", "use m
+")],
+            &[("m.txt", "link:~/.config/${role}/init.lua
+")],
+        );
+        with_vars(&f, "role = travel
+");
+        let vars = load_vars(&f).unwrap();
+        let d = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts().with_vars(vars))
+            .at(parse_absolute("2026-07-16T12:00").unwrap())
+            .resolve()
+            .unwrap();
+        let names: Vec<String> = d
+            .dependents()
+            .filter_map(|(s, _)| match s {
+                Statement::Link(n, _) => Some(n.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, vec!["~/.config/travel/init.lua"]);
+    }
+
+    #[test]
+    fn a_variable_expands_inside_an_option_value() {
+        let f = fx(
+            "Work
+",
+            &[("Work", "use m
+")],
+            &[("m.txt", "apt:nginx@version=$pinned
+")],
+        );
+        with_vars(&f, "pinned = 1.24.0
+");
+        let vars = load_vars(&f).unwrap();
+        let d = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts().with_vars(vars))
+            .at(parse_absolute("2026-07-16T12:00").unwrap())
+            .resolve()
+            .unwrap();
+        let spec = d.present().find(|p| p.name == "nginx").unwrap();
+        assert_eq!(spec.options.get("version").map(String::as_str), Some("1.24.0"));
+    }
+
+    #[test]
+    fn a_schedules_run_command_keeps_its_dollars_for_the_shell() {
+        // `run` is a command line; `$` there belongs to the shell that will execute it.
+        let f = fx("Work
+", &[("Work", "apt:curl
+")], &[]);
+        with_vars(&f, "role = travel
+");
+        std::fs::write(
+            f.layout.schedules_file(),
+            "schedule:t@cron=0 2 * * *,run=sh -c 'echo $HOME'
+",
+        )
+        .unwrap();
+        let vars = load_vars(&f).unwrap();
+        let d = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts().with_vars(vars))
+            .at(parse_absolute("2026-07-16T12:00").unwrap())
+            .resolve()
+            .unwrap();
+        let (_, opts, _) = d.schedules().next().unwrap();
+        assert_eq!(opts.one("run"), Some("sh -c 'echo $HOME'"));
     }
 
     #[test]

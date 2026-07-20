@@ -2573,10 +2573,13 @@ evaluated and hands them to `HostFacts`. Nothing re-resolves them mid-run.
   — a value may come from a program that reads the clock or shells out — is *unimplemented*, so
   in practice today's variables cannot move. The contract is shaped for it (`resolve` takes
   definitions, not a file) but there is no second provider.
-- **Position 3 stops at `vars` itself.** `${role}-heavy` works *inside* the `vars` file.
-  `vars::expand` exists and is tested for use in a `link:` target or `@version=`, but **nothing
-  calls it yet** — so interpolation in declaration values, which is the position-2 half the
-  owner also asked for, is written and unwired.
+- ~~Position 3 stops at `vars` itself.~~ **Wired in the same session.** `Resolver::statements`
+  expands `$name` into option values, `link:`/`shim:`/`service:` names and `repo:` specs, once,
+  after `when` gating and before anything reads a value — so the prober, the merge and the
+  backends never learn that variables exist. **A `schedule:`'s `run` is deliberately left
+  alone**: it is a command line, and `$` there belongs to the shell that will execute it.
+  A line this host never reached is never expanded, so an unused `when` arm cannot fail on a
+  variable irrelevant to this machine.
 - **W1–W14 remain formally void.** This lands W3 (no bare `$flag`), W7 and W10 by construction;
   the rest are untouched and must still be re-asked.
 - **`plan` does not show variables as a cause of change (W13).** A variable that moves can

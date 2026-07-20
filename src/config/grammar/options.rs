@@ -42,6 +42,12 @@ impl Options {
     pub fn iter(&self) -> impl Iterator<Item = (&str, &[String])> {
         self.inner.iter().map(|(k, v)| (k.as_str(), v.as_slice()))
     }
+
+    /// Every value, mutably — for rewriting values in place (variable expansion, IX). Keys
+    /// are not offered: a key is grammar, and rewriting one would change what a line means.
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut String> {
+        self.inner.values_mut().flat_map(|v| v.iter_mut())
+    }
 }
 
 /// Parse the short form: `@key=value,key2=value2`, given the text AFTER the `@`.
