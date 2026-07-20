@@ -38,9 +38,7 @@ impl TestKernel {
 
         let registry_path = tmp.path().join("registry.json");
 
-        let mut config = Config::default();
-        config.config_root = tmp.path().to_path_buf();
-        config.tmp_dir = tmp.path().join("tmp");
+        let mut config = Config::sandboxed(tmp.path());
         config.dry_run = true;
 
         let vfs = Arc::new(DashMap::new());

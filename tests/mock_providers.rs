@@ -37,13 +37,9 @@ impl TestKernel {
 
         let registry_path = tmp.path().join("registry.json");
 
-        let mut config = Config::default();
-        config.config_root = tmp.path().to_path_buf();
-        // Isolate LiNix's DATA root too, structurally and in one place (S11): the layout's
-        // snapshots (and anything else derived from the data root) now target the sandbox, not
-        // the developer's real data dir — no per-test `$LINIX_DATA_DIR` remembering required.
-        config.data_root = tmp.path().to_path_buf();
-        config.tmp_dir = tmp.path().join("tmp");
+        // S11: every path under the sandbox, in one call. Setting the roots by hand here is
+        // what let the sibling fixture forget `data_root` and write to real user state.
+        let mut config = Config::sandboxed(tmp.path());
         config.dry_run = true;
 
         // The II.1 layout, because the resolver now reads a repo rather than a folder of
