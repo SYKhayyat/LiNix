@@ -135,19 +135,6 @@ impl<'a> StateResolver<'a> {
             warn!("`{}` at {} has expired and no longer counts.", key, origin);
         }
 
-        // S12: the extras now have somewhere to go. `repo:` is phase 1 (App::apply_repositories,
-        // before packages); `shim:`, `service:` and `link:` are phase 3 (App::apply_dependents,
-        // after packages). Only `schedule:` is still unwired — the scheduler owns it, not `sync` —
-        // so it is the one line left to warn about, by file and line. Saying so is the difference
-        // between "not built yet" and a line that does nothing forever.
-        for (_, origin) in state.extras.iter().filter(|(s, _)| matches!(s, Statement::Schedule(..))) {
-            warn!(
-                "{}: `schedule:` is not applied by `sync` — the scheduler owns it, and that \
-                 wiring is not built yet.",
-                origin
-            );
-        }
-
         debug!(
             "{} declared present, {} declared absent.",
             state.present().count(),

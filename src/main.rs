@@ -165,6 +165,11 @@ async fn main() -> Result<()> {
         }
         Commands::Protected { packages, json } => handle_protected(&app, packages, *json).await,
         Commands::Unmanage { packages, json } => handle_unmanage(&app, packages, *json).await,
+        Commands::Rebuild {
+            packages,
+            backend,
+            all,
+        } => handle_rebuild(&app, packages, backend.as_deref(), *all).await,
         Commands::Config(args) => handle_config(&app, &args.command).await,
         Commands::Path { explain, set } => handle_path(&cli, *explain, set.as_deref()).await,
         Commands::Edit { file } => handle_edit(&cli, file.as_deref()).await,
@@ -494,6 +499,165 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     app.reconcile_extras(&state).await?;
     perform_maintenance(app).await?;
     Ok(applied)
+}
+
+/// `linix rebuild` — remove and reinstall what is declared, one backend at a time (X.1, K1).
+async fn handle_rebuild(
+    app: &App,
+    packages: &[String],
+    backend: Option<&str>,
+    all: bool,
+) -> Result<()> {
+    use linix::app::rebuild::{self, Scope};
+    use linix::app::sync::guard::{self, GuardScope};
+    use linix::core::transaction::GraphAction;
+
+    // K2: no default scope. The failure mode is declared software missing from a machine, and
+    // `--all` is not something to arrive at by pressing enter.
+    let scope = match (packages.is_empty(), backend, all) {
+        (_, Some(b), _) => Scope::Backend(b.to_string()),
+        (_, None, true) => Scope::All,
+        (false, None, false) => Scope::Packages(packages.to_vec()),
+        (true, None, false) => anyhow::bail!(
+            "rebuild needs a scope — it removes software in order to put it back:\n\n\
+             \x20   linix rebuild fd ripgrep       one or more packages (`cargo:fd` picks a backend)\n\
+             \x20   linix rebuild --backend cargo  everything that backend declares\n\
+             \x20   linix rebuild --all            every declared package on this machine"
+        ),
+    };
+
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let declared: Vec<linix::core::PackageSpec> = resolver
+        .resolve_desired_state()
+        .await?
+        .into_values()
+        .flatten()
+        .collect();
+
+    let priority = app.priority_backends().await;
+    let registry = app.registry.clone();
+    let is_foundation = |b: &str| registry.get(b).map(|m| m.needs_root()).unwrap_or(false);
+
+    let mut plan = {
+        let state = app.state.lock().await;
+        rebuild::plan(
+            &scope,
+            &declared,
+            &|backend, name| state.is_managed(backend, name),
+            &priority,
+            &is_foundation,
+        )
+    };
+
+    // The guard refuses to remove a protected package, and it is right to: a rebuild's removal
+    // is only safe because a reinstall follows, and if that reinstall fails the machine is
+    // genuinely without it. Narrow the scope here rather than ask the guard for an exception —
+    // `rebuild --all` stays usable on a machine whose `bash` is protected, and the refusal
+    // keeps meaning what it says.
+    {
+        let all_pairs: Vec<(String, String)> = plan
+            .batches
+            .iter()
+            .flat_map(|b| b.specs.iter().map(|s| (b.backend.clone(), s.name.clone())))
+            .collect();
+        let backends: std::collections::HashSet<String> =
+            all_pairs.iter().map(|(b, _)| b.clone()).collect();
+        let essential = guard::essential_names(&app.registry, &backends).await;
+        rebuild::without_protected(&mut plan, &|backend, name| {
+            guard::protection_of(&app.config, backend, name, &essential).map(|p| p.reason())
+        });
+    }
+
+    for skip in &plan.skipped {
+        info!("skipping {} — {}", skip.key, skip.reason);
+    }
+    if plan.is_empty() {
+        info!("nothing to rebuild.");
+        return Ok(());
+    }
+
+    println!(
+        "\nRebuilding {} package(s) across {} backend(s), one backend at a time:",
+        plan.total(),
+        plan.batches.len()
+    );
+    for batch in &plan.batches {
+        println!("  {:<10} {}", batch.backend, batch.names().join(" "));
+    }
+    println!(
+        "\nEach backend's packages are removed together, then reinstalled together. If a \
+         reinstall fails,\nthat backend's software is missing until it succeeds — later \
+         backends are not started."
+    );
+
+    if app.config.dry_run {
+        return Ok(());
+    }
+
+    if !app.config.yes {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "Refusing to rebuild without confirmation in a non-interactive shell. Re-run with --yes, or --dry-run to preview."
+            );
+        }
+        let proceed = dialoguer::Confirm::new()
+            .with_prompt("Remove and reinstall these packages?")
+            .default(false)
+            .interact()?;
+        if !proceed {
+            return Ok(());
+        }
+    }
+
+    let engine = app.sync_engine().await;
+    for batch in &plan.batches {
+        info!(
+            "rebuilding {} ({} package(s))",
+            batch.backend,
+            batch.specs.len()
+        );
+
+        // Removal and reinstall are two transactions, not one graph. The transaction engine
+        // runs independent nodes concurrently, and a Remove and an Install of the same package
+        // have no edge between them — in one graph they would race.
+        let mut down = linix::app::sync::planner::SyncChanges::default();
+        for spec in &batch.specs {
+            down.removal_tracker
+                .insert(format!("{}:{}", batch.backend, spec.name));
+            down.graph.add_node(GraphAction::Remove {
+                name: spec.name.clone(),
+                backend: batch.backend.clone(),
+            });
+        }
+        engine.sync(down, GuardScope::Rebuild).await?;
+
+        let mut up = linix::app::sync::planner::SyncChanges::default();
+        for spec in &batch.specs {
+            let idx = up.graph.add_node(GraphAction::Install(spec.clone()));
+            up.install_map.insert(spec.name.clone(), idx);
+        }
+        // K3: the removal has already happened. If this fails the batch's software is gone,
+        // so say which packages and stop — starting the next backend would widen a hole.
+        if let Err(e) = engine.sync(up, GuardScope::Rebuild).await {
+            anyhow::bail!(
+                "rebuild of `{}` failed while reinstalling: {}\n\n\
+                 These packages were removed and are NOT back:\n    {}\n\n\
+                 The pre-sync snapshot (if one was taken) can restore them, or re-run \
+                 `linix rebuild --backend {}` once the cause is fixed.\n\
+                 Remaining backends were not started.",
+                batch.backend,
+                e,
+                batch.names().join(" "),
+                batch.backend
+            );
+        }
+    }
+
+    info!("rebuild complete.");
+    Ok(())
 }
 
 async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
@@ -2694,6 +2858,12 @@ async fn handle_check(app: &App) -> Result<()> {
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let state = resolver.resolve_model().await?;
+    // `check` claims to parse everything the active profiles reach, and a `schedule:` line is
+    // only validated where it is provisioned — so a missing `cron`, or a `run` a timer may not
+    // run, surfaced at sync time on a file `check` had already called clean.
+    for (name, opts, origin) in state.schedules() {
+        linix::model::schedule::schedule_config(name, opts, origin)?;
+    }
     println!(
         "OK: everything the active profiles reach parses. {} present, {} absent, {} repo/shim/service/link/schedule line(s).",
         state.total_present(),
@@ -3073,13 +3243,15 @@ async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<
                                  it never lets a protected or essential package through)\n\
          Allow a big install:    linix <command> --allow-mass-install (answers `max_installs`,\n\
                                  off unless you set it)",
-        cfg.config_file.display()
+        cfg.preferences_file.display()
     );
     Ok(())
 }
 
-const CONFIG_TEMPLATE: &str = r#"# LiNix configuration file (config.toml)
+const CONFIG_TEMPLATE: &str = r#"# LiNix refusals and behaviour (preferences.toml). Nothing writes to this but you.
 # Every key is optional; omit a key to use its built-in default.
+#
+# Where your repo lives is NOT a key here — this file is inside it. Use `linix path --set`.
 
 # Maximum number of packages installed/removed (and searched) in parallel.
 # Omit to auto-detect this machine's core count (respecting container CPU limits).
@@ -3146,15 +3318,6 @@ max_removals = 20
 # deny_vulnerable = false
 "#;
 
-/// The editor to fall back to when neither $VISUAL nor $EDITOR is set.
-fn default_editor() -> &'static str {
-    if cfg!(windows) {
-        "notepad"
-    } else {
-        "vi"
-    }
-}
-
 async fn handle_path(cli: &Cli, explain: bool, set: Option<&std::path::Path>) -> Result<()> {
     use linix::app::locate;
 
@@ -3177,6 +3340,16 @@ async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
     let target = locate::resolve_target(&resolved.path, file)?;
     let editor = locate::editor_command();
 
+    let is_preferences = target.file_name().and_then(|n| n.to_str())
+        == Some(linix::config::PREFERENCES_FILE_NAME);
+    if is_preferences && !target.exists() {
+        if let Some(parent) = target.parent() {
+            tokio::fs::create_dir_all(parent).await.ok();
+        }
+        tokio::fs::write(&target, CONFIG_TEMPLATE).await?;
+        println!("Created {} from the default template.", target.display());
+    }
+
     let status = tokio::process::Command::new(&editor)
         .arg(&target)
         .status()
@@ -3186,15 +3359,27 @@ async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
     if !status.success() {
         anyhow::bail!("editor '{}' exited abnormally.", editor);
     }
+
+    // Catch a typo here rather than at the next run, when the command that fails is
+    // unrelated to the edit that broke it.
+    if is_preferences {
+        let p = target.clone();
+        match tokio::task::spawn_blocking(move || linix::config::Config::from_file(&p)).await? {
+            Ok(_) => println!("Saved. {} parses cleanly.", target.display()),
+            Err(e) => anyhow::bail!(
+                "{} no longer parses ({}). Re-run `linix edit {}` to fix it.",
+                target.display(),
+                e,
+                linix::config::PREFERENCES_FILE_NAME
+            ),
+        }
+    }
     Ok(())
 }
 
 async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
-    let path = app.config.config_file.clone();
+    let path = app.config.preferences_file.clone();
     match cmd {
-        ConfigCommand::Path => {
-            println!("{}", path.display());
-        }
         ConfigCommand::Show => {
             let source = if path.exists() {
                 format!("file: {}", path.display())
@@ -3221,42 +3406,7 @@ async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
             tokio::fs::write(&path, CONFIG_TEMPLATE)
                 .await
                 .with_context(|| format!("Failed to write config to {}", path.display()))?;
-            info!("Wrote commented default config to {}", path.display());
-        }
-        ConfigCommand::Edit => {
-            // Make sure there's something to open.
-            if !path.exists() {
-                if let Some(parent) = path.parent() {
-                    tokio::fs::create_dir_all(parent).await.ok();
-                }
-                tokio::fs::write(&path, CONFIG_TEMPLATE).await?;
-                println!("Created {} from the default template.", path.display());
-            }
-            let editor = std::env::var("VISUAL")
-                .or_else(|_| std::env::var("EDITOR"))
-                .unwrap_or_else(|_| default_editor().to_string());
-            let status = tokio::process::Command::new(&editor)
-                .arg(&path)
-                .status()
-                .await
-                .with_context(|| format!("launching editor '{}'", editor))?;
-            if !status.success() {
-                anyhow::bail!(
-                    "editor '{}' exited abnormally; config not re-validated.",
-                    editor
-                );
-            }
-            // Re-validate by re-parsing; a broken config is caught here, not at next run.
-            let p = path.clone();
-            let parsed =
-                tokio::task::spawn_blocking(move || linix::config::Config::from_file(&p)).await?;
-            match parsed {
-                Ok(_) => println!("Saved. Config at {} parses cleanly.", path.display()),
-                Err(e) => anyhow::bail!(
-                    "Config no longer parses ({}). Re-run `linix config edit` to fix it.",
-                    e
-                ),
-            }
+            info!("Wrote commented default preferences to {}", path.display());
         }
     }
     Ok(())
@@ -3758,7 +3908,7 @@ async fn interactive_init(app: &App, force: bool) -> Result<()> {
         );
     }
 
-    let config_path = app.config.config_file.clone();
+    let config_path = app.config.preferences_file.clone();
     if config_path.exists() && !force {
         anyhow::bail!(
             "Config already exists at {}. Re-run `linix init -i --force` to overwrite it.",
@@ -3795,7 +3945,7 @@ async fn interactive_init(app: &App, force: bool) -> Result<()> {
         .collect();
 
     let mut new_cfg = apply_init_answers(defaults, &answers);
-    new_cfg.config_file = config_path.clone();
+    new_cfg.preferences_file = config_path.clone();
     new_cfg.config_root = app.config.config_root();
 
     if let Some(parent) = config_path.parent() {
@@ -4239,8 +4389,9 @@ async fn attempt_shim_hijack() -> Result<Option<Result<()>>> {
         .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "linix".to_string());
     if current_name != "linix" && !current_name.starts_with("linix") {
+        let root = linix::app::locate::locate(None)?.path;
         let config =
-            linix::config::Config::from_file(&linix::utils::safe_config_dir().join("config.toml"))
+            linix::config::Config::from_file(&root.join(linix::config::PREFERENCES_FILE_NAME))
                 .unwrap_or_default();
         let app = App::new(config).await?;
         return Ok(Some(
@@ -4254,12 +4405,17 @@ async fn attempt_shim_hijack() -> Result<Option<Result<()>>> {
 }
 
 async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
+    // Where the repo is: --config-dir, then $LINIX_CONFIG_DIR, then LiNix's settings file,
+    // then the default. This has to resolve BEFORE `preferences.toml` is opened, because
+    // that file lives inside the root it would otherwise have to announce.
+    let located = linix::app::locate::locate(cli.config_dir.as_deref())?;
     let path = cli
         .config
         .clone()
-        .unwrap_or_else(|| linix::utils::safe_config_dir().join("config.toml"));
+        .unwrap_or_else(|| located.path.join(linix::config::PREFERENCES_FILE_NAME));
     let mut config =
         tokio::task::spawn_blocking(move || linix::config::Config::from_file(&path)).await??;
+    config.config_root = located.path;
     config.merge_cli_overrides(
         Some(cli.dry_run),
         Some(cli.yes),
@@ -4277,11 +4433,6 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
     if cli.no_progress {
         config.show_progress = false;
     }
-    // Where the repo is: --config-dir, then $LINIX_CONFIG_DIR, then LiNix's settings file,
-    // then the default. Applied here so every command resolves it the same way and
-    // `linix path` is telling the truth about the run it is part of.
-    let located = linix::app::locate::locate(cli.config_dir.as_deref())?;
-    config.config_root = located.path;
     // Fold the user-editable keep-list into the protected set. It lives in the GLOBAL
     // groups folder, which `-g` no longer moves — previously `-g /tmp/foo` made this look
     // for /tmp/foo/keep.txt, found nothing, returned early, and every keep-list protection

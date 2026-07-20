@@ -628,7 +628,7 @@ isn't safe; use a profile."*
 
 **`clean` goes through the guard** — ask the backend what it intends, check the list against
 protection, refuse if it touches something protected. **Sync nudges:** *"3 packages are now
-orphaned; run `linix clean`."* Want it automatic? `schedule:tidy { run = clean }`.
+orphaned; run `linix clean`."* Want it automatic? `schedule:tidy@cron=0 3 * * *,run=clean`.
 
 ## II.9 Adopt
 
@@ -715,6 +715,34 @@ Plan: install 30,207 · remove 0 · upgrade 3
 - **Shows the whole list.** 576 packages is 576 lines. The pain is the feature.
 - Docs state the residual risk in these words: adopt is an estimate; if it missed something,
   this deletes it.
+
+## II.11b `rebuild` (V.49)
+
+**`sync` converges; `rebuild` asserts.** Convergence cannot repair state that is wrong while
+the difference is empty (X.1). `rebuild` removes what is declared so it can install it again.
+
+- **Scope is required.** A bare `linix rebuild` errors and names the three forms. `--all` is
+  not a default you can reach by pressing enter.
+- **Batch per backend, one backend at a time.** All of a backend's packages come down, then
+  all of them go back up, then the next backend. Within a backend a dependency shared only by
+  packages that all leave really does orphan, so the repair repairs; and a failure strands one
+  backend's software, not the machine.
+- **Foundation backends first**, then the rest, each tier in `priority` order. "Foundation" is
+  `needs_root()` — a manager that must be root installs into the system. **The reason is
+  dependency direction, not blast radius**: a crate can need a system compiler, and no system
+  package has ever needed a crate.
+- **Removal and reinstall are two transactions, not one graph.** The transaction engine runs
+  independent nodes concurrently and there is no edge between removing a package and
+  installing it.
+- **It never touches undeclared software.** Everything it removes, it removes to put back.
+  That is what separates it from `purge-unmanaged` (II.11).
+- **It never removes a protected package.** Those are dropped from the scope and named, along
+  with anything declared-but-not-installed (`sync`'s job) and any package nobody declared.
+  **The skips are printed, never silent.**
+- **A failed reinstall stops the run.** It names the packages that are gone and does not start
+  the next backend.
+- **`rebuild` is not a mode of `sync`** and cannot appear in `schedules` (K13), because
+  `schedules` runs sync unattended and a mode of sync is a mode a schedule can reach.
 
 ## II.12 Hooks and the supply chain
 
@@ -2267,6 +2295,52 @@ is reported is a default the user can override with `@asset=`.**
 guess back exactly where the user reached for the option to turn it off — and the case where
 `@bin=` is reached for is the case where the guess was already wrong.
 
+**V.49 — Why `rebuild` is a separate command that batches per backend.** *(Adopted 2026-07-20
+from Part X.1; owner ruling K1.)*
+
+The bug this prevents is the one convergence cannot see. `sync` computes the difference between
+the declaration and the machine, so **every failure where the difference is empty is a failure
+it will report as success, forever**: the half-configured install, the truncated download, the
+closure someone removed by hand. Re-running `sync` on that machine is not a weak repair, it is
+a guaranteed no-op, and the user has no way to tell the difference between "nothing to do" and
+"nothing I can see".
+
+**Why not a flag on `sync`.** Two reasons, and the second is the one that matters. It is
+destructive on a machine that is fine — a flag is one typo from a routine command. And
+`schedules` runs `sync` unattended: a mode of sync is a mode a timer can reach, and a timer
+cannot be the thing that notices a package is broken. The parser now refuses `run = rebuild`
+outright rather than relying on nobody writing it.
+
+**Why batch-per-backend and not the two obvious answers.** All-at-once genuinely forces orphan
+collection and can leave the machine without a shell partway through. One-at-a-time is safe and
+collects almost nothing, because a dependency shared with a still-installed package is never
+orphaned at any instant — it would be a repair that does not repair. **These are different
+features wearing one name, and the backend is the granularity at which the underlying question
+is even defined:** `apt` cannot orphan a `cargo` crate.
+
+**Why foundation backends go first, and why the original reasoning for it was wrong.** X.1
+argued from blast radius — put the risky batch first so a strand lands furthest from the
+machine's ability to boot. *That argument does not survive contact:* if `apt` goes first and
+`apt` strands, the machine has no shell, which is the worst available outcome, and running it
+last would have left it untouched. **The ruling is right for a different reason — dependency
+direction.** A crate can need a system compiler; no `apt` package has ever needed a crate.
+Rebuilding user-space software first would rebuild it against the system state the rebuild is
+about to replace, leaving it stale the instant the foundation batch lands. Foundation is
+`needs_root()`, which already draws that line, rather than a second hand-kept list.
+
+**Why removal and reinstall are two transactions.** The transaction engine runs independent
+graph nodes concurrently, and a `Remove` and an `Install` of the same package have no edge
+between them. In one graph they race, and the winner decides whether the package exists.
+
+**Why protected packages are dropped from the scope rather than exempted in the guard.** A
+rebuild's removal is only safe because a reinstall follows — and if that reinstall fails, the
+machine is genuinely without the package, which is exactly what the guard exists to prevent.
+Teaching the guard that one caller means it differently would make the refusal conditional on
+intent, and intent is what every caller claims. Narrowing the scope keeps `rebuild --all` usable
+on a machine whose `bash` is protected while leaving the refusal absolute. **The skips are
+printed**: a rebuild that silently dropped half its scope would report success over a machine it
+never repaired, which is the same lie convergence was already telling.
+
 ---
 
 # Part VI — Bugs
@@ -2420,18 +2494,91 @@ path to every other** — the per-machine hand-maintained state II.1 exists to f
 `<config dir>/linix.settings.toml`, and **a test asserts the settings path is not under the
 default repo**, because the next person to tidy that name will not otherwise know why it is odd.
 
-**Not built from X.6:** K12's symlink case is untested, and `linix config path`/`config edit`
-still exist alongside these. **Those two answer a different question** — the path of
-`config.toml`, LiNix's settings-in-the-repo — but that only holds until the larger cleanup
-below lands, at which point they are two of everything and one must go.
+**Not built from X.6:** K12's symlink case is untested.
 
-**Owed, and larger than it looks: `preferences.toml` still has no reader.** Part II.1 lists it;
-nothing parses it. What actually holds LiNix's behaviour is `config.toml`, which is not in the
-spec's file list at all, **lives inside the repo, and holds `config_root`** — a key inside the
-file whose location it defines, which is exactly the unresolvable ordering X.6 describes. The
-settings file above resolves the ordering; **it does not yet retire `config.toml`.** That
-rename (`config.toml` → `preferences.toml`, minus `config_root`) is the NO-LEGACY half and is
-not done.
+## Done 2026-07-20 — `config.toml` is retired; `preferences.toml` is the file (II.1)
+
+The NO-LEGACY half of X.6. `config.toml` was not in Part II.1's file list at all, yet it was
+what actually held LiNix's behaviour — and it **held `config_root`**, a key naming the location
+of the directory it lived in. `preferences.toml` was in the list and had no reader. Two files,
+one of them undocumented and one of them fictional.
+
+- **One file, at `<config_root>/preferences.toml`**, which is what `Layout::preferences_file()`
+  had been returning to nobody since it was written. `Config::config_file` is now
+  `preferences_file` and is filled from that layout.
+- **`config_root` is `#[serde(skip)]`.** It cannot be set in the file, and **a test asserts it
+  stays that way** — the ordering paradox is closed structurally, not by a doc note. The
+  resolution order is `--config-dir` → `$LINIX_CONFIG_DIR` → settings file → default, and
+  `load_and_merge_config` now runs it *before* opening the preferences file rather than after.
+- **`linix config path` and `linix config edit` are deleted**, not deprecated. `linix path` and
+  `linix edit` answer those questions, and after the rename the two pairs answered the same
+  question about the same file. What `config edit` did better — create from the template if
+  absent, re-parse on save so a typo surfaces at the edit rather than at the next unrelated
+  command — moved into `linix edit`, which applies it when the target is the preferences file.
+- **A second `default_editor()` in `main.rs` is deleted**; `locate::editor_command()` is the one.
+- **`bundle`'s special case is deleted.** It copied the config file separately *because* the
+  file lived outside the repo; the recursive copy of the root now covers it.
+
+**`examples/config.toml` → `examples/preferences.toml`.** Its header pointed at
+`~/.config/linix/config.toml`, a path that is now wrong in both halves.
+
+**Still owed here:** the example file documents keys (`cache_ttl`, `prune_scope`,
+`protect_imperative`, `bloatware_file`, `remove_bloatware`, `prune_on_sync`,
+`[hostname_packages]`, `[managed_files]`) that **no longer exist on `Config`** — it is
+documentation of a version that is gone, and every one of them is silently ignored on load.
+`Config` also still carries `aliases`, `command_aliases` and `fleet_hosts`, which II.1 does not
+mention. Reconciling the struct with Part II is its own pass and is not done.
+
+## Done 2026-07-20 — `rebuild` (X.1, K1, K2, K13)
+
+**Built: `linix rebuild [PKG…] [--backend N] [--all]`.** `src/app/rebuild.rs` holds the pure
+half — scope selection, batching and ordering — with 11 unit tests; `handle_rebuild` in
+`main.rs` holds the applying half. Part II gains II.11b; the reasoning is V.49.
+
+- **Batch per backend (K1), foundation first.** `needs_root()` is the foundation test, so there
+  is no second list of "system backends" to keep in sync with the registry.
+- **A scope is required (K2).** A bare `rebuild` prints the three forms and exits non-zero.
+- **`schedules` refuses `run = rebuild` (K13)**, by first word, so `run = sync --locked` is
+  unaffected.
+- **Removal and reinstall are two `sync` calls per backend**, not one graph — see V.49.
+- **Protected packages, declared-but-not-installed packages, and names nobody declared are
+  dropped and printed**, each with the sentence explaining it.
+
+**The ordering rule X.1 said was owed is now written down — and X.1's own reasoning for it was
+wrong.** Blast radius argues for the foundation batch going *last* (if `apt` strands first the
+machine has no shell). The ruling stands on dependency direction instead. V.49 records both,
+because the next person to read "foundation first, so a strand lands furthest from boot" will
+correctly conclude it is backwards and may reverse the rule.
+
+**An integration test asserts the ordering against the registry this host actually builds** —
+every `needs_root()` backend before every one that is not, from a deliberately hostile input
+order. It was mutation-checked: inverting the comparator fails it (`choco needs root but was
+ordered after mise`), so it is not passing vacuously.
+
+**Two pre-existing bugs found by exercising the K13 refusal, both about `schedule:`:**
+
+1. **`check` never validated schedule lines at all.** `schedule_config` — which is where `cron`
+   and `run` are checked — ran only in `apply_schedules`, at provisioning time. So a schedule
+   missing its `cron` passed `check` cleanly and failed later, on a file `check` had already
+   called good. `check` claims to parse everything the active profiles reach; now it does.
+2. **The resolver warned that every `schedule:` line does nothing.** *"`schedule:` is not
+   applied by `sync` — the scheduler owns it, and that wiring is not built yet."* S21 wired
+   `apply_schedules` as II.7 phase 4 **on 2026-07-17** and the warning was never removed, so
+   LiNix spent three days telling users their working schedules were inert. Deleted.
+
+**And a documentation bug in two places:** both the spec (`schedule:tidy { run = clean }`) and
+`schedule.rs`'s own module docstring showed an *inline* block form. The block form is multiline
+— a line ending in `{`, then `key = value` lines, then `}` — so both examples were syntax that
+does not parse. Corrected to the short form and the real block form.
+
+**Not built:**
+- **K15 is the real gap.** `rebuild` prints its own plan and never says "remove", but the two
+  transactions run through the ordinary `sync` path, so the engine still narrates N removals —
+  the exact sentence K15 exists to prevent. The plan printer has to learn what a rebuild is.
+- **K3 is answered thinly.** A failed reinstall stops the run, names the packages that are gone,
+  and points at the pre-sync snapshot. It does not *take* a rebuild-specific snapshot or revert
+  automatically; it relies on the snapshot `sync` already takes, which may not exist.
+- **K14 (no git commit) is untested** — nothing was added, but nothing asserts it either.
 
 ## Done 2026-07-20 — artifact selection (Part VIII, first half)
 
@@ -4382,9 +4529,14 @@ down, then all of them go back up, then the next backend. The reasoning the ruli
   granularity at which the underlying operation is defined.
 
 **Backend order is therefore load-bearing and is not the registry's iteration order.** The
-backend that owns the shell and the system libraries goes first, so that if anything strands, it
-strands the batch furthest from the machine's ability to boot. *Owed: the ordering rule, written
-down.*
+backend that owns the shell and the system libraries goes first.
+
+**RULED and built (2026-07-20): foundation first, where foundation is `needs_root()`, then the
+rest, each tier in `priority` order.** The blast-radius reasoning first offered for this — put
+the risky batch first so a strand lands furthest from boot — **is wrong and is not the reason**;
+`apt` stranding first is the worst outcome available, not the best. The reason is dependency
+direction: a crate can need a system compiler, and no system package has ever needed a crate.
+See V.49.
 
 **K2 — What is `rebuild`'s default scope?** `--all` on a bare `linix rebuild` is a very large
 default for a command whose failure mode is an unbootable machine. *Recommendation:* require a
@@ -4458,6 +4610,10 @@ mechanism.
 refuse it by name, for the reason in X.1. A destructive repair operation that can be scheduled
 is one that will run at 3am on a machine nobody is watching.
 
+**BUILT (2026-07-20): the parser refuses it.** `schedule.rs` carries a `NEVER_UNATTENDED` list
+(`rebuild`, `purge-unmanaged`) checked against the first word of `run`, so `run = sync --locked`
+still parses. The refusal names the command and says why.
+
 ### Behaviour and tooling
 
 **K14 — Does `rebuild` produce a git commit?** Nothing about the declared state changed, so
@@ -4469,6 +4625,13 @@ commit; `rebuild` is recorded wherever snapshots are, not wherever intent is.
 214 packages" when all 214 come straight back is technically true and will terrify the reader.
 *Recommendation:* yes — the plan says *reinstall* where remove-then-install is the same package,
 and reserves *remove* for removals that stay removed.
+
+**Partly built (2026-07-20), and the gap is real.** `rebuild` prints its own plan, which never
+says "remove" — it lists the batches and states that each backend's packages come down and go
+back up. But the two transactions it then runs go through the ordinary `sync` path, so **the
+engine's own progress output still narrates 214 removals**, which is the sentence K15 exists to
+prevent. Fixing it properly means the plan printer learning what a rebuild is, and that is not
+done.
 
 **K16 — Does `clean-cache --all` need the guard?** It removes no packages, so today's answer is
 no (R19 established exactly this reasoning for `clean-cache`). Level 3 of X.3 is a different

@@ -84,7 +84,7 @@ active         which profiles are on right now
 priority       which package managers this machine uses, in order
 schedules      when LiNix runs itself
 locks/         what everything resolved to, one file per backend
-config.toml    settings (written by `linix config init`)
+preferences.toml   refusals and behaviour (written by `linix config init`)
 ```
 
 LiNix's own bookkeeping — what it currently owns, snapshot metadata — lives in
@@ -272,6 +272,7 @@ a number typed into a README does.
 | `list` / `search` / `info` | What is installed, what exists, what a package is |
 | `update` / `upgrade` | Refresh metadata; upgrade managed packages |
 | `hold` / `unhold` | Stop a package from being upgraded |
+| `rebuild` | Remove and reinstall what is declared, to repair what `sync` cannot see |
 
 **Understanding the machine**
 
@@ -319,6 +320,29 @@ a number typed into a README does.
 `export` never silently overwrites: if `package.json` already exists, the export is written
 beside it as `package.linix.json` and says so. `--force` overwrites deliberately.
 
+### When `sync` says "nothing to do" and something is still broken
+
+`sync` applies the *difference* between your files and the machine. A package that is declared
+and installed but broken — a half-configured install, an interrupted download, a closure
+something else removed — produces no difference, so `sync` will report success over it forever.
+
+`linix rebuild` stops asking what changed and asserts the declared set from scratch:
+
+```
+linix rebuild fd ripgrep       one or more packages (cargo:fd picks a backend)
+linix rebuild --backend cargo  everything that backend declares
+linix rebuild --all            every declared package on this machine
+```
+
+There is no default scope — it removes software in order to put it back, so it makes you say
+what. It works **one backend at a time**: all of that backend's packages come down together
+(which is what actually lets a shared dependency become an orphan and get collected), then all
+of them go back up, then the next backend. Backends that need root go first, because a crate can
+need a system compiler and no system package has ever needed a crate.
+
+It never touches undeclared software, and it never removes a protected package — those are
+named and skipped rather than rebuilt. It cannot be put in `schedules`.
+
 ## Safety
 
 - **Atomic transactions.** A write-ahead log records every mutation before it runs. If LiNix is
@@ -335,9 +359,16 @@ beside it as `package.linix.json` and says so. `--force` overwrites deliberately
 
 ## Configuration
 
-`linix config init` writes a commented `config.toml`. Every key is optional. Settings cover
-timeouts, concurrency (`max_parallel`), snapshot retention, notification channels, and the
-`[guard]` block that holds the removal rules described above.
+`linix config init` writes a commented `preferences.toml` into your repo; `linix edit
+preferences.toml` opens it and re-checks that it still parses when you save. Every key is
+optional. Settings cover timeouts, concurrency (`max_parallel`), snapshot retention,
+notification channels, and the `[guard]` block that holds the removal rules described above.
+
+**Where your repo lives is not a key in it.** `preferences.toml` sits *inside* the repo, so a
+key there could only be read from the directory it was trying to move away from. That one
+setting lives in LiNix's own settings file, beside the repo rather than in it — set it with
+`linix path --set DIR`, override it for one command with `--config-dir`, and ask which of the
+four sources won with `linix path --explain`.
 
 ## Contributing
 

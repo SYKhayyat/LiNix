@@ -78,6 +78,29 @@ pub enum Commands {
         json: bool,
     },
 
+    /// Remove and reinstall what is declared, to repair state `sync` is blind to.
+    ///
+    /// `sync` applies the difference between your files and the machine. When a package is
+    /// declared and installed but broken — a half-configured install, an interrupted download,
+    /// a closure someone removed by hand — that difference is empty and `sync` does nothing.
+    /// `rebuild` asserts the declared set from scratch instead. One backend at a time: all of
+    /// its packages come down, then all of them go back up, then the next backend.
+    ///
+    /// It never touches undeclared software, and it never removes a protected package — those
+    /// are named and skipped, not rebuilt.
+    Rebuild {
+        /// Packages to rebuild (`fd`, or `cargo:fd` to pick one backend's copy)
+        packages: Vec<String>,
+
+        /// Rebuild everything this backend declares
+        #[arg(long, conflicts_with_all = ["packages", "all"])]
+        backend: Option<String>,
+
+        /// Rebuild every declared package on this machine
+        #[arg(long, conflicts_with = "packages")]
+        all: bool,
+    },
+
     /// Continuously reconcile the system to your manifests (GitOps for one machine): on each
     /// tick, optionally `git pull` the config, then apply any changes automatically. Unattended
     /// by design — it applies without prompting. Ctrl-C to stop.
@@ -631,19 +654,14 @@ pub struct ConfigArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigCommand {
-    /// Write a commented default config.toml (refuses to overwrite unless --force)
+    /// Write a commented default preferences.toml (refuses to overwrite unless --force)
     Init {
-        /// Overwrite an existing config file
+        /// Overwrite an existing preferences file
         #[arg(long)]
         force: bool,
     },
-    /// Print the resolved configuration file path
-    Path,
     /// Print the active configuration and its source (file or built-in defaults)
     Show,
-    /// Open the config in $VISUAL/$EDITOR (creating it from the template if absent) and
-    /// re-validate it on save, so a typo can't silently break your configuration.
-    Edit,
 }
 
 #[derive(Args, Debug)]

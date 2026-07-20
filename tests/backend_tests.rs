@@ -249,3 +249,53 @@ async fn test_metadata_provider_resolution() {
         deps
     );
 }
+
+// ============================================================================
+// REBUILD ORDERING (K1)
+// ============================================================================
+
+/// `rebuild` batches per backend, and the order is load-bearing: a user-space package can
+/// need a system compiler, and no system package has ever needed a crate. Rebuilding
+/// user-space software first would rebuild it against the system state the rebuild is about
+/// to replace.
+///
+/// The rule is expressed as `needs_root()` rather than a hand-kept list of system backends.
+/// This asserts it against the registry this machine actually built, so a backend that
+/// changes its answer is caught here rather than by an out-of-order rebuild.
+#[tokio::test]
+async fn rebuild_puts_every_root_backend_before_every_user_backend() {
+    let kernel = TestKernel::new().await;
+    let registry = kernel.app.registry.clone();
+
+    let names: Vec<String> = registry
+        .available()
+        .iter()
+        .map(|b| b.name().to_string())
+        .collect();
+    if names.len() < 2 {
+        return; // nothing to order on a host with one backend
+    }
+
+    // Deliberately hostile priority: user-space backends first, so a passing result cannot
+    // be the input order surviving.
+    let mut priority = names.clone();
+    priority.sort_by_key(|n| registry.get(n).map(|b| b.needs_root()).unwrap_or(false));
+
+    let is_foundation = |b: &str| registry.get(b).map(|x| x.needs_root()).unwrap_or(false);
+    let ordered = linix::app::rebuild::order_backends(&names, &priority, &is_foundation);
+
+    let mut seen_user_backend: Option<String> = None;
+    for name in &ordered {
+        if is_foundation(name) {
+            assert!(
+                seen_user_backend.is_none(),
+                "{} needs root but was ordered after {}, which does not",
+                name,
+                seen_user_backend.as_deref().unwrap_or("?")
+            );
+        } else {
+            seen_user_backend = Some(name.clone());
+        }
+    }
+    assert_eq!(ordered.len(), names.len(), "ordering dropped a backend");
+}

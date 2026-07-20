@@ -140,8 +140,13 @@ pub struct ScheduleConfig {
     pub last_synced: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// The primary configuration for LiNix Version 3.6.0.
+/// Refusals and behaviour: `<config_root>/preferences.toml` (II.1).
+///
+/// `deny_unknown_fields`: a key that no longer exists must fail loudly. Silently ignoring one
+/// means a `[guard]` setting can be deleted from the code and every config still claiming it
+/// keeps parsing — the guard reads as configured while being off.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub aliases: HashMap<String, String>,
@@ -170,7 +175,12 @@ pub struct Config {
     /// The root of your LiNix repo (II.1): the folder that holds `modules/`, `profiles/`,
     /// `active`, `priority`, `locks/` and `preferences.toml`. LiNix's own data (the registry,
     /// snapshots) lives BESIDE it, never inside it — see [`safe_data_dir`].
-    #[serde(default = "default_config_root")]
+    ///
+    /// `#[serde(skip)]`: `preferences.toml` lives *inside* this directory, so a key here that
+    /// moved it could only be read from the place it was moving away from. It is resolved
+    /// before this file is opened — `--config-dir`, `$LINIX_CONFIG_DIR`, the settings file,
+    /// the default — by [`crate::app::locate`].
+    #[serde(skip, default = "default_config_root")]
     pub config_root: PathBuf,
 
     /// Where LiNix's own data lives (II.1): the registry, snapshots, journal — BESIDE the repo,
@@ -181,8 +191,9 @@ pub struct Config {
     #[serde(skip, default = "default_data_root")]
     pub data_root: PathBuf,
 
+    /// Where this file was read from: `<config_root>/preferences.toml` (II.1).
     #[serde(skip)]
-    pub config_file: PathBuf,
+    pub preferences_file: PathBuf,
 
     #[serde(default)]
     pub hooks: HashMap<String, HashMap<String, String>>,
@@ -269,6 +280,10 @@ pub struct Config {
     #[serde(default)]
     pub schedules: Vec<ScheduleConfig>,
 }
+
+/// The one spelling of the refusals-and-behaviour file (II.1). [`Layout::preferences_file`]
+/// joins it to the repo root; nothing else may name it.
+pub const PREFERENCES_FILE_NAME: &str = "preferences.toml";
 
 fn default_config_root() -> PathBuf {
     safe_config_dir()
@@ -403,7 +418,7 @@ impl Default for Config {
             allow_mass_removal: false,
             config_root: default_config_root(),
             data_root: default_data_root(),
-            config_file: safe_config_dir().join("config.toml"),
+            preferences_file: default_config_root().join(PREFERENCES_FILE_NAME),
             hooks: HashMap::new(),
             retention: crate::core::RetentionConfig::default(),
             fleet_hosts: Vec::new(),
@@ -438,11 +453,19 @@ impl Config {
         // NotFound as "use defaults".
         let content = match fs::read_to_string(path) {
             Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            // A missing file still fixes WHERE it was missing from: `config init` and
+            // `config show` report this path, and a default that forgot it would name the
+            // built-in location while `--config-dir` pointed somewhere else entirely.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    preferences_file: path.to_path_buf(),
+                    ..Self::default()
+                })
+            }
             Err(e) => return Err(Error::Config(format!("Failed to read config file: {}", e))),
         };
         let mut config: Self = toml::from_str(&content)?;
-        config.config_file = path.to_path_buf();
+        config.preferences_file = path.to_path_buf();
         // Empty protection means the built-in defaults, never "no protection" — a config
         // that omits (or empties) the list must not silently disarm the guard.
         if config.guard.protected_packages.is_empty() {
@@ -454,10 +477,10 @@ impl Config {
     pub fn save(&self) -> Result<()> {
         let content = toml::to_string_pretty(self)
             .map_err(|e| Error::Config(format!("Failed to serialize config: {}", e)))?;
-        if let Some(parent) = self.config_file.parent() {
+        if let Some(parent) = self.preferences_file.parent() {
             fs::create_dir_all(parent).map_err(Error::from)?;
         }
-        fs::write(&self.config_file, content)
+        fs::write(&self.preferences_file, content)
             .map_err(|e| Error::Config(format!("Failed to write config file: {}", e)))?;
         Ok(())
     }
@@ -492,6 +515,7 @@ impl Config {
         Self {
             config_root: sandbox.to_path_buf(),
             data_root: sandbox.to_path_buf(),
+            preferences_file: sandbox.join(PREFERENCES_FILE_NAME),
             tmp_dir: sandbox.join("tmp"),
             github_dir: sandbox.join("github"),
             web_dir: sandbox.join("web"),
@@ -542,7 +566,7 @@ impl Config {
             self.allow_mass_install = a;
         }
         if let Some(cp) = config_path {
-            self.config_file = cp;
+            self.preferences_file = cp;
         }
         if let Some(v) = verbose {
             self.verbose = v;
@@ -628,6 +652,61 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn preferences_cannot_move_the_repo_it_lives_in() {
+        // The file is at <config_root>/preferences.toml, so a `config_root` key here could
+        // only ever be read from the directory it was trying to move away from. It is
+        // resolved before this file is opened; serde must not quietly accept it back.
+        let dir = std::env::temp_dir().join("linix-prefs-root-test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(PREFERENCES_FILE_NAME);
+        std::fs::write(&file, "config_root = \"/somewhere/else\"\n").unwrap();
+
+        let err = Config::from_file(&file)
+            .expect_err("`config_root` is being read out of preferences.toml again");
+        assert!(
+            err.to_string().contains("config_root"),
+            "the refusal must name the key: {}",
+            err
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_missing_file_still_remembers_where_it_looked() {
+        // `--config-dir DIR config init` wrote to the built-in location instead of DIR,
+        // because the not-found path returned a bare default.
+        let target = std::env::temp_dir()
+            .join("linix-absent-root")
+            .join(PREFERENCES_FILE_NAME);
+        let cfg = Config::from_file(&target).unwrap();
+        assert_eq!(cfg.preferences_file, target);
+    }
+
+    #[test]
+    fn the_shipped_example_is_a_file_linix_would_accept() {
+        // It documented eight keys that had been deleted from this struct. Every one was
+        // silently ignored, so the example read as a working config and was not one.
+        let example = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/preferences.toml");
+        let text = std::fs::read_to_string(example).expect("examples/preferences.toml");
+        if let Err(e) = toml::from_str::<Config>(&text) {
+            panic!("examples/preferences.toml documents a key that no longer exists: {e}");
+        }
+    }
+
+    #[test]
+    fn the_preferences_file_sits_inside_the_repo() {
+        let sandbox = std::path::Path::new(if cfg!(windows) {
+            r"C:\linix-test-sandbox"
+        } else {
+            "/tmp/linix-test-sandbox"
+        });
+        let cfg = Config::sandboxed(sandbox);
+        assert_eq!(cfg.preferences_file, cfg.layout().preferences_file());
+    }
+
     #[test]
     fn sandboxed_puts_every_path_under_the_sandbox() {
         // S11: the escape this exists to stop is a fixture that sets `config_root` and
@@ -656,8 +735,6 @@ mod tests {
             );
         }
     }
-
-    use super::*;
 
     #[test]
     fn snapshot_retention_reads_the_one_config_dialect() {

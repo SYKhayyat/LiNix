@@ -1,6 +1,9 @@
-# LiNix Configuration File - Version 3.5.0 (High-Performance Engine)
-# 
-# Copy this to ~/.config/linix/config.toml and modify as needed.
+# LiNix preferences.toml — refusals and behaviour (II.1). Nothing writes to this but you.
+#
+# Copy this to your repo root (see `linix path`) as preferences.toml and modify as needed.
+# Every key is optional. An unknown key is an error, not a shrug — see `deny_unknown_fields`.
+#
+# Where your repo lives is NOT a key here: this file is inside it. Use `linix path --set`.
 
 # Dry-run mode: Show what would happen without making actual system changes.
 dry_run = false
@@ -28,30 +31,8 @@ nix_gc_age = "30d"
 # unless `yes = true`.
 confirm_destructive = false
 
-# Cache TTL (Time-to-Live) in seconds for remote metadata lookups.
-cache_ttl = 300
-
-# Drift-removal scope for `prune`/`sync`:
-#   "managed" (default) — only remove packages LiNix manages that left the manifests.
-#   "system"            — remove ANY installed package not in your manifests (except
-#                         protected packages). Powerful and dangerous; enable deliberately.
-prune_scope = "managed"
-
-# Shield imperatively-installed packages (`linix install ...`) from drift pruning even if
-# they never made it into a manifest. Safe default: true.
-protect_imperative = true
-
 # Default SSH destinations for `linix fleet` when none are passed on the command line.
 # fleet_hosts = ["user@web-01", "user@web-02"]
-
-# Source of truth for packages to remove (bloatware).
-bloatware_file = "~/.config/linix/bloatware.txt"
-remove_bloatware = false
-
-# Whether `sync` removes drift (packages installed but no longer in your manifests).
-# Default false — `sync` only installs/upgrades, and drift is removed explicitly with
-# `linix prune` (preview it first with `linix status`). Set true to prune during sync.
-prune_on_sync = false
 
 # Show professional progress indicators and spinners.
 show_progress = true
@@ -84,31 +65,15 @@ sys = "apt"
 web = "web"
 ext = "vscode"
 
-# Hostname-specific packages
-[hostname_packages]
-# workstation = ["docker", "kubernetes-cli", "terraform"]
-# gaming-pc = ["steam", "discord", "nvidia-settings"]
-
-# Per-host backend sets now live in the `priority` file with `when` blocks, e.g.
+# Per-host packages live in a module with a `when host == ...` block, not here.
+# Per-host backend sets live in the `priority` file with `when` blocks, e.g.
 #   when host == server-01
 #   apt
 #   end
 # — keeping dev tooling off a server without a second place to say which backends exist.
 
-# Managed config files, contents declared inline (target path -> file body).
-# Each becomes a managed `link` file: written on `sync`, self-healed if edited, tracked
-# for drift, and removed by `prune` when you delete the entry. Any pre-existing file at
-# the target is backed up once to "<target>.linix-backup" before it is overwritten, and
-# LiNix logs where the backup went. (To point at a separate source file instead, use a
-# `link:` line in a manifest; to fill in per-machine values, use a link template.)
-[managed_files]
-# "~/.gitconfig" = '''
-# [user]
-#     name = Ada Lovelace
-#     email = ada@example.com
-# [init]
-#     defaultBranch = main
-# '''
+# Managed config files are declared with a `link:` line in a module, not here — a file you
+# want on this machine is a declaration, and declarations live in modules/ (II.1).
 
 # Retention: how long to keep each of LiNix's three histories. Each block is independent
 # (they cost very different amounts of disk). Rules combine as a UNION — an entry is kept

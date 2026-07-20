@@ -14,6 +14,7 @@ pub mod module_registry;
 pub mod pm_hooks;
 pub mod profile;
 pub mod profile_expr;
+pub mod rebuild;
 pub mod run;
 pub mod sandbox;
 pub mod vocab;
@@ -40,4 +41,4 @@ pub use self::profile::ProfileManager;
 pub use self::shell::EphemeralShell;
 
 pub const APP_NAME: &str = "linix";
-pub const DEFAULT_CONFIG_NAME: &str = "config.toml";
+pub const DEFAULT_CONFIG_NAME: &str = crate::config::PREFERENCES_FILE_NAME;

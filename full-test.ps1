@@ -88,7 +88,7 @@ if ($count -gt 0) {
 
 # 9. Dry-run sync
 Write-Host "`n[9/12] Testing dry-run sync..." -ForegroundColor Yellow
-$configPath = "$env:USERPROFILE\.config\linix-test\config.toml"
+$configPath = "$env:USERPROFILE\.config\linix-test\preferences.toml"
 if (Test-Path $configPath) {
     & $BINARY --config $configPath --dry-run sync 2>&1 | Select-Object -First 10
     Write-Host "✅ Dry-run sync executed" -ForegroundColor Green

@@ -123,13 +123,6 @@ pub async fn create_bundle(
     // declarations is worse than one that fails.
     let root = app.config.config_root();
     report.files_copied += copy_dir_recursive(&root, out, Some(out)).await?;
-    {
-        let cfg = app.config.config_file.clone();
-        if cfg.exists() && cfg.parent() != Some(root.as_path()) {
-            let _ = tokio::fs::copy(&cfg, out.join("config.toml")).await;
-            report.files_copied += 1;
-        }
-    }
 
     // The manifest HISTORY, not just the current files: a `git bundle` carries every commit,
     // so the far side can `rollback` to any past state, not only restore what's current. It is

@@ -3,7 +3,13 @@
 //! A `schedule:` line names a job and carries its options — when to run and what to run:
 //!
 //! ```text
-//! schedule:nightly-tidy { cron = 0 2 * * *; run = clean; notify = desktop }
+//! schedule:nightly-tidy@cron=0 2 * * *,run=clean,notify=desktop
+//!
+//! schedule:nightly-tidy {
+//!   cron = 0 2 * * *
+//!   run = clean
+//!   notify = desktop
+//! }
 //! ```
 //!
 //! The resolver collects these (from the `schedules` file only — II.2), and this module maps
@@ -35,6 +41,7 @@ pub fn schedule_config(name: &str, options: &Options, origin: &Origin) -> Result
 
     let cron = required(name, options, "cron", origin)?;
     let command = required(name, options, "run", origin)?;
+    refuse_unattended(name, &command, origin)?;
     let notification = options.one("notify").map(str::to_string);
 
     Ok(ScheduleConfig {
@@ -44,6 +51,27 @@ pub fn schedule_config(name: &str, options: &Options, origin: &Origin) -> Result
         notification,
         last_synced: None,
     })
+}
+
+/// Commands a timer may not run.
+///
+/// `rebuild` removes declared software in order to reinstall it (II.11b). Unattended, a failed
+/// reinstall leaves the machine missing software at 2am with nobody watching — and the repair
+/// it performs is for a problem a human noticed, so a timer cannot be the thing that notices.
+const NEVER_UNATTENDED: &[&str] = &["rebuild", "purge-unmanaged"];
+
+fn refuse_unattended(name: &str, command: &str, origin: &Origin) -> Result<()> {
+    let head = command.split_whitespace().next().unwrap_or("");
+    if NEVER_UNATTENDED.contains(&head) {
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`schedule:{}` may not run `{}`", name, head),
+        )
+        .with_hint(
+            "a schedule runs unattended, and this command removes software. Run it yourself.",
+        ));
+    }
+    Ok(())
 }
 
 fn required(name: &str, options: &Options, key: &str, origin: &Origin) -> Result<String> {
@@ -114,6 +142,22 @@ mod tests {
     fn an_empty_cron_value_is_treated_as_missing() {
         let o = opts(&[("cron", "  "), ("run", "clean")]);
         assert!(schedule_config("t", &o, &origin()).is_err());
+    }
+
+    #[test]
+    fn a_timer_may_not_run_rebuild() {
+        // K13. `rebuild` removes declared software to put it back; unattended, a failed
+        // reinstall leaves the machine short at 2am with nobody watching.
+        let o = opts(&[("cron", "0 2 * * *"), ("run", "rebuild --all")]);
+        let err = schedule_config("nightly", &o, &origin()).unwrap_err();
+        assert!(err.what.contains("may not run `rebuild`"), "{}", err);
+    }
+
+    #[test]
+    fn the_refusal_reads_the_command_not_the_whole_line() {
+        // `run = sync --rebuild-cache` is not `run = rebuild`.
+        let o = opts(&[("cron", "0 2 * * *"), ("run", "sync --locked")]);
+        assert!(schedule_config("t", &o, &origin()).is_ok());
     }
 
     #[test]

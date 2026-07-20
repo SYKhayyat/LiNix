@@ -47,6 +47,21 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
   where behaviour settings belong. `--config-dir` overrides it for one run; the order is
   `--config-dir`, `$LINIX_CONFIG_DIR`, the settings file, the default, and
   `linix path --explain` says which one won.
+- **Behaviour lives in `preferences.toml`, inside your repo.** `config.toml` is gone — it was
+  never in the spec's file list, and it held the key that said where the repo was, which could
+  only ever be read from the directory it was moving away from. An unknown key is now an error
+  naming the key rather than a silent shrug, which it had been while eight documented settings
+  no longer existed. `linix config path` and `config edit` are gone too; `linix path` and
+  `linix edit` answer those questions, and `linix edit preferences.toml` re-checks that the
+  file still parses when you save it.
+- **`linix rebuild` repairs what `sync` cannot see.** `sync` applies the difference between
+  your files and the machine, so a package that is declared and installed but broken produces
+  no difference and `sync` reports success over it forever. `rebuild` asserts the declared set
+  from scratch instead — one backend at a time, all of its packages down and then all of them
+  back up, which is what actually lets a shared dependency orphan and be collected. Backends
+  that need root go first (a crate can need a system compiler; no system package needs a
+  crate). There is no default scope, it never touches undeclared software, it names and skips
+  protected packages rather than removing them, and it cannot be put in `schedules`.
 
 ### Safety
 

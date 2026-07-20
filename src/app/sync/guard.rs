@@ -38,6 +38,7 @@ pub enum GuardScope {
     ShellExit,
     Leases,
     Heal,
+    Rebuild,
 }
 
 impl GuardScope {
@@ -55,6 +56,7 @@ impl GuardScope {
             Self::ShellExit => "shell-exit",
             Self::Leases => "leases",
             Self::Heal => "heal",
+            Self::Rebuild => "rebuild",
         }
     }
 

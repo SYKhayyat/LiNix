@@ -4,7 +4,7 @@ pub mod grammar;
 pub mod parser;
 pub mod settings;
 
-pub use config::{Config, GuardSettings};
+pub use config::{Config, GuardSettings, PREFERENCES_FILE_NAME};
 pub use settings::{resolve_root, ResolvedRoot, RootSource, Settings};
 
 /// Module-level constants for configuration defaults
