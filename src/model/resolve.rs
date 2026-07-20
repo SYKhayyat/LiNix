@@ -1078,7 +1078,7 @@ when os == linux {
   role = travel
 }
 ");
-        assert_eq!(load_vars(&f).unwrap()["role"], "travel");
+        assert_eq!(load_vars(&f).unwrap()["role"].to_string(), "travel");
     }
 
     #[test]
@@ -1091,7 +1091,7 @@ when os == plan9 {
   role = travel
 }
 ");
-        assert_eq!(load_vars(&f).unwrap()["role"], "desktop");
+        assert_eq!(load_vars(&f).unwrap()["role"].to_string(), "desktop");
     }
 
     #[test]

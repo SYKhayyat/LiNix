@@ -1,4 +1,5 @@
 use crate::core::{Error, Result};
+use crate::model::vars::Value;
 
 /// Facts about the host used to evaluate `when` conditionals, so a single shared repo can
 /// serve a heterogeneous fleet (Linux + macOS + Windows). The model reads these when it
@@ -31,18 +32,20 @@ impl HostFacts {
         }
     }
 
-    fn value_for(&self, key: &str) -> Option<&str> {
+    fn value_for(&self, key: &str) -> Option<Value> {
         // IX.4: `$name` is a variable you decided, `name` is a fact the machine reported. The
         // sigil is what lets LiNix add a detected fact without changing the meaning of a file
         // where someone happened to use that word as a variable.
         if let Some(var) = key.strip_prefix('$') {
-            return self.vars.get(var).map(String::as_str);
+            return self.vars.get(var).cloned();
         }
+        // A detected fact is always a string (W2), so `$var == family` follows the same
+        // no-coercion equality as any other comparison.
         match key {
-            "os" => Some(&self.os),
-            "arch" => Some(&self.arch),
-            "host" | "hostname" => Some(&self.host),
-            "family" => Some(&self.family),
+            "os" => Some(Value::Str(self.os.clone())),
+            "arch" => Some(Value::Str(self.arch.clone())),
+            "host" | "hostname" => Some(Value::Str(self.host.clone())),
+            "family" => Some(Value::Str(self.family.clone())),
             _ => None,
         }
     }
@@ -100,47 +103,110 @@ fn parse_os_release_family(text: &str) -> Option<String> {
     }
 }
 
-/// Evaluate a `when` predicate against host facts. Supported forms (case-insensitive on the
-/// value): `os == linux`, `arch != x86_64`, `host == laptop`, `os in [linux, macos]`.
-/// Pure — unit tested.
+/// Evaluate a `when` predicate against host facts. Forms: `os == linux`, `arch != x86_64`,
+/// `$count > 3`, `os in [linux, macos]`. Values are typed (W2): comparison is between values of
+/// the same type, ordering is numbers only, and there is no truthiness — a bare `$flag` is an
+/// error, not a non-empty test. Pure — unit tested.
 pub fn eval_when(pred: &str, facts: &HostFacts) -> Result<bool> {
     let pred = pred.trim();
 
-    // Membership form: `key in [a, b, c]`  (brackets optional)
+    // Membership form: `key in [a, b, c]`  (brackets optional), or `key in $listvar`.
     if let Some((key, rest)) = pred.split_once(" in ") {
-        let key = key.trim();
-        let actual = facts
-            .value_for(key)
-            .ok_or_else(|| Error::Config(format!("unknown `when` key '{}'", key)))?;
-        let list = rest.trim().trim_start_matches('[').trim_end_matches(']');
-        let hit = list
-            .split(',')
-            .map(|s| s.trim())
-            .any(|v| v.eq_ignore_ascii_case(actual));
-        return Ok(hit);
+        let actual = lhs_value(key.trim(), facts)?;
+        let elements = list_operand(rest.trim(), facts)?;
+        return Ok(elements.iter().any(|el| actual.equals(el)));
     }
 
-    // Comparison form: `key == value` or `key != value`
-    let (negate, sep) = if pred.contains("!=") {
-        (true, "!=")
-    } else if pred.contains("==") {
-        (false, "==")
-    } else {
+    // Comparison form. Two-char operators are matched before one-char ones so `<=` is not read
+    // as `<`; every operator is distinct so order among the two-char set does not matter.
+    for op in ["==", "!=", "<=", ">="] {
+        if let Some((l, r)) = pred.split_once(op) {
+            return compare(l.trim(), op, r.trim(), facts);
+        }
+    }
+    for op in ["<", ">"] {
+        if let Some((l, r)) = pred.split_once(op) {
+            return compare(l.trim(), op, r.trim(), facts);
+        }
+    }
+
+    // No operator. A bare `$flag` is the truthiness trap W3 forbids: `false` is a non-empty
+    // string, so `when $gpu` would fire on `gpu = false`. Refuse it, and say what to write.
+    if let Some(var) = pred.strip_prefix('$') {
         return Err(Error::Config(format!(
-            "invalid `when` predicate '{}' (use `key == value`, `key != value`, or `key in [..]`)",
-            pred
+            "`{}` is not a condition on its own — there is no truthiness; write `${} == true` or another comparison",
+            pred, var
         )));
-    };
-    let (key, value) = pred
-        .split_once(sep)
-        .ok_or_else(|| Error::Config(format!("invalid `when` predicate '{}'", pred)))?;
-    let key = key.trim();
-    let value = value.trim();
-    let actual = facts
+    }
+    Err(Error::Config(format!(
+        "invalid `when` predicate '{}' (use `key == value`, `key != value`, `key < number`, or `key in [..]`)",
+        pred
+    )))
+}
+
+/// The left side of a comparison is always a key — a detected fact or a `$variable` — and an
+/// unknown one is an error, never a silent false (a typo'd `$rle` that read as false is a block
+/// that never fires and never complains, IX.3).
+fn lhs_value(key: &str, facts: &HostFacts) -> Result<Value> {
+    facts
         .value_for(key)
-        .ok_or_else(|| Error::Config(format!("unknown `when` key '{}'", key)))?;
-    let eq = actual.eq_ignore_ascii_case(value);
-    Ok(eq != negate)
+        .ok_or_else(|| Error::Config(format!("unknown `when` key '{}'", key)))
+}
+
+/// The right side is a value: another `$variable`, or a literal read with the same rules a `vars`
+/// line uses, so `$gpu == true` and `gpu = true` mean the same thing.
+fn rhs_value(token: &str, facts: &HostFacts) -> Result<Value> {
+    if token.starts_with('$') {
+        return lhs_value(token, facts);
+    }
+    Ok(Value::parse_literal(token))
+}
+
+fn compare(left: &str, op: &str, right: &str, facts: &HostFacts) -> Result<bool> {
+    let a = lhs_value(left, facts)?;
+    let b = rhs_value(right, facts)?;
+    match op {
+        "==" => Ok(a.equals(&b)),
+        "!=" => Ok(!a.equals(&b)),
+        _ => {
+            let ord = a.order(&b).ok_or_else(|| {
+                Error::Config(format!(
+                    "`{} {} {}` compares a {} with a {}; ordering is only defined between numbers",
+                    left,
+                    op,
+                    right,
+                    a.type_name(),
+                    b.type_name()
+                ))
+            })?;
+            Ok(match op {
+                "<" => ord.is_lt(),
+                ">" => ord.is_gt(),
+                "<=" => ord.is_le(),
+                ">=" => ord.is_ge(),
+                _ => unreachable!("operator set is closed"),
+            })
+        }
+    }
+}
+
+/// The right side of `in`: a bracketed literal list, or a `$variable` that must itself be a list.
+fn list_operand(rest: &str, facts: &HostFacts) -> Result<Vec<Value>> {
+    if rest.starts_with('$') {
+        return match lhs_value(rest, facts)? {
+            Value::List(items) => Ok(items),
+            other => Err(Error::Config(format!(
+                "`{}` is a {}, not a list; `in` needs a list on the right",
+                rest,
+                other.type_name()
+            ))),
+        };
+    }
+    let inner = rest.trim_start_matches('[').trim_end_matches(']');
+    Ok(inner
+        .split(',')
+        .map(|s| Value::parse_literal(s.trim()))
+        .collect())
 }
 
 /// Split a removal target like `backend:name[@opts]` into `(Some(backend), bare_name)`
@@ -181,7 +247,7 @@ mod conditional_tests {
 
     fn with_role(role: &str) -> HostFacts {
         let mut vars = crate::model::vars::Vars::new();
-        vars.insert("role".into(), role.into());
+        vars.insert("role".into(), Value::Str(role.into()));
         facts().with_vars(vars)
     }
 
@@ -198,10 +264,56 @@ mod conditional_tests {
         // IX.4: the sigil exists so LiNix can add a detected fact forever without changing the
         // meaning of a file where someone used that word as a variable name.
         let mut vars = crate::model::vars::Vars::new();
-        vars.insert("os".into(), "definitely-not-linux".into());
+        vars.insert("os".into(), Value::Str("definitely-not-linux".into()));
         let f = facts().with_vars(vars);
         assert!(eval_when("os == linux", &f).unwrap(), "`os` must stay the detected fact");
         assert!(eval_when("$os == definitely-not-linux", &f).unwrap());
+    }
+
+    #[test]
+    fn typed_comparisons_have_no_cross_type_coercion() {
+        let mut vars = crate::model::vars::Vars::new();
+        vars.insert("gpu".into(), Value::Bool(true));
+        vars.insert("cores".into(), Value::Num(8.0));
+        vars.insert("role".into(), Value::Str("travel".into()));
+        vars.insert("tags".into(), Value::List(vec![Value::Str("travel".into())]));
+        let f = facts().with_vars(vars);
+
+        assert!(eval_when("$gpu == true", &f).unwrap());
+        assert!(!eval_when("$gpu == false", &f).unwrap());
+        // A boolean is not the string "true": no coercion (W2).
+        assert!(!eval_when("$gpu == \"true\"", &f).unwrap());
+
+        assert!(eval_when("$cores > 4", &f).unwrap());
+        assert!(eval_when("$cores <= 8", &f).unwrap());
+        assert!(!eval_when("$cores < 8", &f).unwrap());
+
+        // `in` tests whether the left value is a member of the right list.
+        assert!(eval_when("$role in [travel, work]", &f).unwrap());
+        assert!(!eval_when("$role in [home, office]", &f).unwrap());
+        // The right side may be a list-typed variable.
+        assert!(eval_when("$role in $tags", &f).unwrap());
+        // A non-list on the right of `in` is refused.
+        assert!(eval_when("$role in $gpu", &f).is_err());
+    }
+
+    #[test]
+    fn ordering_a_string_is_refused_not_answered_wrongly() {
+        let mut vars = crate::model::vars::Vars::new();
+        vars.insert("ver".into(), Value::Str("10".into()));
+        let f = facts().with_vars(vars);
+        // `"10" > "9"` is false under string ordering and true under intuition; refuse it (W2).
+        assert!(eval_when("$ver > 9", &f).is_err());
+    }
+
+    #[test]
+    fn a_bare_variable_is_not_a_condition() {
+        // W3: `false` is a non-empty string, so a truthiness test would fire on `gpu = false`.
+        let mut vars = crate::model::vars::Vars::new();
+        vars.insert("gpu".into(), Value::Bool(false));
+        let f = facts().with_vars(vars);
+        let err = eval_when("$gpu", &f).unwrap_err();
+        assert!(err.to_string().contains("== true"), "{}", err);
     }
 
     #[test]

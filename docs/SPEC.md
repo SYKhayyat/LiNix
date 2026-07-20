@@ -2512,6 +2512,53 @@ Three suspicions did not survive scrutiny:
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
+## Session 2026-07-20 (fourth session) — Part IX begins: typed values (W2, built)
+
+The designated next-session work is Part IX (the `vars` language) at the position-4 ruling. This
+session opened it. **Owner rulings taken at the start, recorded at their register entries below:**
+
+- **Build full position 4 this pass** — the embedded programmable provider included, not deferred.
+- **The embedded language is Rhai, under the neutral file extension `vars.linix`** — neutral so
+  the engine can be swapped later without renaming anyone's files. (An implementation choice per
+  IX.6, recorded here where it lands, not a spec ruling.)
+- **Providers are chosen by filename, and multiple provider files may coexist; a `[vars]` selector
+  in `preferences.toml` picks the active one. Two present and none selected is a loud error, never
+  a precedence guess.** This answers the undefined gap in IX.2/IX.6 (how a machine picks a
+  provider) and settles W6 toward "highly configurable": several sources allowed, one active.
+- **Interpolating a list into a string value is an error naming the variable**; a number or
+  boolean interpolates to its obvious text form. (The still-open half of W9 for scalars only.)
+
+**Built this session — Stage 1, typed values (W2):** `vars` values are now the four JSON types —
+string, number, boolean, list — not strings. `model/vars::Value` carries the type; one
+`parse_literal` reads both a `vars` line and a `when` right-hand side, so `gpu = true` and
+`when $gpu == true` agree by construction. The W2 coercion rules are enforced in `Value::equals`
+/`Value::order` and in `config/parser::eval_when`:
+
+- **No cross-type coercion.** `"1" == 1` is false, `true == "true"` is false — not an error, just
+  not equal. Strings still compare case-insensitively, which is the behaviour detected facts have
+  always had (`os == LINUX`) and the one recorded deviation from "no surprises".
+- **Ordering (`<`, `>`, `<=`, `>=`) is numbers only**; comparing a string by order is refused by
+  name, not answered (`"10" > "9"` would lie). These operators are new to `when` this session.
+- **`in` tests list membership** with the same no-coercion equality; the right operand may be a
+  bracket literal or a list-typed variable.
+- **No truthiness (W3, adopted).** A bare `when $flag` is a parse error suggesting `$flag == true`,
+  so `false`/`""`/`0`/`[]` never quietly differ.
+
+Values that are exactly one reference (`alias = $tags`) inherit that variable's type; any other
+value containing `$` is string interpolation and yields a string. `expand` (the `$var` walk into
+`link:` targets and `@version=`) stringifies scalars and refuses a list by name.
+
+**Green at this commit:** `cargo build --all-targets` clean, `cargo clippy --all-targets` silent,
+`cargo test` all suites passing (734 lib + integration; run the command, do not copy the number).
+
+**Owed, and tracked:** W2's Part II home and Part V entry are not written yet — deferred until the
+whole `vars` language lands (stages 2–6), so Part II does not describe a half-built feature.
+Stages remaining: provider abstraction + external-executable provider + the `preferences.toml`
+selector; the embedded Rhai provider; **an owner decision on the Rhai standard library** (which
+`sh`/`now`/`http`/`read_file` host functions exist — not yet asked); plan-carries-resolved-vars
+(the once-per-invocation rule, W4); and tooling (`linix vars` W12, `why` W11, `diff` W14,
+`activate`/`deactivate` + guard W8/W13, `check` W5).
+
 ## Done 2026-07-20 (second session) — the audit's findings, closed
 
 **Every numbered finding in the audit below is now fixed, plus the II.17 zombie keys, the
@@ -4945,14 +4992,23 @@ wrong question, so each is decided here or it is decided by accident:
   differ from each other.
 - **A detected fact is still a string**, and comparing `$var` to one follows the rule above.
 
+**BUILT (2026-07-20, fourth session).** `model/vars::Value` is the four types; one `parse_literal`
+reads a `vars` line and a `when` right-hand side alike; `Value::equals`/`Value::order` and
+`config/parser::eval_when` enforce every rule above. `<`, `>`, `<=`, `>=` are new to `when` and
+refuse a non-number pair by name. One deviation, recorded: **string equality is
+case-insensitive**, preserving the detected-fact behaviour `os == LINUX` has always had.
+
 **Owed:** the value type lands in Part II with a Part V entry naming the bug (a comparison that
 answers a question the reader did not ask), and `linix vars` (W12) prints the type alongside the
-value or the whole feature is undebuggable.
+value or the whole feature is undebuggable. **Deferred until stages 2–6 land**, so Part II does not
+describe a half-built feature.
 
 **W3 — Is a bare `$flag` a condition?** `when $gpu { … }` meaning "non-empty" is the obvious
 shorthand and it needs deciding before people write `gpu = false` and find that it fires.
 *Recommendation:* no bare form — require an explicit comparison, and make `when $gpu` a parse
 error suggesting `$gpu == …`. **`false` as a truthy string is a footgun with no upside.**
+**ADOPTED and BUILT (2026-07-20, fourth session):** a bare `$flag` in `when` is a parse error
+naming the fix.
 
 **W4 — Where in resolution does `vars` load?** It has to be parsed and resolved before any file
 containing `when` is evaluated, including `active` — which means before profiles are known. And

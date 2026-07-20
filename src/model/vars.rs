@@ -14,6 +14,170 @@ use std::collections::{BTreeMap, HashSet};
 /// variable is an identifier, and this is not one — so it cannot collide with a user's.
 const VALUE_PLACEHOLDER: &str = "<value>";
 
+/// A variable's value. The four JSON scalar-and-list types (W2, ruled): a provider that returns
+/// JSON has these already, and flattening them to strings at the boundary throws away information
+/// the user produced on purpose.
+///
+/// Comparison is defined in [`Value::equals`] and [`Value::order`]; the load-bearing rule is that
+/// there is **no cross-type coercion**, so `"1" == 1` is false rather than a silent true.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum Value {
+    Bool(bool),
+    /// A JSON number. `f64` because JSON does not distinguish integers, and a config value that
+    /// is `3` and one that is `3.0` are the same claim.
+    Num(f64),
+    Str(String),
+    List(Vec<Value>),
+}
+
+impl Value {
+    /// Parse a value literal the way both a `vars` line and a `when` right-hand side read it, so
+    /// `gpu = true` and `when $gpu == true` agree by construction rather than by luck. A `"quoted"`
+    /// value is always a string, which is the only way to write the literal text `true` or `5`.
+    pub fn parse_literal(text: &str) -> Value {
+        let t = text.trim();
+        if let Some(inner) = t.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+            return Value::Str(inner.to_string());
+        }
+        if t == "true" {
+            return Value::Bool(true);
+        }
+        if t == "false" {
+            return Value::Bool(false);
+        }
+        if let Some(items) = parse_list_literal(t) {
+            return Value::List(items.iter().map(|s| Value::parse_literal(s)).collect());
+        }
+        if let Some(n) = parse_number(t) {
+            return Value::Num(n);
+        }
+        Value::Str(t.to_string())
+    }
+
+    /// The type's name, for an error that says what two things could not be compared.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Value::Bool(_) => "boolean",
+            Value::Num(_) => "number",
+            Value::Str(_) => "string",
+            Value::List(_) => "list",
+        }
+    }
+
+    /// No cross-type coercion (W2): two values are equal only when they are the same type and the
+    /// same value. Strings compare case-insensitively, which is the behaviour detected facts have
+    /// always had (`os == LINUX`) and the one place case matters least.
+    pub fn equals(&self, other: &Value) -> bool {
+        match (self, other) {
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Num(a), Value::Num(b)) => a == b,
+            (Value::Str(a), Value::Str(b)) => a.eq_ignore_ascii_case(b),
+            (Value::List(a), Value::List(b)) => {
+                a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.equals(y))
+            }
+            _ => false,
+        }
+    }
+
+    /// Ordering is legal only between two numbers (W2): `"10" > "9"` is false under every string
+    /// ordering and true under every intuition, so comparing strings by order is refused rather
+    /// than answered wrongly. `None` means the comparison is not defined and the caller errors.
+    pub fn order(&self, other: &Value) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Value::Num(a), Value::Num(b)) => a.partial_cmp(b),
+            _ => None,
+        }
+    }
+
+    /// The text form used when a value is substituted into a string (a `link:` target, a
+    /// `@version=`). A list has no single text form, so the caller refuses it by name rather than
+    /// inventing a joined string that would parse as one thing and mean another.
+    pub fn as_interpolated(&self) -> std::result::Result<String, &'static str> {
+        match self {
+            Value::Str(s) => Ok(s.clone()),
+            Value::Bool(b) => Ok(b.to_string()),
+            Value::Num(n) => Ok(format_number(*n)),
+            Value::List(_) => Err("list"),
+        }
+    }
+}
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Str(s) => write!(f, "{}", s),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::Num(n) => write!(f, "{}", format_number(*n)),
+            Value::List(items) => {
+                let parts: Vec<String> = items.iter().map(|v| v.to_string()).collect();
+                write!(f, "[{}]", parts.join(", "))
+            }
+        }
+    }
+}
+
+/// Print `3` not `3.0`, but `1.5` as itself — the number a user wrote is the number they see.
+fn format_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.is_finite() && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else {
+        format!("{}", n)
+    }
+}
+
+/// A number literal, and only a literal: a finite decimal with at most one point and an optional
+/// leading sign. `1e5`, `inf`, `nan` and `1.2.3` are not numbers, so a version string stays a
+/// string and shell text is never mistaken for arithmetic.
+fn parse_number(t: &str) -> Option<f64> {
+    if t.is_empty() {
+        return None;
+    }
+    let body = t.strip_prefix(['+', '-']).unwrap_or(t);
+    if body.is_empty() {
+        return None;
+    }
+    let mut seen_dot = false;
+    for c in body.chars() {
+        match c {
+            '0'..='9' => {}
+            '.' if !seen_dot => seen_dot = true,
+            _ => return None,
+        }
+    }
+    t.parse::<f64>().ok().filter(|n| n.is_finite())
+}
+
+/// Split `[a, b, [c, d]]` into its top-level element texts, tracking bracket depth so a nested
+/// list is one element. `None` when the text is not a bracketed list at all.
+fn parse_list_literal(t: &str) -> Option<Vec<String>> {
+    let inner = t.strip_prefix('[')?.strip_suffix(']')?;
+    if inner.trim().is_empty() {
+        return Some(Vec::new());
+    }
+    let mut items = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let bytes = inner.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'[' => depth += 1,
+            b']' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                items.push(inner[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(inner[start..].trim().to_string());
+    Some(items)
+}
+
+/// The resolved set. A `BTreeMap` so `plan` and `sync` print variables in the same order and a
+/// diff of two machines' resolved vars is readable.
+pub type Vars = BTreeMap<String, Value>;
+
 /// One `NAME = VALUE` line. `conditional` is whether it came from inside a `when` block, which
 /// is what IX.3 turns on: a top-level line defines a name, a conditional one may only override.
 #[derive(Debug, Clone)]
@@ -23,10 +187,6 @@ pub struct Definition {
     pub origin: Origin,
     pub conditional: bool,
 }
-
-/// The resolved set. A `BTreeMap` so `plan` and `sync` print variables in the same order and a
-/// diff of two machines' resolved vars is readable.
-pub type Vars = BTreeMap<String, String>;
 
 /// Resolve definitions that `when` has already gated down to the ones that apply here.
 ///
@@ -89,7 +249,8 @@ pub fn resolve(defs: &[Definition]) -> Result<Vars> {
     interpolate_all(&raw)
 }
 
-/// Resolve every value, substituting `$other` references, in dependency order.
+/// Resolve every value into a typed [`Value`], substituting `$other` references, in dependency
+/// order.
 fn interpolate_all(raw: &BTreeMap<String, &Definition>) -> Result<Vars> {
     let mut done: Vars = BTreeMap::new();
     let mut visiting: Vec<String> = Vec::new();
@@ -132,47 +293,119 @@ fn resolve_one(
     seen.insert(name.to_string());
     visiting.push(name.to_string());
 
-    let mut out = String::with_capacity(def.value.len());
-    let mut rest = def.value.as_str();
+    let value = resolve_value(def, raw, done, visiting, seen)?;
+
+    visiting.pop();
+    done.insert(name.to_string(), value);
+    Ok(())
+}
+
+/// Turn one definition's raw text into a typed value. A value that is exactly one reference
+/// (`alias = $other`) inherits that variable's type, so a list can be aliased; any other value
+/// containing `$` is string interpolation and its result is a string; a value with no reference
+/// is a typed literal.
+fn resolve_value(
+    def: &Definition,
+    raw: &BTreeMap<String, &Definition>,
+    done: &mut Vars,
+    visiting: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) -> Result<Value> {
+    let text = def.value.trim();
+    if let Some(referenced) = sole_reference(text) {
+        require_defined(referenced, raw, &def.origin, None)?;
+        resolve_one(referenced, raw, done, visiting, seen)?;
+        return Ok(done.get(referenced).cloned().unwrap_or(Value::Str(String::new())));
+    }
+    if text.contains('$') {
+        let s = interpolate_string(&def.value, Some(&def.name), &def.origin, raw, done, visiting, seen)?;
+        return Ok(Value::Str(s));
+    }
+    Ok(Value::parse_literal(&def.value))
+}
+
+/// The single `$name`/`${name}` a value consists of entirely, or `None` if it is anything else.
+fn sole_reference(text: &str) -> Option<&str> {
+    let after = text.strip_prefix('$')?;
+    let (name, rest) = split_reference(after);
+    match name {
+        Some(n) if rest.is_empty() => Some(n),
+        _ => None,
+    }
+}
+
+fn require_defined(
+    referenced: &str,
+    raw: &BTreeMap<String, &Definition>,
+    origin: &Origin,
+    referrer: Option<&str>,
+) -> Result<()> {
+    if raw.contains_key(referenced) {
+        return Ok(());
+    }
+    let what = match referrer {
+        Some(name) if name != VALUE_PLACEHOLDER => {
+            format!("`{}` refers to `${}`, which is not defined", name, referenced)
+        }
+        _ => format!("`${}` is not defined", referenced),
+    };
+    Err(GrammarError::new(origin.clone(), what)
+        .with_hint("every variable needs a top-level default in `vars` before it can be used."))
+}
+
+/// Substitute `$name` references into `text`, resolving each referenced variable first. The
+/// result is always a string — this is text composition, and a referenced list has no text form.
+#[allow(clippy::too_many_arguments)]
+fn interpolate_string(
+    text: &str,
+    referrer: Option<&str>,
+    origin: &Origin,
+    raw: &BTreeMap<String, &Definition>,
+    done: &mut Vars,
+    visiting: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) -> Result<String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
     while let Some(at) = rest.find('$') {
         out.push_str(&rest[..at]);
         let after = &rest[at + 1..];
+        // `$$` is a literal `$`, the one escape. Without it there is no way to write a dollar
+        // sign in a value at all.
+        if let Some(tail) = after.strip_prefix('$') {
+            out.push('$');
+            rest = tail;
+            continue;
+        }
         let (referenced, remainder) = split_reference(after);
         match referenced {
-            // `$$` is a literal `$`, the one escape. Without it there is no way to write a
-            // dollar sign in a value at all.
-            None if after.starts_with('$') => {
-                out.push('$');
-                rest = &after[1..];
-                continue;
-            }
             None => {
                 out.push('$');
                 rest = after;
-                continue;
             }
             Some(referenced) => {
-                if !raw.contains_key(referenced) {
-                    let what = if name == VALUE_PLACEHOLDER {
-                        format!("`${}` is not defined", referenced)
-                    } else {
-                        format!("`{}` refers to `${}`, which is not defined", name, referenced)
-                    };
-                    return Err(GrammarError::new(def.origin.clone(), what).with_hint(
-                        "every variable needs a top-level default in `vars` before it can be used.",
-                    ));
-                }
+                require_defined(referenced, raw, origin, referrer)?;
                 resolve_one(referenced, raw, done, visiting, seen)?;
-                out.push_str(done.get(referenced).map(String::as_str).unwrap_or(""));
+                let value = done.get(referenced).cloned().unwrap_or(Value::Str(String::new()));
+                match value.as_interpolated() {
+                    Ok(s) => out.push_str(&s),
+                    Err(_) => {
+                        return Err(GrammarError::new(
+                            origin.clone(),
+                            format!("`${}` is a list and cannot go inside a value", referenced),
+                        )
+                        .with_hint(
+                            "a list has no single text form; reference it in a `when` condition \
+                             instead, or name a scalar variable here.",
+                        ));
+                    }
+                }
                 rest = remainder;
             }
         }
     }
     out.push_str(rest);
-
-    visiting.pop();
-    done.insert(name.to_string(), out);
-    Ok(())
+    Ok(out)
 }
 
 /// Read a variable reference off the front of `text`, returning it and what follows.
@@ -201,39 +434,53 @@ fn split_reference(text: &str) -> (Option<&str>, &str) {
 /// Substitute `$name` references in a value written outside `vars` — a `link:` target, a
 /// `@version=`. Unknown names are an error, never left as literal text: a silently unexpanded
 /// `$rle` would become a path with a dollar sign in it and fail somewhere with no mention of
-/// the typo.
+/// the typo. A referenced list is refused by name for the same reason as inside `vars`.
 pub fn expand(value: &str, vars: &Vars, origin: &Origin) -> Result<String> {
-    let as_defs: BTreeMap<String, Definition> = vars
-        .iter()
-        .map(|(k, v)| {
-            (
-                k.clone(),
-                Definition {
-                    name: k.clone(),
-                    value: v.clone(),
-                    origin: origin.clone(),
-                    conditional: false,
-                },
-            )
-        })
-        .collect();
-    let refs: BTreeMap<String, &Definition> = as_defs.iter().map(|(k, v)| (k.clone(), v)).collect();
-
-    let holder = Definition {
-        name: VALUE_PLACEHOLDER.to_string(),
-        value: value.to_string(),
-        origin: origin.clone(),
-        conditional: false,
-    };
-    let mut one = refs.clone();
-    one.insert(VALUE_PLACEHOLDER.to_string(), &holder);
-
-    let mut done: Vars = vars.clone();
-    done.remove(VALUE_PLACEHOLDER);
-    let mut visiting = Vec::new();
-    let mut seen = HashSet::new();
-    resolve_one(VALUE_PLACEHOLDER, &one, &mut done, &mut visiting, &mut seen)?;
-    Ok(done.remove(VALUE_PLACEHOLDER).unwrap_or_default())
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(at) = rest.find('$') {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 1..];
+        if let Some(tail) = after.strip_prefix('$') {
+            out.push('$');
+            rest = tail;
+            continue;
+        }
+        let (referenced, remainder) = split_reference(after);
+        match referenced {
+            None => {
+                out.push('$');
+                rest = after;
+            }
+            Some(referenced) => {
+                let Some(v) = vars.get(referenced) else {
+                    return Err(GrammarError::new(
+                        origin.clone(),
+                        format!("`${}` is not defined", referenced),
+                    )
+                    .with_hint(
+                        "every variable needs a top-level default in `vars` before it can be used.",
+                    ));
+                };
+                match v.as_interpolated() {
+                    Ok(s) => out.push_str(&s),
+                    Err(_) => {
+                        return Err(GrammarError::new(
+                            origin.clone(),
+                            format!("`${}` is a list and cannot go inside a value", referenced),
+                        )
+                        .with_hint(
+                            "a list has no single text form; reference it in a `when` condition \
+                             instead, or name a scalar variable here.",
+                        ));
+                    }
+                }
+                rest = remainder;
+            }
+        }
+    }
+    out.push_str(rest);
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -262,16 +509,20 @@ mod tests {
         }
     }
 
+    fn str_val(s: &str) -> Value {
+        Value::Str(s.into())
+    }
+
     #[test]
     fn a_default_survives_when_nothing_overrides_it() {
         let v = resolve(&[top("role", "desktop", 1)]).unwrap();
-        assert_eq!(v["role"], "desktop");
+        assert_eq!(v["role"], str_val("desktop"));
     }
 
     #[test]
     fn a_matching_block_overrides_the_default() {
         let v = resolve(&[top("role", "desktop", 1), when("role", "travel", 5)]).unwrap();
-        assert_eq!(v["role"], "travel");
+        assert_eq!(v["role"], str_val("travel"));
     }
 
     #[test]
@@ -304,7 +555,7 @@ mod tests {
             when("role", "travel", 9),
         ])
         .unwrap();
-        assert_eq!(v["role"], "travel");
+        assert_eq!(v["role"], str_val("travel"));
     }
 
     #[test]
@@ -316,33 +567,30 @@ mod tests {
     #[test]
     fn a_value_may_be_built_from_another_variable() {
         let v = resolve(&[top("role", "render", 1), top("tier", "${role}-heavy", 2)]).unwrap();
-        assert_eq!(v["tier"], "render-heavy");
+        assert_eq!(v["tier"], str_val("render-heavy"));
     }
 
     #[test]
     fn a_reference_ends_at_a_non_name_character_without_braces() {
         let v = resolve(&[top("role", "render", 1), top("path", "/etc/$role/conf", 2)]).unwrap();
-        assert_eq!(v["path"], "/etc/render/conf");
+        assert_eq!(v["path"], str_val("/etc/render/conf"));
     }
 
     #[test]
     fn braces_are_what_let_a_reference_touch_a_name_character() {
-        // `$role-heavy` reads `role-heavy` as the name; `-` ends a name but a reader would
-        // not guess that, which is exactly why `${}` exists.
         let v = resolve(&[top("role", "render", 1), top("tier", "$role_x", 2)]);
         assert!(v.is_err(), "`$role_x` must not silently resolve to `render_x`");
     }
 
     #[test]
     fn derived_values_resolve_in_dependency_order_not_file_order() {
-        // `tier` is defined before what it depends on.
         let v = resolve(&[
             top("tier", "${role}-heavy", 1),
             top("role", "render", 2),
             top("label", "${tier}!", 3),
         ])
         .unwrap();
-        assert_eq!(v["label"], "render-heavy!");
+        assert_eq!(v["label"], str_val("render-heavy!"));
     }
 
     #[test]
@@ -353,7 +601,7 @@ mod tests {
             when("role", "travel", 5),
         ])
         .unwrap();
-        assert_eq!(v["tier"], "travel-tier", "derived values must see the override");
+        assert_eq!(v["tier"], str_val("travel-tier"), "derived values must see the override");
     }
 
     #[test]
@@ -383,29 +631,115 @@ mod tests {
     #[test]
     fn a_doubled_dollar_is_a_literal_one() {
         let v = resolve(&[top("price", "$$5", 1)]).unwrap();
-        assert_eq!(v["price"], "$5");
+        assert_eq!(v["price"], str_val("$5"));
     }
 
     #[test]
     fn a_shell_positional_is_not_a_variable_reference() {
-        // A name cannot start with a digit, so `$1` is the shell text it looks like. Without
-        // this rule every value carrying a shell snippet is an error about an undefined `1`.
         let v = resolve(&[top("cmd", "awk '{print $1}'", 1)]).unwrap();
-        assert_eq!(v["cmd"], "awk '{print $1}'");
+        assert_eq!(v["cmd"], str_val("awk '{print $1}'"));
     }
+
+    // --- W2: types ------------------------------------------------------------------------
+
+    #[test]
+    fn a_bare_true_or_false_is_a_boolean_not_a_string() {
+        let v = resolve(&[top("gpu", "true", 1), top("headless", "false", 2)]).unwrap();
+        assert_eq!(v["gpu"], Value::Bool(true));
+        assert_eq!(v["headless"], Value::Bool(false));
+    }
+
+    #[test]
+    fn a_plain_number_is_a_number_and_a_version_is_not() {
+        let v = resolve(&[top("count", "3", 1), top("ver", "1.6.0", 2), top("ratio", "1.5", 3)])
+            .unwrap();
+        assert_eq!(v["count"], Value::Num(3.0));
+        assert_eq!(v["ver"], str_val("1.6.0"));
+        assert_eq!(v["ratio"], Value::Num(1.5));
+    }
+
+    #[test]
+    fn quotes_force_a_string_even_when_it_looks_like_another_type() {
+        let v = resolve(&[top("flag", "\"true\"", 1), top("n", "\"5\"", 2)]).unwrap();
+        assert_eq!(v["flag"], str_val("true"));
+        assert_eq!(v["n"], str_val("5"));
+    }
+
+    #[test]
+    fn a_bracketed_value_is_a_list_of_typed_elements() {
+        let v = resolve(&[top("tags", "[travel, work]", 1), top("ports", "[22, 80]", 2)]).unwrap();
+        assert_eq!(v["tags"], Value::List(vec![str_val("travel"), str_val("work")]));
+        assert_eq!(v["ports"], Value::List(vec![Value::Num(22.0), Value::Num(80.0)]));
+    }
+
+    #[test]
+    fn a_value_that_is_exactly_one_reference_inherits_its_type() {
+        let v = resolve(&[
+            top("tags", "[a, b]", 1),
+            top("alias", "$tags", 2),
+            top("count", "3", 3),
+            top("n", "${count}", 4),
+        ])
+        .unwrap();
+        assert_eq!(v["alias"], Value::List(vec![str_val("a"), str_val("b")]));
+        assert_eq!(v["n"], Value::Num(3.0), "a sole reference keeps the number type");
+    }
+
+    #[test]
+    fn a_list_cannot_be_interpolated_into_a_string_value() {
+        let err = resolve(&[top("tags", "[a, b]", 1), top("label", "x-${tags}", 2)]).unwrap_err();
+        assert!(err.what.contains("list"), "{}", err);
+    }
+
+    #[test]
+    fn value_equality_has_no_cross_type_coercion() {
+        assert!(Value::Num(1.0).equals(&Value::Num(1.0)));
+        assert!(!Value::Str("1".into()).equals(&Value::Num(1.0)));
+        assert!(!Value::Bool(true).equals(&Value::Str("true".into())));
+        assert!(Value::Str("Linux".into()).equals(&Value::Str("linux".into())));
+    }
+
+    #[test]
+    fn ordering_is_defined_only_between_numbers() {
+        use std::cmp::Ordering;
+        assert_eq!(Value::Num(9.0).order(&Value::Num(10.0)), Some(Ordering::Less));
+        assert_eq!(Value::Str("9".into()).order(&Value::Str("10".into())), None);
+        assert_eq!(Value::Num(1.0).order(&Value::Str("1".into())), None);
+    }
+
+    #[test]
+    fn a_number_displays_without_a_trailing_zero() {
+        assert_eq!(Value::Num(3.0).to_string(), "3");
+        assert_eq!(Value::Num(1.5).to_string(), "1.5");
+    }
+
+    // --- expand ---------------------------------------------------------------------------
 
     #[test]
     fn expand_substitutes_into_a_value_written_outside_vars() {
         let mut vars = Vars::new();
-        vars.insert("role".into(), "travel".into());
+        vars.insert("role".into(), str_val("travel"));
         let out = expand("~/.config/$role/init.lua", &vars, &origin(3)).unwrap();
         assert_eq!(out, "~/.config/travel/init.lua");
     }
 
     #[test]
+    fn expand_stringifies_a_number_or_boolean() {
+        let mut vars = Vars::new();
+        vars.insert("n".into(), Value::Num(5.0));
+        assert_eq!(expand("v$n", &vars, &origin(1)).unwrap(), "v5");
+    }
+
+    #[test]
+    fn expand_refuses_a_list_rather_than_joining_it() {
+        let mut vars = Vars::new();
+        vars.insert("tags".into(), Value::List(vec![str_val("a")]));
+        let err = expand("x-$tags", &vars, &origin(1)).unwrap_err();
+        assert!(err.what.contains("list"), "{}", err);
+    }
+
+    #[test]
     fn expand_refuses_an_unknown_name_rather_than_leaving_it_literal() {
-        // A silently unexpanded `$rle` becomes a path with a dollar in it and fails later,
-        // somewhere else, with no mention of the typo.
         let vars = Vars::new();
         let err = expand("~/.config/$rle/init.lua", &vars, &origin(3)).unwrap_err();
         assert!(err.what.contains("rle"), "{}", err);
@@ -415,5 +749,13 @@ mod tests {
     fn expand_leaves_a_value_with_no_references_alone() {
         let vars = Vars::new();
         assert_eq!(expand("plain/path", &vars, &origin(1)).unwrap(), "plain/path");
+    }
+
+    #[test]
+    fn parse_number_rejects_infinity_and_multiple_dots() {
+        assert_eq!(parse_number("inf"), None);
+        assert_eq!(parse_number("1.2.3"), None);
+        assert_eq!(parse_number("1e5"), None);
+        assert_eq!(parse_number("-4"), Some(-4.0));
     }
 }
