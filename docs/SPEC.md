@@ -2277,7 +2277,7 @@ Three suspicions did not survive scrutiny:
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
-## In progress 2026-07-19 — R1–R23
+## Done 2026-07-19 — R1–R23, the Phase 5 docs, F4/F5, S7, S11, G3
 
 **R2, R3 done; R4 was already done and the entry was stale.** Each entry in Part III carries what
 landed. The one with teeth is closed: **`teleport` no longer exists**, so the guard bypass it
@@ -2347,6 +2347,14 @@ advertisement of `switch`, which the owner ruled dead.
 see "Not started, and owed" below, which is now retired. Writing them found S22 (a phantom
 package from an empty-result banner) and one wrong assumption of my own about module/profile
 indirection, both recorded there.
+
+**Phase 5 is closed except for the container work.** R1–R23, the README/CHANGELOG rewrite, F1,
+F4 (goal), F5, G3, H2, P6, S7, S11 and S20/S21 are all done and each carries its evidence. **What
+is left in Phase 5 is G2 and the harness's multi-backend sweep, and both need Docker, which this
+box does not have** (`docker` is not on PATH) — so they were not attempted rather than written
+blind. Phase 6's five containers are untouched for the same reason. **That is the honest blocker:
+the remaining Phase 5/6 work is not hard, it is unrunnable here, and writing container shell that
+has never been executed is precisely the "unverified is not done" trap this document is about.**
 
 **F5 is done and F4's goal is met by deletion — read F4's entry before believing it, because the
 mechanism it names does not exist.** The stale backend counts ("50+" / "33+") are gone from
