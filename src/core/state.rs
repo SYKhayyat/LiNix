@@ -308,7 +308,7 @@ impl StateRegistry {
 
     /// Records a temporary uninstall (the mirror of a lease). `duration` is optional:
     /// `Some("2h")` schedules a timed restore, `None` ties the restore to the currently
-    /// active shell session (restored when the ghost shell exits). Returns the resolved
+    /// active shell session (restored when that shell exits). Returns the resolved
     /// restore timestamp, or an error if the duration string is malformed.
     pub fn suspend(
         &mut self,

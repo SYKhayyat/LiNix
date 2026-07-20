@@ -1114,6 +1114,27 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   three auto-rollback call sites log it. GhostShell's dropped state write (`shell/mod.rs`) now
   warns with the true consequence.**
 - **F4:** `--help` asks the registry for the backend count. The README line is generated.
+
+  **The GOAL is met; the MECHANISM named here was not built. 2026-07-19.** Recorded this way on
+  purpose, following the SEC5 precedent above — a ruling reported as implemented when only its
+  effect holds is the failure mode this document exists to stop.
+
+  The problem F4 names is two numbers for one fact: `args.rs` said "50+ backends", `lib.rs` said
+  "33+", the README said "50+", and all three were typed. **All three are now deleted** — the
+  `--help` tagline and crate docs describe what the tool does and carry no count, and the
+  rewritten README carries none either. Nothing is left to go stale, which is what F4 was for.
+
+  **What does not exist is `--help` querying the registry.** Building the registry needs a
+  `CommandExecutor`, the `Config`, and `LuaHooks`, and it loads user-defined backends from
+  `custom_backends.toml` — so wiring it into `--help` would make the help text read config and
+  a user file from disk, and give `--help` a way to fail. That is a bad trade for a cosmetic
+  number.
+
+  **The generated count already exists where the registry is already built:** `linix doctor`
+  opens with `Backends: 26 OK, 0 degraded, 17 critical (of 43 total)` — counted from the live
+  registry, so it is per-machine and cannot rot. The README points readers there instead of
+  quoting a number. **If the owner wants the count in `--help` specifically, that is the
+  remaining work and it is not done.**
 - ~~**F1:** `network_timeout_secs` — **honour it** (today every consumer applies an
   undocumented `.max(10)` floor, so setting 5 silently gives you 10).~~ **DONE — both consumers
   (`insight.rs` audit client, `main.rs` module-fetch client) now use `.max(1)`, matching
@@ -1132,6 +1153,30 @@ downstream consumes it. `src/backends/` (11,193 lines), `src/core/` (4,499), and
   `model::priority::starter_file` (wired into `init` at `main.rs:4457`) already writes the
   "system managers first / pip last / when-block" rationale as the file header.**
 - **F5:** fix the false doc comments.
+
+  **DONE 2026-07-19 — but only two of the six were fixed by this session, and the entry deserves
+  the split.** F5's list lives in `AUDIT-v6.org:602`. Checked one at a time against `HEAD`:
+
+  - `migrate.rs` — `audit()` documented as a *"destructive Discovery cycle"* in a sentence that
+    then said it generates no files and acquires no state. **Already fixed**; `grep -n
+    destructive src/app/migrate.rs` is empty.
+  - `config.rs` "names removal must never touch" and `parsers/mod.rs` "whatever a manifest says"
+    — the audit called both untrue because `remove`, bloatware, leases and transient cleanup all
+    bypassed protection. **Both are now true, because the code moved to meet them, not the
+    comment**: `essential_names` feeds `guard::inspect` (`guard.rs:236`), which every removal
+    path reaches through `enforce`, plus the lease sweep, adoption, and `linix protected`.
+  - `planner.rs` — "silent about the consequence, that it makes `plan`/`apply` destructive while
+    `sync` isn't". **The consequence no longer exists**: v7's `sync` converges by default, so
+    there is no asymmetry left to disclose.
+  - **Fixed here:** `context.rs::sweep_expired_leases` documented itself with `linix install
+    foo@lease=30d` and "the next explicit `sync`/`prune`" — **`@lease` is not an option key (the
+    grammar rejects it with a hint) and `prune` is a deleted command**, so a doc comment was
+    teaching a reader two things that error out. It now says `@expires`. Three surviving "ghost
+    shell" references went too (R14).
+
+  **Also audited mechanically, and clean:** every ``name()`` in a comment resolves to a defined
+  symbol, and every file path named in a comment either exists or is explicitly marked as the
+  old layout (`locks.json`, `policy.toml` — both phrased as what was replaced).
 - ~~**P6** goes in `CLAUDE.md`.~~ **DONE — repo-root `CLAUDE.md` carries P6 (comment states a
   constraint, nothing else) plus NO LEGACY, one `backend:name` parser, every-removal-path-guards,
   prefer-deleting, and the verify chain.**
@@ -2303,8 +2348,13 @@ see "Not started, and owed" below, which is now retired. Writing them found S22 
 package from an empty-result banner) and one wrong assumption of my own about module/profile
 indirection, both recorded there.
 
-**Still open: SEC1–SEC3, which remain deferred**, F4/F5 (the generated `--help` backend count and
-the false doc comments), and Phase 6's containers.
+**F5 is done and F4's goal is met by deletion — read F4's entry before believing it, because the
+mechanism it names does not exist.** The stale backend counts ("50+" / "33+") are gone from
+`--help`, the crate docs and the README; the generated count lives in `linix doctor`, which
+already builds the registry.
+
+**Still open: SEC1–SEC3, which remain deferred**, the `--help`-queries-the-registry half of F4 if
+the owner wants it literally, and Phase 6's containers (untestable here — they need Docker).
 
 **Suite: 561 passing, 0 failed; `cargo build --all-targets` clean; `cargo clippy --all-targets`
 silent; `linix --help` and the new commands run** (measured 2026-07-19, after R1–R23). *Green says

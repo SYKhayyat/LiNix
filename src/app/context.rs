@@ -633,10 +633,9 @@ impl App {
         Ok(unmanaged)
     }
 
-    /// Remove any managed packages whose lease has expired, across their backends, and
-    /// persist the updated state. Called during post-command maintenance so that
-    /// temporary installs (`linix install foo@lease=30d`) really do uninstall themselves
-    /// once time is up, without waiting for the next explicit `sync`/`prune`. No-op in
+    /// Remove any managed packages whose `@expires` datetime has passed, across their
+    /// backends, and persist the updated state. Runs as post-command maintenance so a dated
+    /// line takes effect on time rather than waiting for the next explicit `sync`. No-op in
     /// dry-run mode.
     pub async fn sweep_expired_leases(&self) -> Result<()> {
         if self.config.dry_run {
@@ -756,7 +755,7 @@ impl App {
     }
 
     /// Restore every package suspended under a given ephemeral shell session (called when
-    /// that ghost shell exits). Same warn-and-move-on contract as the timed sweep.
+    /// that shell exits). Same warn-and-move-on contract as the timed sweep.
     pub async fn restore_session_suspensions(&self, session_id: &str) -> Result<()> {
         let owned = { self.state.lock().await.get_session_suspensions(session_id) };
         self.restore_suspensions(owned, "session-suspended on shell exit")

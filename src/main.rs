@@ -1126,7 +1126,7 @@ async fn handle_uninstall(
     json: bool,
     temp: Option<&Option<String>>,
 ) -> Result<()> {
-    // Bare `--temp` restores when a `linix shell` session ends. That is the ghost shell's
+    // Bare `--temp` restores when a `linix shell` session ends. That is the ephemeral shell's
     // business and it is outside the model by design (II.8), so it never touches a file.
     if let Some(None) = temp {
         let has_session = app.state.lock().await.active_session_id.is_some();
@@ -1201,7 +1201,7 @@ async fn handle_uninstall(
     handle_sync(app, false, json).await
 }
 
-/// Bare `--temp` inside a ghost shell: suspend now, restore when the session ends.
+/// Bare `--temp` inside an ephemeral shell: suspend now, restore when the session ends.
 ///
 /// Outside the model on purpose (II.8) — a shell session is not a declaration, and writing
 /// a file for something that ends when the shell does would leave the file behind.
