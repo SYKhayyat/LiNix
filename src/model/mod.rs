@@ -14,6 +14,7 @@ pub mod profiles;
 pub mod resolve;
 pub mod schedule;
 pub mod vars;
+pub mod vars_embedded;
 pub mod vars_provider;
 
 pub use conflict::Declared;

@@ -183,10 +183,7 @@ impl<'a> Resolver<'a> {
         match selected.kind {
             Kind::LineFile => self.load_vars_linefile(&selected.path),
             Kind::External => vars_provider::run_external(&selected.path, &self.facts),
-            Kind::Embedded => Err(GrammarError::new(
-                Origin::new("vars.linix", 0),
-                "the embedded `vars.linix` provider is not built yet".to_string(),
-            )),
+            Kind::Embedded => crate::model::vars_embedded::resolve(&selected.path, &self.facts),
         }
     }
 
