@@ -484,7 +484,9 @@ pub fn register(
     let core = Arc::new(GithubBackendCore::new(
         exec.duplicate(),
         cfg.github_dir.clone(),
-        cfg.github_token.clone(),
+        // A secret is the environment only, never a file (II.1) — `preferences.toml` is
+        // committed to the repo it lives in, so a token key there is a token in git.
+        std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty()),
     ));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())

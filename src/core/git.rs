@@ -1,25 +1,25 @@
 // Version control for LiNix's *intent* — the manifest/config directory.
 //
-// LiNix already versions the *effect* of a change two ways: generations (the realized
-// package set + a frozen manifest copy) and filesystem snapshots (the whole disk). Git adds
-// the third, complementary layer: the human-readable, diffable, branchable, pushable history
-// of what you *asked for*. `git diff` shows "you added ripgrep, removed nano"; a remote backs
-// your whole setup up like dotfiles.
+// Filesystem snapshots version the *effect* of a change — the whole disk. Git is the other
+// half and the complementary one: the human-readable, diffable, branchable, pushable history
+// of what you *asked for* (II.13). `git diff` shows "you added ripgrep, removed nano"; a
+// remote backs your whole setup up like dotfiles. There is no generation format; a generation
+// IS a commit.
 //
 // This is a thin, dependency-free wrapper that shells out to the system `git` (LiNix already
 // shells out to every package manager, so this adds no new dependency and no libgit2 build
 // cost). Every method that could fail on a machine without git returns a `Result` the caller
 // can degrade gracefully on — auto-commit, for instance, simply no-ops when git is absent.
 //
-// The repo root is the LiNix config directory (the parent of `groups/`), so a single repo
-// captures `config.toml`, `groups/`, `modules/`, and `profiles/` together.
+// The repo root is the LiNix config directory, so a single repo captures `preferences.toml`,
+// `modules/`, `profiles/`, `active`, `priority` and `locks/` together.
 
 use crate::core::{Error, Result};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
-/// A commit as shown by `git log` — the data `linix git log` renders and `Generation`
-/// stamping records.
+/// A commit as shown by `git log` — the data `linix git log` renders. A generation IS a
+/// commit (II.13), so this is the whole of the history record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitCommit {
     pub hash: String,
@@ -60,14 +60,15 @@ impl GitManager {
     fn run(&self, args: &[&str]) -> Result<Output> {
         let mut cmd = std::process::Command::new("git");
         cmd.arg("-C").arg(&self.root);
-        // Deterministic identity + no GPG prompt, without mutating the user's global config.
+        // A deterministic identity, without mutating the user's global config. Signing is
+        // NOT forced off here: II.13 makes integrity `git commit -S`, and an override that
+        // guaranteed every LiNix commit was unsigned made that unreachable by construction.
+        // Whether a commit is signed is the user's `commit.gpgsign` to answer.
         cmd.args([
             "-c",
             "user.name=linix",
             "-c",
             "user.email=linix@localhost",
-            "-c",
-            "commit.gpgsign=false",
         ]);
         cmd.args(args);
         cmd.output()
@@ -188,8 +189,8 @@ impl GitManager {
         self.run_checked(&["status", "--porcelain"])
     }
 
-    /// The manifest lines a commit added or removed — the package-level story of that commit,
-    /// for the cockpit's detail pane. `git show` limited to the config files, keeping only the
+    /// The manifest lines a commit added or removed — the package-level story of that commit.
+    /// `git show` limited to the config files, keeping only the
     /// `+`/`-` content lines (diff headers and comments dropped). Empty for a commit that
     /// touched no manifests. This is what replaced the generation format's stored package sets:
     /// git already records exactly what each change did to your manifests.

@@ -109,22 +109,6 @@ impl GuardSettings {
     }
 }
 
-/// Settings for automatic system snapshot management. Retention counts/ages moved to the one
-/// retention engine (`[retention.snapshots]`); the legacy `max_age_days`/`max_count` keys were
-/// deleted (NO LEGACY). Only the on/off switch remains here.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SnapshotSettings {
-    /// If true, prune snapshots automatically after successful transactions.
-    #[serde(default = "default_true")]
-    pub auto_prune: bool,
-}
-
-impl Default for SnapshotSettings {
-    fn default() -> Self {
-        Self { auto_prune: true }
-    }
-}
-
 /// Feature 5: Configuration for background scheduled tasks.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScheduleConfig {
@@ -218,9 +202,6 @@ pub struct Config {
     #[serde(default)]
     pub quiet: bool,
 
-    #[serde(default)]
-    pub github_token: Option<String>,
-
     #[serde(default = "default_max_parallel")]
     pub max_parallel: usize,
 
@@ -232,11 +213,6 @@ pub struct Config {
     /// orphan cleanup (e.g. "30d", "2w"). Replaces the previously hardcoded "30d".
     #[serde(default = "default_nix_gc_age")]
     pub nix_gc_age: String,
-
-    /// When true, destructive operations (removals) require interactive confirmation
-    /// unless `yes` is set. Extra guard on top of the normal preview.
-    #[serde(default = "default_false")]
-    pub confirm_destructive: bool,
 
     #[serde(default)]
     pub backend_settings: HashMap<String, HashMap<String, String>>,
@@ -272,13 +248,6 @@ pub struct Config {
     #[serde(default)]
     pub sandbox: SandboxSettings,
 
-    /// Feature 2: Snapshot pruning configuration.
-    #[serde(default)]
-    pub snapshots: SnapshotSettings,
-
-    /// Feature 5: Native background schedules.
-    #[serde(default)]
-    pub schedules: Vec<ScheduleConfig>,
 }
 
 /// The one spelling of the refusals-and-behaviour file (II.1). [`Layout::preferences_file`]
@@ -425,11 +394,9 @@ impl Default for Config {
             show_progress: true,
             verbose: false,
             quiet: false,
-            github_token: None,
             max_parallel: default_max_parallel(),
             network_timeout_secs: default_network_timeout_secs(),
             nix_gc_age: default_nix_gc_age(),
-            confirm_destructive: false,
             backend_settings: HashMap::new(),
             allow_mass_install: false,
             guard: GuardSettings::default(),
@@ -440,8 +407,6 @@ impl Default for Config {
             web_dir: default_web_dir(),
             appimage_dir: default_appimage_dir(),
             sandbox: SandboxSettings::default(),
-            snapshots: SnapshotSettings::default(),
-            schedules: Vec::new(),
         }
     }
 }
@@ -585,24 +550,6 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         if self.max_parallel == 0 {
             return Err(Error::Config("max_parallel must be greater than 0".into()));
-        }
-        // Verify cron strings for any schedules. Standard 5-field cron is normalized to
-        // the `cron` crate's 6-field (with-seconds) form; `@`-macros are accepted as-is.
-        for schedule in &self.schedules {
-            if schedule.cron.starts_with('@') {
-                continue;
-            }
-            let normalized = if schedule.cron.split_whitespace().count() == 5 {
-                format!("0 {}", schedule.cron)
-            } else {
-                schedule.cron.clone()
-            };
-            if let Err(e) = normalized.parse::<cron::Schedule>() {
-                return Err(Error::Config(format!(
-                    "Invalid cron expression for task '{}': {}",
-                    schedule.name, e
-                )));
-            }
         }
         Ok(())
     }
@@ -752,44 +699,6 @@ mod tests {
         };
         let q = cfg.snapshot_retention();
         assert_eq!((q.keep_last, q.keep_days), (5, 14));
-    }
-
-    fn schedule(cron: &str) -> ScheduleConfig {
-        ScheduleConfig {
-            name: "t".into(),
-            cron: cron.into(),
-            command: "sync".into(),
-            notification: None,
-            last_synced: None,
-        }
-    }
-
-    #[test]
-    fn validate_accepts_standard_and_macro_cron() {
-        // standard 5-field cron is accepted (normalized to the crate's 6-field form)
-        let cfg = Config {
-            schedules: vec![schedule("30 4 * * 1")],
-            ..Config::default()
-        };
-        assert!(cfg.validate().is_ok(), "5-field cron should be valid");
-        // explicit 6-field also accepted
-        let cfg = Config {
-            schedules: vec![schedule("0 30 4 * * 1")],
-            ..Config::default()
-        };
-        assert!(cfg.validate().is_ok(), "6-field cron should be valid");
-        // @-macros accepted
-        let cfg = Config {
-            schedules: vec![schedule("@daily")],
-            ..Config::default()
-        };
-        assert!(cfg.validate().is_ok(), "@daily should be valid");
-        // garbage rejected
-        let cfg = Config {
-            schedules: vec![schedule("not a cron")],
-            ..Config::default()
-        };
-        assert!(cfg.validate().is_err(), "garbage cron should be rejected");
     }
 
     #[test]

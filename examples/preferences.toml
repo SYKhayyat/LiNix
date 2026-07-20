@@ -27,10 +27,6 @@ network_timeout_secs = 15
 # Nix orphans (e.g. "30d", "2w"). Replaces the previously hardcoded 30 days.
 nix_gc_age = "30d"
 
-# Require an extra confirmation before destructive (removal) operations,
-# unless `yes = true`.
-confirm_destructive = false
-
 # Default SSH destinations for `linix fleet` when none are passed on the command line.
 # fleet_hosts = ["user@web-01", "user@web-02"]
 

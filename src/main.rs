@@ -56,8 +56,8 @@ async fn main() -> Result<()> {
     // `linix up` can stand in for `linix upgrade --all`. Built-in subcommands always win.
     let cli = {
         let raw_argv: Vec<String> = std::env::args().collect();
-        let cfg_path = config_path_from_argv(&raw_argv);
-        let aliases = linix::config::Config::from_file(&cfg_path)
+        let aliases = preferences_path_from_argv(&raw_argv)
+            .and_then(|p| linix::config::Config::from_file(&p).ok())
             .map(|c| c.command_aliases)
             .unwrap_or_default();
         if aliases.is_empty() {
@@ -268,20 +268,39 @@ async fn handle_self_upgrade(git: Option<&str>, check: bool) -> Result<()> {
     Ok(())
 }
 
-/// Peek at argv for a `--config`/`-c` override so the pre-parse alias load reads the same
-/// config file the app will. Falls back to the default config location.
-fn config_path_from_argv(argv: &[String]) -> std::path::PathBuf {
+/// The value of a `--flag VALUE` / `--flag=VALUE` in raw argv.
+///
+/// Command aliases are expanded before clap runs, so this pre-parse cannot ask clap where the
+/// repo is. It peeks at the flags and hands them to the same resolver the app uses — peeking
+/// is unavoidable here, resolving a second time is not.
+fn flag_from_argv(argv: &[String], names: &[&str]) -> Option<String> {
     let mut it = argv.iter();
     while let Some(a) = it.next() {
-        if a == "-c" || a == "--config" {
-            if let Some(p) = it.next() {
-                return std::path::PathBuf::from(p);
+        if names.contains(&a.as_str()) {
+            return it.next().cloned();
+        }
+        for n in names {
+            if let Some(rest) = a.strip_prefix(&format!("{}=", n)) {
+                return Some(rest.to_string());
             }
-        } else if let Some(rest) = a.strip_prefix("--config=") {
-            return std::path::PathBuf::from(rest);
         }
     }
-    linix::utils::safe_config_dir().join("config.toml")
+    None
+}
+
+/// Where `preferences.toml` is, for the pre-clap alias load.
+///
+/// `--config` names the file; otherwise `locate` answers with `--config-dir`,
+/// `$LINIX_CONFIG_DIR`, the settings file, then the default — the one resolution, so the
+/// aliases come out of the file the rest of the run will read (X.6).
+fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::PathBuf> {
+    if let Some(p) = flag_from_argv(argv, &["-c", "--config"]) {
+        return Some(std::path::PathBuf::from(p));
+    }
+    let dir = flag_from_argv(argv, &["--config-dir"]).map(std::path::PathBuf::from);
+    linix::app::locate::locate(dir.as_deref())
+        .ok()
+        .map(|r| r.path.join(linix::config::PREFERENCES_FILE_NAME))
 }
 
 /// The set of built-in subcommand names (and their clap aliases), so a user command-alias can
@@ -517,7 +536,15 @@ async fn handle_rebuild(
     let scope = match (packages.is_empty(), backend, all) {
         (_, Some(b), _) => Scope::Backend(b.to_string()),
         (_, None, true) => Scope::All,
-        (false, None, false) => Scope::Packages(packages.to_vec()),
+        (false, None, false) => {
+            let registry = app.registry.clone();
+            Scope::Packages(
+                packages
+                    .iter()
+                    .map(|p| rebuild::Target::parse(p, |b| registry.get(b).is_some()))
+                    .collect(),
+            )
+        }
         (true, None, false) => anyhow::bail!(
             "rebuild needs a scope — it removes software in order to put it back:\n\n\
              \x20   linix rebuild fd ripgrep       one or more packages (`cargo:fd` picks a backend)\n\
@@ -529,12 +556,12 @@ async fn handle_rebuild(
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
-    let declared: Vec<linix::core::PackageSpec> = resolver
-        .resolve_desired_state()
-        .await?
-        .into_values()
-        .flatten()
-        .collect();
+    let desired = resolver.resolve_desired_state().await?;
+    // A rebuild reinstalls, so it is a change path and the `[guard]` gate applies. Checked
+    // against the declared set before anything is removed — a `deny_packages` hit must stop
+    // the removal, not be discovered between the removal and the reinstall.
+    enforce_policy(app, &desired).await?;
+    let declared: Vec<linix::core::PackageSpec> = desired.into_values().flatten().collect();
 
     let priority = app.priority_backends().await;
     let registry = app.registry.clone();
@@ -860,22 +887,23 @@ async fn upgrade_targeted(
     let mut targets: Vec<(String, String)> = Vec::new();
     if !packages.is_empty() {
         for req in packages {
-            let (want_backend, want_name) = match req.split_once(':') {
-                Some((b, n)) if app.registry.get(b).is_some() => (Some(b), n),
-                _ => (None, req.as_str()),
-            };
-            let hit = managed
-                .iter()
-                .find(|(b, n)| n == want_name && want_backend.map(|wb| wb == b).unwrap_or(true));
+            let (want_backend, want_name) = linix::config::parser::split_removal_target(
+                req,
+                |b| app.registry.get(b).is_some(),
+            );
+            let hit = managed.iter().find(|(b, n)| {
+                n == &want_name && want_backend.as_ref().is_none_or(|wb| wb == b)
+            });
             match hit {
                 Some((b, n)) => targets.push((b.clone(), n.clone())),
                 None => {
                     // Not currently managed — still honor an explicit, backend-qualified
                     // upgrade by resolving it fresh; otherwise warn and skip.
-                    if let Some(b) = want_backend {
-                        targets.push((b.to_string(), want_name.to_string()));
-                    } else {
-                        eprintln!("upgrade: '{}' is not a managed package — skipping.", req);
+                    match want_backend {
+                        Some(b) => targets.push((b, want_name)),
+                        None => {
+                            eprintln!("upgrade: '{}' is not a managed package — skipping.", req)
+                        }
                     }
                 }
             }
@@ -1186,25 +1214,6 @@ async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
         print_flight_plan(app, &changes);
     }
 
-    // Extra guard before an upgrade that would also remove (drift) packages.
-    if app.config.confirm_destructive
-        && !app.config.yes
-        && !app.config.dry_run
-        && changes.total_remove() > 0
-    {
-        let proceed = dialoguer::Confirm::new()
-            .with_prompt(format!(
-                "Upgrade will also REMOVE {} package(s). Proceed?",
-                changes.total_remove()
-            ))
-            .default(false)
-            .interact()
-            .unwrap_or(false);
-        if !proceed {
-            info!("Upgrade aborted by user.");
-            return Ok(());
-        }
-    }
 
     if !changes.is_empty() {
         app.sync_engine()
@@ -1476,9 +1485,8 @@ async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
 }
 
 /// Destroying a file you wrote is a plain refusal plus `--force`, like every other tool
-/// (II.8). It has nothing to do with packages, so it is not wired to `confirm_destructive`
-/// — a setting about removals deciding whether your module survives is how one prompt came
-/// to mean two unrelated things (E12).
+/// (II.8). It has nothing to do with packages, so no removal setting reaches it — one prompt
+/// standing for two unrelated questions is how it came to mean neither (E12).
 fn refuse_overwrite(path: &std::path::Path, name: &str, force: bool) -> Result<()> {
     if force || !path.exists() {
         return Ok(());
@@ -1810,8 +1818,8 @@ async fn handle_hooks(app: &App, cmd: &HooksCommand) -> Result<()> {
 }
 
 /// Shared recording path for a single hooked target. Repo installs become declarative
-/// (recorded + appended to local.txt); local-file installs are recorded imperatively and kept
-/// OUT of the manifest (not reproducible), so drift-prune never removes them.
+/// (recorded + appended to the active module); local-file installs are recorded imperatively
+/// and kept OUT of the modules (not reproducible), so a sync never removes them as drift.
 async fn record_hooked_target(
     app: &App,
     manager: &str,
@@ -1959,39 +1967,57 @@ async fn handle_hook_observe(
     Ok(())
 }
 
+/// `linix schedule` — a shortcut for editing the `schedules` file, then converging.
+///
+/// The file is the state (II.6: being in the file means it's on), so `add` and `remove` write
+/// it and `sync` provisions what changed. They do not talk to the OS scheduler directly: a
+/// command that registered a timer the file did not describe would be a second store, and the
+/// two would disagree about what this machine runs.
 async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
+    use linix::model::schedule::{add_line, remove_line};
+
+    let file = app.config.layout().schedules_file();
+    let body = tokio::fs::read_to_string(&file).await.unwrap_or_default();
+    let registry = app.registry.clone();
+    let known = move |b: &str| registry.get(b).is_some();
+
     match cmd {
         ScheduleCommand::Add {
             name,
             cron,
-            command,
-            notification,
+            run,
+            notify,
         } => {
-            let mut cfg = (*app.config).clone();
-            app.scheduler
-                .add_schedule(
-                    &app.executor,
-                    &mut cfg,
-                    name.clone(),
-                    cron.clone(),
-                    command.clone(),
-                    notification.clone(),
-                )
-                .await?;
-        }
-        ScheduleCommand::List => {
-            for s in &app.config.schedules {
-                println!("{:<15} {:<15} {}", s.name, s.cron, s.command);
-            }
+            let updated = add_line(&body, name, cron, run, notify.as_deref())
+                .map_err(|e| anyhow::anyhow!(e))?;
+            // Parse what was just written before it is written: a bad cron or an unknown key
+            // must be refused at the door, naming the line, not discovered at provision time.
+            linix::config::grammar::parse_document(&file, &updated, &known)?;
+            tokio::fs::write(&file, &updated).await?;
+            println!("Added `schedule:{}` to {}.", name, file.display());
         }
         ScheduleCommand::Remove { name } => {
-            let mut cfg = (*app.config).clone();
-            app.scheduler
-                .remove_schedule(&app.executor, &mut cfg, name)
-                .await?;
+            let Some(updated) = remove_line(&body, name) else {
+                println!("No `schedule:{}` in {}.", name, file.display());
+                return Ok(());
+            };
+            tokio::fs::write(&file, &updated).await?;
+            println!("Removed `schedule:{}` from {}.", name, file.display());
+        }
+        ScheduleCommand::List => {
+            let doc = linix::config::grammar::parse_document(&file, &body, &known)?;
+            let facts = linix::config::parser::HostFacts::current();
+            for (stmt, origin) in doc.statements_for(&facts)? {
+                if let linix::config::grammar::Statement::Schedule(name, opts) = stmt {
+                    let cfg = linix::model::schedule::schedule_config(&name, &opts, &origin)?;
+                    println!("{:<15} {:<15} {}", cfg.name, cfg.cron, cfg.command);
+                }
+            }
+            return Ok(());
         }
     }
-    Ok(())
+
+    handle_sync(app, false, false).await
 }
 
 async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
@@ -2310,7 +2336,7 @@ async fn handle_remove_orphans(app: &App) -> Result<()> {
 
     // The guard sees the whole set at once, so the removal count and the protected list are
     // judged against the total rather than per backend.
-    enforce(&app.config, &app.registry, &removals, GuardScope::Prune).await?;
+    enforce(&app.config, &app.registry, &removals, GuardScope::RemoveOrphans).await?;
 
     if app.config.dry_run {
         println!("
@@ -2605,8 +2631,11 @@ async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Drift detection: re-plan against the current world and compare.
-    if let Ok(now_changes) = compute_full_changes(app).await {
+    // Drift detection, and the `[guard]` gate: `compute_full_changes` runs `enforce_policy`,
+    // so an `Err` here is a refusal and must not be swallowed. Applying a captured plan to a
+    // machine whose manifests no longer resolve is the case this stops.
+    {
+        let now_changes = compute_full_changes(app).await?;
         let current = linix::app::sync::SavedPlan::from_changes(&now_changes, None);
         if current.desired_hash != plan.desired_hash {
             if yes {
@@ -2671,6 +2700,12 @@ async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
         &app.config,
         &app.registry,
         &removal_pairs,
+        linix::app::sync::guard::GuardScope::Apply,
+    )
+    .await?;
+    linix::app::sync::guard::enforce_installs(
+        &app.config,
+        installs.len(),
         linix::app::sync::guard::GuardScope::Apply,
     )
     .await?;
@@ -2973,7 +3008,7 @@ async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) -> Result<()>
         &app.config,
         &app.registry,
         &removals,
-        linix::app::sync::guard::GuardScope::Prune,
+        linix::app::sync::guard::GuardScope::PurgeUnmanaged,
     )
     .await?;
 
@@ -3262,9 +3297,6 @@ network_timeout_secs = 15
 
 # Retention window for `nix-collect-garbage --delete-older-than` during cleanup.
 nix_gc_age = "30d"
-
-# Require confirmation before destructive (removal) operations unless `yes = true`.
-confirm_destructive = false
 
 # Default SSH destinations for `linix fleet` when none are given on the command line.
 # fleet_hosts = ["user@web-01", "user@web-02"]
@@ -3879,17 +3911,15 @@ async fn scaffold_dirs(cfg: &linix::config::Config) -> Result<()> {
 /// homework (V.41).
 #[derive(Debug, Clone, Default)]
 struct InitAnswers {
-    auto_prune_snapshots: bool,
     snapshot_count: Option<u32>,
     starter_packages: Vec<String>,
 }
 
 /// Pure: layer the interactive answers onto a base config. No I/O, so it can be tested.
 fn apply_init_answers(mut base: linix::config::Config, a: &InitAnswers) -> linix::config::Config {
-    base.snapshots.auto_prune = a.auto_prune_snapshots;
     if let Some(n) = a.snapshot_count {
-        // Snapshot retention lives in the one retention engine now (`[retention.snapshots]`),
-        // not the deleted legacy `[snapshots]` count key.
+        // One dial, not two: `keep_last = 0` is how a user says "keep everything", so an
+        // `auto_prune` switch beside it was a second way to answer the same question.
         base.retention.snapshots.keep_last = n as usize;
     }
     base
@@ -3898,7 +3928,7 @@ fn apply_init_answers(mut base: linix::config::Config, a: &InitAnswers) -> linix
 /// Guided setup: write the II.1 repo, then ask the few things LiNix genuinely cannot work
 /// out. Refuses to run without a TTY so CI falls back to `linix init` instead of hanging.
 async fn interactive_init(app: &App, force: bool) -> Result<()> {
-    use dialoguer::{Confirm, Input};
+    use dialoguer::Input;
     use std::io::IsTerminal;
 
     if !std::io::stdin().is_terminal() {
@@ -3919,17 +3949,10 @@ async fn interactive_init(app: &App, force: bool) -> Result<()> {
     println!("\nLet's set up LiNix. Press Enter to accept the [default].\n");
 
     let defaults = linix::config::Config::default();
-    let mut answers = InitAnswers {
-        auto_prune_snapshots: true,
-        ..Default::default()
-    };
+    let mut answers = InitAnswers::default();
 
-    answers.auto_prune_snapshots = Confirm::new()
-        .with_prompt("Automatically remove old system snapshots after successful changes?")
-        .default(true)
-        .interact()?;
     let keep: String = Input::new()
-        .with_prompt("How many system snapshots to keep")
+        .with_prompt("How many system snapshots to keep (0 keeps every one)")
         .default(defaults.snapshot_retention().keep_last.to_string())
         .interact_text()?;
     answers.snapshot_count = keep.trim().parse::<u32>().ok();
@@ -4452,7 +4475,7 @@ async fn perform_maintenance(app: &App) -> Result<()> {
     }
     // Version-control the manifests/config if the user opted in via `linix git init`.
     app.git_autocommit("linix: sync manifest state").await;
-    if app.config.snapshots.auto_prune {
+    if app.config.snapshot_retention().prunes() {
         app.prune_snapshots(false).await?;
     }
     Ok(())
@@ -4596,12 +4619,10 @@ mod init_tests {
     fn answers_layer_onto_config() {
         let base = linix::config::Config::default();
         let answers = InitAnswers {
-            auto_prune_snapshots: false,
             snapshot_count: Some(42),
             starter_packages: vec![],
         };
         let cfg = apply_init_answers(base, &answers);
-        assert!(!cfg.snapshots.auto_prune);
         assert_eq!(cfg.retention.snapshots.keep_last, 42);
     }
 
@@ -4622,14 +4643,12 @@ mod init_tests {
         // The interactive config must serialize to valid TOML and load back identically —
         // otherwise `init -i` writes a file `linix` cannot read.
         let answers = InitAnswers {
-            auto_prune_snapshots: true,
             snapshot_count: Some(7),
             starter_packages: vec![],
         };
         let cfg = apply_init_answers(linix::config::Config::default(), &answers);
         let toml_str = toml::to_string_pretty(&cfg).expect("serializes");
         let back: linix::config::Config = toml::from_str(&toml_str).expect("parses back");
-        assert!(back.snapshots.auto_prune);
         assert_eq!(back.retention.snapshots.keep_last, 7);
     }
 

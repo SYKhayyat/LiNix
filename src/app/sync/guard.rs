@@ -28,33 +28,35 @@ use tracing::{debug, warn};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GuardScope {
     Apply,
-    Prune,
+    RemoveOrphans,
+    PurgeUnmanaged,
     Sync,
     Watch,
     Upgrade,
-    Rollback,
     Canary,
     Remove,
     ShellExit,
-    Leases,
+    ExpirySweep,
     Heal,
     Rebuild,
 }
 
 impl GuardScope {
-    /// The command name a user would recognize, for messages.
+    /// The command a user would recognize, for messages. It has to be what they typed:
+    /// a refusal reading "prune refused" to someone running `purge-unmanaged` names a
+    /// command that does not exist, and gives them nothing to act on.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Apply => "apply",
-            Self::Prune => "prune",
+            Self::RemoveOrphans => "remove-orphans",
+            Self::PurgeUnmanaged => "purge-unmanaged",
             Self::Sync => "sync",
             Self::Watch => "watch",
             Self::Upgrade => "upgrade",
-            Self::Rollback => "rollback",
-            Self::Canary => "canary",
-            Self::Remove => "remove",
-            Self::ShellExit => "shell-exit",
-            Self::Leases => "leases",
+            Self::Canary => "upgrade --canary",
+            Self::Remove => "uninstall",
+            Self::ShellExit => "shell exit",
+            Self::ExpirySweep => "expiry sweep",
             Self::Heal => "heal",
             Self::Rebuild => "rebuild",
         }
@@ -569,15 +571,16 @@ mod tests {
         for scope in [
             GuardScope::Apply,
             GuardScope::Sync,
-            GuardScope::Prune,
+            GuardScope::RemoveOrphans,
+            GuardScope::PurgeUnmanaged,
             GuardScope::Watch,
             GuardScope::Upgrade,
-            GuardScope::Rollback,
             GuardScope::Canary,
             GuardScope::Remove,
             GuardScope::ShellExit,
-            GuardScope::Leases,
+            GuardScope::ExpirySweep,
             GuardScope::Heal,
+            GuardScope::Rebuild,
         ] {
             assert!(
                 enforce(&cfg, &reg, &pairs(&["python3"]), scope).await.is_err(),
@@ -596,13 +599,13 @@ mod tests {
         let cfg = config_with(2);
 
         assert!(
-            enforce_deliberate(&cfg, &reg, &pairs(&["a", "b", "c", "d"]), GuardScope::Prune)
+            enforce_deliberate(&cfg, &reg, &pairs(&["a", "b", "c", "d"]), GuardScope::PurgeUnmanaged)
                 .await
                 .is_ok(),
             "the count is not the question here"
         );
         assert!(
-            enforce_deliberate(&cfg, &reg, &pairs(&["python3"]), GuardScope::Prune)
+            enforce_deliberate(&cfg, &reg, &pairs(&["python3"]), GuardScope::PurgeUnmanaged)
                 .await
                 .is_err(),
             "protection still applies to a deliberate purge"
@@ -722,7 +725,7 @@ mod tests {
                 limit: 20,
             }))
             .collect();
-        let msg = GuardReport { objections }.message(GuardScope::Prune);
+        let msg = GuardReport { objections }.message(GuardScope::PurgeUnmanaged);
         let count_line = msg.find("removes 25 packages").expect("count line present");
         let first_pkg = msg.find("apt:pkg0").expect("a package listed");
         assert!(count_line < first_pkg, "the count must lead");

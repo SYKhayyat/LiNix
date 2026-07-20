@@ -5,10 +5,12 @@
 //! `re:`) was a thing they read as a backend name instead (C13).
 
 pub mod error;
+pub mod gated;
 pub mod options;
 pub mod statement;
 
 pub use error::{GrammarError, Origin, Result};
+pub use gated::{GatedLine, Vocabulary};
 pub use options::Options;
 pub use statement::{
     BackendNames, PackageDecl, Reference, Selector, Statement, RESERVED_BACKEND_NAMES,
@@ -143,13 +145,23 @@ impl Document {
 
 /// Strip a trailing comment from a statement line.
 ///
-/// `#` inside a `{ }` block VALUE is data, not a comment (V.9) — that case never reaches
+/// A `#` opens a comment only at the start of a line or after whitespace. Cutting at the
+/// first `#` anywhere truncated any short-form value containing one — `@content=#!/bin/sh`
+/// became `@content=` — silently, and made the block form the only way to write a `#` at all.
+///
+/// `#` inside a `{ }` block VALUE is data whatever it follows (V.9); that case never reaches
 /// here, because block values are read by `options::parse_block_line`.
-fn strip_comment(line: &str) -> &str {
-    match line.find('#') {
-        Some(i) => &line[..i],
-        None => line,
+pub fn strip_comment(line: &str) -> &str {
+    let bytes = line.as_bytes();
+    for (i, c) in line.char_indices() {
+        if c != '#' {
+            continue;
+        }
+        if i == 0 || bytes[i - 1].is_ascii_whitespace() {
+            return &line[..i];
+        }
     }
+    line
 }
 
 /// Parse a whole file body.
@@ -332,7 +344,9 @@ fn merge_options(stmt: &mut Statement, extra: Options, origin: &Origin) -> Resul
             target.insert(k, v.clone());
         }
     }
-    Ok(())
+    // The header was validated when it parsed, but the body's keys arrive after that, so a
+    // block form re-checks the whole statement or it checks nothing.
+    statement::validate(origin, stmt)
 }
 
 #[cfg(test)]
@@ -504,6 +518,49 @@ mod tests {
         assert!(matches!(out[3], Statement::Absent(_)));
         assert!(matches!(out[4], Statement::Repo { .. }));
         assert!(matches!(out[8], Statement::Use(Reference::Module(_))));
+    }
+
+    /// The block form used to be a way around every rule in II.2's table: the header was
+    /// validated, the body was merged in afterwards unchecked. Each of these passed clean.
+    #[test]
+    fn a_block_body_is_held_to_the_same_rules_as_the_short_form() {
+        for (short, block) in [
+            (
+                "apt:nginx@requires=libfoo",
+                "apt:nginx {\n  requires = libfoo\n}",
+            ),
+            ("apt:jq@hold@version=1.6", "apt:jq@hold {\n  version = 1.6\n}"),
+            ("apt:nginx@colour=blue", "apt:nginx {\n  colour = blue\n}"),
+            ("apt:nginx@lease=2h", "apt:nginx {\n  lease = 2h\n}"),
+            ("apt:curl@formats=deb", "apt:curl {\n  formats = deb\n}"),
+            (
+                "apt:curl@expires=2h",
+                "apt:curl {\n  expires = 2h\n}",
+            ),
+        ] {
+            assert!(doc(&format!("{}\n", short)).is_err(), "short form allowed `{}`", short);
+            assert!(doc(&format!("{}\n", block)).is_err(), "block form allowed `{}`", block);
+        }
+    }
+
+    /// Cutting at the first `#` anywhere made the block form the only way to write a value
+    /// containing one, and did it without saying a word.
+    #[test]
+    fn a_hash_inside_a_value_is_data_and_a_hash_after_a_space_is_a_comment() {
+        assert_eq!(strip_comment("apt:curl   # why"), "apt:curl   ");
+        assert_eq!(strip_comment("# whole line"), "");
+        assert_eq!(
+            strip_comment("link:/etc/x@content=#!/bin/sh"),
+            "link:/etc/x@content=#!/bin/sh"
+        );
+    }
+
+    #[test]
+    fn a_retired_option_cannot_be_reached_through_a_block() {
+        // `@lease` is the one that mattered: II.16 retired it, and something downstream still
+        // read it and turned it into a real expiry (S19).
+        let err = doc("apt:jq {\n  lease = 2h\n}\n").unwrap_err().to_string();
+        assert!(err.contains("lease"), "{}", err);
     }
 
     #[test]

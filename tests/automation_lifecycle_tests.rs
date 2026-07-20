@@ -100,19 +100,20 @@ async fn test_systemd_oncalendar_translation_logic() {
 
     // Input: Every Monday at 4:30 AM ("30 4 * * 1")
     let cron = "30 4 * * 1";
-    let mut config = kernel.app.config.as_ref().clone();
 
     // Execute scheduling logic via the kernel scheduler
     kernel
         .app
         .scheduler
-        .add_schedule(
+        .provision(
             &kernel.app.executor,
-            &mut config,
-            "weekly-sync-task".into(),
-            cron.into(),
-            "sync".into(),
-            None,
+            &linix::config::config::ScheduleConfig {
+                name: "weekly-sync-task".into(),
+                cron: cron.into(),
+                command: "sync".into(),
+                notification: None,
+                last_synced: None,
+            },
         )
         .await
         .expect("Scheduler failed to provision Systemd mock units.");
@@ -150,18 +151,19 @@ async fn test_launchd_plist_translation_logic() {
 
     // Input: 15th of every month at 2:15 AM ("15 2 15 * *")
     let cron = "15 2 15 * *";
-    let mut config = kernel.app.config.as_ref().clone();
 
     kernel
         .app
         .scheduler
-        .add_schedule(
+        .provision(
             &kernel.app.executor,
-            &mut config,
-            "monthly-maintenance-job".into(),
-            cron.into(),
-            "upgrade".into(),
-            None,
+            &linix::config::config::ScheduleConfig {
+                name: "monthly-maintenance-job".into(),
+                cron: cron.into(),
+                command: "upgrade".into(),
+                notification: None,
+                last_synced: None,
+            },
         )
         .await
         .expect("Scheduler failed to provision macOS mock Plist.");
@@ -199,18 +201,19 @@ async fn test_launchd_plist_translation_logic() {
 #[tokio::test]
 async fn test_scheduler_reboot_mapping_fidelity() {
     let kernel = TestKernel::new().await;
-    let mut config = kernel.app.config.as_ref().clone();
 
     kernel
         .app
         .scheduler
-        .add_schedule(
+        .provision(
             &kernel.app.executor,
-            &mut config,
-            "reboot-cleanup".into(),
-            "@reboot".into(),
-            "clean".into(),
-            None,
+            &linix::config::config::ScheduleConfig {
+                name: "reboot-cleanup".into(),
+                cron: "@reboot".into(),
+                command: "clean".into(),
+                notification: None,
+                last_synced: None,
+            },
         )
         .await
         .unwrap();

@@ -7,7 +7,9 @@ use crate::config::grammar::Origin;
 use crate::config::parser::HostFacts;
 use crate::config::Config;
 use crate::core::{CommandExecutor, Error, Journal, Result, SnapshotManager, StateRegistry};
-use crate::model::profiles::{parse_active, read_active, ProfileLoader};
+use crate::model::profiles::{
+    blocks_in_active, parse_active, read_active, remove_from_active, ProfileLoader,
+};
 use crate::model::Layout;
 use crate::utils::progress::ProgressReporter;
 use std::sync::Arc;
@@ -98,8 +100,20 @@ impl ProfileManager {
             return self.add_to_active(names).await;
         }
 
+        // The set form sets, blocks included — but automatic and silent are different
+        // things (S6), and only one of them is a decision you get to review afterwards.
+        let file = self.layout.active_file();
+        let old = tokio::fs::read_to_string(&file).await.unwrap_or_default();
+        let dropped = blocks_in_active(&old);
+
         self.write_active(names).await?;
         info!("active is now {}.", names.join(", "));
+        for b in &dropped {
+            info!(
+                "Removed the `when {}` block on line {}.",
+                b.predicate, b.line
+            );
+        }
         self.sync_now().await
     }
 
@@ -145,67 +159,50 @@ impl ProfileManager {
     }
 
     /// `deactivate NAME…` — take names out of the list, then converge.
+    ///
+    /// "Deactivate" has to mean it: the name goes from the top level **and** from every
+    /// `when` block that applies to this host (II.6). A block that does not apply here is
+    /// activating nothing, so it is left alone and said so — `active` is committed and
+    /// shared, and reaching into another host's arm changes a machine nobody is sitting at.
     #[instrument(skip(self))]
     pub async fn deactivate(&self, names: &[String]) -> Result<()> {
         let file = self.layout.active_file();
         let body = tokio::fs::read_to_string(&file).await.unwrap_or_default();
-        let entries = read_active(&file, &body)?;
+        let facts = HostFacts::current();
+        let edit = remove_from_active(&file, &body, names, &facts)?;
 
-        let mut touched = false;
-        let mut out: Vec<String> = Vec::new();
-        let mut depth = 0usize;
-
-        for raw in body.lines() {
-            let bare = match raw.find('#') {
-                Some(i) => &raw[..i],
-                None => raw,
-            }
-            .trim();
-
-            if bare.ends_with('{') {
-                depth += 1;
-                out.push(raw.to_string());
-                continue;
-            }
-            if bare == "}" {
-                depth = depth.saturating_sub(1);
-                out.push(raw.to_string());
-                continue;
-            }
-            // Only top-level lines are LiNix's to remove. A name inside a `when` block is
-            // something you wrote, and the block is the thing that activates it.
-            if depth == 0 && names.iter().any(|n| n == bare) {
-                touched = true;
-                continue;
-            }
-            out.push(raw.to_string());
-        }
-
-        for name in names {
-            match entries.iter().find(|e| &e.name == name) {
-                Some(e) => {
-                    if let Some(pred) = &e.gate {
-                        info!(
-                            "Removed {} from the list. It is still activated by the `when {}` \
-                             block on line {}.",
-                            name, pred, e.line
-                        );
-                    }
-                }
-                // Not an error: the end state is what was asked for (II.6).
-                None => info!("{} was not active.", name),
+        for r in &edit.removed {
+            match &r.gate {
+                Some(pred) => info!(
+                    "Removed {} from the `when {}` block on line {}.",
+                    r.name, pred, r.line
+                ),
+                None => info!("Removed {}.", r.name),
             }
         }
+        for b in &edit.emptied {
+            info!(
+                "Removed the now-empty `when {}` block on line {}.",
+                b.predicate, b.line
+            );
+        }
+        for e in &edit.elsewhere {
+            info!(
+                "{} is not active on this host. `active` line {} activates it when {} — edit \
+                 that by hand if you meant every machine.",
+                e.name, e.line, e.predicate
+            );
+        }
+        // Not an error: the end state is what was asked for (II.6).
+        for name in &edit.absent {
+            info!("{} was not active.", name);
+        }
 
-        if !touched {
+        if !edit.changed() {
             return Ok(());
         }
 
-        let mut new_body = out.join("\n");
-        if !new_body.is_empty() {
-            new_body.push('\n');
-        }
-        tokio::fs::write(&file, new_body)
+        tokio::fs::write(&file, &edit.body)
             .await
             .map_err(Error::from)?;
 

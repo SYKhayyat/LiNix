@@ -316,10 +316,11 @@ impl<'a> Resolver<'a> {
     /// the merge and the backends all see the same expanded text and none of them has to know
     /// variables exist. A line the host never reached is never expanded, which is why an unused
     /// `when` arm cannot fail on a variable that is irrelevant to this machine.
+    /// An empty variable set is not a reason to skip the walk: with no `vars` file at all,
+    /// `$role` has to be the same error it is when the file exists and the name is misspelled.
+    /// Returning early here left it as literal text, which becomes a path with a dollar in it
+    /// and fails later, somewhere else, with no mention of the typo.
     fn expand_vars(&self, statements: &mut [(Statement, Origin)]) -> Result<()> {
-        if self.facts.vars.is_empty() {
-            return Ok(());
-        }
         for (stmt, origin) in statements.iter_mut() {
             let vars = &self.facts.vars;
             match stmt {
@@ -1121,6 +1122,26 @@ when $role == travel {
             })
             .collect();
         assert_eq!(names, vec!["~/.config/travel/init.lua"]);
+    }
+
+    /// With no `vars` file the variable set is empty, and an empty set used to mean "skip
+    /// expansion entirely" — so `$role` survived as literal text and became a path with a
+    /// dollar in it, failing later and somewhere else. It has to be the same error here that
+    /// a misspelled name is when the file does exist.
+    #[test]
+    fn an_unknown_variable_is_an_error_even_with_no_vars_file() {
+        let f = fx(
+            "Work\n",
+            &[("Work", "use m\n")],
+            &[("m.txt", "link:~/.config/$role/init.lua\n")],
+        );
+        let err = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts())
+            .at(parse_absolute("2026-07-16T12:00").unwrap())
+            .resolve()
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("role"), "{}", err);
     }
 
     #[test]

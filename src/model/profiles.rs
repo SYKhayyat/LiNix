@@ -1,6 +1,7 @@
 use super::layout::Layout;
 use crate::config::grammar::{
-    parse_document, BackendNames, GrammarError, Origin, Reference, Result, Statement,
+    gated, parse_document, BackendNames, GrammarError, Origin, Reference, Result, Statement,
+    Vocabulary,
 };
 use crate::config::parser::HostFacts;
 
@@ -216,81 +217,226 @@ pub fn read_active_with(
     body: &str,
     facts: &HostFacts,
 ) -> Result<Vec<ActiveEntry>> {
+    // The block structure is the shared one (`grammar::gated`) — `priority` reads the same
+    // shape, and two copies of it had already drifted. What is left here is the one rule
+    // that belongs to this file: a line names a profile, and profiles are Capitalized.
+    let vocab = Vocabulary {
+        noun: "profile name",
+        holds: "`active` is a list of profile names, one per line, and `when` blocks. It \
+                answers one question: what is this machine set to right now?",
+        nesting: "`active` nests one level: name the condition once.",
+    };
+
     let mut out: Vec<ActiveEntry> = Vec::new();
-    let mut gate: Option<(String, bool)> = None;
-
-    for (idx, raw) in body.lines().enumerate() {
-        let origin = Origin::new(file, idx + 1);
-        let line = match raw.find('#') {
-            Some(i) => &raw[..i],
-            None => raw,
+    for entry in gated::read(file, body, facts, &vocab)? {
+        if !entry.text.chars().next().is_some_and(char::is_uppercase) {
+            return Err(GrammarError::new(
+                Origin::new(file, entry.line),
+                format!("`{}` is not a profile name", entry.text),
+            )
+            .with_hint(
+                "profiles are Capitalized, modules are lowercase. Only profiles can be \
+                 activated.",
+            ));
         }
-        .trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if line == "}" {
-            if gate.is_none() {
-                return Err(GrammarError::new(
-                    origin,
-                    "`}` closes a `when` that was never opened",
-                ));
-            }
-            gate = None;
-            continue;
-        }
-
-        if let Some(header) = line.strip_suffix('{') {
-            let header = header.trim();
-            let Some(pred) = header.strip_prefix("when ") else {
-                return Err(GrammarError::new(
-                    origin,
-                    format!("`{}` is not a `when` block", header),
-                )
-                .with_hint("`active` holds profile names and `when` blocks, nothing else."));
-            };
-            if gate.is_some() {
-                return Err(GrammarError::new(origin, "a `when` block inside a `when` block")
-                    .with_hint("`active` nests one level: name the condition once."));
-            }
-            let hit = crate::config::parser::eval_when(pred.trim(), facts)
-                .map_err(|e| GrammarError::new(Origin::new(file, idx + 1), e.to_string()))?;
-            gate = Some((pred.trim().to_string(), hit));
-            continue;
-        }
-
-        if line.split_whitespace().count() > 1 {
-            return Err(
-                GrammarError::new(origin, format!("`{}` is not a profile name", line)).with_hint(
-                    "`active` is a list of profile names, one per line, and `when` blocks.                      It answers one question: what is this machine set to right now?",
-                ),
-            );
-        }
-        if !line.chars().next().is_some_and(char::is_uppercase) {
-            return Err(
-                GrammarError::new(origin, format!("`{}` is not a profile name", line))
-                    .with_hint("profiles are Capitalized, modules are lowercase. Only profiles can be activated."),
-            );
-        }
-        if out.iter().any(|e| e.name == line) {
+        if out.iter().any(|e| e.name == entry.text) {
             continue;
         }
         out.push(ActiveEntry {
-            name: line.to_string(),
-            line: idx + 1,
-            gate: gate.as_ref().map(|(p, _)| p.clone()),
-            on: gate.as_ref().map(|(_, hit)| *hit).unwrap_or(true),
+            name: entry.text,
+            line: entry.line,
+            gate: entry.gate,
+            on: entry.on,
         });
     }
-
-    if gate.is_some() {
-        return Err(
-            GrammarError::new(Origin::new(file, 0), "a `when` block is never closed")
-                .with_hint("add the matching `}`."),
-        );
-    }
     Ok(out)
+}
+
+/// A name `deactivate` took out, and the `when` block it came from if it was in one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Removal {
+    pub name: String,
+    pub line: usize,
+    pub gate: Option<String>,
+}
+
+/// A `when` block that went with the last name in it, or that `activate` replaced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockDrop {
+    pub predicate: String,
+    pub line: usize,
+}
+
+/// A name found only inside a `when` block that does not apply here. `active` is committed
+/// and shared, so this host does not edit the arm another host runs on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotHere {
+    pub name: String,
+    pub predicate: String,
+    pub line: usize,
+}
+
+/// The result of taking names out of an `active` body: the new text, and everything the
+/// command has to be able to say about it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActiveEdit {
+    pub body: String,
+    pub removed: Vec<Removal>,
+    pub emptied: Vec<BlockDrop>,
+    pub elsewhere: Vec<NotHere>,
+    pub absent: Vec<String>,
+}
+
+impl ActiveEdit {
+    pub fn changed(&self) -> bool {
+        !self.removed.is_empty()
+    }
+}
+
+/// `deactivate NAME…` (II.6): take each name out of the top level **and out of every `when`
+/// block that applies to this host**, dropping a block the removal empties.
+///
+/// Removing the top-level line and leaving the name switched on by a block two lines down
+/// would report a state the machine did not reach — the verb has to mean what it says. A
+/// block that does not apply here is not activating anything, so there is nothing in it to
+/// deactivate and it is left alone.
+pub fn remove_from_active(
+    file: &std::path::Path,
+    body: &str,
+    names: &[String],
+    facts: &HostFacts,
+) -> Result<ActiveEdit> {
+    // Parse first: a malformed `active` must fail before anything is rewritten.
+    read_active_with(file, body, facts)?;
+
+    let bare = |raw: &str| -> String {
+        crate::config::grammar::strip_comment(raw).trim().to_string()
+    };
+
+    struct Open {
+        header: String,
+        line: usize,
+        predicate: String,
+        on: bool,
+        kept: Vec<String>,
+        had_names: bool,
+        keeps_a_name: bool,
+    }
+
+    let mut edit = ActiveEdit::default();
+    let mut out: Vec<String> = Vec::new();
+    let mut open: Option<Open> = None;
+
+    for (idx, raw) in body.lines().enumerate() {
+        let line_no = idx + 1;
+        let text = bare(raw);
+
+        if let Some(header) = text.strip_suffix('{') {
+            let predicate = header.trim().strip_prefix("when ").unwrap_or("").trim();
+            open = Some(Open {
+                header: raw.to_string(),
+                line: line_no,
+                predicate: predicate.to_string(),
+                on: crate::config::parser::eval_when(predicate, facts).unwrap_or(false),
+                kept: Vec::new(),
+                had_names: false,
+                keeps_a_name: false,
+            });
+            continue;
+        }
+
+        if text == "}" {
+            let Some(b) = open.take() else { continue };
+            // A block whose last name just left is not left behind empty — an empty `when`
+            // is a rule about nothing.
+            if b.had_names && !b.keeps_a_name {
+                edit.emptied.push(BlockDrop {
+                    predicate: b.predicate,
+                    line: b.line,
+                });
+                continue;
+            }
+            out.push(b.header);
+            out.extend(b.kept);
+            out.push(raw.to_string());
+            continue;
+        }
+
+        let is_name = !text.is_empty();
+        let targeted = names.iter().any(|n| n == &text);
+
+        match &mut open {
+            Some(b) => {
+                if is_name {
+                    b.had_names = true;
+                }
+                if targeted && b.on {
+                    edit.removed.push(Removal {
+                        name: text,
+                        line: line_no,
+                        gate: Some(b.predicate.clone()),
+                    });
+                    continue;
+                }
+                if targeted {
+                    edit.elsewhere.push(NotHere {
+                        name: text,
+                        predicate: b.predicate.clone(),
+                        line: line_no,
+                    });
+                }
+                if is_name {
+                    b.keeps_a_name = true;
+                }
+                b.kept.push(raw.to_string());
+            }
+            None => {
+                if targeted {
+                    edit.removed.push(Removal {
+                        name: text,
+                        line: line_no,
+                        gate: None,
+                    });
+                    continue;
+                }
+                out.push(raw.to_string());
+            }
+        }
+    }
+
+    for name in names {
+        let seen = edit.removed.iter().any(|r| &r.name == name)
+            || edit.elsewhere.iter().any(|e| &e.name == name);
+        if !seen {
+            edit.absent.push(name.clone());
+        }
+    }
+
+    edit.body = out.join("\n");
+    if !edit.body.is_empty() {
+        edit.body.push('\n');
+    }
+    Ok(edit)
+}
+
+/// Every `when` block in an `active` body, for `activate` to name as it overwrites them.
+///
+/// The set form sets, blocks included (II.6) — but automatic and silent are different things,
+/// so it has to be able to say which blocks went.
+pub fn blocks_in_active(body: &str) -> Vec<BlockDrop> {
+    let mut out = Vec::new();
+    for (idx, raw) in body.lines().enumerate() {
+        let text = crate::config::grammar::strip_comment(raw).trim();
+        if let Some(header) = text.strip_suffix('{') {
+            if let Some(pred) = header.trim().strip_prefix("when ") {
+                out.push(BlockDrop {
+                    predicate: pred.trim().to_string(),
+                    line: idx + 1,
+                });
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -493,6 +639,81 @@ mod active_tests {
         assert!(read("when host == laptop {\n  Travel\n", "laptop").is_err());
         assert!(read("Work\n}\n", "any").is_err());
         assert!(read("when a == b {\n when c == d {\n Work\n}\n}\n", "any").is_err());
+    }
+
+    fn deactivate(body: &str, host: &str, names: &[&str]) -> ActiveEdit {
+        let names: Vec<String> = names.iter().map(|s| s.to_string()).collect();
+        remove_from_active(&PathBuf::from("active"), body, &names, &facts(host)).unwrap()
+    }
+
+    #[test]
+    fn deactivate_takes_a_top_level_name_out() {
+        let e = deactivate("Work\nGaming\n", "laptop", &["Work"]);
+        assert_eq!(e.body, "Gaming\n");
+        assert_eq!(e.removed.len(), 1);
+        assert_eq!(e.removed[0].gate, None);
+    }
+
+    /// The old rule — top-level lines only — left the name switched on by a block two lines
+    /// down and reported a state the machine had not reached. Reversed by owner 2026-07-17.
+    #[test]
+    fn deactivate_reaches_into_a_block_that_applies_here() {
+        let e = deactivate(
+            "Work\nwhen host == laptop {\n  Travel\n}\n",
+            "laptop",
+            &["Travel"],
+        );
+        assert_eq!(e.removed.len(), 1);
+        assert_eq!(e.removed[0].gate.as_deref(), Some("host == laptop"));
+        // The block held nothing else, so it goes too, and it says so.
+        assert_eq!(e.emptied.len(), 1);
+        assert_eq!(e.emptied[0].line, 2);
+        assert_eq!(e.body, "Work\n");
+        assert!(e.elsewhere.is_empty());
+    }
+
+    #[test]
+    fn a_block_with_another_name_left_in_it_survives() {
+        let e = deactivate(
+            "when host == laptop {\n  Travel\n  Work\n}\n",
+            "laptop",
+            &["Travel"],
+        );
+        assert!(e.emptied.is_empty());
+        assert_eq!(e.body, "when host == laptop {\n  Work\n}\n");
+    }
+
+    /// `active` is committed and shared. On the desktop, `when host == laptop { Travel }` is
+    /// activating nothing — so there is nothing there to deactivate, and editing it would
+    /// change a machine nobody is sitting at.
+    #[test]
+    fn a_block_for_another_host_is_never_touched() {
+        let e = deactivate(
+            "when host == laptop {\n  Travel\n}\n",
+            "desktop",
+            &["Travel"],
+        );
+        assert!(e.removed.is_empty());
+        assert!(!e.changed());
+        assert_eq!(e.elsewhere.len(), 1);
+        assert_eq!(e.elsewhere[0].predicate, "host == laptop");
+        assert_eq!(e.elsewhere[0].line, 2);
+        assert_eq!(e.body, "when host == laptop {\n  Travel\n}\n");
+    }
+
+    #[test]
+    fn deactivating_a_name_that_is_not_there_changes_nothing_and_says_so() {
+        let e = deactivate("Work\n", "laptop", &["Gaming"]);
+        assert_eq!(e.absent, ["Gaming"]);
+        assert!(!e.changed());
+    }
+
+    #[test]
+    fn activate_can_name_every_block_it_overwrites() {
+        let blocks = blocks_in_active("Work\nwhen host == laptop {\n  Travel\n}\n");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].predicate, "host == laptop");
+        assert_eq!(blocks[0].line, 2);
     }
 
     #[test]

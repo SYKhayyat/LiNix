@@ -21,7 +21,7 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub yes: bool,
 
-    /// Path to custom config.toml
+    /// Path to a preferences.toml, overriding the one in the config repo
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,
 
@@ -409,7 +409,7 @@ pub enum Commands {
     Profile(ProfileArgs),
 
     // --- NEW FOR 3.6.0 ---
-    /// Reusable package modules (@module syntax)
+    /// Reusable package lists (`modules/`, referenced with `use`)
     Module(ModuleArgs),
 
     /// System snapshots and atomic rollbacks
@@ -464,15 +464,15 @@ pub enum Commands {
         file: Option<String>,
     },
 
-    /// Scaffold the LiNix directory structure (groups, modules, data dirs) and a
-    /// starter manifest, so a fresh machine is ready for `linix sync`
+    /// Scaffold the LiNix repo (modules, profiles, active, priority) and a starter
+    /// module, so a fresh machine is ready for `linix sync`
     Init {
         /// Reset the starter manifest even if one already exists
         #[arg(long)]
         force: bool,
 
-        /// Interactive setup: ask about preferred backend, sync/prune behavior, snapshots,
-        /// and starter packages, then write the answers into config.toml and local.txt.
+        /// Interactive setup: ask about snapshot retention and starter packages, then
+        /// write the answers into preferences.toml and a starter module.
         #[arg(short, long)]
         interactive: bool,
     },
@@ -876,23 +876,23 @@ pub struct ScheduleArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ScheduleCommand {
-    /// Add a new background task to the system scheduler
+    /// Write a `schedule:` block into the `schedules` file, then sync
     Add {
         /// Unique name for the scheduled task
         name: String,
         /// Cron-style execution string (e.g. "0 2 * * *")
         #[arg(long)]
         cron: String,
-        /// Command to execute within LiNix (e.g. "upgrade --profile dev")
+        /// LiNix command to run (e.g. "upgrade --profile dev")
         #[arg(long)]
-        command: String,
+        run: String,
         /// Notification channel (desktop, email, or none)
         #[arg(long)]
-        notification: Option<String>,
+        notify: Option<String>,
     },
-    /// List all tasks currently registered in the native scheduler
+    /// List what the `schedules` file declares for this host
     List,
-    /// Remove a task from the native scheduler
+    /// Take a `schedule:` block out of the `schedules` file, then sync
     Remove { name: String },
 }
 

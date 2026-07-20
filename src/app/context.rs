@@ -676,7 +676,7 @@ impl App {
             &self.config,
             &self.registry,
             &pairs,
-            crate::app::sync::guard::GuardScope::Leases,
+            crate::app::sync::guard::GuardScope::ExpirySweep,
         )
         .await
         {

@@ -1,5 +1,6 @@
 use crate::config::grammar::error::{GrammarError, Origin, Result};
-use crate::config::parser::{eval_when, HostFacts};
+use crate::config::grammar::{gated, Vocabulary};
+use crate::config::parser::HostFacts;
 use std::path::Path;
 
 /// The `priority` file: which backends this setup uses, and in what order (SPEC II.6).
@@ -24,77 +25,26 @@ impl Priority {
 
     /// Parse the file body, applying `when` blocks for this host.
     ///
-    /// The body is lines, and `when` gates them — the same rule as everywhere else (II.2).
+    /// The block structure is the shared one (`grammar::gated`) — `active` reads the same
+    /// shape, and two copies of it had already drifted.
     pub fn parse(file: &Path, body: &str, facts: &HostFacts) -> Result<Self> {
+        let vocab = Vocabulary {
+            noun: "backend name",
+            holds: "`priority` holds backend names and `when` blocks, nothing else. One backend per line.",
+            nesting: "`priority` nests one level: name the condition once.",
+        };
+
         let mut backends: Vec<String> = Vec::new();
-        let mut gate: Option<bool> = None;
-
-        for (idx, raw) in body.lines().enumerate() {
-            let origin = Origin::new(file, idx + 1);
-            let line = match raw.find('#') {
-                Some(i) => &raw[..i],
-                None => raw,
-            }
-            .trim();
-            if line.is_empty() {
+        for entry in gated::read(file, body, facts, &vocab)? {
+            if !entry.on {
                 continue;
-            }
-
-            if line == "}" {
-                if gate.is_none() {
-                    return Err(GrammarError::new(
-                        origin,
-                        "`}` closes a `when` that was never opened",
-                    ));
-                }
-                gate = None;
-                continue;
-            }
-
-            if let Some(pred) = line.strip_suffix('{') {
-                let pred = pred.trim();
-                let Some(pred) = pred.strip_prefix("when ") else {
-                    return Err(GrammarError::new(
-                        origin,
-                        format!("`{}` is not a `when` block", pred),
-                    )
-                    .with_hint("`priority` holds backend names and `when` blocks, nothing else."));
-                };
-                if gate.is_some() {
-                    return Err(GrammarError::new(origin, "a `when` block inside a `when` block")
-                        .with_hint("`priority` nests one level: name the condition once."));
-                }
-                gate = Some(eval_when(pred.trim(), facts).map_err(|e| {
-                    GrammarError::new(Origin::new(file, idx + 1), e.to_string())
-                })?);
-                continue;
-            }
-
-            if gate == Some(false) {
-                continue;
-            }
-
-            if line.split_whitespace().count() > 1 {
-                return Err(GrammarError::new(
-                    origin,
-                    format!("`{}` is not a backend name", line),
-                )
-                .with_hint("one backend per line."));
             }
             // First mention wins: a `when` block naming apt, then a global apt below, must
             // not move apt down the order.
-            if !backends.iter().any(|b| b == line) {
-                backends.push(line.to_string());
+            if !backends.iter().any(|b| b == &entry.text) {
+                backends.push(entry.text);
             }
         }
-
-        if gate.is_some() {
-            return Err(
-                GrammarError::new(Origin::new(file, 0), "a `when` block is never closed")
-                    .with_hint("add the matching `}`."),
-            );
-        }
-
         Ok(Self { backends })
     }
 

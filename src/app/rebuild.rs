@@ -16,9 +16,41 @@ use crate::core::PackageSpec;
 /// instead of guessing one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
-    Packages(Vec<String>),
+    Packages(Vec<Target>),
     Backend(String),
     All,
+}
+
+/// A `linix rebuild NAME` argument, after the one parser has had it.
+///
+/// Split where the backend registry can be consulted rather than at the point of use: a
+/// `next_back()` on `:` turns `web:https://host/x.tar.gz` into `//host/x.tar.gz`, and never
+/// checks that the prefix names a backend at all (C13).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub backend: Option<String>,
+    pub name: String,
+    /// What the user typed, for the message that names it back to them.
+    pub raw: String,
+}
+
+impl Target {
+    pub fn parse(input: &str, is_known_backend: impl Fn(&str) -> bool) -> Self {
+        let (backend, name) = crate::config::parser::split_removal_target(input, is_known_backend);
+        Self {
+            backend,
+            name,
+            raw: input.to_string(),
+        }
+    }
+
+    fn matches(&self, spec: &PackageSpec) -> bool {
+        self.name == spec.name
+            && self
+                .backend
+                .as_ref()
+                .is_none_or(|b| b == &spec.backend)
+    }
 }
 
 /// A package left out of the rebuild, and the sentence explaining it. Printed, never silent:
@@ -102,20 +134,17 @@ pub fn plan(
         .filter(|s| match scope {
             Scope::All => true,
             Scope::Backend(b) => &s.backend == b,
-            Scope::Packages(names) => names
-                .iter()
-                .any(|n| n == &s.name || n == &format!("{}:{}", s.backend, s.name)),
+            Scope::Packages(targets) => targets.iter().any(|t| t.matches(s)),
         })
         .collect();
 
     // A named package that is not declared is the user believing something is managed when it
     // is not. Rebuild must say so rather than silently rebuild nothing.
-    if let Scope::Packages(names) = scope {
-        for name in names {
-            let bare = name.split(':').next_back().unwrap_or(name);
-            if !selected.iter().any(|s| s.name == bare) {
+    if let Scope::Packages(targets) = scope {
+        for target in targets {
+            if !selected.iter().any(|s| target.matches(s)) {
                 plan.skipped.push(Skipped {
-                    key: name.clone(),
+                    key: target.raw.clone(),
                     reason: "not declared in any active module".to_string(),
                 });
             }
@@ -192,6 +221,12 @@ mod tests {
 
     fn all_installed(_: &str, _: &str) -> bool {
         true
+    }
+
+    fn targets(raw: &[&str]) -> Vec<Target> {
+        raw.iter()
+            .map(|s| Target::parse(s, |b| matches!(b, "apt" | "cargo" | "web")))
+            .collect()
     }
 
     #[test]
@@ -279,7 +314,7 @@ mod tests {
     #[test]
     fn a_package_nobody_declared_is_named_not_ignored() {
         let p = plan(
-            &Scope::Packages(vec!["nosuch".into()]),
+            &Scope::Packages(targets(&["nosuch"])),
             &[spec("apt", "curl")],
             &all_installed,
             &["apt".into()],
@@ -290,11 +325,27 @@ mod tests {
         assert!(p.skipped[0].reason.contains("not declared"));
     }
 
+    /// `split(':').next_back()` degraded this to `//host/x.tar.gz` and matched nothing —
+    /// and never checked the prefix named a backend at all.
+    #[test]
+    fn a_name_with_colons_in_it_survives_the_split() {
+        let t = &targets(&["web:https://host/x.tar.gz"])[0];
+        assert_eq!(t.backend.as_deref(), Some("web"));
+        assert_eq!(t.name, "https://host/x.tar.gz");
+    }
+
+    #[test]
+    fn an_unknown_prefix_is_part_of_the_name_not_a_backend() {
+        let t = &targets(&["nosuchbackend:fd"])[0];
+        assert_eq!(t.backend, None);
+        assert_eq!(t.name, "nosuchbackend:fd");
+    }
+
     #[test]
     fn a_qualified_name_selects_only_that_backends_copy() {
         let declared = vec![spec("cargo", "fd"), spec("apt", "fd")];
         let p = plan(
-            &Scope::Packages(vec!["cargo:fd".into()]),
+            &Scope::Packages(targets(&["cargo:fd"])),
             &declared,
             &all_installed,
             &["apt".into(), "cargo".into()],

@@ -9,11 +9,11 @@ mod mock_providers;
 use mock_providers::TestKernel;
 
 // ============================================================================
-// FEATURE 6: GHOST SHELL (EPHEMERAL LIFECYCLE)
+// The ephemeral shell (`linix shell`): packages live for the session and go on exit.
 // ============================================================================
 
 #[tokio::test]
-async fn test_ghost_shell_transient_registration_logic() {
+async fn test_ephemeral_shell_transient_registration_logic() {
     let kernel = TestKernel::new().await;
     let shell = kernel.app.shell();
 
@@ -40,7 +40,7 @@ async fn test_ghost_shell_transient_registration_logic() {
 
     assert!(
         pkg.is_transient,
-        "Package in Ghost Shell must be marked as 'transient'."
+        "A package in an ephemeral shell must be marked transient."
     );
     assert_eq!(
         pkg.session_id.as_deref(),
@@ -50,7 +50,7 @@ async fn test_ghost_shell_transient_registration_logic() {
 }
 
 #[tokio::test]
-async fn test_ghost_shell_atomic_purge_isolation_logic() {
+async fn test_ephemeral_shell_atomic_purge_isolation_logic() {
     let kernel = TestKernel::new().await;
     let shell = kernel.app.shell();
 
@@ -96,7 +96,7 @@ async fn test_ghost_shell_atomic_purge_isolation_logic() {
 }
 
 #[tokio::test]
-async fn test_ghost_shell_auto_manifest_discovery() {
+async fn test_ephemeral_shell_auto_manifest_discovery() {
     let kernel = TestKernel::new().await;
 
     let manifest_content = "# Dev Stack\nbrew:jq\nbrew:htop\n";
@@ -122,7 +122,7 @@ async fn test_ghost_shell_auto_manifest_discovery() {
 }
 
 #[tokio::test]
-async fn test_ghost_shell_mount_point_resolution() {
+async fn test_ephemeral_shell_mount_point_resolution() {
     let kernel = TestKernel::new().await;
     let shell = kernel.app.shell();
 
@@ -169,7 +169,7 @@ async fn test_ghost_shell_mount_point_resolution() {
 
     assert!(
         result.is_some(),
-        "GhostShell failed to resolve physical root for sandbox mount."
+        "Ephemeral shell failed to resolve physical root for sandbox mount."
     );
     assert_eq!(
         result.unwrap(),

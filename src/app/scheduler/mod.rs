@@ -1,12 +1,9 @@
 use crate::config::config::ScheduleConfig;
-use crate::config::Config;
 use crate::core::{CommandExecutor, Error, Result};
 use async_trait::async_trait;
-use cron::Schedule;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use tracing::{debug, info, trace, warn};
+use tracing::debug;
 
 pub mod notify;
 
@@ -52,43 +49,6 @@ impl SchedulerManager {
         })
     }
 
-    pub async fn add_schedule(
-        &self,
-        executor: &CommandExecutor,
-        config_mut: &mut Config,
-        name: String,
-        cron: String,
-        command: String,
-        notification: Option<String>,
-    ) -> Result<()> {
-        info!(
-            "Provisioning task '{}' with schedule '{}'.",
-            name, cron
-        );
-
-        let schedule_entry = ScheduleConfig {
-            name: name.clone(),
-            cron,
-            command,
-            notification,
-            last_synced: None,
-        };
-
-        // The OS registration must succeed before the config is written: persisting first
-        // would leave a schedule the user can see but the system will never run.
-        self.provision(executor, &schedule_entry).await?;
-
-        config_mut.schedules.retain(|s| s.name != name);
-        config_mut.schedules.push(schedule_entry);
-        config_mut.save()?;
-
-        info!(
-            "Task '{}' successfully registered and active in OS.",
-            name
-        );
-        Ok(())
-    }
-
     /// Register `cfg` with the OS scheduler (systemd/launchd/Task Scheduler) — the declarative
     /// path (S21). Unlike [`add_schedule`], it does NOT write to `config.toml`: a `schedule:`
     /// declared in the model lives in the `schedules` file, and `sync` provisions it from
@@ -106,64 +66,17 @@ impl SchedulerManager {
         self.provisioner.remove_task(executor, name).await
     }
 
-    /// Reject an invalid cron before it reaches the OS scheduler. Standard cron is 5-field
-    /// (min hour dom month dow); the `cron` crate expects a 6-field form with seconds, so a
-    /// 5-field expression is normalized by prepending "0". `@`-macros (@reboot, @daily, …)
-    /// never reach the parser — the systemd/launchd mapping handles them.
+    /// Reject an invalid cron before it reaches the OS scheduler. One implementation, in the
+    /// model, so a bad cron is the same error whether it came from a file or a flag.
     fn validate_cron(name: &str, cron: &str) -> Result<()> {
-        if cron.starts_with('@') {
-            return Ok(());
-        }
-        let normalized = if cron.split_whitespace().count() == 5 {
-            format!("0 {}", cron)
-        } else {
-            cron.to_string()
-        };
-        Schedule::from_str(&normalized).map_err(|e| {
+        crate::model::schedule::validate_cron(cron).map_err(|e| {
             Error::Validation(format!(
                 "Invalid cron syntax for task '{}': {}. Rejection issued.",
                 name, e
             ))
-        })?;
-        Ok(())
+        })
     }
 
-    pub async fn remove_schedule(
-        &self,
-        executor: &CommandExecutor,
-        config_mut: &mut Config,
-        name: &str,
-    ) -> Result<()> {
-        info!("Purging background task '{}' from OS.", name);
-
-        self.provisioner.remove_task(executor, name).await?;
-
-        config_mut.schedules.retain(|s| s.name != name);
-        config_mut.save()?;
-
-        Ok(())
-    }
-
-    pub async fn sync_schedules(&self, executor: &CommandExecutor, config: &Config) -> Result<()> {
-        trace!("Verifying OS registry for configured tasks.");
-        for schedule in &config.schedules {
-            if !self
-                .provisioner
-                .is_task_active(executor, &schedule.name)
-                .await
-            {
-                warn!(
-                    "Task '{}' is missing from native timers. Restoring...",
-                    schedule.name
-                );
-                let _ = self
-                    .provisioner
-                    .add_task(executor, schedule, &self.linix_bin_path)
-                    .await;
-            }
-        }
-        Ok(())
-    }
 }
 
 struct LinuxSystemdProvisioner;

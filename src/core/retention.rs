@@ -23,6 +23,14 @@ pub struct RetentionPolicy {
     pub keep: Vec<String>,
 }
 
+impl RetentionPolicy {
+    /// Whether this policy prunes anything at all. Both rules off is how a user says "keep
+    /// everything" — there is no second on/off switch beside it (II.13: one engine).
+    pub fn prunes(&self) -> bool {
+        self.keep_last > 0 || self.keep_days > 0
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RetentionConfig {
     // `generations` is gone: the generation format was deleted (git is the manifest history

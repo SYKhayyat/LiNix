@@ -208,8 +208,8 @@ pub async fn create_bundle(
          Packages: {}\nConfig files: {}\nArtifacts pre-fetched: {}\n\n\
          ## Restore on the target machine\n\n\
          1. Copy this directory to the machine.\n\
-         2. Point LiNix at it (e.g. set the config dir to this bundle) or copy `groups/` and\n\
-            `modules/` into your LiNix config directory.\n\
+         2. Point LiNix at it (`linix path --set <dir>`), or copy `modules/`, `profiles/`\n\
+            and `active` into your LiNix config directory.\n\
          3. Reproduce the exact versions:  `linix sync --locked`\n\
             (`locks/versions.json` pins every version).\n\n\
          If you bundled with `--artifacts`, the `artifacts/<backend>/` folders hold the\n\
@@ -330,8 +330,8 @@ mod tests {
     fn tar_gz_round_trips_through_extract() {
         let tmp = tempfile::tempdir().unwrap();
         let src = tmp.path().join("bundle");
-        std::fs::create_dir_all(src.join("groups")).unwrap();
-        std::fs::write(src.join("groups/local.txt"), "apt:curl\n").unwrap();
+        std::fs::create_dir_all(src.join("modules")).unwrap();
+        std::fs::write(src.join("modules/dev.txt"), "apt:curl\n").unwrap();
         std::fs::write(src.join("packages.json"), "{}").unwrap();
 
         let tar = tmp.path().join("bundle.tar.gz");
@@ -342,7 +342,7 @@ mod tests {
         // Unpack it and confirm the tree survived under the single root folder.
         let dest = tmp.path().join("unpacked");
         crate::utils::archive::extract_archive(&tar, &dest).unwrap();
-        let restored = dest.join("bundle/groups/local.txt");
+        let restored = dest.join("bundle/modules/dev.txt");
         assert_eq!(std::fs::read_to_string(restored).unwrap(), "apt:curl\n");
     }
 }

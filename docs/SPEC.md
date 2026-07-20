@@ -1,13 +1,19 @@
 # LiNix v7 — the declarative model
 
-**Status (2026-07-17, and the tree is under active edit as this is written — trust Part VII, not
-this line):** Phase 1's parser unification is closed (one `backend:name` parser, C13). Phases 2–5
-largely landed (the model, the guard's nine refusals in one home, the II.12 hook ledger, F1/H2/P6);
-Phase 0's deletions are still partly owed; Phase 6's containers have not been run. A five-pass code
-review on 2026-07-17 added two kinds of entry under Phase 5: **R1–R23 (owner-approved fixes)** and
-**SEC1–SEC7 (recorded vulnerabilities whose solutions are NOT yet decided)** — the agent is
-implementing these now. The earlier "Phases 0 and 1 complete" claim was audited false; that history
-lives in Part VII.
+**Status (2026-07-20, after the audit AND the session that closed it — trust Part VII, not this
+line):** Build clean, clippy silent, **735 tests passing**. Phases 0–5 have largely landed: the
+model, the grammar, the guard, git-backed history, R1–R23, `rebuild`, artifact selection,
+`vars`, and X.6. Phase 6's six containers exist and **have never been run** (no Docker here).
+**SEC1–SEC3 remain deferred by the owner**; SEC4–SEC6 are built.
+
+**The 2026-07-20 audit found seven bugs and five zombie config keys; all twelve are closed** —
+block-form options now face every rule the short form does, `apply` and `rebuild` reach the
+`[guard]` gate, `deactivate` implements the rule the owner actually ruled, and `[schedules]`
+is gone so the `schedules` file is the only schedule store. What is still owed is listed at
+the end of that entry, and the largest item is that **II.13's signature check is not built**.
+
+*Both the audit and its fix are in Part VII, in that order. The audit section is kept for what
+it records about how the drift happened, but it describes a tree that no longer exists.*
 
 **Part VII holds the current state — read it after Part II and before you touch anything. It is the
 living truth; every frozen status line, including this one, drifts behind the tree.**
@@ -317,6 +323,7 @@ stands in for the other: `apt` is a `family == debian` fact, not a `linux` one.
 | `asset` | filename or glob narrowing the choice; `all` takes every match |
 | `bin` | the executable inside an archive |
 | `channel` | one version stream. Backends that publish channels only |
+| `sha256` | checksum the resolved artifact must match. Not with `@asset=all` — one hash cannot verify several files |
 
 ### Artifact selection (V.48)
 
@@ -501,19 +508,32 @@ schedule:nightly {
 }
 ```
 
-`run=` is hashed and locked exactly like a hook.
+`run=` is hashed and locked exactly like a hook. A `schedule:` may take `cron`, `run` and
+`notify`, and its cron is validated where the line is read, so a bad expression names the file
+and line rather than surfacing when the OS scheduler is handed the job.
 
-**`locks/`** — one file per backend. **Generated. In git. Yours.** Records:
+**`linix schedule add`/`remove` edit this file and then sync**, the way `install` edits a
+module and syncs (P1) — the file is the state, so the edit IS the command. `schedule list`
+reads it. **There is no second store**: the `[schedules]` config table these commands used to
+write is deleted (II.17), because two stores could disagree about what this machine runs.
 
-| | |
-|---|---|
-| version | `apt:curl → 7.81.0` |
-| **resolved backend for a bare name** | `ripgrep → cargo:ripgrep@14.1.0` |
-| **regex expansion** (only if frozen) | `re:^texlive- → [312 names]` |
-| **hook script hash** | `fonts:after_install → sha256:a3f1…` |
+**`locks/`** — **generated. In git. Yours.** Records:
 
-`linix lock` regenerates. `linix lock <name>` regenerates one. `linix lock --backend cargo`
-regenerates one file.
+| | | state |
+|---|---|---|
+| version | `apt:curl → 7.81.0` | **built** (`locks/versions.json`) |
+| **hook script hash** | `fonts:after_install → sha256:a3f1…` | **built** (`locks/hooks.toml`) |
+| **resolved backend for a bare name** | `ripgrep → cargo:ripgrep@14.1.0` | **not built** |
+| **regex expansion** (only if frozen) | `re:^texlive- → [312 names]` | **not built** |
+
+`linix lock` regenerates. **It takes no arguments** — the per-name and per-backend forms this
+section used to promise (`lock <name>`, `lock --backend cargo`) do not exist, and neither does
+the one-file-per-backend layout: what is written is the two files named above, by fixed path.
+`Layout::lock_file()`, the `locks/<backend>.toml` accessor, has zero callers.
+
+*The two unbuilt rows are the target state and are kept as such. They were written here as
+though they were real, which cost the 2026-07-20 audit a check — a target belongs in Part III
+or marked, not stated in the present tense.*
 
 **`preferences.toml`** — refusals and behaviour. **Nothing writes to it but you.**
 
@@ -707,7 +727,7 @@ Plan: install 30,207 · remove 0 · upgrade 3
   LiNix manages 3 packages.
   This will remove 576, including python3, libc6, and bash.
   That looks like you haven't adopted this machine yet.
-  Run `linix adopt` first, or --i-really-mean-it if you're sure.
+  Run `linix adopt` first, or --allow-mass-purge if you're sure.
   ```
 - `max_removals` does **not** apply (it catches accidents; this is deliberate).
   `protected_packages` and OS-essential **always** apply.
@@ -846,7 +866,7 @@ One package, recoverable, snapshot has your back.
 | `linix shim jq --source cargo:jq` (**`--source` discarded unread**) | `shim:jq@source=cargo:jq` |
 | `linix hold jq` (machine-local `registry.json`) | `apt:jq@hold` |
 | hooks table in config | `apt:nginx@after_install=./setup.sh` |
-| `linix schedule add` (**writes config**) | a line in `schedules` |
+| `linix schedule add` (**wrote config**) | a line in `schedules` — the command survives and now writes that file |
 | `@lease=2h` (**inert today**) | `apt:jq@expires=2026-07-17T14:00` |
 | `remove --temp` (**loses to sync**) | `absent:apt:jq@until=…` |
 | `bloatware.txt` | `absent:apt:libreoffice` in a module |
@@ -982,13 +1002,14 @@ parsers against the old grammar just to rewrite them is work done twice.
 > - **~~`statement.rs:66` calls the enum "II.2's full list" but it includes II.4's set ops~~ —
 >   FIXED (Phase 2x):** the doc comment now says it is the union of II.2's statements and
 >   II.4's set-math, not "II.2's full list".
-> - **`schedule:NAME` "(only in `schedules`)" has no file-context check — it parses in a
+> - ~~**`schedule:NAME` "(only in `schedules`)" has no file-context check — it parses in a
 >   module.** Still true, and it is **part of wiring `schedule:` at all**, which is unbuilt:
 >   the layout has `schedules_file()` but the resolver never reads it, so `schedule:` only ever
->   lands in `extras` and `sync` warns it is unapplied (S12). The check ("`schedule:` belongs
->   in the `schedules` file, and a `schedule:` line anywhere else is an error") lands **with the
->   scheduler wiring — tracked as S21 → Phase 5**, because there is nowhere for a correctly-placed
->   `schedule:` line to go until then.
+>   lands in `extras` and `sync` warns it is unapplied (S12).~~ — **DONE (verified 2026-07-20).**
+>   S21 wired the scheduler on 2026-07-17; `resolve.rs:303-305` reads `schedules_file()`, and the
+>   file-context check is at `resolve.rs:516` with a test at `:982`. The warning this passage
+>   cites was deleted in the `rebuild` session. **A live `[schedules]` table still exists in
+>   `Config` beside the file, so there are two schedule stores** — see the audit.
 
 ## Phase 2 — The model (the cliff)
 
@@ -2418,7 +2439,7 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S8** | **DONE, 2026-07-17.** `FORBIDDEN_PATHS` renamed to `REGISTRY_READ_FORBIDDEN_PATHS` with a comment saying it guards the snapshot-**registry-read** (diff) step only — the old name claimed a global "never touch" ban that `execute_restore` (which rolls all of `/` back) plainly violates. The refusal message now says it is refusing to *read a registry* from that path (a would-be arbitrary-file-read), not that the path is globally off-limits. And the restore confirmation now states plainly that it reverts the **entire filesystem** — every file, configs and data included, not just the packages in the summary — before asking for `RESTORE`. `undo` and the check are both kept, per the decision. `cargo check --lib` clean; no unit test (message/comment/rename change). *(Original decision, for context:)* **`undo` lies about scope; there is no safety hole. DECIDED 2026-07-16.** What `undo` does: list filesystem snapshots, mount the chosen one read-only, read the `registry.json` *inside* it, diff that against now, show a package-level summary, and on confirmation hand the snapshot to btrfs/timeshift to restore. `FORBIDDEN_PATHS` guards step 3 only — which directory `undo` will read a registry out of, so a crafted path cannot make it parse `/etc/shadow` as JSON. That is a real check doing a real job. Its *name and comment* claim "paths NEVER allowed to be accessed", and restore goes over `/` including all of them. So the defect is the false claim, not the check. **Keep** the check (renamed to say it guards the snapshot-read path); **delete** the global claim; **keep** `undo` (nothing else turns a snapshot into a package diff), but restore must state plainly that it rolls back the entire filesystem before asking. Gating restore on the list would refuse every root snapshot, i.e. delete `undo` by accident → **Phase 3** |
 | **S9** | ~~`remove_package_from_local` (`parser.rs:290`) matches a bare target against the BACKEND prefix~~ — **FIXED in Phase 2e, and this row was stale in three ways (2026-07-17).** The function is gone (`grep` empty). The removal path is now `model/edit.rs:378` `matches()`, which parses each line **through the grammar** and compares `d.selector`, never the prefix; regression test at `edit.rs:669` (`npm:typescript` survives, `apt:npm` dies). **It did not "die with `local.txt`" — it died of `edit.rs`, and `local.txt` still has readers** (`insight.rs:418`). ~~→ **Phase 2**~~ **Nothing owed.** *(Both surviving prefix-splitters were checked for this defect shape and do not have it — `insight.rs:429` requires both halves, `manifest.rs:90` matches the name half.)* |
 | **S10** | **`cargo test` wrote to the developer's REAL data dir**, and one bad file bricks every command. `TestKernel` (named `linix_hermetic_`) isolated `registry.json`, groups and tmp, but `Journal::new()` hardcoded `safe_data_dir()` — found at 733KB of test noise in `%APPDATA%/linix/journal.json`. Fixed in Phase 2b by injection (`Journal::at`). ~~**The remaining half is real:** `Journal::load_sync` errors on a bad parse -> `App::new` fails -> EVERY command fails, with no message saying which file to delete or how to recover.~~ **DONE, 2026-07-17.** `load_sync` no longer returns `Err` on a corrupt WAL: it moves the bad file aside to `<path>.corrupt` (preserved for inspection, and so it stops re-triggering), `warn`s loudly with the path and that an interrupted op can't be auto-recovered (re-run `sync`), and starts fresh — so `list`/`plan`/everything still run. Failing loud AND leaving a way out (P3). **What I checked:** `cargo check --lib` clean; **2 unit tests written but NOT run this session** — a corrupt WAL constructs successfully + gets moved to `.corrupt` off the live path; a missing WAL starts fresh. → was **Phase 5** |
-| **S12** | **DONE (Phase 2o + 2p). All the extras now have somewhere to go.** They land in `DesiredState::extras`, which the old `resolve_desired_state` dropped because the seam carries `.packages` only; `sync` resolves the whole `DesiredState` now and applies the extras in II.7's ordering. **Phase 1 — `App::apply_repositories`:** `repo:` lines FIRST (add repo, refresh index) before the package plan, each repo naming its backend (V.47), a backend not in `priority` refused in the file (V.15). **Phase 3 — `App::apply_dependents`:** `shim:`, `service:`, `link:` AFTER the package plan executes — a shim wraps a tool that must already be installed, a service enables a unit a package just laid down, a link writes a config a package expects, so they are the *dependent* phase and cannot be interleaved with packages. Applied in declaration order (a config `link:` above the `service:` that reads it keeps that order). A dependents-only config (no package changes) still runs the phase — the "System matches" exit checks `has_dependents()`. Verified against the binary: `schedule:` warns (file:line), Flight plan installs the package, THEN service → link → shim preview. **Only `schedule:` is still unwired** — the scheduler owns it, not `sync` — and it is now the one line the resolver warns about. `watch` (the unattended `sync`) runs the same three phases now, so an unattended reconcile also adds repos and applies dependents. The **teardown** direction — reconciling away a *removed* extra — is tracked separately as **S20**. → **Phase 2** (forward direction done)
+| **S12** | **DONE (Phase 2o + 2p). All the extras now have somewhere to go.** They land in `DesiredState::extras`, which the old `resolve_desired_state` dropped because the seam carries `.packages` only; `sync` resolves the whole `DesiredState` now and applies the extras in II.7's ordering. **Phase 1 — `App::apply_repositories`:** `repo:` lines FIRST (add repo, refresh index) before the package plan, each repo naming its backend (V.47), a backend not in `priority` refused in the file (V.15). **Phase 3 — `App::apply_dependents`:** `shim:`, `service:`, `link:` AFTER the package plan executes — a shim wraps a tool that must already be installed, a service enables a unit a package just laid down, a link writes a config a package expects, so they are the *dependent* phase and cannot be interleaved with packages. Applied in declaration order (a config `link:` above the `service:` that reads it keeps that order). A dependents-only config (no package changes) still runs the phase — the "System matches" exit checks `has_dependents()`. Verified against the binary: `schedule:` warns (file:line), Flight plan installs the package, THEN service → link → shim preview. ~~**Only `schedule:` is still unwired** — the scheduler owns it, not `sync` — and it is now the one line the resolver warns about.~~ **(Stale as of 2026-07-20: the resolver reads `schedules` at `resolve.rs:303-305` and that warning was deleted. S21 wired it on 2026-07-17.)** `watch` (the unattended `sync`) runs the same three phases now, so an unattended reconcile also adds repos and applies dependents. The **teardown** direction — reconciling away a *removed* extra — is tracked separately as **S20**. → **Phase 2** (forward direction done)
 | **S20** | **DONE, 2026-07-17.** The applied-extras ledger is built. New pure `core/extras_lock.rs`: `ExtrasLedger` (→ `locks/extras.toml`, an ordered `BTreeSet` of extra keys), `extra_key(&Statement)` (`repo:apt:ppa:x/y`, `service:nginx`, `shim:rg`, `link:…`, `schedule:…`), `split_key`, and `drift(declared)` = recorded − declared. New `App::reconcile_extras` diffs the currently-declared extras against the recorded set, undoes the difference via each backend's existing removal path (`shim`→`remove_shim` (ownership-safe), `service`/`link`→`as_installable().remove`, `repo`→`as_repo_manager().remove_repo`, `schedule`→new config-free `SchedulerManager::deprovision`), then records the new set. Best-effort per item (a backend that can't undo one warns and the rest continue); dry-run previews and never writes; a no-op sync neither works nor rewrites the ledger. Wired as sync phase 5 in `handle_sync` (incl. the "System matches" early-exit, so **removing the last extra line still triggers the undo** — the exact bug) and `watch_reconcile`. **What I checked:** `cargo check --lib`/`--bin linix` clean; **6 unit tests written but NOT run this session** (key stability + parse, package-has-no-key, drift = recorded−declared, no drift when unchanged, a newly-declared extra isn't drift, TOML round-trip, missing-file-loads-empty). **Untested here:** the actual OS undo (systemctl/repo tools — none on this box); the ledger + diff + dispatch structure is what's covered. → was **Phase 4** |
 | **S21** | **DONE, 2026-07-17.** All three parts wired: **(1)** the resolver now reads the `schedules` file in `statements()` via `parse_document` + `statements_for(facts)`, `when`-gated exactly like a module (absent file → no schedules). **(2)** New `App::apply_schedules` maps each line to a `ScheduleConfig` (new pure `model/schedule.rs::schedule_config`, which validates `cron`+`run` are present and rejects unknown keys) and provisions it through the new config-free `SchedulerManager::provision` (extracted `validate_cron` from `add_schedule`, no more duplicated cron logic); wired as II.7 phase 4 in `handle_sync` (dry-run aware) and `watch_reconcile`, and the "nothing to do" exit now accounts for schedules. **(3)** The file-context rule lives in `collect`: a `Statement::Schedule` whose origin is not the `schedules` file is an error naming the line and pointing at the right file. **What I checked:** `cargo check --lib` and `--bin linix` clean; **6 unit tests written but NOT run this session** (mapping happy-path, optional `notify`, missing `cron`/`run` errors, empty-cron-as-missing, unknown-key refusal). **Untested here:** the actual OS provisioning (systemd/launchd/Task Scheduler — no such runner on this box); only the line→config mapping, the file read, and the file-context rule are unit-covered. **Not done:** `init` does not scaffold an empty `schedules` file (not required — the resolver treats absent as "no schedules"). Was → Phase 5. |
 | **S13** | **A bare name and an explicit one were two packages, not one.** `model::resolve` keys the merge on `backend:name`, and a bare `ripgrep` is keyed `?:ripgrep` until something probes it — so `ripgrep` in one module and `cargo:ripgrep` in another never met, never reconciled, and both reached the planner. Found while wiring the seam and **fixed there**: `Resolver::statements()` and `Resolver::collect()` are now separate, the caller probes in between, and `with_bare` hands the answers back so the merge sees real backends. II.7 rule 5 was silently not applying to every bare line → **Phase 2** (fixed) |
@@ -2449,6 +2470,374 @@ Three suspicions did not survive scrutiny:
 **Living section. It is the one place that records progress — Part III stays the plan, this
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
+
+## Done 2026-07-20 (second session) — the audit's findings, closed
+
+**Every numbered finding in the audit below is now fixed, plus the II.17 zombie keys, the
+smaller list, and the three-`when`-readers item.** Two owner decisions were taken during the
+session and are recorded at the bottom of this entry.
+
+**Measured at the end of the session, by running the command:** `cargo build --all-targets`
+clean, `cargo clippy --all-targets` silent, `cargo test` **735 passing / 0 failed**. *Do not
+copy that number forward — it is the eleventh count in this document, and the previous ten
+were all stale within a session. Run the command.*
+
+### The seven findings
+
+**1. Block-form options skipped every validation — closed, and it was the whole class, not
+one call.** `validate_options` had one caller (the short-form header parse) and
+`merge_options` inserted the body's keys afterwards unchecked. The fix is not a second call
+site: `statement::parse` now wraps `parse_inner` and ends in one `validate(origin, &stmt)`,
+and `merge_options` calls the same function after merging. **The same function also gained
+the option vocabulary for `shim:`/`service:`/`link:`/`schedule:`**, which had none at all —
+`shim:jq@sorce=…` used to parse clean. `model::schedule` now imports the grammar's
+`SCHEDULE_OPTION_KEYS` rather than keeping its own list.
+
+*Verified the way the audit found it — against the real binary, on a scratch repo:* every one
+of the six lines it printed as silently accepted is now refused by name, in both forms, and
+the valid lines still pass. Unit tests: a table driving short and block form through the same
+six violations, plus the `@lease` case named on its own because it used to reach a real
+expiry (S19).
+
+**2 + 3. `activate`/`deactivate` now do what II.6 says.** This is the entry the audit caught
+a ✅ burying, so: the Phase 2i entry claimed "in full", the audit said two items were open,
+**the audit was right, and both are closed now.**
+- `deactivate` removed top-level lines only, with the policy the owner reversed on
+  2026-07-17 written into the comment, and still printed *"It is still activated by the
+  `when …` block"* — the sentence II.6 requires to be unreachable. It now takes the name out
+  of the top level **and out of every `when` block that applies to this host**, drops a block
+  the removal empties and says so, and leaves a block for another host alone with II.6's
+  sentence about why.
+- `activate` overwrote `when` blocks silently. It now names every block it removed.
+- The editing is a pure function (`model::profiles::remove_from_active` → `ActiveEdit`, and
+  `blocks_in_active`), not more line-fiddling in the command, so all six behaviours are unit
+  tested — including the two that are about *not* acting.
+
+**4. `expand_vars` no longer skips the walk when no variable is defined.** The early return
+on an empty set meant that with no `vars` file a `$role` survived as literal text and became
+a path with a dollar in it. Tested in the direction that was missing: no `vars` file, `$role`
+in a `link:`, error naming it.
+
+**5. The second config resolver is gone.** `config_path_from_argv` hand-parsed `-c/--config`
+and fell back to the deleted `config.toml`, ignoring `--config-dir`, `$LINIX_CONFIG_DIR` and
+the settings file — so `[command_aliases]` never loaded for anyone off the default path, out
+of a file that could not exist. Replaced by `preferences_path_from_argv`, which peeks the
+flags (unavoidable: aliases expand before clap runs) and hands them to `app::locate::locate`,
+the one resolution. **`config.toml` now has no functional reader.**
+
+**6. The `[guard]` gate reaches every change path.** `apply` threw away the `Err` from
+`compute_full_changes` with `if let Ok(…)`, so `deny_packages`, `pinned_only`,
+`require_snapshot` and `deny_vulnerable` never blocked it; it never called
+`enforce_installs`, so `max_installs` did not apply; and `rebuild` went straight to
+`engine.sync` with no gate at all. All three closed. *The removal half was already sound and
+still is.*
+
+**7. `rebuild.rs`'s `backend:name` splitter is gone.** `name.split(':').next_back()` degraded
+`web:https://host/x.tar.gz` to `//host/x.tar.gz` and never checked the prefix named a
+backend. `Scope::Packages` now carries a parsed `Target`, split by `split_removal_target` with
+the registry in hand. **The third splitter went with it**: `main.rs`'s upgrade path
+reimplemented that function inline and now calls it.
+
+### II.17 — the five that were alive are dead
+
+- **`[schedules]` is deleted, and there is one schedule store.** *(Owner decision below.)*
+  `schedule add`/`remove` write the `schedules` **file** and then sync, the way `install`
+  writes a module and syncs (P1); `schedule list` reads it. `add_schedule`,
+  `remove_schedule` and `sync_schedules` — the three methods that wrote the config table —
+  are deleted, and so is `Config::schedules`. **Cron validation moved to
+  `model::schedule::validate_cron`, called at parse time**, so a bad cron is refused naming
+  the file and line rather than surfacing when the OS scheduler is handed the job; the
+  scheduler calls the same function. The CLI flags are `--cron/--run/--notify`, matching the
+  file's keys — they were `--command/--notification`, one vocabulary in two spellings.
+- **`confirm_destructive` is deleted**, along with the upgrade prompt it drove and its line in
+  both the shipped example and the generated default. The guard already judges removals; a
+  second "are you sure" keyed off a config flag was the extra prompt II.10 does not list.
+- **`config.snapshots` is deleted.** Its only live key was `auto_prune`, which is a second
+  answer to a question `[retention.snapshots]` already answers — `keep_last = 0, keep_days =
+  0` **is** "keep everything". `RetentionPolicy::prunes()` is now the gate, and `init -i` asks
+  one question instead of two.
+- **`github_token` is deleted from `Config`** and read from `$GITHUB_TOKEN`. II.1 says secrets
+  are the environment only, never a file — and `preferences.toml` lives inside the git repo,
+  so the key was a token in git.
+- **`groups/` is out of the live help.** `bundle`'s restore instructions named it; they now
+  name `modules/`, `profiles/` and `active`. The `git.rs` header naming `groups/` and
+  `config.toml` went too, along with its paragraph about the deleted generation format.
+
+### The smaller list
+
+- **`strip_comment` no longer truncates a value at any `#`.** A `#` opens a comment at the
+  start of a line or after whitespace; `@content=#!/bin/sh` is a value. `active` and
+  `priority` use the same function now rather than three inline copies of `find('#')`.
+- **`GuardScope` no longer names commands that do not exist.** `Rollback` was never
+  constructed and is deleted. `Prune` was one label for two different commands — it now
+  splits into `RemoveOrphans` and `PurgeUnmanaged`, so a refusal names what the user typed
+  instead of printing *"prune refused"* to someone who cannot run `prune`. `Leases` →
+  `ExpirySweep`, `Canary` → `upgrade --canary`, `Remove` → `uninstall`.
+- **Three stale `--help` strings** (`module`'s "@module syntax", `init`'s "groups, modules,
+  data dirs", `init -i`'s "config.toml and local.txt") and `--config`'s "Path to custom
+  config.toml" all now describe what exists.
+- **`tests/exhaustive_backend_suite.rs` is deleted.** Its first line was `// tests/
+  mock_providers.rs`; it was a stale copy registering zero tests.
+- **The last `cockpit` comment and every `GhostShell`/`test_ghost_shell_*` name are gone.**
+
+### One `when` reader where there were three
+
+New `config/grammar/gated.rs`: `active` and `priority` are the same file shape — bare names
+plus `when` blocks — and were two hand-rolled block walkers with the same brace handling,
+nesting limit and unclosed/stray-brace errors, written twice. Both now call `gated::read` and
+keep only the rule that is theirs (a profile is Capitalized; first mention wins).
+
+**The third reader stays, and that is a decision, not a leftover.** The grammar's own reader
+handles modules and profiles, which hold *statements* and where a `when` may nest. `active`
+and `priority` refuse a nested `when` on purpose — II.6 calls `active` "the one file you read
+to know what is on, so it stays a list you can read at a glance." The audit listed the
+divergence as a defect; it is one rule (`when` gates the lines inside it) applied to two
+different kinds of file. **Recorded here so the next audit does not re-file it as a bug.**
+
+### Owner decisions, 2026-07-20
+
+- **`schedule add`/`remove` edit the `schedules` file** rather than being deleted. One store,
+  two doors into it — the file stays the only source of truth, and a one-line CLI for a cron
+  job stays available. *(Options offered: delete the mutating verbs, rewrite them onto the
+  file, or delete the whole command.)*
+- **Stop forcing LiNix's own commits unsigned.** `core/git.rs` passed
+  `-c commit.gpgsign=false` on every invocation, which inverted II.13 and made
+  `git commit -S` unreachable by construction. The override is removed; the user's
+  `commit.gpgsign` decides. **The verification half is explicitly NOT built** — see below.
+
+### Still owed after this session
+
+- **II.13's integrity check is not built.** LiNix does not verify that git says a commit is
+  signed, or by whom. Deferred deliberately by the owner this session, not overlooked. *There
+  is a second question inside it:* `git.rs` also forces `user.name=linix` /
+  `user.email=linix@localhost`, so a signed commit would be signed by the user's key and
+  authored by a fake identity. Whoever builds the check has to settle that first.
+- **`upgrade`'s whole-system mode (`app.upgrade()`, the native `apt upgrade` path) returns
+  before `enforce_policy`.** Found while closing finding 6, not in the audit. It is a change
+  path with no gate. `deny_packages` is close to meaningless against "upgrade everything", but
+  `require_snapshot` is not — and half a gate is its own kind of lie, so this needs a decision
+  rather than a guess.
+- **`Layout::lock_file()` still has zero callers**, and II.6's claims about what `locks/`
+  records (resolved backend for a bare name, regex expansion) are still false. Untouched this
+  session.
+- **The `use`-cycle error still names only names**, not every file and line in loop order; and
+  `@requires` cycles are still caught by separate machinery (Tarjan, at plan time) rather than
+  being "the same error" II.7 promises.
+- **`linix check` still does not reach what no active profile reaches**, though its doc
+  comment and II.3 both say it parses everything on demand.
+- **99 comments in `src/` cite a `V.n` paragraph.** Not swept, on purpose: CLAUDE.md's rule is
+  that a comment citing `V.n` *to explain a design* is narration, while one stating a
+  constraint is not, and the two cannot be told apart by grep. A mechanical strip would be a
+  large diff that deletes real constraints along with the narration.
+- **Phase 6's six containers still have not been run** (no Docker on this box), and
+  `src/app/migrate.rs` is still alive at 702 lines as the body of `handle_adopt`.
+
+**What this session did NOT verify:** the OS scheduler (no systemd/launchd/Task Scheduler
+runner here — the line→config mapping, the file editing and the cron validation are covered,
+the provisioning is not), the network path in any backend, and anything requiring Docker.
+
+## Audit 2026-07-20 — every claim in this document checked against the tree
+
+> **CLOSED by the session above, which is dated the same day and ran after it.** Every
+> numbered finding here is fixed; the false-claims table below is kept because it records
+> what was wrong and where, but **the rows are answers to a state of the tree that no longer
+> exists.** Read the entry above first.
+
+**A full verification pass over Parts II, III, VII, VIII, IX and X at `e406924`.** Nothing below
+was recalled: each row was run, grepped, or read at the cited symbol. Where a count is given, it
+was counted today.
+
+**Verified state:** `cargo build --all-targets` clean, `cargo clippy --all-targets` silent,
+`cargo test` **718 passing / 0 failed** (650 lib + 17 bin + 51 integration). `linix --help`
+starts. `linix check` runs and exits 1 with the `priority` refusal on a bare machine.
+
+**The suite counts in this document are stale low, again.** "575 lib tests" (the artifact entry)
+and "561 passing" (the R1–R23 entry) were both true when written. The artifact module's "59
+tests" is now **66**. *This is the eighth measurement in this document to be wrong, and the
+fourth in a row to be wrong in the direction of the tree being better than the sentence.*
+
+### The findings that are bugs, not bookkeeping
+
+> **All seven are fixed.** Each is answered by number in the session entry above.
+
+**1. Block-form options skip every validation the short form enforces.** `validate_options`
+(`config/grammar/statement.rs:538`) has exactly one caller — the header parse at `:430`.
+`merge_options` (`config/grammar/mod.rs:310-334`) inserts the block body's keys straight into the
+statement with no re-check. Confirmed by running the real binary against a scratch repo: the
+identical violation errors in short form and passes clean in block form.
+
+```
+apt:nginx@requires=libfoo        ERROR "`requires = libfoo` is a bare name"   ← II.2, correct
+apt:nginx { requires = libfoo }  OK: everything ... parses.                   ← same rule, silent
+apt:jq@hold { version = 1.6 }    OK                        ← II.2's named contradiction, silent
+apt:nginx { colour = blue }      OK                        ← unknown key, silently ignored
+apt:nginx { lease = 2h }         OK                        ← S19's retired key, reachable again
+apt:curl { formats = deb }       OK                        ← wrong-backend key, silently ignored
+```
+
+**This is the highest-severity finding in the pass**, because II.2 closes with *"silently
+ignoring an option the user wrote is how a config grows lines that do nothing"* — and the block
+form does exactly that for every key. It also reopens `@lease`: the comment at
+`statement.rs:551-556` explains that a package which uninstalls itself is refused, and the block
+form walks around the refusal. **The fix is one call**, but it will fail lines people have
+written, so it is a change with a blast radius, not a tidy-up.
+
+**2. `deactivate` implements the rule the owner reversed on 2026-07-17.** `app/profile.rs:177`
+gates removal on `depth == 0` with a comment stating the *old* policy verbatim (*"Only top-level
+lines are LiNix's to remove"*), and `:186-193` still prints *"Removed X from the list. It is
+still activated by the `when …` block on line N."* — the sentence II.6 says must be **unreachable
+by construction**. `ActiveEntry.on` exists for exactly this and is never consulted, so the
+message fires for blocks that do *not* apply to this host, where it is wrong twice over: nothing
+was removed, and nothing is activated here.
+
+**3. `activate` overwrites `when` blocks and does not say so.** `profile.rs:102` prints only
+`"active is now {names}"`. II.6 requires it to name every block it removed (S6: automatic and
+silent are different things). No code reads the old body.
+
+> **2 and 3 are not new findings — this document already recorded both**, in the 2026-07-17
+> audit entry, under *"Two things are not fixed."* What is new is that **"Done in Phase 2i —
+> `activate` does what II.6 says" claims it "answered the audit's `activate` finding in full."**
+> It did not. The audit entry was right, the Phase 2i entry overwrote it with a ✅, and the code
+> has not moved since. *This is the failure mode at the top of this document, caught in the act:
+> a later, more confident sentence burying an earlier, more accurate one.*
+
+**4. `expand_vars` silently skips expansion when no variable is defined.**
+`model/resolve.rs:320`: `if self.facts.vars.is_empty() { return Ok(()); }`. With no `vars` file,
+`link:~/.config/$role/init.lua` is left **literally unexpanded** instead of erroring — the exact
+failure the `vars` entry says was designed out (*"A silently unexpanded `$rle` becomes a path
+with a dollar in it and fails later, somewhere else, with no mention of the typo"*). The error
+only fires when at least one variable happens to exist. Untested in either direction.
+
+**5. `main.rs:273-285` is a second config resolver, and it points at a deleted file.**
+`config_path_from_argv` hand-parses `-c/--config` out of argv and falls back to
+`safe_config_dir().join("config.toml")` — the file the `preferences.toml` change deleted. Called
+at `main.rs:59` for command-alias loading, it ignores `--config-dir`, `$LINIX_CONFIG_DIR` and the
+settings file. So `[command_aliases]` silently never loads for anyone whose repo is not at the
+default path, and the path it reads can never exist. **It is both the last functional
+`config.toml` reader and a second implementation of a resolution the X.6 entry claims happens in
+one function.**
+
+**6. `apply` discards the `[guard]` gate.** `main.rs:2609`: `if let Ok(now_changes) =
+compute_full_changes(app).await {` — an `Err` from `enforce_policy` is thrown away, so
+`deny_packages`, `pinned_only`, `require_snapshot` and `deny_vulnerable` never block `linix
+apply`. It never calls `enforce_installs` either, so `max_installs` does not apply. **`rebuild`
+reinstalls without the gate too** (`main.rs:644` goes straight to `engine.sync`). CLAUDE.md's
+*"every install/change path calls the `[guard]` gate; a guard on one command is a guard on
+nothing"* is not currently true.
+
+*The removal half is sound:* every removal path does reach `enforce`. I found no unguarded
+removal.
+
+**7. `rebuild.rs:115` splits a user-supplied name on `:` and trusts it.**
+`name.split(':').next_back()` — so `linix rebuild web:https://x/y.tar.gz` degrades to
+`//x/y.tar.gz`, and no backend prefix is ever validated. It is a C13 parser, in a file written
+after C13 was declared closed.
+
+### Claims in this document that are false
+
+| claim | where | truth |
+|---|---|---|
+| *"II.1's file table does not list `vars`"* | `vars` entry | **False.** II.1 lists it (line 191). |
+| *"`config.toml` is retired"* | `preferences.toml` entry | **Partly false.** 8 live references remain, one of them functional (finding 5). `args.rs:24` still advertises `--config` as *"Path to custom config.toml"*; `main.rs:3842` tells the user to run `config init` to write one; `fleet.rs:94` names it in an error. |
+| *"a test asserts `config_root` stays `#[serde(skip)]`"* | `preferences.toml` entry | **False.** The `serde(skip)` is real (`config.rs:183`); **no test asserts it.** The structural guarantee the entry credits to a test is guarded by nothing. |
+| *"the resolved backend for a bare name / regex expansion are recorded in `locks/`"* | II.6 | **False.** Neither is ever locked. `Layout::lock_file()` (`layout.rs:125`), the `locks/<backend>.toml` accessor, has **zero callers** — dead code. What exists is three files by hardcoded path: `locks/versions.json`, `locks/hooks.toml`, `locks/extras.toml`. |
+| *"`linix lock <name>` / `lock --backend cargo`"* | II.6 | **False.** `Commands::Lock` takes no arguments. |
+| *"the choice … is recorded in the lock"* (artifact selection) | II.2 | **False.** It is recorded in `GithubState` (`github.rs:20-31`), the backend's own state. Part VIII's own entry admits this; **II.2's adopted text does not**, and II.2 is the target state. |
+| *"the choice and what it passed over are reported"* | II.2 | **Partial.** An install-time `info!` (`github.rs:245-259`), only when ambiguous. Not plan output, which is what II.2 and V.48 describe. |
+| *"`channel` … the backends do not read it yet"* | artifact entry | **False for snap.** `backends/snap.rs:76-78` pushes `--channel`. True for flatpak only. |
+| *"`schedule:` is unbuilt … the resolver never reads `schedules_file()`"* | Phase 2, lines 986-991 | **Stale.** `resolve.rs:303-305` reads it; `:516` enforces file context, with a test at `:982`. The warning the passage cites was deleted in the `rebuild` session. |
+| *"Only `schedule:` is still unwired"* | S12 row, line 2421 | **Stale**, same reason. |
+| *"the example file documents keys that no longer exist on `Config`"* | `preferences.toml` entry, "Still owed" | **Stale — that work is done.** All eight named keys are absent from `examples/preferences.toml`, and every key it does document maps to a real field. The stated rationale is also wrong: `config.rs:149` sets `#[serde(deny_unknown_fields)]`, so an unknown key is a hard error, not "silently ignored". *(The `aliases`/`command_aliases`/`fleet_hosts` half of that paragraph is still accurate.)* |
+| *"Phase 0 … roughly 15% happened"* | 2026-07-17 audit | **Badly stale.** `groups_dir`, `line_declares`, `keep.txt`, `_active_profiles.txt`, `Commands::Prune`, `Commands::Migrate` are all gone; `local.txt` survives only in test fixtures and one stale help string. **`src/app/migrate.rs` is the one live row** — 702 lines, compiled, and the whole body of `handle_adopt`. |
+| *"three of six paths have no reader"* | 2026-07-17 audit | **Stale.** Five of six read cleanly. `schedules` and `preferences.toml` both gained readers. The one real gap is `locks/`, and it is a different gap: a reader exists and nobody calls it. |
+| *"`linix why` answers from the old model"* | 2026-07-17 audit | **Fixed.** Note the entry's own tripwire grep (`layout()\|Layout\|profiles_dir`) returns 0 and **always would** — `why` reaches the model through `StateResolver`, not `Layout`. **A tripwire that cannot go quiet is not a tripwire.** |
+| *"`shim --source` is a live bug"* | VI.1 rows | **Dead by deletion.** There is no `shim` command; `create_shim` no longer takes a discarded source. |
+| *"the pre-v7 `run-in-container.sh` was deleted"* | Phase 5 | **False.** The file is on disk (`docker/integration/`), alongside six Dockerfiles. Phase 6 says "five containers"; there are **six** (gentoo is opt-in). |
+| *"`teleport` … goes through `model/edit.rs`"* | Phase 2 checklist | **Stale text.** `teleport` is fully deleted — the grep is silent. The checklist still lists it as a writer. |
+
+### II.17 — five things it says are deleted are alive
+
+> **All five are dead as of the session above.** Kept as a record of what was found where.
+
+| | |
+|---|---|
+| **`[schedules]`** | `config.rs:281`, written by `linix schedule add/remove` (`scheduler/mod.rs:81,141`), read at `main.rs:1983`. **This is two schedule stores**, both live — the config table and the II.1 `schedules` file (`resolve.rs:303`). The exact "two of everything" CLAUDE.md names as how this repo got into trouble. |
+| **`confirm_destructive`** | `config.rs:239`, live at `main.rs:1190`, **and advertised to users** in the generated default preferences (`main.rs:3267`). |
+| **`config.snapshots`** | `config.rs:277`. |
+| **`github_token`** | `config.rs:222`, read at `backends/github.rs:487`. II.17 says this moves to the environment; II.1 says secrets are *"the environment only. Never a file."* |
+| **`groups/`** | Gone from the model, still named in live user-facing help: `bundle.rs:211` tells users to copy `groups/`. |
+
+Everything else in II.17 is genuinely gone — commands, flags, syntax, files and code all check out.
+
+### Smaller, and each cheap to close
+
+> **Most are closed** (see "The smaller list" above). Still open, and now tracked in "Still
+> owed": the `use`-cycle error's origins, `@requires` cycles being separate machinery,
+> `linix check` not reaching unactivated profiles, and the 99 `V.n` comments — which were
+> deliberately not swept. The `when`-has-three-readers row is now two readers and one
+> deliberate difference, explained above.
+
+- **No option-key validation for `shim:` / `service:` / `link:`.** `shim:jq@sorce=cargo:jq`,
+  `service:nginx@enabld=true` and `link:/a/b@targt=/c` all parse clean. Same defect as finding 1,
+  different door.
+- **`linix check` does not reach what no active profile reaches**, though its own doc comment and
+  II.3 both say it parses everything on demand. A `use` cycle in an unactivated profile is never
+  seen.
+- **`strip_comment` (`grammar/mod.rs:148`) cuts at the first `#` on a statement line**, so a
+  short-form option value containing `#` is silently truncated. Only the block form is safe — the
+  mirror image of finding 1.
+- **The `use`-cycle error names only names** (`module 'a' ends up using itself: a -> b -> a`).
+  II.7 asks for every file and line in loop order. The per-edge origins are never collected.
+- **`@requires` cycles are caught by separate machinery** (Tarjan in `sync/planner.rs:59-84`),
+  not "the same error" II.7 promises: different type, different wording, and it surfaces at plan
+  time rather than resolve time.
+- **`when` has three readers** — the grammar's, plus hand-rolled ones in `profiles.rs:214-294`
+  and `priority.rs:28-99` — and they diverge: `active` and `priority` refuse nested `when`;
+  modules and profiles allow it. "One rule, everywhere" is one rule and three implementations.
+- **Three `backend:name` parsers for user input**: `config/parser.rs:160`, `main.rs:863` (which
+  reimplements `split_removal_target` rather than calling it), and finding 7.
+- **`GuardScope` carries dead labels.** `Rollback` is never constructed; `Prune`, `Leases` and
+  `Canary` name commands that no longer exist, so a refusal can print *"prune refused"* to a user
+  who cannot run `prune`.
+- **`git commit -S` integrity (II.13) is not built, and is inverted**: `core/git.rs:69` passes
+  `-c commit.gpgsign=false` on every invocation, so LiNix's own commits are guaranteed unsigned.
+- **`sha256` is a recognised package option key** (`statement.rs:439`) with no entry in II.2's
+  table.
+- **`--allow-mass-purge` is the flag; II.11 still specifies `--i-really-mean-it`** — the R1 sweep
+  renamed it and II.11 was not updated.
+- **`purge-unmanaged` is also refused in `schedules`**, not just `rebuild`
+  (`schedule.rs:61`). Correct, and undocumented — K13 names only `rebuild`.
+- **Three stale `--help` strings**: `module` advertises "(@module syntax)", `init` says
+  "(groups, modules, data dirs)", and `init -i`'s doc says it writes "config.toml and local.txt".
+  All four names are deleted grammar or deleted layout.
+- **One `cockpit` comment survives** the R1 sweep (`core/git.rs:192`), and
+  `tests/shell_lifecycle_tests.rs` still names `GhostShell` in an assertion message and
+  `test_ghost_shell_*` in four function names.
+- **`tests/exhaustive_backend_suite.rs` and `tests/mock_providers.rs` are near-duplicates**
+  (215 and 236 lines of the same fixtures) and **register zero tests between them**. The
+  "exhaustive" one is the stale copy: it lacks the II.1 repo scaffolding and the S11 sandbox
+  comment the other gained.
+- **99 comments in `src/` cite a `V.n` paragraph.** P6 and V.42 call that narration.
+
+### What checked out, and is worth not re-verifying
+
+`family`/`os-release` (7 tests, `ID_LIKE` before `ID`); the `vars` engine (19 tests) including
+IX.3's ungated walk, the sigil, cycles, `$$`, the digit rule and both file-context refusals;
+`rebuild` end to end (11 tests, K1/K2/K13, the hostile-order integration test, and all three
+claimed gaps still genuinely gaps); the artifact selector (66 tests, closed vocabulary,
+platform-before-formats, the four-level tie-break, `@asset=all` erroring by name, `@bin` turning
+the guess off, `score_asset` gone from every `.rs`); X.6's `path`/`edit`/precedence/`--set` and
+the settings-file-outside-the-repo test; II.3/II.4/II.5 in full — set math, ordering,
+subtraction-always-wins, the layering rule, and II.5's teaching error verbatim; II.7's
+contradiction and dated-line rules; `priority`'s "not listed = not used at all"; SEC4, SEC5 (with
+its recorded deviation) and SEC6 as built; SEC1–SEC3 as deferred; and `teleport`, `clean`,
+`switch`, the generation family and the `status`/`diff` alias panic all confirmed gone.
+
+**Direction of staleness this pass: the tree is better than the document almost everywhere.**
+The 2026-07-17 audit section is now mostly describing bugs that are fixed, and reading it as
+current would cost someone a day re-fixing them. The genuine residue is small and is listed
+above. *The exception is the ✅ direction, which failed the same way it always has: Phase 2i's
+"in full" buried an accurate finding that is still accurate.*
 
 ## Done 2026-07-20 — `when family` means the distribution (owner ruling)
 
@@ -2523,12 +2912,23 @@ one of them undocumented and one of them fictional.
 **`examples/config.toml` → `examples/preferences.toml`.** Its header pointed at
 `~/.config/linix/config.toml`, a path that is now wrong in both halves.
 
-**Still owed here:** the example file documents keys (`cache_ttl`, `prune_scope`,
+~~**Still owed here:** the example file documents keys (`cache_ttl`, `prune_scope`,
 `protect_imperative`, `bloatware_file`, `remove_bloatware`, `prune_on_sync`,
-`[hostname_packages]`, `[managed_files]`) that **no longer exist on `Config`** — it is
-documentation of a version that is gone, and every one of them is silently ignored on load.
-`Config` also still carries `aliases`, `command_aliases` and `fleet_hosts`, which II.1 does not
-mention. Reconciling the struct with Part II is its own pass and is not done.
+`[hostname_packages]`, `[managed_files]`) that **no longer exist on `Config`** — every one of
+them is silently ignored on load.~~ — **Retired 2026-07-20 by audit: this was already done when
+it was written.** None of the eight keys is in `examples/preferences.toml`, and every key it
+does document maps to a real field. The rationale was wrong too: `config.rs:149` sets
+`#[serde(deny_unknown_fields)]`, so an unknown key is a hard parse error, not a silent ignore.
+
+**Still owed, and this half is accurate:** `Config` carries `aliases`, `command_aliases` and
+`fleet_hosts`, which II.1 does not mention — and four keys II.17 says are deleted are alive
+(`[schedules]`, `confirm_destructive`, `snapshots`, `github_token`; see the audit). Reconciling
+the struct with Part II is its own pass and is not done.
+
+**And `config.toml` is not fully retired.** Eight references remain, one functional:
+`main.rs:273-285` resolves a config path by hand and falls back to `config.toml`, so
+`[command_aliases]` never loads off the default path. **The claim above that "a test asserts
+`config_root` stays `#[serde(skip)]`" is false — no such test exists.**
 
 ## Done 2026-07-20 — `vars`, first half (Part IX; owner ruling: position 3)
 
@@ -2584,7 +2984,11 @@ evaluated and hands them to `HostFacts`. Nothing re-resolves them mid-run.
   the rest are untouched and must still be re-asked.
 - **`plan` does not show variables as a cause of change (W13).** A variable that moves can
   change what is declared with no edit to any file, and the plan does not say so.
-- **`init` does not scaffold a `vars` file**, and II.1's file table does not list it.
+- **`init` does not scaffold a `vars` file.** *(This bullet also claimed II.1's file table does
+  not list `vars`. It does — see the 2026-07-20 audit.)*
+- **`expand_vars` returns early when no variable is defined** (`resolve.rs:320`), so with no
+  `vars` file a `$name` is left as literal text instead of erroring — the exact silent-drift
+  failure the "unknown reference is an error" bullet above says was designed out. Untested.
 
 ## Done 2026-07-20 — `rebuild` (X.1, K1, K2, K13)
 
@@ -2643,7 +3047,8 @@ does not parse. Corrected to the short form and the real block form.
 backend.** `src/backends/artifact/` is the new module: `format` (the closed vocabulary and the
 detected default order), `platform` (does this file run here), `pattern` (`@asset=` globs),
 `discover` (the executable inside an archive), `capability` (which backends the keys are legal
-on), `options` (reading them off a resolved spec) and `select` (the engine). 59 unit tests, none
+on), `options` (reading them off a resolved spec) and `select` (the engine). 59 unit tests *(66
+as re-counted 2026-07-20)*, none
 of which touch the network — the selector is given an asset list and returns a choice, so every
 rule is testable without a release to download.
 
@@ -2681,11 +3086,12 @@ declaration touches the state model (`GithubState` holds one `bin_path`), so the
 **errors by name** rather than silently installing the first of the picks. **Owed.**
 
 **Not built from Part VIII:** the `priority`-level `formats` block (D7), `channel` on the snap
-and flatpak backends (parsed and refused elsewhere, but the backends do not read it yet), the
+and flatpak backends (parsed and refused elsewhere, but the backends do not read it yet — *false
+for snap as of 2026-07-20: `snap.rs:76-78` pushes `--channel`; flatpak only*), the
 lock file half of VIII.2 (the resolved asset is recorded in the backend's own state, not in
 `locks/github`), and `why` explaining the selection (D14).
 
-**Suite: 575 lib tests + integration all passing, `cargo build --all-targets` clean,
+**Suite: 575 lib tests *(650 as re-counted 2026-07-20; 718 total)* + integration all passing, `cargo build --all-targets` clean,
 `cargo clippy --all-targets` silent, `linix --help` and `linix check` run** (measured
 2026-07-20). *Green covers the new module properly — the 59 tests are the evidence for the
 selection rules. It says nothing about the network path, which has no test and was not run
@@ -2843,6 +3249,14 @@ R1–R23 section at the top of Part VII.** All four greps are now quiet.
   would send a cold reader to redo committed work.
 
 ## Audit: the ✅ that are not true (last run 2026-07-17, second pass)
+
+> **MOSTLY STALE as of 2026-07-20 — do not act on this section without checking the audit at the
+> top of Part VII.** Re-verified item by item: `linix why`, `linix init -i`, Phase 0's deletions,
+> the missing readers, and VI.1's two rows are all **fixed**. Two things survive: `activate`/
+> `deactivate` (see the correction on the Phase 2i entry) and `src/app/migrate.rs`, which is
+> alive at 702 lines. **This section now describes mostly-repaired code, and reading it as
+> current costs a day re-fixing what is fixed** — the same cost as a false ✅, in the other
+> direction.
 
 **Phases 0 and 1 were marked ✅ before this section existed, and neither survives a grep.**
 Checked by hand against the working tree, not recalled. **The suite is green and will stay
@@ -3353,7 +3767,21 @@ caller of `ManifestEngine` and the last real reason `groups_dir` exists.
 
 ## Done in Phase 2i — `activate` does what II.6 says, and `active` gained `when`
 
-Answered the audit's `activate` finding in full; the details are in that section, marked
+> **CORRECTED 2026-07-20 by audit. This entry said it answered the audit's finding "in full."
+> It did not, and the audit entry it overwrote was right.** Two of that entry's items were
+> still open at `e406924`: `activate` did not name the `when` blocks it removes (S6), and
+> `deactivate` still implemented the rule the owner reversed on 2026-07-17 — it edited
+> top-level lines only (`profile.rs:177`) and still printed *"It is still activated by the
+> `when …` block"*, the sentence II.6 requires to be unreachable.
+>
+> **Both are fixed in the session dated 2026-07-20 at the top of Part VII (findings 2 and 3),
+> and this time the behaviour is unit tested** — `remove_from_active` is a pure function, so
+> "a block for another host is never touched" is an assertion rather than a claim. **The
+> correction is left standing above the paragraph below**, because the paragraph is what a
+> reader would otherwise believe, and the failure mode this document keeps catching is a later
+> confident sentence burying an earlier accurate one.
+
+Answered most of the audit's `activate` finding; the details are in that section, marked
 FIXED. The shape of it: **II.6 described the opposite of the code**, the CLI help contradicted
 II.6 in the same repo, and `profile switch` — the set form under a second name — was not in
 this document at all. `activate` sets, `activate -a` adds, `switch` is deleted, and the empty
@@ -3525,13 +3953,23 @@ that says `use x`.
 ## A warning about this document
 
 **Every "(verified)" / "(measured)" fact in this spec that has been checked has been wrong —
-seven for seven, always under-reporting.** They were measured against an older tree. Corrected
+ten for ten, always under-reporting.** They were measured against an older tree. Corrected
 so far: the comment count (139 → 884 + 32 false), both good-comment exemplar citations, the
 parser count (5/3 → 8/6 → **9/6**, wrong twice, the second time by a re-measurement that was
 itself called "(re-measured)"), the backend count, and — the expensive one —
 **"`reconcile_shims` is written and never called (verified)"**, which was false and was the
 sentence hiding a bug that made every `sync` delete the user's own files out of
-`~/.local/bin` (S1).
+`~/.local/bin` (S1). **The 2026-07-20 audit added three more**: the artifact module's "59 unit
+tests" (66), "575 lib tests" (650), and "561 passing" (718). *Note that these three were each
+written on the day they were measured. A count in this document is stale within one session,
+which is the argument for citing the command rather than its output.*
+
+**And the audit's own "718 passing" was stale by the end of the same day (735).** That is
+eleven for eleven, and the eleventh was written by the pass whose whole purpose was to catch
+stale numbers. **Stop writing the number.** Any sentence here that needs a test count should
+name `cargo test` and let the reader run it; the count in the status line is kept only because
+a reader wants one glance at whether the tree is green, and it is wrong by the next session
+either way.
 
 **The ✅ markers fail the same way, and worse.** Phases 0 and 1 were both marked complete
 while untrue (2026-07-17 audit, Part VII) — under a rule, already written at the top of this

@@ -129,6 +129,12 @@ const KNOWN_PREFIXES: &[&str] = &[
 /// checked that the prefix named a real backend — so every new prefix (`absent:`, `re:`,
 /// `repo:`) was a thing they silently read as a backend name (C13).
 pub fn parse(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result<Statement> {
+    let stmt = parse_inner(origin, line, backends)?;
+    validate(origin, &stmt)?;
+    Ok(stmt)
+}
+
+fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result<Statement> {
     let line = line.trim();
 
     if let Some(rest) = line.strip_prefix("use ") {
@@ -180,7 +186,7 @@ pub fn parse(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result
     }
 
     if let Some(rest) = line.strip_prefix("absent:") {
-        let decl = parse_package(origin, rest.trim(), backends, true)?;
+        let decl = parse_package(origin, rest.trim(), backends)?;
         if decl.backend.is_none() {
             return Err(GrammarError::new(
                 origin.clone(),
@@ -246,7 +252,7 @@ pub fn parse(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result
         return Ok(var);
     }
 
-    let decl = parse_package(origin, line, backends, false)?;
+    let decl = parse_package(origin, line, backends)?;
     Ok(Statement::Package(decl))
 }
 
@@ -352,12 +358,7 @@ fn split_options(origin: &Origin, text: &str) -> Result<(String, Options)> {
     }
 }
 
-fn parse_package(
-    origin: &Origin,
-    text: &str,
-    backends: &dyn BackendNames,
-    absent: bool,
-) -> Result<PackageDecl> {
+fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Result<PackageDecl> {
     let (head, options) = match text.split_once('@') {
         Some((head, opts)) => (head.trim(), parse_short(origin, opts)?),
         None => (text, Options::default()),
@@ -422,13 +423,80 @@ fn parse_package(
         }
     };
 
-    let decl = PackageDecl {
+    Ok(PackageDecl {
         backend,
         selector,
         options,
-    };
-    validate_options(origin, &decl, absent)?;
-    Ok(decl)
+    })
+}
+
+/// Every option rule in II.2, for every statement that carries options.
+///
+/// This runs on the finished statement rather than inside the header parse, because a block
+/// body's keys are merged in after the header is parsed. Validating at the header let
+/// `apt:jq@hold { version = 1.6 }` through — the same contradiction the short form refuses,
+/// silent — and II.2 closes with the reason that cannot stand: silently ignoring an option
+/// the user wrote is how a config grows lines that do nothing.
+pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
+    match stmt {
+        Statement::Package(decl) => validate_options(origin, decl, false),
+        Statement::Absent(decl) => validate_options(origin, decl, true),
+        Statement::Shim(name, o) => validate_extra_options(origin, "shim", name, o),
+        Statement::Service(name, o) => validate_extra_options(origin, "service", name, o),
+        Statement::Link(name, o) => validate_extra_options(origin, "link", name, o),
+        Statement::Schedule(name, o) => validate_extra_options(origin, "schedule", name, o),
+        Statement::Repo { .. }
+        | Statement::Use(_)
+        | Statement::Exclude(_)
+        | Statement::Intersect(_)
+        | Statement::Subtract(_)
+        | Statement::Var { .. }
+        | Statement::Expr(_) => Ok(()),
+    }
+}
+
+/// The options each non-package statement understands (II.2's table).
+///
+/// A `schedule:` also needs `cron` and `run` to be *present*, which `model::schedule` checks
+/// when it builds the job — that is a question about one line's meaning, not about which
+/// words are legal, and it has an error that can name what is missing.
+pub const SHIM_OPTION_KEYS: &[&str] = &["source"];
+pub const SERVICE_OPTION_KEYS: &[&str] = &["enabled", "status"];
+pub const LINK_OPTION_KEYS: &[&str] = &["target", "content", "template", "decrypt", "identity"];
+pub const SCHEDULE_OPTION_KEYS: &[&str] = &["cron", "run", "notify"];
+
+fn keys_for(prefix: &str) -> &'static [&'static str] {
+    match prefix {
+        "shim" => SHIM_OPTION_KEYS,
+        "service" => SERVICE_OPTION_KEYS,
+        "link" => LINK_OPTION_KEYS,
+        _ => SCHEDULE_OPTION_KEYS,
+    }
+}
+
+fn validate_extra_options(
+    origin: &Origin,
+    prefix: &str,
+    name: &str,
+    options: &Options,
+) -> Result<()> {
+    let legal = keys_for(prefix);
+    for key in options.keys() {
+        if legal.contains(&key) {
+            continue;
+        }
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`@{}` is not an option on `{}:`", key, prefix),
+        )
+        .with_hint(format!(
+            "`{}:{}` takes: {}.",
+            prefix,
+            name,
+            legal.join(", ")
+        )));
+    }
+    Ok(())
 }
 
 /// Every option a package line may carry (II.2's table). Hooks are `*_install`
@@ -826,6 +894,33 @@ mod tests {
         };
         assert_eq!(name, "jq");
         assert_eq!(opts.one("source"), Some("cargo:jq"));
+    }
+
+    /// A typo'd key on one of these used to parse clean and then do nothing — the same
+    /// silent-line defect the package table exists to prevent, through a different door.
+    #[test]
+    fn a_typo_on_an_extra_is_refused_by_name() {
+        for line in [
+            "shim:jq@sorce=cargo:jq",
+            "service:nginx@enabld=true",
+            "link:/a/b@targt=/c",
+            "schedule:nightly@crron=0 2 * * *",
+        ] {
+            let err = p(line).unwrap_err();
+            assert!(err.what.contains("is not an option"), "{}: {}", line, err);
+        }
+    }
+
+    #[test]
+    fn the_documented_keys_on_an_extra_are_accepted() {
+        for line in [
+            "shim:jq@source=cargo:jq",
+            "service:nginx@enabled=true@status=started",
+            "link:/a/b@target=/c@template=true",
+            "schedule:nightly@cron=0 2 * * *,run=sync",
+        ] {
+            assert!(p(line).is_ok(), "{} was refused", line);
+        }
     }
 
     #[test]
