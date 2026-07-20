@@ -209,6 +209,9 @@ impl GitManager {
             "active",
             "priority",
             "schedules",
+            // `vars`, `vars.linix`, `vars.py` … — the file that explains a change must be in the
+            // change view, or a variable edit that removed a hundred packages is invisible (W14).
+            "vars*",
         ])?;
         Ok(parse_manifest_changes(&raw))
     }
@@ -250,6 +253,7 @@ impl GitManager {
             "active",
             "priority",
             "schedules",
+            "vars*",
         ])?;
         Ok(parse_manifest_changes(&raw))
     }

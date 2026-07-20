@@ -174,6 +174,11 @@ pub enum Commands {
     /// is keeping OFF this machine, and where each rule is written.
     Absent,
 
+    /// Print the variables (Part IX) resolved on this machine — each name, its typed value,
+    /// and the provider that set it. The first thing to reach for when a `when $name` block
+    /// does not fire.
+    Vars,
+
     /// Delete everything LiNix does not manage. Shows the whole list first.
     ///
     /// This is the strict "make this machine exactly match my files" command. It is a

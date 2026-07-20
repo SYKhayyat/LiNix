@@ -3,7 +3,7 @@ use super::dated::dating_of;
 use super::layout::Layout;
 use super::modules::{expand, ModuleLoader};
 use super::priority::Priority;
-use super::profiles::{parse_active, ProfileLoader, SetOp};
+use super::profiles::{parse_active_with, ProfileLoader, SetOp};
 use crate::config::grammar::{
     statement, BackendNames, GrammarError, Options, Origin, PackageDecl, Result, Selector,
     Statement,
@@ -254,10 +254,13 @@ impl<'a> Resolver<'a> {
     /// not. The caller probes the bare names these statements carry, then hands the answers
     /// back to `collect` via `with_bare` — so the merge in `collect` sees real backends.
     pub fn statements(&self) -> Result<Reached> {
-        // 1. Read `active` -> the profile set.
+        // 1. Read `active` -> the profile set. Against this run's facts, which carry the
+        // resolved variables (IX.6/W8), so `when $role == travel { Travel }` in `active` sees
+        // `$role` — the single most useful place for a variable, and the one that used to fail
+        // with "unknown when key" because `active` re-detected varless facts of its own.
         let active_file = self.layout.active_file();
         let body = std::fs::read_to_string(&active_file).unwrap_or_default();
-        let active = parse_active(&active_file, &body)?;
+        let active = parse_active_with(&active_file, &body, &self.facts)?;
 
         let mut out = Reached {
             statements: Vec::new(),

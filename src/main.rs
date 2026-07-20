@@ -161,6 +161,7 @@ async fn main() -> Result<()> {
         Commands::Unmanaged => handle_unmanaged(&app).await,
         Commands::Check => handle_check(&app).await,
         Commands::Absent => handle_absent(&app).await,
+        Commands::Vars => handle_vars(&app).await,
         Commands::PurgeUnmanaged { allow_mass_purge } => {
             handle_purge_unmanaged(&app, *allow_mass_purge).await
         }
@@ -3029,6 +3030,42 @@ async fn handle_check(app: &App) -> Result<()> {
 
 /// `absent` (II.8): every `absent:` line in force, and the module it comes from — what LiNix
 /// keeps OFF this machine, and where each rule is written. Read-only.
+/// `vars` (Part IX, W12): the variables resolved on this machine, so a `when $name` block that
+/// does not fire can be debugged by seeing the value the machine actually derived.
+async fn handle_vars(app: &App) -> Result<()> {
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let Some(selected) = resolver.vars_provider()? else {
+        println!(
+            "No variable provider in this repo, so no variables.\n  \
+             Create a `vars` file, or point `[vars] source` at one."
+        );
+        return Ok(());
+    };
+    let name = selected
+        .path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("vars");
+    let kind = match selected.kind {
+        linix::model::vars_provider::Kind::LineFile => "line file",
+        linix::model::vars_provider::Kind::External => "external program",
+        linix::model::vars_provider::Kind::Embedded => "embedded script",
+    };
+    let vars = resolver.resolve_vars().await?;
+    if vars.is_empty() {
+        println!("`{}` ({}) resolved no variables.", name, kind);
+        return Ok(());
+    }
+    println!("Variables from `{}` ({}):", name, kind);
+    let width = vars.keys().map(|k| k.len()).max().unwrap_or(0);
+    for (k, v) in &vars {
+        println!("  ${:<width$} = {}   [{}]", k, v, v.type_name(), width = width);
+    }
+    Ok(())
+}
+
 async fn handle_absent(app: &App) -> Result<()> {
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)

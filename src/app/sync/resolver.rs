@@ -103,6 +103,25 @@ impl<'a> StateResolver<'a> {
         Priority::parse(&file, &body, facts).map_err(Error::from)
     }
 
+    /// Resolve just the variables (Part IX), without planning the whole model — for `linix vars`.
+    /// The same resolution `resolve_model` performs, so what this prints is what a `when` sees.
+    pub async fn resolve_vars(&self) -> Result<crate::model::vars::Vars> {
+        let facts = HostFacts::current();
+        let priority = self.priority(&facts).await?;
+        let known = Vocab::new(&self.registry, self.config, &priority);
+        crate::model::Resolver::new(&self.layout, &known, &priority)
+            .with_facts(facts)
+            .with_vars_source(self.config.vars.source.clone())
+            .load_vars()
+            .map_err(Error::from)
+    }
+
+    /// The active provider file and kind, or `None` when the repo has no `vars` provider.
+    pub fn vars_provider(&self) -> Result<Option<crate::model::vars_provider::Selected>> {
+        crate::model::vars_provider::select(self.layout.config_root(), &self.config.vars.source)
+            .map_err(Error::from)
+    }
+
     #[instrument(skip(self))]
     pub async fn resolve_desired_state(&self) -> Result<HashMap<String, Vec<PackageSpec>>> {
         Ok(self.resolve_model().await?.packages)

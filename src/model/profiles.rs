@@ -181,7 +181,18 @@ impl<'a> ProfileLoader<'a> {
 /// Answers exactly one question — *what is this machine set to right now?* Nothing else
 /// goes in it.
 pub fn parse_active(file: &std::path::Path, body: &str) -> Result<Vec<String>> {
-    Ok(read_active(file, body)?
+    parse_active_with(file, body, &HostFacts::current())
+}
+
+/// `parse_active`, but against supplied facts — so a `when $role == …` in `active` (W8) sees the
+/// variables the resolver already resolved, rather than the empty set `HostFacts::current()`
+/// carries. The resolution path uses this; the plain form is for callers with no variables loaded.
+pub fn parse_active_with(
+    file: &std::path::Path,
+    body: &str,
+    facts: &HostFacts,
+) -> Result<Vec<String>> {
+    Ok(read_active_with(file, body, facts)?
         .into_iter()
         .filter(|e| e.on)
         .map(|e| e.name)
@@ -587,6 +598,31 @@ mod active_tests {
             .filter(|e| e.on)
             .map(|e| e.name)
             .collect()
+    }
+
+    #[test]
+    fn a_when_block_in_active_can_test_a_variable() {
+        // W8: `active` is the most useful place for a variable, and it used to fail with
+        // "unknown when key '$role'" because it detected its own varless facts.
+        let mut f = facts("anyhost");
+        f.vars.insert("role".into(), crate::model::vars::Value::Str("travel".into()));
+        let body = "when $role == travel {\n  Travel\n}\nWork\n";
+        let names: Vec<String> = read_active_with(&PathBuf::from("active"), body, &f)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.on)
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(names, vec!["Travel".to_string(), "Work".to_string()]);
+
+        f.vars.insert("role".into(), crate::model::vars::Value::Str("desktop".into()));
+        let names: Vec<String> = read_active_with(&PathBuf::from("active"), body, &f)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.on)
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(names, vec!["Work".to_string()], "Travel is off when the variable does not match");
     }
 
     /// II.6's own example file. It did not parse: `active` rejected any line with more than
