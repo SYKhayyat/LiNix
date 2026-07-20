@@ -92,6 +92,15 @@ pub struct FlatpakInstallable {
     pub core: Arc<FlatpakBackendCore>,
 }
 
+/// A flatpak ref is `name/arch/branch`. The arch slot stays empty so flatpak keeps choosing it
+/// from the machine; writing `name/branch` would be read as an architecture, not a branch.
+fn install_ref(spec: &PackageSpec) -> String {
+    match spec.options.get("channel") {
+        Some(channel) => format!("{}//{}", spec.name, channel),
+        None => spec.name.clone(),
+    }
+}
+
 #[async_trait]
 impl Installable for FlatpakInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
@@ -102,7 +111,7 @@ impl Installable for FlatpakInstallable {
         let mut args = self.core.scope_args();
         args.extend(["install", "-y", "--noninteractive"]);
 
-        let names: Vec<String> = specs.iter().map(|s| s.name.clone()).collect();
+        let names: Vec<String> = specs.iter().map(install_ref).collect();
         let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
         args.extend(name_refs);
 
@@ -304,5 +313,29 @@ mod tests {
             pkgs[0].properties.get("description").map(String::as_str),
             Some("Free 3D suite")
         );
+    }
+
+    fn spec_with(name: &str, options: &[(&str, &str)]) -> PackageSpec {
+        PackageSpec {
+            name: name.to_string(),
+            backend: "flatpak".to_string(),
+            options: options
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn flatpak_channel_becomes_the_branch_of_the_ref() {
+        let spec = spec_with("org.gimp.GIMP", &[("channel", "beta")]);
+        assert_eq!(install_ref(&spec), "org.gimp.GIMP//beta");
+    }
+
+    #[test]
+    fn flatpak_without_a_channel_installs_the_bare_name() {
+        let spec = spec_with("org.gimp.GIMP", &[]);
+        assert_eq!(install_ref(&spec), "org.gimp.GIMP");
     }
 }

@@ -63,22 +63,27 @@ pub struct SnapInstallable {
     pub core: Arc<SnapBackendCore>,
 }
 
+fn install_args(spec: &PackageSpec) -> Vec<String> {
+    let mut args = vec!["install".to_string()];
+
+    if spec.options.get("classic") == Some(&"true".to_string()) {
+        args.push("--classic".into());
+    }
+
+    if let Some(channel) = spec.options.get("channel") {
+        args.push("--channel".into());
+        args.push(channel.clone());
+    }
+
+    args.push(spec.name.clone());
+    args
+}
+
 #[async_trait]
 impl Installable for SnapInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         for spec in specs {
-            let mut args = vec!["install".to_string()];
-
-            if spec.options.get("classic") == Some(&"true".to_string()) {
-                args.push("--classic".into());
-            }
-
-            if let Some(channel) = spec.options.get("channel") {
-                args.push("--channel".into());
-                args.push(channel.clone());
-            }
-
-            args.push(spec.name.clone());
+            let args = install_args(spec);
 
             let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
             info!("Snap: Installing {}...", spec.name);
@@ -265,5 +270,29 @@ mod tests {
             .get("summary")
             .unwrap()
             .contains("greeting"));
+    }
+
+    fn spec_with(name: &str, options: &[(&str, &str)]) -> PackageSpec {
+        PackageSpec {
+            name: name.to_string(),
+            backend: "snap".to_string(),
+            options: options
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn snap_channel_reaches_the_command() {
+        let args = install_args(&spec_with("code", &[("channel", "edge")]));
+        assert_eq!(args, ["install", "--channel", "edge", "code"]);
+    }
+
+    #[test]
+    fn snap_without_a_channel_passes_no_channel_flag() {
+        let args = install_args(&spec_with("code", &[]));
+        assert_eq!(args, ["install", "code"]);
     }
 }

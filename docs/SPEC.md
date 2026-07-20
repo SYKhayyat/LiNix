@@ -523,13 +523,17 @@ write is deleted (II.17), because two stores could disagree about what this mach
 |---|---|---|
 | version | `apt:curl → 7.81.0` | **built** (`locks/versions.json`) |
 | **hook script hash** | `fonts:after_install → sha256:a3f1…` | **built** (`locks/hooks.toml`) |
+| **resolved artifact** | `sharkdp/fd → fd-…-linux-gnu.tar.gz`, its URL, format and hash | **built** (`locks/github.toml`) |
 | **resolved backend for a bare name** | `ripgrep → cargo:ripgrep@14.1.0` | **not built** |
 | **regex expansion** (only if frozen) | `re:^texlive- → [312 names]` | **not built** |
 
-`linix lock` regenerates. **It takes no arguments** — the per-name and per-backend forms this
-section used to promise (`lock <name>`, `lock --backend cargo`) do not exist, and neither does
-the one-file-per-backend layout: what is written is the two files named above, by fixed path.
-`Layout::lock_file()`, the `locks/<backend>.toml` accessor, has zero callers.
+`linix lock` regenerates the version pins. **It takes no arguments** — the per-name and
+per-backend forms this section used to promise (`lock <name>`, `lock --backend cargo`) do not
+exist. The one-file-per-backend layout now has exactly one real instance: `locks/github.toml`,
+written by the backend as it installs rather than by `linix lock`, because the artifact is only
+known at the moment it is chosen. `Layout::lock_file()` still has zero callers — `github`
+builds its own path — and that is a duplication worth closing when a second artifact backend
+needs one.
 
 *The two unbuilt rows are the target state and are kept as such. They were written here as
 though they were real, which cost the 2026-07-20 audit a check — a target belongs in Part III
@@ -2619,9 +2623,10 @@ different kinds of file. **Recorded here so the next audit does not re-file it a
   and that is accepted; `require_snapshot` and `deny_vulnerable` are not, and they are the
   reason. *(Options offered: route it through the gate, honour `require_snapshot` only, or
   refuse whole-system upgrade whenever a policy is set.)*
-- **`Layout::lock_file()` still has zero callers**, and II.6's claims about what `locks/`
-  records (resolved backend for a bare name, regex expansion) are still false. Untouched this
-  session.
+- **`Layout::lock_file()` still has zero callers**, though `locks/<backend>.toml` is now a real
+  layout: `github` builds that path itself rather than asking `Layout`. The duplication is
+  small and worth closing when a second artifact backend needs one. II.6's other two claims
+  (resolved backend for a bare name, regex expansion) are still false.
 - **The `use`-cycle error still names only names**, not every file and line in loop order; and
   `@requires` cycles are still caught by separate machinery (Tarjan, at plan time) rather than
   being "the same error" II.7 promises.
@@ -2669,6 +2674,35 @@ so D14's `why` has a reason to print. Nothing reads it yet.
 
 **D7 and D9 are adopted** — see their register entries. Both owe a Part II home and a Part V
 entry, and neither has one yet.
+
+### The artifact lock (D6), and `channel` on flatpak
+
+**`locks/github.toml` exists** — `core/artifact_lock.rs`, an `ArtifactLedger` of
+`{version, asset, url, format, sha256}` keyed by the declaration's name. This is the D6 ruling:
+the hash is generated content, recorded per machine, because one hand-written `@sha256=` cannot
+cover an asset that differs per box.
+
+- **The github backend writes it as it installs** and drops the entry on removal. A lock left
+  behind after a removal would pin the next install to an artifact chosen for a declaration
+  that no longer exists.
+- **The alarm it buys:** the same asset of the same release, with different bytes than last
+  time. No legitimate republish does that. It is an error naming both hashes, and deliberately
+  *not* answered by selecting a different asset — that would turn a supply-chain warning into a
+  silent substitution.
+- **`@sha256=` is now legal only where the line pins exactly one format**, on a backend that
+  selects between artifacts. The refusal says where the generated hash lives instead. On
+  `appimage:`/`web:` nothing changes: those name one file already.
+
+**`channel` reaches flatpak.** It parsed, validated, and was then ignored — the exact "an option
+nobody reads is a line that does nothing" failure VIII.4 exists to prevent. Flatpak takes it as
+the ref's branch (`app//branch`) rather than `--branch=`, because the install is batched and a
+command-wide flag would apply one spec's channel to every package in the batch. `snap` gained
+the test it never had.
+
+**`LINIX_GITHUB_TOKEN`, not `GITHUB_TOKEN`.** II.1 names the first; the code read the second.
+II.1 is the target state, so the code moved. *Worth a second look:* `GITHUB_TOKEN` is the name
+`gh` and most CI already set, so the spec's name may be the wrong one — but one name either
+way, never both.
 
 ## Audit 2026-07-20 — every claim in this document checked against the tree
 

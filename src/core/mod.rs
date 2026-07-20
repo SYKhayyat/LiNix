@@ -1,3 +1,4 @@
+pub mod artifact_lock;
 pub mod cache;
 pub mod error;
 pub mod executor;
@@ -39,6 +40,7 @@ pub use security::verify_checksum;
 pub use hook_lock::{hook_id, HookLedger, Verdict};
 
 pub use extras_lock::{extra_key, ExtrasLedger};
+pub use artifact_lock::{verify_against, ArtifactLedger, ArtifactLock};
 
 pub use state::{GhostMetadata, ManagedPackage, StateRegistry};
 

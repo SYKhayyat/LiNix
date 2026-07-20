@@ -590,6 +590,9 @@ pub fn validate_artifact_options(
     }
 
     // `@asset=all` installs every match, so there is no single artifact for one hash to cover.
+    // Checked before the pinned-format rule below: both objections are true of
+    // `@asset=all,sha256=…`, and this one names the reason the line cannot be fixed by
+    // pinning a format.
     if o.one("asset").is_some_and(|a| a.eq_ignore_ascii_case("all")) && o.contains("sha256") {
         return Err(GrammarError::new(
             origin.clone(),
@@ -598,6 +601,34 @@ pub fn validate_artifact_options(
         .with_hint(
             "`all` installs several files and one hash cannot verify them. Pin one file, or \
              drop the checksum.",
+        ));
+    }
+
+    // One hash cannot cover an asset that varies by machine (D6): a shared module says
+    // `github:x/y` and the Debian box downloads the `.deb` while the Fedora box downloads the
+    // `.rpm`. A hand-written hash is only a claim about a file when the line names one file,
+    // so it is legal only where the format is pinned to exactly one. Everywhere else the hash
+    // is generated content and lives in `locks/<backend>.toml`.
+    if o.contains("sha256")
+        && backend.is_some_and(capability::selects_artifacts)
+        && o.all("formats").len() != 1
+    {
+        let said = o.all("formats").len();
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!(
+                "`@sha256` needs the line to pin exactly one format, and it {}",
+                if said == 0 {
+                    "pins none".to_string()
+                } else {
+                    format!("lists {}", said)
+                }
+            ),
+        )
+        .with_hint(
+            "one release ships several files and one hash cannot verify them all. Add \
+             `@formats=` naming one, or drop the checksum — LiNix records the hash of what it \
+             downloaded in `locks/` either way.",
         ));
     }
 
@@ -1091,6 +1122,33 @@ mod artifact_option_tests {
     fn asset_all_and_a_checksum_cannot_both_be_set() {
         let err = p("github:sharkdp/fd@asset=all,sha256=abc").unwrap_err();
         assert!(format!("{}", err).contains("cannot both be set"));
+    }
+
+    #[test]
+    fn a_checksum_needs_the_line_to_pin_one_format() {
+        // D6: `github:x/y@sha256=…` with no format pinned means the Debian box downloads the
+        // `.deb` and the Fedora box the `.rpm`, and one hash cannot verify two files.
+        let err = p("github:sharkdp/fd@sha256=abc").unwrap_err();
+        assert!(format!("{}", err).contains("exactly one format"), "{}", err);
+        assert!(format!("{}", err).contains("locks/"), "{}", err);
+    }
+
+    #[test]
+    fn a_checksum_beside_one_pinned_format_is_legal() {
+        assert!(p("github:sharkdp/fd@sha256=abc,formats=deb").is_ok());
+    }
+
+    #[test]
+    fn a_checksum_beside_a_list_of_formats_is_not() {
+        let err = p("github:sharkdp/fd@sha256=abc,formats=deb,formats=rpm").unwrap_err();
+        assert!(format!("{}", err).contains("lists 2"), "{}", err);
+    }
+
+    #[test]
+    fn a_checksum_on_a_backend_that_selects_nothing_is_untouched() {
+        // `appimage:` already names one file — the backend name is the format — so there is
+        // nothing to pin, and demanding `@formats=` there would be unanswerable.
+        assert!(p("appimage:https://example.com/tool.AppImage@sha256=abc").is_ok());
     }
 
     #[test]

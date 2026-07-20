@@ -1,6 +1,8 @@
 use crate::core::{
-    security::verify_checksum, BackendCore, CommandExecutor, Error, HealthReport, HealthStatus,
-    Installable, MetadataProvider, Package, PackageSpec, Queryable, RateLimiter, Result,
+    security::{generate_checksum, verify_checksum},
+    verify_against, ArtifactLedger, ArtifactLock, BackendCore, CommandExecutor, Error,
+    HealthReport, HealthStatus, Installable, MetadataProvider, Package, PackageSpec, Queryable,
+    RateLimiter, Result,
 };
 use crate::backends::artifact::{
     self, default_formats, ArtifactOptions, Asset as ArtifactAsset, Entry as ArchiveEntry, Format,
@@ -50,6 +52,9 @@ pub struct GithubBackendCore {
     pub client: reqwest::Client,
     pub install_dir: PathBuf,
     pub state_file: PathBuf,
+    /// `locks/github.toml` — what each declaration resolved to, in the config repo (VIII.2).
+    /// Separate from `state_file`, which is LiNix's own bookkeeping and is not in git.
+    pub locks_file: PathBuf,
     pub rate_limiter: RateLimiter,
     pub github_token: Option<String>,
     pub internal_lock: Mutex<()>,
@@ -59,6 +64,7 @@ impl GithubBackendCore {
     pub fn new(
         executor: CommandExecutor,
         install_dir: PathBuf,
+        locks_file: PathBuf,
         github_token: Option<String>,
     ) -> Self {
         let rate_limiter = if github_token.is_some() {
@@ -75,6 +81,7 @@ impl GithubBackendCore {
             client: reqwest::Client::new(),
             install_dir,
             state_file,
+            locks_file,
             rate_limiter,
             github_token,
             internal_lock: Mutex::new(()),
@@ -199,6 +206,7 @@ fn is_executable(entry: &walkdir::DirEntry) -> bool {
 impl Installable for GithubInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         let mut state = self.core.load_state_internal().await;
+        let mut ledger = ArtifactLedger::load(&self.core.locks_file)?;
 
         for spec in specs {
             let url = format!("https://api.github.com/repos/{}/releases/latest", spec.name);
@@ -308,6 +316,34 @@ impl Installable for GithubInstallable {
                 verify_checksum(&dl_path, expected_sha)?;
             }
 
+            // The same asset of the same release, with different bytes than last time. No
+            // legitimate republish does that, so it is an alarm rather than an update — and
+            // it must not be answered by selecting a different asset, which would turn a
+            // supply-chain warning into a silent substitution (VIII.2).
+            let downloaded_sha = generate_checksum(&dl_path)?;
+            if let Some(locked) = ledger.get(&spec.name) {
+                if locked.version.as_deref() == Some(release.version.as_str()) {
+                    if let Some(objection) =
+                        verify_against(locked, &best_asset.name, Some(&downloaded_sha))
+                    {
+                        return Err(Error::Validation(format!(
+                            "{}: {}",
+                            spec.name, objection
+                        )));
+                    }
+                }
+            }
+            ledger.record(
+                spec.name.clone(),
+                ArtifactLock {
+                    version: Some(release.version.clone()),
+                    asset: best_asset.name.clone(),
+                    url: best_asset.url.clone(),
+                    format: chosen.format.to_string(),
+                    sha256: Some(downloaded_sha),
+                },
+            );
+
             let pkg_dir_name = spec.name.replace('/', "_");
             let pkg_dir = self.core.install_dir.join(&pkg_dir_name);
             if tokio::fs::try_exists(&pkg_dir).await.unwrap_or(false) {
@@ -413,11 +449,13 @@ impl Installable for GithubInstallable {
         }
 
         self.core.save_state_internal(&state).await?;
+        ledger.save(&self.core.locks_file)?;
         Ok(())
     }
 
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
         let mut state = self.core.load_state_internal().await;
+        let mut ledger = ArtifactLedger::load(&self.core.locks_file)?;
         let mut failures = Vec::new();
         for name in names {
             if let Some(pkg) = state.remove(name) {
@@ -431,6 +469,10 @@ impl Installable for GithubInstallable {
                     errors.push(e);
                 }
                 if errors.is_empty() {
+                    // The lock describes what is installed. Leaving the entry behind would
+                    // pin a future install to an artifact chosen for a declaration that is
+                    // gone.
+                    ledger.forget(name);
                     info!("removed {}", name);
                 } else {
                     // The binary is still on disk and still on PATH. Dropping it from state
@@ -441,6 +483,7 @@ impl Installable for GithubInstallable {
             }
         }
         self.core.save_state_internal(&state).await?;
+        ledger.save(&self.core.locks_file)?;
         if !failures.is_empty() {
             return Err(Error::Other(format!(
                 "could not remove {} GitHub package(s), still installed: {}",
@@ -484,9 +527,12 @@ pub fn register(
     let core = Arc::new(GithubBackendCore::new(
         exec.duplicate(),
         cfg.github_dir.clone(),
+        cfg.config_root().join("locks").join("github.toml"),
         // A secret is the environment only, never a file (II.1) — `preferences.toml` is
         // committed to the repo it lives in, so a token key there is a token in git.
-        std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty()),
+        std::env::var("LINIX_GITHUB_TOKEN")
+            .ok()
+            .filter(|t| !t.is_empty()),
     ));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())
