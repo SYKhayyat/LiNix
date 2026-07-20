@@ -2680,6 +2680,36 @@ different kinds of file. **Recorded here so the next audit does not re-file it a
 runner here — the line→config mapping, the file editing and the cron validation are covered,
 the provisioning is not), the network path in any backend, and anything requiring Docker.
 
+## Session summary — 2026-07-20 (third session): Parts VIII and X, most of the way
+
+The session took Parts VIII and X from *proposed* to *mostly built*. Part IX (the `vars`
+language) was deliberately left for a clean next session — only its two blocking owner rulings
+(W2 types, and the position-4 provider model) were recorded, not implemented.
+
+**Owner rulings this session**, each recorded at its register entry: D6 (checksums in `locks/`),
+W2 (full JSON types, no coercion), the `upgrade` gate, D3/D3b/D4 wording, `GITHUB_TOKEN` over
+`LINIX_GITHUB_TOKEN` (II.1 moved), K3 (rebuild snapshots and reverts), `setting:` reset-to-
+default, and X.2 reverted as blocked on a download cache that does not exist.
+
+**Built:** the `priority` options body (VIII.2, D7, D9); `locks/github.toml` recording the
+resolved artifact and its hash (D6); one ownership-safe PATH deploy replacing three hand-rolled
+symlinks (D4 corrected); `rebuild` snapshot-and-revert (K3); `why` explaining the format choice
+(D14); `@version=` pinning and lock-first offline resolution (D1, D12); the `setting:` statement
+with a GNOME adapter (X.4, K7); `linix reset` (X.3 level 3, K5); `clean-cache --all` (X.3 level
+2, K16); and the `doctor` git line closing X.5's one gap (K8).
+
+**Three bugs found and fixed in passing**, none on any list: all three download backends
+destroyed a user's own `~/.local/bin/<name>`; `web:` on Windows recorded the wrong path; and
+`appimage:` cleared its destination with the ownership-unaware removal helper.
+
+**Not done, and why:** X.2 (`clean_cache_on_remove`) — no backend keeps a separable download
+cache, so the preference has nothing to honour; it needs a download-cache layer first. K9 (the
+git-less backup command) — owner left it unproposed. K15 (rebuild's plan saying "reinstall" not
+"remove" in the engine's own progress) — needs the plan printer reworked, which the spec already
+marks as not done; `rebuild`'s upfront plan already frames it. Part IX in full. The GitHub
+network path, flatpak channel validation, and anything needing Docker remain unverified on this
+box.
+
 ## Done 2026-07-20 (third session) — `priority` carries a backend's defaults (VIII.2, D7, D9)
 
 The middle level of VIII.2's precedence existed in the spec and nowhere else: `formats` could
