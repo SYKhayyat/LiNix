@@ -39,7 +39,7 @@ tera = "1.19"
 # Networking & API Integration
 # rustls (not native-tls) so we don't drag in OpenSSL — that made static musl/Alpine
 # builds fail to link and required openssl-dev on every distro. lettre already uses rustls.
-reqwest = { version = "0.11", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "stream", "rustls-tls", "blocking"] }
 governor = "0.6"      # Rate limiting
 nonzero_ext = "0.3"
 
