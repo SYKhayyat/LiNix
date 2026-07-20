@@ -1168,6 +1168,19 @@ async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
                 held_count
             );
         }
+        // `apt upgrade` is a change path, so it passes the `[guard]` gate like every other
+        // one. `deny_packages` is close to meaningless against "upgrade everything";
+        // `require_snapshot` is not, and a gate honoured by some change paths is a gate on
+        // nothing.
+        let resolver = linix::app::sync::resolver::StateResolver::new(
+            &app.config,
+            app.registry.clone(),
+            false,
+        )
+        .await;
+        let desired = resolver.resolve_desired_state().await?;
+        enforce_policy(app, &desired).await?;
+
         if app.config.dry_run {
             println!(
                 "[DRY-RUN] would run each backend's native whole-system upgrade (e.g. `apt upgrade`)."
