@@ -8,8 +8,10 @@ pub struct HostFacts {
     pub os: String,
     pub arch: String,
     pub host: String,
-    /// "unix" or "windows" — NOT the distribution family. `when family == debian` therefore
-    /// never matches, though the spec's examples use exactly that. See `distro_family()`.
+    /// The distribution family: `debian`, `fedora`, `arch`, `suse`, … On a system with no
+    /// distributions this is the OS name, so `family` always answers something.
+    ///
+    /// `os` already answers linux-or-windows, which is why this does not.
     pub family: String,
 }
 
@@ -20,7 +22,8 @@ impl HostFacts {
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             host: crate::config::Config::get_hostname(),
-            family: std::env::consts::FAMILY.to_string(),
+            family: distro_family()
+                .unwrap_or_else(|| std::env::consts::OS.to_string()),
         }
     }
 
@@ -36,11 +39,8 @@ impl HostFacts {
 }
 
 /// The distribution family — `debian`, `fedora`, `arch`, `suse`, … — read from
-/// `/etc/os-release`, which is the only place that answers it.
-///
-/// This is NOT `HostFacts::family`, which is `std::env::consts::FAMILY` and answers
-/// "unix or windows". The two are different questions and the names collide; see the note in
-/// `HostFacts`.
+/// `/etc/os-release`, which is the only place that answers it. `None` where there are no
+/// distributions to tell apart.
 pub fn distro_family() -> Option<String> {
     if !cfg!(target_os = "linux") {
         return None;
@@ -154,7 +154,7 @@ mod conditional_tests {
             os: "linux".into(),
             arch: "x86_64".into(),
             host: "laptop".into(),
-            family: "unix".into(),
+            family: "debian".into(),
         }
     }
 
@@ -182,6 +182,64 @@ mod conditional_tests {
         let f = facts();
         assert!(eval_when("kernel == 6.1", &f).is_err());
         assert!(eval_when("os linux", &f).is_err());
+    }
+
+    #[test]
+    fn family_answers_the_distribution_and_os_answers_the_kernel() {
+        let f = facts();
+        assert!(eval_when("family == debian", &f).unwrap());
+        assert!(eval_when("os == linux", &f).unwrap());
+        assert!(
+            !eval_when("family == linux", &f).unwrap(),
+            "`family` must not still be answering the os question"
+        );
+    }
+
+    #[test]
+    fn a_derivative_resolves_to_the_family_that_decides_the_artifact() {
+        let mint = "NAME=\"Linux Mint\"\nID=linuxmint\nID_LIKE=\"ubuntu debian\"\n";
+        assert_eq!(parse_os_release_family(mint).as_deref(), Some("debian"));
+    }
+
+    #[test]
+    fn ubuntu_is_debian_even_without_an_id_like() {
+        assert_eq!(
+            parse_os_release_family("ID=ubuntu\nVERSION_ID=\"24.04\"\n").as_deref(),
+            Some("debian")
+        );
+    }
+
+    #[test]
+    fn quotes_around_a_value_are_not_part_of_it() {
+        assert_eq!(
+            parse_os_release_family("ID=\"fedora\"\n").as_deref(),
+            Some("fedora")
+        );
+    }
+
+    #[test]
+    fn the_rhel_derivatives_share_one_family() {
+        for id in ["centos", "rocky", "almalinux"] {
+            assert_eq!(
+                parse_os_release_family(&format!("ID={}\n", id)).as_deref(),
+                Some("rhel"),
+                "{} should be rhel",
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_distribution_reports_its_own_name_rather_than_nothing() {
+        assert_eq!(
+            parse_os_release_family("ID=voidlinux\n").as_deref(),
+            Some("voidlinux")
+        );
+    }
+
+    #[test]
+    fn an_os_release_with_no_id_at_all_answers_nothing() {
+        assert_eq!(parse_os_release_family("PRETTY_NAME=\"mystery\"\n"), None);
     }
 }
 

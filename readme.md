@@ -205,6 +205,10 @@ when host in [laptop, tablet] {
 
 Keys: `os`, `arch`, `host`, `hostname`, `family`. Operators: `==`, `!=`, `in [a, b]`.
 
+`os` is the kernel — `linux`, `macos`, `windows`. `family` is the distribution — `debian`,
+`fedora`, `arch`, `suse`, `alpine` — so `when family == debian` also covers Ubuntu and Mint,
+which is usually what you meant when you asked.
+
 ## Profiles
 
 A profile is a named set of modules you can turn on and off live, with no reboot. Several can

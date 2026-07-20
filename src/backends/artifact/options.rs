@@ -57,12 +57,10 @@ impl ArtifactOptions {
     }
 }
 
-/// The built-in default for this machine.
+/// The built-in default for this machine, from the same detected facts `when family` reads.
 pub fn default_formats() -> FormatOrder {
-    FormatOrder::detected_default(
-        std::env::consts::OS,
-        crate::config::parser::distro_family().as_deref(),
-    )
+    let facts = crate::config::parser::HostFacts::current();
+    FormatOrder::detected_default(&facts.os, Some(facts.family.as_str()))
 }
 
 #[cfg(test)]

@@ -308,7 +308,7 @@ mod tests {
             os: "linux".into(),
             arch: "x86_64".into(),
             host: "laptop".into(),
-            family: "unix".into(),
+            family: "debian".into(),
         }
     }
 
@@ -422,7 +422,7 @@ mod active_tests {
             os: "linux".into(),
             arch: "x86_64".into(),
             host: host.into(),
-            family: "unix".into(),
+            family: "debian".into(),
         }
     }
 

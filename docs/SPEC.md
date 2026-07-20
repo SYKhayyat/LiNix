@@ -293,6 +293,11 @@ packages; in a profile they're imports; in `priority` they're backends; in `acti
 profile names. To gate a whole file, wrap it. Keys: `os`, `arch`, `host`, `hostname`, `family`. Operators: `==`, `!=`,
 `in [a, b]`.
 
+**`os` is the kernel** (`linux`, `windows`, `macos`); **`family` is the distribution**
+(`debian`, `fedora`, `arch`, `suse`, `alpine`), read from `/etc/os-release` and falling back to
+the OS name where there are no distributions to tell apart. They are two questions and neither
+stands in for the other: `apt` is a `family == debian` fact, not a `linux` one.
+
 ### Option keys
 
 | key | meaning |
@@ -2370,6 +2375,27 @@ Three suspicions did not survive scrutiny:
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
+## Done 2026-07-20 — `when family` means the distribution (owner ruling)
+
+**`family` was `std::env::consts::FAMILY` — "unix" or "windows" — and every example in this
+document written as `when family == debian` was therefore false.** It had never matched, on any
+machine, since the key existed.
+
+**Ruled (owner, 2026-07-20): both questions stay answerable, and each key answers one.**
+`os` is the kernel (`linux`, `macos`, `windows`); `family` is the distribution (`debian`,
+`fedora`, `rhel`, `suse`, `arch`, `alpine`), read from `/etc/os-release` and falling back to
+the OS name where there are no distributions to tell apart. **The old meaning is deleted, not
+kept beside the new one** — `os` already answered it, so preserving it would have been the
+second spelling of one fact. *(Owner: "NEVER worry about existing users — there are none.")*
+
+`ID_LIKE` is consulted before `ID`, so a derivative resolves to the family that actually decides
+the artifact: Linux Mint is `debian`, Rocky is `rhel`. Seven tests cover the parse, including
+the derivative and the unknown-distribution cases.
+
+**This is what makes VIII.2's default format order real.** It was written as "Debian family →
+`deb`" against a `family` that could never say `debian`, so the table described a branch nothing
+could reach.
+
 ## Done 2026-07-20 — X.6: finding your files
 
 **Built: `linix path`, `linix edit`, `--config-dir`, and LiNix's own settings file.**
@@ -2425,15 +2451,11 @@ had an asset list to be ambiguous about.
 
 **Two things found while building, neither of which was on any list:**
 
-- **`when family == debian` has never worked.** `HostFacts::family` is
-  `std::env::consts::FAMILY`, which is `"unix"` or `"windows"` — it is not the distribution
-  family, and II.2's own examples (and VIII.2's default-order table) are written as though it
-  were. Nothing detected `debian`/`fedora` anywhere in the tree. **A new `distro_family()` in
-  `config/parser.rs` reads `/etc/os-release` and is used for the default format order.**
-  `HostFacts.family` is deliberately **left alone** — changing what `family` means in a `when`
-  block is a user-visible semantic change, so it is reported rather than slipped in. The two
-  now sit side by side with a comment saying they answer different questions. **Owed: a ruling
-  on which one `when family` should mean.**
+- **`when family == debian` has never worked** — `HostFacts::family` was
+  `std::env::consts::FAMILY` ("unix"/"windows"), so II.2's examples and VIII.2's default-order
+  table both described a branch nothing could reach. Reported rather than fixed on the spot,
+  because it changes what a `when` block means; **ruled the same day and now done — see the
+  `when family` section above.**
 - **The Debian default would have broken installs.** With `deb` first on Debian, the backend
   would have downloaded a `.deb` and handed it to `extract_archive`. Installing a system
   package is D5 (ownership: `dpkg -i` puts it in apt's database, where apt can then upgrade it

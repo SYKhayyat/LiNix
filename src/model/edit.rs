@@ -609,7 +609,7 @@ mod tests {
             os: "linux".into(),
             arch: "x86_64".into(),
             host: "laptop".into(),
-            family: "unix".into(),
+            family: "debian".into(),
         }
     }
 
