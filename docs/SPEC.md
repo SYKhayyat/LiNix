@@ -2708,6 +2708,28 @@ the ref's branch (`app//branch`) rather than `--branch=`, because the install is
 command-wide flag would apply one spec's channel to every package in the batch. `snap` gained
 the test it never had.
 
+### D1 and D12 — the release, and not calling the network to learn what you know
+
+**D1 is built as recommended.** Unpinned stays `releases/latest`, which *is* GitHub's own
+newest non-draft, non-prerelease release — filtering the full list here would be a second
+definition of the same thing, free to drift from theirs. `@version=` is tried under both tag
+spellings (`10.2.0` and `v10.2.0`); **both existing is an error naming both**, never a guess.
+No prerelease option, per the register.
+
+**D12 is built as recommended, and the ordering was the bug.** Every install called the API
+before consulting local state, so a pinned, already-installed package burned a request on every
+sync. Local knowledge now answers first: a pin, a lock entry, an install that matches both, and
+no drift in `formats` or `@asset=` means **zero HTTP requests**. `sync` works on a plane.
+
+The last two conditions are load-bearing rather than decorative: without them a pinned line
+could never notice a changed `@formats=`, because no API call would ever happen to notice it
+with — which would quietly reintroduce the bug artifact selection exists to close.
+
+**Not verified:** the network path itself. The tag-URL shape, the 404-means-absent handling and
+the deserialization of a tag-fetched release are compile-checked and reasoned from GitHub's API
+contract, not observed. **A pinned line that is not yet installed costs two API calls**, one per
+spelling, which is inherent to detecting D1's ambiguity.
+
 ### One way onto `PATH`, and it is not `shim:` (D4, corrected)
 
 **There were four mechanisms for putting an executable on `PATH`**, and the discovery that

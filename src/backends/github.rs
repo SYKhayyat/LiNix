@@ -5,8 +5,8 @@ use crate::core::{
     RateLimiter, Result,
 };
 use crate::backends::artifact::{
-    self, default_formats, ArtifactOptions, Asset as ArtifactAsset, Entry as ArchiveEntry, Format,
-    FormatOrder, Platform, Request as SelectRequest,
+    self, default_formats, ArtifactOptions, Asset as ArtifactAsset, AssetPattern,
+    Entry as ArchiveEntry, Format, FormatOrder, Platform, Request as SelectRequest,
 };
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
@@ -120,6 +120,34 @@ impl GithubBackendCore {
             .await
     }
 
+    /// `None` when the release does not exist, which is an answer rather than a failure: a pin
+    /// is tried under both tag spellings and one of the two is expected to be absent.
+    async fn release_at(&self, url: &str) -> Result<Option<GithubRelease>> {
+        let res = self.github_get(url).await?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let res = res.error_for_status().map_err(Error::from)?;
+        res.json().await.map(Some).map_err(Error::from)
+    }
+
+    async fn resolve_release(&self, repo: &str, pin: Option<&str>) -> Result<GithubRelease> {
+        let Some(pin) = pin else {
+            // `releases/latest` is GitHub's own newest non-draft, non-prerelease release.
+            // Filtering the full list here would be a second definition of the same thing,
+            // free to drift from theirs.
+            let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
+            return self.release_at(&url).await?.ok_or_else(|| {
+                Error::PackageNotFound(format!("{}: the repo has no published release", repo))
+            });
+        };
+
+        let [bare, prefixed] = tag_spellings(pin);
+        let found_bare = self.release_at(&tag_url(repo, &bare)).await?;
+        let found_prefixed = self.release_at(&tag_url(repo, &prefixed)).await?;
+        one_release(repo, pin, found_bare, found_prefixed)
+    }
+
     async fn load_state_internal(&self) -> HashMap<String, GithubState> {
         let _guard = self.internal_lock.lock().await;
         if !tokio::fs::try_exists(&self.state_file)
@@ -179,6 +207,85 @@ fn installable_here(format: Format) -> bool {
     format.is_archive() || matches!(format, Format::AppImage | Format::Binary)
 }
 
+fn tag_url(repo: &str, tag: &str) -> String {
+    format!("https://api.github.com/repos/{}/releases/tags/{}", repo, tag)
+}
+
+/// The two tags a pin may name. Roughly half of GitHub tags carry a leading `v`, so `@version=`
+/// is spelled one way and tagged the other often enough that trying only what was written finds
+/// nothing on half the repos.
+fn tag_spellings(pin: &str) -> [String; 2] {
+    let bare = pin.strip_prefix('v').unwrap_or(pin);
+    [bare.to_string(), format!("v{}", bare)]
+}
+
+fn same_tag(pin: &str, tag: &str) -> bool {
+    let [bare, _] = tag_spellings(pin);
+    let [tag_bare, _] = tag_spellings(tag);
+    bare == tag_bare
+}
+
+/// A repo carrying both `10.2.0` and `v10.2.0` has two releases answering to one pin, and
+/// choosing between them here would install a version the user never named.
+fn one_release(
+    repo: &str,
+    pin: &str,
+    bare: Option<GithubRelease>,
+    prefixed: Option<GithubRelease>,
+) -> Result<GithubRelease> {
+    match (bare, prefixed) {
+        (Some(b), Some(p)) => Err(Error::Validation(format!(
+            "{}: @version={} matches two releases, `{}` and `{}`. Name the tag you mean.",
+            repo, pin, b.version, p.version
+        ))),
+        (Some(r), None) | (None, Some(r)) => Ok(r),
+        (None, None) => {
+            let [bare, prefixed] = tag_spellings(pin);
+            Err(Error::PackageNotFound(format!(
+                "{}: no release tagged `{}` or `{}`",
+                repo, bare, prefixed
+            )))
+        }
+    }
+}
+
+/// What local files already know about a declaration, before anything is asked of GitHub.
+struct Known<'a> {
+    pin: Option<&'a str>,
+    locked: Option<&'a ArtifactLock>,
+    installed: Option<&'a GithubState>,
+}
+
+/// Whether the lock and the install already answer the declaration, so no API call is owed.
+///
+/// Only a pinned line can be answered this way: an unpinned one asks for whatever is newest,
+/// and only GitHub knows that. The formats and `@asset=` checks are what keep a pinned line
+/// honest — changing either asks for a different artifact of the same release, and only a
+/// re-selection can find it.
+fn answered_locally(known: &Known, formats: &FormatOrder, asset: Option<&AssetPattern>) -> bool {
+    let (Some(pin), Some(locked), Some(installed)) = (known.pin, known.locked, known.installed)
+    else {
+        return false;
+    };
+    let Some(locked_version) = locked.version.as_deref() else {
+        return false;
+    };
+    if !same_tag(pin, locked_version) || installed.version != locked_version {
+        return false;
+    }
+    if installed.asset.as_deref() != Some(locked.asset.as_str()) {
+        return false;
+    }
+    if Format::parse(&locked.format)
+        .ok()
+        .and_then(|f| formats.rank(f))
+        .is_none()
+    {
+        return false;
+    }
+    asset.is_none_or(|pattern| pattern.matches(&locked.asset))
+}
+
 /// Windows has no executable bit, so the name is the only signal there.
 #[cfg(unix)]
 fn is_executable(entry: &walkdir::DirEntry) -> bool {
@@ -209,10 +316,6 @@ impl Installable for GithubInstallable {
         let mut ledger = ArtifactLedger::load(&self.core.locks_file)?;
 
         for spec in specs {
-            let url = format!("https://api.github.com/repos/{}/releases/latest", spec.name);
-            let res = self.core.github_get(&url).await?;
-            let release: GithubRelease = res.json().await.map_err(Error::from)?;
-
             let wanted = ArtifactOptions::read(&spec.options).map_err(Error::Validation)?;
             let asked = wanted.resolved_formats(&default_formats());
             let formats = asked.retaining(installable_here);
@@ -233,6 +336,29 @@ impl Installable for GithubInstallable {
                     )
                 )));
             }
+
+            let pin = spec
+                .options
+                .get("version")
+                .map(|v| v.trim())
+                .filter(|v| !v.is_empty());
+
+            let known = Known {
+                pin,
+                locked: ledger.get(&spec.name),
+                installed: state.get(&spec.name),
+            };
+            if answered_locally(&known, &formats, wanted.asset.as_ref()) {
+                debug!(
+                    "GitHub: {} is locked at {} and installed — no API call",
+                    spec.name,
+                    pin.unwrap_or_default()
+                );
+                continue;
+            }
+
+            let release = self.core.resolve_release(&spec.name, pin).await?;
+
             let offered: Vec<ArtifactAsset> = release
                 .assets
                 .iter()
@@ -513,4 +639,171 @@ pub fn register(
             .with_metadata_provider(core.clone())
             .build(),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn release(tag: &str) -> GithubRelease {
+        GithubRelease {
+            version: tag.to_string(),
+            assets: vec![],
+        }
+    }
+
+    fn lock(version: &str, asset: &str, format: &str) -> ArtifactLock {
+        ArtifactLock {
+            version: Some(version.to_string()),
+            asset: asset.to_string(),
+            url: format!("https://example.invalid/{}", asset),
+            format: format.to_string(),
+            sha256: Some("abc123".into()),
+        }
+    }
+
+    fn installed(version: &str, asset: &str) -> GithubState {
+        GithubState {
+            repo: "sharkdp/fd".into(),
+            version: version.to_string(),
+            bin_path: Some("/home/u/.local/bin/fd".into()),
+            install_path: "/opt/linix/sharkdp_fd".into(),
+            asset: Some(asset.to_string()),
+            format: Some("tarball".into()),
+        }
+    }
+
+    fn tarballs() -> FormatOrder {
+        FormatOrder::new(vec![Format::Tarball, Format::Binary])
+    }
+
+    #[test]
+    fn a_pinned_version_matches_the_tag_with_or_without_a_v() {
+        assert_eq!(tag_spellings("10.2.0"), tag_spellings("v10.2.0"));
+        assert!(same_tag("10.2.0", "v10.2.0"));
+        assert!(same_tag("v10.2.0", "10.2.0"));
+        assert!(!same_tag("10.2.0", "10.2.1"));
+    }
+
+    #[test]
+    fn a_pin_that_answers_to_both_spellings_is_an_error_naming_both() {
+        let err = one_release(
+            "sharkdp/fd",
+            "10.2.0",
+            Some(release("10.2.0")),
+            Some(release("v10.2.0")),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("10.2.0"), "{}", err);
+        assert!(err.contains("v10.2.0"), "{}", err);
+    }
+
+    #[test]
+    fn either_spelling_alone_resolves_to_that_release() {
+        let from_bare = one_release("sharkdp/fd", "10.2.0", Some(release("10.2.0")), None).unwrap();
+        assert_eq!(from_bare.version, "10.2.0");
+        let from_prefixed =
+            one_release("sharkdp/fd", "10.2.0", None, Some(release("v10.2.0"))).unwrap();
+        assert_eq!(from_prefixed.version, "v10.2.0");
+    }
+
+    #[test]
+    fn a_pin_no_tag_answers_names_both_spellings_it_tried() {
+        let err = one_release("sharkdp/fd", "9.9.9", None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("9.9.9"), "{}", err);
+        assert!(err.contains("v9.9.9"), "{}", err);
+    }
+
+    #[test]
+    fn a_pinned_installed_package_is_answered_without_the_network() {
+        let locked = lock("v10.2.0", "fd.tar.gz", "tarball");
+        let state = installed("v10.2.0", "fd.tar.gz");
+        let known = Known {
+            pin: Some("10.2.0"),
+            locked: Some(&locked),
+            installed: Some(&state),
+        };
+        assert!(answered_locally(&known, &tarballs(), None));
+    }
+
+    #[test]
+    fn an_unpinned_line_always_asks_github() {
+        let locked = lock("v10.2.0", "fd.tar.gz", "tarball");
+        let state = installed("v10.2.0", "fd.tar.gz");
+        let known = Known {
+            pin: None,
+            locked: Some(&locked),
+            installed: Some(&state),
+        };
+        assert!(!answered_locally(&known, &tarballs(), None));
+    }
+
+    #[test]
+    fn a_pin_that_moved_past_the_lock_asks_github() {
+        let locked = lock("v10.2.0", "fd.tar.gz", "tarball");
+        let state = installed("v10.2.0", "fd.tar.gz");
+        let known = Known {
+            pin: Some("10.3.0"),
+            locked: Some(&locked),
+            installed: Some(&state),
+        };
+        assert!(!answered_locally(&known, &tarballs(), None));
+    }
+
+    #[test]
+    fn a_lock_without_an_install_asks_github() {
+        let locked = lock("v10.2.0", "fd.tar.gz", "tarball");
+        let known = Known {
+            pin: Some("10.2.0"),
+            locked: Some(&locked),
+            installed: None,
+        };
+        assert!(!answered_locally(&known, &tarballs(), None));
+    }
+
+    #[test]
+    fn an_install_that_drifted_from_the_lock_asks_github() {
+        let locked = lock("v10.2.0", "fd-gnu.tar.gz", "tarball");
+        let state = installed("v10.2.0", "fd-musl.tar.gz");
+        let known = Known {
+            pin: Some("10.2.0"),
+            locked: Some(&locked),
+            installed: Some(&state),
+        };
+        assert!(!answered_locally(&known, &tarballs(), None));
+    }
+
+    #[test]
+    fn changing_formats_under_a_pin_asks_github_again() {
+        let locked = lock("v10.2.0", "fd.tar.gz", "tarball");
+        let state = installed("v10.2.0", "fd.tar.gz");
+        let known = Known {
+            pin: Some("10.2.0"),
+            locked: Some(&locked),
+            installed: Some(&state),
+        };
+        assert!(!answered_locally(
+            &known,
+            &FormatOrder::new(vec![Format::Deb]),
+            None
+        ));
+    }
+
+    #[test]
+    fn changing_the_asset_pattern_under_a_pin_asks_github_again() {
+        let locked = lock("v10.2.0", "fd-gnu.tar.gz", "tarball");
+        let state = installed("v10.2.0", "fd-gnu.tar.gz");
+        let known = Known {
+            pin: Some("10.2.0"),
+            locked: Some(&locked),
+            installed: Some(&state),
+        };
+        let musl = AssetPattern::parse("*musl*").unwrap();
+        assert!(!answered_locally(&known, &tarballs(), Some(&musl)));
+        let gnu = AssetPattern::parse("*gnu*").unwrap();
+        assert!(answered_locally(&known, &tarballs(), Some(&gnu)));
+    }
 }
