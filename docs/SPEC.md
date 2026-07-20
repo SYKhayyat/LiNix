@@ -5086,6 +5086,31 @@ apt or pacman, the per-package cache file is the backend's business, and asking 
 package's entry is a different capability per backend; K4 decides whether that is worth having
 or whether the preference is honestly documented as download-backends-only.
 
+**NOT BUILT — blocked on a prerequisite that does not exist (2026-07-20, owner ruling).** The
+investigation for this feature found that **no download backend retains a separable cache**, so
+there is nothing for the preference to act on:
+
+- `github` and `web` download the archive into a `tempfile::tempdir()` and extract from it; the
+  tempdir is dropped during install. What remains on disk *is* the extracted install, which
+  ordinary removal already takes. There is no retained archive.
+- `appimage` stores the `.AppImage` in its store dir, but that file is **the installed program
+  itself** — the PATH symlink points straight at it. It is not a cache alongside the install;
+  it is the install. Keeping it after removal would leave the whole program on disk while
+  claiming to have uninstalled it, and re-install re-downloads rather than reusing it, so the
+  "bet you'll want it again" never pays off.
+
+So `clean_cache_on_remove` as specified assumes a download cache **that LiNix does not keep**.
+A version was built (appimage-only, keeping the `.AppImage` by default) and **reverted**,
+because a preference that is inert on every backend is the "option nobody reads" failure this
+document warns against, and the appimage reading turned uninstall into "leave a ~200 MB file
+behind by default". *(Options offered: revert and record the prerequisite; build a real
+download cache first; or keep the appimage-only version.)*
+
+**What X.2 actually needs first:** a download cache — a place github/web/appimage retain the
+downloaded archive separate from the install, reused on reinstall. Only then does dropping it
+on removal mean something. That cache is new work and its own decision; until it exists, the
+preference has nothing to honour and is deliberately absent rather than present-and-dead.
+
 ## X.3 Starting over
 
 Separate from both of the above: **a way to return the machine to as-if-LiNix-had-never-run**,
@@ -5115,6 +5140,21 @@ Level 4 is not proposed. It is `purge-unmanaged` with different marketing.
 it manages 214 packages. They stay installed. `linix adopt` is how you get them back, and it
 will guess."* — and take the typed confirmation `purge-unmanaged` takes (II.10). K5 decides
 whether it may run at all while a config repo exists, or only after the repo is gone.
+
+**BUILT, 2026-07-20.**
+
+- **Level 2 is `clean-cache --all`**, and it clears LiNix's own transient download area
+  (`tmp_dir`) on top of each backend's cache. It **deliberately does not touch the installed
+  artifact directories** (`github_dir`/`web_dir`/`appimage_dir`): those hold software that is
+  on `PATH`, and deleting them is a removal (level 4), not a cache clean. The table's phrase
+  "and artifacts" is narrowed here on purpose, and the reason is written into the command.
+- **Level 3 is `linix reset`** — a separate command, as X.3 requires. It deletes `registry.json`
+  and `snapshots/`, prints the "LiNix will forget it manages N packages" notice, and takes the
+  same typed-the-count confirmation `purge-unmanaged` uses.
+- **K5 ruled: it refuses while a config repo exists unless `--force`**, because forgetting the
+  registry while the declarations remain leaves LiNix believing it manages nothing and the
+  files saying otherwise. The refusal names the repo and says how to proceed. *(This is the
+  recommendation in K5, adopted.)*
 
 ## X.4 Configuring a desktop environment
 
@@ -5195,6 +5235,14 @@ Two requests, one section, because the second is why the first matters.
 says *"This is a git repo"* flatly; the ruling is that **git buys rollback and history, and
 nothing else**. Everything else — parsing, resolution, sync, the guard, locks, schedules —
 reads files off a disk and does not care whether a `.git` exists beside them.
+
+**Largely already true, and closed 2026-07-20.** The audit found the core paths already
+degrade rather than fail: `git_autocommit` no-ops without a repo, and `is_repo()` guards every
+history command. What was missing was K8's standing notice, now built (see K8). No path
+requires the git binary to be installed; a machine with no git is supported. **What is still
+owed is the backup command (K9, deliberately unproposed)** — the requirement that the config
+be recoverable on a git-less machine, with the one constraint that it not be a second archive
+writer.
 
 **Not a dependency means not a dependency**: no git binary required to install LiNix, no git
 call on a path that is not history, and no command that fails because git is absent rather than
@@ -5331,11 +5379,19 @@ most backends is worse than a narrower one that is honest.
 **K5 — May a level-3 reset (X.3) run while a config repo exists?** Forgetting the registry
 while the declarations remain leaves LiNix believing it manages nothing and the files saying
 otherwise. *Recommendation:* refuse unless the repo is empty or `--force`, and say which.
+**BUILT the recommendation, 2026-07-20:** `linix reset` refuses when `modules/`, `profiles/`
+or `active` exists unless `--force`, and the refusal names the repo path and both ways forward.
 
 **K8 — How does a git-less LiNix announce what it cannot do?** Once at `init`, on every
 affected command, or only in `doctor`. *Recommendation:* on the affected commands (they are
 few, and that is where the user is when it matters) plus a `doctor` line. Never on `sync` —
 warning on the command that runs unattended, every time, teaches people to ignore it.
+
+**BUILT the recommendation, 2026-07-20.** The affected commands already said it — `rollback`,
+`diff` and `history` each bail with "this needs git, run `linix git init`" rather than
+crashing, and `git_autocommit` is a silent no-op without a repo. The one gap was the standing
+`doctor` line, now added: `doctor` reports git as *degraded* (not a fault) when it is absent or
+the config is not a repo, naming exactly what is unavailable. Nothing warns on `sync`.
 
 **K9 — Is the backup command `bundle`, an alias, or nothing?** **OPEN — implementation
 deliberately not proposed (owner, 2026-07-19).** The requirement is recorded in X.5; the shape
@@ -5416,3 +5472,6 @@ done.
 no (R19 established exactly this reasoning for `clean-cache`). Level 3 of X.3 is a different
 command and does need confirmation. *Recommendation:* keep the split — the guard protects
 packages, not disk space, and widening it to cover caches dilutes what a guard refusal means.
+**BUILT the split, 2026-07-20:** `clean-cache --all` takes no confirmation and no guard (it
+touches caches and `tmp_dir`, no installed software); `linix reset` takes the typed-count
+confirmation because it destroys the registry. The reason is written into `handle_clean_cache`.

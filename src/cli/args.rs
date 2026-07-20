@@ -141,7 +141,27 @@ pub enum Commands {
 
     /// Delete downloaded package archives and caches. Frees disk; removes no package.
     #[command(name = "clean-cache")]
-    CleanCache,
+    CleanCache {
+        /// Also clear LiNix's own download cache and extracted artifacts (X.3 level 2), not
+        /// just each backend's cache. Still removes no installed package.
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Make LiNix forget it manages anything — the registry and snapshots are deleted, the
+    /// packages stay installed (X.3, level 3).
+    ///
+    /// This is not a cleanup. Losing the registry means LiNix can no longer tell software you
+    /// declared from software that was already there, which is the one distinction the whole
+    /// removal model rests on. After a reset, every managed package looks unmanaged and
+    /// `linix adopt` is how you get them back — by guessing. Refuses while a config repo
+    /// exists unless `--force`, because forgetting the registry while the declarations remain
+    /// leaves LiNix believing it manages nothing and the files saying otherwise.
+    Reset {
+        /// Reset even though a config repo (modules/profiles) still exists.
+        #[arg(long)]
+        force: bool,
+    },
 
     /// Identify all packages installed on the OS but not managed by LiNix
     Unmanaged,

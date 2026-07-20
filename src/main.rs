@@ -142,7 +142,7 @@ async fn main() -> Result<()> {
         } => handle_list(&app, backend.as_deref(), *json, *outdated).await,
         Commands::Info { package } => handle_info(&app, package).await,
         Commands::RemoveOrphans => handle_remove_orphans(&app).await,
-        Commands::CleanCache => handle_clean_cache(&app).await,
+        Commands::CleanCache { all } => handle_clean_cache(&app, *all).await,
         Commands::Heal => handle_heal(&app).await,
         Commands::Doctor { fix, json } => handle_doctor(&app, *fix, *json).await,
         Commands::Adopt => handle_adopt(&app).await,
@@ -157,6 +157,7 @@ async fn main() -> Result<()> {
         Commands::Plan { out } => handle_plan(&app, out).await,
         Commands::Apply { plan, yes } => handle_apply(&app, plan, *yes).await,
         Commands::Update => handle_update(&app).await,
+        Commands::Reset { force } => handle_reset(&app, *force).await,
         Commands::Unmanaged => handle_unmanaged(&app).await,
         Commands::Check => handle_check(&app).await,
         Commands::Absent => handle_absent(&app).await,
@@ -2475,11 +2476,19 @@ Also: {} cannot list what it would remove, so those packages are not in the list
         .interact()?)
 }
 
-/// `clean-cache` — downloaded archives and build caches. Removes no installed package, so it
-/// needs no preview and no guard.
-async fn handle_clean_cache(app: &App) -> Result<()> {
+/// `clean-cache` — downloaded archives and build caches (X.3 levels 1–2). Removes no installed
+/// package, so it needs no preview and no guard: the guard protects packages, not disk space,
+/// and widening it to cover caches would dilute what a refusal means (K16).
+///
+/// `--all` additionally clears LiNix's own transient download area. It does NOT touch the
+/// installed artifact directories — those hold software that is on `PATH`, and deleting them
+/// is a removal (level 4), not a cache clean.
+async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
     if app.config.dry_run {
         println!("[DRY-RUN] Would clear the package cache for every backend that has one.");
+        if all {
+            println!("[DRY-RUN] Would also clear LiNix's own download cache.");
+        }
         return Ok(());
     }
     let mut cleaned = Vec::new();
@@ -2499,6 +2508,22 @@ async fn handle_clean_cache(app: &App) -> Result<()> {
     } else {
         println!("Cleared caches: {}.", cleaned.join(", "));
     }
+
+    if all {
+        let tmp = &app.config.tmp_dir;
+        if tmp.exists() {
+            match tokio::fs::remove_dir_all(tmp).await {
+                Ok(()) => {
+                    tokio::fs::create_dir_all(tmp).await.ok();
+                    println!("Cleared LiNix's download cache ({}).", tmp.display());
+                }
+                Err(e) => warn!("could not clear {}: {}", tmp.display(), e),
+            }
+        } else {
+            println!("LiNix's download cache is already empty.");
+        }
+    }
+
     perform_maintenance(app).await
 }
 
@@ -3147,6 +3172,90 @@ async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) -> Result<()>
     println!("\nRemoved {} package(s); {} failed.", gone, failed);
     if let Some(id) = &snapshot {
         println!("Undo with `linix undo {}`.", id);
+    }
+    Ok(())
+}
+
+/// `linix reset` — LiNix forgets it manages anything (X.3, level 3). The packages stay; the
+/// registry and snapshots go.
+///
+/// This is not a widening of `clean-cache`. Level 3 is a different command precisely because
+/// losing the registry loses the one distinction the removal model rests on — declared vs
+/// already-there — and after it every managed package looks unmanaged.
+async fn handle_reset(app: &App, force: bool) -> Result<()> {
+    let managed = app.state.lock().await.packages.len();
+
+    // K5: forgetting the registry while the declarations remain leaves LiNix believing it
+    // manages nothing and the files saying otherwise. Refuse unless the repo is gone, or the
+    // user says `--force`.
+    let config_root = app.config.config_root();
+    let repo_exists = config_root.join("modules").exists()
+        || config_root.join("profiles").exists()
+        || config_root.join("active").exists();
+    if repo_exists && !force {
+        anyhow::bail!(
+            "A config repo still exists at {}.\n\
+             Resetting the registry while your files declare packages would leave LiNix \
+             believing it manages nothing while the files say otherwise.\n\
+             Delete the repo first, or pass --force if you mean to keep the files and forget \
+             the registry anyway.",
+            config_root.display()
+        );
+    }
+
+    println!(
+        "LiNix will forget it manages {} package(s). They stay installed.\n\
+         `linix adopt` is how you get them back, and it will guess.\n\
+         The registry and all snapshots are deleted. This cannot be undone.\n",
+        managed
+    );
+
+    if !app.config.yes {
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "Refusing to reset without confirmation in a non-interactive shell. Re-run \
+                 with --yes if you are certain."
+            );
+        }
+        let typed: String = dialoguer::Input::new()
+            .with_prompt(format!(
+                "Type the number of packages to forget ({}) to confirm",
+                managed
+            ))
+            .allow_empty(true)
+            .interact_text()?;
+        if typed.trim() != managed.to_string() {
+            println!("Aborted. Nothing was forgotten.");
+            return Ok(());
+        }
+    }
+
+    let layout = app.config.layout();
+    let registry = layout.registry_file();
+    let snapshots = layout.snapshots_dir();
+
+    let mut removed = Vec::new();
+    if registry.exists() {
+        tokio::fs::remove_file(&registry)
+            .await
+            .with_context(|| format!("could not delete {}", registry.display()))?;
+        removed.push(registry.display().to_string());
+    }
+    if snapshots.exists() {
+        tokio::fs::remove_dir_all(&snapshots)
+            .await
+            .with_context(|| format!("could not delete {}", snapshots.display()))?;
+        removed.push(snapshots.display().to_string());
+    }
+
+    if removed.is_empty() {
+        println!("Nothing to reset: no registry or snapshots were on disk.");
+    } else {
+        println!("Reset. Deleted:");
+        for r in &removed {
+            println!("  {}", r);
+        }
     }
     Ok(())
 }
@@ -4368,6 +4477,36 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
                     )),
                 ));
             }
+        }
+    }
+
+    // Git is not a dependency (X.5): its absence is reported, not treated as a fault. What is
+    // unavailable without it is exactly the history-and-rollback set, and `doctor` is where
+    // K8 says the standing notice lives — not on `sync`, which runs unattended.
+    {
+        let git = app.git_manager();
+        if !linix::core::GitManager::git_available() {
+            system.push((
+                "git".into(),
+                HealthStatus::Degraded,
+                Some(
+                    "not installed. LiNix runs without it; generations, `rollback` and `diff` \
+                     are unavailable until it is present."
+                        .into(),
+                ),
+            ));
+        } else if !git.is_repo() {
+            system.push((
+                "git".into(),
+                HealthStatus::Degraded,
+                Some(
+                    "this config is not a git repo, so there is no history to roll back to. \
+                     `linix git init` here turns it on."
+                        .into(),
+                ),
+            ));
+        } else {
+            system.push(("git".into(), HealthStatus::Ok, None));
         }
     }
 
