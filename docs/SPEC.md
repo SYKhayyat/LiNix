@@ -2548,8 +2548,25 @@ Values that are exactly one reference (`alias = $tags`) inherit that variable's 
 value containing `$` is string interpolation and yields a string. `expand` (the `$var` walk into
 `link:` targets and `@version=`) stringifies scalars and refuses a list by name.
 
+**Built this session — Stage 2, provider selection + external provider.** A provider produces
+`name → value`; the line file is one, an external program another. `[vars] source` in
+`preferences.toml` (`config::VarsSettings`) names the active provider when several coexist
+(`vars`, `vars.py`, `vars.linix`); two present and none chosen is a loud error, not a guess —
+this answers the undefined gap in IX.2/IX.6 and settles W6 toward "several present, one active".
+The external provider (`model/vars_provider.rs`) runs the program — interpreter inferred by
+extension per IX.6's "run by LiNix" — hands it the facts as `LINIX_OS`/`ARCH`/`HOST`/`FAMILY`,
+and parses a JSON object or `name=value` lines into typed vars; a non-zero exit carries the
+program's stderr.
+
+**Built this session — Stage 3, the embedded provider.** `vars.linix` (`model/vars_embedded.rs`)
+is a Rhai script LiNix runs in-process, under a neutral extension so the engine can be swapped
+without renaming files. **It is pure by construction** — a stock Rhai `Engine` has no file,
+shell, clock or network access — so the script's only inputs today are `OS`/`ARCH`/`HOST`/`FAMILY`
+and it must end in a map of the four types. The host powers IX.6 permits are a separate standard
+library, **owner decision pending (Stage 4), not built.**
+
 **Green at this commit:** `cargo build --all-targets` clean, `cargo clippy --all-targets` silent,
-`cargo test` all suites passing (734 lib + integration; run the command, do not copy the number).
+`cargo test` all suites passing (run the command, do not copy the number).
 
 **Owed, and tracked:** W2's Part II home and Part V entry are not written yet — deferred until the
 whole `vars` language lands (stages 2–6), so Part II does not describe a half-built feature.
