@@ -29,6 +29,13 @@ pub struct SavedPlan {
     pub desired_hash: String,
     pub installs: Vec<PackageSpec>,
     pub removals: Vec<PlanRemoval>,
+    /// The variables this plan resolved against (Part IX, IX.6). `apply` resolves the model
+    /// against these rather than running the provider again: a provider may read the clock or
+    /// shell out, so a fresh resolution at apply time could disagree with the preview and make
+    /// every plan with a moving variable spuriously fail its drift check. Auxiliary to the hash
+    /// — the executed operations are `installs`/`removals`, which the hash protects.
+    #[serde(default)]
+    pub vars: std::collections::BTreeMap<String, crate::model::vars::Value>,
 }
 
 impl SavedPlan {
@@ -52,6 +59,7 @@ impl SavedPlan {
             desired_hash,
             installs,
             removals,
+            vars: std::collections::BTreeMap::new(),
         }
     }
 
@@ -123,6 +131,29 @@ mod tests {
         let a = vec![spec("apt", "htop", Some(("__source", "local.txt")))];
         let b = vec![spec("apt", "htop", Some(("__source", "module:dev")))];
         assert_eq!(hash_plan(&a, &[]), hash_plan(&b, &[]));
+    }
+
+    #[test]
+    fn a_plan_carries_its_variables_across_a_round_trip() {
+        use crate::model::vars::Value;
+        let mut plan = SavedPlan::from_changes(
+            &crate::app::sync::planner::SyncChanges::default(),
+            Some(1),
+        );
+        plan.vars.insert("role".into(), Value::Str("travel".into()));
+        plan.vars.insert("cores".into(), Value::Num(8.0));
+        let json = serde_json::to_string(&plan).unwrap();
+        let back: SavedPlan = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.vars["role"], Value::Str("travel".into()));
+        assert_eq!(back.vars["cores"], Value::Num(8.0));
+    }
+
+    #[test]
+    fn a_plan_with_no_vars_field_deserializes_to_empty() {
+        // The field is `serde(default)`, so a plan written before it existed still reads.
+        let raw = r#"{"schema":1,"created_at":null,"desired_hash":"x","installs":[],"removals":[]}"#;
+        let plan: SavedPlan = serde_json::from_str(raw).unwrap();
+        assert!(plan.vars.is_empty());
     }
 
     #[test]

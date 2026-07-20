@@ -2598,25 +2598,40 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
 /// Write the currently-installed version of every managed package to locks/versions.json so a
 /// later `sync --locked` reproduces those exact versions (where the backend supports it).
 /// Compute the sync changes for the current desired state (shared by `plan` and `apply`).
-async fn compute_full_changes(app: &App) -> Result<linix::app::sync::SyncChanges> {
+/// Resolve, enforce and plan — returning both the changes and the variables the resolution used.
+///
+/// `frozen_vars` is `Some` only when applying a saved plan: the model resolves against the plan's
+/// own variables instead of running the provider again, so a clock/shell/network variable does
+/// not read differently at apply time than it did when the plan was captured (IX.6).
+async fn compute_full_changes(
+    app: &App,
+    frozen_vars: Option<linix::model::vars::Vars>,
+) -> Result<(linix::app::sync::SyncChanges, linix::model::vars::Vars)> {
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
-    let desired = resolver.resolve_desired_state().await?;
-    enforce_policy(app, &desired).await?;
+    let resolver = match frozen_vars {
+        Some(v) => resolver.with_vars(v),
+        None => resolver,
+    };
+    let state = resolver.resolve_model().await?;
+    enforce_policy(app, &state.packages).await?;
     let state_guard = app.state.lock().await;
     let planner = linix::app::sync::planner::ChangePlanner::new(
         app.registry.clone(),
         &state_guard,
         &app.config,
     );
-    Ok(planner.plan(&desired, None).await?)
+    let changes = planner.plan(&state.packages, None).await?;
+    Ok((changes, state.vars))
 }
 
 async fn handle_plan(app: &App, out: &str) -> Result<()> {
-    let changes = compute_full_changes(app).await?;
+    let (changes, vars) = compute_full_changes(app, None).await?;
     let created_at = chrono::Utc::now().timestamp();
-    let plan = linix::app::sync::SavedPlan::from_changes(&changes, Some(created_at));
+    let mut plan = linix::app::sync::SavedPlan::from_changes(&changes, Some(created_at));
+    // Freeze the resolved variables so `apply` reproduces this exact resolution (IX.6).
+    plan.vars = vars;
     tokio::fs::write(out, serde_json::to_string_pretty(&plan)?).await?;
     if plan.is_empty() {
         println!(
@@ -2728,7 +2743,9 @@ async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
     // so an `Err` here is a refusal and must not be swallowed. Applying a captured plan to a
     // machine whose manifests no longer resolve is the case this stops.
     {
-        let now_changes = compute_full_changes(app).await?;
+        // Resolve against the plan's frozen variables, so a clock/shell/network variable does
+        // not read differently now and trip a drift warning for a change nobody made (IX.6).
+        let (now_changes, _) = compute_full_changes(app, Some(plan.vars.clone())).await?;
         let current = linix::app::sync::SavedPlan::from_changes(&now_changes, None);
         if current.desired_hash != plan.desired_hash {
             if yes {
@@ -3967,12 +3984,13 @@ async fn handle_bundle(app: &App, out: &str, artifacts: bool, archive: bool) -> 
 
     // Freeze a plan so the target can review/apply it offline. Computed up front so it can be
     // written into the bundle (and captured inside the archive) by create_bundle.
-    let plan_json = match compute_full_changes(app).await {
-        Ok(changes) => {
-            let plan = linix::app::sync::SavedPlan::from_changes(
+    let plan_json = match compute_full_changes(app, None).await {
+        Ok((changes, vars)) => {
+            let mut plan = linix::app::sync::SavedPlan::from_changes(
                 &changes,
                 Some(chrono::Utc::now().timestamp()),
             );
+            plan.vars = vars;
             Some(serde_json::to_string_pretty(&plan)?)
         }
         Err(_) => None,

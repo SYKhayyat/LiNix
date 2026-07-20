@@ -22,6 +22,11 @@ pub struct StateResolver<'a> {
     locked: bool,
     /// "backend:package" -> version.
     locks: HashMap<String, String>,
+    /// Pre-resolved variables to use instead of running the provider (Part IX, IX.6). Set when
+    /// applying a saved plan: re-running a clock/shell/network provider at apply time could
+    /// disagree with what the plan froze, so `apply` resolves the model against the plan's own
+    /// variables. `None` resolves them fresh, which is what every non-plan path does.
+    vars_override: Option<crate::model::vars::Vars>,
 }
 
 impl<'a> StateResolver<'a> {
@@ -58,7 +63,15 @@ impl<'a> StateResolver<'a> {
             layout: config.layout(),
             locked,
             locks,
+            vars_override: None,
         }
+    }
+
+    /// Resolve the model against these already-resolved variables instead of running the
+    /// provider (used by `apply` to reuse a saved plan's frozen variables).
+    pub fn with_vars(mut self, vars: crate::model::vars::Vars) -> Self {
+        self.vars_override = Some(vars);
+        self
     }
 
     /// The `priority` file: which package managers this setup uses, and in what order.
@@ -109,10 +122,13 @@ impl<'a> StateResolver<'a> {
         // that mentions one is evaluated. Resolving them a second time later could produce a
         // different answer — a provider may read the clock — and a `plan` that disagrees with
         // the `sync` executing it is not a plan.
-        let vars = crate::model::Resolver::new(&self.layout, &known, &priority)
-            .with_facts(facts.clone())
-            .with_vars_source(self.config.vars.source.clone())
-            .load_vars()?;
+        let vars = match &self.vars_override {
+            Some(frozen) => frozen.clone(),
+            None => crate::model::Resolver::new(&self.layout, &known, &priority)
+                .with_facts(facts.clone())
+                .with_vars_source(self.config.vars.source.clone())
+                .load_vars()?,
+        };
         if !vars.is_empty() {
             debug!("{} variable(s) resolved", vars.len());
         }

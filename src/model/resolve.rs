@@ -29,6 +29,10 @@ pub struct DesiredState {
     /// Dated lines whose date has passed. They linger — **LiNix must not rewrite your
     /// files** — so `sync` mentions them, naming the exact file and line (II.16).
     pub lapsed: Vec<(String, Origin)>,
+    /// The variables this state resolved against (Part IX). Carried so a saved plan can freeze
+    /// them: a provider may read the clock or shell out, so re-resolving at apply time could
+    /// disagree with what the plan previewed — the plan uses these, not a fresh resolution.
+    pub vars: crate::model::vars::Vars,
 }
 
 impl DesiredState {
@@ -641,6 +645,7 @@ impl<'a> Resolver<'a> {
             out.packages.entry(e.backend).or_default().push(spec);
         }
 
+        out.vars = self.facts.vars.clone();
         Ok(out)
     }
 
@@ -1151,6 +1156,24 @@ when $role == travel {
             .resolve()
             .unwrap();
         assert_eq!(names(&d, "apt"), vec!["curl", "mosh"]);
+    }
+
+    #[test]
+    fn the_resolved_state_carries_its_variables_for_the_plan_to_freeze() {
+        // IX.6: a saved plan freezes these so `apply` reuses them instead of re-running a
+        // provider that might read the clock and disagree with what the plan previewed.
+        let f = fx("Work
+", &[("Work", "apt:curl
+")], &[]);
+        with_vars(&f, "role = travel
+");
+        let vars = load_vars(&f).unwrap();
+        let d = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts().with_vars(vars))
+            .at(parse_absolute("2026-07-16T12:00").unwrap())
+            .resolve()
+            .unwrap();
+        assert_eq!(d.vars["role"], crate::model::vars::Value::Str("travel".into()));
     }
 
     #[test]
