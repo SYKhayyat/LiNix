@@ -188,6 +188,7 @@ modules/            your lists              lowercase names       *.txt
 profiles/           your choices           Capitalized names
 active              which profiles are on
 priority            which backends, in order
+vars                your own names for conditions
 schedules           when LiNix runs itself
 locks/              what everything resolved to    one file per backend
 preferences.toml    refusals and behaviour
@@ -2528,6 +2529,59 @@ one of them undocumented and one of them fictional.
 documentation of a version that is gone, and every one of them is silently ignored on load.
 `Config` also still carries `aliases`, `command_aliases` and `fleet_hosts`, which II.1 does not
 mention. Reconciling the struct with Part II is its own pass and is not done.
+
+## Done 2026-07-20 — `vars`, first half (Part IX; owner ruling: position 3)
+
+**RULED (owner, 2026-07-20): position 3 — derived values — "if it is not so hard".** It is not:
+interpolation with dependency ordering and cycle detection is a small, wholly pure engine. What
+was *not* built is an expression language — there are no operators, no functions, no
+conditionals in values. A value may name another variable and nothing else, which is the honest
+reading of 3 that does not become Nix.
+
+**Also ruled: all three hook dialects stay** — Lua, Rhai, and shebang-to-anything. So the
+engine choice that would have forced deleting `mlua` or `rhai` does not arise, and `tera` (a
+template engine, a different job) is untouched.
+
+**Built: the `vars` file, `$name` in `when`, and derived values.** `src/model/vars.rs` is the
+resolution engine — 19 unit tests, no I/O; `Resolver::load_vars` reads the file; `HostFacts`
+carries the resolved set and `value_for` answers `$name` from it.
+
+- **IX.3 is enforced as a property of the file, not of the machine.** A name defined only
+  inside a `when` block is an error *even on a host where that block does not match* — checked
+  against every definition the document contains via a new ungated walk. Getting this wrong
+  would make one repo valid on the laptop and broken on the desktop, which is the exact failure
+  IX.3 exists to delete. **A test asserts the miss case**, because the hit case passes either way.
+- **The sigil holds (IX.4).** `$os` and `os` are different questions; a test asserts a variable
+  named `os` cannot shadow the detected fact.
+- **Two matching `when` blocks that disagree name both lines** (II.7.5); two that agree are
+  redundant, not wrong.
+- **Cycles name the whole loop** (`a -> b -> a`), per V.45.
+- **A variable name cannot start with a digit**, so `awk '{print $1}'` in a value is the shell
+  text it looks like rather than an error about an undefined `1`. Found by writing the test
+  that asserted the opposite and disbelieving it.
+- **`$$` is a literal `$`** — without it there is no way to write a dollar sign at all.
+- **An unknown reference is an error, never left as literal text.** A silently unexpanded `$rle`
+  becomes a path with a dollar in it and fails later, somewhere else, with no mention of the typo.
+- **File context is enforced both ways:** a `NAME = VALUE` outside `vars` is refused (it would
+  make `$role` depend on which profile you activated), and a package line inside `vars` is too.
+
+**Resolved once per invocation (IX.6):** `resolve_model` loads vars before any `when` is
+evaluated and hands them to `HostFacts`. Nothing re-resolves them mid-run.
+
+**Not built, and each is load-bearing:**
+- **The script and executable providers.** Only the file provider exists. The whole IX.6 ruling
+  — a value may come from a program that reads the clock or shells out — is *unimplemented*, so
+  in practice today's variables cannot move. The contract is shaped for it (`resolve` takes
+  definitions, not a file) but there is no second provider.
+- **Position 3 stops at `vars` itself.** `${role}-heavy` works *inside* the `vars` file.
+  `vars::expand` exists and is tested for use in a `link:` target or `@version=`, but **nothing
+  calls it yet** — so interpolation in declaration values, which is the position-2 half the
+  owner also asked for, is written and unwired.
+- **W1–W14 remain formally void.** This lands W3 (no bare `$flag`), W7 and W10 by construction;
+  the rest are untouched and must still be re-asked.
+- **`plan` does not show variables as a cause of change (W13).** A variable that moves can
+  change what is declared with no edit to any file, and the plan does not say so.
+- **`init` does not scaffold a `vars` file**, and II.1's file table does not list it.
 
 ## Done 2026-07-20 — `rebuild` (X.1, K1, K2, K13)
 

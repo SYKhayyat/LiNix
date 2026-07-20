@@ -112,6 +112,11 @@ impl Layout {
         self.config_root.join("schedules")
     }
 
+    /// Your own names for conditions (IX.2). Absent means no variables, not an error.
+    pub fn vars_file(&self) -> PathBuf {
+        self.config_root.join("vars")
+    }
+
     /// What everything resolved to. Generated, in git, yours. One file per backend.
     pub fn locks_dir(&self) -> PathBuf {
         self.config_root.join("locks")

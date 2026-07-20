@@ -54,6 +54,14 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
   no longer existed. `linix config path` and `config edit` are gone too; `linix path` and
   `linix edit` answer those questions, and `linix edit preferences.toml` re-checks that the
   file still parses when you save it.
+- **You can name your own conditions.** A `vars` file holds `role = desktop` lines with `when`
+  blocks that override them, and `when $role == travel` gates packages anywhere `when` is
+  legal. The `$` keeps your names and LiNix's detected facts in separate namespaces, so new
+  facts can be added forever without changing what an existing file means. A variable needs a
+  default at the top level — a `when` block may override one but never introduce it, so every
+  variable is defined on every machine and a typo is always an error rather than a block that
+  quietly never fires. Values may be built from other variables (`tier = ${role}-heavy`),
+  resolved in dependency order with loops reported by name.
 - **`linix rebuild` repairs what `sync` cannot see.** `sync` applies the difference between
   your files and the machine, so a package that is declared and installed but broken produces
   no difference and `sync` reports success over it forever. `rebuild` asserts the declared set

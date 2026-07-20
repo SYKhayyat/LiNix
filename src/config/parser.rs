@@ -13,6 +13,9 @@ pub struct HostFacts {
     ///
     /// `os` already answers linux-or-windows, which is why this does not.
     pub family: String,
+    /// The resolved `vars` (Part IX), reached as `$name`. Empty until a caller supplies them,
+    /// so a `when $role == …` in a repo with no `vars` file is an unknown key and says so.
+    pub vars: crate::model::vars::Vars,
 }
 
 impl HostFacts {
@@ -24,10 +27,17 @@ impl HostFacts {
             host: crate::config::Config::get_hostname(),
             family: distro_family()
                 .unwrap_or_else(|| std::env::consts::OS.to_string()),
+            vars: Default::default(),
         }
     }
 
     fn value_for(&self, key: &str) -> Option<&str> {
+        // IX.4: `$name` is a variable you decided, `name` is a fact the machine reported. The
+        // sigil is what lets LiNix add a detected fact without changing the meaning of a file
+        // where someone happened to use that word as a variable.
+        if let Some(var) = key.strip_prefix('$') {
+            return self.vars.get(var).map(String::as_str);
+        }
         match key {
             "os" => Some(&self.os),
             "arch" => Some(&self.arch),
@@ -35,6 +45,16 @@ impl HostFacts {
             "family" => Some(&self.family),
             _ => None,
         }
+    }
+
+    /// The resolved variables this run evaluates `$name` against.
+    ///
+    /// Resolved once per invocation and carried, never recomputed: a provider may read the
+    /// clock or shell out, so a second resolution can disagree with the first, and a `plan`
+    /// that disagrees with the `sync` executing it is not a plan (IX.6).
+    pub fn with_vars(mut self, vars: crate::model::vars::Vars) -> Self {
+        self.vars = vars;
+        self
     }
 }
 
@@ -155,7 +175,41 @@ mod conditional_tests {
             arch: "x86_64".into(),
             host: "laptop".into(),
             family: "debian".into(),
+            vars: Default::default(),
         }
+    }
+
+    fn with_role(role: &str) -> HostFacts {
+        let mut vars = crate::model::vars::Vars::new();
+        vars.insert("role".into(), role.into());
+        facts().with_vars(vars)
+    }
+
+    #[test]
+    fn a_variable_is_reached_with_the_sigil() {
+        let f = with_role("travel");
+        assert!(eval_when("$role == travel", &f).unwrap());
+        assert!(!eval_when("$role == desktop", &f).unwrap());
+        assert!(eval_when("$role in [travel, workstation]", &f).unwrap());
+    }
+
+    #[test]
+    fn a_variable_can_never_shadow_a_detected_fact() {
+        // IX.4: the sigil exists so LiNix can add a detected fact forever without changing the
+        // meaning of a file where someone used that word as a variable name.
+        let mut vars = crate::model::vars::Vars::new();
+        vars.insert("os".into(), "definitely-not-linux".into());
+        let f = facts().with_vars(vars);
+        assert!(eval_when("os == linux", &f).unwrap(), "`os` must stay the detected fact");
+        assert!(eval_when("$os == definitely-not-linux", &f).unwrap());
+    }
+
+    #[test]
+    fn an_undefined_variable_is_an_error_not_a_silent_false() {
+        // A typo'd `$rle` that read as false would be a block that never fires and never
+        // complains, which is the failure IX.3 exists to delete.
+        let f = with_role("travel");
+        assert!(eval_when("$rle == travel", &f).is_err());
     }
 
     #[test]

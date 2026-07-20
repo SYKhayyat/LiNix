@@ -82,6 +82,7 @@ modules/       your lists of packages       lowercase names, *.txt
 profiles/      named sets you turn on and off       Capitalized names
 active         which profiles are on right now
 priority       which package managers this machine uses, in order
+vars           your own names for conditions, so `when` can ask about them
 schedules      when LiNix runs itself
 locks/         what everything resolved to, one file per backend
 preferences.toml   refusals and behaviour (written by `linix config init`)
@@ -241,6 +242,55 @@ which refuses when a removal:
 `--allow-mass-removal`. **`--yes` is deliberately not an override**, because every script and CI
 job passes `-y`, and an unattended run is exactly the one that cannot notice a system being
 taken apart. Protection is a refusal, not a confirmation: nothing overrides it.
+
+## Your own conditions
+
+`when` asks about facts LiNix detects — `os`, `arch`, `family`, `host`. The `vars` file lets
+you name your own, and `$` is how you tell the two apart:
+
+```
+# vars
+role = desktop
+gpu  = none
+
+when host in [thinkpad, x220] {
+  role = travel
+}
+
+when hostname == render-01 {
+  role = workstation
+  gpu  = nvidia
+}
+```
+
+```
+# modules/tools.txt
+when $role == travel {
+  apt:mosh
+  apt:tlp
+}
+```
+
+**Every variable needs a default at the top of the file.** A `when` block may override one but
+never introduce it — otherwise `role` set only inside `when host == thinkpad` is undefined
+everywhere else, and `when $role == travel` on your desktop has no answer. Requiring the
+default means `$role` is defined on every machine and a typo is always an error, wherever you
+are sitting. LiNix enforces this by reading the whole file, not just the blocks that match here.
+
+A value can be built from another variable, with `${}` where the name would otherwise run into
+the next character:
+
+```
+role = render
+tier = ${role}-heavy        # render-heavy
+```
+
+Order in the file does not matter; LiNix resolves them in dependency order and tells you if two
+variables define each other in a loop. Write `$$` for a literal dollar sign. A name never starts
+with a digit, so `$1` in a value is left alone.
+
+Two `when` blocks that both match and set the same variable to different values is an error
+naming both lines — the same rule as two contradicting package declarations.
 
 ## History and rollback
 

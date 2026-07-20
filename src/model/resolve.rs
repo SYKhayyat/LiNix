@@ -154,6 +154,70 @@ impl<'a> Resolver<'a> {
         self.collect(statements)
     }
 
+    /// Read and resolve the `vars` file (IX.2), so `$name` has a value before any `when` that
+    /// mentions one is evaluated.
+    ///
+    /// Runs against facts carrying no variables, which is what makes a `when` *inside* `vars`
+    /// a detected-fact condition only. Letting one variable's `when` test another would make
+    /// the file's meaning depend on the order its blocks were read, and there is no order that
+    /// is obviously right.
+    pub fn load_vars(&self) -> Result<crate::model::vars::Vars> {
+        let file = self.layout.vars_file();
+        let Ok(body) = std::fs::read_to_string(&file) else {
+            return Ok(Default::default());
+        };
+        let doc = crate::config::grammar::parse_document(&file, &body, self.backends)?;
+
+        // IX.3 is a property of the FILE, not of this machine: a name defined only inside a
+        // `when` block is an error everywhere, including on the box where that block happens
+        // to match. Checked against every definition the file contains, gated or not, so the
+        // answer does not depend on which machine runs it.
+        let every = doc.every_statement();
+        let top_level: std::collections::HashSet<&str> = every
+            .iter()
+            .filter(|(_, _, conditional)| !conditional)
+            .filter_map(|(s, _, _)| match s {
+                Statement::Var { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        for (stmt, origin, conditional) in &every {
+            if let (Statement::Var { name, .. }, true) = (stmt, *conditional) {
+                if !top_level.contains(name.as_str()) {
+                    return Err(GrammarError::new(
+                        (*origin).clone(),
+                        format!("`{}` is only defined inside a `when` block", name),
+                    )
+                    .with_hint(
+                        "give it a default at the top level. Every variable is defined on \
+                         every machine, so a typo is always an error and never a block that \
+                         quietly never fires.",
+                    ));
+                }
+            }
+        }
+
+        let mut defs = Vec::new();
+        for (stmt, origin, conditional) in doc.statements_with_gating(&self.facts)? {
+            match stmt {
+                Statement::Var { name, value } => defs.push(crate::model::vars::Definition {
+                    name,
+                    value,
+                    origin,
+                    conditional,
+                }),
+                other => {
+                    return Err(GrammarError::new(
+                        origin,
+                        format!("the `vars` file takes `NAME = VALUE` lines, not `{}`", set_key(&other)),
+                    )
+                    .with_hint("declarations live in `modules/`; this file only names values."));
+                }
+            }
+        }
+        crate::model::vars::resolve(&defs)
+    }
+
     /// II.7 steps 1-3: `active` -> profiles -> the modules they reach, parsed and gated.
     ///
     /// Split from `collect` because resolving a bare name needs the network and this does
@@ -415,6 +479,19 @@ impl<'a> Resolver<'a> {
                          for the whole machine, so it does not live in a module or profile.",
                     ));
                 }
+                // IX.2: a variable belongs in the `vars` file, and only there. A `NAME =
+                // VALUE` in a module would make what `$role` means depend on which profile
+                // you activated, which is the opposite of a variable that is always defined.
+                Statement::Var { ref name, .. } if origin.file != self.layout.vars_file() => {
+                    return Err(GrammarError::new(
+                        origin.clone(),
+                        format!("`{}` is a variable, and is not in the `vars` file", name),
+                    )
+                    .with_hint(
+                        "move it to the `vars` file in your config root. A variable is defined \
+                         on every machine, so it cannot live behind a profile.",
+                    ));
+                }
                 other => {
                     out.extras.push((other, origin));
                     continue;
@@ -547,6 +624,7 @@ fn set_key(stmt: &Statement) -> String {
         Statement::Exclude(r) => format!("exclude {}", r.name()),
         Statement::Intersect(r) => format!("intersect {}", r.name()),
         Statement::Subtract(p) => format!("-{}", p),
+        Statement::Var { name, .. } => format!("{} =", name),
         Statement::Expr(e) => e.clone(),
     }
 }
@@ -635,6 +713,7 @@ mod tests {
             arch: "x86_64".into(),
             host: "laptop".into(),
             family: "debian".into(),
+            vars: Default::default(),
         }
     }
 
@@ -888,6 +967,111 @@ mod tests {
         assert_eq!(name, "nightly");
         // A schedule is never a dependent (II.7 phase 4, not phase 3).
         assert!(!d.has_dependents());
+    }
+
+    // ---- Part IX: vars ----
+
+    fn load_vars(f: &Fx) -> Result<crate::model::vars::Vars> {
+        Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts())
+            .load_vars()
+    }
+
+    fn with_vars(f: &Fx, body: &str) {
+        std::fs::write(f.layout.vars_file(), body).unwrap();
+    }
+
+    #[test]
+    fn no_vars_file_is_no_variables_and_not_an_error() {
+        let f = fx("Work
+", &[("Work", "apt:curl
+")], &[]);
+        assert!(load_vars(&f).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_matching_block_overrides_the_default() {
+        let f = fx("Work
+", &[("Work", "apt:curl
+")], &[]);
+        with_vars(&f, "role = desktop
+when os == linux {
+  role = travel
+}
+");
+        assert_eq!(load_vars(&f).unwrap()["role"], "travel");
+    }
+
+    #[test]
+    fn a_block_that_does_not_match_leaves_the_default() {
+        let f = fx("Work
+", &[("Work", "apt:curl
+")], &[]);
+        with_vars(&f, "role = desktop
+when os == plan9 {
+  role = travel
+}
+");
+        assert_eq!(load_vars(&f).unwrap()["role"], "desktop");
+    }
+
+    #[test]
+    fn a_variable_defined_only_in_a_block_is_an_error_even_where_the_block_misses() {
+        // IX.3 is a property of the FILE. If this were checked only against the blocks that
+        // matched, the same repo would be valid on the laptop and broken on the desktop —
+        // and the error would appear on whichever machine happened not to define it.
+        let f = fx("Work
+", &[("Work", "apt:curl
+")], &[]);
+        with_vars(&f, "when os == plan9 {
+  role = travel
+}
+");
+        let err = load_vars(&f).unwrap_err();
+        assert!(err.what.contains("only defined inside a `when` block"), "{}", err);
+    }
+
+    #[test]
+    fn a_gated_line_can_use_a_variable() {
+        let f = fx("Work
+", &[("Work", "use m
+")], &[("m.txt", "apt:curl
+when $role == travel {
+  apt:mosh
+}
+")]);
+        with_vars(&f, "role = travel
+");
+        let vars = load_vars(&f).unwrap();
+        let d = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts().with_vars(vars))
+            .at(parse_absolute("2026-07-16T12:00").unwrap())
+            .resolve()
+            .unwrap();
+        assert_eq!(names(&d, "apt"), vec!["curl", "mosh"]);
+    }
+
+    #[test]
+    fn a_variable_line_outside_the_vars_file_is_refused() {
+        let f = fx("Work
+", &[("Work", "use m
+")], &[("m.txt", "role = travel
+apt:curl
+")]);
+        let err = resolve(&f).unwrap_err();
+        assert!(err.what.contains("is not in the `vars` file"), "{}", err);
+    }
+
+    #[test]
+    fn a_package_line_in_the_vars_file_is_refused() {
+        let f = fx("Work
+", &[("Work", "apt:curl
+")], &[]);
+        with_vars(&f, "role = desktop
+apt:nginx
+");
+        let err = load_vars(&f).unwrap_err();
+        assert!(err.what.contains("NAME = VALUE"), "{}", err);
     }
 
     #[test]

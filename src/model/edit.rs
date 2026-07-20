@@ -482,6 +482,8 @@ fn other_key(stmt: &Statement) -> Option<String> {
         | Statement::Subtract(_)
         | Statement::Expr(_)
         | Statement::Package(_)
+        // A variable is not a thing `edit` adds or removes; the `vars` file is hand-written.
+        | Statement::Var { .. }
         | Statement::Absent(_) => None,
     }
 }
@@ -610,6 +612,7 @@ mod tests {
             arch: "x86_64".into(),
             host: "laptop".into(),
             family: "debian".into(),
+            vars: Default::default(),
         }
     }
 

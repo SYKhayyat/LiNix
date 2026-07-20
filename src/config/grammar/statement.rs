@@ -94,6 +94,9 @@ pub enum Statement {
     Subtract(String),
     /// `(Work | gaming) & security` — a set expression over modules and profiles (II.4).
     Expr(String),
+    /// `NAME = VALUE` — a variable (IX.2). Legal only in the `vars` file; parsed here so
+    /// there is one parser, and rejected by file context the way `schedule:` is.
+    Var { name: String, value: String },
 }
 
 /// Decides whether a `prefix:` names a real backend. Injected rather than hardcoded: the
@@ -239,8 +242,33 @@ pub fn parse(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Result
         }
     }
 
+    if let Some(var) = parse_var(line) {
+        return Ok(var);
+    }
+
     let decl = parse_package(origin, line, backends, false)?;
     Ok(Statement::Package(decl))
+}
+
+/// `NAME = VALUE` (IX.2), where NAME is an identifier.
+///
+/// Checked last, and only for a bare identifier before the `=`, so nothing that is already a
+/// package line can be read as a variable: `apt:foo@version=1.2` has a `:` and an `@` in its
+/// head, and `-vim` does not start with a name character.
+fn parse_var(line: &str) -> Option<Statement> {
+    let (head, value) = line.split_once('=')?;
+    let name = head.trim();
+    if name.is_empty() || !name.starts_with(|c: char| c.is_alphabetic() || c == '_') {
+        return None;
+    }
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(Statement::Var {
+        name: name.to_string(),
+        // Verbatim to end of line, trimmed — the same rule as a block-form option value.
+        value: value.trim().to_string(),
+    })
 }
 
 /// Whether a line opens with one of II.2's typed-statement prefixes. Such a line is that

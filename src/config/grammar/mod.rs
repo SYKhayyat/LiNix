@@ -49,29 +49,79 @@ impl Document {
     /// `module` blocks' bodies. Returns each statement with where it came from, so a
     /// conflict can name both files (II.7 rule 5).
     pub fn statements_for(&self, facts: &HostFacts) -> Result<Vec<(Statement, Origin)>> {
+        Ok(self
+            .statements_with_gating(facts)?
+            .into_iter()
+            .map(|(s, o, _)| (s, o))
+            .collect())
+    }
+
+    /// As [`Document::statements_for`], but each statement also says whether a `when` block
+    /// put it here.
+    ///
+    /// IX.3 turns on exactly that distinction: a top-level line defines a variable and a
+    /// conditional one may only override, so the two cannot be flattened together.
+    pub fn statements_with_gating(
+        &self,
+        facts: &HostFacts,
+    ) -> Result<Vec<(Statement, Origin, bool)>> {
         let mut out = Vec::new();
-        Self::walk(&self.items, facts, &mut out)?;
+        Self::walk(&self.items, facts, false, &mut out)?;
         Ok(out)
+    }
+
+    /// Every statement the file contains, `when` blocks included whether or not they match,
+    /// each flagged with whether a `when` put it there.
+    ///
+    /// For checks that are properties of the FILE rather than of this machine — IX.3's "every
+    /// variable is defined on every machine" cannot be answered by the box that happens to be
+    /// running, or the same file is valid on the laptop and broken on the desktop.
+    ///
+    /// Never use this to decide what to install: it deliberately ignores the gating that says
+    /// what belongs on this host.
+    pub fn every_statement(&self) -> Vec<(&Statement, &Origin, bool)> {
+        let mut out = Vec::new();
+        Self::walk_ungated(&self.items, false, &mut out);
+        out
+    }
+
+    fn walk_ungated<'d>(
+        items: &'d [Item],
+        conditional: bool,
+        out: &mut Vec<(&'d Statement, &'d Origin, bool)>,
+    ) {
+        for item in items {
+            match item {
+                Item::Statement(s, o) => out.push((s, o, conditional)),
+                Item::Block(Block::Module(_, body), _) => {
+                    Self::walk_ungated(body, conditional, out)
+                }
+                Item::Block(Block::When(_, body), _) => Self::walk_ungated(body, true, out),
+            }
+        }
     }
 
     fn walk(
         items: &[Item],
         facts: &HostFacts,
-        out: &mut Vec<(Statement, Origin)>,
+        conditional: bool,
+        out: &mut Vec<(Statement, Origin, bool)>,
     ) -> Result<()> {
         for item in items {
             match item {
-                Item::Statement(s, o) => out.push((s.clone(), o.clone())),
-                Item::Block(Block::Module(_, body), _) => Self::walk(body, facts, out)?,
+                Item::Statement(s, o) => out.push((s.clone(), o.clone(), conditional)),
+                Item::Block(Block::Module(_, body), _) => {
+                    Self::walk(body, facts, conditional, out)?
+                }
                 Item::Block(Block::When(pred, body), origin) => {
                     let hit = eval_when(pred, facts).map_err(|e| {
                         GrammarError::new(origin.clone(), e.to_string()).with_hint(
-                            "`when` keys are os, arch, host, hostname, family; operators are \
-                             ==, != and `in [a, b]`.",
+                            "`when` keys are os, arch, host, hostname, family, or `$name` for \
+                             a variable; operators are ==, != and `in [a, b]`.",
                         )
                     })?;
                     if hit {
-                        Self::walk(body, facts, out)?;
+                        Self::walk(body, facts, true, out)?;
                     }
                 }
             }
@@ -269,6 +319,7 @@ fn merge_options(stmt: &mut Statement, extra: Options, origin: &Origin) -> Resul
         | Statement::Exclude(_)
         | Statement::Intersect(_)
         | Statement::Subtract(_)
+        | Statement::Var { .. }
         | Statement::Expr(_) => {
             return Err(GrammarError::new(
                 origin.clone(),
@@ -303,6 +354,7 @@ mod tests {
             arch: "x86_64".into(),
             host: "laptop".into(),
             family: "debian".into(),
+            vars: Default::default(),
         }
     }
 

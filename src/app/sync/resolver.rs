@@ -105,6 +105,18 @@ impl<'a> StateResolver<'a> {
         let priority = self.priority(&facts).await?;
         let known = Vocab::new(&self.registry, self.config, &priority);
 
+        // IX.6: variables are resolved exactly once per invocation, here, before any `when`
+        // that mentions one is evaluated. Resolving them a second time later could produce a
+        // different answer — a provider may read the clock — and a `plan` that disagrees with
+        // the `sync` executing it is not a plan.
+        let vars = crate::model::Resolver::new(&self.layout, &known, &priority)
+            .with_facts(facts.clone())
+            .load_vars()?;
+        if !vars.is_empty() {
+            debug!("{} variable(s) resolved", vars.len());
+        }
+        let facts = facts.with_vars(vars);
+
         debug!("resolving desired state for host '{}'", facts.host);
 
         // Steps 1-3 read the files. Probing needs the network, so it happens out here,
