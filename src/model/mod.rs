@@ -14,6 +14,7 @@ pub mod profiles;
 pub mod resolve;
 pub mod schedule;
 pub mod vars;
+pub mod vars_provider;
 
 pub use conflict::Declared;
 pub use edit::{active_module_files, inactive_declarations, Edit, Editor, Landing, Target};

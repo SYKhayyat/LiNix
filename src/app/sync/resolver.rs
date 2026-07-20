@@ -111,6 +111,7 @@ impl<'a> StateResolver<'a> {
         // the `sync` executing it is not a plan.
         let vars = crate::model::Resolver::new(&self.layout, &known, &priority)
             .with_facts(facts.clone())
+            .with_vars_source(self.config.vars.source.clone())
             .load_vars()?;
         if !vars.is_empty() {
             debug!("{} variable(s) resolved", vars.len());

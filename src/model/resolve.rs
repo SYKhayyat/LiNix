@@ -115,6 +115,9 @@ pub struct Resolver<'a> {
     facts: HostFacts,
     now: DateTime<Utc>,
     bare: HashMap<String, String>,
+    /// `[vars] source` from preferences (Part IX): which provider is active when the repo holds
+    /// more than one. `None` selects the sole provider file, or none.
+    vars_source: Option<String>,
 }
 
 impl<'a> Resolver<'a> {
@@ -126,7 +129,14 @@ impl<'a> Resolver<'a> {
             facts: HostFacts::current(),
             now: Utc::now(),
             bare: HashMap::new(),
+            vars_source: None,
         }
+    }
+
+    /// The active `vars` provider (Part IX), from `[vars] source` in preferences.
+    pub fn with_vars_source(mut self, source: Option<String>) -> Self {
+        self.vars_source = source;
+        self
     }
 
     /// The prober's answers: bare name -> the backend it resolved to.
@@ -165,11 +175,27 @@ impl<'a> Resolver<'a> {
     /// the file's meaning depend on the order its blocks were read, and there is no order that
     /// is obviously right.
     pub fn load_vars(&self) -> Result<crate::model::vars::Vars> {
-        let file = self.layout.vars_file();
-        let Ok(body) = std::fs::read_to_string(&file) else {
+        use crate::model::vars_provider::{self, Kind};
+        let Some(selected) = vars_provider::select(self.layout.config_root(), &self.vars_source)?
+        else {
             return Ok(Default::default());
         };
-        let doc = crate::config::grammar::parse_document(&file, &body, self.backends)?;
+        match selected.kind {
+            Kind::LineFile => self.load_vars_linefile(&selected.path),
+            Kind::External => vars_provider::run_external(&selected.path, &self.facts),
+            Kind::Embedded => Err(GrammarError::new(
+                Origin::new("vars.linix", 0),
+                "the embedded `vars.linix` provider is not built yet".to_string(),
+            )),
+        }
+    }
+
+    /// The line-file provider (`vars`): parse it, enforce IX.3, resolve to typed values.
+    fn load_vars_linefile(&self, file: &Path) -> Result<crate::model::vars::Vars> {
+        let Ok(body) = std::fs::read_to_string(file) else {
+            return Ok(Default::default());
+        };
+        let doc = crate::config::grammar::parse_document(file, &body, self.backends)?;
 
         // IX.3 is a property of the FILE, not of this machine: a name defined only inside a
         // `when` block is an error everywhere, including on the box where that block happens

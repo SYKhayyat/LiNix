@@ -248,6 +248,25 @@ pub struct Config {
     #[serde(default)]
     pub sandbox: SandboxSettings,
 
+    /// The `[vars]` table (Part IX): which variable provider is active. A repo may hold more
+    /// than one provider file (`vars`, `vars.py`, `vars.linix`); this picks the active one.
+    #[serde(default)]
+    pub vars: VarsSettings,
+
+}
+
+/// The `[vars]` table (Part IX): selecting a variable provider when the repo holds several.
+///
+/// Providers are chosen by filename, and several may coexist — but exactly one is active per
+/// machine. With `source` unset and more than one present, resolution refuses rather than
+/// guessing which one wins.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct VarsSettings {
+    /// The filename of the active provider, relative to the repo root — `vars`, `vars.py`,
+    /// `vars.linix`. Unset selects the sole provider file if there is exactly one, or none.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// The one spelling of the refusals-and-behaviour file (II.1). [`Layout::preferences_file`]
@@ -407,6 +426,7 @@ impl Default for Config {
             web_dir: default_web_dir(),
             appimage_dir: default_appimage_dir(),
             sandbox: SandboxSettings::default(),
+            vars: VarsSettings::default(),
         }
     }
 }
