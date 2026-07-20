@@ -1,3 +1,4 @@
+pub mod artifact;
 pub mod generic;
 pub mod node_registry;
 pub mod onboarder;

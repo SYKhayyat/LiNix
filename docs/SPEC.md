@@ -307,6 +307,52 @@ profile names. To gate a whole file, wrap it. Keys: `os`, `arch`, `host`, `hostn
 | `cron`, `run` | on `schedule:` |
 | `target`, `content`, `template`, `decrypt`, `identity` | on `link:` |
 | `enabled`, `status` | on `service:` |
+| `formats` | ordered artifact preference. Repeated key makes the list. Backends that offer a choice only |
+| `asset` | filename or glob narrowing the choice; `all` takes every match |
+| `bin` | the executable inside an archive |
+| `channel` | one version stream. Backends that publish channels only |
+
+### Artifact selection (V.48)
+
+`github:sharkdp/fd` names a repo, not a file. A release ships a `.deb`, an `.rpm`, an
+`.AppImage`, a `.tar.gz` and a bare binary, and **a declaration that resolves to a different
+file on two machines is not declarative.**
+
+**`formats` is an ordered preference over a closed vocabulary.** First match wins; a later
+entry is a fallback, never an addition. An unrecognised name is an error naming the legal set:
+
+```
+deb  rpm  appimage  tarball  zip  exe  msi  pkg  dmg  binary
+```
+
+**Arch and OS are not preferences.** The asset list is filtered to what this machine can run
+*before* `formats` is consulted, from detected facts. There is no `@arch=`: a declaration that
+requests an artifact your machine cannot execute is a footgun with no use case. A filename that
+names a foreign OS or architecture is rejected; one that names neither is kept, because absent
+evidence is not evidence of mismatch.
+
+**When two assets are still equally legal, the tie-break is one rule in one place:** the format
+you asked for first, then the asset that names this machine most explicitly, then the shortest
+filename, then alphabetical. **The choice and what it passed over are reported and recorded in
+the lock** — a guess that is printed and locked is not the guess that drifts.
+
+**`@asset=` narrows; it does not select.** It takes a filename or a glob (`@asset=*musl*`, which
+survives a version bump where an exact name does not). When the pattern still matches several,
+the same tie-break applies. **`@asset=all` installs every match** rather than choosing.
+
+**An archive is extracted and the executable inside it is shimmed**, reusing `shim:` rather
+than inventing a second way onto `PATH`. The executable is guessed from the package name;
+`@bin=PATH` names it when the guess is wrong, and turns the guess off rather than falling back
+to it. **Finding none, or several, is an error listing what the archive held** — never a pick.
+
+**Both keys are errors on the wrong backend.** `formats` is legal where one name resolves to
+several downloadable artifacts; `channel` where one artifact ships in several version streams.
+Everywhere else the ecosystem already decided, and **silently ignoring an option the user wrote
+is how a config grows lines that do nothing.**
+
+**`channel` is singular and unordered.** There is no "try edge, fall back to stable": a fallback
+across version streams silently downgrades a machine, and the user asked for a stream, not a
+best-effort.
 
 ## II.3 Modules
 
@@ -2169,6 +2215,53 @@ to stop guessing and say so. Naming the whole loop instead of the last edge is I
 the error names the file and the line — and it is the difference between *"there is a cycle"*
 and a user who can see which of the three lines they meant to delete.
 
+**V.48 — Why an artifact is selected and not scored.** *(Adopted 2026-07-20 from Part VIII;
+owner rulings D3, D3b, D4.)* The bug this prevents was live in the tree, not hypothetical.
+
+`GithubBackendCore::score_asset` added points for an OS token, points for an arch token,
+points for looking like an archive, five points for `musl`, and took `max_by_key` over the
+result. **Three separate defects, each of which shipped:**
+
+1. **It picked a maximum even when the maximum was negative.** A release offering nothing this
+   machine could run still returned an asset, which was then downloaded and unpacked. The
+   failure surfaced later, somewhere else, as a binary that would not execute.
+2. **`name.contains(arch)` is a substring test.** On a 32-bit box `x86` matched inside
+   `x86_64`, so the wrong artifact scored *higher* than the right one. Substring matching over
+   filenames is why the replacement matches whole tokens and lets the longest alias at a
+   position win.
+3. **There was no tie-break at all**, so between two equally-scored assets the winner was
+   whichever order the GitHub API happened to return them in. **The same declaration could
+   install a different file on two machines on the same afternoon** — which is precisely the
+   property a declarative package manager exists to deny.
+
+**The score also could not be argued with.** A user who got the wrong file had no line to
+change, because the answer was a sum of magic numbers with no vocabulary. `formats` replaces
+the sum with an ordered list of names the user can read, write and override.
+
+**Why `formats` and `channel` stay two keys.** They look alike — both narrow "which of these
+do I get" — and folding them into one key would produce a value whose meaning depends on which
+backend answered. That is the `backend_priority`/`enabled_backends`/`default_backend` defect
+(V.15) in miniature: one name, several meanings, and no way to tell from the file which one is
+in play. **A snap channel is not an artifact.** Snap ships one artifact and several streams of
+it; GitHub ships one stream and several artifacts. Two questions, two keys, each an error where
+it does not apply.
+
+**Why an unmatched selection is an error and never a fallback.** "Whatever was first" is how
+the score behaved and it is what made the bug invisible: something always installed, so nothing
+ever looked wrong. The error prints what the release actually offered and why each asset was
+passed over, so the fix is visible without opening a browser.
+
+**Why the tie-break is printed and locked rather than merely applied.** Shortest-filename-wins
+is a heuristic, and the honest objection to it is that it is indefensible as a written rule. It
+survives here only because it is not silent: the plan names what was chosen and what was passed
+over, and the lock records the resolved filename so a pinned declaration cannot quietly resolve
+to a different file next month. **A guess nobody can see is the guess that drifts; a guess that
+is reported is a default the user can override with `@asset=`.**
+
+**Why `@bin=` turns the guess off instead of falling back to it.** A fallback would put the
+guess back exactly where the user reached for the option to turn it off — and the case where
+`@bin=` is reached for is the case where the guess was already wrong.
+
 ---
 
 # Part VI — Bugs
@@ -2276,6 +2369,64 @@ Three suspicions did not survive scrutiny:
 **Living section. It is the one place that records progress — Part III stays the plan, this
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
+
+## Done 2026-07-20 — artifact selection (Part VIII, first half)
+
+**Built: `formats`, `asset`, `bin`, `channel` — parsed, validated, and wired into the `github`
+backend.** `src/backends/artifact/` is the new module: `format` (the closed vocabulary and the
+detected default order), `platform` (does this file run here), `pattern` (`@asset=` globs),
+`discover` (the executable inside an archive), `capability` (which backends the keys are legal
+on), `options` (reading them off a resolved spec) and `select` (the engine). 59 unit tests, none
+of which touch the network — the selector is given an asset list and returns a choice, so every
+rule is testable without a release to download.
+
+**`score_asset` is deleted, not wrapped.** Its three defects are written up in V.48; the one
+worth repeating here is that it had **no tie-break**, so between two equally-scored assets the
+winner was whatever order the API returned — the same declaration installing different files on
+two machines. **That was live on `HEAD` and no test covered it**, because nothing in the suite
+had an asset list to be ambiguous about.
+
+**Two things found while building, neither of which was on any list:**
+
+- **`when family == debian` has never worked.** `HostFacts::family` is
+  `std::env::consts::FAMILY`, which is `"unix"` or `"windows"` — it is not the distribution
+  family, and II.2's own examples (and VIII.2's default-order table) are written as though it
+  were. Nothing detected `debian`/`fedora` anywhere in the tree. **A new `distro_family()` in
+  `config/parser.rs` reads `/etc/os-release` and is used for the default format order.**
+  `HostFacts.family` is deliberately **left alone** — changing what `family` means in a `when`
+  block is a user-visible semantic change, so it is reported rather than slipped in. The two
+  now sit side by side with a comment saying they answer different questions. **Owed: a ruling
+  on which one `when family` should mean.**
+- **The Debian default would have broken installs.** With `deb` first on Debian, the backend
+  would have downloaded a `.deb` and handed it to `extract_archive`. Installing a system
+  package is D5 (ownership: `dpkg -i` puts it in apt's database, where apt can then upgrade it
+  out from under LiNix) and is unbuilt. **The backend now declares what it can install and the
+  order is narrowed to it**, so the default falls through to `appimage`/`tarball`/`binary`
+  exactly as "a later entry is a fallback" already means — and an *explicit* `formats = deb`
+  gets a named error instead of a confusing extraction failure.
+
+**One deviation from the D3 ruling's letter, recorded rather than absorbed.** The ruling says
+shortest filename wins. The implementation checks **specificity first** — an asset naming this
+machine (`fd-linux-x86_64.tar.gz`) beats a shorter silent one (`fd.tar.gz`) — and falls to
+shortest only among equally specific candidates. **The D3 case itself is unaffected**
+(`fd_10.2.0_amd64.deb` and `fd-musl_10.2.0_amd64.deb` are equally specific, so shortest still
+picks the plain one). It is a strict improvement on the heuristic, and it is written here
+because it is not what was ruled.
+
+**`@asset=all` parses and selects but does not install.** Installing several artifacts under one
+declaration touches the state model (`GithubState` holds one `bin_path`), so the backend
+**errors by name** rather than silently installing the first of the picks. **Owed.**
+
+**Not built from Part VIII:** the `priority`-level `formats` block (D7), `channel` on the snap
+and flatpak backends (parsed and refused elsewhere, but the backends do not read it yet), the
+lock file half of VIII.2 (the resolved asset is recorded in the backend's own state, not in
+`locks/github`), and `why` explaining the selection (D14).
+
+**Suite: 575 lib tests + integration all passing, `cargo build --all-targets` clean,
+`cargo clippy --all-targets` silent, `linix --help` and `linix check` run** (measured
+2026-07-20). *Green covers the new module properly — the 59 tests are the evidence for the
+selection rules. It says nothing about the network path, which has no test and was not run
+against a real release.*
 
 ## Done 2026-07-19 — R1–R23, the Phase 5 docs, F4/F5, S7, S11, G3
 
@@ -3224,3 +3375,1043 @@ README calls the indirection out explicitly and points at `check` as the way to 
 *Part II says this plainly (II.3: a module is a list of lines; II.4: profiles choose). I read
 it, summarised it, and still produced an example that does not work — which is the exact
 failure mode rule 9 describes, in prose instead of a ✅.*
+
+---
+
+# Part VIII — Proposed: artifact selection and channels
+
+**Status: PROPOSED, 2026-07-19 (owner-raised). Not built. Not in Part II.** Nothing here is
+target state yet. When a rule below is adopted it moves into Part II and **owes a Part V entry**
+like every other rule; until then this section is the whole record.
+
+The problem: `github:sharkdp/fd` does not name a file. A release ships a `.deb`, an `.rpm`, an
+`.AppImage`, a `.tar.gz`, a `.zip` and a bare binary, and today the backend picks one. **A
+declaration that resolves to a different artifact on two machines — or on the same machine next
+month — is not declarative.** The user has to be able to say which, and that answer varies by
+machine and by backend.
+
+## VIII.1 Two axes, deliberately not unified
+
+| key | question it answers | backends |
+|---|---|---|
+| `formats` | *which of these files do I download* | `github`, `web` (when the spec isn't one URL) |
+| `channel` | *which version stream do I track* | `snap`, `flatpak` |
+
+**They look alike and they are not the same question, so they stay two keys.** A snap channel
+is not an artifact — snap ships one artifact and several streams of it. Folding them into one
+key would produce a value whose meaning depends on the backend, which is the same defect as the
+old `backend_priority`/`enabled_backends`/`default_backend` cluster (V.15) in miniature. Two
+keys, each meaningless on the wrong backend, each an error there.
+
+## VIII.2 `formats` — ordered preference, not a filter
+
+An ordered list. **First match wins; a later entry is a fallback, never an addition.** The
+vocabulary is closed, and an unrecognised name is an error naming the legal set — the same rule
+as every other unrecognised line (II.2):
+
+```
+deb  rpm  appimage  tarball  zip  exe  msi  pkg  dmg  binary
+```
+
+`tarball` covers `.tar.gz`/`.tar.xz`/`.tgz`/`.tar.bz2`; `binary` is an unarchived executable
+asset. **`appimage` here is a format, not the `appimage:` backend** — a GitHub release that
+ships an `.AppImage` is still installed by `github`.
+
+### Where it is declared
+
+**In the `priority` file, as an options body on the backend line.** No new file and no new block
+kind: `priority` already takes `when` blocks (II.6), and II.2 already says a declaration's body
+is options with a repeated key making a list.
+
+```
+apt
+dnf
+
+when family == debian {
+  github {
+    formats = deb
+    formats = appimage
+    formats = tarball
+  }
+}
+
+github {
+  formats = appimage
+  formats = tarball
+  formats = binary
+}
+```
+
+Per-line override uses the options forms that already exist. Short form for one, block form for
+several — **`@formats=deb,rpm` is the comma error (II.2), not a list**:
+
+```
+github:sharkdp/fd@formats=deb                 one, short form
+
+github:BurntSushi/ripgrep {                   several, block form
+  formats = rpm
+  formats = tarball
+}
+```
+
+**Precedence: the line beats `priority`, `priority` beats the built-in default.** A line's list
+*replaces* the backend's list; it does not extend it. Half-overriding an ordered list is how you
+get an order nobody wrote. *(Asserted, not ruled — D9.)*
+
+### The default, when nothing is declared
+
+**Derived from detected facts, not configured** (II.1). Debian family → `deb`, then `appimage`,
+`tarball`, `binary`. Fedora/SUSE family → `rpm`, then the same tail. Everything else →
+`appimage`, `tarball`, `binary`. Windows → `exe`, `msi`, `zip`.
+
+**A fresh repo installs the right thing without a `formats` line anywhere**, which is the point:
+if it *is* the command's job, it is automatic and it does not ask.
+
+### Arch and OS are not preferences
+
+LiNix filters the asset list to this machine's OS and architecture **before** `formats` is
+consulted, from detected facts. `formats` only orders what already runs here. So `formats = deb`
+on an arm64 box selects the arm64 `.deb` and never the amd64 one, and **there is no
+`@arch=` option** — a declaration that lets you request an artifact your machine cannot execute
+is a footgun with no use case.
+
+### When nothing matches
+
+**Error. Never a fallback to "whatever was first."** The error prints what the release actually
+offered, so the fix is visible without opening a browser:
+
+```
+github:sharkdp/fd — no asset matches your formats.
+  wanted:  deb, appimage
+  release v10.2.0 offers, for linux/x86_64:
+    fd-v10.2.0-x86_64-unknown-linux-gnu.tar.gz   tarball
+    fd_10.2.0_amd64.deb                          deb  (arm64 only)
+  add `formats = tarball`, or pin one with @formats=.
+```
+
+### The lock, and the guard
+
+- **The resolved asset name, its URL and its format go in `locks/github`.** A lock that records
+  only a version leaves the artifact free to change under a pinned declaration, which is the
+  bug this whole section exists to close.
+- **`@sha256` outranks everything.** When both are given, `formats` selects and the checksum
+  verifies; a mismatch is an error, not a re-selection down the list. Selecting a *different*
+  asset because the pinned one failed its hash would turn a supply-chain alarm into a silent
+  substitution. This ties into the unimplemented SEC work in Phase 5 (`web`/`appimage`/`github`
+  checksums) and must not land before it. **But one hash cannot cover an asset that varies by
+  machine — see D6, which is unresolved and may move checksums into the lock entirely.**
+- Changing `formats` changes the installed artifact, so it goes through the plan and the guard
+  like any other change.
+
+## VIII.3 `channel` — one value, no list
+
+```
+snap:code@channel=stable
+flatpak:org.gimp.GIMP@channel=stable
+```
+
+**Singular, and not ordered.** There is no "try edge, fall back to stable" — a fallback across
+version streams would silently downgrade a machine, and the user asked for a stream, not a
+best-effort. A channel the backend does not publish is an error naming the ones it does.
+
+Declarable in `priority` the same way, for a machine-wide default:
+
+```
+flatpak {
+  channel = stable
+}
+```
+
+**Default when unset: the backend's own default** (`stable` for snap, the remote's default branch
+for flatpak) — detected, not typed into the file. Snap's `--classic` confinement is a **third**
+axis and is not `channel`; it is deliberately left out of this section rather than smuggled in.
+
+## VIII.4 Backends this does not apply to, and why
+
+- **`appimage:`** — no `formats`. The backend name *is* the format; `appimage:foo@formats=deb`
+  is a contradiction and is an error, not an ignored key.
+- **`web:URL`** — when the spec is one explicit URL there is nothing to choose, and `formats`
+  there is an error. It applies only if a `web:` spec ever resolves to several candidates.
+- **`apt`/`dnf`/`cargo`/…** — the ecosystem already decided the artifact. No `formats`, no
+  `channel`.
+
+**The general rule, so a future backend inherits it without an edit here:** `formats` is legal on
+a backend that resolves one name to several downloadable artifacts; `channel` is legal on a
+backend that publishes one artifact in several version streams. **On any other backend both are
+errors.** Silently ignoring an option the user wrote is how a config grows lines that do nothing.
+
+## VIII.5 The decision register
+
+**Every decision this feature forces, none of them made.** VIII.1–VIII.4 above is a proposal
+with a shape; this is the list of questions that shape does not answer. Each entry is the
+question, the tension that makes it a question, and a recommendation where I have one. **A
+recommendation is not a ruling** — nothing here is decided until the owner says so, and the
+entry is then rewritten as the rule plus its Part V "why".
+
+They are numbered `D1…D17` so a commit or a review can name one. **D1–D6 block
+implementation** — the backend cannot be written without them. D7–D10 are grammar shape, cheap
+now and expensive after the first `formats` line exists in a real repo. D11–D14 are behaviour
+over time. D15–D17 are parked on purpose.
+
+### Blocking — the backend cannot be built without these
+
+**D1 — What is "the release"?** `github:sharkdp/fd` names a repo, not a version. GitHub has
+draft releases, prereleases, and tags that never became releases at all. And `@version=10.2.0`
+has to mean *something* here — a tag, presumably, but tags are `v10.2.0` about half the time.
+*Recommendation:* latest non-draft, non-prerelease release; `@version=` matches the tag with and
+without a leading `v` and errors if both exist; no "track prereleases" option until someone asks.
+
+**D2 — How is a format recognised from an asset filename?** There is no metadata on a GitHub
+asset saying "this is a tarball" — only a filename, and release naming is a free-for-all
+(`fd-v10.2.0-x86_64-unknown-linux-gnu.tar.gz`, `fd_10.2.0_amd64.deb`, `fd-linux`, `fd`). Pure
+extension matching fails on `binary`, which has no extension by definition. *Recommendation:*
+extension match for everything that has one, and `binary` means "matched this machine's os/arch
+and has no recognised extension" — but this needs testing against real releases before it is a
+rule, because it is the one part of this feature that fails quietly rather than loudly.
+
+**D3 — Two assets, same format, both legal for this machine.** `fd_10.2.0_amd64.deb` and
+`fd-musl_10.2.0_amd64.deb`. `formats = deb` selects both and must pick one.
+
+**RULED (owner, 2026-07-20): shortest filename wins, said out loud, plus `@asset=` taking a
+pattern.** Four parts, and the fourth is a separate axis the question surfaced:
+
+1. **Default: shortest matching filename**, and the selection is *reported* — the plan names the
+   asset it chose and the ones it passed over, and the chosen name goes in `locks/github` so it
+   cannot drift under a pinned line. A guess that is printed and locked is not the silent guess
+   D3 was afraid of.
+2. **`@asset=` takes a glob, not just an exact name.** `@asset=*musl*` survives a version bump;
+   an exact name does not, and a pin that needs re-editing every release is a pin nobody keeps.
+3. **`@asset=` narrows, it does not select.** When the pattern still matches several, rule 1
+   applies among the matches. One tie-break in the system, not two.
+4. **`@asset=all` installs every match** rather than picking. This is the one shape the original
+   question did not contain: a release that ships several artifacts you genuinely want.
+
+**This answers D16** (`gnu` vs `musl` is exactly rule 1 plus `@asset=*musl*`) and closes it.
+
+**D3b — download-only artifacts (owner, 2026-07-20, raised with D3).** A `github:`/`web:` line may
+ask LiNix to **fetch an artifact without installing or managing it** — the `web:`-shaped case.
+The two modes are different declarations and must not be one key wearing two meanings:
+
+- **managed (default)** — LiNix installs it, owns it, and **removes it when the line leaves the
+  modules and profiles**, through the ordinary plan and guard.
+- **download-only** — LiNix fetches it to a known place and stops. It is still declared, so it is
+  still removed when the declaration goes; what it is *not* is installed, shimmed, or on `PATH`.
+
+*Owed:* the option's spelling, and whether a download-only artifact appears in `check` as
+software (it is not software, so probably not). Recorded as **D3b, open**, not assumed.
+
+**D4 — What does installing a `tarball`/`zip`/`binary` actually do?** A `.deb` is
+self-installing; an archive is not. Something has to decide where it extracts, which file inside
+it is the executable, and what lands on `PATH`.
+
+**RULED (owner, 2026-07-20): extract, find the executable, shim it — with `@bin=` to name it
+when the guess is wrong.**
+
+- LiNix extracts to its own artifact directory and **reuses `shim:` (II.2) rather than inventing
+  a second way onto `PATH`.** A second PATH mechanism is the two-of-everything failure with a
+  new name.
+- **The default guesses**, by looking for an executable whose name matches the package. The guess
+  is *reported* in the plan, like D3's — the same discipline, for the same reason.
+- **`@bin=PATH` names the executable inside the archive** (`github:foo/bar@bin=build/bar`) and
+  turns the guess off. It is the escape hatch for odd layouts and for archives holding several
+  executables.
+- **An archive where the guess finds nothing, or finds several, is an error listing what it
+  found** — never a silent pick. D3's tie-break is for *assets*, not for executables inside one:
+  two binaries in a tarball are two different programs, and shortest-name is meaningless there.
+
+**D5 — A `deb` installed by `github` — who owns it?** `dpkg -i` puts it in apt's database. Now
+`apt` can upgrade it out from under LiNix, `linix check` may see it twice (once as a github
+declaration, once as an apt-visible package), and the removal path has to know which tool to
+call. **This is the "two of everything" failure at the package level**, and `purge-unmanaged`
+(II.11) will have an opinion. *Recommendation:* the lock records the installing backend and
+that backend owns removal; `check` must not double-count. Needs a real test against a real apt
+box, not a mock.
+
+**D6 — `@sha256` cannot cover a per-machine asset.** A shared module says
+`github:x/y@sha256=…`, but the Ubuntu box downloads the `.deb` and the Fedora box downloads the
+`.rpm`. **One hash cannot verify two files.** So either the checksum option is per-asset (a list,
+keyed by filename — verbose, and generated by hand), or it is only legal alongside a single
+pinned format, or checksums move into `locks/github` as generated content and stop being a
+hand-written option. This collides directly with the unimplemented SEC checksum work in Phase 5
+and **must be settled with it, not separately.** *Recommendation:* the lock is the right home;
+`@sha256` stays legal only when the line pins exactly one format.
+
+### Grammar shape — cheap now, expensive after the first real `formats` line
+
+**D7 — Does a `github { formats = … }` block in `priority` mean the backend is enabled?**
+V.15 says listed = available. A block with an options body is still a listing, so presumably yes
+— but then a user who writes only a formats block has silently enabled a backend. *Recommendation:*
+yes, it enables — one list, one question, exactly as V.15 argues. Say so explicitly.
+
+**D8 — `when` inside an options body.** II.2 says a declaration's body is options, so
+`github { when family == debian { … } }` is not legal today, and VIII.2's example wraps the whole
+`github` block in a `when` instead. That works but gets repetitive across four families.
+*Recommendation:* keep it illegal. The wrap form is uglier and does not need a new grammar rule,
+and a new block kind here is how the grammar starts growing exceptions.
+
+**D9 — A line's `formats` replaces the backend's list. Confirm.** VIII.2 asserts replace-not-
+extend. The alternative (prepend the line's entries, keep the backend's as fallback) is more
+forgiving and produces an order nobody wrote. *Recommendation:* replace, as written — but it is
+an assertion I made, not a ruling, so it is listed here.
+
+**D10 — The closed vocabulary, and where it lives.** VIII.2 fixes ten names and makes an
+eleventh an error. That list has to live somewhere both the parser and the error message read
+from, or it drifts — and a typed list of names that drifts is precisely the failure this document
+has recorded seven times. *Recommendation:* one table in the grammar crate, and the error message
+prints it rather than restating it.
+
+### Behaviour over time
+
+**D11 — The default order is detected, so a LiNix upgrade can change it.** A machine with no
+`formats` line that installs a `tarball` today could install a `deb` after an upgrade. The lock
+protects an existing install; a fresh `linix lock` or a new machine does not. *Recommendation:*
+treat the default order as versioned and say so in the changelog when it moves — or accept the
+churn explicitly. Not decided.
+
+**D12 — Network, rate limits, and offline.** Listing assets is a GitHub API call per repo.
+Unauthenticated is 60/hour, which a repo with thirty `github:` lines exhausts on the second
+`sync`. `LINIX_GITHUB_TOKEN` exists (II.1). *Recommendation:* resolve from `locks/github` without
+any API call when the lock is present and the version is pinned; only `linix lock` and an
+unpinned line hit the network. Needs deciding because it determines whether `sync` works on a
+plane.
+
+**D13 — Changing a `channel` — refresh or reinstall?** `snap refresh --channel=edge` is not
+`snap remove && snap install`, and moving `edge → stable` is usually a downgrade. **A downgrade
+is a removal-shaped event and the guard should see it.** *Recommendation:* refresh where the
+backend supports it, and route the downgrade case through the plan and the guard like any other
+destructive change.
+
+**D14 — Does `why` explain the selection?** When `github:x/y` installs a `.tar.gz` on a machine
+the user expected a `.deb` on, the answer lives in three places (line, `priority`, built-in
+default) and `linix why` is the command that should say which one won. *Recommendation:* yes,
+and it is a small amount of work only if the resolver keeps the reason rather than just the
+result. Decide before the resolver is written, not after.
+
+### Parked on purpose
+
+**D15 — `.flatpak`/`.snap` assets in a GitHub release.** They exist. Adding them to the
+vocabulary means `github` installing something `flatpak` then does not own — **D5's ownership
+question, one layer worse.** Parked until D5 is answered.
+
+**D16 — libc variants** (`gnu` vs `musl`, both valid for this machine). A real ambiguity
+`formats` cannot express, and a fourth axis is not worth opening until someone hits it. **D3's
+answer probably resolves this one for free**, which is the argument for answering D3 properly
+rather than expediently.
+
+**D17 — Regex lines.** What `github:re:…@formats=` means when one pattern spans repos with
+different asset sets is unspecified. *Probably:* the list applies to each match independently and
+a match with no legal asset is the VIII.2 error, named per repo. Not decided, and low urgency —
+`github:re:` is rare in practice.
+
+---
+
+# Part IX — Proposed: user-defined `when` variables
+
+**Status: PROPOSED, 2026-07-19 (owner-raised). Not built. Not in Part II.** Same standing as
+Part VIII: a shape, not target state. Adopted rules move into Part II and owe a Part V entry.
+Decisions are numbered `W1…W14` in IX.7.
+
+**How far customization goes here is an open discussion, not a settled question (owner, 2026-07-19).**
+IX.5 draws a narrow boundary and IX.7 recommends holding it in several places. **Read those as
+one position in a live argument, not as the decision** — the scope itself is what is being
+decided. See IX.6.
+
+## IX.1 The problem, and the rule it argues with
+
+`when` today takes five keys — `os`, `arch`, `host`, `hostname`, `family` (II.2) — and all five
+are **detected facts**. So the only way to say "this machine is my travel box" is to say
+`when host == thinkpad`, in every file that cares. Buy a new laptop and you edit all of them,
+and you have to remember which of nine hostname tests meant "travel" and which meant "this
+specific machine, for a reason".
+
+**The hostname is not the intent. It is a proxy for the intent, repeated until it rots.** A
+variable lets the intent be named once and bound to machines in one place.
+
+This argues with II.1: **facts about this machine are detected, never configured.** The rule
+exists so a fleet does not need hand-maintained state on every box forever, and it is a good
+rule. **The proposal below does not break it, and that is the load-bearing claim of this part:**
+a variable is not a new fact, it is a **name for a condition over existing facts**. The `vars`
+file is committed, shared, and identical on every machine; each machine derives its own values
+from what LiNix already detected. Nothing is typed per box.
+
+The place that claim gets tested is W7 — variables that genuinely cannot be derived.
+
+## IX.2 The file
+
+**`vars`**, alongside `active`, `priority` and `schedules` in the repo (II.1). A line file, not
+TOML — because it needs `when`, and `when` is a line-file construct. `preferences.toml` is the
+wrong home for the same reason.
+
+```
+modules/            your lists
+profiles/           your choices
+active              which profiles are on
+priority            which backends, in order
+vars                your own names for conditions      ← new
+schedules           when LiNix runs itself
+```
+
+A new statement form, legal **only** in `vars` — the same way `schedule:` is legal only in
+`schedules`:
+
+```
+NAME = VALUE
+```
+
+Value is verbatim to end of line, trimmed, exactly like a block-form option value (II.2). And
+`when` works here as it works everywhere (II.2: *one rule, everywhere*):
+
+```
+role = desktop                      # the default, always present
+gpu  = none
+
+when host in [thinkpad, x220] {
+  role = travel
+}
+
+when hostname == render-01 {
+  role = workstation
+  gpu  = nvidia
+}
+```
+
+Then, anywhere `when` is legal:
+
+```
+when $role == travel {
+  apt:mosh
+  apt:tlp
+}
+```
+
+## IX.3 Every variable is always defined
+
+**A variable must have a top-level, unconditional definition. A `when` block overrides it; it
+may not introduce a name.** Referencing a name that `vars` never defines at top level is an
+error naming the file.
+
+This is the rule that makes the rest work. Without it, `role` defined only inside
+`when host == thinkpad` is *undefined* on every other machine, and `when $role == travel` on the
+desktop has no answer — leaving a choice between "undefined is an error" (which breaks every
+machine that is not the laptop) and "undefined is silently false" (which turns a typo into a
+block that never fires and never complains). **Requiring a default deletes the question instead
+of answering it.**
+
+So: `$role` is always defined, everywhere, on every machine. A typo'd name is always an error.
+Neither one depends on which box you are sitting at.
+
+**Two `when` blocks that both match and set the same variable to different values = ERROR**,
+naming both lines — II.7 rule 5, unchanged. Top-level-then-override is not a contradiction
+because the default is not a claim about this machine; two matching blocks are.
+
+## IX.4 The sigil, and why there is one
+
+`$role` in a condition, bare `role =` in `vars`. **The `$` is not decoration — it separates two
+namespaces that must never merge.**
+
+Without it, `when role == travel` and `when os == linux` are the same syntax over different
+things, and the day LiNix detects one more fact — `distro`, say, or `init` — every user who
+named a variable `distro` has a file that silently changes meaning. **A detected-fact namespace
+that can never grow is a worse cost than one character.** With the sigil, LiNix can add facts
+forever and no user file is affected.
+
+Two consequences, both intended:
+
+- **A variable can never shadow a detected fact.** `$os` is not `os`; defining `os = …` in
+  `vars` is legal and useless, and probably deserves a warning rather than an error.
+- **Reading a condition tells you where the answer comes from.** `$role` is something you
+  decided; `family` is something the machine reported. That distinction is worth seeing.
+
+## IX.5 What the narrow version is not
+
+**This section is a proposal for where to draw the line, and the line is not agreed** — IX.6
+holds the open question. What follows is the narrow end of the range, written out so there is
+something concrete to argue with.
+
+**Not a template language.** Variables are legal **in `when` conditions only** — not in package
+names, not in hook commands, not in `link:` targets, not in option values.
+
+`link:~/.config/$role/init.lua` is the obvious next request and the answer is no, for now. The
+moment a variable can appear in a path or a command, LiNix owns string interpolation, escaping,
+quoting, and the question of what `$role` means inside a value that II.2 defines as *verbatim* —
+and a package manager that has grown a templating language has stopped being a package manager.
+The narrow version is useful on its own; the wide version is a project. See W9.
+
+**Not computed.** No `$a = $b-heavy`, no arithmetic, no conditionals in values. See W10.
+
+**Not per-machine input.** The `vars` file is committed and identical everywhere. See W7 for
+the case this does not cover.
+
+## IX.6 RULED (owner, 2026-07-20): a real language, with the clock and the shell
+
+**The open question below is answered, and the answer is past the far end of the range the
+section drew.** It is recorded here in full because everything in IX.1–IX.5 was written assuming
+position 1, and **most of it is now superseded** — read this before believing anything above it.
+
+### What was ruled
+
+**A variable's value may come from a program, and that program may read the clock, run a shell
+command, and reach the network.** Position 4 in the table below, deliberately, with eyes open.
+
+### The consequence that forced a second ruling, and how it is closed
+
+A value that can move between two commands breaks the one promise the plan makes. `linix plan`
+resolves `$x` at 11:59:58 and shows nothing to do; the `sync` you confirm at 12:00:01 resolves it
+again, gets a different answer, and removes forty packages **the preview never showed**. That is
+not a bug to be fixed later — it is what "the value moved" means, and it makes `plan` a lie.
+
+**So: variables are resolved exactly once per invocation, and a plan carries its resolved
+variables with it.** The `sync` that executes a plan uses *the plan's* values, not freshly
+computed ones. **The preview and the action agree by construction rather than by luck** — which
+is the property II.8 rests on, and the only condition under which the clock is admissible at all.
+
+### One contract, two providers
+
+**A vars provider produces `name → value` pairs. That is the whole interface**, and it is the
+reason this is one feature rather than two:
+
+| provider | what it is | costs |
+|---|---|---|
+| **embedded (default)** | a script LiNix runs itself, in a language it ships | nothing to install; **runs identically on every machine in a fleet**, which is the entire argument for having a default at all |
+| **external** | any executable — `vars.py`, `vars.sh`, `vars.js` — run by LiNix, printing `name=value` or JSON on stdout | only works where that interpreter is installed, so a fleet inherits a dependency |
+
+**Both satisfy the same interface and neither is a special case of the other in the code.** The
+resolver knows about providers; it does not know about Rhai or about Python. *(Language choice
+for the embedded provider is an implementation decision, not a spec ruling — recorded where it
+lands, not here.)*
+
+**The simple line-file of IX.2 remains, and is not a third provider.** It is the same contract
+with a trivial implementation: a file of `name = value` lines with `when` blocks produces
+name → value pairs like everything else. What it is *not* is a second resolution path.
+
+### What this supersedes above, explicitly
+
+**IX.5 is dead as written.** "Not computed" is reversed outright. "Not per-machine input" is
+reversed the moment a provider can run `hostname` or read a file. **What survives IX.5 is the
+narrow claim about `when` conditions**, and even that is now a separate question (W9) rather
+than a consequence of the scope.
+
+**The W register's recommendations are void, not adjusted.** IX.7 says plainly that every
+recommendation in it "assumes position 1, and every one of them changes if the answer is 2 or
+higher." The answer is 4. **W1–W14 must each be re-asked against this ruling before any of them
+is implemented** — carrying a position-1 recommendation into a position-4 feature is exactly the
+stale-✅ failure this document exists to stop. The ones that visibly change shape:
+
+- **W2 (types)** — "strings only" was cheap when values were typed by hand. A provider returning
+  JSON has types already, and throwing them away at the boundary is a choice that needs making.
+- **W4 (when `vars` loads)** — now *the* load-bearing entry. Providers may shell out, so
+  resolution has a side-effecting phase, and the once-per-invocation rule above lives here.
+- **W7 (the undetectable variable)** — **answered for free.** A provider can read anything, so
+  there is no escape hatch to design. This is the entry that had no recommendation.
+- **W10 (variables referencing variables)** — inside one script this is just a local, and the
+  question shrinks to whether one *provider* can see another's output.
+- **W13 (the guard)** — sharpens badly. A variable that moves on its own can now deactivate a
+  profile with no edit to any file, so **`plan` must show the variable as the cause**, and the
+  guard is protecting against a change nobody typed.
+
+### The open discussion this replaces
+
+Kept for the argument, which is still the right argument even though the answer went the other
+way.
+
+
+
+**Recorded at the owner's instruction, 2026-07-19.** Everything above proposes the narrow end
+of a range. **The range itself has not been chosen**, and the choice is not a detail that falls
+out of implementation — it decides what LiNix is.
+
+The positions, roughly, from narrow to wide:
+
+| | what a user can express | cost |
+|---|---|---|
+| **1. Named conditions** *(IX.1–IX.5)* | `$role == travel` in `when`, and nowhere else | almost none; the feature is a lookup table over detected facts |
+| **2. Values in declarations** | `link:~/.config/$role/init.lua`, `@version=$pinned` | LiNix owns interpolation, escaping, and what `$` means inside a value II.2 defines as *verbatim* |
+| **3. Derived values** | `tier = $role-heavy`, string ops, defaults | ordering, cycles, and a small expression language |
+| **4. A configuration language** | conditionals in values, functions, imported var files | LiNix is now Nix, with worse ergonomics and none of the guarantees |
+
+**Nothing forces these to be taken in order, and nothing forces stopping.** That is the danger:
+each step is individually reasonable and argued for by a real use case, and the sum is a
+different product. Equally, stopping at 1 may simply relocate the problem — a user who cannot
+write `$role` in a path will write two nearly identical `link:` lines under two `when` arms, and
+duplication is the thing this part exists to remove.
+
+**Several register entries are the same argument in local form and should not be ruled on
+piecemeal:** W9 (interpolation outside `when`) is the 1→2 boundary. W10 (variables referencing
+variables) is 2→3. W2 (types) and W3 (bare `$flag`) are the shape of the expression language, if
+there is to be one. W7 (the undetectable variable) sits outside the range — it is a question
+about *where values come from*, not how far they reach, and it can be answered independently.
+
+**Deciding the extent first makes the rest cheap; deciding it last means rewriting the parser
+and the resolver at whichever step the boundary actually lands.** The recommendation in each
+entry assumes position 1, and every one of them changes if the answer is 2 or higher — so
+**they are conditional recommendations, not a consistent set to be adopted line by line.**
+
+The open question, stated plainly, so it can be answered in one sitting: **is `vars` a lookup
+table, or the beginning of a language?** No date, no owner, no deadline attached — but no code
+should be written against Part IX until it is answered, because position 1 and position 3 do not
+share a parser.
+
+## IX.7 The decision register
+
+Same standing as VIII.5: **questions, not rulings** — and all of them scoped by the open
+question in IX.6, which is why each recommendation below names the assumption it rests on.
+`W1–W5` block implementation; `W6–W10` are scope and grammar; `W11–W14` are behaviour and
+tooling.
+
+### Blocking
+
+**W1 — The sigil: `$role`, or bare `role`?** IX.4 argues for `$`. The counter-argument is real:
+bare names read better, the reserved set is five words and could simply be reserved forever, and
+`$` in a file that is not a shell invites people to expect shell semantics (`${}`, `$(…)`,
+env fallthrough) that will not exist. *Recommendation:* keep the sigil — the future-fact
+collision is the kind of quiet, delayed breakage this document has recorded seven times — but
+this is the single most reversible-now, expensive-later choice in the part.
+
+**W2 — Are values typed?** IX.2 shows strings only. But `when $role in [travel, work]` already
+exists in the grammar, so a list value is a natural request, and `when $gpu == true` reads worse
+than a flag. Options: strings only and every comparison is a string compare (simplest, one type,
+no coercion surprises); or add lists; or add booleans. *Recommendation:* strings only for v1,
+and revisit when someone has a concrete case.
+
+**W3 — Is a bare `$flag` a condition?** `when $gpu { … }` meaning "non-empty" is the obvious
+shorthand and it needs deciding before people write `gpu = false` and find that it fires.
+*Recommendation:* no bare form — require an explicit comparison, and make `when $gpu` a parse
+error suggesting `$gpu == …`. **`false` as a truthy string is a footgun with no upside.**
+
+**W4 — Where in resolution does `vars` load?** It has to be parsed and resolved before any file
+containing `when` is evaluated, including `active` — which means before profiles are known. And
+`vars` itself contains `when` over detected facts. So: detect facts → resolve `vars` → everything
+else. *Recommendation:* state this as a fixed phase in II.7, because getting it wrong produces an
+ordering bug that will look like an intermittent one.
+
+**W5 — What does `linix check` do with `vars`?** `check` parses everything on demand (II.3). A
+variable defined but never used is harmless; a variable *used* but not defined is an error W3/IX.3
+catches at parse time. But an unused variable on a fleet may mean "the block that used it was
+deleted on this branch". *Recommendation:* `check` reports unused variables as a note, not an
+error.
+
+### Scope and grammar
+
+**W6 — Is `vars` one file or a directory?** One file matches `active`/`priority`. A repo with
+forty machines may want `vars.d/`. *Recommendation:* one file; revisit only with a real fleet
+complaining.
+
+**W7 — The undetectable variable — is there an escape hatch?** "Is this a work machine" is not
+derivable from hostname, os, or arch on every fleet, and **IX.1's central claim quietly depends
+on it usually being derivable.** When it is not, the options are: an env var
+(`LINIX_VAR_ROLE=work`) — which makes the resolved state depend on how the command was invoked,
+and II.6 already establishes wariness there (*"an unset `$PROFILE` must not empty the machine"*);
+a gitignored local file — which is per-machine hand-maintained state, the exact thing II.1
+forbids; or a refusal, forcing the user to add a `when hostname ==` arm. *No recommendation.*
+**This is the decision that determines whether IX.1's argument is honest or a technicality,
+and it should be ruled on before anything else in this part.**
+
+**W8 — Do variables work in `active`?** `when $role == travel { Travel }` is the single most
+useful place for this feature and also the place with the sharpest edge: `activate` and
+`deactivate` edit `active` as a file (II.6), including its `when` blocks, and they currently
+reason about host blocks specifically — *"Travel is not active on this host, `active` line 4
+activates it when host == laptop"*. That message and that logic have to learn variables.
+*Recommendation:* yes, allow it, and treat the `activate`/`deactivate` message work as part of
+the feature rather than a follow-up — a half-taught `deactivate` would report a state it did not
+reach, which II.6 already calls out as the defect to avoid.
+
+**W9 — Interpolation outside `when`.** IX.5 says no. Record the boundary explicitly so the
+answer is a decision rather than an omission, because the first `link:` request will arrive
+quickly. *Recommendation:* stay narrow; reopen only with a use case that cannot be expressed as
+two `when` arms.
+
+**W10 — Variables referencing variables.** `tier = $role-heavy`. Introduces ordering, cycles
+(the same walk as `use` loops and `@requires` loops, II.7), and interpolation-inside-a-value,
+which collides with W9. *Recommendation:* no, and the cycle machinery already existing is not a
+reason to invite the problem.
+
+### Behaviour and tooling
+
+**W11 — Does `why` explain a variable?** When a package is present because
+`when $role == travel` matched, `linix why` should say *"`$role` is `travel`, set at `vars`
+line 6 by `when host in [thinkpad, x220]`"* — one hop further than it explains today.
+*Recommendation:* yes, and W4's fixed resolution phase is what makes it cheap. Decide before
+the resolver is written.
+
+**W12 — Is there a command to print resolved variables?** `linix vars`, showing each name, its
+value on this machine, and which line set it. Debugging a fleet without it means reading the
+file and simulating the `when` blocks by hand. *Recommendation:* yes — small, and it is the
+first thing anyone will want when a block does not fire.
+
+**W13 — Does changing a variable go through the guard?** It must: editing one line in `vars`
+can deactivate a profile and remove a hundred packages. That is the ordinary plan-and-guard path
+(II.8) and needs no new mechanism — but it does mean **a one-line edit to `vars` is potentially
+the most destructive edit in the repo**, and the plan output should make the cause visible
+rather than presenting a hundred unexplained removals.
+
+**W14 — Does `vars` belong in `linix diff`?** Phase 4 limits `diff` to
+`modules/profiles/active/priority/schedules`. **`vars` has to join that list or the file that
+explains a change is the one file the change view cannot show.** *Recommendation:* yes; this is
+a one-line fix that will be forgotten if it is not written down here.
+
+---
+
+# Part X — Proposed: rebuild, caches, desktops, backup, and finding your files
+
+**Status: PROPOSED, 2026-07-19 (owner-raised). Not built. Not in Part II.** Six independent
+requests, recorded together because three of them touch the same two files (`preferences.toml`
+and the command table) and two of them **contradict a sentence Part II states as settled** —
+X.5 contradicts *"This is a git repo"* (II.1) and X.6 contradicts the idea that the config's
+own location could be a config key. Those are marked where they occur. As with Parts VIII and
+IX, anything adopted here moves into Part II and owes a Part V entry naming the bug it prevents.
+
+Decisions are numbered `K1…K16` in X.7.
+
+## X.1 Converge, or rebuild
+
+**Today sync only ever converges.** It computes the difference between the declared state and
+the machine, and applies that difference: install what is missing, remove what is no longer
+declared (II.7, II.8). It never removes something that is *still declared* in order to put it
+back.
+
+That is the right default and it stays the default. But convergence cannot fix a class of
+problem it is structurally blind to: **state that is wrong while the difference is empty.**
+
+| what happened | what convergence sees | what is actually true |
+|---|---|---|
+| a package's dependencies were removed by hand | declared, installed → nothing to do | half the closure is missing |
+| a backend orphaned files a later version renamed | declared, installed → nothing to do | dead files, wrong version on `PATH` |
+| a failed sync left a package half-configured | declared, installed → nothing to do | it does not run |
+| a `github:` extraction was interrupted | declared, present → nothing to do | truncated binary |
+
+In every row the machine and the declaration agree at the level LiNix inspects, so no amount
+of re-running `sync` changes anything. **The escape hatch is to stop asking what changed and
+assert the whole declared set from scratch** — remove the declared packages and install them
+again, so whatever the backend does on a fresh install happens, and whatever the previous
+install left behind is collected by the removal.
+
+**This is a repair operation, not a sync mode.** Two reasons it must not be a flag on `sync`:
+
+1. **It is destructive on a machine that is fine.** Removing and reinstalling a hundred
+   packages takes network and time, and passes every one of them through a removal — the exact
+   operation the guard exists to be paranoid about (II.10). A flag on `sync` is one typo away
+   from a routine command.
+2. **Scheduled sync must never do it.** `schedules` runs sync unattended (II.6). A mode of
+   sync is a mode a schedule can reach.
+
+*Proposed:* a separate command, `linix rebuild [PKG… | --backend NAME | --all]`, which
+**removes and reinstalls what is declared**, defaulting to a scope the user names rather than
+to everything. It is not a new plan model: it produces an ordinary plan (remove N, install N),
+prints it, and goes through the ordinary guard and confirmation. What makes it a rebuild is
+only that the removals are of things that will be immediately re-declared.
+
+**The order within a rebuild is the whole problem, and it is K1.** Remove-everything-then-
+install-everything is what actually forces orphan collection, and it is also the version that
+leaves the machine with no shell in the middle. Remove-and-reinstall one package at a time is
+safe and collects almost nothing, because a dependency shared with a still-installed package
+is never orphaned at any instant. **These are different features wearing one name.**
+
+**Rebuild never touches undeclared software.** Everything it removes, it removes in order to
+put back. That is what separates it from `purge-unmanaged` (II.11), and the separation must
+hold even when a package would be caught by both.
+
+## X.2 Removing a package should be able to remove its cache
+
+`clean-cache` exists (Phase 5, R19) and clears every backend's cache wholesale. What does not
+exist is the narrow case: **`linix uninstall jq` leaves jq's downloaded archives on disk**,
+and on the download-shaped backends (`github:`, `web:`, `appimage:`) that is a real file of
+real size that nothing will ever collect, because the thing that knew its name was the
+declaration you just deleted.
+
+*Proposed:* a preference, off by default, that makes removal also drop the removed package's
+cached artifacts.
+
+```toml
+# preferences.toml
+clean_cache_on_remove = false
+```
+
+**Off by default because a cache is a bet that you will want it again**, and uninstalling is
+weak evidence you will not — the common shape is uninstall, discover you needed it, reinstall
+within the hour. The preference exists for the machines where disk is the scarce thing.
+
+**It applies to every path that removes** (II.10's list: sync, `absent:`, expiry,
+`purge-unmanaged`, `uninstall`), not to `uninstall` alone. A setting honoured by one command
+is the same failure as a guard on one command.
+
+**Only for backends where "this package's cache" is a question with an answer.** LiNix knows
+the artifact it downloaded for `github:`/`web:`/`appimage:` — it is in `locks/` (VIII.2). For
+apt or pacman, the per-package cache file is the backend's business, and asking it to drop one
+package's entry is a different capability per backend; K4 decides whether that is worth having
+or whether the preference is honestly documented as download-backends-only.
+
+## X.3 Starting over
+
+Separate from both of the above: **a way to return the machine to as-if-LiNix-had-never-run**,
+for the case where the answer is not "repair this" but "throw it out."
+
+`clean-cache` already clears caches. What "from scratch" additionally means has to be stated,
+because it ranges over four increasingly violent things and the phrase does not distinguish
+them:
+
+| level | drops | reversible by |
+|---|---|---|
+| 1 | every backend's cache | re-downloading |
+| 2 | + LiNix's own download cache and artifacts | re-downloading |
+| 3 | + `registry.json` and `snapshots/` (II.1, the data dir) | **nothing.** LiNix forgets what it owns |
+| 4 | + the installed packages themselves | `sync` |
+
+*Proposed:* levels 1 and 2 are `clean-cache --all` — a widening of a command that exists,
+carrying no risk beyond bandwidth. **Level 3 is a different command** and must be, because
+losing the registry is not a cleanup: it is LiNix forgetting the difference between *software
+you declared* and *software that was already there*, which is the one distinction the entire
+removal model rests on (II.9, II.11). After a level-3 reset every managed package looks
+unmanaged, and the recovery is `linix adopt` guessing.
+
+Level 4 is not proposed. It is `purge-unmanaged` with different marketing.
+
+**A level-3 reset must print what the machine will look like afterwards** — *"LiNix will forget
+it manages 214 packages. They stay installed. `linix adopt` is how you get them back, and it
+will guess."* — and take the typed confirmation `purge-unmanaged` takes (II.10). K5 decides
+whether it may run at all while a config repo exists, or only after the repo is gone.
+
+## X.4 Configuring a desktop environment
+
+**Most of this already works, and the part that does not is not the packages.** Recorded here
+because the request was to check, and the answer is worth writing down.
+
+Installing a DE or WM is packages, and packages are the thing LiNix does. Its config files are
+`link:` (II.2), which is what `link:` is for — `~/.config/i3/config`, `~/.config/sway/config`,
+`~/.config/hypr/hyprland.conf` are files, and a file with a `when` around it is a per-machine
+desktop config with no new mechanism at all. Its daemons are `service:`. **A tiling WM is
+already fully declarable today**, because a tiling WM is a package, a config file, and a
+session — three things that already exist.
+
+Two gaps, and they are different sizes:
+
+1. **A DE is a package *set*, not a package**, and the set has a different name on every
+   distro — `kde-plasma-desktop` on Debian, `plasma-meta` on Arch, `@kde-desktop` as a dnf
+   group. This is not a desktop problem; it is the same problem as any package whose name
+   varies, and the honest answer today is a `when family` block listing each. Whether LiNix
+   should know group syntax per backend is K6.
+2. **The settings-store desktops are not files.** GNOME and KDE keep their configuration in
+   dconf and in kconfig's own format, so `link:` cannot express *"tap-to-click on, dark theme,
+   these six keybindings"* — the state lives in a binary database written through
+   `gsettings`/`dconf`/`kwriteconfig`. **This is the actual gap**, and it is a new statement
+   shape: a key-value setting is not a package, and `service:`/`link:`/`shim:` do not fit it.
+
+*Proposed (owner ruling, 2026-07-19): `setting:` is in scope.* A fourth extra-statement kind
+alongside `service:`, `link:` and `shim:`, applied in the same after-packages phase, with a
+per-desktop adapter behind it.
+
+```
+setting:org.gnome.desktop.peripherals.touchpad/tap-to-click @value=true
+setting:org.gnome.desktop.interface/color-scheme          @value=prefer-dark
+```
+
+**It is a declaration like any other, so it inherits the model rather than extending it:**
+`when` wraps it, removing the line reverts the setting, two active declarations of the same key
+disagreeing is an error (II.7 rule 5), and `plan` shows it before it happens. Nothing here is a
+new rule — which is the test the statement had to pass to be worth adding.
+
+**The adapter is the work, and it is per-desktop, not per-distro.** `gsettings` covers GNOME's
+schema-backed keys, `kwriteconfig` covers KDE's ini files, and neither covers the other. K7 is
+now scope-of-adapters, not whether-to-build.
+
+**Read-before-write is what makes it declarative rather than a hook.** A `setting:` that shells
+out unconditionally is a command that runs every sync; a `setting:` that reads the current value
+first and writes only on a difference is a declaration, and only the second belongs in this
+model.
+
+**No `de:` or `wm:` statement.** A desktop is not a backend. It is packages plus files plus a
+session, all of which have statements already, and inventing a fourth spelling of the same
+three things is precisely the "two of everything" failure the rewrite exists to end.
+
+## X.5 Backup, and working without git
+
+Two requests, one section, because the second is why the first matters.
+
+**LiNix must run without git, and git is not a dependency** (owner ruling, 2026-07-19). II.1
+says *"This is a git repo"* flatly; the ruling is that **git buys rollback and history, and
+nothing else**. Everything else — parsing, resolution, sync, the guard, locks, schedules —
+reads files off a disk and does not care whether a `.git` exists beside them.
+
+**Not a dependency means not a dependency**: no git binary required to install LiNix, no git
+call on a path that is not history, and no command that fails because git is absent rather than
+degrading. A machine with no git installed at all is a supported machine.
+
+> **This changes a Part II sentence.** II.1's *"This is a git repo"* becomes *"This should be a
+> git repo; without one, history and rollback are unavailable and LiNix says so."* Per
+> CLAUDE.md, adopting it requires reading the matching Part V entry first, and it owes one of
+> its own.
+
+What goes missing without git is exactly the Part-IV list and no more: generations are commits,
+so there are none; `rollback` has nothing to check out; `linix diff COMMIT COMMIT` has no
+arguments to take; `bundle`'s history half is empty (it already reports this honestly — Phase
+4). **LiNix must degrade by saying so, once, plainly** — *"No git repo here, so there is no
+history to roll back to. `git init` in this folder turns it on."* — not by failing, and not by
+silently doing less. K8 decides where that notice lives.
+
+**Backup, given all that.** With git and a remote, a backup command is `git push` with extra
+steps. Without git it is the only thing standing between the user and losing the config — which
+is why it moves from optional to necessary the moment the line above is adopted. `bundle`
+already copies the config root, artifacts and the registry (Phase 4).
+
+**No implementation is proposed here yet (owner, 2026-07-19).** What is recorded is the
+requirement — *the config must be recoverable on a machine with no git* — and one constraint on
+whatever satisfies it: **not a second archive writer.** Two of everything is how this repo got
+into trouble; if `bundle` cannot serve the case, the fix is to change `bundle`. K9 stays open.
+
+**Whatever it is called, it never writes secrets.** Secrets are environment-only (II.1), so
+there are none in the config to catch, and that invariant is what makes a backup safe to hand
+to someone. It holds only as long as II.1 holds.
+
+## X.6 Finding your files
+
+`linix edit` — open the config repo, or one file in it, in `$EDITOR`; `linix path` — print the
+directory, so `cd $(linix path)` works and scripts can use it. Small, and the reason it is
+worth a section is that **the alternative is every user memorising `~/.config/linix` and every
+script hard-coding it**, which is how a configurable path stops being configurable in practice.
+K10 decides the exact spelling.
+
+**Where that directory lives is set in LiNix's own settings** (owner ruling, 2026-07-19) — and
+that is a different file from anything in the repo, which is the distinction that makes it work.
+
+| file | lives | holds | in git |
+|---|---|---|---|
+| LiNix's settings | a fixed OS location (`$LINIX_DATA_DIR` or the platform config dir) | **where your repo is**, and nothing else it can help | no |
+| `preferences.toml` | inside your repo | refusals and behaviour (II.1) | yes |
+
+**The ordering resolves because the two files answer different questions.** A key inside the
+repo saying where the repo is would have to be read out of the file whose location it defines —
+no ordering resolves that. A key in a fixed-location settings file saying where the repo is
+resolves in one step: LiNix reads its own settings from a place it always knows, learns the repo
+path, and everything after that is the model as written. **Nothing about resolution, `when`, or
+II.1's "detected, never configured" changes**, because the repo path is not a fact about the
+machine — it is where you put your files, which only you know.
+
+**Precedence:** `--config-dir` flag → `$LINIX_CONFIG_DIR` → the settings file → `~/.config/linix`.
+Command-line beats environment beats stored beats default, which is the ordinary shape and needs
+no argument.
+
+*Proposed:* `linix path` prints the resolved directory *and which of those four set it*, so a
+wrong answer is debuggable in one command; `doctor` reports the same; `linix edit` opens it. K11
+covers whether the settings file is allowed to hold anything else — **the answer should be no,
+and the reason to write it down is that a file holding one key is exactly the file that grows a
+second one**, at which point there are two preference systems and the question of which wins.
+K12 asks whether a symlink at the default path also stays supported for the dotfiles-repo case;
+it costs LiNix nothing, because a symlink is the operating system already solving this.
+
+## X.7 The decision register
+
+Blocking means: this cannot be built without an answer, because two reasonable implementations
+differ.
+
+### Blocking
+
+**K1 — Does `rebuild` remove everything before installing anything, or one package at a time?**
+*This is the whole feature.* All-at-once genuinely forces orphan collection and can leave the
+machine unusable partway through; one-at-a-time is safe and collects nearly nothing, because a
+shared dependency is never orphaned at any instant. Batch-per-backend is a third answer.
+
+**RULED (owner, 2026-07-20): batch per backend.** All of one backend's declared packages come
+down, then all of them go back up, then the next backend. The reasoning the ruling settles on:
+
+- **It collects.** Within a backend, a dependency shared only by packages that are all removed
+  in the same batch really does become an orphan, so the repair actually repairs — which
+  one-at-a-time does not.
+- **It bounds the blast radius.** A failure strands one backend's software, not the machine.
+  A box mid-`rebuild` of `cargo` still has a shell, a package manager and a network stack,
+  because those are `apt`'s batch and `apt`'s batch already finished or has not started.
+- **The backend is the unit the orphan question is asked in anyway.** `apt` cannot orphan a
+  `cargo` crate. Batching by backend is not a compromise between the two extremes; it is the
+  granularity at which the underlying operation is defined.
+
+**Backend order is therefore load-bearing and is not the registry's iteration order.** The
+backend that owns the shell and the system libraries goes first, so that if anything strands, it
+strands the batch furthest from the machine's ability to boot. *Owed: the ordering rule, written
+down.*
+
+**K2 — What is `rebuild`'s default scope?** `--all` on a bare `linix rebuild` is a very large
+default for a command whose failure mode is an unbootable machine. *Recommendation:* require a
+scope; a bare `rebuild` errors and lists the forms.
+
+**K3 — What does `rebuild` do when the reinstall fails after the removal succeeded?** The
+machine is now missing declared software and the command is halfway. Snapshot-and-revert
+(II.10's pre-sync snapshot path) is the existing mechanism and probably the answer, but it has
+to be decided, because "rebuild left me with nothing" is the review this feature gets if it is
+not.
+
+**K4 — Is `clean_cache_on_remove` per-package on every backend, or only where LiNix knows the
+artifact?** LiNix knows the file for `github:`/`web:`/`appimage:` (it is in `locks/`). For apt
+or pacman it needs a new per-backend capability. *Recommendation:* download-backends only,
+documented as such in the key's own description — a preference that silently does nothing on
+most backends is worse than a narrower one that is honest.
+
+**K5 — May a level-3 reset (X.3) run while a config repo exists?** Forgetting the registry
+while the declarations remain leaves LiNix believing it manages nothing and the files saying
+otherwise. *Recommendation:* refuse unless the repo is empty or `--force`, and say which.
+
+**K8 — How does a git-less LiNix announce what it cannot do?** Once at `init`, on every
+affected command, or only in `doctor`. *Recommendation:* on the affected commands (they are
+few, and that is where the user is when it matters) plus a `doctor` line. Never on `sync` —
+warning on the command that runs unattended, every time, teaches people to ignore it.
+
+**K9 — Is the backup command `bundle`, an alias, or nothing?** **OPEN — implementation
+deliberately not proposed (owner, 2026-07-19).** The requirement is recorded in X.5; the shape
+is not. The one constraint that holds regardless of the answer: **not a second archive writer.**
+
+### Scope and shape
+
+**K6 — Does LiNix learn per-backend group syntax** (`@kde-desktop`, `pacman -S plasma`)? It
+would make one line install a desktop. It also means `backend:name` has a third meaning on some
+backends and not others, which is the kind of unification VIII.1 refused. *Recommendation:* no
+for now; a `when family` block listing each distro's name is explicit, works today, and reads.
+
+**K7 — Which desktops does `setting:` adapt to, and in what order?** In scope as of the owner's
+ruling (X.4), so the question is no longer whether. GNOME via `gsettings` is the largest
+population and the cleanest adapter (typed schemas, readable current values); KDE via
+`kwriteconfig` is ini files with no schema, so *reading the current value* — which X.4 requires —
+is harder there. *Recommendation:* GNOME first, KDE second, and **`setting:` refuses on a desktop
+with no adapter rather than falling back to writing something.** A key silently unapplied is
+worse than an error, because the whole point is that the file is the truth.
+
+**K7b — What is the key syntax?** `setting:SCHEMA/KEY @value=…` is one spelling; a backend-shaped
+`gsettings:org.gnome…` is another and would reuse the `backend:name` parser instead of adding a
+statement. *Recommendation:* the statement form, because the desktop is not a backend (X.4) and
+the adapter is chosen by what is running, not by what the user typed.
+
+**K10 — `linix edit` and `linix path`, or flags on an existing command?** *Recommendation:* two
+small commands, because both are things a shell wants to call directly.
+
+**K11 — May LiNix's settings file (X.6) hold anything besides the repo path?** *Recommendation:*
+no, and the refusal should be enforced by the parser, not by discipline. **A file holding exactly
+one key is the file that grows a second one** — and the moment it does, there are two preference
+systems (it and `preferences.toml`) and a new question about which wins on every key either
+could hold. The one key it holds is the one key `preferences.toml` structurally cannot.
+
+**K11b — What is that file called and where exactly does it live?** It is not in the repo, not in
+git, and not scanned; beyond that the platform config dir and `$LINIX_DATA_DIR` are both
+defensible. *Recommendation:* the platform config dir — it is configuration, not data, and
+putting it next to the data dir invites the assumption that deleting the data dir is safe.
+
+**K12 — Is a symlink still supported for "my LiNix files live in my dotfiles repo"?** With X.6's
+settings file the symlink is no longer the only answer, but it costs nothing and some users will
+reach for it first. *Recommendation:* yes, documented, with the settings file as the primary
+mechanism.
+
+**K13 — Does `rebuild` appear in `schedules`?** *Recommendation:* no, and the parser should
+refuse it by name, for the reason in X.1. A destructive repair operation that can be scheduled
+is one that will run at 3am on a machine nobody is watching.
+
+### Behaviour and tooling
+
+**K14 — Does `rebuild` produce a git commit?** Nothing about the declared state changed, so
+there is nothing to commit — but a history that does not record a rebuild means `git log` is no
+longer a complete account of what happened to the machine (II.4's claim). *Recommendation:* no
+commit; `rebuild` is recorded wherever snapshots are, not wherever intent is.
+
+**K15 — Does `plan` distinguish a rebuild's removals from real ones?** A plan showing "remove
+214 packages" when all 214 come straight back is technically true and will terrify the reader.
+*Recommendation:* yes — the plan says *reinstall* where remove-then-install is the same package,
+and reserves *remove* for removals that stay removed.
+
+**K16 — Does `clean-cache --all` need the guard?** It removes no packages, so today's answer is
+no (R19 established exactly this reasoning for `clean-cache`). Level 3 of X.3 is a different
+command and does need confirmation. *Recommendation:* keep the split — the guard protects
+packages, not disk space, and widening it to cover caches dilutes what a guard refusal means.

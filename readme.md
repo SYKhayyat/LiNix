@@ -131,6 +131,57 @@ Common keys: `version`, `hold` (never upgrade), `expires` / `until` (absolute da
 `requires`, the `*_install` hooks, and per-directive keys like `cron`/`run` on `schedule:` or
 `target`/`content` on `link:`.
 
+### Which file gets installed
+
+`github:sharkdp/fd` names a repo, not a file. One release ships a `.deb`, a `.tar.gz`, an
+`.AppImage` and a bare binary, so LiNix has to choose — and a declaration that resolves to a
+different file on two machines is not declarative.
+
+`formats` is an ordered preference. First match wins; a later entry is a fallback:
+
+```
+github:BurntSushi/ripgrep {
+  formats = appimage
+  formats = tarball
+  formats = binary
+}
+```
+
+The vocabulary is closed — `deb rpm appimage tarball zip exe msi pkg dmg binary` — and an
+unrecognised name is an error listing the legal set. **You do not need to write any of this**:
+the default order comes from your OS and distribution, so a fresh repo installs the right thing
+with no `formats` line anywhere.
+
+Your architecture is not a preference. Assets that cannot run on this machine are filtered out
+before `formats` is consulted, so there is no `@arch=` to get wrong.
+
+When a release ships two files that both fit — `fd_10.2.0_amd64.deb` and
+`fd-musl_10.2.0_amd64.deb` — LiNix picks the more specific one, then the shorter name, and
+**tells you what it chose and what it skipped**. To decide yourself, `@asset=` takes a filename
+or a glob that survives version bumps:
+
+```
+github:sharkdp/fd@asset=*musl*
+```
+
+For an archive, LiNix extracts it, finds the executable and shims it onto your `PATH`. When the
+archive holds several and the guess would be wrong, `@bin=` names it:
+
+```
+github:foo/bar@bin=build/bar
+```
+
+Finding no executable, or several, is an error listing what the archive held — never a silent
+pick.
+
+`channel` is the other half, for backends that ship one artifact in several version streams:
+
+```
+snap:code@channel=stable
+```
+
+Both keys are errors on a backend they do not apply to, rather than being quietly ignored.
+
 ### Host conditions
 
 `when` gates the lines inside it, and it works the same way in every file — packages in a

@@ -2,6 +2,10 @@ use crate::core::{
     security::verify_checksum, BackendCore, CommandExecutor, Error, HealthReport, HealthStatus,
     Installable, MetadataProvider, Package, PackageSpec, Queryable, RateLimiter, Result,
 };
+use crate::backends::artifact::{
+    self, default_formats, ArtifactOptions, Asset as ArtifactAsset, Entry as ArchiveEntry, Format,
+    FormatOrder, Platform, Request as SelectRequest,
+};
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -18,6 +22,12 @@ struct GithubState {
     version: String,
     bin_path: Option<String>,
     install_path: String,
+    /// The resolved artifact. A record of only the version leaves the file free to change
+    /// under a pinned declaration, which is what artifact selection exists to prevent.
+    #[serde(default)]
+    asset: Option<String>,
+    #[serde(default)]
+    format: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,41 +113,6 @@ impl GithubBackendCore {
             .await
     }
 
-    fn score_asset(&self, name: &str) -> i32 {
-        let name = name.to_lowercase();
-        let mut score = 0;
-        let os = std::env::consts::OS;
-        let arch = std::env::consts::ARCH;
-
-        if name.contains(os) {
-            score += 50;
-        } else if (os == "linux" && name.contains("linux"))
-            || (os == "macos" && (name.contains("darwin") || name.contains("apple")))
-        {
-            score += 40;
-        }
-
-        if name.contains(arch) {
-            score += 50;
-        } else if (arch == "x86_64" && (name.contains("amd64") || name.contains("x64")))
-            || (arch == "aarch64" && (name.contains("arm64") || name.contains("armv8")))
-        {
-            score += 45;
-        }
-
-        if name.ends_with(".tar.gz") || name.ends_with(".zip") || name.ends_with(".tgz") {
-            score += 10;
-        }
-        if name.contains("musl") && os == "linux" {
-            score += 5;
-        }
-        if name.contains("src") || name.contains("dev") || name.contains("dbg") {
-            score -= 100;
-        }
-
-        score
-    }
-
     async fn load_state_internal(&self) -> HashMap<String, GithubState> {
         let _guard = self.internal_lock.lock().await;
         if !tokio::fs::try_exists(&self.state_file)
@@ -189,6 +164,37 @@ pub struct GithubInstallable {
     pub core: Arc<GithubBackendCore>,
 }
 
+/// What this backend can install today. A `.deb` would have to be handed to `dpkg`, which
+/// puts it in apt's database and makes apt able to upgrade it out from under LiNix — an
+/// ownership question that is recorded and unanswered, so the format is selected against
+/// rather than half-installed.
+fn installable_here(format: Format) -> bool {
+    format.is_archive() || matches!(format, Format::AppImage | Format::Binary)
+}
+
+/// Windows has no executable bit, so the name is the only signal there.
+#[cfg(unix)]
+fn is_executable(entry: &walkdir::DirEntry) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    entry
+        .metadata()
+        .map(|m| m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn is_executable(entry: &walkdir::DirEntry) -> bool {
+    matches!(
+        entry
+            .path()
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_lowercase)
+            .as_deref(),
+        Some("exe") | Some("bat") | Some("cmd")
+    )
+}
+
 #[async_trait]
 impl Installable for GithubInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
@@ -199,14 +205,80 @@ impl Installable for GithubInstallable {
             let res = self.core.github_get(&url).await?;
             let release: GithubRelease = res.json().await.map_err(Error::from)?;
 
-            let best_asset = release
+            let wanted = ArtifactOptions::read(&spec.options).map_err(Error::Validation)?;
+            let asked = wanted.resolved_formats(&default_formats());
+            let formats = asked.retaining(installable_here);
+            if formats.is_empty() {
+                let refused = asked.rejected_by(installable_here);
+                return Err(Error::Validation(format!(
+                    "{}: `github` cannot install {} — it unpacks archives, and a system \
+                     package has to be handed to the package manager that owns it. Ask for \
+                     one of: {}.",
+                    spec.name,
+                    refused
+                        .iter()
+                        .map(|f| f.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    FormatOrder::new(
+                        Format::ALL.into_iter().filter(|f| installable_here(*f)).collect()
+                    )
+                )));
+            }
+            let offered: Vec<ArtifactAsset> = release
                 .assets
                 .iter()
-                .max_by_key(|a| self.core.score_asset(&a.name))
-                .ok_or_else(|| Error::PackageNotFound(format!("No asset for {}", spec.name)))?;
+                .map(|a| ArtifactAsset::new(&a.name, &a.url))
+                .collect();
 
+            let platform = Platform::current();
+            let selection = artifact::select(
+                &SelectRequest {
+                    package: &spec.name,
+                    release: &release.version,
+                    platform: &platform,
+                    formats: &formats,
+                    pattern: wanted.asset.as_ref(),
+                },
+                &offered,
+            )
+            .map_err(|e| Error::PackageNotFound(e.to_string()))?;
+
+            // A tie-break is a guess, and a guess nobody sees is the one that drifts.
+            if selection.was_ambiguous() {
+                let passed: Vec<&str> = selection
+                    .passed_over
+                    .iter()
+                    .map(|p| p.name.as_str())
+                    .collect();
+                info!(
+                    "{}: chose {} over {}",
+                    spec.name,
+                    selection.picks[0].asset.name,
+                    passed.join(", ")
+                );
+            }
+
+            if selection.picks.len() > 1 {
+                return Err(Error::Validation(format!(
+                    "{}: `@asset=all` selected {} files, and installing several artifacts \
+                     under one declaration is not built yet. Narrow it with a pattern, e.g. \
+                     @asset=*musl*.",
+                    spec.name,
+                    selection.picks.len()
+                )));
+            }
+
+            let chosen = &selection.picks[0];
+            let best_asset = &chosen.asset;
+
+            // The version alone is not the identity of what is installed: changing `formats`
+            // on a pinned version must still reinstall, or the declaration and the disk part
+            // ways with nothing to show it.
             if let Some(existing) = state.get(&spec.name) {
-                if existing.version == release.version {
+                if existing.version == release.version
+                    && existing.asset.as_deref() == Some(best_asset.name.as_str())
+                {
                     debug!(
                         "GitHub: {} is already at version {}",
                         spec.name, release.version
@@ -262,30 +334,28 @@ impl Installable for GithubInstallable {
                 .join("bin")
                 .join(repo_name);
 
-            let mut final_bin_path = None;
+            let final_bin_path;
             let core_pkg_dir = pkg_dir.clone();
-            let repo_name_str = repo_name.to_string();
 
-            let discovery_result: Result<Option<PathBuf>> =
-                tokio::task::spawn_blocking(move || {
-                    let walker = walkdir::WalkDir::new(&core_pkg_dir)
-                        .into_iter()
-                        .filter_map(|e| e.ok());
-                    for entry in walker {
-                        let fname = entry.file_name().to_string_lossy().to_lowercase();
-                        if fname == repo_name_str.to_lowercase()
-                            || fname == format!("{}.exe", repo_name_str.to_lowercase())
-                            || (fname.starts_with(&repo_name_str) && !fname.contains('.'))
-                        {
-                            return Ok(Some(entry.path().to_path_buf()));
-                        }
-                    }
-                    Ok(None)
-                })
-                .await
-                .map_err(|e| Error::Other(e.to_string()))?;
+            let listing: Vec<ArchiveEntry> = tokio::task::spawn_blocking(move || {
+                walkdir::WalkDir::new(&core_pkg_dir)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+                    .map(|e| {
+                        let executable = is_executable(&e);
+                        ArchiveEntry::new(e.path().to_path_buf(), executable)
+                    })
+                    .collect()
+            })
+            .await
+            .map_err(|e| Error::Other(e.to_string()))?;
 
-            if let Some(src_path) = discovery_result? {
+            let discovered = artifact::find_executable(&listing, &spec.name, wanted.bin.as_deref())
+                .map_err(|e| Error::PackageNotFound(e.to_string()))?;
+
+            {
+                let src_path = discovered;
                 #[allow(unused_mut)] // mutated only under cfg(windows)
                 let mut bin_dest = bin_dest_base.clone();
 
@@ -336,6 +406,8 @@ impl Installable for GithubInstallable {
                     version: release.version,
                     bin_path: final_bin_path,
                     install_path: pkg_dir.to_string_lossy().to_string(),
+                    asset: Some(best_asset.name.clone()),
+                    format: Some(chosen.format.to_string()),
                 },
             );
         }

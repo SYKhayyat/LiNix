@@ -26,6 +26,19 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
 - **`activate` sets, `activate -a` adds, `deactivate` removes.** Several profiles can be active
   at once; their package sets are unioned, and deactivating one removes only what nothing else
   still needs.
+- **You choose which file a release installs.** `formats` is an ordered preference over a closed
+  vocabulary (`deb rpm appimage tarball zip exe msi pkg dmg binary`), defaulting to something
+  sensible for your OS and distribution so most repos never write it. `@asset=` narrows by
+  filename or glob when a release ships two files that both fit; `@bin=` names the executable
+  inside an archive when the guess would be wrong. Assets your machine cannot run are filtered
+  out before any of this, so there is no architecture option to get wrong.
+  - This replaces a scoring heuristic that had **no tie-break**, so the same declaration could
+    install a different file on two machines depending on the order the GitHub API returned
+    assets in. It also picked a "best" asset even when every candidate was for another
+    platform. Selection is now reported and recorded, so a pinned declaration cannot quietly
+    resolve to a different file later.
+  - Nothing matching your `formats` is an error listing what the release actually offered and
+    why each asset was skipped — not a fallback to whatever came first.
 
 ### Safety
 

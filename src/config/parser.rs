@@ -8,7 +8,8 @@ pub struct HostFacts {
     pub os: String,
     pub arch: String,
     pub host: String,
-    /// "unix" or "windows".
+    /// "unix" or "windows" — NOT the distribution family. `when family == debian` therefore
+    /// never matches, though the spec's examples use exactly that. See `distro_family()`.
     pub family: String,
 }
 
@@ -31,6 +32,51 @@ impl HostFacts {
             "family" => Some(&self.family),
             _ => None,
         }
+    }
+}
+
+/// The distribution family — `debian`, `fedora`, `arch`, `suse`, … — read from
+/// `/etc/os-release`, which is the only place that answers it.
+///
+/// This is NOT `HostFacts::family`, which is `std::env::consts::FAMILY` and answers
+/// "unix or windows". The two are different questions and the names collide; see the note in
+/// `HostFacts`.
+pub fn distro_family() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let text = std::fs::read_to_string("/etc/os-release").ok()?;
+    parse_os_release_family(&text)
+}
+
+/// `ID_LIKE` names the family and `ID` names the distribution, so a derivative
+/// (`linuxmint`, whose `ID_LIKE` is `ubuntu debian`) resolves to the family that decides
+/// which artifact installs. `ID_LIKE` is checked first for exactly that reason.
+fn parse_os_release_family(text: &str) -> Option<String> {
+    let field = |key: &str| -> Option<String> {
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix(key)?.strip_prefix('='))
+            .map(|v| v.trim().trim_matches('"').to_lowercase())
+    };
+
+    const FAMILIES: [&str; 6] = ["debian", "fedora", "rhel", "suse", "arch", "alpine"];
+    let id_like = field("ID_LIKE").unwrap_or_default();
+    for family in FAMILIES {
+        if id_like.split_whitespace().any(|w| w == family) {
+            return Some(family.to_string());
+        }
+    }
+
+    let id = field("ID")?;
+    // `ubuntu` has no `ID_LIKE` on some releases and is not itself in the family list.
+    match id.as_str() {
+        "ubuntu" | "debian" | "raspbian" => Some("debian".into()),
+        "fedora" => Some("fedora".into()),
+        "centos" | "rhel" | "rocky" | "almalinux" => Some("rhel".into()),
+        "opensuse" | "sles" => Some("suse".into()),
+        "arch" | "manjaro" | "endeavouros" => Some("arch".into()),
+        "alpine" => Some("alpine".into()),
+        other => Some(other.to_string()),
     }
 }
 

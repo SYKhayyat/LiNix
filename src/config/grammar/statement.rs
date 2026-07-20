@@ -409,8 +409,101 @@ fn parse_package(
 /// `until` is here and refused below unless the line is `absent:` — II.2 puts it on
 /// `absent:` only, and "not an option" would be the wrong error for a key that exists.
 const PACKAGE_OPTION_KEYS: &[&str] = &[
-    "version", "hold", "expires", "until", "requires", "sha256",
+    "version", "hold", "expires", "until", "requires", "sha256", "formats", "asset", "bin",
+    "channel",
 ];
+
+/// Options that are only meaningful on a backend that resolves one name to several
+/// downloadable artifacts, or that publishes several version streams. Each is refused by name
+/// on any other backend: an option nobody reads is a line that does nothing.
+fn validate_artifact_options(origin: &Origin, decl: &PackageDecl) -> Result<()> {
+    use crate::backends::artifact::{capability, AssetPattern, FormatOrder};
+
+    let o = &decl.options;
+    let backend = decl.backend.as_deref();
+
+    for key in ["formats", "asset", "bin"] {
+        if !o.contains(key) {
+            continue;
+        }
+        // A line with no prefix is resolved through `priority` later, so the backend that will
+        // answer it is not known here. Refusing would break `fd@formats=deb`; the resolver
+        // enforces it once the backend is known.
+        let Some(backend) = backend else { continue };
+        if !capability::selects_artifacts(backend) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`@{}` is not an option on `{}`", key, backend),
+            )
+            .with_hint(format!(
+                "`{}` picks between several files of one release. Backends that offer a \
+                 choice: {}. Everywhere else the ecosystem already decided the file.",
+                key,
+                capability::artifact_backends()
+            )));
+        }
+    }
+
+    if o.contains("channel") {
+        if let Some(backend) = backend {
+            if !capability::has_channels(backend) {
+                return Err(GrammarError::new(
+                    origin.clone(),
+                    format!("`@channel` is not an option on `{}`", backend),
+                )
+                .with_hint(format!(
+                    "a channel is a version stream, not a file. Backends that publish \
+                     channels: {}.",
+                    capability::channel_backends()
+                )));
+            }
+        }
+        if o.all("channel").len() > 1 {
+            return Err(GrammarError::new(
+                origin.clone(),
+                "`@channel` takes one value",
+            )
+            .with_hint(
+                "there is no fallback across version streams — trying `edge` and settling for \
+                 `stable` would silently downgrade the machine. Name the one you want.",
+            ));
+        }
+    }
+
+    for name in o.all("formats") {
+        FormatOrder::parse_all([name])
+            .map_err(|e| GrammarError::new(origin.clone(), e.to_string()))?;
+    }
+
+    if let Some(pattern) = o.one("asset") {
+        AssetPattern::parse(pattern)
+            .map_err(|e| GrammarError::new(origin.clone(), e.to_string()))?;
+    }
+    if o.all("asset").len() > 1 {
+        return Err(GrammarError::new(
+            origin.clone(),
+            "`@asset` takes one pattern",
+        )
+        .with_hint(
+            "one pattern, which may be a glob: `@asset=*musl*`. For every matching file, \
+             `@asset=all`.",
+        ));
+    }
+
+    // `@asset=all` installs every match, so there is no single artifact for one hash to cover.
+    if o.one("asset").is_some_and(|a| a.eq_ignore_ascii_case("all")) && o.contains("sha256") {
+        return Err(GrammarError::new(
+            origin.clone(),
+            "`@asset=all` and `@sha256=` cannot both be set",
+        )
+        .with_hint(
+            "`all` installs several files and one hash cannot verify them. Pin one file, or \
+             drop the checksum.",
+        ));
+    }
+
+    Ok(())
+}
 
 /// Option rules from II.2's table that are about the options themselves rather than any
 /// one backend.
@@ -500,6 +593,8 @@ fn validate_options(origin: &Origin, decl: &PackageDecl, absent: bool) -> Result
              a present line lapse on a date, use `@expires`.",
         ));
     }
+
+    validate_artifact_options(origin, decl)?;
     Ok(())
 }
 
@@ -782,5 +877,108 @@ mod option_key_tests {
             parse_line("editors | fonts").unwrap(),
             Statement::Expr(_)
         ));
+    }
+}
+
+#[cfg(test)]
+mod artifact_option_tests {
+    use super::*;
+
+    fn known(name: &str) -> bool {
+        matches!(name, "apt" | "github" | "snap" | "flatpak" | "appimage")
+    }
+
+    fn p(line: &str) -> Result<Statement> {
+        parse(&Origin::new("modules/dev.txt", 3), line, &known)
+    }
+
+    fn options_of(line: &str) -> Options {
+        match p(line).unwrap() {
+            Statement::Package(d) => d.options,
+            other => panic!("expected a package, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn formats_is_read_on_a_backend_that_offers_a_choice() {
+        let o = options_of("github:sharkdp/fd@formats=deb");
+        assert_eq!(o.all("formats"), vec!["deb"]);
+    }
+
+    #[test]
+    fn a_repeated_formats_key_is_an_ordered_list() {
+        let o = options_of("github:sharkdp/fd@formats=deb,formats=tarball");
+        assert_eq!(o.all("formats"), vec!["deb", "tarball"]);
+    }
+
+    #[test]
+    fn an_unknown_format_names_the_legal_set() {
+        let err = p("github:sharkdp/fd@formats=snapcraft").unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("snapcraft"));
+        assert!(msg.contains("appimage"), "the error must list the vocabulary");
+    }
+
+    #[test]
+    fn formats_on_a_backend_that_decided_already_is_an_error() {
+        let err = p("apt:curl@formats=deb").unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("not an option on `apt`"));
+        assert!(msg.contains("github"), "the error must name where it is legal");
+    }
+
+    #[test]
+    fn formats_on_appimage_is_a_contradiction_and_is_refused() {
+        assert!(p("appimage:foo@formats=deb").is_err());
+    }
+
+    #[test]
+    fn channel_is_read_on_snap_and_flatpak() {
+        assert_eq!(options_of("snap:code@channel=stable").one("channel"), Some("stable"));
+        assert_eq!(
+            options_of("flatpak:org.gimp.GIMP@channel=stable").one("channel"),
+            Some("stable")
+        );
+    }
+
+    #[test]
+    fn channel_on_a_backend_without_version_streams_is_an_error() {
+        let err = p("github:sharkdp/fd@channel=stable").unwrap_err();
+        assert!(format!("{}", err).contains("not an option on `github`"));
+    }
+
+    #[test]
+    fn there_is_no_fallback_across_channels() {
+        let err = p("snap:code@channel=edge,channel=stable").unwrap_err();
+        assert!(format!("{}", err).contains("one value"));
+    }
+
+    #[test]
+    fn an_asset_pattern_is_validated_at_parse_time() {
+        assert_eq!(
+            options_of("github:sharkdp/fd@asset=*musl*").one("asset"),
+            Some("*musl*")
+        );
+    }
+
+    #[test]
+    fn asset_all_and_a_checksum_cannot_both_be_set() {
+        let err = p("github:sharkdp/fd@asset=all,sha256=abc").unwrap_err();
+        assert!(format!("{}", err).contains("cannot both be set"));
+    }
+
+    #[test]
+    fn bin_names_the_executable_inside_an_archive() {
+        assert_eq!(
+            options_of("github:foo/bar@bin=build/bar").one("bin"),
+            Some("build/bar")
+        );
+    }
+
+    #[test]
+    fn a_bare_name_defers_the_capability_check_to_the_resolver() {
+        // No prefix means `priority` decides the backend, so the grammar cannot know yet
+        // whether `formats` is legal — refusing here would break every unprefixed line.
+        assert!(p("fd@formats=deb").is_ok());
     }
 }
