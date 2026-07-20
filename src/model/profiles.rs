@@ -225,6 +225,8 @@ pub fn read_active_with(
         holds: "`active` is a list of profile names, one per line, and `when` blocks. It \
                 answers one question: what is this machine set to right now?",
         nesting: "`active` nests one level: name the condition once.",
+        // A profile name answers one question and has nothing to configure.
+        body: None,
     };
 
     let mut out: Vec<ActiveEntry> = Vec::new();

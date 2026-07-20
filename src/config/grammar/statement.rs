@@ -512,11 +512,14 @@ const PACKAGE_OPTION_KEYS: &[&str] = &[
 /// Options that are only meaningful on a backend that resolves one name to several
 /// downloadable artifacts, or that publishes several version streams. Each is refused by name
 /// on any other backend: an option nobody reads is a line that does nothing.
-fn validate_artifact_options(origin: &Origin, decl: &PackageDecl) -> Result<()> {
+/// Takes the backend and the options rather than a declaration, because the same rules apply
+/// to a backend's options body in `priority` (VIII.2) and one of them had to be the caller.
+pub fn validate_artifact_options(
+    origin: &Origin,
+    backend: Option<&str>,
+    o: &Options,
+) -> Result<()> {
     use crate::backends::artifact::{capability, AssetPattern, FormatOrder};
-
-    let o = &decl.options;
-    let backend = decl.backend.as_deref();
 
     for key in ["formats", "asset", "bin"] {
         if !o.contains(key) {
@@ -690,7 +693,7 @@ fn validate_options(origin: &Origin, decl: &PackageDecl, absent: bool) -> Result
         ));
     }
 
-    validate_artifact_options(origin, decl)?;
+    validate_artifact_options(origin, decl.backend.as_deref(), &decl.options)?;
     Ok(())
 }
 

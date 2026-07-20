@@ -2638,6 +2638,38 @@ different kinds of file. **Recorded here so the next audit does not re-file it a
 runner here — the line→config mapping, the file editing and the cron validation are covered,
 the provisioning is not), the network path in any backend, and anything requiring Docker.
 
+## Done 2026-07-20 (third session) — `priority` carries a backend's defaults (VIII.2, D7, D9)
+
+The middle level of VIII.2's precedence existed in the spec and nowhere else: `formats` could
+be written on a line or fall back to the detected default, and the `priority` file — the place
+VIII.2 actually names — had no options concept at all. `Priority` was a `Vec<String>`.
+
+**What was built**
+
+- **The shared gated reader learned an options body**, behind a vocabulary flag. `priority`
+  allows one; `active` does not, because a profile name answers one question and has nothing
+  to configure. Inside a body a value is verbatim to end of line, so `#` is data (V.9) — the
+  same rule the statement block bodies already follow, not a second one.
+- **`Priority` stores each backend's body** and hands it out by name. First mention wins for
+  the body exactly as it does for the order, so a matching `when` arm beats the plain line
+  below it and the two cannot disagree.
+- **The capability check moved to where both callers reach it.**
+  `validate_artifact_options` now takes a backend and an options set rather than a
+  declaration, so a body in `priority` is refused on the same grounds a line is: `formats` on
+  `apt`, `channel` on `github`, an unknown format name. It was that or a second copy.
+- **`to_spec` composes the three levels**, backend defaults first and the line's own options
+  overwriting whole. This is the only place a declaration becomes a spec, so the precedence
+  cannot drift between the imperative path and the file path.
+- **The bare-line hole is closed.** `fd@formats=deb` could not be checked at parse time
+  because the backend was unknown; the resolver now checks it once the backend is resolved,
+  which is what the comment at the parse site always claimed happened.
+
+**Also recorded, not built:** `to_spec` writes `__formats_from` (`line` or `priority (github)`)
+so D14's `why` has a reason to print. Nothing reads it yet.
+
+**D7 and D9 are adopted** — see their register entries. Both owe a Part II home and a Part V
+entry, and neither has one yet.
+
 ## Audit 2026-07-20 — every claim in this document checked against the tree
 
 > **CLOSED by the session above, which is dated the same day and ran after it.** Every
@@ -4361,6 +4393,13 @@ V.15 says listed = available. A block with an options body is still a listing, s
 — but then a user who writes only a formats block has silently enabled a backend. *Recommendation:*
 yes, it enables — one list, one question, exactly as V.15 argues. Say so explicitly.
 
+**ADOPTED and BUILT (2026-07-20): yes, a body is a listing.** `Priority::parse` pushes the
+backend onto the order and stores its body, so a lone `github { formats = deb }` both enables
+`github` and sets its default. One list answering one question, as V.15 argues. The alternative
+— a body that configures a backend without enabling it — would mean `priority` had two kinds of
+mention with different force, which is the `backend_priority`/`enabled_backends` split V.15
+already deleted once.
+
 **D8 — `when` inside an options body.** II.2 says a declaration's body is options, so
 `github { when family == debian { … } }` is not legal today, and VIII.2's example wraps the whole
 `github` block in a `when` instead. That works but gets repetitive across four families.
@@ -4371,6 +4410,13 @@ and a new block kind here is how the grammar starts growing exceptions.
 extend. The alternative (prepend the line's entries, keep the backend's as fallback) is more
 forgiving and produces an order nobody wrote. *Recommendation:* replace, as written — but it is
 an assertion I made, not a ruling, so it is listed here.
+
+**ADOPTED and BUILT (2026-07-20): replace, at both seams.** `to_spec` writes the backend's
+`priority` body into the spec first and lets the line's own options overwrite the key whole, so
+all three levels compose as *line beats `priority` beats built-in default* with no partial
+merge at either step. The merge happens once, in the one function that turns a declaration into
+a spec, rather than in each backend — a backend that resolved its own precedence would be the
+second implementation of it.
 
 **D10 — The closed vocabulary, and where it lives.** VIII.2 fixes ten names and makes an
 eleventh an error. That list has to live somewhere both the parser and the error message read

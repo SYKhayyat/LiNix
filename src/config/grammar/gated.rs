@@ -10,6 +10,7 @@
 //! see what is on at a glance nests one level and no further.
 
 use super::error::{GrammarError, Origin, Result};
+use super::options::{self, Options};
 use crate::config::parser::{eval_when, HostFacts};
 use std::path::Path;
 
@@ -24,6 +25,8 @@ pub struct GatedLine {
     /// Whether it applies to this host. A name inside a `when` that does not match is in
     /// the file and not in force.
     pub on: bool,
+    /// The name's options body, empty unless the file allows one and the name carried one.
+    pub options: Options,
 }
 
 /// What the file holds, so one reader can write both files' errors in their own words.
@@ -34,6 +37,12 @@ pub struct Vocabulary<'a> {
     pub holds: &'a str,
     /// The hint for a nested `when`.
     pub nesting: &'a str,
+    /// `Some(hint)` if a name here may carry a `{ key = value }` body, `None` if it may not.
+    ///
+    /// `priority` may — a backend line takes `formats`/`channel` (VIII.2). `active` may not:
+    /// a profile name answers one question and has nothing to configure, so a body there is
+    /// a mistake and reads better as one.
+    pub body: Option<&'a str>,
 }
 
 /// Read the body into its names, keeping every one — gated or not — so the caller can tell
@@ -42,9 +51,35 @@ pub struct Vocabulary<'a> {
 pub fn read(file: &Path, body: &str, facts: &HostFacts, vocab: &Vocabulary) -> Result<Vec<GatedLine>> {
     let mut out: Vec<GatedLine> = Vec::new();
     let mut gate: Option<(String, bool)> = None;
+    // The entry whose `{ }` body is open, and the header it was opened with.
+    let mut open_body: Option<(usize, String)> = None;
 
     for (idx, raw) in body.lines().enumerate() {
         let origin = Origin::new(file, idx + 1);
+
+        // Inside an options body a value is verbatim to end of line, so `#` is data and
+        // must not be stripped (V.9). A whole-line comment is still a comment.
+        if let Some((entry, header)) = open_body.clone() {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            if trimmed == "}" {
+                open_body = None;
+                continue;
+            }
+            if trimmed.ends_with('{') {
+                return Err(GrammarError::new(
+                    origin,
+                    format!("a `{{` block inside the `{}` block", header),
+                )
+                .with_hint(vocab.nesting.to_string()));
+            }
+            let (k, v) = options::parse_block_line(&origin, trimmed)?;
+            out[entry].options.insert(k, v);
+            continue;
+        }
+
         let line = super::strip_comment(raw).trim();
         if line.is_empty() {
             continue;
@@ -59,6 +94,29 @@ pub fn read(file: &Path, body: &str, facts: &HostFacts, vocab: &Vocabulary) -> R
             }
             gate = None;
             continue;
+        }
+
+        // A name carrying an options body, where the file allows one.
+        if let (Some(hint), Some(header)) = (vocab.body, line.strip_suffix('{')) {
+            let name = header.trim();
+            if !name.is_empty() && !name.starts_with("when ") {
+                if name.split_whitespace().count() > 1 {
+                    return Err(GrammarError::new(
+                        origin,
+                        format!("`{}` is not a {}", name, vocab.noun),
+                    )
+                    .with_hint(hint.to_string()));
+                }
+                out.push(GatedLine {
+                    text: name.to_string(),
+                    line: idx + 1,
+                    gate: gate.as_ref().map(|(p, _)| p.clone()),
+                    on: gate.as_ref().map(|(_, hit)| *hit).unwrap_or(true),
+                    options: Options::default(),
+                });
+                open_body = Some((out.len() - 1, name.to_string()));
+                continue;
+            }
         }
 
         if let Some(header) = line.strip_suffix('{') {
@@ -94,9 +152,17 @@ pub fn read(file: &Path, body: &str, facts: &HostFacts, vocab: &Vocabulary) -> R
             line: idx + 1,
             gate: gate.as_ref().map(|(p, _)| p.clone()),
             on: gate.as_ref().map(|(_, hit)| *hit).unwrap_or(true),
+            options: Options::default(),
         });
     }
 
+    if let Some((entry, header)) = open_body {
+        return Err(GrammarError::new(
+            Origin::new(file, out[entry].line),
+            format!("the `{}` block is never closed", header),
+        )
+        .with_hint("add the matching `}`."));
+    }
     if gate.is_some() {
         return Err(
             GrammarError::new(Origin::new(file, 0), "a `when` block is never closed")

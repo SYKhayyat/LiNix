@@ -316,7 +316,15 @@ impl<'a> StateResolver<'a> {
 
         // No scopes: this came from a command line, so it is in no module and no profile.
         // `--module dev` must not match it, and it has nothing to be untrue about.
-        let spec = to_spec(&backend, &decl.selector, &decl.options, &origin, present, &[]);
+        let spec = to_spec(
+            &backend,
+            &decl.selector,
+            &decl.options,
+            &origin,
+            present,
+            &[],
+            priority.options(&backend),
+        );
         Validator::validate_package_name_for(&spec.name, &spec.backend)?;
         Ok(spec)
     }

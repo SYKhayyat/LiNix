@@ -1,6 +1,8 @@
 use crate::config::grammar::error::{GrammarError, Origin, Result};
+use crate::config::grammar::options::Options;
 use crate::config::grammar::{gated, Vocabulary};
 use crate::config::parser::HostFacts;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The `priority` file: which backends this setup uses, and in what order (SPEC II.6).
@@ -16,11 +18,17 @@ use std::path::Path;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Priority {
     backends: Vec<String>,
+    /// A backend's machine-wide defaults — `formats`, `channel` (VIII.2) — from the options
+    /// body on its line. Absent for a backend written as a bare name, which is most of them.
+    options: BTreeMap<String, Options>,
 }
 
 impl Priority {
     pub fn from_backends(backends: Vec<String>) -> Self {
-        Self { backends }
+        Self {
+            backends,
+            options: BTreeMap::new(),
+        }
     }
 
     /// Parse the file body, applying `when` blocks for this host.
@@ -32,20 +40,42 @@ impl Priority {
             noun: "backend name",
             holds: "`priority` holds backend names and `when` blocks, nothing else. One backend per line.",
             nesting: "`priority` nests one level: name the condition once.",
+            body: Some(
+                "a backend's body holds its defaults, one `key = value` per line: \
+                 `github { formats = deb }`.",
+            ),
         };
 
         let mut backends: Vec<String> = Vec::new();
+        let mut options: BTreeMap<String, Options> = BTreeMap::new();
         for entry in gated::read(file, body, facts, &vocab)? {
             if !entry.on {
                 continue;
             }
             // First mention wins: a `when` block naming apt, then a global apt below, must
-            // not move apt down the order.
+            // not move apt down the order. The same rule decides the options body, so the
+            // `when` arm that matched beats the unconditional line below it.
             if !backends.iter().any(|b| b == &entry.text) {
-                backends.push(entry.text);
+                backends.push(entry.text.clone());
+            }
+            if !entry.options.is_empty() {
+                // The same rules as a declaration's options: an option on a backend that
+                // cannot read it is an error here too, or `priority` becomes the one file
+                // where a line that does nothing is legal.
+                crate::config::grammar::statement::validate_artifact_options(
+                    &Origin::new(file, entry.line),
+                    Some(entry.text.as_str()),
+                    &entry.options,
+                )?;
+                options.entry(entry.text).or_insert(entry.options);
             }
         }
-        Ok(Self { backends })
+        Ok(Self { backends, options })
+    }
+
+    /// A backend's machine-wide defaults, empty if its line carried no body.
+    pub fn options(&self, backend: &str) -> Option<&Options> {
+        self.options.get(backend)
     }
 
     /// Whether LiNix uses this backend at all.
@@ -228,6 +258,73 @@ mod tests {
     #[test]
     fn a_stray_brace_is_an_error() {
         assert!(parse("apt\n}\n").is_err());
+    }
+
+    #[test]
+    fn a_backend_line_may_carry_its_defaults() {
+        // VIII.2: `formats` in `priority` is the machine-wide default, and it is an options
+        // body on the backend line rather than a new file or a new block kind.
+        let p = parse("apt\ngithub {\n  formats = deb\n  formats = tarball\n}\n").unwrap();
+        assert_eq!(p.order(), ["apt", "github"]);
+        assert_eq!(p.options("github").unwrap().all("formats"), ["deb", "tarball"]);
+    }
+
+    #[test]
+    fn a_body_listing_a_backend_also_enables_it() {
+        // D7: listed = available (V.15). A body is still a listing, so a user who writes
+        // only a formats block has enabled the backend — one list, one question.
+        let p = parse("github {\n  formats = deb\n}\n").unwrap();
+        assert!(p.allows("github"));
+    }
+
+    #[test]
+    fn a_body_inside_a_when_block_applies_only_there() {
+        let body = "when family == debian {\n  github {\n    formats = deb\n  }\n}\n";
+        assert_eq!(parse(body).unwrap().options("github").unwrap().all("formats"), ["deb"]);
+
+        let body = "when family == arch {\n  github {\n    formats = deb\n  }\n}\n";
+        assert!(parse(body).unwrap().options("github").is_none());
+    }
+
+    #[test]
+    fn the_when_arm_that_matched_beats_the_plain_line_below_it() {
+        // Same first-mention-wins rule the order uses, so the two cannot disagree.
+        let body = "when family == debian {\n  github {\n    formats = deb\n  }\n}\n\
+                    github {\n  formats = binary\n}\n";
+        assert_eq!(parse(body).unwrap().options("github").unwrap().all("formats"), ["deb"]);
+    }
+
+    #[test]
+    fn an_option_the_backend_cannot_read_is_an_error_here_too() {
+        // VIII.4: silently ignoring an option is how a config grows lines that do nothing.
+        let err = parse("apt {\n  formats = deb\n}\n").unwrap_err();
+        assert!(err.to_string().contains("apt"), "{}", err);
+
+        let err = parse("github {\n  channel = stable\n}\n").unwrap_err();
+        assert!(err.to_string().contains("channel"), "{}", err);
+    }
+
+    #[test]
+    fn an_unknown_format_in_a_body_is_an_error_naming_the_real_ones() {
+        let err = parse("github {\n  formats = nonsense\n}\n").unwrap_err();
+        assert!(err.to_string().contains("nonsense"), "{}", err);
+        assert!(err.to_string().contains("tarball"), "{}", err);
+    }
+
+    #[test]
+    fn a_body_line_without_an_equals_is_an_error() {
+        assert!(parse("github {\n  formats deb\n}\n").is_err());
+    }
+
+    #[test]
+    fn an_unclosed_body_is_an_error_naming_the_backend() {
+        let err = parse("github {\n  formats = deb\n").unwrap_err();
+        assert!(err.to_string().contains("github"), "{}", err);
+    }
+
+    #[test]
+    fn a_bare_name_still_carries_no_options() {
+        assert!(parse("apt\ncargo\n").unwrap().options("apt").is_none());
     }
 
     #[test]

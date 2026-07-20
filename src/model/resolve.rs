@@ -593,6 +593,15 @@ impl<'a> Resolver<'a> {
                     }
                 }
             }
+            // A line with no prefix could not be checked at parse time, because the backend
+            // that will answer it was not known yet. It is known now, and an option nobody
+            // reads is a line that does nothing (VIII.4).
+            crate::config::grammar::statement::validate_artifact_options(
+                &e.declared.origin,
+                Some(e.backend.as_str()),
+                &e.declared.options,
+            )?;
+
             let spec = to_spec(
                 &e.backend,
                 &e.selector,
@@ -600,6 +609,7 @@ impl<'a> Resolver<'a> {
                 &e.declared.origin,
                 e.declared.present,
                 &scopes,
+                self.priority.options(&e.backend),
             );
             out.packages.entry(e.backend).or_default().push(spec);
         }
@@ -715,12 +725,31 @@ pub fn to_spec(
     origin: &Origin,
     present: bool,
     scopes: &[String],
+    backend_defaults: Option<&Options>,
 ) -> PackageSpec {
     let mut properties: HashMap<String, String> = HashMap::new();
+
+    // The line beats `priority`, and `priority` beats the built-in default (VIII.2, D9).
+    // The backend's defaults go in first and the line's own options overwrite them whole:
+    // a list is replaced, never extended, because half-overriding an ordered list produces
+    // an order nobody wrote.
+    if let Some(defaults) = backend_defaults {
+        for (k, vs) in defaults.iter() {
+            properties.insert(k.to_string(), vs.join(";"));
+        }
+    }
     for (k, vs) in options.iter() {
         // `requires` is a list; the rest are single values. Joined with `;` because that is
         // what the planner already splits on.
         properties.insert(k.to_string(), vs.join(";"));
+    }
+
+    // Which of the three levels answered, so `why` can say (D14). Kept beside the value
+    // rather than recomputed later: the resolver is the only place that still knows.
+    if options.contains("formats") {
+        properties.insert("__formats_from".into(), "line".into());
+    } else if backend_defaults.is_some_and(|d| d.contains("formats")) {
+        properties.insert("__formats_from".into(), format!("priority ({})", backend));
     }
     // Two different questions, two tags. `__source` is where the line is, for the human
     // reading an error or "Added jq to modules/imperative.txt" (II.8). `__scopes` is what
