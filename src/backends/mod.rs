@@ -17,6 +17,7 @@ pub mod mise;
 pub mod nix;
 pub mod pacman;
 pub mod service;
+pub mod setting;
 pub mod snap;
 pub mod vscode;
 pub mod web;

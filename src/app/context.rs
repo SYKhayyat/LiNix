@@ -369,7 +369,27 @@ impl App {
                     inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
                         .await?;
                 }
-                // dependents() yields only these three variants.
+                Statement::Setting(name, opts) => {
+                    let Some(b) = self.registry.get("setting") else {
+                        warn!(
+                            "{}: no settings adapter here — skipping `setting:{}`.",
+                            origin, name
+                        );
+                        continue;
+                    };
+                    if self.config.dry_run {
+                        info!("[DRY-RUN] would apply setting `{}`", name);
+                        continue;
+                    }
+                    let Some(inst) = b.as_installable() else {
+                        continue;
+                    };
+                    info!("Setting: applying `{}` ({})", name, origin);
+                    let spec = spec_from_extra("setting", name, opts);
+                    inst.install(std::slice::from_ref(&spec), b.sudo_for_write())
+                        .await?;
+                }
+                // dependents() yields only these four variants.
                 _ => {}
             }
         }
@@ -461,7 +481,7 @@ impl App {
         match kind {
             "shim" => self.shim_manager().await?.remove_shim(id).await,
             "schedule" => self.scheduler.deprovision(&self.executor, id).await,
-            "service" | "link" => {
+            "service" | "link" | "setting" => {
                 let Some(b) = self.registry.get(kind) else {
                     return Err(Error::BackendNotFound(format!(
                         "the `{}` backend is not available to undo `{}:{}`",

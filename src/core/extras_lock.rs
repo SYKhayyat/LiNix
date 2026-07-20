@@ -31,6 +31,7 @@ pub fn extra_key(stmt: &Statement) -> Option<String> {
         Statement::Shim(name, _) => Some(format!("shim:{}", name)),
         Statement::Service(name, _) => Some(format!("service:{}", name)),
         Statement::Link(name, _) => Some(format!("link:{}", name)),
+        Statement::Setting(name, _) => Some(format!("setting:{}", name)),
         Statement::Schedule(name, _) => Some(format!("schedule:{}", name)),
         _ => None,
     }

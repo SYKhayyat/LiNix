@@ -81,6 +81,11 @@ pub enum Statement {
     Schedule(String, Options),
     Service(String, Options),
     Link(String, Options),
+    /// `setting:SCHEMA/KEY @value=…` — a desktop setting whose home is a settings store
+    /// rather than a file (X.4). GNOME and KDE keep configuration in dconf and kconfig, so
+    /// `link:` cannot reach it; the adapter is chosen by what is running, not by what was
+    /// typed, which is why this is a statement and not a backend.
+    Setting(String, Options),
     Use(Reference),
     /// `exclude heavy` — subtract that module's or profile's packages (II.4).
     Exclude(Reference),
@@ -235,6 +240,7 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
         ("schedule:", Statement::Schedule),
         ("service:", Statement::Service),
         ("link:", Statement::Link),
+        ("setting:", Statement::Setting),
     ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             let (name, options) = split_options(origin, rest.trim())?;
@@ -445,6 +451,7 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
         Statement::Service(name, o) => validate_extra_options(origin, "service", name, o),
         Statement::Link(name, o) => validate_extra_options(origin, "link", name, o),
         Statement::Schedule(name, o) => validate_extra_options(origin, "schedule", name, o),
+        Statement::Setting(name, o) => validate_setting(origin, name, o),
         Statement::Repo { .. }
         | Statement::Use(_)
         | Statement::Exclude(_)
@@ -464,14 +471,62 @@ pub const SHIM_OPTION_KEYS: &[&str] = &["source"];
 pub const SERVICE_OPTION_KEYS: &[&str] = &["enabled", "status"];
 pub const LINK_OPTION_KEYS: &[&str] = &["target", "content", "template", "decrypt", "identity"];
 pub const SCHEDULE_OPTION_KEYS: &[&str] = &["cron", "run", "notify"];
+pub const SETTING_OPTION_KEYS: &[&str] = &["value"];
 
 fn keys_for(prefix: &str) -> &'static [&'static str] {
     match prefix {
         "shim" => SHIM_OPTION_KEYS,
         "service" => SERVICE_OPTION_KEYS,
         "link" => LINK_OPTION_KEYS,
+        "setting" => SETTING_OPTION_KEYS,
         _ => SCHEDULE_OPTION_KEYS,
     }
+}
+
+/// Split `SCHEMA/KEY` into its halves. The one place the shape is decided, so the parser's
+/// refusal and the adapter's lookup cannot disagree about what a setting names.
+pub fn split_setting(name: &str) -> Option<(&str, &str)> {
+    let (schema, key) = name.split_once('/')?;
+    let (schema, key) = (schema.trim(), key.trim());
+    if schema.is_empty() || key.is_empty() || key.contains('/') {
+        return None;
+    }
+    Some((schema, key))
+}
+
+/// A setting names a schema, a key inside it, and the value it must hold. A line missing any
+/// of the three describes no state, and applying it would mean choosing on the user's behalf
+/// which key they meant.
+fn validate_setting(origin: &Origin, name: &str, options: &Options) -> Result<()> {
+    validate_extra_options(origin, "setting", name, options)?;
+
+    if split_setting(name).is_none() {
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`{}` is not `SCHEMA/KEY`", name),
+        )
+        .with_hint(
+            "a setting names the schema and the key inside it, separated by one `/`: \
+             `setting:org.gnome.desktop.interface/color-scheme @value=prefer-dark`.",
+        ));
+    }
+
+    if options.one("value").is_none_or(str::is_empty) {
+        return Err(
+            GrammarError::new(origin.clone(), format!("`setting:{}` has no value", name))
+                .with_hint(
+                    "say what the key must hold: `@value=prefer-dark`. A setting with no value \
+                     declares nothing.",
+                ),
+        );
+    }
+    if options.all("value").len() > 1 {
+        return Err(
+            GrammarError::new(origin.clone(), format!("`setting:{}` has two values", name))
+                .with_hint("a key holds one value. Name the one you want."),
+        );
+    }
+    Ok(())
 }
 
 fn validate_extra_options(
@@ -955,6 +1010,41 @@ mod tests {
         ] {
             assert!(p(line).is_ok(), "{} was refused", line);
         }
+    }
+
+    #[test]
+    fn a_setting_names_a_schema_a_key_and_a_value() {
+        let Statement::Setting(name, opts) =
+            p("setting:org.gnome.desktop.interface/color-scheme@value=prefer-dark").unwrap()
+        else {
+            panic!("not a setting");
+        };
+        assert_eq!(name, "org.gnome.desktop.interface/color-scheme");
+        assert_eq!(opts.one("value"), Some("prefer-dark"));
+    }
+
+    #[test]
+    fn a_setting_without_a_slash_is_not_schema_key() {
+        let err = p("setting:color-scheme@value=prefer-dark").unwrap_err();
+        assert!(err.what.contains("SCHEMA/KEY"), "{}", err);
+    }
+
+    #[test]
+    fn a_setting_with_no_value_declares_nothing() {
+        let err = p("setting:org.gnome.x/color-scheme").unwrap_err();
+        assert!(err.what.contains("no value"), "{}", err);
+    }
+
+    #[test]
+    fn a_setting_takes_one_value_not_two() {
+        let err = p("setting:org.gnome.x/k@value=a,value=b").unwrap_err();
+        assert!(err.what.contains("two values"), "{}", err);
+    }
+
+    #[test]
+    fn a_typo_on_a_setting_is_refused_like_any_other_extra() {
+        let err = p("setting:org.gnome.x/k@vale=dark").unwrap_err();
+        assert!(err.what.contains("is not an option"), "{}", err);
     }
 
     #[test]

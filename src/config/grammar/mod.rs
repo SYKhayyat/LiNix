@@ -325,7 +325,8 @@ fn merge_options(stmt: &mut Statement, extra: Options, origin: &Origin) -> Resul
         Statement::Shim(_, o)
         | Statement::Schedule(_, o)
         | Statement::Service(_, o)
-        | Statement::Link(_, o) => o,
+        | Statement::Link(_, o)
+        | Statement::Setting(_, o) => o,
         Statement::Repo { .. }
         | Statement::Use(_)
         | Statement::Exclude(_)

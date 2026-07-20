@@ -249,6 +249,7 @@ shim:NAME                     a shim
 schedule:NAME                 a scheduled task (only in `schedules`)
 service:NAME                  a service
 link:SOURCE                   a managed file
+setting:SCHEMA/KEY            a desktop setting (`@value=…`), read-before-write
 use NAME                      reference a module (lowercase) or profile (Capitalized)
 ```
 
@@ -2373,6 +2374,36 @@ on a machine whose `bash` is protected while leaving the refusal absolute. **The
 printed**: a rebuild that silently dropped half its scope would report success over a machine it
 never repaired, which is the same lie convergence was already telling.
 
+**V.50 — Why `setting:` is a statement, and why it reads before it writes.** *(Adopted
+2026-07-20 from Part X.4; owner ruling.)*
+
+The bug this prevents has two halves, and they need two different rules.
+
+**Why a statement and not a `de:`/`gsettings:` backend.** A desktop is packages plus files plus
+a session, all of which already have statements. Inventing a fourth spelling of the same three
+things is the two-of-everything failure the rewrite exists to end — and the adapter is chosen by
+*what is running*, not by what the user typed, so a `backend:name` prefix would encode a choice
+the user does not get to make. A GNOME key and a KDE key are the same declaration; only the tool
+that applies it differs.
+
+**Why read-before-write is the whole mechanism, not an optimisation.** A line that shells out
+every sync is a hook — a command that runs whether or not anything changed, and whose effect on
+a converged machine is "run `gsettings set` again for nothing". A line that reads the current
+value and writes only on a difference is a *declaration*: it describes a state, and does nothing
+when the state already holds. The first belongs in `after_install`; only the second belongs in a
+model whose entire promise is that a settled machine is quiet. This is also why KDE waits — a
+store you cannot cleanly *read* cannot host a read-before-write declaration, so `kwriteconfig`
+is not adapted until that read exists, and a desktop with no adapter is an error rather than a
+blind write.
+
+**Why removal resets to the schema default and not to the prior value.** Every other statement's
+removal means "LiNix stops asserting this", and for a setting the honest meaning of that is "the
+desktop's own default applies again", not "whatever this machine happened to hold before LiNix
+first ran". Restoring a prior value would demand a per-machine store of pre-LiNix state — the
+exact hand-maintained per-box state II.1 forbids — to serve a case (a key customised by hand
+*before* adoption) that is rare and that `gsettings reset` handles acceptably by returning it to
+a known value rather than a remembered one.
+
 ---
 
 # Part VI — Bugs
@@ -2763,6 +2794,31 @@ both, or fix the clobber in place and keep three implementations.)*
 name, because it is the one `gh` and CI already set and the value is unambiguously a GitHub
 credential. *(Options offered: the conventional name, the namespaced name, or the namespaced
 one with a fallback — the fallback refused as two paths for one question.)*
+
+## Done 2026-07-20 (third session) — `setting:` (X.4, K7)
+
+The one real gap X.4 named — desktop configuration that lives in a settings store, not a file
+`link:` can write. GNOME's dconf and KDE's kconfig are not files, so `~/.config/i3/config` is
+`link:` and "tap-to-click on, dark theme" is not.
+
+**Built** as a fourth extra statement, `setting:SCHEMA/KEY @value=…`:
+
+- **Grammar:** `Statement::Setting`, parsed by the same prefix table as `service:`/`link:`, and
+  validated to name a schema, a key, and exactly one value — a line missing any of the three
+  describes no state. `split_setting` is the one place `SCHEMA/KEY` is split, so the parser's
+  refusal and the adapter's lookup cannot disagree.
+- **Backend** `src/backends/setting.rs`, on the `service.rs` template: pure
+  `read`/`write`/`reset`/`already_set` functions tested without a desktop, `detect_store`
+  finding `gsettings`, and an `Installable` that reads before it writes so a settled sync runs
+  nothing.
+- **Removal resets to the schema default** (owner ruling), through the same `extras_lock` drift
+  path `service:` uses — no per-key store of prior values.
+- **No adapter is an error, never a silent write** (K7). Only GNOME is adapted; KDE refuses
+  until `kwriteconfig`'s read-before-write is solved.
+
+It inherits the model rather than extending it: `when` wraps it, two active declarations of one
+key disagreeing is the II.7 error, and it is legal in modules and profiles (a `setting:` under
+a `when` is a per-machine desktop config) — unlike `schedule:`/`vars`, which are file-bound.
 
 ## Audit 2026-07-20 — every claim in this document checked against the tree
 
@@ -5085,9 +5141,9 @@ Two gaps, and they are different sizes:
    `gsettings`/`dconf`/`kwriteconfig`. **This is the actual gap**, and it is a new statement
    shape: a key-value setting is not a package, and `service:`/`link:`/`shim:` do not fit it.
 
-*Proposed (owner ruling, 2026-07-19): `setting:` is in scope.* A fourth extra-statement kind
-alongside `service:`, `link:` and `shim:`, applied in the same after-packages phase, with a
-per-desktop adapter behind it.
+*Proposed (owner ruling, 2026-07-19): `setting:` is in scope.* **BUILT, 2026-07-20.** A fourth
+extra-statement kind alongside `service:`, `link:` and `shim:`, applied in the same
+after-packages phase, with a per-desktop adapter behind it.
 
 ```
 setting:org.gnome.desktop.peripherals.touchpad/tap-to-click @value=true
@@ -5107,6 +5163,25 @@ now scope-of-adapters, not whether-to-build.
 out unconditionally is a command that runs every sync; a `setting:` that reads the current value
 first and writes only on a difference is a declaration, and only the second belongs in this
 model.
+
+**Built as `src/backends/setting.rs`, on the `service:`/`link:` pattern exactly:** pure
+`read_command`/`write_command`/`reset_command`/`already_set` functions (unit-tested with no
+desktop), a `detect_store` that finds `gsettings`, and an `Installable` that reads before it
+writes. It is a dependent extra, applied after packages, and its removal runs through the same
+`extras_lock` drift path `service:` uses.
+
+**Removal resets to the schema default (owner ruling, 2026-07-20), not to the prior value.**
+`gsettings reset` drops LiNix's value and lets the desktop's own default apply. There is no
+per-key store of prior values to keep, and "undeclared means the desktop's own default" is the
+shape every other statement's removal already has. *(Options offered: record and restore the
+prior value, reset to the schema default, or leave the value and only drop the record.)* The
+one cost, recorded rather than hidden: a key you had customised by hand *before* adopting LiNix
+returns to the schema default, not to your hand-set value, when the line leaves.
+
+**KDE is not adapted yet (K7).** `gsettings` reads a current value cleanly; `kwriteconfig` over
+KDE's schemaless ini files does not, and read-before-write is the whole mechanism. A desktop
+with no adapter is an error naming the gap, never a silent write — `setting:` refuses rather
+than applying something the desktop does not read.
 
 **No `de:` or `wm:` statement.** A desktop is not a backend. It is packages plus files plus a
 session, all of which have statements already, and inventing a fourth spelling of the same
@@ -5280,6 +5355,11 @@ population and the cleanest adapter (typed schemas, readable current values); KD
 is harder there. *Recommendation:* GNOME first, KDE second, and **`setting:` refuses on a desktop
 with no adapter rather than falling back to writing something.** A key silently unapplied is
 worse than an error, because the whole point is that the file is the truth.
+
+**BUILT the recommendation, 2026-07-20: GNOME via `gsettings`, KDE refused for now.** The
+`SettingStore` enum has exactly `GSettings` and `None`; a desktop that resolves to `None` makes
+every `setting:` line an error naming the missing adapter. KDE joins by adding a variant and its
+three command mappings — the pure-function shape is set up so that is the whole change.
 
 **K7b — What is the key syntax?** `setting:SCHEMA/KEY @value=…` is one spelling; a backend-shaped
 `gsettings:org.gnome…` is another and would reuse the `backend:name` parser instead of adding a

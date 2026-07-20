@@ -56,7 +56,10 @@ impl DesiredState {
         self.extras.iter().filter(|(s, _)| {
             matches!(
                 s,
-                Statement::Shim(..) | Statement::Service(..) | Statement::Link(..)
+                Statement::Shim(..)
+                    | Statement::Service(..)
+                    | Statement::Link(..)
+                    | Statement::Setting(..)
             )
         })
     }
@@ -331,7 +334,8 @@ impl<'a> Resolver<'a> {
                 }
                 Statement::Shim(name, opts)
                 | Statement::Service(name, opts)
-                | Statement::Link(name, opts) => {
+                | Statement::Link(name, opts)
+                | Statement::Setting(name, opts) => {
                     *name = crate::model::vars::expand(name, vars, origin)?;
                     for value in opts.values_mut() {
                         *value = crate::model::vars::expand(value, vars, origin)?;
@@ -675,6 +679,7 @@ fn set_key(stmt: &Statement) -> String {
         Statement::Schedule(n, _) => format!("schedule:{}", n),
         Statement::Service(n, _) => format!("service:{}", n),
         Statement::Link(n, _) => format!("link:{}", n),
+        Statement::Setting(n, _) => format!("setting:{}", n),
         Statement::Use(r) => format!("use {}", r.name()),
         Statement::Exclude(r) => format!("exclude {}", r.name()),
         Statement::Intersect(r) => format!("intersect {}", r.name()),
