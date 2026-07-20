@@ -2565,16 +2565,48 @@ shell, clock or network access — so the script's only inputs today are `OS`/`A
 and it must end in a map of the four types. The host powers IX.6 permits are a separate standard
 library, **owner decision pending (Stage 4), not built.**
 
+**Built this session — Stage 4, the `vars.linix` standard library** (owner ruling, 2026-07-20:
+every power an external `vars.py` has, always-on, since it is a script committed to your own
+repo). Registered on the Rhai engine: `now`/`today`/`weekday`/`hour`/`year`/`month`/`day`;
+`sh("cmd")` (trimmed stdout, throws) and `sh_ok`; `read_file`/`path_exists`; `env`/`has_env`
+(`env` is W7's escape hatch); `http_get` (off the async runtime via reqwest blocking); and
+`parse_json`. Fail-loud split: a question returns a value, a fetch throws.
+
+**Built this session — Stage 5, a plan carries its resolved variables** (IX.6/W4). The
+interactive `sync` path already resolved once and applied that resolution. The gap was the
+saved-plan `apply` path: it re-resolves for the drift check, which would re-run a clock/shell/
+network provider and trip a spurious drift on every plan. `DesiredState` now carries its vars;
+`plan`/`bundle` freeze them into the `SavedPlan`; `apply` resolves the drift check against the
+plan's frozen vars (`StateResolver::with_vars`). Operations stay hash-protected; vars are
+auxiliary.
+
+**Built this session — Stage 6 tooling: W12, W8, W14.** `linix vars` prints each resolved
+variable, its typed value and type, and the active provider. `when $role == travel { Travel }`
+in `active` now works (W8's core) — it failed with "unknown when key" because `active` detected
+its own varless facts; `parse_active_with` threads the run's facts. `linix diff` and the git
+manifest views gained `vars*`, so a variable edit that changes the machine is visible in the
+change view (W14).
+
 **Green at this commit:** `cargo build --all-targets` clean, `cargo clippy --all-targets` silent,
 `cargo test` all suites passing (run the command, do not copy the number).
 
-**Owed, and tracked:** W2's Part II home and Part V entry are not written yet — deferred until the
-whole `vars` language lands (stages 2–6), so Part II does not describe a half-built feature.
-Stages remaining: provider abstraction + external-executable provider + the `preferences.toml`
-selector; the embedded Rhai provider; **an owner decision on the Rhai standard library** (which
-`sh`/`now`/`http`/`read_file` host functions exist — not yet asked); plan-carries-resolved-vars
-(the once-per-invocation rule, W4); and tooling (`linix vars` W12, `why` W11, `diff` W14,
-`activate`/`deactivate` + guard W8/W13, `check` W5).
+**Owed, and tracked — the remainder of Part IX:**
+- **W2's Part II home and Part V entry** are still not written; the whole language is built now,
+  so this is the next documentation step (value type, the coercion rules, the provider model, the
+  selector, the stdlib) into Part II with V entries naming the bugs each prevents.
+- **W5** (`check` reports unused variables as a note) and **W11** (`why` explains *"$role is
+  travel, set at vars line 6"*) both need reference/origin tracking threaded through resolution —
+  the resolved `Vars` is `name → value` with no origins, and gating/interpolation do not record
+  which names they touched. Deferred as a separate, more invasive change.
+- **W8/W13 messaging.** `when $var` in `active` resolves (built), and a variable change already
+  goes through the guard by construction (vars → desired state → plan → guard, so a one-line
+  `vars` edit that removes a hundred packages hits `max_removals`/`protected`). What is NOT built
+  is the *explanation*: `activate`/`deactivate` naming a variable-gated block, and the plan output
+  naming the variable as the cause of a removal. This is entangled with a pre-existing
+  `activate`/`deactivate` `when`-block messaging gap (2026-07-20 audit findings 2–3) and should be
+  taken with it.
+- **Not verified on this box:** the `http_get` live-network path (only a refused-connection error
+  is exercised) and external providers depending on an interpreter not installed here.
 
 ## Done 2026-07-20 (second session) — the audit's findings, closed
 
@@ -4722,9 +4754,14 @@ a match with no legal asset is the VIII.2 error, named per repo. Not decided, an
 
 # Part IX — Proposed: user-defined `when` variables
 
-**Status: PROPOSED, 2026-07-19 (owner-raised). Not built. Not in Part II.** Same standing as
-Part VIII: a shape, not target state. Adopted rules move into Part II and owe a Part V entry.
-Decisions are numbered `W1…W14` in IX.7.
+**Status: BUILT 2026-07-20 (fourth session), position 4. Not yet migrated into Part II.** Owner
+ruled the full programmable model (IX.6): typed values (W2), a line-file provider, an external-
+executable provider, and an embedded Rhai provider (`vars.linix`) with a clock/shell/files/env/
+network standard library. Providers are chosen by filename with a `[vars] source` selector; a
+plan freezes its resolved variables. What remains is documentation (the Part II home and Part V
+entries) and three deferred refinements — W5, W11, and the W8/W13 messaging — each tracked at its
+register entry and needing reference/origin tracking through the resolver. Decisions are numbered
+`W1…W14` in IX.7; the fourth-session entry in Part VII is the build record.
 
 **How far customization goes here is an open discussion, not a settled question (owner, 2026-07-19).**
 IX.5 draws a narrow boundary and IX.7 recommends holding it in several places. **Read those as
@@ -5031,13 +5068,18 @@ naming the fix.
 containing `when` is evaluated, including `active` — which means before profiles are known. And
 `vars` itself contains `when` over detected facts. So: detect facts → resolve `vars` → everything
 else. *Recommendation:* state this as a fixed phase in II.7, because getting it wrong produces an
-ordering bug that will look like an intermittent one.
+ordering bug that will look like an intermittent one. **BUILT (2026-07-20):** vars resolve once
+per invocation, before any `when` is evaluated (`resolve_model`), and the resolved set is carried
+on the facts and frozen into a saved plan so `apply` reuses it rather than re-running a provider
+that could disagree (Stage 5). Owed: writing the phase into II.7 as text.
 
 **W5 — What does `linix check` do with `vars`?** `check` parses everything on demand (II.3). A
 variable defined but never used is harmless; a variable *used* but not defined is an error W3/IX.3
 catches at parse time. But an unused variable on a fleet may mean "the block that used it was
 deleted on this branch". *Recommendation:* `check` reports unused variables as a note, not an
-error.
+error. **NOT BUILT (deferred, 2026-07-20):** needs reference tracking through resolution — the
+resolved set does not record which names a `when`/interpolation touched — so it is a separate,
+more invasive change rather than a note bolted on.
 
 ### Scope and grammar
 
@@ -5054,6 +5096,10 @@ a gitignored local file — which is per-machine hand-maintained state, the exac
 forbids; or a refusal, forcing the user to add a `when hostname ==` arm. *No recommendation.*
 **This is the decision that determines whether IX.1's argument is honest or a technicality,
 and it should be ruled on before anything else in this part.**
+**ANSWERED by the provider model (2026-07-20):** an external `vars.py` or the embedded `env(name)`
+reads `LINIX_VAR_ROLE` (or any variable) itself, so the escape hatch is the environment via a
+provider — no per-machine committed state, no LiNix-level env-var mechanism. The `env()` host
+function is built (Stage 4).
 
 **W8 — Do variables work in `active`?** `when $role == travel { Travel }` is the single most
 useful place for this feature and also the place with the sharpest edge: `activate` and
@@ -5063,6 +5109,11 @@ activates it when host == laptop"*. That message and that logic have to learn va
 *Recommendation:* yes, allow it, and treat the `activate`/`deactivate` message work as part of
 the feature rather than a follow-up — a half-taught `deactivate` would report a state it did not
 reach, which II.6 already calls out as the defect to avoid.
+**CORE BUILT (2026-07-20):** `when $role == travel { Travel }` in `active` resolves — it read its
+own varless facts before and failed with "unknown when key `$role`"; `parse_active_with` now
+threads the run's facts (which carry the variables). **The `activate`/`deactivate` message work is
+NOT built** — those verbs still reason about host blocks only, and that is entangled with the
+pre-existing activate/deactivate messaging gap (2026-07-20 audit findings 2–3); take them together.
 
 **W9 — Interpolation outside `when`.** IX.5 says no. Record the boundary explicitly so the
 answer is a decision rather than an omission, because the first `link:` request will arrive
@@ -5080,23 +5131,31 @@ reason to invite the problem.
 `when $role == travel` matched, `linix why` should say *"`$role` is `travel`, set at `vars`
 line 6 by `when host in [thinkpad, x220]`"* — one hop further than it explains today.
 *Recommendation:* yes, and W4's fixed resolution phase is what makes it cheap. Decide before
-the resolver is written.
+the resolver is written. **NOT BUILT (deferred, 2026-07-20):** needs origin tracking — the
+resolved set is `name → value` with no record of which line/provider set each — the same
+plumbing W5 needs; take them together.
 
 **W12 — Is there a command to print resolved variables?** `linix vars`, showing each name, its
 value on this machine, and which line set it. Debugging a fleet without it means reading the
 file and simulating the `when` blocks by hand. *Recommendation:* yes — small, and it is the
-first thing anyone will want when a block does not fire.
+first thing anyone will want when a block does not fire. **BUILT (2026-07-20):** `linix vars`
+prints each name, its typed value, its type, and the active provider (line file / external /
+embedded). *"Which line set it"* awaits the same origin tracking as W11.
 
 **W13 — Does changing a variable go through the guard?** It must: editing one line in `vars`
 can deactivate a profile and remove a hundred packages. That is the ordinary plan-and-guard path
 (II.8) and needs no new mechanism — but it does mean **a one-line edit to `vars` is potentially
 the most destructive edit in the repo**, and the plan output should make the cause visible
-rather than presenting a hundred unexplained removals.
+rather than presenting a hundred unexplained removals. **CORE SATISFIED by construction
+(2026-07-20):** variables feed the desired state, which feeds the plan, which feeds the guard — a
+`vars` edit that removes a hundred packages hits `max_removals`/`protected` like any other change.
+**The cause-in-the-plan messaging is NOT built** (same origin tracking as W11).
 
 **W14 — Does `vars` belong in `linix diff`?** Phase 4 limits `diff` to
 `modules/profiles/active/priority/schedules`. **`vars` has to join that list or the file that
 explains a change is the one file the change view cannot show.** *Recommendation:* yes; this is
-a one-line fix that will be forgotten if it is not written down here.
+a one-line fix that will be forgotten if it is not written down here. **BUILT (2026-07-20):**
+`diff` and the git manifest views match `vars*` (the line file and every provider file).
 
 ---
 
