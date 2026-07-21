@@ -8,7 +8,7 @@
 
 use crate::config::grammar::{GrammarError, Origin, Result};
 use crate::config::parser::HostFacts;
-use crate::model::vars::{Value, Vars};
+use crate::model::vars::{Value, VarOrigins, Vars};
 use std::path::{Path, PathBuf};
 
 /// Which of the three providers a filename names. The kind is the filename, not a config key, so
@@ -107,6 +107,12 @@ pub fn select(config_root: &Path, source: &Option<String>) -> Result<Option<Sele
 /// object of `name → value`, or `name = value` lines. A non-zero exit is an error carrying the
 /// program's own stderr — a provider that fails must not silently resolve to nothing.
 pub fn run_external(path: &Path, facts: &HostFacts) -> Result<Vars> {
+    run_external_with_origins(path, facts).map(|(v, _)| v)
+}
+
+/// [`run_external`], plus where each variable came from. A `name = value` line carries its line
+/// number; a JSON object has no lines, so every name points at the provider file (W11/W12).
+pub fn run_external_with_origins(path: &Path, facts: &HostFacts) -> Result<(Vars, VarOrigins)> {
     let name = file_name(path);
     let origin = Origin::new(name.clone(), 0);
     let mut argv = interpreter_argv(path);
@@ -181,11 +187,12 @@ fn interpreter_argv(path: &Path) -> Vec<std::ffi::OsString> {
 }
 
 /// Parse a provider's stdout: a JSON object, or `name = value` lines. JSON carries its own types;
-/// a `name = value` line is read with the same literal rules a `vars` line uses.
-fn parse_output(stdout: &str, origin: &Origin) -> Result<Vars> {
+/// a `name = value` line is read with the same literal rules a `vars` line uses. Returns the
+/// origin of each variable alongside it (W11/W12).
+fn parse_output(stdout: &str, origin: &Origin) -> Result<(Vars, VarOrigins)> {
     let text = stdout.trim();
     if text.is_empty() {
-        return Ok(Vars::new());
+        return Ok((Vars::new(), VarOrigins::new()));
     }
     if text.starts_with('{') {
         return parse_json_object(text, origin);
@@ -193,7 +200,7 @@ fn parse_output(stdout: &str, origin: &Origin) -> Result<Vars> {
     parse_pairs(stdout, origin)
 }
 
-fn parse_json_object(text: &str, origin: &Origin) -> Result<Vars> {
+fn parse_json_object(text: &str, origin: &Origin) -> Result<(Vars, VarOrigins)> {
     let json: serde_json::Value = serde_json::from_str(text).map_err(|e| {
         GrammarError::new(origin.clone(), format!("the provider's JSON did not parse: {}", e))
     })?;
@@ -204,11 +211,13 @@ fn parse_json_object(text: &str, origin: &Origin) -> Result<Vars> {
         ));
     };
     let mut vars = Vars::new();
+    let mut origins = VarOrigins::new();
     for (name, value) in map {
         check_name(&name, origin)?;
+        origins.insert(name.clone(), origin.clone());
         vars.insert(name, json_to_value(&value, origin)?);
     }
-    Ok(vars)
+    Ok((vars, origins))
 }
 
 /// JSON's types map straight onto ours; an object or null is refused, because a variable is a
@@ -237,24 +246,27 @@ fn json_to_value(value: &serde_json::Value, origin: &Origin) -> Result<Value> {
     }
 }
 
-fn parse_pairs(stdout: &str, origin: &Origin) -> Result<Vars> {
+fn parse_pairs(stdout: &str, origin: &Origin) -> Result<(Vars, VarOrigins)> {
     let mut vars = Vars::new();
+    let mut origins = VarOrigins::new();
     for (i, line) in stdout.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        let line_origin = Origin::new(file_name_of(origin), i + 1);
         let Some((name, value)) = line.split_once('=') else {
             return Err(GrammarError::new(
-                Origin::new(file_name_of(origin), i + 1),
+                line_origin,
                 format!("`{}` is not a `name = value` line", line),
             ));
         };
         let name = name.trim().to_string();
         check_name(&name, origin)?;
+        origins.insert(name.clone(), line_origin);
         vars.insert(name, Value::parse_literal(value.trim()));
     }
-    Ok(vars)
+    Ok((vars, origins))
 }
 
 /// A variable name is an identifier, so it can be read back as `$name` — a name that starts with
@@ -373,7 +385,7 @@ mod tests {
     #[test]
     fn json_object_output_carries_its_types() {
         let origin = Origin::new("vars.js", 0);
-        let vars = parse_output(
+        let (vars, origins) = parse_output(
             r#"{"role": "travel", "cores": 8, "gpu": true, "tags": ["a", "b"]}"#,
             &origin,
         )
@@ -382,15 +394,20 @@ mod tests {
         assert_eq!(vars["cores"], Value::Num(8.0));
         assert_eq!(vars["gpu"], Value::Bool(true));
         assert_eq!(vars["tags"], Value::List(vec![Value::Str("a".into()), Value::Str("b".into())]));
+        // JSON has no lines, so a variable's origin is the provider file itself.
+        assert_eq!(origins["role"].to_string(), "vars.js");
     }
 
     #[test]
     fn name_value_lines_infer_types_like_a_vars_line() {
         let origin = Origin::new("vars.sh", 0);
-        let vars = parse_output("role = travel\ncores = 8\n# a comment\ngpu = true\n", &origin).unwrap();
+        let (vars, origins) =
+            parse_output("role = travel\ncores = 8\n# a comment\ngpu = true\n", &origin).unwrap();
         assert_eq!(vars["role"], Value::Str("travel".into()));
         assert_eq!(vars["cores"], Value::Num(8.0));
         assert_eq!(vars["gpu"], Value::Bool(true));
+        // A pair line carries its line number, counting the comment line.
+        assert_eq!(origins["gpu"].to_string(), "vars.sh:4");
     }
 
     #[test]

@@ -178,6 +178,12 @@ fn parse_list_literal(t: &str) -> Option<Vec<String>> {
 /// diff of two machines' resolved vars is readable.
 pub type Vars = BTreeMap<String, Value>;
 
+/// Where each resolved variable's value came from — the winning definition's line for a line
+/// file, the provider file for a script or program. Kept beside [`Vars`] rather than inside it
+/// so the value path (gating, the plan, the diff) never carries provenance it does not read;
+/// only the tooling that explains a variable (`linix vars`, `why`) asks for this (W11/W12).
+pub type VarOrigins = BTreeMap<String, Origin>;
+
 /// One `NAME = VALUE` line. `conditional` is whether it came from inside a `when` block, which
 /// is what IX.3 turns on: a top-level line defines a name, a conditional one may only override.
 #[derive(Debug, Clone)]
@@ -197,6 +203,25 @@ pub struct Definition {
 /// 3. Values may reference other variables, so they resolve in dependency order, and a cycle
 ///    is an error naming the loop.
 pub fn resolve(defs: &[Definition]) -> Result<Vars> {
+    let raw = winning_defs(defs)?;
+    interpolate_all(&raw)
+}
+
+/// [`resolve`], plus the origin of the winning definition for each name — the line that set it,
+/// or the top-level default when no block overrode it. For the tooling that has to say *where* a
+/// value came from (W11/W12); the value path uses [`resolve`] and never pays for this.
+pub fn resolve_with_origins(defs: &[Definition]) -> Result<(Vars, VarOrigins)> {
+    let raw = winning_defs(defs)?;
+    let origins: VarOrigins = raw.iter().map(|(k, d)| (k.clone(), d.origin.clone())).collect();
+    let values = interpolate_all(&raw)?;
+    Ok((values, origins))
+}
+
+/// The one definition that wins for each name: its top-level default, replaced by the single
+/// `when` override that applies here. The IX.3 rules (a name needs a default, two matching
+/// blocks that disagree is a contradiction) are enforced here, so both [`resolve`] and
+/// [`resolve_with_origins`] share exactly one implementation of them.
+fn winning_defs(defs: &[Definition]) -> Result<BTreeMap<String, &Definition>> {
     let mut defaults: BTreeMap<String, &Definition> = BTreeMap::new();
     for def in defs.iter().filter(|d| !d.conditional) {
         if let Some(prev) = defaults.insert(def.name.clone(), def) {
@@ -245,8 +270,7 @@ pub fn resolve(defs: &[Definition]) -> Result<Vars> {
 
     let mut raw: BTreeMap<String, &Definition> = defaults;
     raw.extend(applied);
-
-    interpolate_all(&raw)
+    Ok(raw)
 }
 
 /// Resolve every value into a typed [`Value`], substituting `$other` references, in dependency
@@ -523,6 +547,21 @@ mod tests {
     fn a_matching_block_overrides_the_default() {
         let v = resolve(&[top("role", "desktop", 1), when("role", "travel", 5)]).unwrap();
         assert_eq!(v["role"], str_val("travel"));
+    }
+
+    #[test]
+    fn the_origin_is_the_winning_definition_not_the_default() {
+        // W11/W12: `why` and `linix vars` must point at the line that actually set the value —
+        // the override when one applies, the default otherwise.
+        let (v, o) = resolve_with_origins(&[
+            top("role", "desktop", 1),
+            when("role", "travel", 5),
+            top("gpu", "none", 2),
+        ])
+        .unwrap();
+        assert_eq!(v["role"], str_val("travel"));
+        assert_eq!(o["role"].line, 5, "the override line, not the default");
+        assert_eq!(o["gpu"].line, 2, "an unoverridden default names its own line");
     }
 
     #[test]

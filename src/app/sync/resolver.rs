@@ -106,13 +106,21 @@ impl<'a> StateResolver<'a> {
     /// Resolve just the variables (Part IX), without planning the whole model — for `linix vars`.
     /// The same resolution `resolve_model` performs, so what this prints is what a `when` sees.
     pub async fn resolve_vars(&self) -> Result<crate::model::vars::Vars> {
+        self.resolve_vars_with_origins().await.map(|(v, _)| v)
+    }
+
+    /// [`resolve_vars`], plus where each variable was set — for `linix vars` and `why`, which
+    /// have to say not just a variable's value but the line or provider that produced it (W11/W12).
+    pub async fn resolve_vars_with_origins(
+        &self,
+    ) -> Result<(crate::model::vars::Vars, crate::model::vars::VarOrigins)> {
         let facts = HostFacts::current();
         let priority = self.priority(&facts).await?;
         let known = Vocab::new(&self.registry, self.config, &priority);
         crate::model::Resolver::new(&self.layout, &known, &priority)
             .with_facts(facts)
             .with_vars_source(self.config.vars.source.clone())
-            .load_vars()
+            .load_vars_with_origins()
             .map_err(Error::from)
     }
 

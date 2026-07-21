@@ -10,7 +10,7 @@
 
 use crate::config::grammar::{GrammarError, Origin, Result};
 use crate::config::parser::HostFacts;
-use crate::model::vars::{Value, Vars};
+use crate::model::vars::{Value, VarOrigins, Vars};
 use chrono::{Datelike, Timelike};
 use rhai::{Dynamic, Engine, EvalAltResult, Scope};
 use std::path::Path;
@@ -31,6 +31,12 @@ const HTTP_TIMEOUT_SECS: u64 = 30;
 /// four types (string, number, boolean, list); a map value, or a script that does not end in a
 /// map, is an error naming the file.
 pub fn resolve(path: &Path, facts: &HostFacts) -> Result<Vars> {
+    resolve_with_origins(path, facts).map(|(v, _)| v)
+}
+
+/// [`resolve`], plus where each variable came from. A script has no lines to attribute, so every
+/// name points at the script file itself (W11/W12).
+pub fn resolve_with_origins(path: &Path, facts: &HostFacts) -> Result<(Vars, VarOrigins)> {
     let name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -62,12 +68,14 @@ pub fn resolve(path: &Path, facts: &HostFacts) -> Result<Vars> {
         })?;
 
     let mut vars = Vars::new();
+    let mut origins = VarOrigins::new();
     for (key, value) in map {
         let key = key.to_string();
         valid_name(&key, &origin)?;
+        origins.insert(key.clone(), origin.clone());
         vars.insert(key, dynamic_to_value(value, &origin)?);
     }
-    Ok(vars)
+    Ok((vars, origins))
 }
 
 /// Rhai's types map onto ours; a map or a `()` is refused, because a variable is a scalar or a

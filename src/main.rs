@@ -3053,7 +3053,7 @@ async fn handle_vars(app: &App) -> Result<()> {
         linix::model::vars_provider::Kind::External => "external program",
         linix::model::vars_provider::Kind::Embedded => "embedded script",
     };
-    let vars = resolver.resolve_vars().await?;
+    let (vars, origins) = resolver.resolve_vars_with_origins().await?;
     if vars.is_empty() {
         println!("`{}` ({}) resolved no variables.", name, kind);
         return Ok(());
@@ -3061,9 +3061,32 @@ async fn handle_vars(app: &App) -> Result<()> {
     println!("Variables from `{}` ({}):", name, kind);
     let width = vars.keys().map(|k| k.len()).max().unwrap_or(0);
     for (k, v) in &vars {
-        println!("  ${:<width$} = {}   [{}]", k, v, v.type_name(), width = width);
+        let source = origins.get(k).map(short_origin).unwrap_or_default();
+        println!(
+            "  ${:<width$} = {}   [{}]   set at {}",
+            k,
+            v,
+            v.type_name(),
+            source,
+            width = width
+        );
     }
     Ok(())
+}
+
+/// An origin as `linix vars`/`why` show it: the filename and, when it is a real line rather than
+/// a whole-provider attribution, the line number — `vars:6`, or `vars.linix` for a script.
+fn short_origin(origin: &linix::config::grammar::Origin) -> String {
+    let file = origin
+        .file
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("vars");
+    if origin.line == 0 {
+        file.to_string()
+    } else {
+        format!("{}:{}", file, origin.line)
+    }
 }
 
 async fn handle_absent(app: &App) -> Result<()> {

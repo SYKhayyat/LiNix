@@ -179,6 +179,15 @@ impl<'a> Resolver<'a> {
     /// the file's meaning depend on the order its blocks were read, and there is no order that
     /// is obviously right.
     pub fn load_vars(&self) -> Result<crate::model::vars::Vars> {
+        self.load_vars_with_origins().map(|(v, _)| v)
+    }
+
+    /// [`load_vars`], plus where each variable was set — for the tooling that explains a variable
+    /// (`linix vars`, `why`; W11/W12). The value path calls [`load_vars`] and drops the origins,
+    /// so no producer runs twice: both share the one provider dispatch below.
+    pub fn load_vars_with_origins(
+        &self,
+    ) -> Result<(crate::model::vars::Vars, crate::model::vars::VarOrigins)> {
         use crate::model::vars_provider::{self, Kind};
         let Some(selected) = vars_provider::select(self.layout.config_root(), &self.vars_source)?
         else {
@@ -186,13 +195,19 @@ impl<'a> Resolver<'a> {
         };
         match selected.kind {
             Kind::LineFile => self.load_vars_linefile(&selected.path),
-            Kind::External => vars_provider::run_external(&selected.path, &self.facts),
-            Kind::Embedded => crate::model::vars_embedded::resolve(&selected.path, &self.facts),
+            Kind::External => vars_provider::run_external_with_origins(&selected.path, &self.facts),
+            Kind::Embedded => {
+                crate::model::vars_embedded::resolve_with_origins(&selected.path, &self.facts)
+            }
         }
     }
 
-    /// The line-file provider (`vars`): parse it, enforce IX.3, resolve to typed values.
-    fn load_vars_linefile(&self, file: &Path) -> Result<crate::model::vars::Vars> {
+    /// The line-file provider (`vars`): parse it, enforce IX.3, resolve to typed values and their
+    /// origins.
+    fn load_vars_linefile(
+        &self,
+        file: &Path,
+    ) -> Result<(crate::model::vars::Vars, crate::model::vars::VarOrigins)> {
         let Ok(body) = std::fs::read_to_string(file) else {
             return Ok(Default::default());
         };
@@ -245,7 +260,7 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
-        crate::model::vars::resolve(&defs)
+        crate::model::vars::resolve_with_origins(&defs)
     }
 
     /// II.7 steps 1-3: `active` -> profiles -> the modules they reach, parsed and gated.
