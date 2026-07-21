@@ -2252,7 +2252,7 @@ async fn handle_run(app: &App, packages: &[String], command: &str) -> Result<()>
 }
 
 async fn handle_adopt(app: &App) -> Result<()> {
-    app.migrator().migrate().await.map_err(|e| e.into())
+    app.adopter().adopt().await.map_err(|e| e.into())
 }
 async fn handle_undo(app: &App) -> Result<()> {
     app.undo_manager()
@@ -2973,7 +2973,7 @@ async fn handle_update(app: &App) -> Result<()> {
 /// ~103 — so `unmanaged` and `adopt` disagreed by a factor of four about the same word, and
 /// the number you read here was not the number `adopt` would act on. Same crawl, one answer.
 async fn handle_unmanaged(app: &App) -> Result<()> {
-    let found = app.migrator().discover().await?;
+    let found = app.adopter().discover().await?;
 
     if found.adopt.is_empty() {
         println!("Nothing to adopt: LiNix already manages everything you chose to install.");
@@ -3413,7 +3413,7 @@ async fn handle_reset(app: &App, force: bool) -> Result<()> {
 /// Stop managing packages without uninstalling them.
 ///
 /// This exists because deleting a manifest line means "uninstall this", not "stop managing
-/// this" — so the obvious way to trim `migrate`'s output (keep 15 lines, delete 85) is in
+/// this" — so the obvious way to trim `adopt`'s output (keep 15 lines, delete 85) is in
 /// fact an order to purge 85 packages. Forgetting has to be its own verb.
 ///
 /// It drops the package from managed state AND from any manifest that declares it. Doing
@@ -3639,7 +3639,7 @@ nix_gc_age = "30d"
 # [guard] — the nine refusals (II.10). One table, one home.
 #
 # Drift removal is derived from managed state, and managed state can be wrong: a
-# mis-scoped manifest, a bad `migrate`, or a state file from another machine can
+# mis-scoped manifest, a bad `adopt` run, or a state file from another machine can
 # make hundreds of working packages look unwanted. The guard refuses those.
 # Every rule here is a refusal, not a preference: `-y` cannot skip any of them.
 # `linix protected` shows the effective rules.

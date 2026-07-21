@@ -1,6 +1,6 @@
 use crate::config::grammar::Origin;
 use crate::app::diagnostics::FailureDiagnosticEngine;
-use crate::app::migrate::Migrator;
+use crate::app::adopt::Adopter;
 use crate::app::profile::ProfileManager;
 use crate::app::run::Runner;
 use crate::app::scheduler::notify::NotificationManager;
@@ -140,8 +140,8 @@ impl App {
         Self::new_with_executor_and_state_path(config, executor, None).await
     }
 
-    pub fn migrator(&self) -> Migrator {
-        Migrator::new(self.registry.clone(), self.state.clone(), &self.config)
+    pub fn adopter(&self) -> Adopter {
+        Adopter::new(self.registry.clone(), self.state.clone(), &self.config)
     }
 
     pub fn shell(&self) -> EphemeralShell {

@@ -541,9 +541,8 @@ write is deleted (II.17), because two stores could disagree about what this mach
 per-backend forms this section used to promise (`lock <name>`, `lock --backend cargo`) do not
 exist. The one-file-per-backend layout now has exactly one real instance: `locks/github.toml`,
 written by the backend as it installs rather than by `linix lock`, because the artifact is only
-known at the moment it is chosen. `Layout::lock_file()` still has zero callers — `github`
-builds its own path — and that is a duplication worth closing when a second artifact backend
-needs one.
+known at the moment it is chosen. `github` asks `Layout::lock_file()` for that path rather
+than building it, so there is one answer to where a backend's lock lives.
 
 *The two unbuilt rows are the target state and are kept as such. They were written here as
 though they were real, which cost the 2026-07-20 audit a check — a target belongs in Part III
@@ -3132,21 +3131,25 @@ different kinds of file. **Recorded here so the next audit does not re-file it a
   and that is accepted; `require_snapshot` and `deny_vulnerable` are not, and they are the
   reason. *(Options offered: route it through the gate, honour `require_snapshot` only, or
   refuse whole-system upgrade whenever a policy is set.)*
-- **`Layout::lock_file()` still has zero callers**, though `locks/<backend>.toml` is now a real
-  layout: `github` builds that path itself rather than asking `Layout`. The duplication is
-  small and worth closing when a second artifact backend needs one. II.6's other two claims
-  (resolved backend for a bare name, regex expansion) are still false.
-- **The `use`-cycle error still names only names**, not every file and line in loop order; and
-  `@requires` cycles are still caught by separate machinery (Tarjan, at plan time) rather than
-  being "the same error" II.7 promises.
-- **`linix check` still does not reach what no active profile reaches**, though its doc
-  comment and II.3 both say it parses everything on demand.
+- ~~**`Layout::lock_file()` still has zero callers**~~ **CLOSED 2026-07-21:** `github` asks
+  `Layout` for the path. II.6's other two rows (resolved backend for a bare name, regex
+  expansion) are still unbuilt, and II.6 now says so rather than stating them as fact.
+- ~~**The `use`-cycle error still names only names**~~ **CLOSED 2026-07-21:** one renderer
+  (`model::cycle`) writes II.7's shape for `use` loops at both layers and for `@requires`.
+  The `@requires` *walk* is still Tarjan at plan time, and that is now recorded as a decision
+  rather than a gap: the graph is packages, not files.
+- ~~**`linix check` still does not reach what no active profile reaches**~~ **CLOSED
+  2026-07-21:** it walks every module and profile, `use` included, so II.3's "parses
+  everything on demand" and II.7's "catches cycles no active profile reaches" are both true.
 - **99 comments in `src/` cite a `V.n` paragraph.** Not swept, on purpose: CLAUDE.md's rule is
   that a comment citing `V.n` *to explain a design* is narration, while one stating a
   constraint is not, and the two cannot be told apart by grep. A mechanical strip would be a
   large diff that deletes real constraints along with the narration.
-- **Phase 6's six containers still have not been run** (no Docker on this box), and
-  `src/app/migrate.rs` is still alive at 702 lines as the body of `handle_adopt`.
+- **Phase 6's six containers still have not been run** (no Docker on this box).
+  `src/app/migrate.rs` is now `src/app/adopt.rs` and `Migrator` is `Adopter` — it was never a
+  second implementation, it was `adopt` under a deleted command's name, and the word `migrate`
+  is gone from the code with it (including a `source: "migrate"` arm in `why` that nothing
+  writes).
 
 **What this session did NOT verify:** the OS scheduler (no systemd/launchd/Task Scheduler
 runner here — the line→config mapping, the file editing and the cron validation are covered,

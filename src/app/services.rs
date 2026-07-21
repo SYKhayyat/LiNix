@@ -1,7 +1,7 @@
 use crate::app::scheduler::notify::NotificationManager;
 use crate::app::scheduler::SchedulerManager;
 use crate::app::{
-    diagnostics::FailureDiagnosticEngine, EphemeralShell, LuaHooks, MetricsCollector, Migrator,
+    diagnostics::FailureDiagnosticEngine, EphemeralShell, LuaHooks, MetricsCollector, Adopter,
     ProfileManager, ShimManager, UndoManager,
 };
 use crate::backends::{create_default_registry, BackendRegistry};
@@ -33,7 +33,7 @@ pub struct AppCore {
 }
 
 pub struct AppServices {
-    pub migrator: Migrator,
+    pub adopter: Adopter,
     pub shell: EphemeralShell,
     pub shim_manager: ShimManager,
     pub undo_manager: UndoManager,
@@ -48,7 +48,7 @@ impl AppServices {
         let shim_manager = ShimManager::new().await?;
 
         Ok(Self {
-            migrator: Migrator::new(app.registry.clone(), app.state.clone(), &app.config),
+            adopter: Adopter::new(app.registry.clone(), app.state.clone(), &app.config),
             shell: EphemeralShell::new(
                 app.registry.clone(),
                 app.state.clone(),

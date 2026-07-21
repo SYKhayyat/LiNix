@@ -10,7 +10,7 @@ use tracing::{debug, info, instrument, trace, warn};
 
 /// Adoption: bringing packages that are already installed under LiNix's management.
 ///
-/// The Migrator asks every backend which packages a person chose to install, and writes
+/// The Adopter asks every backend which packages a person chose to install, and writes
 /// the answer out as a manifest. Two properties matter more than anything else here:
 ///
 /// 1. *The answer is an estimate.* Package managers differ in how well they separate a
@@ -20,7 +20,7 @@ use tracing::{debug, info, instrument, trace, warn};
 /// 2. *Adoption is the dangerous half.* Everything adopted lands in the global state
 ///    registry, and anything in that registry is a removal candidate on the next sync. An
 ///    over-broad adoption is not a cosmetic mistake; it is a queued mass removal.
-pub struct Migrator {
+pub struct Adopter {
     /// Registry for capability-based discovery across all backends.
     registry: Arc<BackendRegistry>,
     /// Shared mutable access to the system state.
@@ -37,7 +37,7 @@ pub struct Skipped {
     pub reason: String,
 }
 
-/// What a discovery crawl found. `migrate` and `audit` share this so the preview cannot
+/// What a discovery crawl found. `adopt` and `audit` share this so the preview cannot
 /// disagree with the real run — they were near-duplicate loops that had already drifted
 /// apart on two separate points.
 #[derive(Debug, Default)]
@@ -50,7 +50,7 @@ pub struct Discovery {
     pub sources: BTreeMap<String, String>,
 }
 
-impl Migrator {
+impl Adopter {
     pub fn new(
         registry: Arc<BackendRegistry>,
         state: Arc<Mutex<StateRegistry>>,
@@ -65,7 +65,7 @@ impl Migrator {
 
     /// The one discovery crawl. Read-only: it acquires nothing and writes nothing.
     ///
-    /// `migrate` and `audit` both go through here. They used to be near-duplicate loops
+    /// `adopt` and `audit` both go through here. They used to be near-duplicate loops
     /// and had already drifted on two points — one keyed managed-state lookups off the
     /// package's backend and the other off the backend's own name, and one warned on a
     /// backend error while the other swallowed it, so the preview could hide a failure the
@@ -164,7 +164,7 @@ impl Migrator {
 
     /// Discovery -> manifest -> acquisition.
     #[instrument(skip(self))]
-    pub async fn migrate(&self) -> Result<()> {
+    pub async fn adopt(&self) -> Result<()> {
         debug!("scanning for packages to adopt");
         let found = self.discover().await?;
 
@@ -183,11 +183,10 @@ impl Migrator {
 
         info!("{} candidate(s) for adoption.", found.adopt.len());
 
-        // II.9: **one** `modules/adopted.txt`. It used to be `migrated_<timestamp>.txt` in
-        // the groups folder — a folder nothing reads any more, under a name that made the
-        // second `adopt` declare every package twice, which the resolver then refuses as a
-        // contradiction (II.7 rule 5). One file, overwritten, so adopting again answers
-        // "the machine as it is now" rather than "the machine plus history".
+        // II.9: one `modules/adopted.txt`, overwritten. Adopting twice must answer "the
+        // machine as it is now" and not "the machine plus history" — a per-run file would
+        // declare every package twice, which the resolver refuses as a contradiction
+        // (II.7 rule 5).
         let priority = crate::app::sync::resolver::StateResolver::new(
             &self.config,
             self.registry.clone(),
@@ -314,7 +313,7 @@ impl Migrator {
         out
     }
 
-    /// A read-only preview of what `migrate` would adopt. Runs the same crawl.
+    /// A read-only preview of what `adopt` would adopt. Runs the same crawl.
     pub async fn audit(&self) -> Result<Vec<Package>> {
         Ok(self.discover().await?.adopt)
     }
@@ -382,7 +381,7 @@ mod tests {
         Arc::new(reg)
     }
 
-    fn migrator(reg: Arc<BackendRegistry>) -> Migrator {
+    fn adopter(reg: Arc<BackendRegistry>) -> Adopter {
         let config = Config {
             // Keep the default protected list out of these assertions.
             guard: crate::config::GuardSettings {
@@ -392,7 +391,7 @@ mod tests {
             ..Config::default()
         };
         let state = Arc::new(Mutex::new(StateRegistry::default()));
-        Migrator::new(reg, state, &config)
+        Adopter::new(reg, state, &config)
     }
 
     #[tokio::test]
@@ -411,7 +410,7 @@ mod tests {
             .into()),
         );
 
-        let found = migrator(registry_with(ManualListing::Unsupported, mock.clone()))
+        let found = adopter(registry_with(ManualListing::Unsupported, mock.clone()))
             .audit()
             .await
             .unwrap();
@@ -453,7 +452,7 @@ mod tests {
             },
             mock.clone(),
         );
-        let names: Vec<String> = migrator(reg)
+        let names: Vec<String> = adopter(reg)
             .audit()
             .await
             .unwrap()
@@ -503,7 +502,7 @@ mod tests {
             },
             ..Config::default()
         };
-        let m = Migrator::new(reg, Arc::new(Mutex::new(StateRegistry::default())), &config);
+        let m = Adopter::new(reg, Arc::new(Mutex::new(StateRegistry::default())), &config);
         let names: Vec<String> = m
             .audit()
             .await
@@ -554,7 +553,7 @@ mod tests {
             },
             mock,
         );
-        let m = Migrator::new(
+        let m = Adopter::new(
             reg,
             Arc::new(Mutex::new(StateRegistry::default())),
             &Config::default(),
@@ -596,7 +595,7 @@ mod tests {
         );
         // No `protected_packages` here: protection has nothing to say about the manifest
         // (E7/II.9). What is commented out is what the OS calls essential.
-        let m = Migrator::new(
+        let m = Adopter::new(
             reg,
             Arc::new(Mutex::new(StateRegistry::default())),
             &Config::default(),
@@ -644,7 +643,7 @@ mod tests {
             },
             mock,
         );
-        let m = Migrator::new(
+        let m = Adopter::new(
             reg,
             Arc::new(Mutex::new(StateRegistry::default())),
             &Config::default(),
@@ -662,7 +661,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn audit_and_migrate_cannot_disagree() {
+    async fn audit_and_adopt_cannot_disagree() {
         // They were two loops that had already drifted apart on two points. `audit` is now
         // literally `discover().adopt`, so this test would have to be deleted to break it.
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
@@ -683,7 +682,7 @@ mod tests {
             },
             mock,
         );
-        let m = migrator(reg);
+        let m = adopter(reg);
         let audited: Vec<String> = m
             .audit()
             .await

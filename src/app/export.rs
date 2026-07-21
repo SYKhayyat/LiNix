@@ -1,6 +1,6 @@
 // src/app/export.rs
 //
-// Reverse of `migrate`/import: emit the managed package set as NATIVE manifests
+// Reverse of `adopt`/import: emit the managed package set as NATIVE manifests
 // (Brewfile, requirements.txt, package.json, Aptfile). This is the "no lock-in" escape
 // hatch — you can always leave LiNix, or hand a native file to a tool that speaks it.
 //

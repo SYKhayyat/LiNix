@@ -45,7 +45,7 @@ fn is_concrete_version(v: &str) -> bool {
 }
 
 /// How a backend answers "which packages did the user actually ask for?" — the question
-/// `migrate` must get right before it adopts anything into managed state.
+/// `adopt` must get right before it adopts anything into managed state.
 ///
 /// This is stated per backend rather than inferred from the absence of config: "no manual
 /// command configured" is ambiguous between *"listing everything is the correct answer"*

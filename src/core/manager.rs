@@ -64,7 +64,7 @@ pub trait Queryable: Send + Sync {
 
     /// Whether `list_manual` reflects real user intent rather than a guess.
     ///
-    /// Adoption (`migrate`) writes what it discovers into the global state registry, and
+    /// Adoption writes what it discovers into the global state registry, and
     /// anything in that registry is a removal candidate on the next sync. So a backend
     /// that answers "everything installed" when it means "I don't know" gets a system's
     /// entire dependency graph adopted and then purged. Defaults to true, which is right

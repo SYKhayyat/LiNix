@@ -392,7 +392,7 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         list_args: def.list_args,
         // A user-defined backend describes an install/remove/list command set; nothing in
         // that definition says whether its lister reports dependencies too. Don't assume —
-        // `migrate` skips custom backends rather than risk adopting a dependency graph.
+        // `adopt` skips custom backends rather than risk adopting a dependency graph.
         manual: ManualListing::Unsupported,
         essential_args: None,
         search_args: def.search_args,

@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn history_of_an_untouched_env_is_empty_not_everything() {
-        // The failure that matters: if this ever returned the full closure instead, migrate
+        // The failure that matters: if this ever returned the full closure instead, `adopt`
         // would adopt an entire dependency graph.
         assert!(parse_conda_history(r#"{"name":"base","dependencies":[]}"#).is_empty());
         assert!(parse_conda_history("not json").is_empty());

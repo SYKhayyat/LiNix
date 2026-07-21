@@ -968,7 +968,7 @@ fn base_config(name: &str) -> ManagerConfig {
         list_args: vec![],
         // Default to the safe answer, not the convenient one: an unlabelled backend is one
         // nobody has confirmed can separate user-chosen packages from dependencies, so
-        // `migrate` adopts nothing from it. A backend whose installed set really is all
+        // `adopt` adopts nothing from it. A backend whose installed set really is all
         // user-chosen says so with `ManualListing::AllInstalled`.
         manual: ManualListing::Unsupported,
         essential_args: None,
