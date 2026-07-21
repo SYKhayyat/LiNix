@@ -2025,13 +2025,20 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   directory prompts for confirmation on first install** — a confirmation, not a refusal, and not
   gated by a config key. Free for the dotfiles case (all under `~`), and it puts a beat between a
   pasted spec line and a system path. This is the only part of SEC3 the security pass implements.
-  **BUILT 2026-07-21.** `SyncEngine::sync` asks, beside the guard calls and before the snapshot,
-  so every command that installs (`sync`, `apply`, `rebuild`, `watch`, `upgrade`) inherits it from
-  the one place. `--dry-run` prints the destinations and says a real run would ask; `--yes`
-  proceeds (this is a confirmation, not the guard); a non-interactive shell without `--yes` is an
-  error naming the count, not a hang. Install and confirmation resolve `@target` through one
-  function (`backends::link::resolve_target`) — two resolutions is a run that confirms one
-  destination and writes another.
+  **BUILT 2026-07-21.** Asked in `reconcile`, before the repo phase and before any package is
+  touched, because that is the one function that applies extras at all — a `link:` line never
+  enters the package graph, so a check placed beside the guard would have been in a code path
+  `link:` does not travel. `--dry-run` prints the destinations and says a real run would ask;
+  `--yes` proceeds (this is a confirmation, not the guard); a non-interactive shell without
+  `--yes` is an error naming the count, not a hang. Install and confirmation resolve `@target`
+  through one function (`backends::link::resolve_target`) — two resolutions is a run that
+  confirms one destination and writes another.
+
+  **"First install" is asked of the destination, not of the ledger.** `locks/extras.toml` keys a
+  link by its *source*, so a line whose `@target` was edited from `~/.gitconfig` to a system path
+  is the same ledger entry it always was — the first version of this asked the ledger and was
+  silent on exactly the edit worth asking about. A destination that is not there yet is the run
+  that creates it.
 
 - **SEC4 — SSH host argument injection (fleet), semi-trusted input.** `fleet.rs:24-28` passes `host`
   to `ssh` with no `--` separator: `.arg("-o").arg("BatchMode=yes").arg(host).arg(remote_cmd)`. A host
@@ -2836,10 +2843,19 @@ Green at each commit (`cargo build --all-targets` clean, `cargo clippy --all-tar
 not undecided at all: the owner ruled on 2026-07-19 that `@target` stays unconfined and that a
 destination outside the home directory asks once. Only the asking was missing, so a `link:` line
 naming `/etc/cron.d/x` was placed with no beat between the pasted line and the system path. The
-question is asked in `SyncEngine::sync`, beside the guard calls and **before the snapshot** —
-every install path funnels through there, and a confirmation offered after the file is placed is
-a notification. Details and the `--dry-run`/`--yes`/non-interactive rules are recorded under SEC3
-in Phase 5.
+question is asked in `reconcile`, **before the repo phase and before any package is touched** — a
+confirmation offered after the file is placed is a notification. Details and the
+`--dry-run`/`--yes`/non-interactive rules are recorded under SEC3 in Phase 5.
+
+**The first two attempts at it were both wrong, and running the tool is what said so.** The check
+first went beside the guard in `SyncEngine::sync`, which is where every *package* funnels through
+— and a `link:` line is an extra, applied by `App::apply_dependents`, so it never passes that
+point at all. The unit tests were green. The second version asked the applied-extras ledger
+whether the line was new; the ledger keys a link by its source path, so re-pointing an existing
+line at `C:\linixtest` was placed with no question asked. Both were found by running `linix sync`
+against a scratch config with a real destination outside the home directory, and the four cases
+(non-interactive refusal, `--dry-run`, `--yes`, second run) were each exercised against the
+binary.
 
 ## Session 2026-07-21 (seventh session) — the owed list, and `@asset=all`
 

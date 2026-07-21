@@ -123,11 +123,6 @@ impl<'a> SyncEngine<'a> {
         // only `--allow-mass-install` clears it.
         guard::enforce_installs(self.config, changes.total_install(), scope).await?;
 
-        // SEC3: a `link:` line whose `@target` lands outside the home directory is asked
-        // about before the first install writes it. Must precede the snapshot and the
-        // transaction — a confirmation offered after the file is placed is a notification.
-        self.confirm_outside_home_targets(&changes)?;
-
         // The pre-sync snapshot is a safety NET, not a precondition: a Windows System
         // Restore checkpoint needs admin (and System Restore enabled), and btrfs/timeshift
         // may be unavailable — none of which should abort a package sync. Policies that
@@ -186,78 +181,6 @@ impl<'a> SyncEngine<'a> {
         }
 
         result
-    }
-
-    /// The `link:` installs in this run whose `@target` lands outside the home directory,
-    /// as (line, destination) pairs.
-    fn outside_home_targets(changes: &SyncChanges) -> Vec<(String, std::path::PathBuf)> {
-        let mut out = Vec::new();
-        for w in changes.graph.node_weights() {
-            let GraphAction::Install(spec) = w else { continue };
-            if spec.backend != "link" {
-                continue;
-            }
-            let Some(target) = spec.options.get("target") else {
-                continue;
-            };
-            // An unresolvable target is the install path's error to report, with its own
-            // message; swallowing it here would turn it into a silent skip.
-            let Ok(resolved) = crate::backends::link::resolve_target(target) else {
-                continue;
-            };
-            if crate::backends::link::is_outside_home(&resolved) {
-                out.push((format!("{}:{}", spec.backend, spec.name), resolved));
-            }
-        }
-        out
-    }
-
-    /// SEC3: `@target` is deliberately unconfined — an arbitrary destination is the link
-    /// backend's purpose — so this asks rather than refuses, and no config key turns it off.
-    /// What it buys is a beat between a pasted spec line and a system path.
-    fn confirm_outside_home_targets(&self, changes: &SyncChanges) -> Result<()> {
-        let targets = Self::outside_home_targets(changes);
-        if targets.is_empty() {
-            return Ok(());
-        }
-
-        println!("\nThese lines place files outside your home directory:");
-        for (line, path) in &targets {
-            println!("  {}  ->  {}", line, path.display());
-        }
-
-        if self.config.dry_run {
-            println!("[DRY-RUN] a real run would ask you to confirm these destinations.");
-            return Ok(());
-        }
-        if self.config.yes {
-            return Ok(());
-        }
-
-        use std::io::IsTerminal;
-        if !std::io::stdin().is_terminal() {
-            return Err(Error::Other(format!(
-                "refusing to place {} file(s) outside your home directory without \
-                 confirmation in a non-interactive shell.\n\n\
-                 What to do:\n  \
-                 linix plan          see every destination first\n  \
-                 linix sync --yes    place them",
-                targets.len()
-            )));
-        }
-
-        let ok = dialoguer::Confirm::new()
-            .with_prompt("Place these files?")
-            .default(false)
-            .interact()
-            .map_err(|e| Error::Other(format!("could not ask for confirmation: {}", e)))?;
-        if ok {
-            Ok(())
-        } else {
-            Err(Error::Other(
-                "cancelled — nothing was changed.".to_string(),
-            ))
-        }
     }
 
     /// Run the `@check=…` post-install probe for every freshly-installed package that declared
@@ -561,44 +484,3 @@ impl<'a> SyncEngine<'a> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    fn link_spec(name: &str, target: &str) -> PackageSpec {
-        let mut options = HashMap::new();
-        options.insert("target".to_string(), target.to_string());
-        PackageSpec {
-            name: name.to_string(),
-            backend: "link".to_string(),
-            options,
-            requires: vec![],
-            present: true,
-        }
-    }
-
-    #[test]
-    fn only_the_link_targets_outside_home_are_asked_about() {
-        #[cfg(windows)]
-        let system = r"C:\ProgramData\linix\hosts";
-        #[cfg(not(windows))]
-        let system = "/etc/cron.d/backup";
-
-        let mut changes = SyncChanges::default();
-        changes.graph.add_node(GraphAction::Install(link_spec("dotfiles/gitconfig", "~/.gitconfig")));
-        changes.graph.add_node(GraphAction::Install(link_spec("cron/backup", system)));
-        changes.graph.add_node(GraphAction::Install(PackageSpec {
-            name: "jq".into(),
-            backend: "apt".into(),
-            options: HashMap::new(),
-            requires: vec![],
-            present: true,
-        }));
-
-        let found = SyncEngine::outside_home_targets(&changes);
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].0, "link:cron/backup");
-        assert_eq!(found[0].1, std::path::PathBuf::from(system));
-    }
-}

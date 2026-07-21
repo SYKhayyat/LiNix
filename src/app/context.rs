@@ -308,6 +308,83 @@ impl App {
         Ok(())
     }
 
+    /// SEC3: the `link:` lines this run would place outside the home directory for the first
+    /// time, as (line, destination) pairs.
+    ///
+    /// "First time" is asked of the destination, not of a ledger: `locks/extras.toml` keys a
+    /// link by its *source*, so a line whose `@target` is edited to a system path is the same
+    /// ledger entry it always was and would never be asked about. A destination that is not
+    /// there yet is the run that creates it.
+    pub fn outside_home_links(
+        state: &crate::model::DesiredState,
+        exists: &dyn Fn(&std::path::Path) -> bool,
+    ) -> Vec<(String, std::path::PathBuf)> {
+        use crate::config::grammar::Statement;
+
+        state
+            .extras
+            .iter()
+            .filter_map(|(stmt, _)| {
+                let Statement::Link(name, opts) = stmt else {
+                    return None;
+                };
+                // An unresolvable target is the install path's error to report, with its own
+                // message; swallowing it here would turn it into a silent skip.
+                let resolved = crate::backends::link::resolve_target(opts.one("target")?).ok()?;
+                (crate::backends::link::is_outside_home(&resolved) && !exists(&resolved))
+                    .then_some((format!("link:{}", name), resolved))
+            })
+            .collect()
+    }
+
+    /// Ask about those destinations before anything is applied.
+    ///
+    /// SEC3: `@target` is deliberately unconfined — an arbitrary destination is the link
+    /// backend's purpose — so this asks rather than refuses, and no config key turns it off.
+    /// What it buys is a beat between a pasted spec line and a system path.
+    pub fn confirm_outside_home_links(&self, state: &crate::model::DesiredState) -> Result<()> {
+        let targets = Self::outside_home_links(state, &|p| p.exists() || p.is_symlink());
+        if targets.is_empty() {
+            return Ok(());
+        }
+
+        println!("\nThese lines place files outside your home directory:");
+        for (line, dest) in &targets {
+            println!("  {}  ->  {}", line, dest.display());
+        }
+
+        if self.config.dry_run {
+            println!("[DRY-RUN] a real run would ask you to confirm these destinations.");
+            return Ok(());
+        }
+        if self.config.yes {
+            return Ok(());
+        }
+
+        use std::io::IsTerminal;
+        if !std::io::stdin().is_terminal() {
+            return Err(Error::Other(format!(
+                "refusing to place {} file(s) outside your home directory without \
+                 confirmation in a non-interactive shell.\n\n\
+                 What to do:\n  \
+                 linix status        see every destination first\n  \
+                 linix sync --yes    place them",
+                targets.len()
+            )));
+        }
+
+        let ok = dialoguer::Confirm::new()
+            .with_prompt("Place these files?")
+            .default(false)
+            .interact()
+            .map_err(|e| Error::Other(format!("could not ask for confirmation: {}", e)))?;
+        if ok {
+            Ok(())
+        } else {
+            Err(Error::Other("cancelled — nothing was changed.".to_string()))
+        }
+    }
+
     /// Apply the dependent extras — shims, services and links — AFTER the package plan has
     /// run (II.7's dependent phase, the mirror of `apply_repositories`'s phase 1).
     ///
@@ -921,4 +998,49 @@ fn declared_extras(state: &crate::model::DesiredState) -> std::collections::BTre
         .iter()
         .filter_map(|(s, _)| crate::core::extras_lock::extra_key(s))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::grammar::{Options, Statement};
+
+
+    fn link(name: &str, target: &str) -> (Statement, Origin) {
+        let mut opts = Options::default();
+        opts.insert("target", target);
+        (
+            Statement::Link(name.to_string(), opts),
+            Origin::new("modules/files.txt", 1),
+        )
+    }
+
+    fn state_with(extras: Vec<(Statement, Origin)>) -> crate::model::DesiredState {
+        crate::model::DesiredState {
+            extras,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn only_a_new_link_outside_home_is_asked_about() {
+        #[cfg(windows)]
+        let system = r"C:\ProgramData\linix\hosts";
+        #[cfg(not(windows))]
+        let system = "/etc/cron.d/backup";
+
+        let state = state_with(vec![
+            link("dotfiles/gitconfig", "~/.gitconfig"),
+            link("cron/backup", system),
+        ]);
+
+        let asked = App::outside_home_links(&state, &|_| false);
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].0, "link:cron/backup");
+        assert_eq!(asked[0].1, std::path::PathBuf::from(system));
+
+        // The destination is already there: it was agreed to on the run that placed it, and a
+        // re-converge that asks again is a prompt on every sync.
+        assert!(App::outside_home_links(&state, &|_| true).is_empty());
+    }
 }

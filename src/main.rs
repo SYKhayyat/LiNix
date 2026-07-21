@@ -438,6 +438,11 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     let desired = state.packages.clone();
     enforce_policy(app, &desired).await?;
 
+    // SEC3, before the first repo is added and before any package is touched: a `link:` line
+    // whose `@target` lands outside the home directory is asked about once. A confirmation
+    // offered after the file is placed is a notification.
+    app.confirm_outside_home_links(&state)?;
+
     // Ordering phase 1: repos → refresh indexes. A package from a PPA cannot install until
     // the PPA is added, so this runs before the package plan (not inside it).
     app.apply_repositories(&state).await?;
