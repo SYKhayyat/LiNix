@@ -14,11 +14,26 @@
 /// `appimage:` is absent because the backend name is already the format.
 const SELECTS_ARTIFACTS: &[&str] = &["github"];
 
+/// Backends that fetch a URL, make the result executable and put it on `PATH`, so SEC2's
+/// download rules — HTTPS, a checksum, and the two flags that relax them — mean something.
+///
+/// Every other backend asks a package manager, which has its own signed index; `@allow_http`
+/// or `@unverified` there would be a line that does nothing.
+const DOWNLOADS: &[&str] = &["web", "appimage", "github"];
+
 /// Backends that publish one artifact in several version streams.
 const HAS_CHANNELS: &[&str] = &["snap", "flatpak"];
 
 pub fn selects_artifacts(backend: &str) -> bool {
     SELECTS_ARTIFACTS.contains(&backend)
+}
+
+pub fn downloads(backend: &str) -> bool {
+    DOWNLOADS.contains(&backend)
+}
+
+pub fn download_backends() -> String {
+    DOWNLOADS.join(", ")
 }
 
 pub fn has_channels(backend: &str) -> bool {

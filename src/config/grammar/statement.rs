@@ -561,7 +561,7 @@ fn validate_extra_options(
 /// `absent:` only, and "not an option" would be the wrong error for a key that exists.
 const PACKAGE_OPTION_KEYS: &[&str] = &[
     "version", "hold", "expires", "until", "requires", "sha256", "formats", "asset", "bin",
-    "channel",
+    "channel", "allow_http", "unverified",
 ];
 
 /// Options that are only meaningful on a backend that resolves one name to several
@@ -642,6 +642,25 @@ pub fn validate_artifact_options(
             "one pattern, which may be a glob: `@asset=*musl*`. For every matching file, \
              `@asset=all`.",
         ));
+    }
+
+    // SEC2's two opt-outs relax a rule that only exists where LiNix downloads and executes.
+    // On any other backend they are a line that does nothing, which II.2 refuses.
+    for key in ["allow_http", "unverified"] {
+        if !o.contains(key) {
+            continue;
+        }
+        let Some(backend) = backend else { continue };
+        if !capability::downloads(backend) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`@{}` is not an option on `{}`", key, backend),
+            )
+            .with_hint(format!(
+                "it relaxes a rule about downloading and running a file, which only {} do.                  Everywhere else the package manager's own index answers for the bytes.",
+                capability::download_backends()
+            )));
+        }
     }
 
     // `@asset=all` installs every match, so there is no single artifact for one hash to cover.

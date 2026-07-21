@@ -2554,17 +2554,35 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
     let report = changes.generate_report();
     let unmanaged = app.installed_but_unmanaged().await.unwrap_or_default();
 
+    // SEC2: once an install finishes, a checksummed binary and an unchecksummed one are
+    // indistinguishable on disk. `@unverified` is only a real decision if it stays visible
+    // after the fact, so what it bought is listed here for as long as the package is here.
+    let unverified: Vec<(String, String)> = {
+        let state = app.state.lock().await;
+        state
+            .packages
+            .iter()
+            .filter(|p| p.options.get("unverified").is_some_and(|v| v == "true"))
+            .map(|p| (p.backend.clone(), p.name.clone()))
+            .collect()
+    };
+
     if json {
         let out = serde_json::json!({
             "to_install": report.install,
             "to_remove": report.remove,
             "unmanaged": unmanaged.iter().map(|p| serde_json::json!({"backend": p.backend, "name": p.name})).collect::<Vec<_>>(),
+            "unverified": unverified.iter().map(|(b, n)| serde_json::json!({"backend": b, "name": n})).collect::<Vec<_>>(),
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
     }
 
-    if report.install.is_empty() && report.remove.is_empty() && unmanaged.is_empty() {
+    if report.install.is_empty()
+        && report.remove.is_empty()
+        && unmanaged.is_empty()
+        && unverified.is_empty()
+    {
         println!(
             "System matches your manifests; nothing to install, no drift, no unmanaged packages."
         );
@@ -2597,6 +2615,15 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
         );
         for p in &unmanaged {
             println!("    {}:{}", p.backend, p.name);
+        }
+    }
+    if !unverified.is_empty() {
+        println!(
+            "! downloaded with `@unverified` — nothing checked the bytes ({}):",
+            unverified.len()
+        );
+        for (backend, name) in &unverified {
+            println!("    {}:{}", backend, name);
         }
     }
     Ok(())

@@ -1902,7 +1902,22 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   ~~**Solution TBD.**~~ **DECIDED 2026-07-17 (owner): resolve the final destination and refuse it if
   it escapes `~/.local/bin`.** Gated by a config key that turns the protection on and off; on by
   default. Off restores today's unchecked behaviour — the escape hatch is the user's to open.
-  Still deferred to the dedicated security pass for implementation.
+  **BUILT 2026-07-21** (the owner opened the pass). `utils::bin_destination` is the one place a
+  PATH destination is built from a name, and it refuses any name carrying a path separator, `..`,
+  an absolute path or nothing at all — refuses rather than normalises, because "what does
+  `a/../b` mean" has a different answer on every filesystem and none is worth being wrong about.
+  `[guard] confine_bin` (default true) is the key. All three download backends call it, and it
+  also absorbed the three copies of the Windows `.exe` suffixing they each carried.
+
+  **Honest correction, found while building it: the exploit as written was already dead.**
+  `@bin` is refused on `web` — not by anything security-motivated, but by VIII.2's artifact-option
+  validation (2026-07-20), which allows `@bin` only on a backend that resolves one name to several
+  files, and `web:URL` names exactly one. So `web:…@bin=../../.bashrc` has been a parse error since
+  that landed, and web.rs's `options.get("bin")` was a dead branch (now deleted). What this item
+  actually closes is the *residual* traversal — the name derived from the URL's last path segment,
+  and github's repo name — and, more to the point, it makes the confinement structural, so the next
+  backend that deploys to PATH cannot reintroduce it. **A vulnerability closed by accident is
+  closed until somebody accidentally reopens it.**
 
 - **SEC2 — SERIOUS. Download-and-execute with no integrity check; plaintext HTTP allowed
   (appimage/web).** `appimage.rs:108-148`: `url = spec.name`, `client.get(url)` accepts any `http://`
@@ -1944,7 +1959,27 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   gets turned back on — leaving a system that looks protected and isn't. A per-line flag has to be
   written for each spec that needs it, and it stays in the config file where the next reader sees it.
   This is the same shape as SEC1's decided escape hatch: refuse by default, and the opening is the
-  user's to make explicitly. Still deferred to the dedicated security pass for implementation.
+  user's to make explicitly. **BUILT 2026-07-21** (the owner opened the pass), in `core/download.rs`
+  — one module, so the three backends cannot drift on what "verified" means. `@allow_http` and
+  `@unverified` are in II.2's option table and refused by name on any backend that does not
+  download (`capability::downloads`), because an option nobody reads is a line that does nothing.
+  appimage gained checksum verification, run **before** the `chmod 0755`, so an unverified file
+  never exists as an executable even briefly; on a mismatch the download is deleted rather than
+  left on disk. `status` lists every package installed with `@unverified`, for as long as it is
+  installed — after the fact a checksummed binary and an unchecksummed one are indistinguishable,
+  so the flag is only a real decision if it stays visible.
+
+  **`github:` is exempt from the checksum half — RULED 2026-07-21 (owner), and it is a collision
+  between two decisions, not an omission.** This entry (2026-07-19) says all three backends require
+  a checksum. VIII.2 (2026-07-20, one day later) makes a hand-written `@sha256` on `github:` legal
+  *only* when the line pins exactly one format, because one release ships a `.deb`, an `.rpm` and a
+  tarball and one hash cannot verify all of them — and puts github's integrity in
+  `locks/github.toml` instead. Requiring a checksum there would therefore force `@formats=` onto
+  every github line or push everyone to write `@unverified`, which turns the flag into noise rather
+  than a decision. *(Options offered: the lock is github's checksum; require it and live with
+  VIII.2's limits; or a first-run confirmation prompt.)* The owner chose the lock. **The HTTPS half
+  still applies to github**, on every redirect hop — its asset URLs redirect to a CDN, and the hop
+  is exactly where a promised HTTPS download stops being one.
 
   Not covered by this decision: HTTPS and checksums do **not** address SEC1 — that traversal is in the
   `@bin` destination, not the source, and a fully verified HTTPS download still lands wherever `@bin`
@@ -2895,8 +2930,26 @@ together. **NOT verified:** `apt-cache pkgnames` and `pacman -Ssq` have never be
 is no apt or pacman here and no Docker. The two commands are the only unexercised code in this
 item.
 
+**9. RULED and BUILT (owner, 2026-07-21): the security pass. SEC1 and SEC2 are closed.**
+Both had decided approaches and were parked for a dedicated pass; the owner opened it. Read each
+entry under Phase 5 for the detail. Two things worth carrying here:
+
+- **SEC1's headline exploit was already dead, and nobody knew.** `web:…@bin=../../.bashrc` has
+  been a parse error since VIII.2's artifact-option validation landed on 2026-07-20 — `@bin` is
+  legal only on a backend that resolves one name to several files. The traversal was closed by a
+  change made for an unrelated reason, which is worth less than it sounds: a vulnerability closed
+  by accident stays closed until somebody accidentally reopens it. What is built now is the
+  structural version — `utils::bin_destination` is the one place a PATH destination is built from
+  a name, all three download backends go through it, and `[guard] confine_bin` is the key.
+- **SEC2 and VIII.2 collided, and the owner ruled.** SEC2 (19 July) requires a checksum on
+  `web:`/`appimage:`/`github:`; VIII.2 (20 July) makes a hand-written `@sha256` on `github:` legal
+  only when the line pins one format, and puts github's integrity in `locks/github.toml`. github
+  is exempt from the checksum half; the HTTPS half still applies to it, on every redirect hop.
+
 **Not verified this session:** anything needing Docker, the network path in any backend, and the
-OS scheduler.
+OS scheduler. **The SEC2 refusals were exercised against the real binary** (plain HTTP refused,
+HTTPS-without-checksum refused, `@allow_http` alone still refused for the missing checksum), but
+no *successful* download was performed — the hosts were deliberately unreachable.
 
 ## Session 2026-07-20 (fifth session) — Part IX finishes its documentation and W5/W12
 

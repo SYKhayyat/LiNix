@@ -56,6 +56,8 @@ pub struct GithubBackendCore {
     /// Separate from `state_file`, which is LiNix's own bookkeeping and is not in git.
     pub locks_file: PathBuf,
     pub rate_limiter: RateLimiter,
+    /// `[guard] confine_bin`: whether the deployed name may reach outside `~/.local/bin` (SEC1).
+    pub confine_bin: bool,
     pub github_token: Option<String>,
     pub internal_lock: Mutex<()>,
 }
@@ -65,6 +67,7 @@ impl GithubBackendCore {
         executor: CommandExecutor,
         install_dir: PathBuf,
         locks_file: PathBuf,
+        confine_bin: bool,
         github_token: Option<String>,
     ) -> Self {
         let rate_limiter = if github_token.is_some() {
@@ -78,17 +81,25 @@ impl GithubBackendCore {
         Self {
             executor,
             name: "github".to_string(),
-            client: reqwest::Client::new(),
+            // No downgrade across redirects (SEC2). GitHub asset URLs redirect to a CDN,
+            // and the hop is where a promised HTTPS download can stop being one.
+            client: crate::core::download::client(false, "linix-manager")
+                .unwrap_or_else(|_| reqwest::Client::new()),
             install_dir,
             state_file,
             locks_file,
             rate_limiter,
+            confine_bin,
             github_token,
             internal_lock: Mutex::new(()),
         }
     }
 
+    /// SEC2: every URL this backend fetches must be HTTPS, including an asset URL that a
+    /// release points at — the API is HTTPS, but `browser_download_url` is whatever the
+    /// release published, and a redirect can leave the scheme the API promised.
     async fn github_get(&self, url: &str) -> Result<reqwest::Response> {
+        crate::core::download::check_scheme(url, false, url)?;
         self.rate_limiter
             .execute(|| async {
                 let mut request_builder =
@@ -490,11 +501,12 @@ impl Installable for GithubInstallable {
             .map_err(|e| Error::Other(e.to_string()))??;
 
             let repo_name = spec.name.split('/').next_back().unwrap_or(&spec.name);
-            let bin_dest_base = dirs::home_dir()
+            let bin_dir = dirs::home_dir()
                 .ok_or_else(|| Error::Other("Home directory not found".into()))?
                 .join(".local")
-                .join("bin")
-                .join(repo_name);
+                .join("bin");
+            let bin_dest =
+                crate::utils::bin_destination(&bin_dir, repo_name, self.core.confine_bin)?;
 
             let final_bin_path;
             let core_pkg_dir = pkg_dir.clone();
@@ -517,13 +529,6 @@ impl Installable for GithubInstallable {
                 .map_err(|e| Error::PackageNotFound(e.to_string()))?;
 
             {
-                #[allow(unused_mut)] // mutated only under cfg(windows)
-                let mut bin_dest = bin_dest_base.clone();
-                #[cfg(windows)]
-                if bin_dest.extension().is_none() {
-                    bin_dest.set_extension("exe");
-                }
-
                 crate::utils::deploy_executable(
                     &discovered,
                     &bin_dest,
@@ -628,6 +633,7 @@ pub fn register(
         exec.duplicate(),
         cfg.github_dir.clone(),
         cfg.layout().lock_file("github"),
+        cfg.guard.confine_bin,
         // A secret is the environment only, never a file (II.1) — `preferences.toml` is
         // committed to the repo it lives in, so a token key there is a token in git.
         std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty()),

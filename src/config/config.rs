@@ -77,6 +77,15 @@ pub struct GuardSettings {
     /// Refuse to apply when `audit` reports a managed package as vulnerable.
     #[serde(default)]
     pub deny_vulnerable: bool,
+    /// Refuse an `@bin=` value that names a file outside the backend's bin directory (SEC1).
+    /// On by default: off restores an unchecked join, where `@bin=../../.bashrc` is a symlink
+    /// over your shell profile pointing at a downloaded file.
+    #[serde(default = "default_confine_bin")]
+    pub confine_bin: bool,
+}
+
+fn default_confine_bin() -> bool {
+    true
 }
 
 impl Default for GuardSettings {
@@ -93,6 +102,7 @@ impl Default for GuardSettings {
             pinned_only: false,
             require_snapshot: false,
             deny_vulnerable: false,
+            confine_bin: default_confine_bin(),
         }
     }
 }

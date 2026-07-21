@@ -3,6 +3,7 @@ pub mod cache;
 pub mod error;
 pub mod executor;
 pub mod bare_lock;
+pub mod download;
 pub mod regex_lock;
 pub mod extras_lock;
 pub mod hook_lock;

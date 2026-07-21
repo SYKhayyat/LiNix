@@ -18,16 +18,19 @@ struct AppImageState {
 
 pub struct AppImageBackendCore {
     pub executor: CommandExecutor,
+    /// `[guard] confine_bin`: whether a link name may reach outside `~/.local/bin` (SEC1).
+    pub confine_bin: bool,
     pub install_dir: PathBuf,
     pub state_file: PathBuf,
 }
 
 impl AppImageBackendCore {
-    pub fn new(executor: CommandExecutor, install_dir: PathBuf) -> Self {
+    pub fn new(executor: CommandExecutor, install_dir: PathBuf, confine_bin: bool) -> Self {
         let state = install_dir.join("state.json");
 
         Self {
             executor,
+            confine_bin,
             install_dir,
             state_file: state,
         }
@@ -101,12 +104,16 @@ impl Installable for AppImageInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         let bin_dir = self.core.ensure_dirs().await?;
         let mut state = self.core.load_state().await;
-        let client = reqwest::Client::builder()
-            .user_agent("linix-manager")
-            .build()?;
 
         for spec in specs {
             let url = &spec.name;
+            // SEC2. This backend had no checksum option at all: it fetched any URL, chmod
+            // 0755'd the result and put it on PATH, so `appimage:http://…` was one line
+            // between a stranger and your shell.
+            let allow_http = crate::core::download::allows_http(spec);
+            crate::core::download::check_scheme(url, allow_http, url)?;
+            crate::core::download::check_checksum_declared(spec)?;
+            let client = crate::core::download::client(allow_http, "linix-manager")?;
             let filename = url.split('/').next_back().unwrap_or("app.AppImage");
             let dest_path = self.core.install_dir.join(filename);
 
@@ -123,6 +130,15 @@ impl Installable for AppImageInstallable {
             let bytes = response.bytes().await?;
             tokio::fs::write(&dest_path, bytes).await?;
 
+            // Before the chmod below, never after: an unverified file must never exist as an
+            // executable, even briefly.
+            if let Some(expected) = spec.options.get("sha256") {
+                if let Err(e) = crate::core::verify_checksum(&dest_path, expected) {
+                    let _ = tokio::fs::remove_file(&dest_path).await;
+                    return Err(e);
+                }
+            }
+
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -137,7 +153,8 @@ impl Installable for AppImageInstallable {
                 .or_else(|| filename.strip_suffix(".appimage"))
                 .unwrap_or(filename);
 
-            let link_path = bin_dir.join(link_name);
+            let link_path =
+                crate::utils::bin_destination(&bin_dir, link_name, self.core.confine_bin)?;
 
             crate::utils::deploy_executable(
                 &dest_path,
@@ -238,6 +255,7 @@ pub fn register(
     let core = Arc::new(AppImageBackendCore::new(
         exec.duplicate(),
         cfg.appimage_dir.clone(),
+        cfg.guard.confine_bin,
     ));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())

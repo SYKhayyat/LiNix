@@ -23,17 +23,21 @@ struct WebState {
 pub struct WebBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
+    /// `[guard] confine_bin`: whether an `@bin=` value may name a file outside `bin_dir`
+    /// (SEC1). Carried here because the backend is where the value becomes a path.
+    pub confine_bin: bool,
     pub install_dir: PathBuf,
     pub state_file: PathBuf,
     pub internal_lock: Mutex<()>,
 }
 
 impl WebBackendCore {
-    pub fn new(executor: CommandExecutor, install_dir: PathBuf) -> Self {
+    pub fn new(executor: CommandExecutor, install_dir: PathBuf, confine_bin: bool) -> Self {
         let state_file = install_dir.join("installed.json");
         Self {
             executor,
             name: "web".to_string(),
+            confine_bin,
             install_dir,
             state_file,
             internal_lock: Mutex::new(()),
@@ -89,12 +93,15 @@ pub struct WebInstallable {
 impl Installable for WebInstallable {
     async fn install(&self, specs: &[PackageSpec], _: bool) -> Result<()> {
         let mut state = self.core.load_state().await;
-        let client = reqwest::Client::builder()
-            .user_agent("linix-manager")
-            .build()
-            .map_err(Error::from)?;
 
         for spec in specs {
+            // SEC2: checked before a byte is fetched, so a refusal costs nothing and cannot
+            // leave a half-downloaded file behind.
+            let allow_http = crate::core::download::allows_http(spec);
+            crate::core::download::check_scheme(&spec.name, allow_http, &spec.name)?;
+            crate::core::download::check_checksum_declared(spec)?;
+            let client = crate::core::download::client(allow_http, "linix-manager")?;
+
             let head_res = client.head(&spec.name).send().await.map_err(Error::from)?;
             let remote_etag = head_res
                 .headers()
@@ -165,17 +172,18 @@ impl Installable for WebInstallable {
                 .map(|t| t == "program")
                 .unwrap_or(true)
             {
-                let bin_name = spec
-                    .options
-                    .get("bin")
-                    .map(|s| s.as_str())
-                    .unwrap_or_else(|| filename.split('.').next().unwrap_or(filename));
+                // The name comes from the URL, not from an option: `@bin` is refused on
+                // `web` (it picks between several files of one release, and a `web:` URL names
+                // exactly one). Reading it here was the SEC1 traversal's entry point, and a
+                // dead branch besides.
+                let bin_name = filename.split('.').next().unwrap_or(filename);
 
-                let bin_dest_base = dirs::home_dir()
+                let bin_dir = dirs::home_dir()
                     .ok_or_else(|| Error::Other("Home directory not found".into()))?
                     .join(".local")
-                    .join("bin")
-                    .join(bin_name);
+                    .join("bin");
+                let bin_dest =
+                    crate::utils::bin_destination(&bin_dir, bin_name, self.core.confine_bin)?;
 
                 let dest_dir_discovery = dest_dir.clone();
                 let bin_name_str = bin_name.to_string();
@@ -199,15 +207,6 @@ impl Installable for WebInstallable {
                     .map_err(|e| Error::Other(e.to_string()))?;
 
                 if let Some(src_path) = bin_src_result? {
-                    // The recorded path has to be the one that was written, extension and
-                    // all, or the removal path looks for a file that was never there.
-                    #[allow(unused_mut)] // mutated only under cfg(windows)
-                    let mut bin_dest = bin_dest_base.clone();
-                    #[cfg(windows)]
-                    if bin_dest.extension().is_none() {
-                        bin_dest.set_extension("exe");
-                    }
-
                     crate::utils::deploy_executable(
                         &src_path,
                         &bin_dest,
@@ -298,7 +297,11 @@ pub fn register(
     exec: &CommandExecutor,
     cfg: &crate::config::Config,
 ) {
-    let core = Arc::new(WebBackendCore::new(exec.duplicate(), cfg.web_dir.clone()));
+    let core = Arc::new(WebBackendCore::new(
+        exec.duplicate(),
+        cfg.web_dir.clone(),
+        cfg.guard.confine_bin,
+    ));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())
             .with_installable(Arc::new(WebInstallable { core: core.clone() }))
