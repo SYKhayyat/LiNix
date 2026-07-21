@@ -1,3 +1,4 @@
+use super::cycle::{self, Hop, Visit};
 use super::layout::{Layout, ModuleName};
 use crate::config::grammar::{
     parse_document, BackendNames, Document, Gates, GrammarError, Origin, Reference, Result,
@@ -165,23 +166,25 @@ pub fn expand<'a>(
     name: &str,
     asked_by: &Origin,
     facts: &HostFacts,
-    seen: &mut Vec<String>,
+    seen: &mut Vec<Visit>,
     inherited: &Gates,
 ) -> Result<Vec<(Statement, Origin, Gates)>> {
     let key = name.to_lowercase();
-    if seen.contains(&key) {
+    let entered = Hop::new(asked_by.clone(), format!("use {}", name));
+    if let Some(start) = seen.iter().position(|v| v.key == key) {
+        // The loop only — what led *into* it is not part of it.
+        let mut hops: Vec<Hop> = seen[start + 1..].iter().map(|v| v.entered.clone()).collect();
+        hops.push(entered);
         return Err(GrammarError::new(
             asked_by.clone(),
-            format!(
-                "module `{}` ends up using itself: {} -> {}",
-                name,
-                seen.join(" -> "),
-                key
-            ),
+            cycle::describe("modules use each other in a loop", &hops, &key),
         )
         .with_hint("a module cannot use itself, directly or through another."));
     }
-    seen.push(key.clone());
+    seen.push(Visit {
+        key: key.clone(),
+        entered,
+    });
 
     let stmts = loader.load(&key, asked_by)?.statements_with_gating(facts)?;
 
@@ -313,9 +316,26 @@ mod tests {
 
     #[test]
     fn a_module_that_uses_itself_is_an_error_not_a_hang() {
+        // II.7: the error names every file and line in the loop, in order, and stops.
         let f = fixture(&[("a.txt", "use b\n"), ("b.txt", "use a\n")]);
         let err = expand_module(&f, "a").unwrap_err();
-        assert!(err.what.contains("ends up using itself"), "{}", err);
+        assert!(err.what.contains("modules use each other in a loop"), "{}", err);
+        assert!(err.what.contains("a.txt:1  use b"), "{}", err);
+        assert!(err.what.contains("b.txt:1  use a"), "{}", err);
+        assert!(err.what.trim_end().ends_with("^ back to a"), "{}", err);
+    }
+
+    #[test]
+    fn a_diamond_is_not_a_loop() {
+        // II.7: reaching a module twice by two routes is what modules are for. Only a path
+        // that returns to where it started is a loop — so the walk is a path, not a set.
+        let f = fixture(&[
+            ("top.txt", "use left\nuse right\n"),
+            ("left.txt", "use base\n"),
+            ("right.txt", "use base\n"),
+            ("base.txt", "apt:curl\n"),
+        ]);
+        assert_eq!(expand_module(&f, "top").unwrap().len(), 2);
     }
 
     #[test]

@@ -74,9 +74,7 @@ impl std::str::FromStr for Gate {
     fn from_str(s: &str) -> std::result::Result<Self, ()> {
         let (pred, at) = s.rsplit_once(" @ ").ok_or(())?;
         let predicate = pred.strip_prefix("when ").ok_or(())?.to_string();
-        let (file, line) = at.rsplit_once(':').ok_or(())?;
-        let line: usize = line.parse().map_err(|_| ())?;
-        Ok(Gate::new(predicate, Origin::new(file, line)))
+        Ok(Gate::new(predicate, at.parse::<Origin>()?))
     }
 }
 

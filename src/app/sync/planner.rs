@@ -2,7 +2,9 @@
 
 use crate::backends::BackendRegistry;
 use crate::config::Config;
+use crate::config::grammar::Origin;
 use crate::core::{Error, GraphAction, PackageSpec, Result, StateRegistry};
+use crate::model::cycle::{self, Hop};
 use petgraph::algo::{is_cyclic_directed, tarjan_scc};
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableDiGraph;
@@ -41,48 +43,6 @@ pub enum Scope {
 /// Split a desired-state map into what must exist and what must not.
 ///
 /// `absent:` is a declaration, not drift: it is you reaching outside what LiNix manages,
-/// A one-line name for a graph node: `backend:name`, and its file:line when the spec
-/// carries `__source` (II.7 wants the error to say where each edge came from).
-fn node_label(action: &GraphAction) -> String {
-    match action {
-        GraphAction::Install(spec) => {
-            let base = format!("{}:{}", spec.backend, spec.name);
-            match spec.options.get("__source") {
-                Some(src) => format!("{} ({})", base, src),
-                None => base,
-            }
-        }
-        GraphAction::Remove { name, backend } => format!("{}:{}", backend, name),
-    }
-}
-
-/// Name the `@requires` cycle the graph contains, as `a -> b -> a`. Uses Tarjan's SCC to
-/// find the mutually-dependent set (V.45: name what closed the loop, not just "a cycle
-/// exists"). Falls back to a self-loop (a package requiring itself), then to a generic
-/// phrase if the shape defies naming — the message must never be emptier than the old one.
-fn describe_cycle(graph: &StableDiGraph<GraphAction, ()>) -> String {
-    for scc in tarjan_scc(graph) {
-        if scc.len() > 1 {
-            // tarjan_scc yields reverse-topological order; reverse it so the chain reads
-            // the way the `requires` edges point.
-            let mut labels: Vec<String> =
-                scc.iter().rev().map(|&idx| node_label(&graph[idx])).collect();
-            if let Some(first) = labels.first().cloned() {
-                labels.push(first); // close the loop visually: a -> b -> a
-            }
-            return labels.join(" -> ");
-        }
-    }
-    // A self-loop is its own SCC of one, so it is checked separately.
-    for idx in graph.node_indices() {
-        if graph.find_edge(idx, idx).is_some() {
-            let l = node_label(&graph[idx]);
-            return format!("{} -> {}", l, l);
-        }
-    }
-    "a set of packages that each require the next".to_string()
-}
-
 /// deliberately, by name (V.7). It shares the map with wishes because the map type is the
 /// seam, so it must be separated before anything reads the map as a wish list.
 fn partition_by_presence(
@@ -104,6 +64,76 @@ fn partition_by_presence(
         }
     }
     (wanted, unwanted)
+}
+
+/// `backend:name` for a graph node.
+fn node_key(action: &GraphAction) -> String {
+    match action {
+        GraphAction::Install(spec) => format!("{}:{}", spec.backend, spec.name),
+        GraphAction::Remove { name, backend } => format!("{}:{}", backend, name),
+    }
+}
+
+/// The line a node was declared on, so the loop can name it (II.7 wants the file and line of
+/// every edge). `__source` is the resolver's answer to that question; a node with none came
+/// from a command line and has no file to name.
+fn node_origin(action: &GraphAction) -> Origin {
+    match action {
+        GraphAction::Install(spec) => spec
+            .options
+            .get("__source")
+            .and_then(|s| s.parse::<Origin>().ok())
+            .unwrap_or_else(Origin::argument),
+        GraphAction::Remove { .. } => Origin::argument(),
+    }
+}
+
+/// The `@requires` loop, in II.7's shape: every file and line, in the order the edges point.
+///
+/// **The same error a `use` loop gets**, through the same renderer — II.7 calls them one
+/// error, and two spellings of it is how the second one goes stale. The walk differs
+/// (Tarjan over the plan graph, rather than the path the resolver was already tracking)
+/// because the graph is packages, not files, and it is built before anything looks for a
+/// loop.
+fn describe_cycle(graph: &StableDiGraph<GraphAction, ()>) -> String {
+    let loop_nodes: Vec<_> = tarjan_scc(graph)
+        .into_iter()
+        // tarjan_scc yields reverse-topological order; reverse it so the chain reads the way
+        // the `requires` edges point.
+        .map(|scc| scc.into_iter().rev().collect::<Vec<_>>())
+        .find(|scc| scc.len() > 1)
+        // A self-loop is its own SCC of one, so it is found separately: II.7's one-element
+        // case, not a special case.
+        .or_else(|| {
+            graph
+                .node_indices()
+                .find(|&idx| graph.find_edge(idx, idx).is_some())
+                .map(|idx| vec![idx])
+        })
+        .unwrap_or_default();
+
+    if loop_nodes.is_empty() {
+        return "a set of packages that each require the next".to_string();
+    }
+
+    let keys: Vec<String> = loop_nodes.iter().map(|&i| node_key(&graph[i])).collect();
+    let hops: Vec<Hop> = loop_nodes
+        .iter()
+        .enumerate()
+        .map(|(i, &idx)| {
+            let next = &keys[(i + 1) % keys.len()];
+            Hop::new(
+                node_origin(&graph[idx]),
+                format!("{} requires {}", keys[i], next),
+            )
+        })
+        .collect();
+
+    cycle::describe(
+        "packages require each other in a loop",
+        &hops,
+        keys.first().map(String::as_str).unwrap_or(""),
+    )
 }
 
 #[derive(Debug, Default, Clone)]
@@ -584,11 +614,20 @@ mod tests {
         graph.add_edge(a, b, ());
         graph.add_edge(b, a, ());
 
+        // II.7: a `requires` loop owes the same error a `use` loop does — every file and
+        // line, in the order the edges point, and the arrow back to where it started.
         let msg = describe_cycle(&graph);
-        assert!(msg.contains("apt:foo"), "{}", msg);
-        assert!(msg.contains("apt:bar"), "{}", msg);
-        assert!(msg.contains("modules/dev.txt:3"), "must name the file:line: {}", msg);
-        assert!(msg.contains("->"), "must show the chain: {}", msg);
+        assert!(
+            msg.contains("modules/dev.txt:3  apt:foo requires apt:bar"),
+            "{}",
+            msg
+        );
+        assert!(
+            msg.contains("modules/dev.txt:4  apt:bar requires apt:foo"),
+            "{}",
+            msg
+        );
+        assert!(msg.trim_end().ends_with("^ back to apt:foo"), "{}", msg);
     }
 
     #[test]
@@ -599,8 +638,10 @@ mod tests {
             backend: "apt".into(),
         });
         graph.add_edge(n, n, ());
+        // The one-element case, in the same shape as every other loop.
         let msg = describe_cycle(&graph);
-        assert!(msg.contains("apt:loop ->"), "{}", msg);
+        assert!(msg.contains("apt:loop requires apt:loop"), "{}", msg);
+        assert!(msg.trim_end().ends_with("^ back to apt:loop"), "{}", msg);
     }
 
     fn managed(name: &str, backend: &str) -> ManagedPackage {

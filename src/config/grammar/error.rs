@@ -27,6 +27,22 @@ impl Origin {
     }
 }
 
+impl std::str::FromStr for Origin {
+    type Err = ();
+
+    /// The inverse of [`Display`], kept beside it because the round trip crosses seams where
+    /// everything is a string — `__source` on a spec, `__gated_by` on a gate — and the two
+    /// halves drift the moment they are apart. A Windows path's drive letter is why the split
+    /// is from the right.
+    fn from_str(s: &str) -> std::result::Result<Self, ()> {
+        // No line number is the `argument()` shape, not a malformed one.
+        match s.rsplit_once(':').and_then(|(f, l)| Some((f, l.parse::<usize>().ok()?))) {
+            Some((file, line)) => Ok(Origin::new(file, line)),
+            None => Ok(Origin::new(s, 0)),
+        }
+    }
+}
+
 impl fmt::Display for Origin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.line == 0 {

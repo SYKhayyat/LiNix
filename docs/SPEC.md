@@ -746,7 +746,10 @@ path that **returns to where it started** is a loop. *(So the check is a path, n
 everything ever visited.)*
 
 **`linix check` catches cycles no active profile reaches** — consistent with II.3: LiNix
-parses what the active profiles reach, `check` parses everything on demand.
+parses what the active profiles reach, `check` parses everything on demand. It follows `use` from
+every module and profile in the folders, so a loop nobody activated is still found; it gates on
+this host's facts like everything else, so a `when` arm written for another machine is parsed and
+not walked.
 
 **Ordering is the planner's job, never the file layout's.** Repos first → refresh indexes →
 packages (native dependency graph + `@requires` edges) → things depending on packages
@@ -2802,6 +2805,32 @@ resolution read". Parsing only: whether a `use` names a module that exists is re
 question, and asking it here would report every profile on a machine that activates none of them.
 *Verified against the binary:* a broken module no profile reaches now fails `check` by name, and
 `check` is clean again once it is removed.
+
+**7. A loop names every file and line in it, in order — at all three layers (II.7).** The `use`
+cycle errors said *"module `a` ends up using itself: a -> b -> a"*: the names, and not one file or
+line, so the reader still had to find the loop. The walk was already tracking the path; it was
+tracking names only. It now tracks the line that entered each name (`model::cycle::Visit`), and
+**one renderer** (`model::cycle::describe`) writes II.7's shape for all three:
+
+```
+modules use each other in a loop
+
+  modules/a.txt:1  use b
+  modules/b.txt:2  use a
+                   ^ back to a
+```
+
+`@requires` loops go through the same renderer — II.7 calls them one error, and two spellings of
+it is how the second goes stale. Its *walk* still differs (Tarjan over the plan graph, not the
+resolver's path) because the graph is packages rather than files and is built before anything
+looks for a loop; `Origin` gained the `FromStr` that reads `__source` back for it, beside the
+`Display` that wrote it.
+
+**`check` catches loops no active profile reaches** (II.7's own sentence): `parse_everything`
+follows `use` as far as resolution would, so item 6's parse pass is a resolve pass. Rooting at
+every module finds one loop once per member, so the reports are deduped — two reports of one loop
+are rotations of each other, same hops, different starting point. *Verified against the binary:* an
+a↔b loop no profile reaches is reported once, with both lines.
 
 **Not verified this session:** anything needing Docker, the network path in any backend, and the
 OS scheduler.

@@ -392,8 +392,13 @@ impl<'a> Resolver<'a> {
     /// bookkeeping to tell them apart is a second answer to "what did resolution read", and the
     /// files are small.
     ///
-    /// Parsing only. Whether a `use` names a module that exists is resolution's question, and
-    /// asking it here would report every profile on a machine that reaches none of them.
+    /// Each one is walked as far as resolution would walk it — `use` followed into other
+    /// modules and profiles — because **`check` catches cycles no active profile reaches**
+    /// (II.7), and a loop is not visible in any one file.
+    ///
+    /// Gated by this host's facts, like everything else: a `when` arm for another machine is
+    /// parsed here but not walked, and checking it would mean deciding which host to pretend
+    /// to be.
     pub fn parse_everything(&self) -> Vec<GrammarError> {
         let mut errors = Vec::new();
         let mut loader = ModuleLoader::new(self.layout, self.backends);
@@ -402,22 +407,52 @@ impl<'a> Resolver<'a> {
         let mut modules = loader.available();
         modules.sort();
         for name in modules {
-            if let Err(e) = loader.load(&name, &asked) {
+            if let Err(e) = expand(
+                &mut loader,
+                &name,
+                &asked,
+                &self.facts,
+                &mut Vec::new(),
+                &Vec::new(),
+            ) {
                 errors.push(e);
             }
         }
 
         let profiles = ProfileLoader::new(self.layout, self.backends);
+        let asked = Origin::new(self.layout.profiles_dir(), 0);
         for name in profiles.available() {
-            let path = self.layout.profile_file(&name);
-            let Ok(body) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            if let Err(e) = crate::config::grammar::parse_document(&path, &body, self.backends) {
+            if let Err(e) = profiles.resolve(
+                &name,
+                &asked,
+                &self.facts,
+                &mut Vec::new(),
+                &Vec::new(),
+            ) {
                 errors.push(e);
             }
         }
-        errors
+
+        // Every module is walked as a root, so a loop is found once per member and reported
+        // once per member — five copies of one five-module loop. Two reports of one loop are
+        // rotations of each other: same hops, different starting point, so the hops are the
+        // key and the arrow naming that starting point is not.
+        let mut seen: Vec<Vec<&str>> = Vec::new();
+        let mut once = Vec::new();
+        for e in &errors {
+            let mut key: Vec<&str> = e
+                .what
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.starts_with("^ back to"))
+                .collect();
+            key.sort_unstable();
+            if !seen.contains(&key) {
+                seen.push(key);
+                once.push(e.clone());
+            }
+        }
+        once
     }
 
     /// Substitute `$name` into the values of every statement this host reached.

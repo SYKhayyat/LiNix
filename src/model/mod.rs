@@ -5,6 +5,7 @@
 //! (V.2).
 
 pub mod conflict;
+pub mod cycle;
 pub mod dated;
 pub mod edit;
 pub mod layout;

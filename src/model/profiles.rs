@@ -1,3 +1,4 @@
+use super::cycle::{self, Hop, Visit};
 use super::layout::Layout;
 use crate::config::grammar::{
     gated, parse_document, BackendNames, Gates, GrammarError, Origin, Reference, Result,
@@ -104,21 +105,22 @@ impl<'a> ProfileLoader<'a> {
         name: &str,
         asked_by: &Origin,
         facts: &HostFacts,
-        seen: &mut Vec<String>,
+        seen: &mut Vec<Visit>,
         inherited: &Gates,
     ) -> Result<Resolved> {
-        if seen.iter().any(|s| s == name) {
+        let entered = Hop::new(asked_by.clone(), format!("use {}", name));
+        if let Some(start) = seen.iter().position(|v| v.key == name) {
+            let mut hops: Vec<Hop> = seen[start + 1..].iter().map(|v| v.entered.clone()).collect();
+            hops.push(entered);
             return Err(GrammarError::new(
                 asked_by.clone(),
-                format!(
-                    "profile `{}` ends up using itself: {} -> {}",
-                    name,
-                    seen.join(" -> "),
-                    name
-                ),
+                cycle::describe("profiles reference each other in a loop", &hops, name),
             ));
         }
-        seen.push(name.to_string());
+        seen.push(Visit {
+            key: name.to_string(),
+            entered,
+        });
 
         let path = self.layout.profile_file(name);
         let body = std::fs::read_to_string(&path).map_err(|_| self.missing(name, asked_by))?;
@@ -619,11 +621,17 @@ mod tests {
 
     #[test]
     fn a_profile_that_uses_itself_is_an_error_not_a_hang() {
+        // II.7: the error names every file and line in the loop, in order, and stops.
         let f = fixture(&[("A", "use B\n"), ("B", "use A\n")], &[]);
-        assert!(resolve(&f, "A")
-            .unwrap_err()
-            .what
-            .contains("ends up using itself"));
+        let err = resolve(&f, "A").unwrap_err();
+        assert!(
+            err.what.contains("profiles reference each other in a loop"),
+            "{}",
+            err
+        );
+        assert!(err.what.contains("A:1  use B"), "{}", err);
+        assert!(err.what.contains("B:1  use A"), "{}", err);
+        assert!(err.what.trim_end().ends_with("^ back to A"), "{}", err);
     }
 
     #[test]
