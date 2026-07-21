@@ -1,6 +1,7 @@
 use super::layout::{Layout, ModuleName};
 use crate::config::grammar::{
-    parse_document, BackendNames, Document, GrammarError, Origin, Reference, Result, Statement,
+    parse_document, BackendNames, Document, Gates, GrammarError, Origin, Reference, Result,
+    Statement,
 };
 use crate::config::parser::HostFacts;
 use std::collections::HashMap;
@@ -155,13 +156,18 @@ pub fn flatten(doc: &Document) -> Vec<(&Statement, &Origin)> {
 /// The statements a module contributes on this host, following `use` into other modules.
 ///
 /// Cycles are stopped by `seen`: `a` using `b` using `a` is a mistake, not a reason to hang.
+///
+/// `inherited` is what already gated the reader's way in — the `active` block that turned the
+/// profile on, the profile's `when` around its `use`. A module's own blocks append to it, so a
+/// statement carries the whole chain that admitted it and not just its last link (W11).
 pub fn expand<'a>(
     loader: &mut ModuleLoader<'a>,
     name: &str,
     asked_by: &Origin,
     facts: &HostFacts,
     seen: &mut Vec<String>,
-) -> Result<Vec<(Statement, Origin)>> {
+    inherited: &Gates,
+) -> Result<Vec<(Statement, Origin, Gates)>> {
     let key = name.to_lowercase();
     if seen.contains(&key) {
         return Err(GrammarError::new(
@@ -177,17 +183,19 @@ pub fn expand<'a>(
     }
     seen.push(key.clone());
 
-    let stmts = loader.load(&key, asked_by)?.statements_for(facts)?;
+    let stmts = loader.load(&key, asked_by)?.statements_with_gating(facts)?;
 
     let mut out = Vec::new();
-    for (stmt, origin) in stmts {
+    for (stmt, origin, own) in stmts {
+        let mut gates = inherited.clone();
+        gates.extend(own);
         match stmt {
             Statement::Use(Reference::Module(m)) => {
-                out.extend(expand(loader, &m, &origin, facts, seen)?);
+                out.extend(expand(loader, &m, &origin, facts, seen, &gates)?);
             }
             // Rejected at load time; unreachable, but not worth an unwrap.
             Statement::Use(Reference::Profile(_)) => continue,
-            other => out.push((other, origin)),
+            other => out.push((other, origin, gates)),
         }
     }
     seen.pop();
@@ -236,8 +244,9 @@ mod tests {
             &Origin::argument(),
             &facts(),
             &mut Vec::new(),
+            &Vec::new(),
         )?;
-        Ok(out.into_iter().map(|(s, _)| s).collect())
+        Ok(out.into_iter().map(|(s, _, _)| s).collect())
     }
 
     #[test]

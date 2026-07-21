@@ -338,19 +338,25 @@ impl<'a> Editor<'a> {
         let asked = Origin::new(self.layout.active_file(), 0);
 
         for name in active {
-            let Ok(r) = profiles.resolve(name, &asked, &self.facts, &mut Vec::new()) else {
+            let Ok(r) = profiles.resolve(name, &asked, &self.facts, &mut Vec::new(), &Vec::new())
+            else {
                 continue;
             };
             for m in &r.modules {
-                if m.eq_ignore_ascii_case(module.as_str()) {
+                if m.name.eq_ignore_ascii_case(module.as_str()) {
                     return true;
                 }
                 // A module reached through another module is reached.
-                if let Ok(stmts) =
-                    super::modules::expand(&mut loader, m, &asked, &self.facts, &mut Vec::new())
-                {
+                if let Ok(stmts) = super::modules::expand(
+                    &mut loader,
+                    &m.name,
+                    &asked,
+                    &self.facts,
+                    &mut Vec::new(),
+                    &Vec::new(),
+                ) {
                     let want = self.layout.module_file(module);
-                    if stmts.iter().any(|(_, o)| o.file == want) {
+                    if stmts.iter().any(|(_, o, _)| o.file == want) {
                         return true;
                     }
                 }
@@ -532,7 +538,7 @@ pub fn active_module_files(
     let mut out: Vec<PathBuf> = Vec::new();
 
     for name in &active {
-        let Ok(r) = profiles.resolve(name, &asked, facts, &mut Vec::new()) else {
+        let Ok(r) = profiles.resolve(name, &asked, facts, &mut Vec::new(), &Vec::new()) else {
             continue;
         };
         // A profile may hold package lines directly (II.4), so it is a file `uninstall`
@@ -542,11 +548,17 @@ pub fn active_module_files(
             out.push(pf);
         }
         for m in &r.modules {
-            let Ok(stmts) = super::modules::expand(&mut loader, m, &asked, facts, &mut Vec::new())
-            else {
+            let Ok(stmts) = super::modules::expand(
+                &mut loader,
+                &m.name,
+                &asked,
+                facts,
+                &mut Vec::new(),
+                &Vec::new(),
+            ) else {
                 continue;
             };
-            for (_, o) in stmts {
+            for (_, o, _) in stmts {
                 if !out.contains(&o.file) {
                     out.push(o.file);
                 }

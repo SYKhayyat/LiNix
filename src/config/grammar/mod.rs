@@ -40,6 +40,36 @@ pub enum Item {
     Block(Block, Origin),
 }
 
+/// A `when` condition that admitted a statement, and the line it is written on.
+///
+/// Distinct from the statement's own [`Origin`], which says where the *line* is: two
+/// questions, two answers. `why` needs both to say "htop is here because `$role == travel`
+/// matched, and that is written at `active:4`".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gate {
+    pub predicate: String,
+    pub origin: Origin,
+}
+
+impl Gate {
+    pub fn new(predicate: impl Into<String>, origin: Origin) -> Self {
+        Self {
+            predicate: predicate.into(),
+            origin,
+        }
+    }
+}
+
+impl std::fmt::Display for Gate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "when {} @ {}", self.predicate, self.origin)
+    }
+}
+
+/// The chain of `when` conditions that admitted a statement, outermost first — the `active`
+/// block that turned the profile on, then the profile's own block, then the module's.
+pub type Gates = Vec<Gate>;
+
 /// A parsed file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Document {
@@ -58,17 +88,19 @@ impl Document {
             .collect())
     }
 
-    /// As [`Document::statements_for`], but each statement also says whether a `when` block
-    /// put it here.
+    /// As [`Document::statements_for`], but each statement also carries the `when` conditions
+    /// that admitted it, outermost first.
     ///
-    /// IX.3 turns on exactly that distinction: a top-level line defines a variable and a
-    /// conditional one may only override, so the two cannot be flattened together.
+    /// IX.3 turns on the emptiness of that chain: a top-level line defines a variable and a
+    /// conditional one may only override, so the two cannot be flattened together. W11 turns
+    /// on its contents: `why` names the condition, and the variables inside it, behind a
+    /// package.
     pub fn statements_with_gating(
         &self,
         facts: &HostFacts,
-    ) -> Result<Vec<(Statement, Origin, bool)>> {
+    ) -> Result<Vec<(Statement, Origin, Gates)>> {
         let mut out = Vec::new();
-        Self::walk(&self.items, facts, false, &mut out)?;
+        Self::walk(&self.items, facts, &Vec::new(), &mut out)?;
         Ok(out)
     }
 
@@ -106,15 +138,13 @@ impl Document {
     fn walk(
         items: &[Item],
         facts: &HostFacts,
-        conditional: bool,
-        out: &mut Vec<(Statement, Origin, bool)>,
+        gates: &Gates,
+        out: &mut Vec<(Statement, Origin, Gates)>,
     ) -> Result<()> {
         for item in items {
             match item {
-                Item::Statement(s, o) => out.push((s.clone(), o.clone(), conditional)),
-                Item::Block(Block::Module(_, body), _) => {
-                    Self::walk(body, facts, conditional, out)?
-                }
+                Item::Statement(s, o) => out.push((s.clone(), o.clone(), gates.clone())),
+                Item::Block(Block::Module(_, body), _) => Self::walk(body, facts, gates, out)?,
                 Item::Block(Block::When(pred, body), origin) => {
                     let hit = eval_when(pred, facts).map_err(|e| {
                         GrammarError::new(origin.clone(), e.to_string()).with_hint(
@@ -123,7 +153,9 @@ impl Document {
                         )
                     })?;
                     if hit {
-                        Self::walk(body, facts, true, out)?;
+                        let mut inner = gates.clone();
+                        inner.push(Gate::new(pred.clone(), origin.clone()));
+                        Self::walk(body, facts, &inner, out)?;
                     }
                 }
             }

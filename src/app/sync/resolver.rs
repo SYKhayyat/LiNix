@@ -1,10 +1,10 @@
 use crate::backends::BackendRegistry;
 use crate::app::vocab::Vocab;
-use crate::config::grammar::{statement, GrammarError, Origin, Statement};
+use crate::config::grammar::{statement, Gates, GrammarError, Origin, Statement};
 use crate::config::parser::HostFacts;
 use crate::config::Config;
 use crate::core::{Error, PackageSpec, Result, Validator};
-use crate::model::resolve::{to_spec, BARE};
+use crate::model::resolve::{to_spec, Provenance, BARE};
 use crate::model::{DesiredState, Layout, Priority};
 use semver::{Version, VersionReq};
 use std::collections::HashMap;
@@ -238,11 +238,11 @@ impl<'a> StateResolver<'a> {
     /// Here rather than in the model: an alias is a nickname this config gives a backend,
     /// and the model should only ever see the real name — otherwise `priority` would have
     /// to know every nickname too.
-    fn resolve_aliases(&self, statements: &mut [(Statement, Origin)]) {
+    fn resolve_aliases(&self, statements: &mut [(Statement, Origin, Gates)]) {
         if self.config.aliases.is_empty() {
             return;
         }
-        for (stmt, _) in statements.iter_mut() {
+        for (stmt, ..) in statements.iter_mut() {
             let decl = match stmt {
                 Statement::Package(d) | Statement::Absent(d) => d,
                 _ => continue,
@@ -261,11 +261,11 @@ impl<'a> StateResolver<'a> {
     /// the name and the machine, not about the line.
     async fn probe_bare_names(
         &self,
-        statements: &[(Statement, Origin)],
+        statements: &[(Statement, Origin, Gates)],
         priority: &Priority,
     ) -> Result<HashMap<String, String>> {
         let mut questions: Vec<(String, Option<String>, Origin)> = Vec::new();
-        for (stmt, origin) in statements {
+        for (stmt, origin, _) in statements {
             let Statement::Package(decl) = stmt else {
                 continue;
             };
@@ -383,7 +383,7 @@ impl<'a> StateResolver<'a> {
                 b.clone()
             }
             None => {
-                let stmts = vec![(Statement::Package(decl.clone()), origin.clone())];
+                let stmts = vec![(Statement::Package(decl.clone()), origin.clone(), Gates::new())];
                 let answers = self.probe_bare_names(&stmts, &priority).await?;
                 answers
                     .get(decl.selector.as_str())
@@ -398,10 +398,13 @@ impl<'a> StateResolver<'a> {
             &backend,
             &decl.selector,
             &decl.options,
-            &origin,
             present,
-            &[],
             priority.options(&backend),
+            Provenance {
+                origin: &origin,
+                scopes: &[],
+                gates: &[],
+            },
         );
         Validator::validate_package_name_for(&spec.name, &spec.backend)?;
         Ok(spec)

@@ -339,7 +339,13 @@ impl ProfileManager {
         }
         // II.5's error teaches the rule rather than just saying no.
         let err = loader
-            .resolve(name, &Origin::argument(), &HostFacts::current(), &mut Vec::new())
+            .resolve(
+                name,
+                &Origin::argument(),
+                &HostFacts::current(),
+                &mut Vec::new(),
+                &Vec::new(),
+            )
             .unwrap_err();
         Err(err.into())
     }

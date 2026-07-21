@@ -3,10 +3,10 @@ use super::dated::dating_of;
 use super::layout::Layout;
 use super::modules::{expand, ModuleLoader};
 use super::priority::Priority;
-use super::profiles::{parse_active_with, ProfileLoader, SetOp};
+use super::profiles::{read_active_with, ProfileLoader, SetOp};
 use crate::config::grammar::{
-    statement, BackendNames, GrammarError, Options, Origin, PackageDecl, Result, Selector,
-    Statement,
+    statement, BackendNames, Gate, Gates, GrammarError, Options, Origin, PackageDecl, Result,
+    Selector, Statement,
 };
 use crate::config::parser::HostFacts;
 use crate::core::PackageSpec;
@@ -93,7 +93,7 @@ impl DesiredState {
 /// statements are flattened, "profile `Work` reaches module `dev`" is gone, and `linix
 /// upgrade --profile Work` has no way to ask.
 pub struct Reached {
-    pub statements: Vec<(Statement, Origin)>,
+    pub statements: Vec<(Statement, Origin, Gates)>,
     scopes: HashMap<PathBuf, BTreeSet<String>>,
 }
 
@@ -254,13 +254,13 @@ impl<'a> Resolver<'a> {
         }
 
         let mut defs = Vec::new();
-        for (stmt, origin, conditional) in doc.statements_with_gating(&self.facts)? {
+        for (stmt, origin, gates) in doc.statements_with_gating(&self.facts)? {
             match stmt {
                 Statement::Var { name, value } => defs.push(crate::model::vars::Definition {
                     name,
                     value,
                     origin,
-                    conditional,
+                    conditional: !gates.is_empty(),
                 }),
                 other => {
                     return Err(GrammarError::new(
@@ -286,7 +286,17 @@ impl<'a> Resolver<'a> {
         // with "unknown when key" because `active` re-detected varless facts of its own.
         let active_file = self.layout.active_file();
         let body = std::fs::read_to_string(&active_file).unwrap_or_default();
-        let active = parse_active_with(&active_file, &body, &self.facts)?;
+        let active: Vec<(String, Gates)> = read_active_with(&active_file, &body, &self.facts)?
+            .into_iter()
+            .filter(|e| e.on)
+            .map(|e| {
+                let gates = e
+                    .gate
+                    .map(|pred| vec![Gate::new(pred, Origin::new(&active_file, e.line))])
+                    .unwrap_or_default();
+                (e.name, gates)
+            })
+            .collect();
 
         let mut out = Reached {
             statements: Vec::new(),
@@ -296,23 +306,23 @@ impl<'a> Resolver<'a> {
         // 2. Resolve profiles -> the module set. Profiles may reference profiles; modules
         //    may not.
         let profiles = ProfileLoader::new(self.layout, self.backends);
-        let mut wanted_modules: Vec<String> = Vec::new();
+        let mut wanted_modules: Vec<(String, Gates)> = Vec::new();
         // Which profiles want each module. A module two profiles both reach belongs to
         // both, and `upgrade --profile` for either must find it.
         let mut wanted_by: HashMap<String, Vec<String>> = HashMap::new();
-        let mut direct: Vec<(Statement, Origin)> = Vec::new();
+        let mut direct: Vec<(Statement, Origin, Gates)> = Vec::new();
         let mut loader = ModuleLoader::new(self.layout, self.backends);
         let asked = Origin::new(&active_file, 0);
 
-        for name in &active {
-            let r = profiles.resolve(name, &asked, &self.facts, &mut Vec::new())?;
+        for (name, activated_by) in &active {
+            let r = profiles.resolve(name, &asked, &self.facts, &mut Vec::new(), activated_by)?;
 
             // A profile doing set math resolves to packages, not to modules: an
             // intersection of two modules' packages is not a module (V.46). So it is
             // materialised here and its result joins `direct`.
             if r.does_set_math() {
                 let stmts = self.apply_set_math(&profiles, &mut loader, &r, &asked)?;
-                for (_, origin) in &stmts {
+                for (_, origin, _) in &stmts {
                     out.record(&origin.file, format!("profile:{}", name));
                     self.record_module_scope(&mut out, origin);
                 }
@@ -321,31 +331,34 @@ impl<'a> Resolver<'a> {
             }
 
             for m in r.modules {
-                if !wanted_modules.contains(&m) {
-                    wanted_modules.push(m.clone());
+                match wanted_modules.iter_mut().find(|(n, _)| *n == m.name) {
+                    Some((_, gates)) if m.gates.len() < gates.len() => *gates = m.gates.clone(),
+                    Some(_) => {}
+                    None => wanted_modules.push((m.name.clone(), m.gates.clone())),
                 }
-                wanted_by.entry(m).or_default().push(name.clone());
+                wanted_by.entry(m.name).or_default().push(name.clone());
             }
             // A profile's own package lines belong to the profile and to no module: a
             // module can never reach them, which is the cost II.4 accepts knowingly (V.3).
-            for (_, origin) in &r.direct {
+            for (_, origin, _) in &r.direct {
                 out.record(&origin.file, format!("profile:{}", name));
             }
             direct.extend(r.direct);
         }
 
         // 3. Parse ONLY the modules reached. Apply `when`.
-        for m in &wanted_modules {
+        for (m, reached_by) in &wanted_modules {
             let stmts = expand(
                 &mut loader,
                 m,
                 &Origin::new(&active_file, 0),
                 &self.facts,
                 &mut Vec::new(),
+                reached_by,
             )?;
             // Attributed by the file each line actually came from, so a module reached
             // through another module is scoped to itself and to the profile that led here.
-            for (_, origin) in &stmts {
+            for (_, origin, _) in &stmts {
                 self.record_module_scope(&mut out, origin);
                 for p in wanted_by.get(m).into_iter().flatten() {
                     out.record(&origin.file, format!("profile:{}", p));
@@ -362,7 +375,7 @@ impl<'a> Resolver<'a> {
         let schedules_file = self.layout.schedules_file();
         if let Ok(body) = std::fs::read_to_string(&schedules_file) {
             let doc = crate::config::grammar::parse_document(&schedules_file, &body, self.backends)?;
-            out.statements.extend(doc.statements_for(&self.facts)?);
+            out.statements.extend(doc.statements_with_gating(&self.facts)?);
         }
 
         self.expand_vars(&mut out.statements)?;
@@ -379,8 +392,8 @@ impl<'a> Resolver<'a> {
     /// `$role` has to be the same error it is when the file exists and the name is misspelled.
     /// Returning early here left it as literal text, which becomes a path with a dollar in it
     /// and fails later, somewhere else, with no mention of the typo.
-    fn expand_vars(&self, statements: &mut [(Statement, Origin)]) -> Result<()> {
-        for (stmt, origin) in statements.iter_mut() {
+    fn expand_vars(&self, statements: &mut [(Statement, Origin, Gates)]) -> Result<()> {
+        for (stmt, origin, _) in statements.iter_mut() {
             let vars = &self.facts.vars;
             match stmt {
                 Statement::Package(d) | Statement::Absent(d) => {
@@ -437,10 +450,17 @@ impl<'a> Resolver<'a> {
         loader: &mut ModuleLoader<'a>,
         r: &super::profiles::Resolved,
         asked: &Origin,
-    ) -> Result<Vec<(Statement, Origin)>> {
-        let mut base: Vec<(Statement, Origin)> = Vec::new();
+    ) -> Result<Vec<(Statement, Origin, Gates)>> {
+        let mut base: Vec<(Statement, Origin, Gates)> = Vec::new();
         for m in &r.modules {
-            base.extend(expand(loader, m, asked, &self.facts, &mut Vec::new())?);
+            base.extend(expand(
+                loader,
+                &m.name,
+                asked,
+                &self.facts,
+                &mut Vec::new(),
+                &m.gates,
+            )?);
         }
         base.extend(r.direct.clone());
 
@@ -455,20 +475,20 @@ impl<'a> Resolver<'a> {
                 }
                 SetOp::Intersect(reference) => {
                     let other = self.atom(profiles, loader, reference.name(), origin)?;
-                    intersects.push(other.iter().map(|(s, _)| set_key(s)).collect());
+                    intersects.push(other.iter().map(|(s, ..)| set_key(s)).collect());
                 }
                 SetOp::Exclude(reference) => {
                     let other = self.atom(profiles, loader, reference.name(), origin)?;
-                    subtract.extend(other.iter().map(|(s, _)| set_key(s)));
+                    subtract.extend(other.iter().map(|(s, ..)| set_key(s)));
                 }
                 SetOp::Subtract(pkg) => subtract.push(pkg.trim().to_string()),
             }
         }
 
         for keep in &intersects {
-            base.retain(|(s, _)| keep.iter().any(|k| same_package(k, &set_key(s))));
+            base.retain(|(s, ..)| keep.iter().any(|k| same_package(k, &set_key(s))));
         }
-        base.retain(|(s, _)| !subtract.iter().any(|k| same_package(k, &set_key(s))));
+        base.retain(|(s, ..)| !subtract.iter().any(|k| same_package(k, &set_key(s))));
 
         Ok(base)
     }
@@ -484,17 +504,17 @@ impl<'a> Resolver<'a> {
         loader: &mut ModuleLoader<'a>,
         expr: &str,
         origin: &Origin,
-    ) -> Result<Vec<(Statement, Origin)>> {
-        let mut table: HashMap<String, (Statement, Origin)> = HashMap::new();
+    ) -> Result<Vec<(Statement, Origin, Gates)>> {
+        let mut table: HashMap<String, (Statement, Origin, Gates)> = HashMap::new();
         let mut failure: Option<GrammarError> = None;
 
         let keys = crate::app::profile_expr::evaluate(expr, &mut |atom| {
             match self.atom(profiles, loader, atom, origin) {
                 Ok(stmts) => stmts
                     .into_iter()
-                    .map(|(s, o)| {
+                    .map(|(s, o, g)| {
                         let k = set_key(&s);
-                        table.entry(k.clone()).or_insert((s, o));
+                        table.entry(k.clone()).or_insert((s, o, g));
                         k
                     })
                     .collect(),
@@ -525,11 +545,11 @@ impl<'a> Resolver<'a> {
         loader: &mut ModuleLoader<'a>,
         atom: &str,
         origin: &Origin,
-    ) -> Result<Vec<(Statement, Origin)>> {
+    ) -> Result<Vec<(Statement, Origin, Gates)>> {
         let capitalized = atom.chars().next().is_some_and(char::is_uppercase);
 
         if capitalized {
-            let r = profiles.resolve(atom, origin, &self.facts, &mut Vec::new())?;
+            let r = profiles.resolve(atom, origin, &self.facts, &mut Vec::new(), &Vec::new())?;
             return self.apply_set_math(profiles, loader, &r, origin);
         }
 
@@ -539,13 +559,20 @@ impl<'a> Resolver<'a> {
             .map(|m| self.layout.module_file(&m).is_file())
             .unwrap_or(false);
         if is_module {
-            return expand(loader, atom, origin, &self.facts, &mut Vec::new());
+            return expand(
+                loader,
+                atom,
+                origin,
+                &self.facts,
+                &mut Vec::new(),
+                &Vec::new(),
+            );
         }
 
         // Not a file, so it is a package named literally: `(Work | jq)`. Parsed, so a typo
         // is an error here rather than a package nobody has.
         let stmt = statement::parse(origin, atom, self.backends)?;
-        Ok(vec![(stmt, origin.clone())])
+        Ok(vec![(stmt, origin.clone(), Vec::new())])
     }
 
     /// II.7 steps 4-7: resolve each line, conflicts are errors, dated lines get rule 6.
@@ -555,7 +582,7 @@ impl<'a> Resolver<'a> {
         let mut merged: BTreeMap<String, Entry> = BTreeMap::new();
         let mut out = DesiredState::default();
 
-        for (stmt, origin) in reached.statements.iter().cloned() {
+        for (stmt, origin, gates) in reached.statements.iter().cloned() {
             let (decl, present) = match stmt {
                 Statement::Package(d) => (d, true),
                 Statement::Absent(d) => (d, false),
@@ -623,6 +650,12 @@ impl<'a> Resolver<'a> {
                     // the package from `upgrade --module <the other one>`.
                     e.declared = reconcile(&key, e.declared, incoming, self.now)?;
                     e.origins.push(origin);
+                    // Declared twice, once behind a condition and once not, it is here
+                    // unconditionally — so the shortest chain is the true reason, whichever
+                    // declaration won on options.
+                    if gates.len() < e.gates.len() {
+                        e.gates = gates;
+                    }
                     merged.insert(key, e);
                 }
                 None => {
@@ -633,6 +666,7 @@ impl<'a> Resolver<'a> {
                             backend,
                             selector: decl.selector.clone(),
                             origins: vec![origin],
+                            gates,
                         },
                     );
                 }
@@ -666,10 +700,13 @@ impl<'a> Resolver<'a> {
                 &e.backend,
                 &e.selector,
                 &e.declared.options,
-                &e.declared.origin,
                 e.declared.present,
-                &scopes,
                 self.priority.options(&e.backend),
+                Provenance {
+                    origin: &e.declared.origin,
+                    scopes: &scopes,
+                    gates: &e.gates,
+                },
             );
             out.packages.entry(e.backend).or_default().push(spec);
         }
@@ -775,6 +812,20 @@ struct Entry {
     selector: Selector,
     /// Every line that declared it, winner and losers alike — the scopes it belongs to.
     origins: Vec<Origin>,
+    /// The shortest chain of `when` conditions any of those lines needed.
+    gates: Gates,
+}
+
+/// Where a declaration came from and what had to be true for it to count.
+///
+/// Three answers to three different questions, which is why they travel together and not as
+/// one tag: `origin` is the line a human edits, `scopes` is what `--module`/`--profile` match
+/// on, and `gates` is what `why` explains. One tag answering two of them is how
+/// `upgrade --module dev` came to be matched against a filename.
+pub struct Provenance<'a> {
+    pub origin: &'a Origin,
+    pub scopes: &'a [String],
+    pub gates: &'a [Gate],
 }
 
 /// Build the seam's `PackageSpec` from one declaration. The only place this conversion
@@ -784,10 +835,9 @@ pub fn to_spec(
     backend: &str,
     selector: &Selector,
     options: &Options,
-    origin: &Origin,
     present: bool,
-    scopes: &[String],
     backend_defaults: Option<&Options>,
+    from: Provenance<'_>,
 ) -> PackageSpec {
     let mut properties: HashMap<String, String> = HashMap::new();
 
@@ -817,9 +867,21 @@ pub fn to_spec(
     // reading an error or "Added jq to modules/imperative.txt" (II.8). `__scopes` is what
     // it belongs to, for `--module` / `--profile` to match on. One tag answering both is
     // how `upgrade --module dev` came to be matched against a filename.
-    properties.insert("__source".to_string(), origin.to_string());
-    if !scopes.is_empty() {
-        properties.insert("__scopes".to_string(), scopes.join(";"));
+    properties.insert("__source".to_string(), from.origin.to_string());
+    // The `when` conditions that admitted this line, kept only where one tests a variable:
+    // that is the hop `why` cannot make on its own, because a variable's value is not in
+    // the file the package is written in (W11).
+    let gated_by: Vec<String> = from
+        .gates
+        .iter()
+        .filter(|g| !crate::model::vars::referenced_names(&g.predicate).is_empty())
+        .map(Gate::to_string)
+        .collect();
+    if !gated_by.is_empty() {
+        properties.insert("__gated_by".to_string(), gated_by.join(";"));
+    }
+    if !from.scopes.is_empty() {
+        properties.insert("__scopes".to_string(), from.scopes.join(";"));
     }
     if let Selector::Regex(p) = selector {
         properties.insert("__regex".to_string(), p.clone());
@@ -1185,6 +1247,50 @@ when $role == travel {
             .resolve()
             .unwrap();
         assert_eq!(names(&d, "apt"), vec!["curl", "mosh"]);
+    }
+
+    #[test]
+    fn a_package_carries_every_variable_condition_that_admitted_it() {
+        // W11's gating half. The chain crosses three files — `active` turned the profile on,
+        // the profile's block let the `use` through, the module's block let the line
+        // through — and `why` needs all three, in that order.
+        let f = fx(
+            "when $role == travel {\n  Trip\n}\n",
+            &[("Trip", "when $tier == full {\n  use m\n}\n")],
+            &[("m.txt", "when $gpu == true {\n  apt:mosh\n}\napt:curl\n")],
+        );
+        with_vars(&f, "role = travel\ntier = full\ngpu = true\n");
+        let vars = load_vars(&f).unwrap();
+        let d = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts().with_vars(vars))
+            .at(parse_absolute("2026-07-16T12:00").unwrap())
+            .resolve()
+            .unwrap();
+
+        let mosh = d.present().find(|p| p.name == "mosh").unwrap();
+        let chain: Vec<&str> = mosh.options["__gated_by"].split(';').collect();
+        assert_eq!(chain.len(), 3, "{:?}", chain);
+        assert!(chain[0].starts_with("when $role == travel @ "), "{:?}", chain);
+        assert!(chain[1].starts_with("when $tier == full @ "), "{:?}", chain);
+        assert!(chain[2].starts_with("when $gpu == true @ "), "{:?}", chain);
+
+        // `curl` is outside the module's block but still inside the two that led here.
+        let curl = d.present().find(|p| p.name == "curl").unwrap();
+        assert_eq!(curl.options["__gated_by"].split(';').count(), 2);
+    }
+
+    #[test]
+    fn a_condition_that_tests_no_variable_is_not_recorded() {
+        // The tag answers "which variable put this here?". A `when host == laptop` has no
+        // second hop to explain, and listing it would bury the ones that do.
+        let f = fx(
+            "Work\n",
+            &[("Work", "use m\n")],
+            &[("m.txt", "when host == laptop {\n  apt:curl\n}\n")],
+        );
+        let d = resolve(&f).unwrap();
+        let curl = d.present().find(|p| p.name == "curl").unwrap();
+        assert!(!curl.options.contains_key("__gated_by"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use super::layout::Layout;
 use crate::config::grammar::{
-    gated, parse_document, BackendNames, GrammarError, Origin, Reference, Result, Statement,
-    Vocabulary,
+    gated, parse_document, BackendNames, Gates, GrammarError, Origin, Reference, Result,
+    Statement, Vocabulary,
 };
 use crate::config::parser::HostFacts;
 
@@ -9,15 +9,22 @@ use crate::config::parser::HostFacts;
 /// set math it applies to the result.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Resolved {
-    /// Module names, in first-seen order.
-    pub modules: Vec<String>,
+    /// Module names, in first-seen order, each with the `when` conditions that led to it.
+    pub modules: Vec<UsedModule>,
     /// **A profile MAY hold package lines directly** (II.4). A cost accepted knowingly: a
     /// module can never reach them (the layering rule), so they are unshareable,
     /// permanently — and you find out the day you want to share them (V.3).
-    pub direct: Vec<(Statement, Origin)>,
+    pub direct: Vec<(Statement, Origin, Gates)>,
     /// II.4's set math, in the order written. Applied by the caller, which is the only
     /// thing that can turn a module name into the packages to intersect or subtract.
     pub ops: Vec<(SetOp, Origin)>,
+}
+
+/// A module a profile reaches, and what had to be true to reach it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsedModule {
+    pub name: String,
+    pub gates: Gates,
 }
 
 /// One set operation from a profile (II.4).
@@ -41,6 +48,19 @@ impl Resolved {
     /// is no module to name (V.46).
     pub fn does_set_math(&self) -> bool {
         !self.ops.is_empty()
+    }
+
+    /// Record a module this profile reaches.
+    ///
+    /// A module named twice keeps the **shortest** gate chain, not the first: reached once
+    /// inside `when $role == travel` and once outside it, the truth is that it is here
+    /// unconditionally, and an explanation that names the condition anyway is a wrong answer.
+    fn reach(&mut self, name: String, gates: Gates) {
+        match self.modules.iter_mut().find(|m| m.name == name) {
+            Some(existing) if gates.len() < existing.gates.len() => existing.gates = gates,
+            Some(_) => {}
+            None => self.modules.push(UsedModule { name, gates }),
+        }
     }
 }
 
@@ -85,6 +105,7 @@ impl<'a> ProfileLoader<'a> {
         asked_by: &Origin,
         facts: &HostFacts,
         seen: &mut Vec<String>,
+        inherited: &Gates,
     ) -> Result<Resolved> {
         if seen.iter().any(|s| s == name) {
             return Err(GrammarError::new(
@@ -104,20 +125,16 @@ impl<'a> ProfileLoader<'a> {
         let doc = parse_document(&path, &body, self.backends)?;
 
         let mut out = Resolved::default();
-        for (stmt, origin) in doc.statements_for(facts)? {
+        for (stmt, origin, own) in doc.statements_with_gating(facts)? {
+            let mut gates = inherited.to_vec();
+            gates.extend(own);
             match stmt {
-                Statement::Use(Reference::Module(m)) => {
-                    if !out.modules.contains(&m) {
-                        out.modules.push(m);
-                    }
-                }
+                Statement::Use(Reference::Module(m)) => out.reach(m, gates),
                 // Profiles may reference profiles; modules may not (II.7 step 2).
                 Statement::Use(Reference::Profile(p)) => {
-                    let inner = self.resolve(&p, &origin, facts, seen)?;
+                    let inner = self.resolve(&p, &origin, facts, seen, &gates)?;
                     for m in inner.modules {
-                        if !out.modules.contains(&m) {
-                            out.modules.push(m);
-                        }
+                        out.reach(m.name, m.gates);
                     }
                     out.direct.extend(inner.direct);
                     // A profile's set math travels with it: `use Work` where Work excludes
@@ -144,7 +161,7 @@ impl<'a> ProfileLoader<'a> {
                     ))
                 }
 
-                other => out.direct.push((other, origin)),
+                other => out.direct.push((other, origin, gates)),
             }
         }
 
@@ -497,13 +514,18 @@ mod tests {
             &Origin::argument(),
             &facts(),
             &mut Vec::new(),
+            &Vec::new(),
         )
+    }
+
+    fn module_names(r: &Resolved) -> Vec<&str> {
+        r.modules.iter().map(|m| m.name.as_str()).collect()
     }
 
     #[test]
     fn a_profile_chooses_modules() {
         let f = fixture(&[("Work", "use editors\nuse dev\n")], &[]);
-        assert_eq!(resolve(&f, "Work").unwrap().modules, ["editors", "dev"]);
+        assert_eq!(module_names(&resolve(&f, "Work").unwrap()), ["editors", "dev"]);
     }
 
     #[test]
@@ -512,7 +534,7 @@ mod tests {
         // a module can never reach these.
         let f = fixture(&[("Work", "use editors\napt:slack\n")], &[]);
         let r = resolve(&f, "Work").unwrap();
-        assert_eq!(r.modules, ["editors"]);
+        assert_eq!(module_names(&r), ["editors"]);
         assert_eq!(r.direct.len(), 1);
     }
 
@@ -523,7 +545,7 @@ mod tests {
             &[("Work", "use Base\nuse dev\n"), ("Base", "use editors\n")],
             &[],
         );
-        assert_eq!(resolve(&f, "Work").unwrap().modules, ["editors", "dev"]);
+        assert_eq!(module_names(&resolve(&f, "Work").unwrap()), ["editors", "dev"]);
     }
 
     #[test]
