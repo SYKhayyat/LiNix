@@ -206,6 +206,17 @@ impl<'a> StateResolver<'a> {
         Ok(facts.with_vars(vars))
     }
 
+    /// Every parse error in `modules/` and `profiles/`, reached by an active profile or not
+    /// (II.3, for `check`).
+    pub async fn parse_everything(&self) -> Result<Vec<GrammarError>> {
+        let facts = self.facts_for_host().await?;
+        let priority = self.priority(&facts).await?;
+        let known = Vocab::new(&self.registry, self.config, &priority);
+        Ok(crate::model::Resolver::new(&self.layout, &known, &priority)
+            .with_facts(facts)
+            .parse_everything())
+    }
+
     #[instrument(skip(self))]
     pub async fn resolve_desired_state(&self) -> Result<HashMap<String, Vec<PackageSpec>>> {
         Ok(self.resolve_model().await?.packages)

@@ -382,6 +382,44 @@ impl<'a> Resolver<'a> {
         Ok(out)
     }
 
+    /// Parse every module and profile the folders hold, reached or not, and return every error
+    /// found rather than the first.
+    ///
+    /// II.3: resolution parses only what the active profiles reach, and `check` parses
+    /// everything. Without this, a module with a broken line is clean until the day someone
+    /// activates the profile that reaches it — which is the day they are least able to read a
+    /// parse error. Reached files are parsed again here rather than tracked and skipped: the
+    /// bookkeeping to tell them apart is a second answer to "what did resolution read", and the
+    /// files are small.
+    ///
+    /// Parsing only. Whether a `use` names a module that exists is resolution's question, and
+    /// asking it here would report every profile on a machine that reaches none of them.
+    pub fn parse_everything(&self) -> Vec<GrammarError> {
+        let mut errors = Vec::new();
+        let mut loader = ModuleLoader::new(self.layout, self.backends);
+        let asked = Origin::new(self.layout.modules_dir(), 0);
+
+        let mut modules = loader.available();
+        modules.sort();
+        for name in modules {
+            if let Err(e) = loader.load(&name, &asked) {
+                errors.push(e);
+            }
+        }
+
+        let profiles = ProfileLoader::new(self.layout, self.backends);
+        for name in profiles.available() {
+            let path = self.layout.profile_file(&name);
+            let Ok(body) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Err(e) = crate::config::grammar::parse_document(&path, &body, self.backends) {
+                errors.push(e);
+            }
+        }
+        errors
+    }
+
     /// Substitute `$name` into the values of every statement this host reached.
     ///
     /// Done here, once, after `when` gating and before anything reads a value — so the prober,
@@ -1247,6 +1285,31 @@ when $role == travel {
             .resolve()
             .unwrap();
         assert_eq!(names(&d, "apt"), vec!["curl", "mosh"]);
+    }
+
+    #[test]
+    fn check_reaches_a_module_no_profile_reaches() {
+        // II.3. A broken file nobody activated is still broken, and the day it is activated is
+        // the worst day to find out. Both errors are returned, not just the first.
+        let f = fx(
+            "Work\n",
+            &[("Work", "use good\n")],
+            &[
+                ("good.txt", "apt:curl\n"),
+                ("orphan.txt", "apt:nginx@requires=libfoo\n"),
+                ("other.txt", "-vim\n"),
+            ],
+        );
+        // Resolution is clean: nothing reaches the broken files.
+        assert_eq!(names(&resolve(&f).unwrap(), "apt"), ["curl"]);
+
+        let errors = Resolver::new(&f.layout, &known, &f.priority)
+            .with_facts(facts())
+            .parse_everything();
+        let found: Vec<String> = errors.iter().map(|e| e.origin.to_string()).collect();
+        assert_eq!(errors.len(), 2, "{:?}", found);
+        assert!(found.iter().any(|o| o.contains("orphan.txt")), "{:?}", found);
+        assert!(found.iter().any(|o| o.contains("other.txt")), "{:?}", found);
     }
 
     #[test]

@@ -3016,8 +3016,26 @@ async fn handle_check(app: &App) -> Result<()> {
     for (name, opts, origin) in state.schedules() {
         linix::model::schedule::schedule_config(name, opts, origin)?;
     }
+
+    // II.3: resolution reads only what the active profiles reach; `check` reads everything.
+    // A module nobody activates is still a file that has to parse, and finding out otherwise
+    // on the day you activate it is finding out at the worst moment. Every error is listed,
+    // not just the first, because these are independent files.
+    let unreached = resolver.parse_everything().await?;
+    if !unreached.is_empty() {
+        println!("{} file(s) do not parse:\n", unreached.len());
+        for e in &unreached {
+            println!("  {}\n", e);
+        }
+        return Err(anyhow::anyhow!(
+            "{} file(s) in `modules/` or `profiles/` do not parse. They are not active, and \
+             they are still broken.",
+            unreached.len()
+        ));
+    }
+
     println!(
-        "OK: everything the active profiles reach parses. {} present, {} absent, {} repo/shim/service/link/schedule line(s).",
+        "OK: every module and profile parses, reached or not. {} present, {} absent, {} repo/shim/service/link/schedule line(s).",
         state.total_present(),
         state.absent().count(),
         state.extras.len()

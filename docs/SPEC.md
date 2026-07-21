@@ -2790,9 +2790,18 @@ it in instead would have been a claim about the machine — *"nothing is suspend
 checked. The test that asserted the old behaviour is deleted and replaced by one asserting the
 refusal.
 
-**Owed, and found this session:**
-- **`linix check` still does not reach what no active profile reaches** (carried from the fifth
-  session, unrelated to Part IX).
+**6. `check` reaches what no active profile reaches (II.3).** Carried owed since the fifth
+session. Resolution reads only what the active profiles reach — that is II.3's rule and stays —
+and `check` promised to parse everything, while actually parsing exactly what resolution did. A
+module with a broken line was clean until the day someone activated the profile that reached it.
+`Resolver::parse_everything` now parses every file in `modules/` and `profiles/`, returns **every**
+error rather than the first (they are independent files), and `check` prints them all and exits
+non-zero: not active and still broken is still broken. Reached files are parsed twice rather than
+tracked and skipped — the bookkeeping to tell them apart would be a second answer to "what did
+resolution read". Parsing only: whether a `use` names a module that exists is resolution's
+question, and asking it here would report every profile on a machine that activates none of them.
+*Verified against the binary:* a broken module no profile reaches now fails `check` by name, and
+`check` is clean again once it is removed.
 
 **Not verified this session:** anything needing Docker, the network path in any backend, and the
 OS scheduler.
