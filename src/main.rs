@@ -3025,7 +3025,56 @@ async fn handle_check(app: &App) -> Result<()> {
             println!("  {} at {}", key, origin);
         }
     }
+
+    // W5: a variable defined but referenced by no `when` or value anywhere is probably a
+    // leftover from a block deleted on this branch. A note, never an error — an unused default
+    // breaks nothing, and on a fleet the reference may still live on another branch.
+    if !state.vars.is_empty() {
+        let referenced = referenced_variable_names(&app.config.config_root());
+        let mut unused: Vec<&String> =
+            state.vars.keys().filter(|k| !referenced.contains(*k)).collect();
+        unused.sort();
+        if !unused.is_empty() {
+            println!(
+                "\nNote: {} variable(s) defined but never referenced by a `when` or a value:",
+                unused.len()
+            );
+            for name in unused {
+                println!("  ${}", name);
+            }
+            println!(
+                "  (harmless — but often the sign of a `when` block that was deleted on this branch.)"
+            );
+        }
+    }
     Ok(())
+}
+
+/// Every variable name a `$name` references anywhere in the repo's model files — for the `check`
+/// unused-variable note (W5). Read statically across all files, so a name used only in another
+/// host's `when` block still counts as used and is not flagged.
+fn referenced_variable_names(config_root: &std::path::Path) -> std::collections::HashSet<String> {
+    let mut files: Vec<std::path::PathBuf> = ["active", "priority", "schedules", "vars"]
+        .iter()
+        .map(|n| config_root.join(n))
+        .collect();
+    for dir in ["modules", "profiles"] {
+        if let Ok(entries) = std::fs::read_dir(config_root.join(dir)) {
+            files.extend(
+                entries
+                    .flatten()
+                    .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                    .map(|e| e.path()),
+            );
+        }
+    }
+    let mut refs = std::collections::HashSet::new();
+    for f in files {
+        if let Ok(body) = std::fs::read_to_string(&f) {
+            refs.extend(linix::model::vars::referenced_names(&body));
+        }
+    }
+    refs
 }
 
 /// `absent` (II.8): every `absent:` line in force, and the module it comes from — what LiNix

@@ -2695,6 +2695,44 @@ Three suspicions did not survive scrutiny:
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
+## Session 2026-07-20 (fifth session) — Part IX finishes its documentation and W5/W12
+
+Picked up the fourth session's owed list. **Green at each commit** (`cargo build --all-targets`
+clean, `cargo clippy --all-targets` silent, `cargo test` all suites — run the command, do not
+copy a number).
+
+**1. The `vars` language is now in Part II.** It was fully built but lived only in Part IX
+(proposed). Migrated into **II.6b** — the `NAME = VALUE` statement and the `$` sigil, IX.3, typed
+values and the no-coercion rules, the three providers and the `[vars] source` selector, the
+embedded standard library, once-per-invocation resolution frozen into a plan, and the tooling —
+with a resolution **phase 0** written into II.7 and **V.51–V.54** for the why (typed values / no
+coercion; the sigil and the future-fact collision; provider by filename with ambiguity refused;
+a plan freezing its variables). Documentation only, no behaviour change.
+
+**2. W12 completed — resolution carries each variable's origin.** The resolved set was
+`name → value` with no record of where a value came from. Added a `VarOrigins` map produced
+beside `Vars` by the *one* resolution core (`resolve_with_origins` shares `winning_defs` with
+`resolve`; `load_vars_with_origins`/`resolve_vars_with_origins` sit beside the value-only forms).
+The origin is the winning definition's line for a line file, the provider file for a script or
+program. `linix vars` now prints *"set at vars:6"*. Verified against the binary on a scratch repo.
+
+**3. W5 built — `check` notes unused variables.** `model/vars::referenced_names` statically
+scans every `$name` in the model files; `check` lists any resolved variable absent from that set
+as a note (never an error). Static on purpose: a variable used only in another host's
+`when host == …` arm must count as used, which this host's resolution never reaches. Verified on
+a scratch repo: with `role` referenced in a `when` and `gpu`/`unused_flag` not, only the latter
+two are flagged.
+
+**Still owed — the Part IX tail:**
+- **W11** (`why` explains *"$role is travel, set at vars line 6"*) now has its origin foundation
+  (W12) but still needs the **gating side**: recording which variable-referencing `when`
+  conditions admitted each reached statement, so `why` can name the ones behind a package. That
+  is a change to the resolver's `walk`/`statements_with_gating`, threaded into the `__source`-style
+  tags — the invasive half.
+- **W8/W13 messaging** wants the same gating-side data: `activate`/`deactivate` and the plan
+  naming the variable behind a change. Take it with W11, and with the pre-existing
+  `activate`/`deactivate` `when`-block messaging (2026-07-20 audit findings 2–3).
+
 ## Session 2026-07-20 (fourth session) — Part IX begins: typed values (W2, built)
 
 The designated next-session work is Part IX (the `vars` language) at the position-4 ruling. This
@@ -5266,9 +5304,13 @@ that could disagree (Stage 5). Owed: writing the phase into II.7 as text.
 variable defined but never used is harmless; a variable *used* but not defined is an error W3/IX.3
 catches at parse time. But an unused variable on a fleet may mean "the block that used it was
 deleted on this branch". *Recommendation:* `check` reports unused variables as a note, not an
-error. **NOT BUILT (deferred, 2026-07-20):** needs reference tracking through resolution — the
-resolved set does not record which names a `when`/interpolation touched — so it is a separate,
-more invasive change rather than a note bolted on.
+error. **BUILT (2026-07-20, fifth session).** It is not done through resolution but by a static
+scan, which is the *more* correct reading of the intent: `model/vars::referenced_names` reads
+every `$name` out of the model files (`modules/`, `profiles/`, `active`, `priority`, `schedules`,
+and a line-file `vars`), and `check` lists any resolved variable absent from that set as a note,
+never an error. Static because the motivating case is a fleet — a variable used only in another
+host's `when host == …` arm must count as used, and this host's resolution never reaches that
+arm. So the answer is the whole repo's references, not just the ones this box hit.
 
 ### Scope and grammar
 
@@ -5327,9 +5369,12 @@ plumbing W5 needs; take them together.
 **W12 — Is there a command to print resolved variables?** `linix vars`, showing each name, its
 value on this machine, and which line set it. Debugging a fleet without it means reading the
 file and simulating the `when` blocks by hand. *Recommendation:* yes — small, and it is the
-first thing anyone will want when a block does not fire. **BUILT (2026-07-20):** `linix vars`
-prints each name, its typed value, its type, and the active provider (line file / external /
-embedded). *"Which line set it"* awaits the same origin tracking as W11.
+first thing anyone will want when a block does not fire. **BUILT (2026-07-20), completed fifth
+session:** `linix vars` prints each name, its typed value, its type, the active provider (line
+file / external / embedded), and now *"set at vars:6"* — the winning definition's line, or the
+provider file for a script. Resolution carries a `VarOrigins` map beside the value set
+(`resolve_with_origins`/`load_vars_with_origins`), computed by the one resolution core so the
+value path never pays for it. This is the origin foundation W11 needs.
 
 **W13 — Does changing a variable go through the guard?** It must: editing one line in `vars`
 can deactivate a profile and remove a hundred packages. That is the ordinary plan-and-guard path

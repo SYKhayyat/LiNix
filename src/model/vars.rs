@@ -432,6 +432,33 @@ fn interpolate_string(
     Ok(out)
 }
 
+/// Every `$name`/`${name}` a text references, skipping the `$$` escape and shell positionals
+/// (`$1`). For `check` to find a variable defined but referenced nowhere (W5): an unused name is
+/// a note, not an error, because on a fleet it usually means the block that used it was deleted
+/// on this branch. This reads references statically from a file's text — the fleet's whole set,
+/// not just the arms this host reached — so a variable used only in another machine's `when`
+/// block is correctly seen as used.
+pub fn referenced_names(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('$') {
+        let after = &rest[at + 1..];
+        if let Some(tail) = after.strip_prefix('$') {
+            rest = tail;
+            continue;
+        }
+        let (referenced, remainder) = split_reference(after);
+        match referenced {
+            Some(name) => {
+                names.push(name.to_string());
+                rest = remainder;
+            }
+            None => rest = after,
+        }
+    }
+    names
+}
+
 /// Read a variable reference off the front of `text`, returning it and what follows.
 ///
 /// `${name}` exists so a reference can end where a name character would otherwise continue:
@@ -788,6 +815,15 @@ mod tests {
     fn expand_leaves_a_value_with_no_references_alone() {
         let vars = Vars::new();
         assert_eq!(expand("plain/path", &vars, &origin(1)).unwrap(), "plain/path");
+    }
+
+    #[test]
+    fn referenced_names_finds_every_reference_and_skips_escapes() {
+        assert_eq!(referenced_names("when $role == travel"), vec!["role"]);
+        assert_eq!(referenced_names("${a}/${b}/$c"), vec!["a", "b", "c"]);
+        // `$$` is an escape and `$1` a shell positional — neither is a variable reference.
+        assert!(referenced_names("cost $$5 and awk '{print $1}'").is_empty());
+        assert!(referenced_names("no refs here").is_empty());
     }
 
     #[test]
