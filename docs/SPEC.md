@@ -331,6 +331,8 @@ stands in for the other: `apt` is a `family == debian` fact, not a `linux` one.
 | `bin` | the executable inside an archive |
 | `channel` | one version stream. Backends that publish channels only |
 | `sha256` | checksum the resolved artifact must match. Not with `@asset=all` — one hash cannot verify several files |
+| `allow_http` | bare flag: this URL may be `http://`. Downloading backends only (SEC2) |
+| `unverified` | bare flag: no `@sha256` required on this line. Downloading backends only. **Never implied by `allow_http`** — over HTTP the checksum is the only thing left (SEC2) |
 
 ### Artifact selection (V.48)
 
@@ -879,6 +881,15 @@ in your file, and deleting that line is refused (V.26).
 All in `[guard]` in `preferences.toml`. One decision function. **Every removal path calls
 it** — sync, `absent:`, expiry, `purge-unmanaged`, `clean`, shell exit, `uninstall`. The
 last three also gate *installs* and *changes*, so the install paths call it too.
+
+**`[guard]` holds one key that is not one of the nine: `confine_bin`** (default on), which
+refuses a downloaded file a destination outside the backend's bin directory (SEC1). It is in
+this table's home because it is the same kind of promise — a refusal with one deliberate
+opening — but it is deliberately **not** in the decision function, because the only place the
+destination exists is the moment a backend deploys, and a check that ran anywhere else would
+be checking a path nobody was about to write. Counting it among the nine would make "one
+decision function" false, and a table that quietly stops describing its own function is how
+the last one drifted.
 
 **A confirmation asks; a refusal says no.**
 
