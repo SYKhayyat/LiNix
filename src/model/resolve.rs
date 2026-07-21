@@ -211,7 +211,18 @@ impl<'a> Resolver<'a> {
         let Ok(body) = std::fs::read_to_string(file) else {
             return Ok(Default::default());
         };
-        let doc = crate::config::grammar::parse_document(file, &body, self.backends)?;
+        self.resolve_linefile_body(file, &body)
+    }
+
+    /// Resolve a line-file `vars` body that came from somewhere other than the working tree — the
+    /// last commit, for W13's "what did this edit change" note. Same parse, same IX.3 check, same
+    /// resolution as [`load_vars_linefile`]; only the source of the text differs.
+    pub fn resolve_linefile_body(
+        &self,
+        file: &Path,
+        body: &str,
+    ) -> Result<(crate::model::vars::Vars, crate::model::vars::VarOrigins)> {
+        let doc = crate::config::grammar::parse_document(file, body, self.backends)?;
 
         // IX.3 is a property of the FILE, not of this machine: a name defined only inside a
         // `when` block is an error everywhere, including on the box where that block happens

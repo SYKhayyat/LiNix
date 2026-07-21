@@ -159,6 +159,21 @@ impl GitManager {
         }
     }
 
+    /// The content of a tracked file as of HEAD, or `None` when the file was not tracked there
+    /// or the repo has no commits yet. Since LiNix commits only on a successful sync (V.30),
+    /// HEAD is the last-synced state — the baseline for showing what a working-tree edit changed.
+    pub fn show_at_head(&self, relpath: &str) -> Result<Option<String>> {
+        if self.head()?.is_none() {
+            return Ok(None);
+        }
+        let out = self.run(&["show", &format!("HEAD:{}", relpath)])?;
+        if out.status.success() {
+            Ok(Some(String::from_utf8_lossy(&out.stdout).to_string()))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Restore the working tree of the config directory to a given commit/ref WITHOUT moving
     /// HEAD — i.e. roll back your *manifests* to a past state, leaving installed packages
     /// untouched. This is the "config half" of a rollback.

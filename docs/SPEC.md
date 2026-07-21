@@ -2723,15 +2723,26 @@ as a note (never an error). Static on purpose: a variable used only in another h
 a scratch repo: with `role` referenced in a `when` and `gpu`/`unused_flag` not, only the latter
 two are flagged.
 
-**Still owed — the Part IX tail:**
+**4. W13 built — the plan names variables that changed since the last sync.** Owner ruled the
+run-level note over per-package attribution (decision recorded at W13). When a plan removes
+anything, the preview prints the variables whose resolved value differs from the last successful
+sync — the committed `vars` at HEAD (V.30: LiNix commits only on a successful sync), so the
+baseline is stable and needs no second resolution of the live provider. Line-file provider only;
+a script/program whose values do not commit (a clock/network var) is skipped rather than shown
+as "changed" every run. `git::show_at_head`, `StateResolver::vars_at_last_sync`,
+`Resolver::resolve_linefile_body` and `vars::diff` are the pieces; the render is
+`print_vars_changed` in the sync path. The baseline read + diff is verified against a real git
+repo (`vars_change_is_measured_against_the_committed_baseline`).
+
+**Still owed — the Part IX tail (both need gating-side reference tracking):**
 - **W11** (`why` explains *"$role is travel, set at vars line 6"*) now has its origin foundation
   (W12) but still needs the **gating side**: recording which variable-referencing `when`
   conditions admitted each reached statement, so `why` can name the ones behind a package. That
   is a change to the resolver's `walk`/`statements_with_gating`, threaded into the `__source`-style
-  tags — the invasive half.
-- **W8/W13 messaging** wants the same gating-side data: `activate`/`deactivate` and the plan
-  naming the variable behind a change. Take it with W11, and with the pre-existing
-  `activate`/`deactivate` `when`-block messaging (2026-07-20 audit findings 2–3).
+  tags.
+- **W8 messaging**: `activate`/`deactivate` naming a `when $var` block (they reason about host
+  blocks only today). Entangled with the pre-existing `activate`/`deactivate` `when`-block
+  messaging (2026-07-20 audit findings 2–3); take them together.
 
 ## Session 2026-07-20 (fourth session) — Part IX begins: typed values (W2, built)
 
@@ -5383,7 +5394,17 @@ the most destructive edit in the repo**, and the plan output should make the cau
 rather than presenting a hundred unexplained removals. **CORE SATISFIED by construction
 (2026-07-20):** variables feed the desired state, which feeds the plan, which feeds the guard — a
 `vars` edit that removes a hundred packages hits `max_removals`/`protected` like any other change.
-**The cause-in-the-plan messaging is NOT built** (same origin tracking as W11).
+
+**RULED (owner, 2026-07-20, fifth session): the plan shows a run-level note, not per-package
+attribution.** The three options were a run-level note (compare the plan's frozen vars to this
+run's and print *"Variables changed: role (travel → desktop)"* above the removals), per-package
+attribution (resolve twice and diff the gating, so each removed package names the variable that
+dropped it), or nothing. The owner chose the note. It is decoupled from the W11/W8 gating-side
+tracking entirely — the plan already freezes its resolved vars (Stage 5), so the note is a diff
+of two `Vars` maps with no second resolution and no per-package guesswork. It gives the cause
+next to the count, which is the property W13 asks for. **BUILT (fifth session):** the plan/sync
+preview prints changed variables above the removals when the run's vars differ from the frozen
+plan's.
 
 **W14 — Does `vars` belong in `linix diff`?** Phase 4 limits `diff` to
 `modules/profiles/active/priority/schedules`. **`vars` has to join that list or the file that

@@ -76,6 +76,39 @@ async fn test_recursive_module_expansion_logic() {
     assert!(scopes.contains("profile:Work"), "{}", scopes);
 }
 
+/// W13: the plan explains a variable-driven change by diffing this run's variables against the
+/// last successful sync (HEAD). This proves the baseline half — `vars_at_last_sync` reads the
+/// committed `vars`, `resolve_vars` reads the working tree, and `vars::diff` names the change.
+#[tokio::test]
+async fn vars_change_is_measured_against_the_committed_baseline() {
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root().to_path_buf();
+
+    fs::write(root.join("vars"), "role = travel\n").await.unwrap();
+    let git = kernel.app.git_manager();
+    git.init().unwrap();
+    git.commit_all("baseline").unwrap();
+
+    // Edit the working tree without committing — this is the "you edited vars" state.
+    fs::write(root.join("vars"), "role = desktop\n").await.unwrap();
+
+    let resolver =
+        StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
+    let baseline = resolver
+        .vars_at_last_sync(&git)
+        .await
+        .unwrap()
+        .expect("HEAD has a vars file, so there is a baseline");
+    let now = resolver.resolve_vars().await.unwrap();
+
+    assert_eq!(baseline["role"], linix::model::vars::Value::Str("travel".into()));
+    assert_eq!(now["role"], linix::model::vars::Value::Str("desktop".into()));
+
+    let changed = linix::model::vars::diff(&baseline, &now);
+    assert_eq!(changed.len(), 1, "only role changed: {:?}", changed);
+    assert_eq!(changed[0].0, "role");
+}
+
 /// A `use` of a module that does not exist is a descriptive error, never a silent skip and
 /// never a package named `ghost-module-123`.
 #[tokio::test]

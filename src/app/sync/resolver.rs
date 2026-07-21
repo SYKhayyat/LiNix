@@ -124,6 +124,40 @@ impl<'a> StateResolver<'a> {
             .map_err(Error::from)
     }
 
+    /// The variables as of the last successful sync (HEAD), for W13's change note. Line-file
+    /// provider only: a script or program has no committed values to diff, and a clock/network
+    /// var would read as "changed" every run, which is noise, not a cause. `None` when there is
+    /// no baseline — no git repo, no commit yet, or a non-line-file provider.
+    pub async fn vars_at_last_sync(
+        &self,
+        git: &crate::core::GitManager,
+    ) -> Result<Option<crate::model::vars::Vars>> {
+        use crate::model::vars_provider::Kind;
+        let Some(selected) = self.vars_provider()? else {
+            return Ok(None);
+        };
+        if selected.kind != Kind::LineFile {
+            return Ok(None);
+        }
+        let name = selected
+            .path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("vars");
+        let Some(body) = git.show_at_head(name)? else {
+            return Ok(None);
+        };
+        let facts = HostFacts::current();
+        let priority = self.priority(&facts).await?;
+        let known = Vocab::new(&self.registry, self.config, &priority);
+        let (vars, _) = crate::model::Resolver::new(&self.layout, &known, &priority)
+            .with_facts(facts)
+            .with_vars_source(self.config.vars.source.clone())
+            .resolve_linefile_body(&selected.path, &body)
+            .map_err(Error::from)?;
+        Ok(Some(vars))
+    }
+
     /// The active provider file and kind, or `None` when the repo has no `vars` provider.
     pub fn vars_provider(&self) -> Result<Option<crate::model::vars_provider::Selected>> {
         crate::model::vars_provider::select(self.layout.config_root(), &self.config.vars.source)

@@ -471,6 +471,12 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
 
     if !opts.json && !changes.is_empty() {
         print_flight_plan(app, &changes);
+        // W13: a `vars` edit can be the cause of a removal, so when the plan removes anything,
+        // name the variables that changed since the last sync — a hundred removals should never
+        // be unexplained.
+        if changes.total_remove() > 0 {
+            print_vars_changed(app, &resolver, &state.vars).await;
+        }
     }
 
     // Dry-run is preview-only: never prompt, never mutate. (JSON dry-run emits the report.)
@@ -4004,6 +4010,35 @@ fn print_flight_plan(app: &App, changes: &linix::app::sync::planner::SyncChanges
             "  services: {} change(s) may restart running services",
             service_ops
         );
+    }
+}
+
+/// W13: name the variables whose value changed since the last successful sync (HEAD), so a
+/// removal driven by a `vars` edit is explained rather than presented as a bare count. Compares
+/// this run's resolved variables to the committed baseline; silent when nothing changed or there
+/// is no baseline (a fresh repo, or a script/program provider whose values do not commit).
+async fn print_vars_changed(
+    app: &App,
+    resolver: &linix::app::sync::resolver::StateResolver<'_>,
+    current: &linix::model::vars::Vars,
+) {
+    let git = app.git_manager();
+    let prev = match resolver.vars_at_last_sync(&git).await {
+        Ok(Some(p)) => p,
+        _ => return,
+    };
+    let changes = linix::model::vars::diff(&prev, current);
+    if changes.is_empty() {
+        return;
+    }
+    println!("  variables changed since the last sync:");
+    for (name, before, after) in changes {
+        match (before, after) {
+            (Some(a), Some(b)) => println!("    ${}  {} → {}", name, a, b),
+            (None, Some(b)) => println!("    ${}  (new) {}", name, b),
+            (Some(a), None) => println!("    ${}  {} → (gone)", name, a),
+            (None, None) => {}
+        }
     }
 }
 
