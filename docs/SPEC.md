@@ -534,8 +534,8 @@ write is deleted (II.17), because two stores could disagree about what this mach
 | version | `apt:curl → 7.81.0` | **built** (`locks/versions.json`) |
 | **hook script hash** | `fonts:after_install → sha256:a3f1…` | **built** (`locks/hooks.toml`) |
 | **resolved artifact** | `sharkdp/fd → fd-…-linux-gnu.tar.gz`, its URL, format and hash | **built** (`locks/github.toml`) |
-| **resolved backend for a bare name** | `ripgrep → cargo:ripgrep@14.1.0` | **not built** |
-| **regex expansion** (only if frozen) | `re:^texlive- → [312 names]` | **not built** |
+| **resolved backend for a bare name** | `ripgrep → cargo` | **built** (`locks/bare.toml`) |
+| **regex expansion** | `re:^texlive- → [312 names]` | **not built** |
 
 `linix lock` regenerates the version pins. **It takes no arguments** — the per-name and
 per-backend forms this section used to promise (`lock <name>`, `lock --backend cargo`) do not
@@ -544,7 +544,21 @@ written by the backend as it installs rather than by `linix lock`, because the a
 known at the moment it is chosen. `github` asks `Layout::lock_file()` for that path rather
 than building it, so there is one answer to where a backend's lock lives.
 
-*The two unbuilt rows are the target state and are kept as such. They were written here as
+**`locks/bare.toml` is one file, not one per backend** (owner ruling, 2026-07-21), which is
+this table's one exception to the layout above. The fact recorded is about a *name*; per-backend
+files would make a name that moves managers two writes — a delete from one file, an insert into
+another — for one fact changing, and would make *"what did `ripgrep` resolve to?"* a search.
+
+**A bare name is asked once and then frozen, and deleting the entry is how you ask again**
+(owner ruling, 2026-07-21). Re-deriving the answer every run against whatever is installed
+*today* is how an unedited line comes to mean a different package: install a manager that sits
+higher in `priority` and happens to publish the same name, and `ripgrep` silently becomes
+somebody else's `ripgrep`. There is no command to unfreeze, because the file is yours and a text
+editor is the command — the same rule II.15 states for regex. A name nothing declares any more is
+dropped from the file; a name frozen to a backend `priority` no longer lists is re-asked, loudly,
+because `priority` decides what LiNix may use at all (V.15).
+
+*The remaining unbuilt row is the target state and is kept as such. Both were written here as
 though they were real, which cost the 2026-07-20 audit a check — a target belongs in Part III
 or marked, not stated in the present tense.*
 

@@ -2,6 +2,7 @@ pub mod artifact_lock;
 pub mod cache;
 pub mod error;
 pub mod executor;
+pub mod bare_lock;
 pub mod extras_lock;
 pub mod hook_lock;
 pub mod git;
@@ -39,6 +40,7 @@ pub use security::verify_checksum;
 
 pub use hook_lock::{hook_id, HookLedger, Verdict};
 
+pub use bare_lock::BareLock;
 pub use extras_lock::{extra_key, ExtrasLedger};
 pub use artifact_lock::{verify_against, ArtifactLedger, ArtifactLock};
 

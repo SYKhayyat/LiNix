@@ -13,6 +13,17 @@ use tokio::fs;
 use tracing::{debug, instrument, warn};
 use version_compare::{compare as loose_compare, Cmp};
 
+/// Whether the statements handed to the prober are the whole model.
+///
+/// Only then does a name's absence mean it is no longer declared. A single `linix run jq` is
+/// one line, and pruning the bare-name lock against it would forget every other name on the
+/// machine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Coverage {
+    WholeModel,
+    OneLine,
+}
+
 pub struct StateResolver<'a> {
     config: &'a Config,
     registry: Arc<BackendRegistry>,
@@ -241,7 +252,9 @@ impl<'a> StateResolver<'a> {
             .with_facts(facts.clone())
             .statements()?;
         self.resolve_aliases(&mut reached.statements);
-        let answers = self.probe_bare_names(&reached.statements, &priority).await?;
+        let answers = self
+            .probe_bare_names(&reached.statements, &priority, Coverage::WholeModel)
+            .await?;
 
         let mut state = crate::model::Resolver::new(&self.layout, &known, &priority)
             .with_facts(facts)
@@ -300,6 +313,7 @@ impl<'a> StateResolver<'a> {
         &self,
         statements: &[(Statement, Origin, Gates)],
         priority: &Priority,
+        coverage: Coverage,
     ) -> Result<HashMap<String, String>> {
         let mut questions: Vec<(String, Option<String>, Origin)> = Vec::new();
         for (stmt, origin, _) in statements {
@@ -317,8 +331,36 @@ impl<'a> StateResolver<'a> {
             questions.push((name, constraint, origin.clone()));
         }
 
+        // II.6/II.15: the lock is the switch. A recorded name keeps its backend without asking
+        // anyone — which is the point, since re-deriving the answer against whatever is
+        // installed today is how an unedited line comes to mean a different package. Deleting
+        // the entry is how you ask again.
+        let lock_path =
+            crate::core::BareLock::path_in(&self.layout.locks_dir());
+        let mut lock = crate::core::BareLock::load(&lock_path)?;
+        let mut lock_changed = match coverage {
+            Coverage::WholeModel => {
+                let declared: Vec<String> = questions.iter().map(|(n, _, _)| n.clone()).collect();
+                lock.retain_declared(&declared)
+            }
+            Coverage::OneLine => false,
+        };
+
         let mut answers = HashMap::new();
         for (name, constraint, origin) in questions {
+            if let Some(backend) = lock.get(&name) {
+                // A frozen backend that `priority` no longer lists is not a lock to honour
+                // silently: `priority` says which managers LiNix may use at all (V.15).
+                if priority.allows(backend) {
+                    debug!("bare `{}` is locked to `{}`.", name, backend);
+                    answers.insert(name, backend.to_string());
+                    continue;
+                }
+                warn!(
+                    "`{}` was locked to `{}`, which is no longer in `priority`. Asking again.",
+                    name, backend
+                );
+            }
             let mut found = None;
             for backend in priority.order() {
                 if self
@@ -332,6 +374,7 @@ impl<'a> StateResolver<'a> {
             match found {
                 Some(backend) => {
                     debug!("bare `{}` resolved to `{}`.", name, backend);
+                    lock_changed |= lock.record(&name, &backend);
                     answers.insert(name, backend);
                 }
                 // No backend has it, so there is no honest answer to give. The old code
@@ -352,6 +395,12 @@ impl<'a> StateResolver<'a> {
                     ))
                 }
             }
+        }
+
+        // Written only when it changed: an unchanged lock rewritten every run would make
+        // every sync a commit (V.30 commits on success, and there would always be something).
+        if lock_changed {
+            lock.save(&lock_path)?;
         }
         Ok(answers)
     }
@@ -421,7 +470,9 @@ impl<'a> StateResolver<'a> {
             }
             None => {
                 let stmts = vec![(Statement::Package(decl.clone()), origin.clone(), Gates::new())];
-                let answers = self.probe_bare_names(&stmts, &priority).await?;
+                let answers = self
+                    .probe_bare_names(&stmts, &priority, Coverage::OneLine)
+                    .await?;
                 answers
                     .get(decl.selector.as_str())
                     .cloned()
