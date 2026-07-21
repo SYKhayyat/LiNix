@@ -8,6 +8,9 @@ use crate::backends::generic::{
 // Only the distro/macOS backends have a manual-list command to describe.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::backends::generic::ManualFormat;
+// Only apt enumerates; the import is gated with the backend that uses it.
+#[cfg(target_os = "linux")]
+use crate::backends::generic::GenericEnumerable;
 use crate::backends::pip_search::PipSearchable;
 use crate::config::Config;
 use crate::core::{BackendCapabilities, CommandExecutor};

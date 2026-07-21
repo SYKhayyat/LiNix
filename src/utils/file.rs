@@ -101,6 +101,7 @@ pub fn bin_destination(bin_dir: &Path, name: &str, confined: bool) -> Result<Pat
         }
     }
 
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut dest = bin_dir.join(name);
     // The recorded path has to be the one that was written, extension and all, or the removal
     // path looks for a file that was never there.
