@@ -2088,11 +2088,21 @@ async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
         ScheduleCommand::List => {
             let doc = linix::config::grammar::parse_document(&file, &body, &known)?;
             let facts = linix::config::parser::HostFacts::current();
+            let mut listed = 0usize;
             for (stmt, origin) in doc.statements_for(&facts)? {
                 if let linix::config::grammar::Statement::Schedule(name, opts) = stmt {
                     let cfg = linix::model::schedule::schedule_config(&name, &opts, &origin)?;
                     println!("{:<15} {:<15} {}", cfg.name, cfg.cron, cfg.command);
+                    listed += 1;
                 }
+            }
+            // An empty list printed as nothing at all reads as a command that failed. Name the
+            // file too: a `when` block that did not fire is the other reason this is empty.
+            if listed == 0 {
+                println!(
+                    "No schedules are in force. {} declares none that apply to this machine.",
+                    file.display()
+                );
             }
             return Ok(());
         }
@@ -2105,6 +2115,19 @@ async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
     match cmd {
         SnapshotCommand::List => {
             let list = app.snapshot_manager.list_snapshots().await?;
+            if list.is_empty() {
+                // Two different facts print the same empty list, and the difference is the
+                // whole answer: no provider means snapshots are not available on this machine.
+                if app.snapshot_manager.has_provider() {
+                    println!("No snapshots yet. `sync` takes one before it changes anything.");
+                } else {
+                    println!(
+                        "No snapshot provider on this machine (btrfs, ZFS, Timeshift or Windows \
+                         System Restore) — nothing can be listed, and `sync` proceeds without a \
+                         restore point. `linix doctor` says what is available here."
+                    );
+                }
+            }
             for s in list {
                 println!("{:<15} {}", s.backend, s.id);
             }

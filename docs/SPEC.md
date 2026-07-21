@@ -2907,6 +2907,21 @@ against a scratch config with a real destination outside the home directory, and
 (non-interactive refusal, `--dry-run`, `--yes`, second run) were each exercised against the
 binary.
 
+**3. S23 — `nimble`'s format legend was two phantom packages, and two commands printed
+nothing.** Found by running the tool, not by reading it: `linix list` on this machine reported
+`nimble:{PackageName}` and `nimble:└──`, because `nimble list --installed` prints the shape of
+its own output when nothing is installed. The fix is in the shared `is_noise_line`, so it covers
+every first-token parser (recorded as S23 under "Bugs found while implementing"). In the same
+sweep, `schedule list` and `snapshot list` printed **nothing at all** when they had nothing to
+show — indistinguishable from a command that failed. Both now say so, and `snapshot list`
+distinguishes *no snapshots yet* from *no snapshot provider on this machine*, which is the whole
+answer when it is the second.
+
+**Still owed:** **K14** (nothing asserts that `rebuild` makes no git commit — unchanged: the
+honest test still needs a backend that can really remove and reinstall, and this box has none
+that is cheap and offline) and **Phase 6's containers**, which still have never been run (no
+Docker here).
+
 ## Session 2026-07-21 (seventh session) — the owed list, and `@asset=all`
 
 Started by checking the owed lists in this Part against the tree rather than reading them.
@@ -5040,6 +5055,26 @@ pins that a real package named `nodejs` still parses.
 **Found by running the tool while writing its README** — not by a test, and not by reading. The
 suite was green with the phantom package in it, because no test runs a real backend that has
 nothing installed.
+
+**S23 — a format legend parsed as two packages (found 2026-07-21, fixed).** `nimble list
+--installed` on a machine with nimble but no nimble packages prints the *shape* of its output:
+
+```
+Package list format:
+{PackageName}
+└── @{Version} ({CheckSum})[Special Versions (if any)] ({InstallPath})
+```
+
+`linix list` reported `nimble:{PackageName}` and `nimble:└──`. This is S22 exactly one manager
+later, and S22's filter did not catch it because the banner is not a sentence: the fix adds two
+more rules to the same shared `is_noise_line`, so every first-token parser gets them — **a line
+whose first token opens with `{` or `<` is a placeholder**, and **a line starting with a
+tree-drawing character is decoration**. `winget`'s real `ARP\Machine\X64\{GUID}` names still
+parse, because the brace is not the first character.
+
+**Found the same way S22 was: by running `linix list` on this machine, not by a test.** The
+suite was green with both phantoms in it. Every parser test feeds output someone typed into the
+test; no test asks a real manager that has nothing installed what it prints.
 
 
 

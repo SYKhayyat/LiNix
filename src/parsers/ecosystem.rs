@@ -29,7 +29,18 @@ fn is_noise_line(line: &str) -> bool {
         || t.starts_with('#')
         || t.chars()
             .all(|c| matches!(c, '-' | '=' | '─' | '│' | '├' | '└' | ' '))
+        || t.starts_with(['─', '│', '├', '└'])
+        || is_placeholder(t)
         || is_empty_result_sentence(t)
+}
+
+/// `{PackageName}`, `<name>` — a manager describing the shape of its own output. `nimble list
+/// --installed` prints its format legend when nothing is installed, and its first token became
+/// a package called `{PackageName}` (the S22 failure, in a second manager). No real package
+/// name opens with a placeholder bracket.
+fn is_placeholder(line: &str) -> bool {
+    let first = line.split_whitespace().next().unwrap_or("");
+    first.starts_with('{') || first.starts_with('<')
 }
 
 /// "No global environments found." — a manager saying it has nothing, not a package called
@@ -440,6 +451,25 @@ nom
 ", "spack");
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "nodejs");
+    }
+
+    #[test]
+    fn a_format_legend_is_not_a_package() {
+        // `nimble list --installed` with nothing installed prints the shape of its own output.
+        // Its first two lines parsed as packages named `{PackageName}` and `└──` — S22 again,
+        // in a manager that was not covered because the banner is not a sentence.
+        let legend = "Package list format: 
+{PackageName}
+                      └── @{Version} ({CheckSum})[Special Versions (if any)] ({InstallPath})
+";
+        assert!(nimble_list(legend, "nimble").is_empty(), "{:?}", nimble_list(legend, "nimble"));
+
+        // A real listing still parses, brackets and all.
+        let real = "  chronos  [3.2.0, 3.1.0]
+";
+        let pkgs = nimble_list(real, "nimble");
+        assert_eq!(pkgs.len(), 1);
+        assert_eq!(pkgs[0].name, "chronos");
     }
 
     #[test]
