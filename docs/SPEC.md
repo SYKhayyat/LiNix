@@ -673,11 +673,25 @@ construction.
 `linix vars` prints each resolved name, its typed value, its type, and the active provider.
 `vars` (and every provider file) is part of `linix diff` and the git manifest views — otherwise
 the one file that explains a change would be the one the change view could not show. `when $var`
-works in `active` (`when $role == travel { Travel }`). **Still owed** (tracked in Part IX's W
-register): `check` noting unused variables (W5), `why` explaining a variable's origin (W11), and
-`activate`/`deactivate` and the plan naming a variable as the cause of a change (W8/W13
-messaging) — all three need origin tracking threaded through resolution, which the resolved
-`name → value` set does not yet carry.
+works in `active` (`when $role == travel { Travel }`).
+
+`linix check` lists any resolved variable no model file mentions, as a note and never an error.
+
+**`linix why` names the variable behind a package.** Under `because:` it prints every `when` that
+had to hold for the package to be declared — outermost first, across `active`, the profile and the
+module — and what each condition's variables are now: *"`when $role == travel` at `active:2` —
+`$role` is `travel`, set at `vars:1`"*. Only conditions that test a variable are listed: a
+`when host == laptop` is already its own whole answer.
+
+**`activate` and `deactivate` name a block with its variables' values** — *"`when $role == travel`
+($role is desktop)"* — because `active` holds the condition and `vars` holds the value, and a
+message pointing at the first without the second cannot be checked. **The plan names the variables
+that changed** since the last successful sync, above the removals (W13).
+
+**One rule about which facts:** every reader of a `when` — resolving, editing, or explaining — is
+handed the facts that carry this run's variables. There is deliberately no form that detects its
+own: an empty variable set does not make `when $role == travel` a block that fails to match, it
+makes `$role` an unknown key, and a file that is correct is refused.
 
 ## II.7 Resolution
 
@@ -2694,6 +2708,67 @@ Three suspicions did not survive scrutiny:
 **Living section. It is the one place that records progress — Part III stays the plan, this
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
+
+## Session 2026-07-21 (sixth session) — Part IX's tail: W11 and W8, and the bug under W8
+
+Took the fifth session's owed list, which was the whole remaining Part IX register. **W1–W14 are
+now built.** Green at each commit (`cargo build --all-targets` clean, `cargo clippy --all-targets`
+silent, `cargo test` all suites — run the command, do not copy a number).
+
+**1. W11's gating half — resolution carries the conditions that admitted each line.** The resolver
+knew a statement was *conditional* and nothing else, so W12 could say what `$role` is and never
+which package that value put on the machine. The flag is now a chain: `Gate` (a predicate and the
+line it is written on) and `Gates` live beside `Origin` in the grammar, and the chain composes
+across the three levels that can gate a package — the `active` block that turned the profile on,
+the profile's block around its `use`, the module's own block. It lands on the spec as `__gated_by`,
+**filtered to conditions that test a variable**: a `when host == laptop` has no second hop to
+explain, and listing it would bury the ones that do. `Document::walk`, `modules::expand`,
+`ProfileLoader::resolve` (whose `Resolved.modules` is now `UsedModule { name, gates }`),
+`apply_set_math`/`eval_expression`/`atom`, `Reached` and `to_spec` all thread it.
+
+*Two rules were needed and are written into the code:* a module or package **reached twice keeps
+the shortest chain** — reached once inside a condition and once outside it, it is here
+unconditionally, and naming the condition anyway is a wrong answer; and `to_spec`'s three
+provenance arguments became one **`Provenance`**, because origin, scopes and gates answer three
+different questions and had started to read as interchangeable.
+
+**2. W11's output.** `linix why` prints, under `because:`, each variable condition and what its
+variables are now: *"`when $role == travel` at active:2 — $role is travel, set at vars:1"*. The
+`__gated_by` round trip is `Display`/`FromStr` on `Gate`, kept in one place because it crosses the
+`PackageSpec` seam where everything is a string. A tag that does not parse is printed as written
+rather than dropped. *Verified against the real binary on a scratch repo, both ways:* with
+`role = desktop` the package is declared nowhere, with `role = travel` both conditions are named
+with their values and origins.
+
+**3. W8 — and the bug underneath it, which was the larger half.** The resolution path had been
+taught variables in the fourth session. **Every path that edits your files had not.**
+`activate -a`, `deactivate`, `uninstall` and `declares` read `active` through
+`HostFacts::current()`, whose variable set is empty — and an empty set does not make
+`when $role == travel` a block that fails to match, it makes `$role` an **unknown key**. All four
+verbs refused a correct file outright. Closed by deleting the varless readers rather than
+defaulting them (P5: a default nobody chose): `parse_active`/`read_active` take facts,
+`Editor::new` takes facts, and **`StateResolver::facts_for_host` is the one place that produces
+them** — `resolve_model` now calls it instead of resolving variables inline. The messaging half is
+`model::profiles::describe_gate`: `activate` and `deactivate` name a block with its variables'
+current values, *"`when $role == travel` ($role is desktop)"*, because `active` holds the condition
+and `vars` holds the value. *Verified against the binary:* `deactivate Trip` on a variable-gated
+block reports the removal, the emptied block and the value.
+
+**Owed, and found this session:**
+- **A `when $var` in `priority` cannot work, and fails with a confusing error.** Variables are
+  resolved *after* `priority`, because resolving them needs the backend vocabulary that `priority`
+  defines. So `when $role == travel { cargo }` in `priority` reports *"unknown `when` key
+  `$role`"*, which names the wrong problem. **Owner decision pending** — see the question raised
+  at the end of this entry.
+- **`core/state.rs` keeps two `#[serde(default)]` fields whose comments say they exist to load
+  registries written by older versions** (`suspensions`, `held`). That is an old-format reader,
+  which NO-LEGACY says is deleted, not kept. **Owner decision pending** — it is state rather than
+  config, so deleting it means a registry written by a previous build stops loading.
+- **`linix check` still does not reach what no active profile reaches** (carried from the fifth
+  session, unrelated to Part IX).
+
+**Not verified this session:** anything needing Docker, the network path in any backend, and the
+OS scheduler.
 
 ## Session 2026-07-20 (fifth session) — Part IX finishes its documentation and W5/W12
 
@@ -4996,10 +5071,10 @@ state.** Owner ruled the full programmable model (IX.6): typed values (W2), a li
 an external-executable provider, and an embedded Rhai provider (`vars.linix`) with a clock/shell/
 files/env/network standard library. Providers are chosen by filename with a `[vars] source`
 selector; a plan freezes its resolved variables. The canonical description now lives in **II.6b**,
-with V.51–V.54 for the why. What remains is three deferred refinements — W5, W11, and the W8/W13
-messaging — each tracked at its
-register entry and needing reference/origin tracking through the resolver. Decisions are numbered
-`W1…W14` in IX.7; the fourth-session entry in Part VII is the build record.
+with V.51–V.54 for the why. **The register is now closed: W1–W14 are all built** (W5, W11 and
+the W8/W13 messaging landed 2026-07-20, fifth and sixth sessions). Decisions are numbered
+`W1…W14` in IX.7; the fourth-, fifth- and sixth-session entries in Part VII are the build
+record.
 
 **How far customization goes here is an open discussion, not a settled question (owner, 2026-07-19).**
 IX.5 draws a narrow boundary and IX.7 recommends holding it in several places. **Read those as
@@ -5352,10 +5427,22 @@ activates it when host == laptop"*. That message and that logic have to learn va
 the feature rather than a follow-up — a half-taught `deactivate` would report a state it did not
 reach, which II.6 already calls out as the defect to avoid.
 **CORE BUILT (2026-07-20):** `when $role == travel { Travel }` in `active` resolves — it read its
-own varless facts before and failed with "unknown when key `$role`"; `parse_active_with` now
-threads the run's facts (which carry the variables). **The `activate`/`deactivate` message work is
-NOT built** — those verbs still reason about host blocks only, and that is entangled with the
-pre-existing activate/deactivate messaging gap (2026-07-20 audit findings 2–3); take them together.
+own varless facts before and failed with "unknown when key `$role`"; `parse_active` now threads the
+run's facts (which carry the variables).
+
+**COMPLETE (2026-07-20, sixth session), and it was a bug, not only a message.** The resolution path
+had been taught variables; **every path that EDITS your files had not.** `activate -a`,
+`deactivate`, `uninstall` and `declares` all read `active` through `HostFacts::current()`, whose
+variable set is empty — and an empty set does not make `when $role == travel` a block that fails to
+match, it makes `$role` an unknown key. Each of those verbs refused a correct file outright. Fixed
+by deleting the varless readers rather than defaulting them: `parse_active`/`read_active` take
+facts, `Editor::new` takes facts, and **`StateResolver::facts_for_host` is the one place that
+produces them** (`resolve_model` now calls it instead of resolving variables inline). The messaging
+half is `model::profiles::describe_gate`: a block is named with its variables' current values —
+*"`when $role == travel` ($role is desktop)"* — because `active` holds the condition and `vars`
+holds the value, and pointing a reader at the first without the second explains nothing. Verified
+against the binary: `deactivate Trip` on a `when $role == travel` block reports the removal, the
+emptied block, and the value, where it used to fail to parse the file.
 
 **W9 — Interpolation outside `when`.** IX.5 says no. Record the boundary explicitly so the
 answer is a decision rather than an omission, because the first `link:` request will arrive
@@ -5373,16 +5460,22 @@ reason to invite the problem.
 `when $role == travel` matched, `linix why` should say *"`$role` is `travel`, set at `vars`
 line 6 by `when host in [thinkpad, x220]`"* — one hop further than it explains today.
 *Recommendation:* yes, and W4's fixed resolution phase is what makes it cheap. Decide before
-the resolver is written. **HALF BUILT (2026-07-20, fifth session).** The *definition* half is
-done: W12's `VarOrigins` records which line/provider set each variable, so *"`$role` is
-`travel`, set at `vars:6`"* is now available. What is still missing is the *gating* half —
-knowing that a given **package** is present *because* `when $role == travel` matched. That means
-threading the variable-referencing `when` conditions that admitted each reached statement through
-the profile/module resolution core (`parse_active_with` → `ProfileLoader::resolve` → `expand` →
-`apply_set_math` → `Reached` → `to_spec`, into a `__gated_by`-style tag `why` reads). That path
-is the resolver whose flagship bug was a mass removal, so it is the one piece deliberately left
-for a dedicated pass rather than the tail of a long session. **W8's `activate`/`deactivate`
-messaging needs the same gating data and should be taken with it.**
+the resolver is written. **BUILT (2026-07-20, sixth session).** The definition half was W12's
+`VarOrigins`. The gating half is now built: the resolver's per-statement `conditional` flag became
+a **chain** of `Gate`s (a predicate and the line it is written on, `Gates` beside `Origin` in the
+grammar — two questions, two answers). The chain composes across all three levels that can gate a
+package — the `active` block that turned the profile on, the profile's block around its `use`, the
+module's own block — and lands on the spec as `__gated_by`, filtered to the conditions that test a
+variable, which is the hop `why` cannot make from the file alone. `why` prints it under
+`because:`.
+
+**A package or module reached twice keeps the shortest chain.** Reached once inside a condition and
+once outside it, it is here unconditionally, and an explanation that names the condition anyway is
+a wrong answer, not a partial one.
+
+`to_spec`'s three provenance arguments became one `Provenance` in the same pass: origin, scopes and
+gates answer three different questions and had begun to read as interchangeable, which is the
+mistake that made `upgrade --module dev` match a filename.
 
 **W12 — Is there a command to print resolved variables?** `linix vars`, showing each name, its
 value on this machine, and which line set it. Debugging a fleet without it means reading the
