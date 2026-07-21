@@ -3713,6 +3713,13 @@ max_removals = 20
 
 # Refuse to apply when `linix audit` reports a managed package as vulnerable.
 # deny_vulnerable = false
+
+# Refuse to put a downloaded file anywhere but the backend's own bin directory,
+# whatever the `@bin` option or the URL's last path segment says. On by default.
+# Off restores an unchecked join, where a copied install line can name your shell
+# profile and have it replaced by a symlink to a download. Not one of the nine:
+# it is checked where a backend deploys, the only place that destination exists.
+# confine_bin = true
 "#;
 
 async fn handle_path(cli: &Cli, explain: bool, set: Option<&std::path::Path>) -> Result<()> {
