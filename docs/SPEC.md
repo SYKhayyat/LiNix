@@ -2912,10 +2912,11 @@ nothing.** Found by running the tool, not by reading it: `linix list` on this ma
 `nimble:{PackageName}` and `nimble:└──`, because `nimble list --installed` prints the shape of
 its own output when nothing is installed. The fix is in the shared `is_noise_line`, so it covers
 every first-token parser (recorded as S23 under "Bugs found while implementing"). In the same
-sweep, `schedule list` and `snapshot list` printed **nothing at all** when they had nothing to
-show — indistinguishable from a command that failed. Both now say so, and `snapshot list`
-distinguishes *no snapshots yet* from *no snapshot provider on this machine*, which is the whole
-answer when it is the second.
+sweep, `schedule list`, `snapshot list` and `profile show` printed **nothing at all** when they
+had nothing to show — indistinguishable from a command that failed. All three now say so;
+`snapshot list` distinguishes *no snapshots yet* from *no snapshot provider on this machine*
+(the whole answer when it is the second), and `profile show` names what a profile is made of,
+because a profile reaching nothing is usually a `use` line pointing at an empty module.
 
 **Still owed:** **K14** (nothing asserts that `rebuild` makes no git commit — unchanged: the
 honest test still needs a backend that can really remove and reinstall, and this box has none

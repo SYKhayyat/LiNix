@@ -2393,7 +2393,18 @@ async fn handle_profile(app: &App, cmd: &ProfileCommand) -> Result<()> {
             }
         }
         ProfileCommand::Show { name } => {
-            for pkg in pm.show(name).await? {
+            let packages = pm.show(name).await?;
+            // A profile that reaches nothing is the commonest thing a new user writes — a
+            // `use` line pointing at an empty module — and printing nothing for it says
+            // neither "empty" nor "no such profile".
+            if packages.is_empty() {
+                println!(
+                    "`{}` declares no packages. A profile is `use <module>` lines and package \
+                     lines; `linix module list` shows what there is to use.",
+                    name
+                );
+            }
+            for pkg in packages {
                 println!("{}", pkg);
             }
         }
