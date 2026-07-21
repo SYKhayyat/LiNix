@@ -4,8 +4,8 @@
 line):** Build clean, clippy silent, **735 tests passing**. Phases 0–5 have largely landed: the
 model, the grammar, the guard, git-backed history, R1–R23, `rebuild`, artifact selection,
 `vars`, and X.6. Phase 6's six containers exist and **have never been run** (no Docker here).
-**SEC1 and SEC2 were built on 2026-07-21; SEC3 remains deferred by the owner**; SEC4–SEC6 are
-built.
+**SEC1–SEC6 are built** (SEC3's confinement half is a ruled won't-fix; its confirmation half
+landed 2026-07-21).
 
 **The 2026-07-20 audit found seven bugs and five zombie config keys; all twelve are closed** —
 block-form options now face every rule the short form does, `apply` and `rebuild` reach the
@@ -2025,6 +2025,13 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   directory prompts for confirmation on first install** — a confirmation, not a refusal, and not
   gated by a config key. Free for the dotfiles case (all under `~`), and it puts a beat between a
   pasted spec line and a system path. This is the only part of SEC3 the security pass implements.
+  **BUILT 2026-07-21.** `SyncEngine::sync` asks, beside the guard calls and before the snapshot,
+  so every command that installs (`sync`, `apply`, `rebuild`, `watch`, `upgrade`) inherits it from
+  the one place. `--dry-run` prints the destinations and says a real run would ask; `--yes`
+  proceeds (this is a confirmation, not the guard); a non-interactive shell without `--yes` is an
+  error naming the count, not a hang. Install and confirmation resolve `@target` through one
+  function (`backends::link::resolve_target`) — two resolutions is a run that confirms one
+  destination and writes another.
 
 - **SEC4 — SSH host argument injection (fleet), semi-trusted input.** `fleet.rs:24-28` passes `host`
   to `ssh` with no `--` separator: `.arg("-o").arg("BatchMode=yes").arg(host).arg(remote_cmd)`. A host
@@ -2819,6 +2826,20 @@ Three suspicions did not survive scrutiny:
 **Living section. It is the one place that records progress — Part III stays the plan, this
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
+
+## Session 2026-07-21 (eighth session) — the owed list, continued
+
+Green at each commit (`cargo build --all-targets` clean, `cargo clippy --all-targets` silent,
+`cargo test` all suites — 809 lib tests plus the integration suites).
+
+**1. SEC3's confirmation half is built.** The last undecided-looking item on the owed list was
+not undecided at all: the owner ruled on 2026-07-19 that `@target` stays unconfined and that a
+destination outside the home directory asks once. Only the asking was missing, so a `link:` line
+naming `/etc/cron.d/x` was placed with no beat between the pasted line and the system path. The
+question is asked in `SyncEngine::sync`, beside the guard calls and **before the snapshot** —
+every install path funnels through there, and a confirmation offered after the file is placed is
+a notification. Details and the `--dry-run`/`--yes`/non-interactive rules are recorded under SEC3
+in Phase 5.
 
 ## Session 2026-07-21 (seventh session) — the owed list, and `@asset=all`
 

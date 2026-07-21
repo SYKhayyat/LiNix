@@ -14,6 +14,32 @@ pub struct LinkBackendCore {
     pub config: Arc<Config>,
 }
 
+/// Where a `@target=` value lands on disk. The install path and the pre-sync confirmation
+/// must answer this the same way, or the run confirms one destination and writes another.
+pub fn resolve_target(target: &str) -> Result<PathBuf> {
+    let home = || {
+        dirs::home_dir().ok_or_else(|| Error::Other("Could not find home".into()))
+    };
+    if let Some(rest) = target.strip_prefix("~/") {
+        Ok(home()?.join(rest))
+    } else if target == "~" {
+        home()
+    } else {
+        Ok(PathBuf::from(target))
+    }
+}
+
+/// Whether a resolved `@target` lands outside the user's home directory. An unknown home
+/// counts as outside: the point of the question is that the destination is not one of the
+/// dotfiles the link backend exists for, and a machine that cannot say where home is
+/// cannot say the path is under it.
+pub fn is_outside_home(resolved: &Path) -> bool {
+    match dirs::home_dir() {
+        Some(home) => !resolved.starts_with(home),
+        None => true,
+    }
+}
+
 impl LinkBackendCore {
     pub fn new(executor: CommandExecutor, config: Arc<Config>) -> Self {
         Self {
@@ -222,15 +248,7 @@ impl Installable for LinkInstallable {
                 .get("target")
                 .ok_or_else(|| Error::Other("Link requires @target".into()))?;
 
-            let target_path = if let Some(rest) = target_str.strip_prefix("~/") {
-                dirs::home_dir()
-                    .ok_or_else(|| Error::Other("Could not find home".into()))?
-                    .join(rest)
-            } else if target_str == "~" {
-                dirs::home_dir().ok_or_else(|| Error::Other("Could not find home".into()))?
-            } else {
-                PathBuf::from(target_str)
-            };
+            let target_path = resolve_target(target_str)?;
 
             // Mode A: Inline content declared directly (no separate source file).
             if let Some(content) = spec.options.get("content") {
@@ -407,6 +425,23 @@ mod tests {
             requires: vec![],
             present: true,
         }
+    }
+
+    #[test]
+    fn a_bare_tilde_is_the_home_directory_and_is_inside_it() {
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(resolve_target("~").unwrap(), home);
+        assert_eq!(resolve_target("~/.gitconfig").unwrap(), home.join(".gitconfig"));
+        assert!(!is_outside_home(&resolve_target("~/.config/nvim").unwrap()));
+    }
+
+    #[test]
+    fn a_system_path_is_outside_home() {
+        #[cfg(windows)]
+        let system = r"C:\ProgramData\linix\x";
+        #[cfg(not(windows))]
+        let system = "/etc/cron.d/x";
+        assert!(is_outside_home(&resolve_target(system).unwrap()));
     }
 
     #[tokio::test]

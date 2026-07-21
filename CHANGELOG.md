@@ -91,6 +91,9 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
   unattended for hours is still repaired rather than dropped.
 - **`sync`, `rollback` and `remove-orphans` refuse to apply unconfirmed** in a non-interactive
   shell without `--yes`.
+- **A `link:` line that writes outside your home directory asks first.** `@target` can still
+  point anywhere — that is what the link backend is for — but a destination like `/etc/cron.d/x`
+  is listed and confirmed before the first install places it. Dotfiles under `~` are unaffected.
 
 ### Removed
 
