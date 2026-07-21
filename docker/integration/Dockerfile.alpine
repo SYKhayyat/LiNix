@@ -19,6 +19,6 @@ RUN corepack enable || true
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
 WORKDIR /src
 COPY . /src
-RUN cargo build --release
+RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
 ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
 CMD ["apk", "jq"]

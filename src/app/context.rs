@@ -14,12 +14,11 @@ use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::Config;
 use crate::core::{
     CommandExecutor, Error, Journal, Package, PackageCache, PackageSpec, Result, SnapshotManager,
-    StateRegistry, Validator,
+    StateRegistry,
 };
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 
 use super::{LuaHooks, MetricsCollector, UniversalSearch};
-use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -647,26 +646,10 @@ impl App {
 
     #[instrument(skip(self))]
     pub async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
-        let mut resolved = Vec::new();
-        let mut queue = VecDeque::new();
-        let mut seen = HashSet::new();
-
-        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
-        queue.push_back(resolver.parse_and_probe_spec(spec_str).await?);
-
-        while let Some(spec) = queue.pop_front() {
-            let key = format!("{}:{}", spec.backend, spec.name);
-            if !seen.insert(key) {
-                continue;
-            }
-
-            Validator::validate_package_name_for(&spec.name, &spec.backend)?;
-            for req in &spec.requires {
-                queue.push_back(resolver.parse_and_probe_spec(req).await?);
-            }
-            resolved.push(spec);
-        }
-        Ok(resolved)
+        StateResolver::new(&self.config, self.registry.clone(), false)
+            .await
+            .resolve_spec(spec_str)
+            .await
     }
 
     pub async fn update(&self) -> Result<()> {

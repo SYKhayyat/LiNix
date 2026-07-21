@@ -21,7 +21,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --pr
 ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /src
 COPY . /src
-RUN cargo build --release
+RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
 
 FROM gentoo/stage3:latest
 # SMOKE-ONLY: no source builds; plan/parse/read-only only.

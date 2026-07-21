@@ -527,17 +527,19 @@ impl<'a> StateResolver<'a> {
                 // install a package that does not exist, reported by whichever backend
                 // happened to be first (P3).
                 None => {
-                    return Err(Error::from(
-                        GrammarError::new(
-                            origin,
-                            format!("no package manager in your `priority` list has `{}`.", name),
-                        )
-                        .with_hint(format!(
-                            "tried {} in order. Check the spelling, or name the backend on the \
-                             line if it comes from somewhere else.",
-                            priority.order().join(", ")
-                        )),
-                    ))
+                    let grammar = GrammarError::new(
+                        origin,
+                        format!("no package manager in your `priority` list has `{}`.", name),
+                    )
+                    .with_hint(format!(
+                        "tried {} in order. Check the spelling, or name the backend on the \
+                         line if it comes from somewhere else.",
+                        priority.order().join(", ")
+                    ));
+                    return Err(Error::Unresolvable {
+                        message: grammar.to_string(),
+                        name,
+                    })
                 }
             }
         }
@@ -641,6 +643,33 @@ impl<'a> StateResolver<'a> {
         );
         Validator::validate_package_name_for(&spec.name, &spec.backend)?;
         Ok(spec)
+    }
+
+    /// One command-line spec, plus everything its `@requires` chain pulls in.
+    ///
+    /// Lives here because [`parse_and_probe_spec`](Self::parse_and_probe_spec) does, and
+    /// callers that own only a registry and a config — `App` and `Runner` — each kept an
+    /// identical copy of this walk.
+    pub async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
+        let mut resolved = Vec::new();
+        let mut queue = std::collections::VecDeque::new();
+        let mut seen = std::collections::HashSet::new();
+
+        queue.push_back(self.parse_and_probe_spec(spec_str).await?);
+
+        while let Some(spec) = queue.pop_front() {
+            let key = format!("{}:{}", spec.backend, spec.name);
+            if !seen.insert(key) {
+                continue;
+            }
+
+            Validator::validate_package_name_for(&spec.name, &spec.backend)?;
+            for req in &spec.requires {
+                queue.push_back(self.parse_and_probe_spec(req).await?);
+            }
+            resolved.push(spec);
+        }
+        Ok(resolved)
     }
 
     async fn remote_package_exists(

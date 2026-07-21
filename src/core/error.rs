@@ -70,6 +70,15 @@ pub enum Error {
     #[error("Operation not supported by backend '{0}'")]
     Unsupported(String),
 
+    /// No backend in `priority` claims this name, so the line naming it can never be
+    /// satisfied by retrying. Kept apart from `Config` so `install` can tell "this name is
+    /// wrong" from "the sync failed" — it withdraws the line it just wrote only for the
+    /// first, and a dropped network must never be read as a reason to delete intent.
+    /// The payload is the rendered grammar error; `name` is the name that resolved to
+    /// nothing.
+    #[error("Configuration error: {message}")]
+    Unresolvable { name: String, message: String },
+
     #[error("{0}")]
     Other(String),
 }

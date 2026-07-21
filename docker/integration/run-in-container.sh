@@ -32,6 +32,11 @@ mkdir -p "$LINIX_CONFIG_DIR" "$LINIX_DATA_DIR"
 
 lx() { $TO "$LINIX" "$@"; }
 
+# LiNix commits as you (II.13) and injects no identity of its own, so git needs
+# to know who that is. A bare container has no identity and every commit fails.
+git config --global user.name "LiNix Integration" >/dev/null 2>&1 || true
+git config --global user.email "integration@linix.invalid" >/dev/null 2>&1 || true
+
 PASS=0
 FAILC=0
 SOFTC=0
@@ -76,6 +81,16 @@ echo "=============================================================="
 echo " LiNix v7 harness — backend=$BACKEND package=$PKG"
 echo "=============================================================="
 
+# A missing binary is not a failing run, it is an unrun one — and it does not
+# look like one. `nok` reads "command not found" as the refusal it was hoping
+# for, and `grep_ok` for /linix/ matches the words "failed to run command
+# 'linix'", so an image with no binary reported nine passes. Stop here instead.
+if ! $LINIX --version >/dev/null 2>&1; then
+    echo "FATAL: '$LINIX' is not runnable in this image — nothing below was tested."
+    echo "       The image must put the built binary on PATH (see the Dockerfiles)."
+    exit 1
+fi
+
 # --- 1. Bootstrap the II.1 repo -------------------------------------------
 echo "[1] Bootstrap"
 ok "init scaffolds the repo" lx init
@@ -112,6 +127,11 @@ ok "second sync is a no-op (exit 0)" lx -y sync
 # --- 6. Negative path ------------------------------------------------------
 echo "[6] Negative path"
 nok "installing a nonexistent package fails" lx -y install "linix-no-such-pkg-zzz"
+# The failure must not be left in the manifest. Every later command parses the
+# model, so one unresolvable line wedges the config until someone hand-edits it.
+ok "a failed install leaves the model parseable" lx status
+# Whatever the verdict above, the rest of the run needs a model it can read.
+sed -i '/linix-no-such-pkg-zzz/d' "$LINIX_CONFIG_DIR/modules/imperative.txt" 2>/dev/null || true
 
 # --- 7. Adopt (Part IV proof) ---------------------------------------------
 echo "[7] Adopt"
@@ -131,9 +151,11 @@ fi
 
 # --- 8. The guard (Part IV proofs) ----------------------------------------
 echo "[8] The guard"
-# A protected package is never removed. python3/libc/bash are protected; asking
-# to uninstall one must not carry it out.
-nok "uninstall of a protected package is refused/no-op" sh -c "lx -y uninstall bash && command -v bash >/dev/null && exit 1 || true; command -v bash"
+# A protected package is never removed. Only survival is asserted: whether the
+# verb refuses or no-ops depends on whether bash was declared, and the earlier
+# form asserted an exit code so convoluted that a correct refusal failed it.
+lx -y uninstall bash >/dev/null 2>&1 || true
+ok "bash survives an uninstall attempt" command -v bash
 # purge-unmanaged after adopt: a big removal must be refused without the flag OR
 # gated by the ratio; either way, the bare command must not silently purge.
 nok "purge-unmanaged is not a silent mass-delete" lx -y purge-unmanaged
@@ -141,20 +163,46 @@ nok "purge-unmanaged is not a silent mass-delete" lx -y purge-unmanaged
 # --- 9. Remove -------------------------------------------------------------
 echo "[9] Remove"
 ok "uninstall $PKG" lx -y uninstall "$PKG"
+echo "        DIAG path=[$(command -v "$PKG" 2>&1)] ls=[$(ls -l /usr/bin/"$PKG" 2>&1 | head -1)]"
+echo "        DIAG pkgstate=[$(dpkg -l "$PKG" 2>/dev/null | tail -1)]"
+echo "        DIAG declared=[$(grep -rl "$PKG" "$LINIX_CONFIG_DIR"/modules/ 2>/dev/null | tr '\n' ' ')]"
 nok "$PKG binary gone after uninstall" command -v "$PKG"
 
 # --- 10. Git-backed history (Phase 4 / v7) --------------------------------
 echo "[10] Git history + rollback"
 ok "git init enables manifest history" lx git init
-ok "sync commits after a change" sh -c "lx -y install '$PKG' >/dev/null 2>&1; lx git log --limit 5"
-grep_ok "git log shows a linix commit" "linix" lx git log --limit 10
+# `lx` is a function, so `sh -c "lx …"` ran nothing and reported 127 — which the
+# next checks then read as "no commit yet". Drive the binary directly.
+ok "an install after git init succeeds" lx -y install "$PKG"
+ok "the install left a commit behind" git -C "$LINIX_CONFIG_DIR" rev-parse HEAD
+# Subjects are deliberately generic (II.13 puts the detail in the diff), so the
+# package name is not in the log — match the subject prefix LiNix actually writes.
+grep_ok "git log shows a linix commit" "linix:" lx git log --limit 10
 ok "diff against a commit runs" lx diff HEAD
 ok "rollback to HEAD is accepted" lx -y rollback HEAD
 
-# --- 11. Command-surface smoke (exists + --help) --------------------------
-echo "[11] Command surface"
+# --- 11. rebuild asserts, and writes no commit (K14) ----------------------
+echo "[11] rebuild"
+# Git is asked directly, not `linix git log`: a rebuild that committed by some
+# other route would still move HEAD, and only git can say so.
+commits() { git -C "$LINIX_CONFIG_DIR" rev-list --count HEAD 2>/dev/null || echo 0; }
+nok "bare rebuild is refused — scope is required" lx -y rebuild
+BEFORE_COMMITS=$(commits)
+# "unchanged" proves nothing if there was no history to change, and nothing if
+# the rebuild never ran: both read 0 == 0. Require a commit to exist first.
+ok "there is history for a rebuild to leave alone" test "$BEFORE_COMMITS" -ge 1
+# Scoped to $PKG, not --all: the machine was adopted in section 7, so `--all`
+# would churn every manual package on the image to prove a claim about one.
+ok "rebuild $PKG runs" lx -y rebuild "$PKG"
+ok "$PKG is reinstalled, not left removed" command -v "$PKG"
+AFTER_COMMITS=$(commits)
+echo "        commits before=$BEFORE_COMMITS after=$AFTER_COMMITS"
+ok "rebuild wrote no git commit (K14)" test "$BEFORE_COMMITS" = "$AFTER_COMMITS"
+
+# --- 12. Command-surface smoke (exists + --help) --------------------------
+echo "[12] Command surface"
 for c in install uninstall sync plan status list search adopt check absent \
-         protected purge-unmanaged rollback diff git snapshot schedule \
+         protected purge-unmanaged rebuild rollback diff git snapshot schedule \
          profile module bundle export doctor; do
     ok "\`$c --help\` exists" lx "$c" --help
 done

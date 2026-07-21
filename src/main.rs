@@ -1368,7 +1368,21 @@ async fn handle_install(
 
     // And now the ordinary declarative pipeline makes it true — which is also what puts an
     // imperative install behind the guard for the first time (II.10).
-    handle_sync(app, false, json).await
+    let synced = handle_sync(app, false, json).await;
+
+    // A name no backend claims can never be satisfied by retrying, so leaving it in the file
+    // wedges every later command that parses the model — one typo, and `status` is broken
+    // until someone hand-edits a file. Withdraw it. Only this cause: a sync that failed for
+    // any other reason (the network, a lock, a hook) leaves the line alone, because you did
+    // mean it and retrying is the right move.
+    if let Err(e) = &synced {
+        if let Some(linix::core::Error::Unresolvable { name, .. }) = e.downcast_ref() {
+            if app.undeclare(name).await.is_ok_and(|es| !es.is_empty()) {
+                warn!("`{}` was taken back out of your files — nothing can install it.", name);
+            }
+        }
+    }
+    synced
 }
 
 /// `uninstall PKG… [--temp]` — remove the line from every active module, sync (II.8).
@@ -1398,6 +1412,8 @@ async fn handle_uninstall(
     let vocab = app.vocabulary().await?;
     let layout = app.config.layout();
     let facts = linix::config::parser::HostFacts::current();
+
+    let mut never_declared: Vec<&str> = Vec::new();
 
     for pkg in packages {
         // II.8: a `--temp` uninstall of something undeclared has nothing to come back to.
@@ -1449,12 +1465,27 @@ async fn handle_uninstall(
         let edits = app.undeclare(pkg).await?;
         if edits.is_empty() {
             warn!("{} is not declared in any active file.", pkg);
+            never_declared.push(pkg.as_str());
         }
     }
 
     // And the ordinary pipeline removes it: the package is now drift, and removing drift is
     // what sync is (V.34).
-    handle_sync(app, false, json).await
+    handle_sync(app, false, json).await?;
+
+    // The sync runs first: the names that *were* declared are still owed their removal.
+    // But a removal that removed nothing is not a removal, and a warning is the one thing
+    // a script driving this cannot see.
+    if !never_declared.is_empty() {
+        anyhow::bail!(
+            "nothing was uninstalled: {} not declared in any active file.",
+            match never_declared.as_slice() {
+                [one] => format!("`{}` is", one),
+                many => format!("`{}` are", many.join("`, `")),
+            }
+        );
+    }
+    Ok(())
 }
 
 /// Bare `--temp` inside an ephemeral shell: suspend now, restore when the session ends.
@@ -2227,11 +2258,19 @@ async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
     match cmd {
         GitCommand::Init => {
             git.init()?;
+            // Without this commit there is no HEAD, so `diff` and `rollback` answer with
+            // git's "unknown revision" until some later command happens to commit. History
+            // has to be usable from the moment it is switched on.
+            let first = git.commit_all("linix: config at the time history was enabled")?;
             println!(
                 "Initialized manifest version control at {}.\n\
                  LiNix will now auto-commit config/manifest changes after each command.",
                 git.root().display()
             );
+            match first {
+                Some(hash) => println!("Your config as it stands is committed as {}.", hash),
+                None => println!("There was nothing to commit yet."),
+            }
         }
         GitCommand::Status => {
             if !git.is_repo() {

@@ -2,8 +2,7 @@ use crate::app::sandbox::{Sandbox, SandboxConfig};
 use crate::app::sync::resolver::StateResolver;
 use crate::backends::BackendRegistry;
 use crate::config::Config;
-use crate::core::{Error, PackageSpec, Result, Validator};
-use std::collections::{HashSet, VecDeque};
+use crate::core::{Error, PackageSpec, Result};
 use std::sync::Arc;
 use tokio::process::Command;
 use tracing::{debug, error, info, instrument, warn};
@@ -19,28 +18,10 @@ impl Runner {
     }
 
     async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
-        let mut resolved = Vec::new();
-        let mut queue = VecDeque::new();
-        let mut seen = HashSet::new();
-
-        let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
-
-        queue.push_back(resolver.parse_and_probe_spec(spec_str).await?);
-
-        while let Some(spec) = queue.pop_front() {
-            let key = format!("{}:{}", spec.backend, spec.name);
-            if !seen.insert(key) {
-                continue;
-            }
-
-            Validator::validate_package_name_for(&spec.name, &spec.backend)?;
-
-            for req in &spec.requires {
-                queue.push_back(resolver.parse_and_probe_spec(req).await?);
-            }
-            resolved.push(spec);
-        }
-        Ok(resolved)
+        StateResolver::new(&self.config, self.registry.clone(), false)
+            .await
+            .resolve_spec(spec_str)
+            .await
     }
 
     /// Primary execution driver: Ensures environment is ready and spawns process.

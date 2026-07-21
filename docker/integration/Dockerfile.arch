@@ -16,6 +16,6 @@ RUN curl -fsSL https://bun.sh/install | bash || true
 ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
 WORKDIR /src
 COPY . /src
-RUN cargo build --release
+RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
 ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
 CMD ["pacman", "jq"]
