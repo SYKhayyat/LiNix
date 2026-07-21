@@ -57,6 +57,10 @@ protected_packages = [
 # confine_bin = true       # refuse a downloaded file a destination outside the backend's
                            # bin directory (SEC1). Not one of the nine: it is checked where
                            # a backend deploys, which is the only place that path exists.
+# require_signed_history = false
+                           # refuse to roll back to a commit git does not vouch for (II.13).
+                           # Off by default: a fresh repo signs nothing. Turn it on together
+                           # with `git config commit.gpgsign true`.
 
 # Backend Aliases
 [aliases]

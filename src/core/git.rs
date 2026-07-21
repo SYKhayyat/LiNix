@@ -18,6 +18,55 @@ use crate::core::{Error, Result};
 use std::path::{Path, PathBuf};
 use std::process::Output;
 
+/// What git says about a commit's signature (II.13). LiNix verifies nothing itself: `git`
+/// answers, and this is its answer carried without interpretation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Signature {
+    /// No signature at all — the state of every commit in a repo nobody signs.
+    Unsigned,
+    /// A good signature, by this signer.
+    Good(String),
+    /// A signature git could read but will not vouch for: an untrusted, expired or revoked
+    /// key. Kept apart from `Good` — "signed" and "signed by someone you trust" are different
+    /// claims, and collapsing them is how a signature becomes decoration (V.32).
+    Unverified { signer: String, code: char },
+    /// A signature that does not match the commit, or that git could not check at all.
+    Bad,
+}
+
+impl Signature {
+    /// `%G?` is git's own verdict; `%GS` is the signer it read. Any code git adds later lands
+    /// in `Unverified` rather than being read as good.
+    fn from_git(code: &str, signer: &str) -> Self {
+        match code.chars().next().unwrap_or('N') {
+            'N' => Self::Unsigned,
+            'G' => Self::Good(signer.to_string()),
+            'B' | 'E' => Self::Bad,
+            other => Self::Unverified {
+                signer: signer.to_string(),
+                code: other,
+            },
+        }
+    }
+
+    /// Whether git vouches for this commit. Only a good signature does.
+    pub fn is_verified(&self) -> bool {
+        matches!(self, Self::Good(_))
+    }
+
+    /// One line for a log row or a refusal.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Unsigned => "unsigned".to_string(),
+            Self::Good(signer) => format!("signed by {}", signer),
+            Self::Unverified { signer, code } => {
+                format!("signed by {} — git will not vouch for it ({})", signer, code)
+            }
+            Self::Bad => "a bad signature, or one git could not check".to_string(),
+        }
+    }
+}
+
 /// A commit as shown by `git log` — the data `linix git log` renders. A generation IS a
 /// commit (II.13), so this is the whole of the history record.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +75,7 @@ pub struct GitCommit {
     pub short: String,
     pub date: String,
     pub subject: String,
+    pub signature: Signature,
 }
 
 /// A git wrapper scoped to one directory (the LiNix config root).
@@ -55,21 +105,13 @@ impl GitManager {
         self.root.join(".git").exists()
     }
 
-    /// Identity and signing flags are injected on every call so commits never fail on a
-    /// machine that hasn't set `user.name`/`user.email` or that has signing globally on.
+    /// Nothing about the user's git is overridden here — not the identity, not the signing
+    /// flags. A commit signed by your key and authored by `linix@localhost` attributes a
+    /// verified change to a person who does not exist (owner ruling, 2026-07-21), and a repo
+    /// with no identity configured is git's error to report, in git's own words.
     fn run(&self, args: &[&str]) -> Result<Output> {
         let mut cmd = std::process::Command::new("git");
         cmd.arg("-C").arg(&self.root);
-        // A deterministic identity, without mutating the user's global config. Signing is
-        // NOT forced off here: II.13 makes integrity `git commit -S`, and an override that
-        // guaranteed every LiNix commit was unsigned made that unreachable by construction.
-        // Whether a commit is signed is the user's `commit.gpgsign` to answer.
-        cmd.args([
-            "-c",
-            "user.name=linix",
-            "-c",
-            "user.email=linix@localhost",
-        ]);
         cmd.args(args);
         cmd.output()
             .map_err(|e| Error::CommandFailed(format!("git {:?} failed to spawn: {}", args, e)))
@@ -140,7 +182,15 @@ impl GitManager {
         if status.is_empty() {
             return Ok(None);
         }
-        self.run_checked(&["commit", "-m", message])?;
+        let out = self.run(&["commit", "-m", message])?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(Error::CommandFailed(format!(
+                "git refused to commit your manifests:\n\n{}\n\n{}",
+                stderr,
+                commit_refusal_hint(&stderr)
+            )));
+        }
         Ok(Some(self.head()?.unwrap_or_default()))
     }
 
@@ -191,9 +241,21 @@ impl GitManager {
             return Ok(vec![]);
         }
         // Unit-separated fields, record-separated lines — robust against subjects with spaces.
-        let fmt = "--pretty=format:%H%x1f%h%x1f%cs%x1f%s";
+        // The subject goes last: it is the only field that could contain the separator.
+        let fmt = "--pretty=format:%H%x1f%h%x1f%cs%x1f%G?%x1f%GS%x1f%s";
         let raw = self.run_checked(&["log", &format!("-{}", limit.max(1)), fmt])?;
         Ok(parse_log(&raw))
+    }
+
+    /// What git says about one commit's signature (II.13). Asked of the commit a rollback is
+    /// about to restore, so the answer is about that commit and not about HEAD.
+    pub fn signature_of(&self, reference: &str) -> Result<Signature> {
+        let raw = self.run_checked(&["log", "-1", "--pretty=format:%G?%x1f%GS", reference])?;
+        let mut parts = raw.split('\u{1f}');
+        Ok(Signature::from_git(
+            parts.next().unwrap_or("N"),
+            parts.next().unwrap_or("").trim(),
+        ))
     }
 
     /// Short status (porcelain) of the config repo, or an empty string if clean.
@@ -274,6 +336,24 @@ impl GitManager {
     }
 }
 
+/// What to do about a commit git refused. The two reachable causes are configuration, and both
+/// became reachable when LiNix stopped injecting an identity and stopped forcing signing off —
+/// git's own message names the problem, this names the fix in LiNix's terms.
+fn commit_refusal_hint(stderr: &str) -> &'static str {
+    let lower = stderr.to_lowercase();
+    if lower.contains("tell me who you are") || lower.contains("empty ident") {
+        return "LiNix commits as you, not as itself, so git needs an identity:\n  \
+                git config --global user.name  \"Your Name\"\n  \
+                git config --global user.email \"you@example.com\"";
+    }
+    if lower.contains("gpg failed") || lower.contains("failed to sign") {
+        return "Your git is set to sign commits (`commit.gpgsign`) and the signing key did not \
+                work. Fix the key, or turn signing off for this repo with \
+                `git config commit.gpgsign false`.";
+    }
+    "Your manifests are unchanged on disk; the history simply did not record this run."
+}
+
 /// Extract the `+`/`-` content lines from a `git show` diff — the added and removed manifest
 /// lines — skipping the `+++`/`---` file headers and blank/comment lines.
 fn parse_manifest_changes(diff: &str) -> Vec<String> {
@@ -300,12 +380,15 @@ fn parse_log(raw: &str) -> Vec<GitCommit> {
             let hash = parts.next()?.to_string();
             let short = parts.next()?.to_string();
             let date = parts.next()?.to_string();
+            let code = parts.next().unwrap_or("N");
+            let signer = parts.next().unwrap_or("").trim().to_string();
             let subject = parts.next().unwrap_or("").to_string();
             Some(GitCommit {
                 hash,
                 short,
                 date,
                 subject,
+                signature: Signature::from_git(code, &signer),
             })
         })
         .collect()
@@ -335,15 +418,47 @@ mod tests {
 
     #[test]
     fn parse_log_handles_subjects_with_spaces_and_separators() {
-        let raw = "abc123\u{1f}abc\u{1f}2026-07-15\u{1f}feat: add ripgrep, remove nano\n\
-                   def456\u{1f}def\u{1f}2026-07-14\u{1f}initial commit";
+        let raw = "abc123\u{1f}abc\u{1f}2026-07-15\u{1f}N\u{1f}\u{1f}feat: add ripgrep, remove nano\n\
+                   def456\u{1f}def\u{1f}2026-07-14\u{1f}G\u{1f}Shaul <s@example.com>\u{1f}initial commit";
         let commits = parse_log(raw);
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].hash, "abc123");
         assert_eq!(commits[0].short, "abc");
         assert_eq!(commits[0].date, "2026-07-15");
         assert_eq!(commits[0].subject, "feat: add ripgrep, remove nano");
+        assert_eq!(commits[0].signature, Signature::Unsigned);
         assert_eq!(commits[1].subject, "initial commit");
+        assert_eq!(
+            commits[1].signature,
+            Signature::Good("Shaul <s@example.com>".to_string())
+        );
+    }
+
+    #[test]
+    fn a_signature_git_will_not_vouch_for_is_not_a_good_one() {
+        // 'U' is a good signature by an untrusted key, 'X' an expired one. Both are signed,
+        // neither is verified — collapsing them into `Good` is how a signature becomes
+        // decoration (V.32).
+        for code in ["U", "X", "Y", "R"] {
+            let sig = Signature::from_git(code, "someone");
+            assert!(!sig.is_verified(), "{} must not verify", code);
+            assert!(matches!(sig, Signature::Unverified { .. }));
+        }
+        assert_eq!(Signature::from_git("B", "someone"), Signature::Bad);
+        assert_eq!(Signature::from_git("E", ""), Signature::Bad);
+        assert!(Signature::from_git("G", "someone").is_verified());
+    }
+
+    #[test]
+    fn a_missing_identity_is_named_as_the_reason_the_commit_failed() {
+        // Reachable only since LiNix stopped injecting `linix@localhost`: git's own message is
+        // about `user.email`, and the hint has to be about how LiNix uses it.
+        let hint = commit_refusal_hint("*** Please tell me who you are.
+
+fatal: unable to auto-detect email address");
+        assert!(hint.contains("git config --global user.email"), "{}", hint);
+        let signing = commit_refusal_hint("error: gpg failed to sign the data");
+        assert!(signing.contains("commit.gpgsign"), "{}", signing);
     }
 
     #[test]
@@ -353,6 +468,16 @@ mod tests {
 
     // The following tests exercise real git; they self-skip when git is unavailable so the
     // suite still passes in a minimal environment.
+
+    /// Give the temp repo its own identity. LiNix no longer injects one (a signed commit must
+    /// not be authored by a name nobody owns), so a test repo on a machine with no global
+    /// `user.email` would otherwise fail in `git commit` rather than in what it is testing.
+    fn identify(root: &Path) {
+        for (k, v) in [("user.name", "linix test"), ("user.email", "test@example.invalid")] {
+            let _ = std::process::Command::new("git")
+                .arg("-C").arg(root).args(["config", k, v]).output();
+        }
+    }
     #[test]
     fn diff_manifest_changes_reports_package_level_delta() {
         if !GitManager::git_available() {
@@ -362,6 +487,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let git = GitManager::new(tmp.path());
         git.init().unwrap();
+        identify(tmp.path());
         std::fs::create_dir_all(tmp.path().join("modules")).unwrap();
 
         std::fs::write(tmp.path().join("modules/dev.txt"), "apt:curl\napt:nano\n").unwrap();
@@ -390,6 +516,7 @@ mod tests {
         let git = GitManager::new(tmp.path());
         assert!(!git.is_repo());
         git.init().unwrap();
+        identify(tmp.path());
         assert!(git.is_repo());
         assert!(git.head().unwrap().is_none(), "no commits yet");
 
@@ -415,6 +542,7 @@ mod tests {
         let tmp = tempdir().unwrap();
         let git = GitManager::new(tmp.path());
         git.init().unwrap();
+        identify(tmp.path());
         let manifest = tmp.path().join("local.txt");
 
         std::fs::write(&manifest, "apt:curl\n").unwrap();

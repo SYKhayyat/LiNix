@@ -306,6 +306,13 @@ linix undo               # interactive snapshot gallery (btrfs / ZFS / Timeshift
 
 `rollback` refuses to apply unconfirmed in a non-interactive shell; pass `--yes` for CI.
 
+Commits are made **as you** — LiNix sets no git identity of its own and forces no signing flag,
+so `commit.gpgsign` decides whether your history is signed. `linix git log` and `linix history`
+show what git says about each commit's signature, and a signature git will not vouch for (an
+untrusted, expired or revoked key) is never shown as a good one. Set `require_signed_history`
+under `[guard]` to refuse a rollback to any commit git does not vouch for; it is off by default,
+because a fresh repo signs nothing.
+
 ## Commands
 
 Run `linix --help` for the full list with current wording, and `linix doctor` for what this

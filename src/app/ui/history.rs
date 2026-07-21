@@ -48,6 +48,8 @@ pub struct CommitView {
     pub full_hash: String,
     /// The manifest lines this commit added or removed (`+ apt:curl`, `- apt:nano`).
     pub changes: Vec<String>,
+    /// What git says about the commit's signature (II.13), already rendered.
+    pub signature: String,
 }
 
 /// What the history asks the async caller to do after it exits.
@@ -73,6 +75,7 @@ pub fn detail_lines(current: &CommitView) -> Vec<String> {
             "Full    : {}",
             &current.full_hash[..current.full_hash.len().min(12)]
         ),
+        format!("Signed  : {}", current.signature),
         String::new(),
     ];
     if current.changes.is_empty() {
@@ -316,6 +319,7 @@ mod tests {
             subject: subject.into(),
             full_hash: format!("{}0000000000000000000000000000000000000", short),
             changes: changes.iter().map(|s| s.to_string()).collect(),
+            signature: "unsigned".to_string(),
         }
     }
 

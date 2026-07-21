@@ -5,13 +5,16 @@ line):** Build clean, clippy silent, **735 tests passing**. Phases 0–5 have la
 model, the grammar, the guard, git-backed history, R1–R23, `rebuild`, artifact selection,
 `vars`, and X.6. Phase 6's six containers exist and **have never been run** (no Docker here).
 **SEC1–SEC6 are built** (SEC3's confinement half is a ruled won't-fix; its confirmation half
-landed 2026-07-21).
+landed 2026-07-21). **II.13's signature check is built** (2026-07-21): LiNix commits under
+your git identity, `log`/`history` show what git says about each signature, and `rollback`
+refuses an unvouched-for commit when `[guard] require_signed_history` is on.
 
 **The 2026-07-20 audit found seven bugs and five zombie config keys; all twelve are closed** —
 block-form options now face every rule the short form does, `apply` and `rebuild` reach the
 `[guard]` gate, `deactivate` implements the rule the owner actually ruled, and `[schedules]`
 is gone so the `schedules` file is the only schedule store. What is still owed is listed at
-the end of that entry, and the largest item is that **II.13's signature check is not built**.
+the end of that entry. *(Its largest item, II.13's signature check, was built on 2026-07-21 —
+see the eighth session in Part VII.)*
 
 *Both the audit and its fix are in Part VII, in that order. The audit section is kept for what
 it records about how the drift happened, but it describes a tree that no longer exists.*
@@ -889,14 +892,16 @@ All in `[guard]` in `preferences.toml`. One decision function. **Every removal p
 it** — sync, `absent:`, expiry, `purge-unmanaged`, `clean`, shell exit, `uninstall`. The
 last three also gate *installs* and *changes*, so the install paths call it too.
 
-**`[guard]` holds one key that is not one of the nine: `confine_bin`** (default on), which
-refuses a downloaded file a destination outside the backend's bin directory (SEC1). It is in
-this table's home because it is the same kind of promise — a refusal with one deliberate
-opening — but it is deliberately **not** in the decision function, because the only place the
-destination exists is the moment a backend deploys, and a check that ran anywhere else would
-be checking a path nobody was about to write. Counting it among the nine would make "one
-decision function" false, and a table that quietly stops describing its own function is how
-the last one drifted.
+**`[guard]` holds two keys that are not among the nine: `confine_bin`** (default on), which
+refuses a downloaded file a destination outside the backend's bin directory (SEC1), **and
+`require_signed_history`** (default off), which refuses a rollback to a commit git does not
+vouch for (II.13). Both are refusals in kind and neither is in the decision function, for the
+same reason: the fact each one needs — the deploy destination, git's verdict on one commit —
+exists only at the moment its own command asks — a `confine_bin` check anywhere but a deploy
+would be checking a path nobody was about to write. They live in this table's home because
+they are the same kind of promise, a refusal with one deliberate opening. **Counting either
+among the nine would make "one decision function" false**, and a table that quietly stops
+describing its own function is how the last one drifted.
 
 **A confirmation asks; a refusal says no.**
 
@@ -1030,6 +1035,19 @@ Timeshift). Retention prunes — **one engine** (`retention`), not two.
 
 **Integrity is `git commit -S`.** LiNix checks that git says the commit is signed, and by
 whom. **`locksig.rs`, `.linix-lock.key`, and the fail-open branch are deleted.**
+
+**LiNix commits as you.** It sets no identity of its own and forces no signing flag: whatever
+your git config says is what the commit records. A commit signed by your key and authored by
+`linix@localhost` would attribute a verified change to a person who does not exist, and a repo
+with no identity configured is git's error to report, in git's own words (owner ruling,
+2026-07-21).
+
+**Git answers; LiNix repeats the answer.** `git log` and `linix history` show each commit's
+signature and signer, and a commit git will not vouch for — an untrusted, expired or revoked
+key — is never shown as signed. **Nothing is refused by default:** a fresh repo signs nothing,
+and a refusal that fired on every rollback would be turned off before it caught anything. With
+`[guard] require_signed_history` on, `rollback` refuses to restore a commit git does not vouch
+for, naming what git said about it.
 
 ## II.14 Version pins — precedence
 
@@ -2383,6 +2401,16 @@ with `==`, which leaks timing. And **appearance is worse than nothing, because y
 looking.** `git commit -S` signs everything, with real crypto, verified by a tool that's been
 attacked for twenty years.
 
+**V.32b — Why the check reads git's verdict and does not compute one.** LiNix runs `git log
+--pretty=%G?` and carries the letter it gets back. It does not decide what a key is worth,
+because that is the twenty-year-old tool's job and re-deciding it is how the previous signing
+scheme ended up with `sha256(key + "|" + text)`. The same reasoning splits `Good` from
+`Unverified`: git distinguishes a signature it trusts from one made by an untrusted, expired or
+revoked key, and folding the second into the first would restore exactly the appearance-without-
+protection V.32 is about. **And why the refusal is off by default:** a rule that fires on every
+rollback in a repo nobody signs is a rule that gets turned off, at which point the signed case
+is unprotected too.
+
 **V.33 — Why `clone` died.** It copied **the installed set, not the intent** — you got a
 machine with the same packages and no idea why. `git clone && linix sync` gives the intent,
 the history, the pins, and the ability to change it afterwards.
@@ -2847,6 +2875,28 @@ question is asked in `reconcile`, **before the repo phase and before any package
 confirmation offered after the file is placed is a notification. Details and the
 `--dry-run`/`--yes`/non-interactive rules are recorded under SEC3 in Phase 5.
 
+**2. II.13's signature check is built, and LiNix commits as you.** Two rulings were needed and
+both were the recommendation *(options offered: your git identity, keep `linix@localhost`, or
+you-as-author/LiNix-as-committer; and: show-and-refuse-if-asked, show-only, or always-refuse)*:
+
+- **The identity override is gone.** `core/git.rs` set `user.name=linix` /
+  `user.email=linix@localhost` on every call, so a signed commit would have carried your
+  signature and a fake author. Nothing is injected now — not the identity, not the signing
+  flags. A repo with no identity is git's error, and `commit_all` adds the one sentence git
+  cannot: LiNix commits as you, so git needs to know who that is.
+- **Git answers, LiNix repeats it.** `git log` and the `history` browser show each commit's
+  signature and signer; `Signature::Good` is kept apart from a signature by an untrusted,
+  expired or revoked key, because collapsing them is V.32's whole complaint. `rollback` refuses
+  a commit git will not vouch for **only when `[guard] require_signed_history` is on** — off by
+  default, since a fresh repo signs nothing. Reasoned in V.32b.
+
+*Verified against the binary:* a fresh `linix git init` + commit is authored by this machine's
+real git identity (it was `linix <linix@localhost>` before), `git log` prints no signature noise
+for an unsigned repo, and with the rule on, `rollback` refuses the commit by hash and says
+`git says it is unsigned`; with it off the same rollback proceeds. **A signed commit was not
+exercised end to end** — no signing key on this box — so the `G`/`U`/`B` handling is covered by
+unit tests over git's documented `%G?` codes and not by a real signature.
+
 **The first two attempts at it were both wrong, and running the tool is what said so.** The check
 first went beside the guard in `SyncEngine::sync`, which is where every *package* funnels through
 — and a `link:` line is an extra, applied by `App::apply_dependents`, so it never passes that
@@ -2923,7 +2973,8 @@ with no `vars` file is the same error as a misspelling). The `formats` block at 
 **Still owed, and unchanged by this session:** **K14** (nothing asserts that `rebuild` makes no
 git commit — it makes none, because `handle_rebuild` never calls `perform_maintenance`, but the
 only honest test needs a real backend); **II.13's signature check**; **SEC3**; and Phase 6's
-containers, which still have never been run.
+containers, which still have never been run. *(II.13 and SEC3 were closed by the eighth session,
+above; K14 and the containers still stand.)*
 
 **What was verified, and how far it got.** The github work was exercised against the real API and
 a real release (`sharkdp/fd` v10.2.0), from a scratch repo with its own config *and data* root:
@@ -3394,11 +3445,9 @@ different kinds of file. **Recorded here so the next audit does not re-file it a
 
 ### Still owed after this session
 
-- **II.13's integrity check is not built.** LiNix does not verify that git says a commit is
-  signed, or by whom. Deferred deliberately by the owner this session, not overlooked. *There
-  is a second question inside it:* `git.rs` also forces `user.name=linix` /
-  `user.email=linix@localhost`, so a signed commit would be signed by the user's key and
-  authored by a fake identity. Whoever builds the check has to settle that first.
+- ~~**II.13's integrity check is not built.**~~ **RULED and BUILT 2026-07-21** (eighth
+  session): the identity override is gone, `log`/`history` show what git says about each
+  signature, and `rollback` refuses an unvouched-for commit under `require_signed_history`.
 - ~~**`upgrade`'s whole-system mode (`app.upgrade()`, the native `apt upgrade` path) returns
   before `enforce_policy`.**~~ **RULED and BUILT (owner, 2026-07-20): route it through the
   gate.** It resolves the desired state and calls `enforce_policy` before it runs, like every

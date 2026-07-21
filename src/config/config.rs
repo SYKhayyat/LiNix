@@ -82,6 +82,11 @@ pub struct GuardSettings {
     /// over your shell profile pointing at a downloaded file.
     #[serde(default = "default_confine_bin")]
     pub confine_bin: bool,
+    /// Refuse to roll back to a commit git does not vouch for (II.13). Off by default: a fresh
+    /// repo signs nothing, and a refusal that fires on every rollback out of the box would be
+    /// turned off before it ever caught anything.
+    #[serde(default)]
+    pub require_signed_history: bool,
 }
 
 fn default_confine_bin() -> bool {
@@ -103,6 +108,7 @@ impl Default for GuardSettings {
             require_snapshot: false,
             deny_vulnerable: false,
             confine_bin: default_confine_bin(),
+            require_signed_history: false,
         }
     }
 }

@@ -2130,6 +2130,21 @@ async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
              any commit."
         );
     }
+    // II.13's integrity check, on the commit being restored rather than on HEAD. Off unless
+    // `require_signed_history` is set, because a fresh repo signs nothing.
+    let signature = git.signature_of(reference)?;
+    if app.config.guard.require_signed_history && !signature.is_verified() {
+        anyhow::bail!(
+            "rollback: refusing to restore {}.\n  \
+             - git says it is {}\n\n\
+             `require_signed_history` is on, so every commit you roll back to must carry a \
+             signature git vouches for. Sign your commits (`git config commit.gpgsign true`), \
+             or turn the rule off in preferences.toml.",
+            reference,
+            signature.describe()
+        );
+    }
+
     // The bail must come before the checkout, not after. `handle_sync` refuses unconfirmed
     // changes in a non-interactive shell, but by the time it does the manifests have already
     // been overwritten — leaving the files rolled back and the machine not.
@@ -2217,7 +2232,20 @@ async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
                 println!("No commits yet.");
             }
             for c in commits {
-                println!("{}  {}  {}", c.short, c.date, c.subject);
+                // The signature is named only when there is one: a repo nobody signs would
+                // otherwise carry "unsigned" on every row, which is noise, not a finding.
+                match &c.signature {
+                    linix::core::git::Signature::Unsigned => {
+                        println!("{}  {}  {}", c.short, c.date, c.subject)
+                    }
+                    sig => println!(
+                        "{}  {}  {}  [{}]",
+                        c.short,
+                        c.date,
+                        c.subject,
+                        sig.describe()
+                    ),
+                }
             }
         }
         GitCommand::Commit { message } => {
@@ -2289,6 +2317,7 @@ async fn handle_history(app: &App) -> Result<()> {
                 subject: c.subject,
                 full_hash: c.hash,
                 changes,
+                signature: c.signature.describe(),
             }
         })
         .collect();
@@ -3745,6 +3774,12 @@ max_removals = 20
 # profile and have it replaced by a symlink to a download. Not one of the nine:
 # it is checked where a backend deploys, the only place that destination exists.
 # confine_bin = true
+
+# Refuse to roll back to a commit git does not vouch for (II.13). Off by default:
+# a fresh repo signs nothing, and a refusal that fires on every rollback out of
+# the box gets turned off before it ever catches anything. Turn it on together
+# with `git config commit.gpgsign true`.
+# require_signed_history = false
 "#;
 
 async fn handle_path(cli: &Cli, explain: bool, set: Option<&std::path::Path>) -> Result<()> {
