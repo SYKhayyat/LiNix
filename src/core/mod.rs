@@ -45,7 +45,7 @@ pub use hook_lock::{hook_id, HookLedger, Verdict};
 pub use bare_lock::BareLock;
 pub use regex_lock::RegexLock;
 pub use extras_lock::{extra_key, ExtrasLedger};
-pub use artifact_lock::{verify_against, ArtifactLedger, ArtifactLock};
+pub use artifact_lock::{verify_set, ArtifactLedger, ArtifactLock};
 
 pub use state::{GhostMetadata, ManagedPackage, StateRegistry};
 

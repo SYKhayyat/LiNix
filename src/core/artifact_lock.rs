@@ -38,10 +38,13 @@ pub struct ArtifactLock {
 
 /// `locks/<backend>.toml`, keyed by the package name the declaration used. A `BTreeMap` so the
 /// file is ordered and diffs cleanly in git.
+///
+/// A declaration locks a *list* because `@asset=all` installs every match (VIII.2), and one
+/// entry per declaration could only describe the first of them.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ArtifactLedger {
     #[serde(default, flatten)]
-    entries: BTreeMap<String, ArtifactLock>,
+    entries: BTreeMap<String, Vec<ArtifactLock>>,
 }
 
 impl ArtifactLedger {
@@ -71,12 +74,15 @@ impl ArtifactLedger {
             .map_err(|e| Error::Io(format!("writing {}: {}", path.display(), e)))
     }
 
-    pub fn get(&self, name: &str) -> Option<&ArtifactLock> {
-        self.entries.get(name)
+    /// What a declaration resolved to, in selection order. Empty when nothing is locked.
+    pub fn locked(&self, name: &str) -> &[ArtifactLock] {
+        self.entries.get(name).map(Vec::as_slice).unwrap_or(&[])
     }
 
-    pub fn record(&mut self, name: impl Into<String>, lock: ArtifactLock) {
-        self.entries.insert(name.into(), lock);
+    /// Record everything one declaration installed. The whole set is replaced, because a
+    /// declaration that now resolves to fewer artifacts must not keep the ones it dropped.
+    pub fn record(&mut self, name: impl Into<String>, locks: Vec<ArtifactLock>) {
+        self.entries.insert(name.into(), locks);
     }
 
     /// Drop a package's entry. The lock describes what is installed, so a removal that left
@@ -90,9 +96,49 @@ impl ArtifactLedger {
         self.entries.is_empty()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &ArtifactLock)> {
-        self.entries.iter().map(|(k, v)| (k.as_str(), v))
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &[ArtifactLock])> {
+        self.entries.iter().map(|(k, v)| (k.as_str(), v.as_slice()))
     }
+}
+
+/// What a re-download of a whole declaration must satisfy, when `@asset=all` locked several.
+///
+/// The set is compared by name, not by position: a release that reorders its assets is not a
+/// change to what was installed. Anything else — a name that was not locked, or one that is
+/// locked and no longer resolved — is the same objection [`verify_against`] raises for one.
+pub fn verify_set(locked: &[ArtifactLock], resolved: &[(String, Option<String>)]) -> Option<String> {
+    for (asset, sha) in resolved {
+        let Some(entry) = locked.iter().find(|l| &l.asset == asset) else {
+            return Some(format!(
+                "the lock records {} and this resolved to `{}` as well. Run `linix lock` if \
+                 the change is intended.",
+                named(locked),
+                asset
+            ));
+        };
+        if let Some(objection) = verify_against(entry, asset, sha.as_deref()) {
+            return Some(objection);
+        }
+    }
+    if let Some(dropped) = locked
+        .iter()
+        .find(|l| !resolved.iter().any(|(a, _)| a == &l.asset))
+    {
+        return Some(format!(
+            "the lock records `{}` and this release no longer offers it. Run `linix lock` if \
+             the change is intended.",
+            dropped.asset
+        ));
+    }
+    None
+}
+
+fn named(locks: &[ArtifactLock]) -> String {
+    locks
+        .iter()
+        .map(|l| format!("`{}`", l.asset))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// What a re-download must satisfy to be the artifact the lock describes.
@@ -144,14 +190,43 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("locks").join("github.toml");
         let mut led = ArtifactLedger::new();
-        led.record("sharkdp/fd", lock("fd.tar.gz", Some("abc123")));
+        led.record("sharkdp/fd", vec![lock("fd.tar.gz", Some("abc123"))]);
         led.save(&path).unwrap();
 
         let back = ArtifactLedger::load(&path).unwrap();
-        assert_eq!(back.get("sharkdp/fd").unwrap().asset, "fd.tar.gz");
-        assert_eq!(back.get("sharkdp/fd").unwrap().url, "https://example.invalid/fd.tar.gz");
-        assert_eq!(back.get("sharkdp/fd").unwrap().format, "tarball");
-        assert_eq!(back.get("sharkdp/fd").unwrap().sha256.as_deref(), Some("abc123"));
+        let [entry] = back.locked("sharkdp/fd") else {
+            panic!("expected one locked artifact");
+        };
+        assert_eq!(entry.asset, "fd.tar.gz");
+        assert_eq!(entry.url, "https://example.invalid/fd.tar.gz");
+        assert_eq!(entry.format, "tarball");
+        assert_eq!(entry.sha256.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn a_declaration_that_installed_several_locks_all_of_them() {
+        // `@asset=all` (VIII.2). One entry per declaration could describe only the first.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("locks").join("github.toml");
+        let mut led = ArtifactLedger::new();
+        led.record(
+            "foo/bar",
+            vec![lock("bar.tar.gz", Some("a1")), lock("bar-server.tar.gz", Some("b2"))],
+        );
+        led.save(&path).unwrap();
+
+        let back = ArtifactLedger::load(&path).unwrap();
+        let names: Vec<&str> = back.locked("foo/bar").iter().map(|l| l.asset.as_str()).collect();
+        assert_eq!(names, vec!["bar.tar.gz", "bar-server.tar.gz"]);
+    }
+
+    #[test]
+    fn recording_replaces_the_whole_set() {
+        // A declaration that now resolves to fewer artifacts must not keep the dropped ones.
+        let mut led = ArtifactLedger::new();
+        led.record("foo/bar", vec![lock("a.tar.gz", None), lock("b.tar.gz", None)]);
+        led.record("foo/bar", vec![lock("a.tar.gz", None)]);
+        assert_eq!(led.locked("foo/bar").len(), 1);
     }
 
     #[test]
@@ -159,10 +234,63 @@ mod tests {
         // A lock left behind after a removal would pin the next install to an artifact
         // chosen for a declaration that no longer exists.
         let mut led = ArtifactLedger::new();
-        led.record("sharkdp/fd", lock("fd.tar.gz", None));
+        led.record("sharkdp/fd", vec![lock("fd.tar.gz", None)]);
         assert!(led.forget("sharkdp/fd"));
         assert!(!led.forget("sharkdp/fd"));
         assert!(led.is_empty());
+    }
+
+    #[test]
+    fn nothing_locked_is_an_empty_slice_not_a_missing_answer() {
+        assert!(ArtifactLedger::new().locked("foo/bar").is_empty());
+    }
+
+    #[test]
+    fn a_set_that_gained_a_file_is_an_objection_naming_what_was_locked() {
+        let locked = [lock("a.tar.gz", None)];
+        let why = verify_set(
+            &locked,
+            &[("a.tar.gz".into(), None), ("b.tar.gz".into(), None)],
+        )
+        .unwrap();
+        assert!(why.contains("a.tar.gz"), "{}", why);
+        assert!(why.contains("b.tar.gz"), "{}", why);
+    }
+
+    #[test]
+    fn a_set_that_lost_a_file_is_an_objection_naming_it() {
+        let locked = [lock("a.tar.gz", None), lock("b.tar.gz", None)];
+        let why = verify_set(&locked, &[("a.tar.gz".into(), None)]).unwrap();
+        assert!(why.contains("b.tar.gz"), "{}", why);
+    }
+
+    #[test]
+    fn the_same_set_in_another_order_is_no_objection() {
+        // A release that reorders its assets did not change what is installed.
+        let locked = [lock("a.tar.gz", Some("a1")), lock("b.tar.gz", Some("b2"))];
+        assert!(verify_set(
+            &locked,
+            &[
+                ("b.tar.gz".into(), Some("b2".into())),
+                ("a.tar.gz".into(), Some("a1".into())),
+            ]
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn a_changed_hash_inside_a_set_is_still_an_objection() {
+        let locked = [lock("a.tar.gz", Some("a1")), lock("b.tar.gz", Some("b2"))];
+        let why = verify_set(
+            &locked,
+            &[
+                ("a.tar.gz".into(), Some("a1".into())),
+                ("b.tar.gz".into(), Some("ZZZ".into())),
+            ],
+        )
+        .unwrap();
+        assert!(why.contains("b.tar.gz"), "{}", why);
+        assert!(why.contains("ZZZ"), "{}", why);
     }
 
     #[test]

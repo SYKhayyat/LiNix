@@ -362,6 +362,12 @@ the lock** — a guess that is printed and locked is not the guess that drifts.
 survives a version bump where an exact name does not). When the pattern still matches several,
 the same tie-break applies. **`@asset=all` installs every match** rather than choosing.
 
+**One artifact is deployed under the repo's name; several each keep their own.** A line that
+resolves to one file puts it on `PATH` as the repo is called (`github:sharkdp/fd` → `fd`), and
+`@bin=` overrides that as it always has. A line that resolves to several cannot: one name
+cannot hold two files. Each then keeps the name of the program found inside it, and **two that
+would land on the same name is an error naming both files** — never one overwriting the other.
+
 **An archive is extracted and the executable inside it is shimmed**, reusing `shim:` rather
 than inventing a second way onto `PATH`. The executable is guessed from the package name;
 `@bin=PATH` names it when the guess is wrong, and turns the guess off rather than falling back
@@ -2571,6 +2577,16 @@ is reported is a default the user can override with `@asset=`.**
 guess back exactly where the user reached for the option to turn it off — and the case where
 `@bin=` is reached for is the case where the guess was already wrong.
 
+**Why several artifacts under one line keep their own names.** *(Owner ruling, 2026-07-21.)*
+The repo's name was the deployed name because a line resolved to one file. `@asset=all` breaks
+that assumption and nothing else does. The alternative considered was prefixing every file with
+the repo's name, which never collides — and which renames the program you asked for, so the
+same tool is `bar` from one line and `bar-bar-linux` from another. The collision it avoids is
+better handled by refusing: two archives that both contain `bar` are two answers to one
+question, and the user has to say which they meant. **Silently deploying the second over the
+first would install a file the declaration does not name, which is the class of bug artifact
+selection exists to close.**
+
 **V.49 — Why `rebuild` is a separate command that batches per backend.** *(Adopted 2026-07-20
 from Part X.1; owner ruling K1.)*
 
@@ -2802,6 +2818,77 @@ Three suspicions did not survive scrutiny:
 **Living section. It is the one place that records progress — Part III stays the plan, this
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
+
+## Session 2026-07-21 (seventh session) — the owed list, and `@asset=all`
+
+Started by checking the owed lists in this Part against the tree rather than reading them.
+**Four of the items they carry were already built and the entries were stale** — see item 6.
+Green at each commit (`cargo build --all-targets` clean, `cargo clippy --all-targets` silent,
+`cargo test` all suites).
+
+**1. K15 — a rebuild's removals are no longer called removals.** `rebuild` printed its own plan,
+which never says "remove", and then ran two ordinary `sync` transactions whose summary reported
+`Removals: 214` on a run where all 214 come straight back. `sync` now passes the run's shape to
+the summary (`metrics::Narration`, derived from the guard scope), and under a rebuild the two
+counters read `Reinstalled` and `Removed to reinstall`. **The backends' own progress logs were
+deliberately left alone**: `apt` really is removing those packages at that moment, and a line
+saying otherwise there would be false.
+
+**2. W13's second half — `plan` names the variables that moved.** The note existed and only
+`sync` printed it, so the command you read *before anything is touched* was the one that did not
+explain its removals. `print_vars_changed` no longer takes the caller's resolver, so both paths
+call it under one rule: removals present, variables named.
+
+**3. `init` writes the `vars` file II.1 lists.** Comments only — a `role = desktop` LiNix
+invented would be a condition nobody chose, and IX.3 makes every reference to an undefined name
+an error, so an empty file is the honest starting state. *Verified against the binary:* a fresh
+`linix init` writes it and `linix check` is clean.
+
+**4. `status` shows extras that a sync would undo.** The applied-extras ledger (S20) has undone
+removed `service:`/`link:`/`repo:`/`shim:`/`setting:`/`schedule:` lines since Phase 2, but
+`status` reported packages only — so the run that disables a service was previewed as "nothing
+to do". `App::extras_drift` is the one place the question is asked, and `reconcile_extras` asks
+it there too: **a preview computed a second way is a preview free to disagree with the run.**
+
+**5. RULED and BUILT (owner, 2026-07-21): `@asset=all` installs every match.** It parsed and
+selected and then refused by name, because `GithubState` held one `bin_path` and the lock held
+one entry per declaration. Both are now lists: `GithubState.artifacts` (asset, format, deployed
+path) and `locks/github.toml` keyed by declaration with a list under it. Three rules were needed
+and none of them was in the spec:
+
+- **The deployed name.** *(Options offered: each file keeps the name of the program inside it;
+  prefix every file with the repo's name; or leave the refusal standing.)* The owner chose the
+  first. One artifact still deploys under the repo's name, as it always has; several each keep
+  their own, and **two that would land on the same name is an error naming both files** rather
+  than one silently overwriting the other. In Part II under artifact selection, reasoned in V.48.
+- **Everything is downloaded and hashed before anything is unpacked or deployed.** With several
+  files under one line, a supply-chain objection to the third must not arrive with the first two
+  already on `PATH`.
+- **One subdirectory per artifact.** Two archives under one declaration can both contain `bin/`,
+  and unpacking them into one tree loses one of them.
+
+The lock's comparison is now set-shaped (`verify_set`): a release that *reorders* its assets did
+not change what is installed, but a name that was not locked, or one that is locked and no longer
+resolved, is the same objection a changed asset always was. A declaration that stops deploying a
+name it used to deploy has that file removed from `PATH`, or nothing declares it and no sync can
+see it.
+
+**6. Four owed entries were stale, and are corrected in place.** Each was checked against the
+tree, not the document: **K3** (`rebuild` does take a `PreRebuild` snapshot and does restore it
+on a failed reinstall), **VIII.2's lock half** (the resolved asset, url, format and hash have
+been in `locks/github.toml` since the artifact work), **the `vars` script and executable
+providers** (`vars.linix` and `vars.<ext>` both exist and are wired into resolution), and
+**`expand_vars`'s early return** (an empty variable set no longer skips the walk, so `$role`
+with no `vars` file is the same error as a misspelling). The `formats` block at `priority` level
+(D7) is built as well.
+
+**Still owed, and unchanged by this session:** **K14** (nothing asserts that `rebuild` makes no
+git commit — it makes none, because `handle_rebuild` never calls `perform_maintenance`, but the
+only honest test needs a real backend); **II.13's signature check**; **SEC3**; and Phase 6's
+containers, which still have never been run.
+
+**Not verified this session:** anything needing Docker. **`@asset=all` was exercised against the
+real GitHub API and a real release** — see the end of this entry for exactly how far that got.
 
 ## Session 2026-07-21 (sixth session) — Part IX's tail: W11 and W8, and the bug under W8
 
@@ -3786,10 +3873,9 @@ carries the resolved set and `value_for` answers `$name` from it.
 evaluated and hands them to `HostFacts`. Nothing re-resolves them mid-run.
 
 **Not built, and each is load-bearing:**
-- **The script and executable providers.** Only the file provider exists. The whole IX.6 ruling
-  — a value may come from a program that reads the clock or shells out — is *unimplemented*, so
-  in practice today's variables cannot move. The contract is shaped for it (`resolve` takes
-  definitions, not a file) but there is no second provider.
+- ~~**The script and executable providers.**~~ **Stale — corrected 2026-07-21 (seventh
+  session).** All three kinds exist (`vars`, `vars.linix`, `vars.<ext>`) in
+  `model/vars_provider.rs` and `model/vars_embedded.rs`, and resolution selects between them.
 - ~~Position 3 stops at `vars` itself.~~ **Wired in the same session.** `Resolver::statements`
   expands `$name` into option values, `link:`/`shim:`/`service:` names and `repo:` specs, once,
   after `when` gating and before anything reads a value — so the prober, the merge and the
@@ -3799,13 +3885,13 @@ evaluated and hands them to `HostFacts`. Nothing re-resolves them mid-run.
   variable irrelevant to this machine.
 - **W1–W14 remain formally void.** This lands W3 (no bare `$flag`), W7 and W10 by construction;
   the rest are untouched and must still be re-asked.
-- **`plan` does not show variables as a cause of change (W13).** A variable that moves can
-  change what is declared with no edit to any file, and the plan does not say so.
-- **`init` does not scaffold a `vars` file.** *(This bullet also claimed II.1's file table does
-  not list `vars`. It does — see the 2026-07-20 audit.)*
-- **`expand_vars` returns early when no variable is defined** (`resolve.rs:320`), so with no
-  `vars` file a `$name` is left as literal text instead of erroring — the exact silent-drift
-  failure the "unknown reference is an error" bullet above says was designed out. Untested.
+- ~~**`plan` does not show variables as a cause of change (W13).**~~ **Built 2026-07-21
+  (seventh session)** — `plan` prints the same note `sync` does, under the same rule.
+- ~~**`init` does not scaffold a `vars` file.**~~ **Built 2026-07-21 (seventh session)** — a
+  comments-only file, so no name is invented.
+- ~~**`expand_vars` returns early when no variable is defined.**~~ **Stale — corrected
+  2026-07-21 (seventh session).** An empty variable set no longer skips the walk: with no `vars`
+  file at all, `$role` is the same error it is when the file exists and the name is misspelled.
 
 ## Done 2026-07-20 — `rebuild` (X.1, K1, K2, K13)
 
@@ -3850,12 +3936,11 @@ ordered after mise`), so it is not passing vacuously.
 does not parse. Corrected to the short form and the real block form.
 
 **Not built:**
-- **K15 is the real gap.** `rebuild` prints its own plan and never says "remove", but the two
-  transactions run through the ordinary `sync` path, so the engine still narrates N removals —
-  the exact sentence K15 exists to prevent. The plan printer has to learn what a rebuild is.
-- **K3 is answered thinly.** A failed reinstall stops the run, names the packages that are gone,
-  and points at the pre-sync snapshot. It does not *take* a rebuild-specific snapshot or revert
-  automatically; it relies on the snapshot `sync` already takes, which may not exist.
+- ~~**K15 is the real gap.**~~ **Built 2026-07-21 (seventh session)** — the summary is told which
+  run it is narrating, so a rebuild's counters read `Reinstalled` and `Removed to reinstall`.
+- ~~**K3 is answered thinly.**~~ **Stale — corrected 2026-07-21 (seventh session).** `rebuild`
+  takes its own `PreRebuild` snapshot and restores it when a reinstall fails, with a distinct
+  message for the case where the rollback itself failed.
 - **K14 (no git commit) is untested** — nothing was added, but nothing asserts it either.
 
 ## Done 2026-07-20 — artifact selection (Part VIII, first half)
@@ -3898,15 +3983,14 @@ shortest only among equally specific candidates. **The D3 case itself is unaffec
 picks the plain one). It is a strict improvement on the heuristic, and it is written here
 because it is not what was ruled.
 
-**`@asset=all` parses and selects but does not install.** Installing several artifacts under one
-declaration touches the state model (`GithubState` holds one `bin_path`), so the backend
-**errors by name** rather than silently installing the first of the picks. **Owed.**
+~~**`@asset=all` parses and selects but does not install.**~~ **Built 2026-07-21 (seventh
+session)** — the state model and the lock both hold lists now, and the deployed-name rule was
+ruled by the owner. See that session's entry.
 
-**Not built from Part VIII:** the `priority`-level `formats` block (D7), `channel` on the snap
-and flatpak backends (parsed and refused elsewhere, but the backends do not read it yet — *false
-for snap as of 2026-07-20: `snap.rs:76-78` pushes `--channel`; flatpak only*), the
-lock file half of VIII.2 (the resolved asset is recorded in the backend's own state, not in
-`locks/github`) — *D14 is now built: `why` prints the order and which level set it.*
+~~**Not built from Part VIII:** the `priority`-level `formats` block (D7), `channel` on the snap
+and flatpak backends, the lock file half of VIII.2.~~ **All stale — corrected 2026-07-21 (seventh
+session).** D7 is built (`priority.rs`); `channel` is read by both snap and flatpak; the resolved
+asset, url, format and hash are in `locks/github.toml`. *D14 was already noted built.*
 
 **Suite: 575 lib tests *(650 as re-counted 2026-07-20; 718 total)* + integration all passing, `cargo build --all-targets` clean,
 `cargo clippy --all-targets` silent, `linix --help` and `linix check` run** (measured
@@ -4522,10 +4606,9 @@ config does. Tests: `dependents_are_the_after_package_extras_only` and
 someone ran `sync` by hand. It calls `resolve_model` + `apply_repositories` +
 `apply_dependents` now, the same three phases as `sync`.
 
-**Still owed (not S12's forward direction — one new, smaller item):** *drift for extras* —
-reconciling away a `service:`/`link:`/`shim:` line the user *removed* (the forward direction
-is done; the teardown is not, because the planner tracks package drift, not extra drift). A
-Phase 2 follow-up.
+~~**Still owed (not S12's forward direction — one new, smaller item):** *drift for extras*.~~
+**Done.** The teardown landed with the applied-extras ledger (S20); `status` learned to preview
+it on 2026-07-21 (seventh session), which was the last piece.
 
 ## Done in Phase 2q/2r/2s — the grammar's last gaps and the old-model teardown
 
@@ -6169,17 +6252,24 @@ there is nothing to commit — but a history that does not record a rebuild mean
 longer a complete account of what happened to the machine (II.4's claim). *Recommendation:* no
 commit; `rebuild` is recorded wherever snapshots are, not wherever intent is.
 
+**The recommendation holds and is what the code does** — `handle_rebuild` never calls
+`perform_maintenance`, which is the only path to `git_autocommit`. **It is still not asserted by
+a test** (2026-07-21): the honest one needs a backend that can really remove and reinstall, and
+a test that only greps the source would pass on a rebuild that committed through some other
+route. Recorded rather than faked.
+
 **K15 — Does `plan` distinguish a rebuild's removals from real ones?** A plan showing "remove
 214 packages" when all 214 come straight back is technically true and will terrify the reader.
 *Recommendation:* yes — the plan says *reinstall* where remove-then-install is the same package,
 and reserves *remove* for removals that stay removed.
 
-**Partly built (2026-07-20), and the gap is real.** `rebuild` prints its own plan, which never
-says "remove" — it lists the batches and states that each backend's packages come down and go
-back up. But the two transactions it then runs go through the ordinary `sync` path, so **the
-engine's own progress output still narrates 214 removals**, which is the sentence K15 exists to
-prevent. Fixing it properly means the plan printer learning what a rebuild is, and that is not
-done.
+**BUILT (2026-07-21).** `rebuild` prints its own plan, which never says "remove". The gap was
+that the two transactions it runs go through the ordinary `sync` path, whose summary narrated
+214 removals — the sentence K15 exists to prevent. The engine is now told which run it is
+narrating (`metrics::Narration`, from the guard scope): under a rebuild the counters read
+`Reinstalled` and `Removed to reinstall`, and plain `Removals` is reserved for removals that
+stay removed. The backends' own progress logs are unchanged, deliberately: `apt` really is
+removing those packages at that moment.
 
 **K16 — Does `clean-cache --all` need the guard?** It removes no packages, so today's answer is
 no (R19 established exactly this reasoning for `clean-cache`). Level 3 of X.3 is a different

@@ -440,16 +440,24 @@ impl App {
     /// Best-effort per item: a backend that cannot undo one extra must not block the rest, so
     /// each failure warns and the run continues. The ledger is still updated to the declared
     /// set — a drifted extra we could not undo is reported, not retried forever.
-    pub async fn reconcile_extras(&self, state: &crate::model::DesiredState) -> Result<()> {
-        use crate::core::extras_lock::{extra_key, split_key, ExtrasLedger};
-        use std::collections::BTreeSet;
+    /// The extras a sync would undo: applied last time, declared nowhere now. `status` and
+    /// `reconcile_extras` ask the same question, so they ask it in the same place — a preview
+    /// computed a second way is a preview free to disagree with the run.
+    pub async fn extras_drift(
+        &self,
+        state: &crate::model::DesiredState,
+    ) -> Result<Vec<String>> {
+        use crate::core::extras_lock::ExtrasLedger;
 
-        // Every declared extra key: the dependents (repo/shim/service/link) and the schedules.
-        let declared: BTreeSet<String> = state
-            .extras
-            .iter()
-            .filter_map(|(s, _)| extra_key(s))
-            .collect();
+        let path = ExtrasLedger::path_in(&self.config.config_root().join("locks"));
+        let ledger = ExtrasLedger::load(&path)?;
+        Ok(ledger.drift(&declared_extras(state)))
+    }
+
+    pub async fn reconcile_extras(&self, state: &crate::model::DesiredState) -> Result<()> {
+        use crate::core::extras_lock::{split_key, ExtrasLedger};
+
+        let declared = declared_extras(state);
 
         let path = ExtrasLedger::path_in(&self.config.config_root().join("locks"));
         let ledger = ExtrasLedger::load(&path)?;
@@ -904,4 +912,13 @@ impl App {
         searcher.search(query).await
     }
 
+}
+
+/// Every declared extra key: the dependents (repo/shim/service/link/setting) and the schedules.
+fn declared_extras(state: &crate::model::DesiredState) -> std::collections::BTreeSet<String> {
+    state
+        .extras
+        .iter()
+        .filter_map(|(s, _)| crate::core::extras_lock::extra_key(s))
+        .collect()
 }

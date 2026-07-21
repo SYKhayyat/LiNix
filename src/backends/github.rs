@@ -1,6 +1,6 @@
 use crate::core::{
     security::{generate_checksum, verify_checksum},
-    verify_against, ArtifactLedger, ArtifactLock, BackendCore, CommandExecutor, Error,
+    verify_set, ArtifactLedger, ArtifactLock, BackendCore, CommandExecutor, Error,
     HealthReport, HealthStatus, Installable, MetadataProvider, Package, PackageSpec, Queryable,
     RateLimiter, Result,
 };
@@ -22,14 +22,26 @@ use tracing::{debug, info, warn};
 struct GithubState {
     repo: String,
     version: String,
-    bin_path: Option<String>,
+    /// The declaration's directory. Every artifact it installed unpacks under here, so a
+    /// removal has one tree to delete however many files the line resolved to.
     install_path: String,
-    /// The resolved artifact. A record of only the version leaves the file free to change
-    /// under a pinned declaration, which is what artifact selection exists to prevent.
-    #[serde(default)]
-    asset: Option<String>,
-    #[serde(default)]
-    format: Option<String>,
+    /// The resolved artifacts, in selection order. A record of only the version leaves the
+    /// file free to change under a pinned declaration, which is what artifact selection exists
+    /// to prevent; `@asset=all` is the only way there is more than one.
+    artifacts: Vec<InstalledArtifact>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InstalledArtifact {
+    asset: String,
+    format: String,
+    bin_path: Option<String>,
+}
+
+impl GithubState {
+    fn assets(&self) -> Vec<&str> {
+        self.artifacts.iter().map(|a| a.asset.as_str()).collect()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,10 +272,30 @@ fn one_release(
     }
 }
 
+/// Two asset lists naming the same files, whatever order the release offered them in.
+fn same_set(a: &[&str], b: &[&str]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let (mut a, mut b) = (a.to_vec(), b.to_vec());
+    a.sort_unstable();
+    b.sort_unstable();
+    a == b
+}
+
+/// The subdirectory one artifact unpacks into, from its filename. Nothing here reaches the
+/// user: it exists so two archives under one declaration cannot overwrite each other.
+fn artifact_dir_name(asset: &str) -> String {
+    asset
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
+        .collect()
+}
+
 /// What local files already know about a declaration, before anything is asked of GitHub.
 struct Known<'a> {
     pin: Option<&'a str>,
-    locked: Option<&'a ArtifactLock>,
+    locked: &'a [ArtifactLock],
     installed: Option<&'a GithubState>,
 }
 
@@ -274,27 +306,32 @@ struct Known<'a> {
 /// honest — changing either asks for a different artifact of the same release, and only a
 /// re-selection can find it.
 fn answered_locally(known: &Known, formats: &FormatOrder, asset: Option<&AssetPattern>) -> bool {
-    let (Some(pin), Some(locked), Some(installed)) = (known.pin, known.locked, known.installed)
-    else {
+    let (Some(pin), Some(installed)) = (known.pin, known.installed) else {
         return false;
     };
-    let Some(locked_version) = locked.version.as_deref() else {
+    if known.locked.is_empty() {
+        return false;
+    }
+    let Some(locked_version) = known.locked[0].version.as_deref() else {
         return false;
     };
     if !same_tag(pin, locked_version) || installed.version != locked_version {
         return false;
     }
-    if installed.asset.as_deref() != Some(locked.asset.as_str()) {
+    let mut locked_assets: Vec<&str> = known.locked.iter().map(|l| l.asset.as_str()).collect();
+    let mut on_disk = installed.assets();
+    locked_assets.sort_unstable();
+    on_disk.sort_unstable();
+    if locked_assets != on_disk {
         return false;
     }
-    if Format::parse(&locked.format)
-        .ok()
-        .and_then(|f| formats.rank(f))
-        .is_none()
-    {
-        return false;
-    }
-    asset.is_none_or(|pattern| pattern.matches(&locked.asset))
+    known.locked.iter().all(|l| {
+        Format::parse(&l.format)
+            .ok()
+            .and_then(|f| formats.rank(f))
+            .is_some()
+            && asset.is_none_or(|pattern| pattern.matches(&l.asset))
+    })
 }
 
 /// Windows has no executable bit, so the name is the only signal there.
@@ -356,7 +393,7 @@ impl Installable for GithubInstallable {
 
             let known = Known {
                 pin,
-                locked: ledger.get(&spec.name),
+                locked: ledger.locked(&spec.name),
                 installed: state.get(&spec.name),
             };
             if answered_locally(&known, &formats, wanted.asset.as_ref()) {
@@ -404,25 +441,13 @@ impl Installable for GithubInstallable {
                 );
             }
 
-            if selection.picks.len() > 1 {
-                return Err(Error::Validation(format!(
-                    "{}: `@asset=all` selected {} files, and installing several artifacts \
-                     under one declaration is not built yet. Narrow it with a pattern, e.g. \
-                     @asset=*musl*.",
-                    spec.name,
-                    selection.picks.len()
-                )));
-            }
-
-            let chosen = &selection.picks[0];
-            let best_asset = &chosen.asset;
-
             // The version alone is not the identity of what is installed: changing `formats`
             // on a pinned version must still reinstall, or the declaration and the disk part
             // ways with nothing to show it.
+            let chosen_assets: Vec<&str> =
+                selection.picks.iter().map(|p| p.asset.name.as_str()).collect();
             if let Some(existing) = state.get(&spec.name) {
-                if existing.version == release.version
-                    && existing.asset.as_deref() == Some(best_asset.name.as_str())
+                if existing.version == release.version && same_set(&existing.assets(), &chosen_assets)
                 {
                     debug!(
                         "GitHub: {} is already at version {}",
@@ -432,54 +457,51 @@ impl Installable for GithubInstallable {
                 }
             }
 
+            // Everything is downloaded and hashed before anything is unpacked or put on PATH:
+            // with several artifacts under one declaration, a supply-chain objection to the
+            // third must not arrive with the first two already deployed.
             info!(
-                "Downloading GitHub release: {} ({})",
-                spec.name, release.version
+                "Downloading GitHub release: {} ({}), {} artifact(s)",
+                spec.name,
+                release.version,
+                selection.picks.len()
             );
-            let bytes = self
-                .core
-                .github_get(&best_asset.url)
-                .await?
-                .bytes()
-                .await
-                .map_err(Error::from)?;
             let tmp_dir = tempfile::tempdir().map_err(Error::from)?;
-            let dl_path = tmp_dir.path().join(&best_asset.name);
-            tokio::fs::write(&dl_path, bytes)
-                .await
-                .map_err(Error::from)?;
+            let mut downloaded: Vec<(&artifact::Pick, PathBuf, String)> = Vec::new();
+            for pick in &selection.picks {
+                let bytes = self
+                    .core
+                    .github_get(&pick.asset.url)
+                    .await?
+                    .bytes()
+                    .await
+                    .map_err(Error::from)?;
+                let dl_path = tmp_dir.path().join(&pick.asset.name);
+                tokio::fs::write(&dl_path, bytes).await.map_err(Error::from)?;
 
-            if let Some(expected_sha) = spec.options.get("sha256") {
-                verify_checksum(&dl_path, expected_sha)?;
+                // `@sha256` is legal only on a line that resolves to exactly one file
+                // (VIII.2/D6), so it needs no per-artifact story here.
+                if let Some(expected_sha) = spec.options.get("sha256") {
+                    verify_checksum(&dl_path, expected_sha)?;
+                }
+                let sha = generate_checksum(&dl_path)?;
+                downloaded.push((pick, dl_path, sha));
             }
 
             // The same asset of the same release, with different bytes than last time. No
             // legitimate republish does that, so it is an alarm rather than an update — and
             // it must not be answered by selecting a different asset, which would turn a
             // supply-chain warning into a silent substitution (VIII.2).
-            let downloaded_sha = generate_checksum(&dl_path)?;
-            if let Some(locked) = ledger.get(&spec.name) {
-                if locked.version.as_deref() == Some(release.version.as_str()) {
-                    if let Some(objection) =
-                        verify_against(locked, &best_asset.name, Some(&downloaded_sha))
-                    {
-                        return Err(Error::Validation(format!(
-                            "{}: {}",
-                            spec.name, objection
-                        )));
-                    }
+            let locked = ledger.locked(&spec.name);
+            if locked.first().and_then(|l| l.version.as_deref()) == Some(release.version.as_str()) {
+                let resolved: Vec<(String, Option<String>)> = downloaded
+                    .iter()
+                    .map(|(p, _, sha)| (p.asset.name.clone(), Some(sha.clone())))
+                    .collect();
+                if let Some(objection) = verify_set(locked, &resolved) {
+                    return Err(Error::Validation(format!("{}: {}", spec.name, objection)));
                 }
             }
-            ledger.record(
-                spec.name.clone(),
-                ArtifactLock {
-                    version: Some(release.version.clone()),
-                    asset: best_asset.name.clone(),
-                    url: best_asset.url.clone(),
-                    format: chosen.format.to_string(),
-                    sha256: Some(downloaded_sha),
-                },
-            );
 
             let pkg_dir_name = spec.name.replace('/', "_");
             let pkg_dir = self.core.install_dir.join(&pkg_dir_name);
@@ -492,63 +514,137 @@ impl Installable for GithubInstallable {
                 .await
                 .map_err(Error::from)?;
 
-            let dl_path_archive = dl_path.clone();
-            let pkg_dir_archive = pkg_dir.clone();
-            tokio::task::spawn_blocking(move || {
-                extract_archive(&dl_path_archive, &pkg_dir_archive)
-            })
-            .await
-            .map_err(|e| Error::Other(e.to_string()))??;
-
             let repo_name = spec.name.split('/').next_back().unwrap_or(&spec.name);
             let bin_dir = dirs::home_dir()
                 .ok_or_else(|| Error::Other("Home directory not found".into()))?
                 .join(".local")
                 .join("bin");
-            let bin_dest =
-                crate::utils::bin_destination(&bin_dir, repo_name, self.core.confine_bin)?;
+            let one_artifact = downloaded.len() == 1;
+            let previous: Vec<String> = state
+                .get(&spec.name)
+                .map(|s| s.artifacts.iter().filter_map(|a| a.bin_path.clone()).collect())
+                .unwrap_or_default();
 
-            let final_bin_path;
-            let core_pkg_dir = pkg_dir.clone();
+            // Unpack and find each program first, deploy nothing yet: the name two artifacts
+            // fight over is only knowable once both archives are open, and a refusal that
+            // arrives after the first is already on PATH has half-installed the line it
+            // refused.
+            let mut resolved: Vec<(&artifact::Pick, &String, PathBuf, PathBuf)> = Vec::new();
+            for (pick, dl_path, sha) in &downloaded {
+                // One subdirectory per artifact: two archives under one declaration can both
+                // contain `bin/`, and unpacking them over each other loses one of them.
+                let unpack_dir = pkg_dir.join(artifact_dir_name(&pick.asset.name));
+                tokio::fs::create_dir_all(&unpack_dir)
+                    .await
+                    .map_err(Error::from)?;
 
-            let listing: Vec<ArchiveEntry> = tokio::task::spawn_blocking(move || {
-                walkdir::WalkDir::new(&core_pkg_dir)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.file_type().is_file())
-                    .map(|e| {
-                        let executable = is_executable(&e);
-                        ArchiveEntry::new(e.path().to_path_buf(), executable)
-                    })
-                    .collect()
-            })
-            .await
-            .map_err(|e| Error::Other(e.to_string()))?;
+                let dl_path_archive = dl_path.clone();
+                let unpack_archive = unpack_dir.clone();
+                tokio::task::spawn_blocking(move || {
+                    extract_archive(&dl_path_archive, &unpack_archive)
+                })
+                .await
+                .map_err(|e| Error::Other(e.to_string()))??;
 
-            let discovered = artifact::find_executable(&listing, &spec.name, wanted.bin.as_deref())
-                .map_err(|e| Error::PackageNotFound(e.to_string()))?;
+                let walk_dir = unpack_dir.clone();
+                let listing: Vec<ArchiveEntry> = tokio::task::spawn_blocking(move || {
+                    walkdir::WalkDir::new(&walk_dir)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.file_type().is_file())
+                        .map(|e| {
+                            let executable = is_executable(&e);
+                            ArchiveEntry::new(e.path().to_path_buf(), executable)
+                        })
+                        .collect()
+                })
+                .await
+                .map_err(|e| Error::Other(e.to_string()))?;
 
-            {
+                let discovered =
+                    artifact::find_executable(&listing, &spec.name, wanted.bin.as_deref())
+                        .map_err(|e| Error::PackageNotFound(e.to_string()))?;
+
+                // One artifact is deployed under the repo's name, as it always has been.
+                // Several cannot be — so each keeps the name of the program inside it, and
+                // two that would land on the same name is an error rather than one silently
+                // overwriting the other (owner ruling, 2026-07-21).
+                let deploy_name = if one_artifact {
+                    repo_name.to_string()
+                } else {
+                    discovered
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .ok_or_else(|| {
+                            Error::Other(format!(
+                                "{}: the executable inside `{}` has no usable filename",
+                                spec.name, pick.asset.name
+                            ))
+                        })?
+                        .to_string()
+                };
+                let bin_dest =
+                    crate::utils::bin_destination(&bin_dir, &deploy_name, self.core.confine_bin)?;
+                if let Some((clash, _, _, _)) =
+                    resolved.iter().find(|(_, _, _, dest)| dest == &bin_dest)
+                {
+                    return Err(Error::Validation(format!(
+                        "{}: both `{}` and `{}` install a program called `{}`. Narrow \
+                         `@asset=all` with a pattern, e.g. @asset=*musl*, so one file answers \
+                         the line.",
+                        spec.name, clash.asset.name, pick.asset.name, deploy_name
+                    )));
+                }
+                resolved.push((pick, sha, discovered, bin_dest));
+            }
+
+            let mut installed_artifacts: Vec<InstalledArtifact> = Vec::new();
+            let mut locks: Vec<ArtifactLock> = Vec::new();
+            for (pick, sha, discovered, bin_dest) in &resolved {
                 crate::utils::deploy_executable(
-                    &discovered,
-                    &bin_dest,
+                    discovered,
+                    bin_dest,
                     &self.core.install_dir,
-                    state.get(&spec.name).and_then(|s| s.bin_path.as_deref()),
+                    previous
+                        .iter()
+                        .find(|p| *p == &bin_dest.to_string_lossy())
+                        .map(|s| s.as_str()),
                 )
                 .await?;
 
-                final_bin_path = Some(bin_dest.to_string_lossy().to_string());
+                installed_artifacts.push(InstalledArtifact {
+                    asset: pick.asset.name.clone(),
+                    format: pick.format.to_string(),
+                    bin_path: Some(bin_dest.to_string_lossy().to_string()),
+                });
+                locks.push(ArtifactLock {
+                    version: Some(release.version.clone()),
+                    asset: pick.asset.name.clone(),
+                    url: pick.asset.url.clone(),
+                    format: pick.format.to_string(),
+                    sha256: Some((*sha).clone()),
+                });
             }
 
+            // A declaration that used to deploy a name it no longer deploys leaves that file
+            // on PATH, where nothing declares it and no `sync` can see it.
+            for stale in previous
+                .iter()
+                .filter(|p| !installed_artifacts.iter().any(|a| a.bin_path.as_ref() == Some(*p)))
+            {
+                if let Err(e) = crate::utils::remove_deployed_path(stale).await {
+                    warn!("{}: could not remove the old `{}`: {}", spec.name, stale, e);
+                }
+            }
+
+            ledger.record(spec.name.clone(), locks);
             state.insert(
                 spec.name.clone(),
                 GithubState {
                     repo: spec.name.clone(),
                     version: release.version,
-                    bin_path: final_bin_path,
                     install_path: pkg_dir.to_string_lossy().to_string(),
-                    asset: Some(best_asset.name.clone()),
-                    format: Some(chosen.format.to_string()),
+                    artifacts: installed_artifacts,
                 },
             );
         }
@@ -565,7 +661,7 @@ impl Installable for GithubInstallable {
         for name in names {
             if let Some(pkg) = state.remove(name) {
                 let mut errors = Vec::new();
-                if let Some(ref bp) = pkg.bin_path {
+                for bp in pkg.artifacts.iter().filter_map(|a| a.bin_path.as_ref()) {
                     if let Err(e) = crate::utils::remove_deployed_path(bp).await {
                         errors.push(e);
                     }
@@ -668,14 +764,19 @@ mod tests {
         }
     }
 
-    fn installed(version: &str, asset: &str) -> GithubState {
+    fn installed(version: &str, assets: &[&str]) -> GithubState {
         GithubState {
             repo: "sharkdp/fd".into(),
             version: version.to_string(),
-            bin_path: Some("/home/u/.local/bin/fd".into()),
             install_path: "/opt/linix/sharkdp_fd".into(),
-            asset: Some(asset.to_string()),
-            format: Some("tarball".into()),
+            artifacts: assets
+                .iter()
+                .map(|a| InstalledArtifact {
+                    asset: (*a).to_string(),
+                    format: "tarball".into(),
+                    bin_path: Some(format!("/home/u/.local/bin/{}", a)),
+                })
+                .collect(),
         }
     }
 
@@ -725,11 +826,11 @@ mod tests {
 
     #[test]
     fn a_pinned_installed_package_is_answered_without_the_network() {
-        let locked = lock("v10.2.0", "fd.tar.gz", "tarball");
-        let state = installed("v10.2.0", "fd.tar.gz");
+        let locked = [lock("v10.2.0", "fd.tar.gz", "tarball")];
+        let state = installed("v10.2.0", &["fd.tar.gz"]);
         let known = Known {
             pin: Some("10.2.0"),
-            locked: Some(&locked),
+            locked: &locked,
             installed: Some(&state),
         };
         assert!(answered_locally(&known, &tarballs(), None));
@@ -737,11 +838,11 @@ mod tests {
 
     #[test]
     fn an_unpinned_line_always_asks_github() {
-        let locked = lock("v10.2.0", "fd.tar.gz", "tarball");
-        let state = installed("v10.2.0", "fd.tar.gz");
+        let locked = [lock("v10.2.0", "fd.tar.gz", "tarball")];
+        let state = installed("v10.2.0", &["fd.tar.gz"]);
         let known = Known {
             pin: None,
-            locked: Some(&locked),
+            locked: &locked,
             installed: Some(&state),
         };
         assert!(!answered_locally(&known, &tarballs(), None));
@@ -749,11 +850,11 @@ mod tests {
 
     #[test]
     fn a_pin_that_moved_past_the_lock_asks_github() {
-        let locked = lock("v10.2.0", "fd.tar.gz", "tarball");
-        let state = installed("v10.2.0", "fd.tar.gz");
+        let locked = [lock("v10.2.0", "fd.tar.gz", "tarball")];
+        let state = installed("v10.2.0", &["fd.tar.gz"]);
         let known = Known {
             pin: Some("10.3.0"),
-            locked: Some(&locked),
+            locked: &locked,
             installed: Some(&state),
         };
         assert!(!answered_locally(&known, &tarballs(), None));
@@ -761,10 +862,10 @@ mod tests {
 
     #[test]
     fn a_lock_without_an_install_asks_github() {
-        let locked = lock("v10.2.0", "fd.tar.gz", "tarball");
+        let locked = [lock("v10.2.0", "fd.tar.gz", "tarball")];
         let known = Known {
             pin: Some("10.2.0"),
-            locked: Some(&locked),
+            locked: &locked,
             installed: None,
         };
         assert!(!answered_locally(&known, &tarballs(), None));
@@ -772,11 +873,11 @@ mod tests {
 
     #[test]
     fn an_install_that_drifted_from_the_lock_asks_github() {
-        let locked = lock("v10.2.0", "fd-gnu.tar.gz", "tarball");
-        let state = installed("v10.2.0", "fd-musl.tar.gz");
+        let locked = [lock("v10.2.0", "fd-gnu.tar.gz", "tarball")];
+        let state = installed("v10.2.0", &["fd-musl.tar.gz"]);
         let known = Known {
             pin: Some("10.2.0"),
-            locked: Some(&locked),
+            locked: &locked,
             installed: Some(&state),
         };
         assert!(!answered_locally(&known, &tarballs(), None));
@@ -784,11 +885,11 @@ mod tests {
 
     #[test]
     fn changing_formats_under_a_pin_asks_github_again() {
-        let locked = lock("v10.2.0", "fd.tar.gz", "tarball");
-        let state = installed("v10.2.0", "fd.tar.gz");
+        let locked = [lock("v10.2.0", "fd.tar.gz", "tarball")];
+        let state = installed("v10.2.0", &["fd.tar.gz"]);
         let known = Known {
             pin: Some("10.2.0"),
-            locked: Some(&locked),
+            locked: &locked,
             installed: Some(&state),
         };
         assert!(!answered_locally(
@@ -799,12 +900,62 @@ mod tests {
     }
 
     #[test]
-    fn changing_the_asset_pattern_under_a_pin_asks_github_again() {
-        let locked = lock("v10.2.0", "fd-gnu.tar.gz", "tarball");
-        let state = installed("v10.2.0", "fd-gnu.tar.gz");
+    fn a_pinned_set_of_several_is_answered_without_the_network() {
+        // `@asset=all` locks every file it installed; all of them present is the answer.
+        let locked = [
+            lock("v10.2.0", "fd.tar.gz", "tarball"),
+            lock("v10.2.0", "fd-server.tar.gz", "tarball"),
+        ];
+        let state = installed("v10.2.0", &["fd-server.tar.gz", "fd.tar.gz"]);
         let known = Known {
             pin: Some("10.2.0"),
-            locked: Some(&locked),
+            locked: &locked,
+            installed: Some(&state),
+        };
+        assert!(answered_locally(
+            &known,
+            &tarballs(),
+            Some(&AssetPattern::parse("all").unwrap())
+        ));
+    }
+
+    #[test]
+    fn one_of_a_locked_set_missing_from_disk_asks_github_again() {
+        let locked = [
+            lock("v10.2.0", "fd.tar.gz", "tarball"),
+            lock("v10.2.0", "fd-server.tar.gz", "tarball"),
+        ];
+        let state = installed("v10.2.0", &["fd.tar.gz"]);
+        let known = Known {
+            pin: Some("10.2.0"),
+            locked: &locked,
+            installed: Some(&state),
+        };
+        assert!(!answered_locally(
+            &known,
+            &tarballs(),
+            Some(&AssetPattern::parse("all").unwrap())
+        ));
+    }
+
+    #[test]
+    fn two_assets_unpack_into_two_directories() {
+        // Both archives can contain `bin/`, and one tree would lose one of them.
+        assert_ne!(
+            artifact_dir_name("fd-x86_64-musl.tar.gz"),
+            artifact_dir_name("fd-x86_64-gnu.tar.gz")
+        );
+        assert!(!artifact_dir_name("../escape.tar.gz").contains('/'));
+        assert!(!artifact_dir_name("..\\escape.tar.gz").contains('\\'));
+    }
+
+    #[test]
+    fn changing_the_asset_pattern_under_a_pin_asks_github_again() {
+        let locked = [lock("v10.2.0", "fd-gnu.tar.gz", "tarball")];
+        let state = installed("v10.2.0", &["fd-gnu.tar.gz"]);
+        let known = Known {
+            pin: Some("10.2.0"),
+            locked: &locked,
             installed: Some(&state),
         };
         let musl = AssetPattern::parse("*musl*").unwrap();

@@ -2538,7 +2538,11 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
-    let desired = resolver.resolve_desired_state().await?;
+    let state = resolver.resolve_model().await?;
+    let desired = state.packages.clone();
+    // A deleted `service:`/`link:`/`repo:` line is drift a sync will undo (S20), and `status`
+    // that reports only packages says "nothing to do" on the run that disables a service.
+    let extras_to_undo = app.extras_drift(&state).await.unwrap_or_default();
     // `status` reports what a full `sync` would do, so it scopes drift the same way.
     let enabled = app.priority_backends().await;
     let changes = {
@@ -2573,6 +2577,7 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
             "to_remove": report.remove,
             "unmanaged": unmanaged.iter().map(|p| serde_json::json!({"backend": p.backend, "name": p.name})).collect::<Vec<_>>(),
             "unverified": unverified.iter().map(|(b, n)| serde_json::json!({"backend": b, "name": n})).collect::<Vec<_>>(),
+            "extras_to_undo": extras_to_undo,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
@@ -2582,6 +2587,7 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
         && report.remove.is_empty()
         && unmanaged.is_empty()
         && unverified.is_empty()
+        && extras_to_undo.is_empty()
     {
         println!(
             "System matches your manifests; nothing to install, no drift, no unmanaged packages."
@@ -2624,6 +2630,15 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
         );
         for (backend, name) in &unverified {
             println!("    {}:{}", backend, name);
+        }
+    }
+    if !extras_to_undo.is_empty() {
+        println!(
+            "- no longer declared — `sync` would undo ({}):",
+            extras_to_undo.len()
+        );
+        for key in &extras_to_undo {
+            println!("    {}", key);
         }
     }
     Ok(())
