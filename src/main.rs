@@ -475,7 +475,7 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         // name the variables that changed since the last sync — a hundred removals should never
         // be unexplained.
         if changes.total_remove() > 0 {
-            print_vars_changed(app, &resolver, &state.vars).await;
+            print_vars_changed(app, &state.vars).await;
         }
     }
 
@@ -2680,6 +2680,11 @@ async fn handle_plan(app: &App, out: &str) -> Result<()> {
             plan.removals.len(),
             out
         );
+        // W13, on the path where it matters most: `plan` is read before anything is touched,
+        // so a removal a `vars` edit caused has to be explained here too, not only at sync.
+        if !plan.removals.is_empty() {
+            print_vars_changed(app, &plan.vars).await;
+        }
         // Writing a plan changes nothing, so this warns rather than refuses — but say it
         // here, where there is still time to fix the manifest, rather than letting the
         // refusal be a surprise at apply time.
@@ -4080,11 +4085,10 @@ fn print_flight_plan(app: &App, changes: &linix::app::sync::planner::SyncChanges
 /// removal driven by a `vars` edit is explained rather than presented as a bare count. Compares
 /// this run's resolved variables to the committed baseline; silent when nothing changed or there
 /// is no baseline (a fresh repo, or a script/program provider whose values do not commit).
-async fn print_vars_changed(
-    app: &App,
-    resolver: &linix::app::sync::resolver::StateResolver<'_>,
-    current: &linix::model::vars::Vars,
-) {
+async fn print_vars_changed(app: &App, current: &linix::model::vars::Vars) {
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
     let git = app.git_manager();
     let prev = match resolver.vars_at_last_sync(&git).await {
         Ok(Some(p)) => p,
@@ -4273,7 +4277,7 @@ async fn handle_init(app: &App, force: bool, interactive: bool) -> Result<()> {
 
     scaffold_repo(app, force).await?;
 
-    println!("(Run `linix config init` to also write a commented config.toml, or `linix init -i` for guided setup.)");
+    println!("(Run `linix config init` to also write a commented preferences.toml, or `linix init -i` for guided setup.)");
     Ok(())
 }
 
@@ -5090,7 +5094,7 @@ mod init_tests {
         // hands every new user a broken config, and a template whose keys don't match the
         // struct silently documents settings that do nothing (as `cache_ttl` did).
         let cfg: linix::config::Config =
-            toml::from_str(CONFIG_TEMPLATE).expect("CONFIG_TEMPLATE must be valid config.toml");
+            toml::from_str(CONFIG_TEMPLATE).expect("CONFIG_TEMPLATE must be valid preferences.toml");
         assert_eq!(cfg.guard.max_removals, 20);
     }
 
@@ -5167,6 +5171,31 @@ async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
         .await
         .with_context(|| format!("Failed to write {}", profile.display()))?;
         println!("  created  {:<10} {}", "profile", profile.display());
+    }
+
+    // II.1 lists `vars` beside `active` and `priority`. It is scaffolded empty: a name LiNix
+    // invented would be a condition nobody chose (IX.3 makes every reference to an undefined
+    // name an error, and a helpful `role = desktop` is exactly the default P5 bans).
+    let vars = layout.vars_file();
+    if !vars.exists() || force {
+        tokio::fs::write(
+            &vars,
+            "# Your own names for conditions. Each needs a top-level default before it can be\n\
+             # used, and a `when` block may override it but may not introduce it.\n\
+             #\n\
+             #   role = desktop\n\
+             #\n\
+             #   when host in [thinkpad, x220] {\n\
+             #     role = travel\n\
+             #   }\n\
+             #\n\
+             # Then `when $role == travel { … }` anywhere `when` is legal.\n",
+        )
+        .await
+        .with_context(|| format!("Failed to write {}", vars.display()))?;
+        println!("  created  {:<10} {}", "vars", vars.display());
+    } else {
+        println!("  kept     {:<10} {}", "vars", vars.display());
     }
 
     let active = layout.active_file();

@@ -50,7 +50,7 @@ impl SchedulerManager {
     }
 
     /// Register `cfg` with the OS scheduler (systemd/launchd/Task Scheduler) — the declarative
-    /// path (S21). Unlike [`add_schedule`], it does NOT write to `config.toml`: a `schedule:`
+    /// path (S21). Unlike [`add_schedule`], it does NOT write to `preferences.toml`: a `schedule:`
     /// declared in the model lives in the `schedules` file, and `sync` provisions it from
     /// there on every run. Idempotent by nature — `add_task` re-registers the same task.
     pub async fn provision(&self, executor: &CommandExecutor, cfg: &ScheduleConfig) -> Result<()> {
@@ -60,7 +60,7 @@ impl SchedulerManager {
             .await
     }
 
-    /// Remove a task from the OS scheduler by name, without touching config.toml — the undo
+    /// Remove a task from the OS scheduler by name, without touching preferences.toml — the undo
     /// side of [`provision`], used when a `schedule:` line is deleted (S20 drift).
     pub async fn deprovision(&self, executor: &CommandExecutor, name: &str) -> Result<()> {
         self.provisioner.remove_task(executor, name).await

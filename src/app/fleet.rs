@@ -91,7 +91,7 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
     };
     if hosts.is_empty() {
         return Err(Error::Config(
-            "no hosts given and `fleet_hosts` is empty in config.toml".into(),
+            "no hosts given and `fleet_hosts` is empty in preferences.toml".into(),
         ));
     }
     for host in &hosts {

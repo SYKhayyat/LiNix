@@ -159,7 +159,7 @@ pub struct Config {
 
     /// Carry out a removal the guard would refuse (over `max_removals`, or touching a
     /// protected/essential package). CLI-only by design — `serde(skip)` keeps it out of
-    /// config.toml, because a permanently-on "yes, purge anything" switch is exactly the
+    /// preferences.toml, because a permanently-on "yes, purge anything" switch is exactly the
     /// setting this guard exists to make impossible. Deliberately distinct from `yes`:
     /// scripts and CI pass `-y` universally, and an unattended run is the one that cannot
     /// notice a system being dismantled.
