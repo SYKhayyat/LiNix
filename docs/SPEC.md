@@ -5373,9 +5373,16 @@ reason to invite the problem.
 `when $role == travel` matched, `linix why` should say *"`$role` is `travel`, set at `vars`
 line 6 by `when host in [thinkpad, x220]`"* — one hop further than it explains today.
 *Recommendation:* yes, and W4's fixed resolution phase is what makes it cheap. Decide before
-the resolver is written. **NOT BUILT (deferred, 2026-07-20):** needs origin tracking — the
-resolved set is `name → value` with no record of which line/provider set each — the same
-plumbing W5 needs; take them together.
+the resolver is written. **HALF BUILT (2026-07-20, fifth session).** The *definition* half is
+done: W12's `VarOrigins` records which line/provider set each variable, so *"`$role` is
+`travel`, set at `vars:6`"* is now available. What is still missing is the *gating* half —
+knowing that a given **package** is present *because* `when $role == travel` matched. That means
+threading the variable-referencing `when` conditions that admitted each reached statement through
+the profile/module resolution core (`parse_active_with` → `ProfileLoader::resolve` → `expand` →
+`apply_set_math` → `Reached` → `to_spec`, into a `__gated_by`-style tag `why` reads). That path
+is the resolver whose flagship bug was a mass removal, so it is the one piece deliberately left
+for a dedicated pass rather than the tail of a long session. **W8's `activate`/`deactivate`
+messaging needs the same gating data and should be taken with it.**
 
 **W12 — Is there a command to print resolved variables?** `linix vars`, showing each name, its
 value on this machine, and which line set it. Debugging a fleet without it means reading the
