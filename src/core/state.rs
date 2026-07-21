@@ -63,14 +63,10 @@ pub struct StateRegistry {
     /// Removed packages, kept as a record after uninstall.
     pub ghosts: HashMap<String, GhostMetadata>,
     pub active_session_id: Option<String>,
-    /// Packages temporarily uninstalled that are awaiting restoration. `#[serde(default)]`
-    /// keeps registries written by older versions loadable (the field is simply empty).
-    #[serde(default)]
+    /// Packages temporarily uninstalled that are awaiting restoration.
     pub suspensions: Vec<Suspension>,
     /// Packages the user has "held": never auto-upgraded until explicitly unheld. Entries are
-    /// `backend:name` or a bare `name` (matching either form). `#[serde(default)]` keeps older
-    /// registries loadable.
-    #[serde(default)]
+    /// `backend:name` or a bare `name` (matching either form).
     pub held: Vec<String>,
 }
 
@@ -134,8 +130,16 @@ impl StateRegistry {
             return Ok(Self::new(path.to_path_buf()));
         }
 
-        let mut registry: Self = serde_json::from_str(&data)
-            .map_err(|e| Error::Other(format!("Registry Corruption at {:?}: {}", path, e)))?;
+        let mut registry: Self = serde_json::from_str(&data).map_err(|e| {
+            Error::Other(format!(
+                "the state registry at {} cannot be read: {}\n  \
+                 It records what LiNix believes it manages. A missing or unreadable one is \
+                 not something to guess at — move it aside and run `linix adopt` to rebuild \
+                 it from what is actually installed.",
+                path.display(),
+                e
+            ))
+        })?;
 
         // `path` is #[serde(skip)], so it comes back empty and must be restored here or the
         // next save writes to "".
@@ -517,13 +521,12 @@ mod tests {
     }
 
     #[test]
-    fn registry_without_suspensions_field_still_loads() {
-        // A registry written by an older LiNix has no "suspensions" key; serde(default)
-        // must fill it with an empty vec rather than fail.
-        let legacy = r#"{"packages":[],"ghosts":{},"active_session_id":null}"#;
-        let r: StateRegistry = serde_json::from_str(legacy).expect("legacy registry loads");
-        assert!(r.suspensions.is_empty());
-        assert!(r.held.is_empty());
+    fn a_registry_missing_a_field_is_refused_rather_than_filled_in() {
+        // There is no old-format reader. A registry with no `suspensions` key is one this
+        // build did not write, and the honest answer is to say so — filling it with an empty
+        // list says "nothing is suspended", which is a claim about the machine nobody checked.
+        let missing = r#"{"packages":[],"ghosts":{},"active_session_id":null}"#;
+        assert!(serde_json::from_str::<StateRegistry>(missing).is_err());
     }
 
     #[test]

@@ -49,6 +49,27 @@ pub struct Vocabulary<'a> {
 /// "not listed" from "listed but not for this host". The caller applies whatever rule makes
 /// a name legal in its file; this owns the block structure and nothing else.
 pub fn read(file: &Path, body: &str, facts: &HostFacts, vocab: &Vocabulary) -> Result<Vec<GatedLine>> {
+    read_inner(file, body, Some(facts), vocab)
+}
+
+/// Every name the file holds, `when` blocks included whether or not they match, with no
+/// predicate evaluated at all.
+///
+/// For the one question that has to be answered before variables exist: `priority` decides
+/// which backends there are, resolving variables needs that vocabulary, and evaluating a
+/// `when $role` here is the unknown-key refusal this exists to remove. A superset is safe for
+/// that use and wrong for every other, so this must never decide what to install — the same
+/// warning [`Document::every_statement`] carries.
+pub fn read_every(file: &Path, body: &str, vocab: &Vocabulary) -> Result<Vec<GatedLine>> {
+    read_inner(file, body, None, vocab)
+}
+
+fn read_inner(
+    file: &Path,
+    body: &str,
+    facts: Option<&HostFacts>,
+    vocab: &Vocabulary,
+) -> Result<Vec<GatedLine>> {
     let mut out: Vec<GatedLine> = Vec::new();
     let mut gate: Option<(String, bool)> = None;
     // The entry whose `{ }` body is open, and the header it was opened with.
@@ -134,8 +155,11 @@ pub fn read(file: &Path, body: &str, facts: &HostFacts, vocab: &Vocabulary) -> R
                 );
             }
             let pred = pred.trim();
-            let hit = eval_when(pred, facts)
-                .map_err(|e| GrammarError::new(Origin::new(file, idx + 1), e.to_string()))?;
+            let hit = match facts {
+                Some(facts) => eval_when(pred, facts)
+                    .map_err(|e| GrammarError::new(Origin::new(file, idx + 1), e.to_string()))?,
+                None => true,
+            };
             gate = Some((pred.to_string(), hit));
             continue;
         }

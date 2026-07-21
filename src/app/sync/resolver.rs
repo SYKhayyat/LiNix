@@ -81,10 +81,12 @@ impl<'a> StateResolver<'a> {
     /// the thing `priority` exists to stop (V.15), and a default nobody chose is a default
     /// nobody can safely change (P5).
     pub async fn priority_for_host(&self) -> Result<Priority> {
-        self.priority(&HostFacts::current()).await
+        let facts = self.facts_for_host().await?;
+        self.priority(&facts).await
     }
 
-    async fn priority(&self, facts: &HostFacts) -> Result<Priority> {
+    /// The `priority` file's text, or the error that teaches what the file is for.
+    async fn priority_body(&self) -> Result<(std::path::PathBuf, String)> {
         let file = self.layout.priority_file();
         let body = match fs::read_to_string(&file).await {
             Ok(b) => b,
@@ -100,7 +102,36 @@ impl<'a> StateResolver<'a> {
             }
             Err(e) => return Err(Error::from(e)),
         };
+        Ok((file, body))
+    }
+
+    async fn priority(&self, facts: &HostFacts) -> Result<Priority> {
+        let (file, body) = self.priority_body().await?;
         Priority::parse(&file, &body, facts).map_err(Error::from)
+    }
+
+    /// The backend vocabulary the `vars` file is parsed with, before any variable exists.
+    ///
+    /// Never an order and never a filter: `priority`'s `when` blocks are evaluated against the
+    /// resolved facts by [`StateResolver::priority`], which is the answer everything else uses.
+    async fn vars_vocabulary(&self) -> Result<Priority> {
+        let (file, body) = self.priority_body().await?;
+        Priority::every_backend(&file, &body).map_err(Error::from)
+    }
+
+    /// Resolve the variables against the given facts — the one implementation, so `linix vars`
+    /// prints what a `when` will see rather than a second opinion about it.
+    async fn resolve_vars_against(
+        &self,
+        facts: &HostFacts,
+    ) -> Result<(crate::model::vars::Vars, crate::model::vars::VarOrigins)> {
+        let priority = self.vars_vocabulary().await?;
+        let known = Vocab::new(&self.registry, self.config, &priority);
+        crate::model::Resolver::new(&self.layout, &known, &priority)
+            .with_facts(facts.clone())
+            .with_vars_source(self.config.vars.source.clone())
+            .load_vars_with_origins()
+            .map_err(Error::from)
     }
 
     /// Resolve just the variables (Part IX), without planning the whole model — for `linix vars`.
@@ -114,14 +145,7 @@ impl<'a> StateResolver<'a> {
     pub async fn resolve_vars_with_origins(
         &self,
     ) -> Result<(crate::model::vars::Vars, crate::model::vars::VarOrigins)> {
-        let facts = HostFacts::current();
-        let priority = self.priority(&facts).await?;
-        let known = Vocab::new(&self.registry, self.config, &priority);
-        crate::model::Resolver::new(&self.layout, &known, &priority)
-            .with_facts(facts)
-            .with_vars_source(self.config.vars.source.clone())
-            .load_vars_with_origins()
-            .map_err(Error::from)
+        self.resolve_vars_against(&HostFacts::current()).await
     }
 
     /// The variables as of the last successful sync (HEAD), for W13's change note. Line-file
@@ -148,7 +172,7 @@ impl<'a> StateResolver<'a> {
             return Ok(None);
         };
         let facts = HostFacts::current();
-        let priority = self.priority(&facts).await?;
+        let priority = self.vars_vocabulary().await?;
         let known = Vocab::new(&self.registry, self.config, &priority);
         let (vars, _) = crate::model::Resolver::new(&self.layout, &known, &priority)
             .with_facts(facts)
@@ -174,14 +198,7 @@ impl<'a> StateResolver<'a> {
         let facts = HostFacts::current();
         let vars = match &self.vars_override {
             Some(frozen) => frozen.clone(),
-            None => {
-                let priority = self.priority(&facts).await?;
-                let known = Vocab::new(&self.registry, self.config, &priority);
-                crate::model::Resolver::new(&self.layout, &known, &priority)
-                    .with_facts(facts.clone())
-                    .with_vars_source(self.config.vars.source.clone())
-                    .load_vars()?
-            }
+            None => self.resolve_vars_against(&facts).await?.0,
         };
         if !vars.is_empty() {
             debug!("{} variable(s) resolved", vars.len());
@@ -366,7 +383,7 @@ impl<'a> StateResolver<'a> {
     /// The same grammar and the same probe as a line in a module. P1: an imperative command
     /// is a shortcut for editing a file, so it must not be a second dialect.
     pub async fn parse_and_probe_spec(&self, line: &str) -> Result<PackageSpec> {
-        let facts = HostFacts::current();
+        let facts = self.facts_for_host().await?;
         let priority = self.priority(&facts).await?;
         let known = Vocab::new(&self.registry, self.config, &priority);
 

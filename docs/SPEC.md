@@ -693,6 +693,13 @@ handed the facts that carry this run's variables. There is deliberately no form 
 own: an empty variable set does not make `when $role == travel` a block that fails to match, it
 makes `$role` an unknown key, and a file that is correct is refused.
 
+**`priority` is the one file read twice, and it has to be.** It says which backends exist, and
+resolving variables needs that vocabulary, so neither can simply go first. The bootstrap pass takes
+every backend `priority` names — `when` blocks included, matching or not — and **evaluates no
+predicate**, which is why a variable is usable there at all; it produces a vocabulary and never an
+order. The real pass runs against the resolved facts and decides both. A superset is safe in the
+first pass because a `vars` file names no backend.
+
 ## II.7 Resolution
 
 0. **Detect facts, then resolve `vars` → the variables, exactly once** (II.6b). This is before
@@ -2754,16 +2761,36 @@ current values, *"`when $role == travel` ($role is desktop)"*, because `active` 
 and `vars` holds the value. *Verified against the binary:* `deactivate Trip` on a variable-gated
 block reports the removal, the emptied block and the value.
 
+**4. RULED and BUILT (owner, 2026-07-21): `when $var` works in `priority`.** It could not,
+because `priority` says which backends exist and resolving variables needs that vocabulary — so
+one of the two has to go first without the other, and `when $role == travel { cargo }` reported
+*"unknown `when` key `$role`"*, naming the wrong problem entirely. *(Options offered: refuse it by
+name with a hint, resolve variables first in two passes, or leave the confusing error.)* The owner
+chose to make it work.
+
+`priority` is now read twice. The **bootstrap** pass (`Priority::every_backend`, on
+`gated::read_every`) takes every backend the file names, `when` blocks included whether or not they
+match, and **evaluates no predicate at all** — so there is no condition it can fail to answer. Its
+result is a vocabulary and never an order: it exists only so the `vars` file has backend names to
+parse against, it can only ever be a superset, and a `vars` file names no backend, so nothing it
+over-includes can change what a variable resolves to. The **real** pass is `Priority::parse`
+against the resolved facts, and that is what decides the order and what `allows` answers.
+`StateResolver::priority_for_host` now resolves variables first like every other reader of a
+`when`, and `resolve_vars_against` is the single variable resolution the three callers share.
+*Verified against the binary:* with `role = travel` a `cargo:` line passes `check`; with
+`role = desktop` the same line is refused with *"`cargo` isn't in your priority list"*.
+
+**5. RULED and BUILT (owner, 2026-07-21): the state registry has no old-format reader.**
+`core/state.rs` carried `#[serde(default)]` on `suspensions` and `held`, with comments saying they
+existed so registries written by older versions still load — an old-format reader, which NO-LEGACY
+deletes. *(Options offered: delete and fail loud, keep it and rewrite the comments as an honest
+empty default, or leave both alone.)* The defaults are gone: a registry missing either field is
+refused with an error naming the file and saying to move it aside and run `linix adopt`. Filling
+it in instead would have been a claim about the machine — *"nothing is suspended"* — that nobody
+checked. The test that asserted the old behaviour is deleted and replaced by one asserting the
+refusal.
+
 **Owed, and found this session:**
-- **A `when $var` in `priority` cannot work, and fails with a confusing error.** Variables are
-  resolved *after* `priority`, because resolving them needs the backend vocabulary that `priority`
-  defines. So `when $role == travel { cargo }` in `priority` reports *"unknown `when` key
-  `$role`"*, which names the wrong problem. **Owner decision pending** — see the question raised
-  at the end of this entry.
-- **`core/state.rs` keeps two `#[serde(default)]` fields whose comments say they exist to load
-  registries written by older versions** (`suspensions`, `held`). That is an old-format reader,
-  which NO-LEGACY says is deleted, not kept. **Owner decision pending** — it is state rather than
-  config, so deleting it means a registry written by a previous build stops loading.
 - **`linix check` still does not reach what no active profile reaches** (carried from the fifth
   session, unrelated to Part IX).
 

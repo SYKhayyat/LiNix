@@ -31,12 +31,27 @@ impl Priority {
         }
     }
 
-    /// Parse the file body, applying `when` blocks for this host.
+    /// Every backend the file names, `when` blocks included whether or not they match.
     ///
-    /// The block structure is the shared one (`grammar::gated`) — `active` reads the same
-    /// shape, and two copies of it had already drifted.
-    pub fn parse(file: &Path, body: &str, facts: &HostFacts) -> Result<Self> {
-        let vocab = Vocabulary {
+    /// The bootstrap half of `priority`'s two passes. `priority` says which backends exist and
+    /// resolving variables needs that vocabulary, so one of the two has to go first without the
+    /// other — and evaluating `when $role == travel` before variables exist is the unknown-key
+    /// refusal that made a variable unusable here at all. Taking the union instead evaluates
+    /// nothing: it can only be a superset, and the `vars` file names no backend, so nothing this
+    /// pass over-includes can change what a variable resolves to. **The result is a vocabulary
+    /// and never an order** — [`Priority::parse`] against the resolved facts decides that.
+    pub fn every_backend(file: &Path, body: &str) -> Result<Self> {
+        let mut backends: Vec<String> = Vec::new();
+        for entry in gated::read_every(file, body, &Self::vocabulary())? {
+            if !backends.iter().any(|b| b == &entry.text) {
+                backends.push(entry.text);
+            }
+        }
+        Ok(Self::from_backends(backends))
+    }
+
+    fn vocabulary() -> Vocabulary<'static> {
+        Vocabulary {
             noun: "backend name",
             holds: "`priority` holds backend names and `when` blocks, nothing else. One backend per line.",
             nesting: "`priority` nests one level: name the condition once.",
@@ -44,11 +59,20 @@ impl Priority {
                 "a backend's body holds its defaults, one `key = value` per line: \
                  `github { formats = deb }`.",
             ),
-        };
+        }
+    }
 
+    /// Parse the file body, applying `when` blocks for this host.
+    ///
+    /// The block structure is the shared one (`grammar::gated`) — `active` reads the same
+    /// shape, and two copies of it had already drifted.
+    ///
+    /// `facts` must carry this run's variables: `when $role == travel { cargo }` is legal here,
+    /// and reading it without them is an unknown key, not a block that does not match.
+    pub fn parse(file: &Path, body: &str, facts: &HostFacts) -> Result<Self> {
         let mut backends: Vec<String> = Vec::new();
         let mut options: BTreeMap<String, Options> = BTreeMap::new();
-        for entry in gated::read(file, body, facts, &vocab)? {
+        for entry in gated::read(file, body, facts, &Self::vocabulary())? {
             if !entry.on {
                 continue;
             }
@@ -199,6 +223,35 @@ mod tests {
 
     fn parse(body: &str) -> Result<Priority> {
         Priority::parse(&PathBuf::from("priority"), body, &facts())
+    }
+
+    #[test]
+    fn a_variable_block_chooses_a_backend() {
+        let mut f = facts();
+        f.vars.insert(
+            "role".into(),
+            crate::model::vars::Value::parse_literal("travel"),
+        );
+        let p = Priority::parse(
+            &PathBuf::from("priority"),
+            "apt\nwhen $role == travel {\n  cargo\n}\n",
+            &f,
+        )
+        .unwrap();
+        assert_eq!(p.order(), ["apt", "cargo"]);
+    }
+
+    #[test]
+    fn the_bootstrap_pass_names_every_backend_and_evaluates_nothing() {
+        // It runs before variables exist, so a predicate it cannot answer must not be an
+        // error — and the superset it returns is a vocabulary for parsing `vars`, never an
+        // order. `dnf` is inside a block that will not match; it is still named here.
+        let p = Priority::every_backend(
+            &PathBuf::from("priority"),
+            "apt\nwhen $role == travel {\n  cargo\n}\nwhen os == plan9 {\n  dnf\n}\n",
+        )
+        .unwrap();
+        assert_eq!(p.order(), ["apt", "cargo", "dnf"]);
     }
 
     #[test]
