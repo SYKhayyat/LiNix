@@ -505,6 +505,9 @@ snap
 **Listed = available to LiNix, in this order. Not listed = LiNix does not use it at all** —
 `snap:foo` errors with *"snap isn't in your priority list."*
 
+**`vars`** — your own names for conditions, so `when $role == travel` reads intent where
+`when host == thinkpad` reads a proxy for it. It has its own section: **II.6b**.
+
 **`schedules`** — lines, with `when` blocks. **Being in the file means it's on.** No
 active-list.
 
@@ -548,8 +551,140 @@ or marked, not stated in the present tense.*
 
 **`preferences.toml`** — refusals and behaviour. **Nothing writes to it but you.**
 
+## II.6b `vars` — named conditions, typed values, and providers
+
+**The problem.** `when` takes detected facts only (II.2): `os`, `arch`, `host`, `hostname`,
+`family`. So "this is my travel box" has to be spelled `when host == thinkpad`, in every file
+that cares, and a new laptop means editing all of them. **The hostname is a proxy for the
+intent, repeated until it rots.** A variable names the intent once and binds it to machines in
+one place — and it does **not** break "facts are detected, never configured" (II.1), because a
+variable is not a new fact: it is a **name for a condition over the facts LiNix already
+detected.** The `vars` source is committed and identical on every machine; each machine derives
+its own values. Nothing is typed per box.
+
+### The statement, and the sigil
+
+A `vars` line is `NAME = VALUE`, a statement legal **only** in a `vars` source — the way
+`schedule:` is legal only in `schedules`. `when` gates it like everywhere else (II.2, *one rule
+everywhere*). A variable is read back with a `$`:
+
+```
+role = desktop            # a default, always present
+gpu  = none
+
+when host in [thinkpad, x220] {
+  role = travel
+}
+```
+```
+when $role == travel {    # anywhere `when` is legal
+  apt:mosh
+}
+```
+
+**The `$` separates two namespaces that must never merge** (V.52). `$role` is something you
+decided; `family` is something the machine reported, and reading the condition tells you which.
+Because a variable can never be spelled like a fact, LiNix can detect one more fact — `distro`,
+`init` — forever without silently changing the meaning of a file that named a variable the same
+thing. Defining a variable that shadows a fact name (`os = …`) is legal and useless.
+
+### Every variable is always defined (IX.3)
+
+**A variable must have a top-level, unconditional definition. A `when` block overrides it; it
+may never introduce a name.** Referencing a name `vars` does not define at top level is an
+error. This is the rule that makes the rest work: without it, `role` set only inside
+`when host == thinkpad` is *undefined* everywhere else, and `when $role == travel` on the
+desktop would have to choose between erroring on every non-laptop and treating a typo as a
+block that never fires and never complains. Requiring a default deletes that question. Two
+matching `when` blocks that set one name to different values is an ERROR naming both lines
+(II.7 rule 5), because the default is not a claim about this machine but two matching blocks
+are.
+
+### Values are typed (W2)
+
+A value is one of the four JSON types — **string, number, boolean, list** — not text.
+`gpu = true` is a boolean, `cores = 8` a number, `ver = 1.6.0` a string (a version is not a
+number), `tags = [travel, work]` a list. `"quoted"` forces a string, which is the only way to
+write the literal text `true` or `5`. **There is no cross-type coercion** (V.51): `"1" == 1` is
+**false**, not an error and not a silent true. `==`/`!=` compare any two values; ordering
+(`<`, `>`, `<=`, `>=`) is legal **only between numbers**, because `"10" > "9"` is false under
+every string ordering and true under every intuition. `in` tests list membership under the same
+no-coercion equality. **There is no truthiness:** a bare `when $flag` is a parse error naming
+the fix (`$flag == true`), so `false`, `""`, `0` and `[]` never quietly differ (W3). One
+recorded deviation: string equality is **case-insensitive**, preserving the behaviour
+`os == LINUX` has always had.
+
+A value that is exactly one reference (`alias = $tags`) inherits that variable's type; any
+other value containing `$` is string interpolation and yields a string (`tier = ${role}-heavy`).
+`$$` is a literal `$`; `${name}` ends a reference where a name character would otherwise
+continue. Values may be **derived from other variables**, resolved in dependency order, and a
+cycle is an error naming the whole loop (the same shape as a `use` loop, II.7). A `$var` may
+also be expanded into a `link:` target or a `@version=` (`~/.config/$role/init.lua`); an unknown
+name there is an error, never left as literal text, and a list has no text form so it is refused
+by name.
+
+### One contract, three providers
+
+**A provider produces `name → value`. That is the whole interface**, which is why this is one
+feature and not several:
+
+| provider | filename | what it is |
+|---|---|---|
+| **line file** | `vars` | the `NAME = VALUE` file above, with `when` blocks |
+| **embedded** | `vars.linix` | a script LiNix runs itself, in a language it ships (Rhai) — nothing to install, resolves identically across a fleet |
+| **external** | `vars.py`, `vars.sh`, `vars.js`, … | any executable, run by LiNix, printing a JSON object or `name = value` lines; only works where its interpreter is installed |
+
+**The kind is the filename, not a config key**, so what a file *is* is visible in the repo. The
+external program is handed the facts as `LINIX_OS`/`LINIX_ARCH`/`LINIX_HOST`/`LINIX_FAMILY` and
+its non-zero exit is an error carrying its stderr — a provider that fails must never resolve
+silently to nothing (P3). The embedded script reads the facts as the constants `OS`/`ARCH`/
+`HOST`/`FAMILY` and must end in a map of the four types.
+
+**Several provider files may coexist; `[vars] source` in `preferences.toml` names the active
+one.** One present and no `source` uses it; two present and no `source` is a **loud error
+listing them**, never a precedence guess (V.53). A `source` naming a file that is not there, or
+a name that is not a provider, is an error.
+
+**The embedded standard library.** `vars.linix` is trusted the same as a hook (a script in your
+own repo), so it gets every power an external `vars.py` already has, always on: the clock
+(`now`/`today`/`weekday`/`hour`/`year`/`month`/`day`), the shell (`sh`, `sh_ok`), read-only
+files (`read_file`, `path_exists`), the environment (`env`, `has_env` — **W7's escape hatch**
+for a value no fact can derive, e.g. `env("LINIX_ROLE")`), the network (`http_get`), and
+`parse_json`. The fail-loud split is deliberate: a function that **asks a question**
+(`sh_ok`, `path_exists`, `has_env`) returns a value, so "no" is an answer; one that **fetches**
+(`sh`, `read_file`, `http_get`) throws, because a fetch that silently returned nothing would
+resolve a variable to the wrong value with no sign it failed.
+
+### Resolved once, and frozen into a plan (W4, W13)
+
+A provider may read the clock or the network, so **a value can move between two commands** —
+and a value that moves makes `plan` a lie: the preview resolves `$x` at 11:59:58 and shows
+nothing, the `sync` you confirm at 12:00:01 resolves it again and removes forty packages the
+preview never showed. So **variables are resolved exactly once per invocation** (before any
+`when`, including `active`'s, is evaluated), and **a saved plan carries its resolved variables**;
+the `apply` that executes a plan uses the plan's values, not fresh ones (V.54). Because a
+`vars` edit feeds the desired state, which feeds the plan, which feeds the guard, **a one-line
+`vars` change that removes a hundred packages hits `max_removals`/`protected` like any other
+change** — potentially the most destructive edit in the repo, and it goes through the guard by
+construction.
+
+### Tooling
+
+`linix vars` prints each resolved name, its typed value, its type, and the active provider.
+`vars` (and every provider file) is part of `linix diff` and the git manifest views — otherwise
+the one file that explains a change would be the one the change view could not show. `when $var`
+works in `active` (`when $role == travel { Travel }`). **Still owed** (tracked in Part IX's W
+register): `check` noting unused variables (W5), `why` explaining a variable's origin (W11), and
+`activate`/`deactivate` and the plan naming a variable as the cause of a change (W8/W13
+messaging) — all three need origin tracking threaded through resolution, which the resolved
+`name → value` set does not yet carry.
+
 ## II.7 Resolution
 
+0. **Detect facts, then resolve `vars` → the variables, exactly once** (II.6b). This is before
+   everything else because `active` itself may carry `when $role`, and the once-per-invocation
+   rule is what keeps `plan` honest when a provider reads the clock or the network. The resolved
+   set rides on the facts for the rest of resolution and freezes into a saved plan.
 1. Read `active` → the profile names, unioned.
 2. Resolve profiles → the module set. Profiles may reference profiles; modules may not.
 3. Parse **only** the modules reached. Apply `when`.
@@ -2404,6 +2539,54 @@ exact hand-maintained per-box state II.1 forbids — to serve a case (a key cust
 *before* adoption) that is rare and that `gsettings reset` handles acceptably by returning it to
 a known value rather than a remembered one.
 
+**V.51 — Why `vars` values are typed and never coerce.** *(Adopted 2026-07-20 from Part IX,
+W2; owner ruling.)* The bug is a comparison that answers a question the reader did not ask. Once
+a provider can return JSON, `gpu` is `true` the boolean and `ver` is `"1.6.0"` the string, and
+those types are information the user produced on purpose. Flattening everything to text at the
+boundary throws that away and then quietly lies: `"1" == 1` becomes true, a version string
+sorts by ASCII, and `when $gpu` fires on the string `"false"`. So the type is kept, and each
+place two types could meet is decided rather than left to chance — no cross-type equality
+(`"1" == 1` is false), ordering only between numbers (`"10" > "9"` refused, not answered
+wrongly), and no truthiness (a bare `when $flag` is a parse error, so `false`/`""`/`0`/`[]`
+never blur together). The one deviation, string equality being case-insensitive, is not a
+coercion — it is the behaviour a detected fact has always had (`os == LINUX`) and the place
+case matters least.
+
+**V.52 — Why a variable carries a `$` and a fact does not.** *(Adopted 2026-07-20 from Part IX,
+W4/IX.4.)* This is a future-fact collision, the quiet delayed kind this document has recorded
+too many times. Without the sigil, `when role == travel` and `when os == linux` are one syntax
+over two namespaces, and the day LiNix learns to detect `distro` or `init`, every file that
+named a variable `distro` silently changes meaning. **A detected-fact namespace that can never
+grow is a worse cost than one character.** With the sigil, facts can be added forever and no
+user file is touched, and a reader can tell at a glance which half of the condition they
+decided and which half the machine reported.
+
+**V.53 — Why a provider is chosen by filename and ambiguity is refused.** *(Adopted 2026-07-20
+from Part IX, IX.6; owner ruling.)* Two bugs, one entry. First, a **silent precedence guess**:
+if `vars` and `vars.py` both sit in a repo and LiNix picks one by directory order or a built-in
+ranking, the resolved state of the machine depends on something nobody wrote down, and the day
+someone adds the second file the machine changes with no edit to explain it. So two providers
+and no `[vars] source` is a loud error listing them (P3), never a winner. Second, the filename
+*is* the kind — `vars.py` is visibly a program — so what a file does is legible in the repo
+rather than hidden behind a config key that could disagree with the file's contents. The
+embedded provider gets the full standard library (clock, shell, files, env, network) for the
+same reason a hook does: it is a script committed to your own repo, so withholding powers an
+external `vars.py` already has would only push people to the external one and inherit its
+interpreter dependency across the fleet.
+
+**V.54 — Why a plan freezes its resolved variables.** *(Adopted 2026-07-20 from Part IX,
+W4/W13; owner ruling.)* This is the admission price for letting a value come from the clock or
+the network, and without it `plan` is a lie. A value that can move between two commands means
+the preview you read and the action you confirm resolve `$x` independently and can disagree — the
+preview shows nothing to do, and the sync a few seconds later removes packages it never
+displayed. That is not a bug to fix later; it is what "the value moved" means. So a variable is
+resolved **exactly once per invocation**, and the saved plan carries the values it resolved; the
+`apply` that runs a plan reuses them rather than re-running a provider. The preview and the
+action agree by construction, which is the property II.8 rests on and the only condition under
+which admitting the clock is safe at all. It also means a `vars` edit reaches the guard like any
+other change — the desired state is computed from the frozen variables, so a one-line edit that
+would remove a hundred packages is caught by `max_removals` before anything runs.
+
 ---
 
 # Part VI — Bugs
@@ -2591,9 +2774,13 @@ change view (W14).
 `cargo test` all suites passing (run the command, do not copy the number).
 
 **Owed, and tracked — the remainder of Part IX:**
-- **W2's Part II home and Part V entry** are still not written; the whole language is built now,
-  so this is the next documentation step (value type, the coercion rules, the provider model, the
-  selector, the stdlib) into Part II with V entries naming the bugs each prevents.
+- ~~**W2's Part II home and Part V entry** are still not written.~~ **DONE 2026-07-20 (fifth
+  session):** the language is now in Part II as **II.6b** (the statement and sigil, IX.3, typed
+  values and coercion, the three providers and the `[vars] source` selector, the embedded stdlib,
+  once-per-invocation resolution frozen into a plan, and the tooling), a resolution phase 0 is
+  written into II.7, and Part V gained **V.51** (typed values, no coercion), **V.52** (the sigil
+  and the future-fact collision), **V.53** (provider by filename, ambiguity refused), and **V.54**
+  (a plan freezes its variables). No behaviour changed — documentation only.
 - **W5** (`check` reports unused variables as a note) and **W11** (`why` explains *"$role is
   travel, set at vars line 6"*) both need reference/origin tracking threaded through resolution —
   the resolved `Vars` is `name → value` with no origins, and gating/interpolation do not record
@@ -4754,12 +4941,14 @@ a match with no legal asset is the VIII.2 error, named per repo. Not decided, an
 
 # Part IX — Proposed: user-defined `when` variables
 
-**Status: BUILT 2026-07-20 (fourth session), position 4. Not yet migrated into Part II.** Owner
-ruled the full programmable model (IX.6): typed values (W2), a line-file provider, an external-
-executable provider, and an embedded Rhai provider (`vars.linix`) with a clock/shell/files/env/
-network standard library. Providers are chosen by filename with a `[vars] source` selector; a
-plan freezes its resolved variables. What remains is documentation (the Part II home and Part V
-entries) and three deferred refinements — W5, W11, and the W8/W13 messaging — each tracked at its
+**Status: BUILT 2026-07-20 (fourth session), position 4. Migrated into Part II as II.6b (fifth
+session); this part is now the design rationale and open-question register, not the target
+state.** Owner ruled the full programmable model (IX.6): typed values (W2), a line-file provider,
+an external-executable provider, and an embedded Rhai provider (`vars.linix`) with a clock/shell/
+files/env/network standard library. Providers are chosen by filename with a `[vars] source`
+selector; a plan freezes its resolved variables. The canonical description now lives in **II.6b**,
+with V.51–V.54 for the why. What remains is three deferred refinements — W5, W11, and the W8/W13
+messaging — each tracked at its
 register entry and needing reference/origin tracking through the resolver. Decisions are numbered
 `W1…W14` in IX.7; the fourth-session entry in Part VII is the build record.
 
