@@ -164,6 +164,31 @@ impl<'a> StateResolver<'a> {
             .map_err(Error::from)
     }
 
+    /// The facts every `when` in your files is evaluated against: what this machine is,
+    /// plus this run's variables.
+    ///
+    /// IX.6: variables are resolved exactly once per invocation. Anything that reads a `when`
+    /// without them sees `$role` as an unknown key and refuses a file that is correct — which
+    /// is what `activate`, `deactivate` and `uninstall` all did before W8.
+    pub async fn facts_for_host(&self) -> Result<HostFacts> {
+        let facts = HostFacts::current();
+        let vars = match &self.vars_override {
+            Some(frozen) => frozen.clone(),
+            None => {
+                let priority = self.priority(&facts).await?;
+                let known = Vocab::new(&self.registry, self.config, &priority);
+                crate::model::Resolver::new(&self.layout, &known, &priority)
+                    .with_facts(facts.clone())
+                    .with_vars_source(self.config.vars.source.clone())
+                    .load_vars()?
+            }
+        };
+        if !vars.is_empty() {
+            debug!("{} variable(s) resolved", vars.len());
+        }
+        Ok(facts.with_vars(vars))
+    }
+
     #[instrument(skip(self))]
     pub async fn resolve_desired_state(&self) -> Result<HashMap<String, Vec<PackageSpec>>> {
         Ok(self.resolve_model().await?.packages)
@@ -175,25 +200,9 @@ impl<'a> StateResolver<'a> {
     /// planner splits them out. Everything below the seam — `src/backends/`, `src/core/`,
     /// `src/parsers/` — is untouched by any of this.
     pub async fn resolve_model(&self) -> Result<DesiredState> {
-        let facts = HostFacts::current();
+        let facts = self.facts_for_host().await?;
         let priority = self.priority(&facts).await?;
         let known = Vocab::new(&self.registry, self.config, &priority);
-
-        // IX.6: variables are resolved exactly once per invocation, here, before any `when`
-        // that mentions one is evaluated. Resolving them a second time later could produce a
-        // different answer — a provider may read the clock — and a `plan` that disagrees with
-        // the `sync` executing it is not a plan.
-        let vars = match &self.vars_override {
-            Some(frozen) => frozen.clone(),
-            None => crate::model::Resolver::new(&self.layout, &known, &priority)
-                .with_facts(facts.clone())
-                .with_vars_source(self.config.vars.source.clone())
-                .load_vars()?,
-        };
-        if !vars.is_empty() {
-            debug!("{} variable(s) resolved", vars.len());
-        }
-        let facts = facts.with_vars(vars);
 
         debug!("resolving desired state for host '{}'", facts.host);
 

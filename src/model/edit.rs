@@ -129,21 +129,19 @@ impl Edit {
 pub struct Editor<'a> {
     layout: &'a Layout,
     backends: &'a dyn BackendNames,
+    /// **Must carry this run's variables.** An editor reads `active` to find out which files
+    /// its write has to reach, and a `when $role == travel` block read against no variables
+    /// is an unknown key, not a block that does not match (W8).
     facts: HostFacts,
 }
 
 impl<'a> Editor<'a> {
-    pub fn new(layout: &'a Layout, backends: &'a dyn BackendNames) -> Self {
+    pub fn new(layout: &'a Layout, backends: &'a dyn BackendNames, facts: HostFacts) -> Self {
         Self {
             layout,
             backends,
-            facts: HostFacts::current(),
+            facts,
         }
-    }
-
-    pub fn with_facts(mut self, facts: HostFacts) -> Self {
-        self.facts = facts;
-        self
     }
 
     /// Write `line` into `target`, and make sure something reaches it.
@@ -291,7 +289,7 @@ impl<'a> Editor<'a> {
     fn reachable_via(&self, module: &ModuleName) -> Result<Option<String>> {
         let active_file = self.layout.active_file();
         let body = std::fs::read_to_string(&active_file).unwrap_or_default();
-        let active = parse_active(&active_file, &body)?;
+        let active = parse_active(&active_file, &body, &self.facts)?;
 
         if self.reaches(&active, module) {
             return Ok(None);
@@ -528,7 +526,7 @@ pub fn active_module_files(
 ) -> Vec<PathBuf> {
     let active_file = layout.active_file();
     let body = std::fs::read_to_string(&active_file).unwrap_or_default();
-    let Ok(active) = parse_active(&active_file, &body) else {
+    let Ok(active) = parse_active(&active_file, &body, facts) else {
         return Vec::new();
     };
 
@@ -586,7 +584,7 @@ pub fn inactive_declarations(
     target_pkg: &str,
 ) -> Vec<String> {
     let reached = active_module_files(layout, backends, facts);
-    let editor = Editor::new(layout, backends).with_facts(facts.clone());
+    let editor = Editor::new(layout, backends, facts.clone());
     let wanted = editor.match_key(target_pkg);
 
     let mut out: Vec<String> = Vec::new();
@@ -648,7 +646,7 @@ mod tests {
     }
 
     fn editor(f: &Fx) -> Editor<'_> {
-        Editor::new(&f.layout, &known).with_facts(facts())
+        Editor::new(&f.layout, &known, facts())
     }
 
     fn read(f: &Fx, p: &str) -> String {

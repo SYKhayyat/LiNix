@@ -200,7 +200,11 @@ impl Migrator {
         let layout = self.config.layout();
 
         let manifest = self.render_manifest(&found);
-        let edit = crate::model::Editor::new(&layout, &vocab)
+        let facts = crate::app::sync::StateResolver::new(&self.config, self.registry.clone(), false)
+            .await
+            .facts_for_host()
+            .await?;
+        let edit = crate::model::Editor::new(&layout, &vocab, facts)
             .write_module(&crate::model::Landing::Adopted.target(), &manifest)?;
         let manifest_path = edit.file.clone();
         info!("{}", edit.describe("Wrote"));

@@ -8,7 +8,7 @@ use crate::config::parser::HostFacts;
 use crate::config::Config;
 use crate::core::{CommandExecutor, Error, Journal, Result, SnapshotManager, StateRegistry};
 use crate::model::profiles::{
-    blocks_in_active, parse_active, read_active, remove_from_active, ProfileLoader,
+    blocks_in_active, describe_gate, parse_active, read_active, remove_from_active, ProfileLoader,
 };
 use crate::model::Layout;
 use crate::utils::progress::ProgressReporter;
@@ -66,6 +66,15 @@ impl ProfileManager {
         }
     }
 
+    /// What this machine is, plus this run's variables — so a `when $role == travel` block
+    /// in `active` is one these verbs can read rather than an unknown key (W8).
+    async fn facts(&self) -> Result<HostFacts> {
+        StateResolver::new(&self.config, self.registry.clone(), false)
+            .await
+            .facts_for_host()
+            .await
+    }
+
     async fn vocab(&self) -> Result<Vocab> {
         let priority = StateResolver::new(&self.config, self.registry.clone(), false)
             .await
@@ -105,13 +114,15 @@ impl ProfileManager {
         let file = self.layout.active_file();
         let old = tokio::fs::read_to_string(&file).await.unwrap_or_default();
         let dropped = blocks_in_active(&old);
+        let facts = self.facts().await?;
 
         self.write_active(names).await?;
         info!("active is now {}.", names.join(", "));
         for b in &dropped {
             info!(
-                "Removed the `when {}` block on line {}.",
-                b.predicate, b.line
+                "Removed the {} block on line {}.",
+                describe_gate(&b.predicate, &facts),
+                b.line
             );
         }
         self.sync_now().await
@@ -121,7 +132,8 @@ impl ProfileManager {
     async fn add_to_active(&self, names: &[String]) -> Result<()> {
         let file = self.layout.active_file();
         let body = tokio::fs::read_to_string(&file).await.unwrap_or_default();
-        let entries = read_active(&file, &body)?;
+        let facts = self.facts().await?;
+        let entries = read_active(&file, &body, &facts)?;
 
         let mut added: Vec<String> = Vec::new();
         for name in names {
@@ -129,8 +141,10 @@ impl ProfileManager {
                 // Not an error: the end state is what was asked for (II.6).
                 Some(e) => match &e.gate {
                     Some(pred) => info!(
-                        "{} is already listed, inside `when {}` on line {}.",
-                        name, pred, e.line
+                        "{} is already listed, inside {} on line {}.",
+                        name,
+                        describe_gate(pred, &facts),
+                        e.line
                     ),
                     None => info!("{} is already active.", name),
                 },
@@ -168,29 +182,34 @@ impl ProfileManager {
     pub async fn deactivate(&self, names: &[String]) -> Result<()> {
         let file = self.layout.active_file();
         let body = tokio::fs::read_to_string(&file).await.unwrap_or_default();
-        let facts = HostFacts::current();
+        let facts = self.facts().await?;
         let edit = remove_from_active(&file, &body, names, &facts)?;
 
         for r in &edit.removed {
             match &r.gate {
                 Some(pred) => info!(
-                    "Removed {} from the `when {}` block on line {}.",
-                    r.name, pred, r.line
+                    "Removed {} from the {} block on line {}.",
+                    r.name,
+                    describe_gate(pred, &facts),
+                    r.line
                 ),
                 None => info!("Removed {}.", r.name),
             }
         }
         for b in &edit.emptied {
             info!(
-                "Removed the now-empty `when {}` block on line {}.",
-                b.predicate, b.line
+                "Removed the now-empty {} block on line {}.",
+                describe_gate(&b.predicate, &facts),
+                b.line
             );
         }
         for e in &edit.elsewhere {
             info!(
-                "{} is not active on this host. `active` line {} activates it when {} — edit \
+                "{} is not active on this host. `active` line {} activates it {} — edit \
                  that by hand if you meant every machine.",
-                e.name, e.line, e.predicate
+                e.name,
+                e.line,
+                describe_gate(&e.predicate, &facts)
             );
         }
         // Not an error: the end state is what was asked for (II.6).
@@ -227,7 +246,7 @@ impl ProfileManager {
     pub async fn active_profiles(&self) -> Result<Vec<String>> {
         let file = self.layout.active_file();
         let body = tokio::fs::read_to_string(&file).await.unwrap_or_default();
-        Ok(parse_active(&file, &body)?)
+        Ok(parse_active(&file, &body, &self.facts().await?)?)
     }
 
     /// What a profile expands to, as `backend:name` lines.
@@ -342,7 +361,7 @@ impl ProfileManager {
             .resolve(
                 name,
                 &Origin::argument(),
-                &HostFacts::current(),
+                &self.facts().await?,
                 &mut Vec::new(),
                 &Vec::new(),
             )

@@ -206,6 +206,16 @@ impl App {
         .await
     }
 
+    /// What this machine is, plus this run's variables — the facts every `when` in your
+    /// files is evaluated against (IX.6). Anything that reads `active` needs these, not the
+    /// detected ones on their own.
+    pub async fn host_facts(&self) -> Result<crate::config::parser::HostFacts> {
+        StateResolver::new(&self.config, self.registry.clone(), false)
+            .await
+            .facts_for_host()
+            .await
+    }
+
     /// This machine's backend vocabulary, for anything that reads or writes a line.
     pub async fn vocabulary(&self) -> Result<crate::app::vocab::Vocab> {
         let resolver = StateResolver::new(&self.config, self.registry.clone(), false).await;
@@ -234,7 +244,7 @@ impl App {
             Some(name) => crate::model::Target::parse(name, &Origin::argument())?,
             None => landing.target(),
         };
-        let edit = crate::model::Editor::new(&layout, &vocab)
+        let edit = crate::model::Editor::new(&layout, &vocab, self.host_facts().await?)
             .add(&target, line)
             .map_err(Error::from)?;
         info!("{}", edit.describe("Added"));
@@ -528,9 +538,9 @@ impl App {
     pub async fn declares(&self, target: &str) -> Result<bool> {
         let vocab = self.vocabulary().await?;
         let layout = self.config.layout();
-        let facts = crate::config::parser::HostFacts::current();
+        let facts = self.host_facts().await?;
         let files = crate::model::active_module_files(&layout, &vocab, &facts);
-        let editor = crate::model::Editor::new(&layout, &vocab).with_facts(facts);
+        let editor = crate::model::Editor::new(&layout, &vocab, facts);
         Ok(editor.declares_in(&files, target))
     }
 
@@ -539,10 +549,9 @@ impl App {
     pub async fn undeclare(&self, target_pkg: &str) -> Result<Vec<crate::model::Edit>> {
         let vocab = self.vocabulary().await?;
         let layout = self.config.layout();
-        let facts = crate::config::parser::HostFacts::current();
+        let facts = self.host_facts().await?;
         let files = crate::model::active_module_files(&layout, &vocab, &facts);
-        let edits = crate::model::Editor::new(&layout, &vocab)
-            .with_facts(facts)
+        let edits = crate::model::Editor::new(&layout, &vocab, facts)
             .remove_from(&files, target_pkg)
             .map_err(Error::from)?;
         for e in &edits {

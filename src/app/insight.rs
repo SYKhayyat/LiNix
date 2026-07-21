@@ -423,11 +423,39 @@ impl Declaration {
     }
 }
 
+/// One `when` condition that had to hold for a package to be declared, with the current
+/// value of every variable it tests.
+///
+/// Two hops in one sentence: the condition is in a file the user can open, the value is not
+/// — it was resolved from `vars` — and W11 exists because reading the first without the
+/// second explains nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gating {
+    pub predicate: String,
+    /// `active:4` — where the block is written.
+    pub at: String,
+    /// Each `$name` in the predicate: its value now, and where that value was set.
+    pub variables: Vec<(String, String, String)>,
+}
+
+impl Gating {
+    pub fn describe(&self) -> String {
+        let mut out = format!("`when {}` at {}", self.predicate, self.at);
+        for (name, value, origin) in &self.variables {
+            out.push_str(&format!(" — ${} is {}, set at {}", name, value, origin));
+        }
+        out
+    }
+}
+
 /// What the resolver knows about `backend:name`: where it is declared, and — on a backend
 /// that picks between artifacts — which `formats` order it will pick with.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Declared {
     pub declarations: Vec<Declaration>,
+    /// The variable conditions that admitted it, outermost first. Empty when no `when` that
+    /// tests a variable stands between the file and this machine.
+    pub gating: Vec<Gating>,
     /// `None` on a backend whose ecosystem publishes one artifact, where there is nothing
     /// to choose and a `formats` line would be noise.
     pub formats: Option<String>,
@@ -451,6 +479,48 @@ fn format_choice(backend: &str, options: &HashMap<String, String>) -> Option<Str
     Some(format!("{} — {}", order, from))
 }
 
+/// Read the resolver's `__gated_by` tag back into sentences, filling in each variable's
+/// value from this run's resolution.
+///
+/// A tag whose shape does not parse is shown as written rather than dropped: a `why` that
+/// silently loses the reason a package is here is the failure it exists to prevent.
+fn gating_of(
+    options: &HashMap<String, String>,
+    vars: &crate::model::vars::Vars,
+    origins: &crate::model::vars::VarOrigins,
+) -> Vec<Gating> {
+    let Some(tag) = options.get("__gated_by") else {
+        return Vec::new();
+    };
+    tag.split(';')
+        .map(|entry| match entry.parse::<crate::config::grammar::Gate>() {
+            Ok(gate) => Gating {
+                variables: crate::model::vars::referenced_names(&gate.predicate)
+                    .into_iter()
+                    .map(|n| {
+                        let value = vars
+                            .get(&n)
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "undefined".into());
+                        let at = origins
+                            .get(&n)
+                            .map(|o| o.to_string())
+                            .unwrap_or_else(|| "an unknown file".into());
+                        (n, value, at)
+                    })
+                    .collect(),
+                predicate: gate.predicate,
+                at: gate.origin.to_string(),
+            },
+            Err(()) => Gating {
+                predicate: entry.to_string(),
+                at: "an unreadable origin".to_string(),
+                variables: Vec::new(),
+            },
+        })
+        .collect()
+}
+
 /// Ask the resolver where `backend:name` is declared.
 ///
 /// An error is returned, never swallowed into "declared nowhere": a `why` that cannot read
@@ -460,6 +530,7 @@ async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declare
         crate::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
     let state = resolver.resolve_model().await?;
+    let (vars, var_origins) = resolver.resolve_vars_with_origins().await?;
 
     let lapsed_keys: Vec<&str> = state.lapsed.iter().map(|(k, _)| k.as_str()).collect();
     let key = format!("{}:{}", backend, name);
@@ -471,6 +542,9 @@ async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declare
         }
         if out.formats.is_none() {
             out.formats = format_choice(backend, &spec.options);
+        }
+        if out.gating.is_empty() {
+            out.gating = gating_of(&spec.options, &vars, &var_origins);
         }
         out.declarations.push(Declaration {
             at: spec
@@ -538,6 +612,7 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
         let formats = found.formats.clone();
         let declarations: Vec<String> =
             found.declarations.iter().map(|d| d.describe()).collect();
+        let gating: Vec<String> = found.gating.iter().map(|g| g.describe()).collect();
 
         // How it got into the registry, which is a different question: `adopt` took it, a
         // hook caught it, `linix install` put it there.
@@ -590,6 +665,7 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
                 "version": version,
                 "why": prov,
                 "declared_in": declarations,
+                "gated_by": gating,
                 "formats": formats,
                 "lease_expires": lease,
                 "required_by": dependents,
@@ -601,6 +677,10 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
             for (i, d) in declarations.iter().enumerate() {
                 let label = if i == 0 { "declared:" } else { "" };
                 println!("  {:<12} {}", label, d);
+            }
+            for (i, g) in gating.iter().enumerate() {
+                let label = if i == 0 { "because:" } else { "" };
+                println!("  {:<12} {}", label, g);
             }
             if let Some(f) = &formats {
                 println!("  formats:     {}", f);

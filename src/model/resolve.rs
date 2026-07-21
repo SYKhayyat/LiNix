@@ -3,7 +3,7 @@ use super::dated::dating_of;
 use super::layout::Layout;
 use super::modules::{expand, ModuleLoader};
 use super::priority::Priority;
-use super::profiles::{read_active_with, ProfileLoader, SetOp};
+use super::profiles::{read_active, ProfileLoader, SetOp};
 use crate::config::grammar::{
     statement, BackendNames, Gate, Gates, GrammarError, Options, Origin, PackageDecl, Result,
     Selector, Statement,
@@ -286,7 +286,7 @@ impl<'a> Resolver<'a> {
         // with "unknown when key" because `active` re-detected varless facts of its own.
         let active_file = self.layout.active_file();
         let body = std::fs::read_to_string(&active_file).unwrap_or_default();
-        let active: Vec<(String, Gates)> = read_active_with(&active_file, &body, &self.facts)?
+        let active: Vec<(String, Gates)> = read_active(&active_file, &body, &self.facts)?
             .into_iter()
             .filter(|e| e.on)
             .map(|e| {

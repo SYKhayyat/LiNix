@@ -197,19 +197,17 @@ impl<'a> ProfileLoader<'a> {
 ///
 /// Answers exactly one question — *what is this machine set to right now?* Nothing else
 /// goes in it.
-pub fn parse_active(file: &std::path::Path, body: &str) -> Result<Vec<String>> {
-    parse_active_with(file, body, &HostFacts::current())
-}
-
-/// `parse_active`, but against supplied facts — so a `when $role == …` in `active` (W8) sees the
-/// variables the resolver already resolved, rather than the empty set `HostFacts::current()`
-/// carries. The resolution path uses this; the plain form is for callers with no variables loaded.
-pub fn parse_active_with(
+///
+/// **`facts` must carry this run's variables.** There is deliberately no form that detects
+/// its own: a `when $role == travel` block read against the empty set is not a block that
+/// fails to match, it is an unknown key, and every caller that took the convenient form
+/// refused a correct file (W8).
+pub fn parse_active(
     file: &std::path::Path,
     body: &str,
     facts: &HostFacts,
 ) -> Result<Vec<String>> {
-    Ok(read_active_with(file, body, facts)?
+    Ok(read_active(file, body, facts)?
         .into_iter()
         .filter(|e| e.on)
         .map(|e| e.name)
@@ -235,12 +233,7 @@ pub struct ActiveEntry {
 /// `when` gates it like any other file — one rule, everywhere (II.2). `active` used to be
 /// the exception: it rejected any line with more than one word, so the `when host == laptop
 /// {` in II.6's own example was a hard error.
-pub fn read_active(file: &std::path::Path, body: &str) -> Result<Vec<ActiveEntry>> {
-    let facts = HostFacts::current();
-    read_active_with(file, body, &facts)
-}
-
-pub fn read_active_with(
+pub fn read_active(
     file: &std::path::Path,
     body: &str,
     facts: &HostFacts,
@@ -280,6 +273,26 @@ pub fn read_active_with(
         });
     }
     Ok(out)
+}
+
+/// A `when` block as a message names it: the condition, and what its variables are on this
+/// machine right now.
+///
+/// A message naming a block without its variables' values points the reader at a file that
+/// does not contain the answer — `active` says `when $role == travel`, and what `$role` is
+/// was decided in `vars`, or by a program (W8).
+pub fn describe_gate(predicate: &str, facts: &HostFacts) -> String {
+    let values: Vec<String> = crate::model::vars::referenced_names(predicate)
+        .into_iter()
+        .map(|n| match facts.vars.get(&n) {
+            Some(v) => format!("${} is {}", n, v),
+            None => format!("${} is undefined", n),
+        })
+        .collect();
+    if values.is_empty() {
+        return format!("`when {}`", predicate);
+    }
+    format!("`when {}` ({})", predicate, values.join(", "))
 }
 
 /// A name `deactivate` took out, and the `when` block it came from if it was in one.
@@ -337,7 +350,7 @@ pub fn remove_from_active(
     facts: &HostFacts,
 ) -> Result<ActiveEdit> {
     // Parse first: a malformed `active` must fail before anything is rewritten.
-    read_active_with(file, body, facts)?;
+    read_active(file, body, facts)?;
 
     let bare = |raw: &str| -> String {
         crate::config::grammar::strip_comment(raw).trim().to_string()
@@ -489,6 +502,62 @@ mod tests {
         }
     }
 
+    fn facts_with(pairs: &[(&str, &str)]) -> HostFacts {
+        let mut f = facts();
+        for (k, v) in pairs {
+            f.vars
+                .insert(k.to_string(), crate::model::vars::Value::parse_literal(v));
+        }
+        f
+    }
+
+    #[test]
+    fn a_variable_block_in_active_is_read_against_this_runs_variables() {
+        // W8. The editing verbs used to read `active` against detected facts only, so this
+        // file was not "a block that does not apply" — it was an unknown key, and every one
+        // of them refused a correct file.
+        let body = "when $role == travel {\n  Trip\n}\nWork\n";
+        let on = parse_active(
+            &PathBuf::from("active"),
+            body,
+            &facts_with(&[("role", "travel")]),
+        )
+        .unwrap();
+        assert_eq!(on, ["Trip", "Work"]);
+
+        let off = parse_active(
+            &PathBuf::from("active"),
+            body,
+            &facts_with(&[("role", "desktop")]),
+        )
+        .unwrap();
+        assert_eq!(off, ["Work"]);
+    }
+
+    #[test]
+    fn a_message_about_a_variable_block_says_what_the_variable_is() {
+        // The point of W8's messaging: `active` says the condition, and the file the reader
+        // would open next does not contain the value.
+        let facts = facts_with(&[("role", "desktop")]);
+        assert_eq!(
+            describe_gate("$role == travel", &facts),
+            "`when $role == travel` ($role is desktop)"
+        );
+        // No variable, nothing to add: the condition is already the whole answer.
+        assert_eq!(
+            describe_gate("host == laptop", &facts),
+            "`when host == laptop`"
+        );
+    }
+
+    #[test]
+    fn a_message_names_an_undefined_variable_rather_than_going_quiet() {
+        assert_eq!(
+            describe_gate("$role == travel", &facts()),
+            "`when $role == travel` ($role is undefined)"
+        );
+    }
+
     struct Fixture {
         _tmp: TempDir,
         layout: Layout,
@@ -570,25 +639,25 @@ mod tests {
 
     #[test]
     fn active_is_a_plain_list_of_profile_names() {
-        let out = parse_active(&PathBuf::from("active"), "# on now\nWork\nGaming\n").unwrap();
+        let out = parse_active(&PathBuf::from("active"), "# on now\nWork\nGaming\n", &facts()).unwrap();
         assert_eq!(out, ["Work", "Gaming"]);
     }
 
     #[test]
     fn active_refuses_a_module_name() {
         // Only profiles can be activated (II.4).
-        let err = parse_active(&PathBuf::from("active"), "editors\n").unwrap_err();
+        let err = parse_active(&PathBuf::from("active"), "editors\n", &facts()).unwrap_err();
         assert!(err.hint.unwrap().contains("Only profiles can be activated"));
     }
 
     #[test]
     fn active_refuses_anything_that_is_not_a_name() {
-        assert!(parse_active(&PathBuf::from("active"), "Work | Gaming\n").is_err());
+        assert!(parse_active(&PathBuf::from("active"), "Work | Gaming\n", &facts()).is_err());
     }
 
     #[test]
     fn active_ignores_a_repeat() {
-        let out = parse_active(&PathBuf::from("active"), "Work\nWork\n").unwrap();
+        let out = parse_active(&PathBuf::from("active"), "Work\nWork\n", &facts()).unwrap();
         assert_eq!(out, ["Work"]);
     }
 
@@ -610,7 +679,7 @@ mod active_tests {
     }
 
     fn read(body: &str, host: &str) -> Result<Vec<ActiveEntry>> {
-        read_active_with(&PathBuf::from("active"), body, &facts(host))
+        read_active(&PathBuf::from("active"), body, &facts(host))
     }
 
     fn on(body: &str, host: &str) -> Vec<String> {
@@ -629,7 +698,7 @@ mod active_tests {
         let mut f = facts("anyhost");
         f.vars.insert("role".into(), crate::model::vars::Value::Str("travel".into()));
         let body = "when $role == travel {\n  Travel\n}\nWork\n";
-        let names: Vec<String> = read_active_with(&PathBuf::from("active"), body, &f)
+        let names: Vec<String> = read_active(&PathBuf::from("active"), body, &f)
             .unwrap()
             .into_iter()
             .filter(|e| e.on)
@@ -638,7 +707,7 @@ mod active_tests {
         assert_eq!(names, vec!["Travel".to_string(), "Work".to_string()]);
 
         f.vars.insert("role".into(), crate::model::vars::Value::Str("desktop".into()));
-        let names: Vec<String> = read_active_with(&PathBuf::from("active"), body, &f)
+        let names: Vec<String> = read_active(&PathBuf::from("active"), body, &f)
             .unwrap()
             .into_iter()
             .filter(|e| e.on)
