@@ -602,7 +602,8 @@ impl App {
                 upgradable.upgrade(backend.sudo_for_write()).await?;
             }
         }
-        self.metrics.print_summary();
+        self.metrics
+            .print_summary(crate::app::metrics::Narration::Change);
         Ok(())
     }
 

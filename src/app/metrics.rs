@@ -15,6 +15,25 @@ pub struct OperationMetrics {
     pub bytes_downloaded: u64,
 }
 
+/// What the run is doing, in the summary's words.
+///
+/// A rebuild removes a package and puts the same package back. Counting that as a plain
+/// removal is true and unreadable: "Removals: 214" on a run where all 214 return is the
+/// sentence that makes someone reach for the power button (II.11b, V.49).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Narration {
+    Change,
+    Rebuild,
+}
+
+/// The two counter labels, so `remove` is reserved for removals that stay removed.
+fn summary_labels(narration: Narration) -> (&'static str, &'static str) {
+    match narration {
+        Narration::Change => ("Installs", "Removals"),
+        Narration::Rebuild => ("Reinstalled", "Removed to reinstall"),
+    }
+}
+
 #[derive(Default)]
 struct MetricsInner {
     operations: Vec<OperationMetrics>,
@@ -91,17 +110,17 @@ impl MetricsCollector {
             .push((context.to_string(), message.to_string()));
     }
 
-    pub fn print_summary(&self) {
-        self.print_summary_opts(true)
+    pub fn print_summary(&self, narration: Narration) {
+        self.print_summary_opts(true, narration)
     }
 
     /// Like [`print_summary`], but `quiet` suppresses everything except errors — for a
     /// `--quiet` run that still needs to surface failures.
     pub fn print_summary_quiet(&self) {
-        self.print_summary_opts(false)
+        self.print_summary_opts(false, Narration::Change)
     }
 
-    fn print_summary_opts(&self, verbose: bool) {
+    fn print_summary_opts(&self, verbose: bool, narration: Narration) {
         if !verbose {
             // Quiet mode: say nothing on success, but never swallow errors.
             let inner = self.inner.lock().expect("Metrics lock poisoned");
@@ -113,10 +132,10 @@ impl MetricsCollector {
             }
             return;
         }
-        self.print_summary_full()
+        self.print_summary_full(narration)
     }
 
-    fn print_summary_full(&self) {
+    fn print_summary_full(&self, narration: Narration) {
         let inner = self.inner.lock().expect("Metrics lock poisoned");
         let total_duration = inner
             .start_time
@@ -133,8 +152,9 @@ impl MetricsCollector {
             }
         );
         println!("Time:         {:.2}s", total_duration);
-        println!("Installs:     {}", inner.packages_installed);
-        println!("Removals:     {}", inner.packages_removed);
+        let (installs, removals) = summary_labels(narration);
+        println!("{:<14}{}", format!("{}:", installs), inner.packages_installed);
+        println!("{:<14}{}", format!("{}:", removals), inner.packages_removed);
 
         if inner.total_bytes_downloaded > 0 {
             let mb = inner.total_bytes_downloaded as f64 / 1024.0 / 1024.0;
@@ -231,6 +251,16 @@ mod tests {
         // BTreeMap → sorted: apt then cargo.
         assert_eq!(r[0], ("apt".to_string(), 2, 400, 300));
         assert_eq!(r[1], ("cargo".to_string(), 1, 50, 50));
+    }
+
+    #[test]
+    fn a_rebuild_never_calls_its_removals_removals() {
+        // K15. All of them come straight back, and a bare "Removals: 214" is the sentence
+        // that reads as a machine being dismantled.
+        let (_, removals) = summary_labels(Narration::Rebuild);
+        assert!(!removals.eq_ignore_ascii_case("removals"));
+        assert!(removals.contains("reinstall"));
+        assert_eq!(summary_labels(Narration::Change).1, "Removals");
     }
 
     #[test]

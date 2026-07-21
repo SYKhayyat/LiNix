@@ -119,7 +119,8 @@ async fn test_telemetry_metrics_reporting_accuracy() {
     metrics.record_remove(2);
 
     // 3. Verification: print_summary must not panic
-    metrics.print_summary();
+    metrics.print_summary(linix::app::metrics::Narration::Change);
+    metrics.print_summary(linix::app::metrics::Narration::Rebuild);
 }
 
 // ============================================================================

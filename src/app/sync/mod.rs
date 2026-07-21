@@ -18,6 +18,17 @@ pub mod resolver;
 pub mod saved_plan;
 
 pub use self::planner::{ChangePlanner, Scope, SyncChanges};
+
+/// K15: a rebuild's two transactions run through this engine like any other sync, so the
+/// summary has to be told which run it is narrating or it reports a rebuild's removals as
+/// removals.
+fn narration_for(scope: guard::GuardScope) -> crate::app::metrics::Narration {
+    match scope {
+        guard::GuardScope::Rebuild => crate::app::metrics::Narration::Rebuild,
+        _ => crate::app::metrics::Narration::Change,
+    }
+}
+
 pub use self::resolver::StateResolver;
 pub use self::saved_plan::{SavedPlan, PLAN_SCHEMA};
 
@@ -152,7 +163,7 @@ impl<'a> SyncEngine<'a> {
             if self.config.quiet {
                 self.metrics.print_summary_quiet();
             } else {
-                self.metrics.print_summary();
+                self.metrics.print_summary(narration_for(scope));
             }
 
             // Post-apply health probes: verify any freshly-installed package that declared
