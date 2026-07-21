@@ -39,6 +39,10 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
     resolve to a different file later.
   - Nothing matching your `formats` is an error listing what the release actually offered and
     why each asset was skipped — not a fallback to whatever came first.
+  - **`@asset=all` installs every file it matches.** One file is deployed under the repo's name
+    as always; several each keep the name of the program inside them, and two that would land
+    on the same name is an error naming both files rather than one overwriting the other.
+    Everything is downloaded, checked and unpacked before anything reaches your `PATH`.
 - **`linix path` and `linix edit` find your files for you**, so neither you nor your scripts
   have to hard-code `~/.config/linix`. `linix path --set DIR` records the repo location in
   LiNix's own settings file — the one file that lives outside the repo, because a key inside
@@ -130,6 +134,16 @@ Each of these was a second way to do something the model already does. Deleted, 
   JSON keys.
 - **`network_timeout_secs` was ignored below 10**, and `max_parallel` did not detect the core
   count.
+- **A rebuild reported its removals as removals.** `linix rebuild` prints its own plan, but the
+  two transactions underneath it ran through the ordinary sync path, whose summary said
+  "Removals: N" on a run where all N come straight back. It now reads "Reinstalled" and
+  "Removed to reinstall"; plain "Removals" means removals that stay removed.
+- **`linix plan` did not say when a variable caused a removal.** `sync` named the variables that
+  had moved since the last sync and `plan` — the command you read first — did not.
+- **`linix status` reported packages only.** A deleted `service:` / `link:` / `repo:` / `shim:` /
+  `setting:` / `schedule:` line is drift that `sync` undoes, and status called it nothing to do.
+- **`linix init` did not create the `vars` file** it documents. It now writes a commented one,
+  with no variable invented for you.
 
 ## [6.0.0] — 2026-07-02
 

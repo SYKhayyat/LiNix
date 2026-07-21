@@ -4,7 +4,8 @@
 line):** Build clean, clippy silent, **735 tests passing**. Phases 0–5 have largely landed: the
 model, the grammar, the guard, git-backed history, R1–R23, `rebuild`, artifact selection,
 `vars`, and X.6. Phase 6's six containers exist and **have never been run** (no Docker here).
-**SEC1–SEC3 remain deferred by the owner**; SEC4–SEC6 are built.
+**SEC1 and SEC2 were built on 2026-07-21; SEC3 remains deferred by the owner**; SEC4–SEC6 are
+built.
 
 **The 2026-07-20 audit found seven bugs and five zombie config keys; all twelve are closed** —
 block-form options now face every rule the short form does, `apply` and `rebuild` reach the
@@ -2887,8 +2888,30 @@ git commit — it makes none, because `handle_rebuild` never calls `perform_main
 only honest test needs a real backend); **II.13's signature check**; **SEC3**; and Phase 6's
 containers, which still have never been run.
 
-**Not verified this session:** anything needing Docker. **`@asset=all` was exercised against the
-real GitHub API and a real release** — see the end of this entry for exactly how far that got.
+**What was verified, and how far it got.** The github work was exercised against the real API and
+a real release (`sharkdp/fd` v10.2.0), from a scratch repo with its own config *and data* root:
+
+- `@asset=all` on that release selects both Windows archives, downloads and hashes both, opens
+  both, and **refuses by name** — *"both `fd-…-gnu.zip` and `fd-…-msvc.zip` install a program
+  called `fd.exe`"* — leaving `~/.local/bin` untouched. The first attempt at this deployed one
+  file before refusing, which is what moved the collision check ahead of every deploy.
+- The same line narrowed to one artifact installs, deploys `fd.exe` under the repo's name,
+  writes `locks/github.toml` in the new list shape with the real sha256, is *"already up to
+  date"* on the second run with no API call, and uninstalls the binary, the tree and the lock
+  entry clean.
+- `status` prints and JSON-reports the extras a sync would undo. The **diff and the output** were
+  exercised against a hand-written `locks/extras.toml`; **no extra was actually provisioned and
+  undone** — that path is S20's and is unchanged.
+
+**No successful two-file install was performed:** no release to hand ships two differently-named
+Windows programs, so the multi-deploy loop past the collision check has run only in unit tests.
+**Also not verified this session:** anything needing Docker.
+
+*One thing worth carrying: the first end-to-end run was made against the machine's real config
+and registry, and `sync` scheduled removals of packages that registry claimed LiNix owned. It
+did no damage — the two it reached were already absent — but a test of a download backend has no
+business planning removals, and every run after it set `LINIX_DATA_DIR` as well as
+`LINIX_CONFIG_DIR`.*
 
 ## Session 2026-07-21 (sixth session) — Part IX's tail: W11 and W8, and the bug under W8
 
