@@ -1,6 +1,6 @@
 use crate::core::{
-    BackendCore, CommandExecutor, HealthReport, HealthStatus, Installable, MetadataProvider,
-    Package, PackageSpec, Queryable, RepoManager, Result, Searchable, Upgradable,
+    BackendCore, CommandExecutor, Enumerable, Error, HealthReport, HealthStatus, Installable,
+    MetadataProvider, Package, PackageSpec, Queryable, RepoManager, Result, Searchable, Upgradable,
 };
 use crate::parsers::OutputParser;
 use async_trait::async_trait;
@@ -93,6 +93,14 @@ pub struct ManagerConfig {
     pub search_args: Vec<String>,
     /// Optional: if specified, use this binary for search instead of the backend name.
     pub search_binary: Option<String>,
+    /// Optional: args that print every installable package name, one per line, and nothing
+    /// else — what II.15's `re:` expands against. `None` means this manager cannot list its
+    /// catalogue, which is the honest answer for every language registry, and a `re:` line
+    /// naming it is refused rather than expanded to nothing.
+    pub enumerate_args: Option<Vec<String>>,
+    /// Optional: binary for `enumerate_args`, when the catalogue lives in a separate program
+    /// (apt's is `apt-cache`, not `apt`).
+    pub enumerate_binary: Option<String>,
     /// Optional: binary to run the LIST commands (`list_args`/`essential_args`) with,
     /// instead of the backend name. Required when a manager's query tool is a *separate*
     /// program — e.g. apt lists installed packages via `dpkg-query`, not `apt dpkg-query`.
@@ -406,6 +414,36 @@ impl Searchable for GenericSearchable {
     }
 }
 
+pub struct GenericEnumerable {
+    pub core: Arc<GenericBackendCore>,
+}
+
+#[async_trait]
+impl Enumerable for GenericEnumerable {
+    async fn available_names(&self) -> Result<Vec<String>> {
+        let Some(args) = &self.core.config.enumerate_args else {
+            return Err(Error::Other(format!(
+                "`{}` cannot list every package it could install.",
+                self.core.name
+            )));
+        };
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let bin = self
+            .core
+            .config
+            .enumerate_binary
+            .as_deref()
+            .unwrap_or(&self.core.name);
+        let output = self.core.executor.run_output(bin, &args, false).await?;
+        Ok(output
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+}
+
 pub struct GenericUpgradable {
     pub core: Arc<GenericBackendCore>,
 }
@@ -599,6 +637,8 @@ mod tests {
                 essential_args: None,
                 search_args: vec![],
                 search_binary: None,
+                enumerate_args: None,
+                enumerate_binary: None,
                 list_binary: None,
                 upgrade_args: vec![],
                 update_args: None,

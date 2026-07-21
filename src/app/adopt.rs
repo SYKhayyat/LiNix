@@ -348,6 +348,8 @@ mod tests {
             ]),
             search_args: vec![],
             search_binary: None,
+            enumerate_args: None,
+            enumerate_binary: None,
             list_binary: Some("dpkg-query".into()),
             upgrade_args: vec![],
             update_args: None,

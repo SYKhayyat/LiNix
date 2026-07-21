@@ -535,7 +535,7 @@ write is deleted (II.17), because two stores could disagree about what this mach
 | **hook script hash** | `fonts:after_install → sha256:a3f1…` | **built** (`locks/hooks.toml`) |
 | **resolved artifact** | `sharkdp/fd → fd-…-linux-gnu.tar.gz`, its URL, format and hash | **built** (`locks/github.toml`) |
 | **resolved backend for a bare name** | `ripgrep → cargo` | **built** (`locks/bare.toml`) |
-| **regex expansion** | `re:^texlive- → [312 names]` | **not built** |
+| **regex expansion** | `re:^texlive- → [312 names]` | **built** (`locks/regex.toml`) |
 
 `linix lock` regenerates the version pins. **It takes no arguments** — the per-name and
 per-backend forms this section used to promise (`lock <name>`, `lock --backend cargo`) do not
@@ -558,9 +558,8 @@ editor is the command — the same rule II.15 states for regex. A name nothing d
 dropped from the file; a name frozen to a backend `priority` no longer lists is re-asked, loudly,
 because `priority` decides what LiNix may use at all (V.15).
 
-*The remaining unbuilt row is the target state and is kept as such. Both were written here as
-though they were real, which cost the 2026-07-20 audit a check — a target belongs in Part III
-or marked, not stated in the present tense.*
+*Both rows were once written here as though they were real, which cost the 2026-07-20 audit a
+check. A target belongs in Part III or marked, not stated in the present tense.*
 
 **`preferences.toml`** — refusals and behaviour. **Nothing writes to it but you.**
 
@@ -1025,16 +1024,42 @@ You wrote it, it wins, LiNix regenerates the lock to agree and says so.
 
 ## II.15 Regex
 
-**`re:` prefix. Live by default, lockable when you want it frozen.**
+**`re:` prefix. Frozen the first time it is seen; delete the entry to match again**
+(owner ruling, 2026-07-21 — this replaces "live by default, lockable when you want it").
 
-**The lock file IS the switch.** Entry in `locks/` → frozen. No entry → live, re-evaluated
-every sync. `linix lock texlive` freezes one; delete the entry and it's live again.
+**The lock file IS the switch, and it writes itself.** The first expansion records what it
+matched in `locks/regex.toml`; an entry is used as-is and no manager is asked. Deleting the
+entry — in your editor, since the file is yours — matches again and records the new answer.
+There is no `lock` command for it and no `unlock`: declaring the machine is LiNix's job to do
+automatically, and a prompt for something that is the command's own work is a prompt nobody
+wanted (P1).
 
-**`plan` shows which is which:**
+*Why freezing is the default and not the option:* `apt:re:^lib` was **(measured)** at 30,207
+packages. Re-matched every run, that line grows the machine the day someone else's upload
+happens to fit the pattern — nothing in your files changed, nothing was reviewed, and the plan
+you approved is not the plan that ran. Frozen, the expansion is a file in git, so what the
+pattern means is a diff.
+
+**The pattern must name a manager.** `apt:re:^fonts-`, never a bare `re:^fonts-`: a bare name
+can be probed ("who has `ripgrep`?"), but every manager has *some* match for a pattern, so the
+first yes would be an accident of `priority` order. The grammar refuses it at parse time.
+
+**Only a manager that can produce its whole catalogue** can be matched against — a new
+capability, distinct from search, because a search matches descriptions and ranks results and
+cannot answer "which names match this". The system managers can (`apt-cache pkgnames`,
+`pacman -Ssq`); a language registry with millions of packages and no list endpoint cannot, and
+a `re:` naming one is refused by name rather than expanded to nothing. **A pattern that matches
+zero packages is an error**, not an empty expansion: it is a typo every time.
+
+**`check` shows what each pattern means**, since that is the one thing not readable from the
+line:
 ```
-re:^fonts-      live    1,043 packages today
-re:^texlive-    frozen  312 packages
+1 pattern(s), frozen in `locks/regex.toml`:
+  apt:re:^fonts-               312 package(s)
+  (delete an entry from the lock to match again.)
 ```
+and `why` on a matched package says *"matched by `re:^fonts-` at modules/dev.txt:3"* rather than
+sending the reader to a line that does not contain the package.
 
 **(measured)** `apt:re:^python3-.*` → 4,447. `apt:re:^lib` → 30,207.
 
@@ -2844,6 +2869,31 @@ follows `use` as far as resolution would, so item 6's parse pass is a resolve pa
 every module finds one loop once per member, so the reports are deduped — two reports of one loop
 are rotations of each other, same hops, different starting point. *Verified against the binary:* an
 a↔b loop no profile reaches is reported once, with both lines.
+
+**8. RULED and BUILT (owner, 2026-07-21): `re:` works, and is frozen on first sight.**
+`re:` was in the grammar, in II.2 and II.15 with measured numbers beside it, and **expanded
+nowhere**: an `apt:re:^fonts-` line reached the validator as a package literally named
+`^fonts-` and died with *"Invalid characters in package name"* — blaming the user's regex
+characters for a feature that was never built. *(Options offered for the "only if frozen"
+qualifier, which named a freeze mechanism that did not exist: park it, always record without
+freezing, or always freeze. The owner chose always freeze, with **deleting the entry** as the
+way to re-find — which is II.15's own "the lock file IS the switch", now automatic.)*
+
+Built: an `Enumerable` capability (a manager's whole catalogue, distinct from search, which
+matches descriptions and ranks), implemented for **apt** (`apt-cache pkgnames`) and **pacman**
+(`pacman -Ssq`) and absent everywhere else, since a language registry has no list endpoint; the
+expansion step in the resolver beside the bare-name probe, because both turn one written line
+into what it actually names and both must run before the merge; `locks/regex.toml` keyed by
+`backend:pattern`, because one pattern against two managers is two questions. A pattern matching
+zero packages is an error — it is a typo every time. `check` prints each pattern and its count,
+`why` says *"matched by `re:^fonts-` at modules/dev.txt:3"*.
+
+*Verified against the binary:* a `re:` on a manager with no catalogue is refused by name; a
+frozen pattern expands with no manager asked at all (which is how it was testable on a Windows
+box with neither apt nor pacman); `why` names the pattern, the file and the variable condition
+together. **NOT verified:** `apt-cache pkgnames` and `pacman -Ssq` have never been run — there
+is no apt or pacman here and no Docker. The two commands are the only unexercised code in this
+item.
 
 **Not verified this session:** anything needing Docker, the network path in any backend, and the
 OS scheduler.

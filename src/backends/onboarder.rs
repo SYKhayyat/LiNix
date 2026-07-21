@@ -397,6 +397,10 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         essential_args: None,
         search_args: def.search_args,
         search_binary: None,
+        // A custom backend describes one CLI; nothing in that description can promise a
+        // complete catalogue, so `re:` does not apply to one.
+        enumerate_args: None,
+        enumerate_binary: None,
         list_binary: None,
         upgrade_args: def.upgrade_args,
         update_args: def.update_args,

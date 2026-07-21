@@ -50,6 +50,22 @@ impl DesiredState {
         self.present().count()
     }
 
+    /// Each `re:` pattern in force and how many packages it expanded to (II.15).
+    ///
+    /// A pattern is the one line whose meaning you cannot read off the line — `apt:re:^lib`
+    /// was measured at 30,207 packages — so the count is the only way to know what you wrote.
+    pub fn regex_expansions(&self) -> Vec<(String, usize)> {
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for spec in self.packages.values().flatten() {
+            if let Some(pattern) = spec.options.get("__from_regex") {
+                *counts
+                    .entry(format!("{}:re:{}", spec.backend, pattern))
+                    .or_default() += 1;
+            }
+        }
+        counts.into_iter().collect()
+    }
+
     /// The extras `sync` applies AFTER packages (II.7's dependent phase): shims, services
     /// and links. A shim wraps a tool that must already be installed; a service enables a
     /// unit a package just laid down; a link writes a config a package expects — each one

@@ -405,6 +405,9 @@ pub struct Declaration {
     pub at: String,
     /// `module:dev`, `profile:Work` — what it belongs to.
     pub scopes: Vec<String>,
+    /// The `re:` pattern that matched this name, when no line names it directly. Without it
+    /// `why` sends the reader to a file and a line that does not contain the package (II.15).
+    pub from_regex: Option<String>,
     /// A dated line that has stopped counting still sits in the file (II.16).
     pub lapsed: bool,
 }
@@ -412,7 +415,10 @@ pub struct Declaration {
 impl Declaration {
     /// The sentence `why` prints.
     pub fn describe(&self) -> String {
-        let mut out = format!("at {}", self.at);
+        let mut out = match &self.from_regex {
+            Some(p) => format!("matched by `re:{}` at {}", p, self.at),
+            None => format!("at {}", self.at),
+        };
         if !self.scopes.is_empty() {
             out.push_str(&format!(" ({})", self.scopes.join(", ")));
         }
@@ -557,6 +563,7 @@ async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declare
                 .get("__scopes")
                 .map(|s| s.split(';').map(str::to_string).collect())
                 .unwrap_or_default(),
+            from_regex: spec.options.get("__from_regex").cloned(),
             lapsed: lapsed_keys.contains(&key.as_str()),
         });
     }
@@ -844,6 +851,7 @@ mod tests {
             at: "modules/dev.txt:3".into(),
             scopes: vec!["module:dev".into(), "profile:Work".into()],
             lapsed: false,
+            from_regex: None,
         };
         assert_eq!(
             d.describe(),
@@ -859,6 +867,7 @@ mod tests {
             at: "modules/imperative.txt:2".into(),
             scopes: vec!["module:imperative".into()],
             lapsed: true,
+            from_regex: None,
         };
         assert!(d.describe().contains("expired, so it no longer counts"));
     }
@@ -870,8 +879,25 @@ mod tests {
             at: "profiles/Work:5".into(),
             scopes: vec![],
             lapsed: false,
+            from_regex: None,
         };
         assert_eq!(d.describe(), "at profiles/Work:5");
+    }
+
+    #[test]
+    fn a_package_a_pattern_matched_names_the_pattern() {
+        // II.15: no line says `fonts-cantarell`. Sending the reader to `modules/dev.txt:3`
+        // without saying why would send them to a line that does not mention the package.
+        let d = Declaration {
+            at: "modules/dev.txt:3".into(),
+            scopes: vec!["module:dev".into()],
+            lapsed: false,
+            from_regex: Some("^fonts-".into()),
+        };
+        assert_eq!(
+            d.describe(),
+            "matched by `re:^fonts-` at modules/dev.txt:3 (module:dev)"
+        );
     }
 
     #[test]

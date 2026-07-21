@@ -3,6 +3,7 @@ pub mod cache;
 pub mod error;
 pub mod executor;
 pub mod bare_lock;
+pub mod regex_lock;
 pub mod extras_lock;
 pub mod hook_lock;
 pub mod git;
@@ -30,8 +31,8 @@ pub use journal::{ActionStatus, Journal, JournalEntry};
 pub use snapshot::{Snapshot, SnapshotManager, SnapshotProvider};
 
 pub use manager::{
-    BackendCapabilities, BackendCapabilitiesBuilder, BackendCore, HealthReport, HealthStatus,
-    Installable, MetadataProvider, Queryable, RepoManager, Searchable, Upgradable,
+    BackendCapabilities, BackendCapabilitiesBuilder, BackendCore, Enumerable, HealthReport,
+    HealthStatus, Installable, MetadataProvider, Queryable, RepoManager, Searchable, Upgradable,
 };
 
 pub use package::{Package, PackageSpec};
@@ -41,6 +42,7 @@ pub use security::verify_checksum;
 pub use hook_lock::{hook_id, HookLedger, Verdict};
 
 pub use bare_lock::BareLock;
+pub use regex_lock::RegexLock;
 pub use extras_lock::{extra_key, ExtrasLedger};
 pub use artifact_lock::{verify_against, ArtifactLedger, ArtifactLock};
 

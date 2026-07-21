@@ -92,6 +92,21 @@ pub trait Queryable: Send + Sync {
     async fn info(&self, name: &str) -> Result<Option<Package>>;
 }
 
+/// Every package name this manager could install, without being told what to look for.
+///
+/// Separate from [`Searchable`], which answers a query: a search matches names *and*
+/// descriptions and ranks them, so "does `^fonts-` match?" cannot be asked of it. II.15's
+/// `re:` needs the full name list and nothing else.
+///
+/// **Most managers cannot do this and must not pretend to.** A system manager has a local
+/// index of everything its repositories carry; a language registry has millions of packages
+/// and no list endpoint. A backend with no honest answer implements nothing here, and a `re:`
+/// line naming it is refused rather than silently expanding to nothing.
+#[async_trait]
+pub trait Enumerable: Send + Sync {
+    async fn available_names(&self) -> Result<Vec<String>>;
+}
+
 #[async_trait]
 pub trait Searchable: Send + Sync {
     async fn search(&self, query: &str) -> Result<Vec<Package>>;
@@ -170,6 +185,7 @@ pub struct BackendCapabilities {
     core: Arc<dyn BackendCore>,
     installable: Option<Arc<dyn Installable>>,
     searchable: Option<Arc<dyn Searchable>>,
+    enumerable: Option<Arc<dyn Enumerable>>,
     queryable: Option<Arc<dyn Queryable>>,
     upgradable: Option<Arc<dyn Upgradable>>,
     repo_manager: Option<Arc<dyn RepoManager>>,
@@ -223,6 +239,10 @@ impl BackendCapabilities {
         self.searchable.as_ref()
     }
 
+    pub fn as_enumerable(&self) -> Option<&Arc<dyn Enumerable>> {
+        self.enumerable.as_ref()
+    }
+
     pub fn is_queryable(&self) -> bool {
         self.queryable.is_some()
     }
@@ -256,6 +276,7 @@ pub struct BackendCapabilitiesBuilder {
     core: Arc<dyn BackendCore>,
     installable: Option<Arc<dyn Installable>>,
     searchable: Option<Arc<dyn Searchable>>,
+    enumerable: Option<Arc<dyn Enumerable>>,
     queryable: Option<Arc<dyn Queryable>>,
     upgradable: Option<Arc<dyn Upgradable>>,
     repo_manager: Option<Arc<dyn RepoManager>>,
@@ -268,6 +289,7 @@ impl BackendCapabilitiesBuilder {
             core,
             installable: None,
             searchable: None,
+            enumerable: None,
             queryable: None,
             upgradable: None,
             repo_manager: None,
@@ -281,6 +303,10 @@ impl BackendCapabilitiesBuilder {
     }
     pub fn with_searchable(mut self, s: Arc<dyn Searchable>) -> Self {
         self.searchable = Some(s);
+        self
+    }
+    pub fn with_enumerable(mut self, e: Arc<dyn Enumerable>) -> Self {
+        self.enumerable = Some(e);
         self
     }
     pub fn with_queryable(mut self, q: Arc<dyn Queryable>) -> Self {
@@ -305,6 +331,7 @@ impl BackendCapabilitiesBuilder {
             core: self.core,
             installable: self.installable,
             searchable: self.searchable,
+            enumerable: self.enumerable,
             queryable: self.queryable,
             upgradable: self.upgradable,
             repo_manager: self.repo_manager,

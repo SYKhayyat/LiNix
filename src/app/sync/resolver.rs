@@ -252,6 +252,7 @@ impl<'a> StateResolver<'a> {
             .with_facts(facts.clone())
             .statements()?;
         self.resolve_aliases(&mut reached.statements);
+        self.expand_regexes(&mut reached.statements, &priority).await?;
         let answers = self
             .probe_bare_names(&reached.statements, &priority, Coverage::WholeModel)
             .await?;
@@ -303,6 +304,150 @@ impl<'a> StateResolver<'a> {
                 }
             }
         }
+    }
+
+    /// Replace every `re:` line with the packages it matches (II.15).
+    ///
+    /// Here, beside the bare-name probe: both turn one written line into what it actually
+    /// names, both need the backends, and both must happen before the merge or two lines that
+    /// resolve to the same package never meet.
+    ///
+    /// **A frozen pattern is not re-expanded** — `locks/regex.toml` is the switch, and a
+    /// pattern re-matched every run grows the machine a package the day somebody else uploads
+    /// one that fits, with nothing in your files changed and nothing to review.
+    async fn expand_regexes(
+        &self,
+        statements: &mut Vec<(Statement, Origin, Gates)>,
+        priority: &Priority,
+    ) -> Result<()> {
+        if !statements
+            .iter()
+            .any(|(s, ..)| matches!(s, Statement::Package(d) | Statement::Absent(d)
+                if matches!(d.selector, crate::config::grammar::Selector::Regex(_))))
+        {
+            return Ok(());
+        }
+
+        let lock_path = crate::core::RegexLock::path_in(&self.layout.locks_dir());
+        let mut lock = crate::core::RegexLock::load(&lock_path)?;
+        let mut declared: Vec<String> = Vec::new();
+        let mut lock_changed = false;
+        let mut expanded: Vec<(Statement, Origin, Gates)> = Vec::new();
+
+        for (stmt, origin, gates) in statements.drain(..) {
+            let (decl, present) = match &stmt {
+                Statement::Package(d) => (d, true),
+                Statement::Absent(d) => (d, false),
+                _ => {
+                    expanded.push((stmt, origin, gates));
+                    continue;
+                }
+            };
+            let crate::config::grammar::Selector::Regex(pattern) = &decl.selector else {
+                expanded.push((stmt, origin, gates));
+                continue;
+            };
+
+            // The grammar refuses a prefixless `re:` at parse time, so this cannot be reached
+            // through a file. Skipping rather than re-erroring keeps one rule in one place;
+            // the pattern falls through as a package name and the validator says so.
+            let Some(backend) = decl.backend.clone() else {
+                expanded.push((stmt, origin, gates));
+                continue;
+            };
+
+            let names = match lock.get(&backend, pattern) {
+                Some(frozen) => {
+                    debug!("`{}:re:{}` is frozen to {} name(s).", backend, pattern, frozen.len());
+                    frozen.to_vec()
+                }
+                None => {
+                    let found = self.match_catalogue(&backend, pattern, &origin, priority).await?;
+                    lock_changed |= lock.record(&backend, pattern, found.clone());
+                    found
+                }
+            };
+            declared.push(crate::core::regex_lock::key(&backend, pattern));
+
+            // Zero matches is an error, not an empty expansion: a pattern that matches nothing
+            // is a typo every time, and silently declaring nothing is the failure this whole
+            // design exists to remove (P3).
+            if names.is_empty() {
+                return Err(Error::from(
+                    GrammarError::new(
+                        origin,
+                        format!("`{}:re:{}` matches no package.", backend, pattern),
+                    )
+                    .with_hint("check the pattern, or the manager's package index is empty."),
+                ));
+            }
+
+            for name in names {
+                let mut one = decl.clone();
+                one.selector = crate::config::grammar::Selector::Name(name);
+                // The line that produced it, so `why` can say a pattern put this here rather
+                // than leaving a package nobody can find in any file.
+                one.options.insert("__from_regex".to_string(), pattern.clone());
+                let stmt = if present {
+                    Statement::Package(one)
+                } else {
+                    Statement::Absent(one)
+                };
+                expanded.push((stmt, origin.clone(), gates.clone()));
+            }
+        }
+
+        lock_changed |= lock.retain_declared(&declared);
+        if lock_changed {
+            lock.save(&lock_path)?;
+        }
+        *statements = expanded;
+        Ok(())
+    }
+
+    /// Every name in a manager's catalogue that the pattern matches.
+    async fn match_catalogue(
+        &self,
+        backend: &str,
+        pattern: &str,
+        origin: &Origin,
+        priority: &Priority,
+    ) -> Result<Vec<String>> {
+        if !priority.allows(backend) {
+            return Err(Error::from(priority.reject(backend, origin)));
+        }
+        let listing = self
+            .registry
+            .get(backend)
+            .and_then(|b| b.as_enumerable().cloned())
+            .ok_or_else(|| {
+                Error::from(
+                    GrammarError::new(
+                        origin.clone(),
+                        format!("`{}` cannot list every package it could install.", backend),
+                    )
+                    .with_hint(
+                        "`re:` needs a manager that can produce its whole catalogue — the \
+                         system managers can, the language registries cannot. Name the \
+                         packages instead.",
+                    ),
+                )
+            })?;
+
+        let re = regex::Regex::new(pattern).map_err(|e| {
+            Error::from(GrammarError::new(
+                origin.clone(),
+                format!("`re:{}` is not a valid regular expression: {}", pattern, e),
+            ))
+        })?;
+        let names: Vec<String> = listing
+            .available_names()
+            .await?
+            .into_iter()
+            .filter(|n| re.is_match(n))
+            .collect();
+        debug!("`{}:re:{}` matched {} name(s).", backend, pattern, names.len());
+        Ok(names)
     }
 
     /// Ask each backend in `priority` order whether it has this bare name (II.7 step 4).

@@ -1,5 +1,6 @@
 use crate::core::{
-    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    BackendCore, CommandExecutor, Enumerable, Error, Installable, MetadataProvider, Package,
+    PackageSpec,
     Queryable, RepoManager, Result, Searchable, Upgradable,
 };
 use crate::parsers::pacman;
@@ -188,6 +189,30 @@ impl Searchable for PacmanSearchable {
     }
 }
 
+pub struct PacmanEnumerable {
+    pub core: Arc<PacmanBackendCore>,
+}
+
+#[async_trait]
+impl Enumerable for PacmanEnumerable {
+    /// `-Ssq` is the search form that prints bare names from the sync databases, with no
+    /// query — the catalogue, which is what II.15's `re:` expands against. `pacman -Ss` (what
+    /// [`PacmanSearchable`] runs) matches descriptions too and cannot answer a name pattern.
+    async fn available_names(&self) -> Result<Vec<String>> {
+        let output = self
+            .core
+            .executor
+            .run_output("pacman", &["-Ssq"], false)
+            .await?;
+        Ok(output
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+}
+
 pub struct PacmanRepoManager {
     pub core: Arc<PacmanBackendCore>,
 }
@@ -307,6 +332,7 @@ pub fn register(
             .with_installable(Arc::new(PacmanInstallable { core: core.clone() }))
             .with_queryable(Arc::new(PacmanQueryable { core: core.clone() }))
             .with_searchable(Arc::new(PacmanSearchable { core: core.clone() }))
+            .with_enumerable(Arc::new(PacmanEnumerable { core: core.clone() }))
             .with_upgradable(Arc::new(PacmanUpgradable { core: core.clone() }))
             .with_repo_manager(Arc::new(PacmanRepoManager { core: core.clone() }))
             .with_metadata_provider(core.clone())

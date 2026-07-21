@@ -3040,6 +3040,17 @@ async fn handle_check(app: &App) -> Result<()> {
         state.absent().count(),
         state.extras.len()
     );
+
+    // II.15: a pattern is the one line whose meaning is not on the line. The count is.
+    let patterns = state.regex_expansions();
+    if !patterns.is_empty() {
+        println!("\n{} pattern(s), frozen in `locks/regex.toml`:", patterns.len());
+        for (pattern, count) in &patterns {
+            println!("  {:<28} {} package(s)", pattern, count);
+        }
+        println!("  (delete an entry from the lock to match again.)");
+    }
+
     if !state.lapsed.is_empty() {
         println!(
             "\n{} dated line(s) have lapsed and no longer count:",
