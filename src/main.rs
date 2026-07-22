@@ -149,6 +149,7 @@ async fn main() -> Result<()> {
             json,
             installed,
         } => handle_search(&app, query, *json, *installed).await,
+        Commands::Teleport { package, backend } => handle_teleport(&app, package, backend).await,
         Commands::List {
             backend,
             json,
@@ -1354,6 +1355,38 @@ async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
         perform_maintenance(app).await?;
     }
     Ok(())
+}
+
+/// `teleport PKG BACKEND` — move a declared package to another manager, then sync (II.8).
+async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<()> {
+    if app.registry.get(backend).is_none() {
+        anyhow::bail!(
+            "`{}` is not a package manager on this machine. `linix doctor` lists the ones that are.",
+            backend
+        );
+    }
+
+    // A dry run says where the line would move without touching a file or the machine.
+    if app.config.dry_run {
+        println!("[DRY-RUN] would move `{}` to `{}:{}` and sync.", package, backend, package);
+        return Ok(());
+    }
+
+    let edits = app.retarget(package, backend).await?;
+    if edits.is_empty() {
+        anyhow::bail!(
+            "`{}` is not declared in any active file, so there is no line to move. \
+             To add it from `{}`, run `linix install {}:{}`.",
+            package,
+            backend,
+            backend,
+            package
+        );
+    }
+
+    // The line now names the new manager; sync installs it there and removes the old copy as
+    // drift — the same convergence every other edit-then-sync command relies on.
+    handle_sync(app, false, false).await
 }
 
 async fn handle_install(

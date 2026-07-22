@@ -436,6 +436,54 @@ impl<'a> Editor<'a> {
         Ok(edits)
     }
 
+    /// Move a declared package to another manager (II.8's `teleport`): rewrite each line that
+    /// declares `target_pkg` so its backend prefix is `new_backend`, in the module where it
+    /// already lives. Options and trailing comments are kept — only the prefix changes.
+    ///
+    /// The sync that follows installs from the new manager and, because the old declaration is
+    /// gone, removes the old copy as drift. So this is edit-the-line-then-sync like every other
+    /// command; it adds no removal path of its own.
+    pub fn retarget_backend(
+        &self,
+        files: &[PathBuf],
+        target_pkg: &str,
+        new_backend: &str,
+    ) -> Result<Vec<Edit>> {
+        let wanted = self.match_key(target_pkg);
+        let mut edits = Vec::new();
+
+        for file in files {
+            let Ok(body) = std::fs::read_to_string(file) else {
+                continue;
+            };
+            let mut out: Vec<String> = Vec::new();
+            let mut changed = false;
+
+            for raw in body.lines() {
+                if self.matches(raw, &wanted) {
+                    let rewritten = rewrite_backend_prefix(raw, new_backend);
+                    out.push(rewritten.clone());
+                    edits.push(Edit {
+                        file: file.clone(),
+                        line: rewritten.trim().to_string(),
+                        wired_into: None,
+                    });
+                    changed = true;
+                } else {
+                    out.push(raw.to_string());
+                }
+            }
+
+            if !changed {
+                continue;
+            }
+            let mut new_body = out.join("\n");
+            new_body.push('\n');
+            write(file, &new_body)?;
+        }
+        Ok(edits)
+    }
+
     /// What the user typed, as something to match against.
     pub(crate) fn match_key(&self, target: &str) -> Match {
         match statement::parse(&Origin::argument(), target, self.backends) {
@@ -514,6 +562,31 @@ fn other_key(stmt: &Statement) -> Option<String> {
         | Statement::Var { .. }
         | Statement::Absent(_) => None,
     }
+}
+
+/// Replace a declaration line's backend prefix with `new_backend`, keeping the package name,
+/// its options, the original indentation, and any trailing comment. A bare-name line (no
+/// prefix) gains one; a prefixed or chain line has its head replaced.
+fn rewrite_backend_prefix(raw: &str, new_backend: &str) -> String {
+    let indent: String = raw.chars().take_while(|c| c.is_whitespace()).collect();
+    let (content, comment) = match raw.find('#') {
+        Some(i) => (raw[..i].trim_end(), &raw[i..]),
+        None => (raw.trim_end(), ""),
+    };
+    let body = content.trim();
+    // The name-and-options tail is everything after the last `:` in the head. A bare name has
+    // no `:` before its `@options`, so guard on the `@`: `foo@version=1` keeps `foo@version=1`.
+    let head_end = body.find('@').unwrap_or(body.len());
+    let tail = match body[..head_end].rfind(':') {
+        Some(i) => &body[i + 1..],
+        None => body,
+    };
+    let mut line = format!("{}{}:{}", indent, new_backend, tail.trim_start());
+    if !comment.is_empty() {
+        line.push(' ');
+        line.push_str(comment);
+    }
+    line
 }
 
 /// A failed write is an error that names the file. "Permission denied" with no path is a
@@ -929,6 +1002,55 @@ mod tests {
         let body = read(&f, "modules/imperative.txt");
         assert_eq!(body.matches("service:nginx").count(), 1, "{}", body);
         assert!(body.contains("enabled=true"), "{}", body);
+    }
+
+    #[test]
+    fn rewrite_backend_prefix_changes_only_the_prefix() {
+        // bare name gains a prefix; options and comment are kept
+        assert_eq!(rewrite_backend_prefix("ripgrep", "apt"), "apt:ripgrep");
+        assert_eq!(
+            rewrite_backend_prefix("  cargo:ripgrep@version=14  # fast", "apt"),
+            "  apt:ripgrep@version=14 # fast"
+        );
+        assert_eq!(
+            rewrite_backend_prefix("ripgrep@version=14", "apt"),
+            "apt:ripgrep@version=14"
+        );
+    }
+
+    #[test]
+    fn teleport_moves_the_line_in_place_and_leaves_no_second_copy() {
+        let f = fx(&[
+            ("active", "Work\n"),
+            ("profiles/Work", "use tools\n"),
+            ("modules/tools.txt", "cargo:ripgrep\napt:jq\n"),
+        ]);
+        let files = vec![f.layout.modules_dir().join("tools.txt")];
+        let edits = editor(&f)
+            .retarget_backend(&files, "ripgrep", "apt")
+            .unwrap();
+        assert_eq!(edits.len(), 1);
+        let body = read(&f, "modules/tools.txt");
+        assert!(body.contains("apt:ripgrep"), "{}", body);
+        assert!(!body.contains("cargo:ripgrep"), "{}", body);
+        // the untouched line stays, and nothing is doubled
+        assert_eq!(body.matches("ripgrep").count(), 1, "{}", body);
+        assert!(body.contains("apt:jq"), "{}", body);
+    }
+
+    #[test]
+    fn teleport_of_an_undeclared_package_changes_nothing() {
+        let f = fx(&[
+            ("active", "Work\n"),
+            ("profiles/Work", "use tools\n"),
+            ("modules/tools.txt", "apt:jq\n"),
+        ]);
+        let files = vec![f.layout.modules_dir().join("tools.txt")];
+        let edits = editor(&f)
+            .retarget_backend(&files, "ripgrep", "apt")
+            .unwrap();
+        assert!(edits.is_empty());
+        assert_eq!(read(&f, "modules/tools.txt"), "apt:jq\n");
     }
 
     #[test]

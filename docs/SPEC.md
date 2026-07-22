@@ -888,7 +888,7 @@ else, ever.**
 | `unmanaged` | what `adopt` would adopt |
 | `absent` | every `absent:` line in force, and its module |
 | `diff COMMIT COMMIT` | the change in **packages**, not text |
-| `teleport PKG BACKEND` | move a package to another manager: edit the line, sync. **Owed — not built (2026-07-22)** |
+| `teleport PKG BACKEND` | move a package to another manager: rewrite the line in place, sync |
 | `shell` | throwaway shell. Outside the model |
 | `bundle` | git bundle + artifacts + registry |
 | `restore DIR` | put a bundle back — the other half of `bundle` (V.59) |

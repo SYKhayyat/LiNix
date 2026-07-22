@@ -262,6 +262,20 @@ pub enum Commands {
         list: bool,
     },
 
+    /// Move a declared package to another package manager, then sync.
+    ///
+    /// `teleport ripgrep apt` rewrites wherever `ripgrep` is declared to `apt:ripgrep`, in the
+    /// module it already lives in. The sync that follows installs it from `apt` and removes the
+    /// old copy as drift — no second copy is left behind. It is edit-the-line-then-sync like
+    /// `install`; to bring in a package that is not declared yet, use `install BACKEND:NAME`.
+    Teleport {
+        /// The package to move (bare name, or `oldbackend:name` to disambiguate).
+        package: String,
+
+        /// The package manager to move it to.
+        backend: String,
+    },
+
     /// Parallel search across all searchable repositories
     Search {
         /// Search query string

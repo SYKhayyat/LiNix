@@ -624,6 +624,27 @@ impl App {
         Ok(editor.declares_in(&files, target))
     }
 
+    /// Move a declared package to `new_backend` by rewriting its line in place (II.8's
+    /// `teleport`), and say which files changed. Empty result = the package is declared in no
+    /// active file, which the caller reports rather than silently doing nothing.
+    pub async fn retarget(
+        &self,
+        target_pkg: &str,
+        new_backend: &str,
+    ) -> Result<Vec<crate::model::Edit>> {
+        let vocab = self.vocabulary().await?;
+        let layout = self.config.layout();
+        let facts = self.host_facts().await?;
+        let files = crate::model::active_module_files(&layout, &vocab, &facts);
+        let edits = crate::model::Editor::new(&layout, &vocab, facts)
+            .retarget_backend(&files, target_pkg, new_backend)
+            .map_err(Error::from)?;
+        for e in &edits {
+            info!("{}", e.describe("Moved"));
+        }
+        Ok(edits)
+    }
+
     /// Remove a package's declaration from every file the active profiles reach (II.8's
     /// `uninstall`), and say which files changed.
     pub async fn undeclare(&self, target_pkg: &str) -> Result<Vec<crate::model::Edit>> {
