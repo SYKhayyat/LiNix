@@ -139,3 +139,64 @@ async fn test_concurrent_transaction_safety_e2e() {
         "Not all parallel nodes reached terminal success."
     );
 }
+
+/// V.59: `bundle` and `restore` are one feature, and the proof runs without git — bundle a
+/// config, restore it into a clean directory, and assert the model parses and resolves to the
+/// same package set. A backup nothing has ever restored is a guess.
+#[tokio::test]
+async fn test_bundle_then_restore_reproduces_the_package_set_without_git() {
+    use linix::model::{Layout, Priority, Resolver};
+
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root().to_path_buf();
+    fs::write(root.join("modules/tools.txt"), "brew:neovim\nbrew:ripgrep\n")
+        .await
+        .unwrap();
+    fs::write(root.join("profiles/Work"), "use tools\n").await.unwrap();
+    fs::write(root.join("active"), "Work\n").await.unwrap();
+
+    let known = |n: &str| n == "brew";
+    let priority = Priority::from_backends(vec!["brew".into()]);
+
+    // The set the source config resolves to.
+    let src_layout = Layout::new(root.clone(), root.join("data"));
+    let before: std::collections::BTreeSet<String> =
+        Resolver::new(&src_layout, &known, &priority)
+            .resolve()
+            .unwrap()
+            .present()
+            .map(|p| format!("{}:{}", p.backend, p.name))
+            .collect();
+    assert_eq!(before.len(), 2);
+
+    // Bundle (no artifacts, no archive, no git repo present → history simply not included).
+    let bundle_dir = root.join("out-bundle");
+    linix::app::bundle::create_bundle(&kernel.app, &bundle_dir, false, false, None)
+        .await
+        .unwrap();
+
+    // Restore into a clean directory and resolve it.
+    let clean = kernel
+        .app
+        .config
+        .config_root()
+        .parent()
+        .unwrap()
+        .join("restored-cfg");
+    let _ = fs::remove_dir_all(&clean).await;
+    let reg = clean.join("data/registry.json");
+    linix::app::bundle::restore_bundle(&bundle_dir, &clean, &reg, false)
+        .await
+        .unwrap();
+
+    let clean_layout = Layout::new(clean.clone(), clean.join("data"));
+    let after: std::collections::BTreeSet<String> =
+        Resolver::new(&clean_layout, &known, &priority)
+            .resolve()
+            .unwrap()
+            .present()
+            .map(|p| format!("{}:{}", p.backend, p.name))
+            .collect();
+
+    assert_eq!(before, after, "restore did not reproduce the declared package set");
+}

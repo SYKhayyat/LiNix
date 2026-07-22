@@ -205,6 +205,7 @@ async fn main() -> Result<()> {
             artifacts,
             archive,
         } => handle_bundle(&app, out, *artifacts, *archive).await,
+        Commands::Restore { dir, force } => handle_restore(&app, dir, *force).await,
         Commands::Why { package, json } => handle_why(&app, package, *json).await,
         Commands::Service(args) => handle_service(&app, &args.command).await,
         Commands::Bisect { test, yes } => linix::app::bisect::bisect(&app, test, *yes)
@@ -4532,6 +4533,38 @@ async fn handle_bundle(app: &App, out: &str, artifacts: bool, archive: bool) -> 
         "See {}/RESTORE.md for offline restore steps.",
         report.out.display()
     );
+    Ok(())
+}
+
+async fn handle_restore(app: &App, dir: &str, force: bool) -> Result<()> {
+    let bundle_dir = std::path::PathBuf::from(dir);
+    let config_root = app.config.config_root();
+    let registry_path = { app.state.lock().await.path.clone() };
+
+    let report =
+        linix::app::bundle::restore_bundle(&bundle_dir, &config_root, &registry_path, force).await?;
+
+    println!(
+        "Restored {} config file(s) into {}.",
+        report.config_files,
+        config_root.display()
+    );
+    println!(
+        "  ownership registry: {}",
+        if report.registry_restored {
+            "restored"
+        } else {
+            "not in the bundle — a first `sync` will rebuild it"
+        }
+    );
+    if report.git_history_present {
+        println!(
+            "  manifest history: `config.bundle` is in {} — `git clone` it there to keep the \
+             history, or `linix sync --locked` to reproduce the current state.",
+            bundle_dir.display()
+        );
+    }
+    println!("Run `linix sync --locked` to reproduce the exact package set.");
     Ok(())
 }
 

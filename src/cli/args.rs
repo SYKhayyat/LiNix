@@ -586,6 +586,21 @@ pub enum Commands {
         archive: bool,
     },
 
+    /// Restore a bundle into this machine's config: the other half of `bundle`.
+    ///
+    /// Copies the bundle's declarations, `locks/` and registry back. Refuses a config
+    /// directory that is not empty unless `--force`, because a restore writes over what is
+    /// there. It restores files; run `linix sync --locked` afterward to reproduce the exact
+    /// versions.
+    Restore {
+        /// The bundle directory to restore from.
+        dir: String,
+
+        /// Restore even though the config directory is not empty (overwrites).
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Explain why a package is installed: its provenance and what depends on it
     Why {
         /// Package name (optionally `backend:name`)

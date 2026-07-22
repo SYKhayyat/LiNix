@@ -211,8 +211,9 @@ pub async fn create_bundle(
          Packages: {}\nConfig files: {}\nArtifacts pre-fetched: {}\n\n\
          ## Restore on the target machine\n\n\
          1. Copy this directory to the machine.\n\
-         2. Point LiNix at it (`linix path --set <dir>`), or copy `modules/`, `profiles/`\n\
-            and `active` into your LiNix config directory.\n\
+         2. `linix restore <dir>` — puts the declarations, `locks/` and registry back.\n\
+            It refuses a config directory that already has something in it; `--force`\n\
+            overwrites.\n\
          3. Reproduce the exact versions:  `linix sync --locked`\n\
             (`locks/versions.json` pins every version).\n\n\
          If you bundled with `--artifacts`, the `artifacts/<backend>/` folders hold the\n\
@@ -260,9 +261,140 @@ pub async fn create_bundle(
     Ok(report)
 }
 
+/// What a restore did, for honest reporting.
+#[derive(Debug, Default)]
+pub struct RestoreReport {
+    pub config_files: usize,
+    pub registry_restored: bool,
+    pub git_history_present: bool,
+}
+
+/// Files a bundle carries that describe the bundle rather than being part of the config, so
+/// `restore` copies everything else into the config root but not these.
+const BUNDLE_META: &[&str] = &[
+    "config.bundle",
+    "registry.json",
+    "packages.json",
+    "plan.json",
+    "RESTORE.md",
+];
+
+/// Put a bundle back (V.59): the other half of `bundle`, a command rather than a README.
+///
+/// `bundle` packs the config root, `locks/`, the registry and the git history; this reverses
+/// it. The config directory it writes into must be empty unless `force` is set, because the
+/// machine you reach for a backup on usually still has something on it, and a restore that
+/// silently merged over a live config would be the worst kind of surprise.
+///
+/// It restores files; it does not sync. `sync --locked` afterward reproduces the exact
+/// versions from the restored `locks/`.
+pub async fn restore_bundle(
+    bundle_dir: &Path,
+    config_root: &Path,
+    registry_path: &Path,
+    force: bool,
+) -> Result<RestoreReport> {
+    if !bundle_dir.join("packages.json").exists() && !bundle_dir.join("modules").exists() {
+        return Err(Error::Other(format!(
+            "{} does not look like a LiNix bundle — no `packages.json` and no `modules/`.",
+            bundle_dir.display()
+        )));
+    }
+
+    if !force && dir_has_entries(config_root).await {
+        return Err(Error::Other(format!(
+            "{} is not empty. A restore writes your declarations over what is there, so it \
+             refuses unless you pass --force.",
+            config_root.display()
+        )));
+    }
+
+    let mut report = RestoreReport {
+        git_history_present: bundle_dir.join("config.bundle").exists(),
+        ..Default::default()
+    };
+
+    // Copy the config, entry by entry, skipping the bundle's own metadata files so the
+    // restored root is a config root and not a bundle.
+    tokio::fs::create_dir_all(config_root)
+        .await
+        .map_err(Error::from)?;
+    let mut rd = tokio::fs::read_dir(bundle_dir).await.map_err(Error::from)?;
+    while let Some(entry) = rd.next_entry().await.map_err(Error::from)? {
+        let name = entry.file_name();
+        if BUNDLE_META.contains(&name.to_string_lossy().as_ref())
+            || name.to_string_lossy() == "artifacts"
+        {
+            continue;
+        }
+        let from = entry.path();
+        let to = config_root.join(&name);
+        if entry.file_type().await.map_err(Error::from)?.is_dir() {
+            report.config_files += copy_dir_recursive(&from, &to, None).await?;
+        } else {
+            if let Some(p) = to.parent() {
+                tokio::fs::create_dir_all(p).await.map_err(Error::from)?;
+            }
+            tokio::fs::copy(&from, &to).await.map_err(Error::from)?;
+            report.config_files += 1;
+        }
+    }
+
+    // The registry lives in the data root, not the config repo, so it is restored separately.
+    let bundled_registry = bundle_dir.join("registry.json");
+    if bundled_registry.exists() {
+        if let Some(p) = registry_path.parent() {
+            tokio::fs::create_dir_all(p).await.map_err(Error::from)?;
+        }
+        tokio::fs::copy(&bundled_registry, registry_path)
+            .await
+            .map_err(Error::from)?;
+        report.registry_restored = true;
+    }
+
+    Ok(report)
+}
+
+/// Whether a directory exists and holds at least one entry. A missing directory is empty.
+async fn dir_has_entries(dir: &Path) -> bool {
+    match tokio::fs::read_dir(dir).await {
+        Ok(mut rd) => rd.next_entry().await.ok().flatten().is_some(),
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn restore_refuses_a_nonempty_config_unless_forced() {
+        let tmp = std::env::temp_dir().join(format!("linix-restore-{}", std::process::id()));
+        let bundle = tmp.join("bundle");
+        let cfg = tmp.join("cfg");
+        let data = tmp.join("data");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(bundle.join("modules")).unwrap();
+        std::fs::write(bundle.join("modules/tools.txt"), "apt:jq\n").unwrap();
+        std::fs::write(bundle.join("active"), "Work\n").unwrap();
+        std::fs::write(bundle.join("packages.json"), "{\"packages\":[]}").unwrap();
+        std::fs::create_dir_all(&cfg).unwrap();
+        std::fs::write(cfg.join("something"), "keep me").unwrap();
+
+        let reg = data.join("registry.json");
+        let refused = restore_bundle(&bundle, &cfg, &reg, false).await;
+        assert!(refused.is_err(), "a non-empty config must be refused");
+
+        // Into a clean directory it restores the declarations.
+        let clean = tmp.join("clean");
+        let report = restore_bundle(&bundle, &clean, &reg, false).await.unwrap();
+        assert!(report.config_files >= 2);
+        assert_eq!(
+            std::fs::read_to_string(clean.join("modules/tools.txt")).unwrap(),
+            "apt:jq\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn offline_fetch_covers_common_backends() {
