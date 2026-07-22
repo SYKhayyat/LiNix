@@ -1,20 +1,26 @@
-//! `locks/bare.toml` — which package manager a bare name resolved to (II.6).
+//! `locks/bare.HOST.toml` — which package manager an unpinned name resolved to (II.6).
 //!
-//! A line with no prefix (`ripgrep`) is answered by asking each backend in `priority` order
-//! whether it has that name and taking the first yes (II.7 step 4). Unrecorded, that answer
-//! is re-derived every run against whatever is installed *now* — so adding a package manager
-//! that sits higher in `priority` and happens to publish the same name silently changes what
-//! an unedited line means. The record is the fix: asked once, then the same answer until you
-//! say otherwise.
+//! A line that does not pin one manager (`ripgrep`, or `apt,dnf:ripgrep`) is answered by
+//! asking its candidates in order whether they have that name and taking the first yes (II.7
+//! step 4). Unrecorded, that answer is re-derived every run against whatever is installed
+//! *now* — so adding a package manager that sits higher in `priority` and happens to publish
+//! the same name silently changes what an unedited line means. The record is the fix: asked
+//! once, then the same answer until you say otherwise.
 //!
-//! **The file is the switch, and deleting is how you unfreeze** (II.15's rule, applied here):
-//! an entry means frozen, no entry means ask. Removing a line re-asks and records the new
-//! answer. There is no command for it, because the file is yours and a text editor is the
-//! command.
+//! **One file per host.** Which manager has `ripgrep` is a fact about a machine, and
+//! `locks/` travels with the config to every machine that shares it. A single file would
+//! hold whichever answer synced last: the Ubuntu box writes `apt`, the Fedora box overwrites
+//! with `dnf`, and the two rewrite each other on every sync and collide in git forever. A
+//! file per host means each machine writes only its own, every file commits cleanly, and
+//! each machine still reproduces exactly what it had.
 //!
-//! One file rather than one per backend, unlike the rest of `locks/`: the fact recorded is
-//! about a *name*, and a name that moves backends would otherwise be two writes — a delete
-//! from one file and an insert into another — for one fact changing.
+//! **Deleting is how you unfreeze** (II.15's rule, applied here): an entry means frozen, no
+//! entry means ask. `linix unlock` removes entries; so does an editor, because the file is
+//! yours.
+//!
+//! One file per host rather than one per backend, unlike the rest of `locks/`: the fact
+//! recorded is about a *name*, and a name that moves backends would otherwise be two writes —
+//! a delete from one file and an insert into another — for one fact changing.
 
 use crate::core::{Error, Result};
 use serde::{Deserialize, Serialize};
@@ -33,8 +39,38 @@ impl BareLock {
         Self::default()
     }
 
+    /// This machine's file. Every other machine sharing the config has its own, so a sync
+    /// here can never overwrite the answer another host depends on.
     pub fn path_in(locks_dir: &Path) -> PathBuf {
-        locks_dir.join("bare.toml")
+        Self::path_for(locks_dir, &crate::config::Config::get_hostname())
+    }
+
+    /// Anything a hostname may legally contain but a filename should not becomes `_`, so a
+    /// host called `../etc` writes inside `locks/` like every other host.
+    pub fn path_for(locks_dir: &Path, host: &str) -> PathBuf {
+        let safe: String = host
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+            .collect();
+        let safe = if safe.is_empty() { "unknown".to_string() } else { safe };
+        locks_dir.join(format!("bare.{}.toml", safe.to_lowercase()))
+    }
+
+    /// Forget one name, so it is asked again. Reports whether there was anything to forget.
+    pub fn forget(&mut self, name: &str) -> bool {
+        self.resolved.remove(name).is_some()
+    }
+
+    /// Forget everything.
+    pub fn clear(&mut self) -> bool {
+        let had = !self.resolved.is_empty();
+        self.resolved.clear();
+        had
+    }
+
+    /// Every frozen name and the manager it is frozen to, for `linix unlock` to report.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.resolved.iter().map(|(n, b)| (n.as_str(), b.as_str()))
     }
 
     /// A missing file means nothing has been resolved yet — the correct starting state on a
@@ -132,6 +168,42 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let path = BareLock::path_in(&tmp.path().join("locks"));
         assert!(BareLock::load(&path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn each_host_keeps_its_own_answers() {
+        // The reason the file is per-host: `locks/` is shared, but which manager has a name
+        // is not. Two machines must not be able to overwrite each other.
+        let locks = Path::new("locks");
+        assert_ne!(
+            BareLock::path_for(locks, "ubuntu-box"),
+            BareLock::path_for(locks, "fedora-box")
+        );
+        assert_eq!(
+            BareLock::path_for(locks, "Ubuntu-Box"),
+            BareLock::path_for(locks, "ubuntu-box"),
+            "a host that shouts its name is the same host"
+        );
+    }
+
+    #[test]
+    fn a_hostname_cannot_write_outside_the_locks_directory() {
+        let path = BareLock::path_for(Path::new("locks"), "../../etc/passwd");
+        assert_eq!(path.parent(), Some(Path::new("locks")));
+    }
+
+    #[test]
+    fn unlocking_forgets_and_says_whether_there_was_anything_to_forget() {
+        let mut lock = BareLock::new();
+        lock.record("ripgrep", "cargo");
+        assert!(lock.forget("ripgrep"));
+        assert_eq!(lock.get("ripgrep"), None);
+        assert!(!lock.forget("ripgrep"), "forgetting twice is not a change");
+
+        lock.record("jq", "apt");
+        assert!(lock.clear());
+        assert!(lock.is_empty());
+        assert!(!lock.clear());
     }
 
     #[test]

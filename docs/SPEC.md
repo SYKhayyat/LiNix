@@ -244,9 +244,12 @@ line number, and what was expected.
 ### Statements
 
 ```
-NAME                          bare package — backend resolved via `priority`, then locked
-BACKEND:NAME                  explicit backend
-BACKEND:re:PATTERN            regex — matches names in that backend
+NAME                          bare package — short for `list:NAME`
+BACKEND:NAME                  this manager or nothing (a pin)
+BACKEND,BACKEND:NAME          these managers, in this order, and nowhere else
+BACKEND,list:NAME             these first, then the rest of `priority`
+list:NAME                     every manager in `priority`, in order — then locked (II.7b)
+BACKEND:re:PATTERN            regex — matches names in that backend. Must pin one
 absent:BACKEND:NAME           declare it must not exist
 repo:BACKEND:SPEC             a repository, for that backend
 shim:NAME                     a shim
@@ -546,7 +549,7 @@ write is deleted (II.17), because two stores could disagree about what this mach
 | version | `apt:curl → 7.81.0` | **built** (`locks/versions.json`) |
 | **hook script hash** | `fonts:after_install → sha256:a3f1…` | **built** (`locks/hooks.toml`) |
 | **resolved artifact** | `sharkdp/fd → fd-…-linux-gnu.tar.gz`, its URL, format and hash | **built** (`locks/github.toml`) |
-| **resolved backend for a bare name** | `ripgrep → cargo` | **built** (`locks/bare.toml`) |
+| **resolved backend for an unpinned name** | `ripgrep → cargo` | **built** (`locks/bare.HOST.toml`) |
 | **regex expansion** | `re:^texlive- → [312 names]` | **built** (`locks/regex.toml`) |
 
 `linix lock` regenerates the version pins. **It takes no arguments** — the per-name and
@@ -556,19 +559,37 @@ written by the backend as it installs rather than by `linix lock`, because the a
 known at the moment it is chosen. `github` asks `Layout::lock_file()` for that path rather
 than building it, so there is one answer to where a backend's lock lives.
 
-**`locks/bare.toml` is one file, not one per backend** (owner ruling, 2026-07-21), which is
-this table's one exception to the layout above. The fact recorded is about a *name*; per-backend
-files would make a name that moves managers two writes — a delete from one file, an insert into
-another — for one fact changing, and would make *"what did `ripgrep` resolve to?"* a search.
+**`locks/bare.HOST.toml` is one file per machine, not one per backend** (owner ruling,
+2026-07-22), which is this table's one exception to the layout above. Two reasons, and they
+pull in different directions:
 
-**A bare name is asked once and then frozen, and deleting the entry is how you ask again**
+- *Not per backend.* The fact recorded is about a *name*; per-backend files would make a name
+  that moves managers two writes — a delete from one file, an insert into another — for one
+  fact changing, and would make *"what did `ripgrep` resolve to?"* a search.
+- *Per host.* Which manager has `ripgrep` is a fact about a **machine**, and `locks/` travels
+  with the config to every machine that shares it. One file would hold whichever answer synced
+  last: the Ubuntu box writes `apt`, the Fedora box overwrites with `dnf`, and the two rewrite
+  each other on every sync and collide in git forever. A file per host means each machine
+  writes only its own, every file commits cleanly, and each machine still reproduces exactly.
+  A hostname is sanitised to `[a-z0-9-]` before it becomes a filename, so a host called
+  `../etc` writes inside `locks/` like every other host.
+
+**An unpinned name is asked once and then frozen, and deleting the entry is how you ask again**
 (owner ruling, 2026-07-21). Re-deriving the answer every run against whatever is installed
 *today* is how an unedited line comes to mean a different package: install a manager that sits
 higher in `priority` and happens to publish the same name, and `ripgrep` silently becomes
-somebody else's `ripgrep`. There is no command to unfreeze, because the file is yours and a text
-editor is the command — the same rule II.15 states for regex. A name nothing declares any more is
-dropped from the file; a name frozen to a backend `priority` no longer lists is re-asked, loudly,
-because `priority` decides what LiNix may use at all (V.15).
+somebody else's `ripgrep`. A name nothing declares any more is dropped from the file; a name
+frozen to a manager the line no longer accepts, or that this machine does not have, is re-asked
+loudly rather than honoured — the lock exists to stop a line changing meaning, never to demand
+a manager that is not here.
+
+**`linix unlock [NAME…]` is how you ask again** (owner ruling, 2026-07-22), alongside the text
+editor II.15 promises for regex. With no arguments it forgets every name this host froze;
+`--list` shows them and changes nothing. It is what you run when a better source appears:
+`ripgrep` frozen to `cargo` because apt did not carry it yet moves to `apt` on the next sync
+once it does — **and that sync uninstalls the cargo copy**, because the old one is a managed
+package nothing declares any more, which is exactly what drift removal is for (V.34). Two
+copies of one package is the state this avoids, not a state it tolerates.
 
 *Both rows were once written here as though they were real, which cost the 2026-07-20 audit a
 check. A target belongs in Part III or marked, not stated in the present tense.*
@@ -733,7 +754,9 @@ first pass because a `vars` file names no backend.
 1. Read `active` → the profile names, unioned.
 2. Resolve profiles → the module set. Profiles may reference profiles; modules may not.
 3. Parse **only** the modules reached. Apply `when`.
-4. Resolve each line. Bare names use `priority`, then the lock.
+4. Resolve each line. A line that pins one manager is that manager. Anything else asks its
+   candidates in order (II.7b), honouring this host's lock when the line still accepts what it
+   names and the machine still has it.
 5. **Two active declarations that contradict = ERROR.** Stop, show both, name both files.
    Not first-wins, not file order.
 6. **Dated lines:**
@@ -741,6 +764,46 @@ first pass because a `vars` file names no backend.
    - **While it is counting, a dated line beats an undated one.** *(The only exception to
      rule 5.)*
 7. Produce the desired state.
+
+### II.7b Which managers a line will accept
+
+**The problem** (owner ruling, 2026-07-22). `apt:rg` says you want apt's ripgrep, and on a
+machine with apt it should keep meaning apt however many other managers carry the name. But
+wanting apt's here does not mean wanting *nothing* on the Fedora box, and before this a line
+had only two settings: one manager forever, or a bare name whose answer got frozen to whichever
+machine synced first. Neither is what someone with two machines means.
+
+**So the prefix is a list, in preference order:**
+
+| written | means |
+|---|---|
+| `apt:rg` | apt or nothing. A pin. Still apt on a machine that also has dnf. |
+| `apt,dnf:rg` | apt, then dnf, and nowhere else. |
+| `apt,list:rg` | apt, then every other manager in `priority`, in its order. |
+| `list:rg` | every manager in `priority`, in order. |
+| `rg` | the same thing — **a bare name is `list:` spelled short.** |
+
+**A comma, not a hyphen.** Package managers have hyphens in their names (`nix-env`, `apt-get`),
+so a hyphen separator stops working the day one of them becomes a backend and `apt-get:rg`
+becomes a guess. A comma never can.
+
+**`list` is reserved** (like `re:`, II.15) and **must come last**: it already means every
+manager in `priority`, so anything written after it can never be reached, and syntax that
+parses but cannot run is a line that lies about what it does. A manager named twice, an empty
+slot (`apt,,dnf`), and a name that is not a backend are each errors — the chain is not a place
+where C13's unchecked prefix gets back in.
+
+**A pattern must still pin.** `apt,dnf:re:^fonts-` is an error: a pattern is matched against
+one manager's catalogue and frozen in one regex lock, and a chain gives it neither (II.15).
+
+**Only an unpinned line is locked.** `apt:rg` has nothing to record — the line already says
+apt. A chain and a bare name record whichever manager answered, in this host's
+`locks/bare.HOST.toml` (II.6), and are re-asked when that manager is gone or the line stops
+accepting it.
+
+**Two lines declaring one name with different lists is an error**, naming both. A name resolves
+to one manager on one machine, so picking either list silently would make the other line a lie —
+the same reasoning as rule 5.
 
 ### Cycles
 
@@ -794,6 +857,7 @@ else, ever.**
 | `plan` | show what sync would do |
 | `check` | parse everything, report errors |
 | `lock [NAME]` | freeze versions / expansions, approve hooks |
+| `unlock [NAME…] [--list]` | forget which manager an unpinned name resolved to, so sync asks again (II.6) |
 | `purge-unmanaged` | delete everything LiNix doesn't manage |
 | `clean` | ask each backend to tidy its own orphans |
 | `unmanaged` | what `adopt` would adopt |
@@ -2282,10 +2346,24 @@ managers does this setup use, and in what order.* It replaces four settings for 
 only two merge today. An explicit `snap:foo` failing when snap isn't listed is a feature: it
 catches typos and makes your backend set declared rather than inherited.
 
-**V.16 — Why bare names get locked.** LiNix *probes* — "does apt have ripgrep?" So `ripgrep`
-lands on cargo today, Ubuntu adds it tomorrow, and the same unchanged line resolves to apt:
-LiNix uninstalls from cargo and installs from apt because a repo you don't control changed.
-**The bare name is the question; the lock is the answer.**
+**V.16 — Why unpinned names get locked, per machine.** LiNix *probes* — "does apt have
+ripgrep?" So `ripgrep` lands on cargo today, Ubuntu adds it tomorrow, and the same unchanged
+line resolves to apt: LiNix uninstalls from cargo and installs from apt because a repo you
+don't control changed. **The unpinned name is the question; the lock is the answer.**
+
+**The answer is per machine, and the lock is not a demand.** `locks/` travels with the config,
+but *which manager has ripgrep* is a fact about a host, so one shared file would have the
+Ubuntu and Fedora boxes overwriting each other's answer on every sync — churn in a tracked
+file and a merge conflict every time. One file per host (II.6) settles that. And a lock naming
+a manager this machine does not have is re-asked, not obeyed: it exists to stop an unedited
+line quietly changing meaning, which is a different thing from insisting on a manager that
+isn't here. Insisting is what a pin is for, and a pin is written on the line (II.7b).
+
+**Where this came from:** a config that resolved `jq` to apt on one box and then moved to a box
+without apt. The lock was honoured, apt was asked, and the run went wrong in a way no wording
+of the lock rule could fix — because the lock was answering a question about the wrong machine.
+The fix is not a better fallback inside the lock; it is that the line says what it will accept
+and the lock only ever records what happened here.
 
 **V.47 — Why a `repo:` line names its backend.** *(Decided 2026-07-17.)* A repository belongs
 to exactly one package manager — a PPA is apt's, a COPR is dnf's, and `add-apt-repository`
@@ -2861,6 +2939,74 @@ Three suspicions did not survive scrutiny:
 **Living section. It is the one place that records progress — Part III stays the plan, this
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
+
+## Session 2026-07-22 (ninth session) — Phase 6 actually ran, and the lock got a shape
+
+**The containers had never been run. They have now**, on real Docker through WSL, doing real
+installs and removals. That is where everything below came from: none of it was visible from a
+green `cargo test` on Windows, which is rule 11 in one line.
+
+**Ubuntu: 79 hard checks, 0 failures.** First time green. Fedora is not, and the reason is
+recorded below.
+
+### 1. Backend chains (II.7b) — owner ruling, 2026-07-22
+
+The prefix on a package line is now a list in preference order: `apt:rg` pins, `apt,dnf:rg`
+tries two, `apt,list:rg` tries apt then the rest of `priority`, and `list:rg` is what a bare
+name has always meant, spelled out. Comma rather than hyphen because `nix-env` and `apt-get`
+are real manager names and a separator a name can contain stops working the day one is added.
+`list` is reserved and must come last; a repeated name, an empty slot, an unknown link, and a
+pattern spread over a chain are each errors.
+
+**The problem it solves.** A line had two settings — one manager forever, or a bare name whose
+answer got frozen to whichever machine synced first — and neither is what someone with two
+machines means. Wanting apt's ripgrep here does not mean wanting nothing on the Fedora box.
+
+### 2. The bare-name lock is per host (II.6, V.16) — owner ruling, 2026-07-22
+
+`locks/bare.toml` → `locks/bare.HOST.toml`. `locks/` travels with the config but *which manager
+has ripgrep* is a fact about a machine, so one shared file had the two boxes overwriting each
+other's answer on every sync — churn in a tracked file, a conflict every time. Each machine now
+writes only its own file; all of them commit cleanly; each still reproduces exactly.
+
+A lock is honoured only when the line still accepts the manager **and this machine has it**;
+otherwise it warns and asks again. The lock exists to stop an unedited line changing meaning,
+which is not the same as insisting on a manager that is not here — insisting is what a pin is
+for. Proven in the container: a `bare.some-other-box.toml` dropped into `locks/` is ignored and
+left untouched.
+
+### 3. `linix unlock [NAME…] [--list]` — owner ruling, 2026-07-22
+
+Forgets what an unpinned name resolved to, so the next sync asks again. For when a better
+source appears: `ripgrep` on cargo because apt did not carry it yet moves to apt once it does,
+**and that sync uninstalls the cargo copy** — the old one is a managed package nothing declares
+any more, which is what drift removal already does. No new mechanism, and no second copy left
+behind.
+
+### 4. Bugs the containers found
+
+- **dnf was invisible on Fedora 41+, and every unpinned name skipped it.** `parse_dnf_search`
+  read dnf4's `name.arch : summary`; dnf5 prints `name.arch<TAB>summary` with `Matched fields:`
+  headers between the rows. The parser matched nothing, so `linix search jq` returned **zero**
+  dnf rows on a box where `dnf list --available jq` lists it — and bare `jq` fell through the
+  whole priority list to `cargo`, whose `jq` is a **library** crate with no binaries, so the
+  install failed. One pass now reads either separator. Also fixed alongside: the name was cut
+  at the first `.`, which renamed `python3.12.x86_64` to `python3` and made it unmatchable.
+- **`cargo` claims any crate with a matching name, including libraries it cannot install.**
+  Not fixed — `cargo search` cannot say whether a crate ships a binary without the registry
+  API. With dnf visible again the system manager wins on Fedora and this stops being reachable
+  there, but a bare name whose only holder is a cargo library still fails at install time
+  rather than at resolution. **Owed.**
+- **The harness lied about removals for nine sections.** `command -v` answers from the shell's
+  hash table, so a package looked up in section 4 still "existed" in section 9 after apt had
+  deleted the file. Every PATH assertion goes through a fresh `sh` now. This was the last
+  Ubuntu failure and it was never LiNix's bug — worth recording because a check that cannot
+  fail is worse than no check.
+
+### 5. Still owed from this session
+
+- Fedora, arch, alpine and tools re-run after the dnf fix; the Windows scoop/winget sweep.
+- The cargo-library-crate resolution gap above.
 
 ## Session 2026-07-21 (eighth session) — the owed list, continued
 

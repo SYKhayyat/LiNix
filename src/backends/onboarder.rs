@@ -307,7 +307,13 @@ struct CustomBackendsFile {
 /// True for a syntactically valid backend id: non-empty, no whitespace or path
 /// separators (it becomes both a HashMap key and an executed command name).
 fn is_valid_backend_name(name: &str) -> bool {
-    !name.is_empty() && !name.chars().any(|c| c.is_whitespace()) && !name.contains(['/', '\\'])
+    !name.is_empty()
+        && !name.chars().any(|c| c.is_whitespace())
+        && !name.contains(['/', '\\'])
+        // A comma separates the managers in a chain and a colon separates the prefix from
+        // the name, so a backend containing either could never be written on a line.
+        && !name.contains([',', ':'])
+        && !crate::config::grammar::RESERVED_BACKEND_NAMES.contains(&name)
 }
 
 
@@ -442,6 +448,21 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_the_prefix_grammar_already_spends_is_refused() {
+        // `re` and `list` mean something in a `backend:name` prefix, so a backend answering
+        // to one could never be reached by a line: `list:rg` would keep meaning the priority
+        // file. Refusing the name is the only place that can be said out loud.
+        assert!(!is_valid_backend_name("re"));
+        assert!(!is_valid_backend_name("list"));
+        // A comma splits a chain and a colon splits the prefix, so neither can be in a name.
+        assert!(!is_valid_backend_name("apt,dnf"));
+        assert!(!is_valid_backend_name("we:ird"));
+        // A hyphen is fine, and has to be: `nix-env` and `apt-get` are real names, which is
+        // why a chain is comma-separated.
+        assert!(is_valid_backend_name("nix-env"));
+    }
 
     #[test]
     fn columns_parser_extracts_name_and_version() {

@@ -247,6 +247,21 @@ pub enum Commands {
     /// approve current hooks), so `sync --locked` reproduces those exact versions elsewhere
     Lock,
 
+    /// Forget which package manager an unpinned name resolved to, so the next sync asks again.
+    ///
+    /// Use it when a better source appears: `ripgrep` frozen to `cargo` because apt did not
+    /// carry it yet moves to `apt` on the next sync once it does — and sync uninstalls the
+    /// cargo copy, because two of the same package is what this avoids. Only names with no
+    /// manager written on their line are affected; `cargo:ripgrep` says cargo and stays.
+    Unlock {
+        /// Name(s) to unfreeze. Empty = every name this host has frozen.
+        names: Vec<String>,
+
+        /// List what is frozen and change nothing
+        #[arg(long)]
+        list: bool,
+    },
+
     /// Parallel search across all searchable repositories
     Search {
         /// Search query string

@@ -1,6 +1,6 @@
 use crate::backends::BackendRegistry;
 use crate::app::vocab::Vocab;
-use crate::config::grammar::{statement, Gates, GrammarError, Origin, Statement};
+use crate::config::grammar::{statement, Candidates, Gates, GrammarError, Origin, Statement};
 use crate::config::parser::HostFacts;
 use crate::config::Config;
 use crate::core::{Error, PackageSpec, Result, Validator};
@@ -24,6 +24,17 @@ enum Coverage {
     OneLine,
 }
 
+/// A candidate list as the line wrote it, for an error to quote back.
+fn describe_candidates(candidates: &Candidates) -> String {
+    match candidates {
+        Candidates::Priority => "every manager in `priority`".to_string(),
+        Candidates::Named(names) => format!("`{}`", names.join(",")),
+        Candidates::NamedThenPriority(names) => {
+            format!("`{},list`", names.join(","))
+        }
+    }
+}
+
 pub struct StateResolver<'a> {
     config: &'a Config,
     registry: Arc<BackendRegistry>,
@@ -38,6 +49,13 @@ pub struct StateResolver<'a> {
     /// disagree with what the plan froze, so `apply` resolves the model against the plan's own
     /// variables. `None` resolves them fresh, which is what every non-plan path does.
     vars_override: Option<crate::model::vars::Vars>,
+    /// Whether this resolution may freeze an unpinned name's backend into this host's
+    /// `locks/bare.HOST.toml`.
+    ///
+    /// Recording is a decision, so only a run that goes on to change the machine makes it.
+    /// Off unless a caller says otherwise: forgetting to ask means a command reads without
+    /// leaving a mark, which is the harmless direction to be wrong in.
+    may_record_locks: bool,
 }
 
 impl<'a> StateResolver<'a> {
@@ -75,6 +93,7 @@ impl<'a> StateResolver<'a> {
             locked,
             locks,
             vars_override: None,
+            may_record_locks: false,
         }
     }
 
@@ -82,6 +101,13 @@ impl<'a> StateResolver<'a> {
     /// provider (used by `apply` to reuse a saved plan's frozen variables).
     pub fn with_vars(mut self, vars: crate::model::vars::Vars) -> Self {
         self.vars_override = Some(vars);
+        self
+    }
+
+    /// Say that this resolution belongs to a run that will act on it, so a bare name it
+    /// settles may be recorded. `reconcile` is the only caller: everything else is looking.
+    pub fn recording_locks(mut self) -> Self {
+        self.may_record_locks = true;
         self
     }
 
@@ -450,7 +476,8 @@ impl<'a> StateResolver<'a> {
         Ok(names)
     }
 
-    /// Ask each backend in `priority` order whether it has this bare name (II.7 step 4).
+    /// Ask each of a name's candidate managers, in order, whether it has that name
+    /// (II.7 step 4).
     ///
     /// Each distinct name is asked once however many lines mention it: the answer is about
     /// the name and the machine, not about the line.
@@ -460,7 +487,14 @@ impl<'a> StateResolver<'a> {
         priority: &Priority,
         coverage: Coverage,
     ) -> Result<HashMap<String, String>> {
-        let mut questions: Vec<(String, Option<String>, Origin)> = Vec::new();
+        struct Question {
+            name: String,
+            candidates: Candidates,
+            constraint: Option<String>,
+            origin: Origin,
+        }
+
+        let mut questions: Vec<Question> = Vec::new();
         for (stmt, origin, _) in statements {
             let Statement::Package(decl) = stmt else {
                 continue;
@@ -469,11 +503,37 @@ impl<'a> StateResolver<'a> {
                 continue;
             }
             let name = decl.selector.as_str().to_string();
-            if questions.iter().any(|(n, _, _)| *n == name) {
+            if let Some(seen) = questions.iter().find(|q| q.name == name) {
+                // Two lines asking the same name to come from different places have no one
+                // answer, and picking either silently would make the other line a lie.
+                if seen.candidates != decl.candidates {
+                    return Err(Error::from(
+                        GrammarError::new(
+                            origin.clone(),
+                            format!(
+                                "`{}` is declared with two different backend lists — {} here, \
+                                 {} in {}.",
+                                name,
+                                describe_candidates(&decl.candidates),
+                                describe_candidates(&seen.candidates),
+                                seen.origin,
+                            ),
+                        )
+                        .with_hint(
+                            "a name resolves to one manager on one machine, so both lines \
+                             have to agree on where it may come from.",
+                        ),
+                    ));
+                }
                 continue;
             }
             let constraint = decl.options.one("version").map(str::to_string);
-            questions.push((name, constraint, origin.clone()));
+            questions.push(Question {
+                name,
+                candidates: decl.candidates.clone(),
+                constraint,
+                origin: origin.clone(),
+            });
         }
 
         // II.6/II.15: the lock is the switch. A recorded name keeps its backend without asking
@@ -485,29 +545,45 @@ impl<'a> StateResolver<'a> {
         let mut lock = crate::core::BareLock::load(&lock_path)?;
         let mut lock_changed = match coverage {
             Coverage::WholeModel => {
-                let declared: Vec<String> = questions.iter().map(|(n, _, _)| n.clone()).collect();
+                let declared: Vec<String> = questions.iter().map(|q| q.name.clone()).collect();
                 lock.retain_declared(&declared)
             }
             Coverage::OneLine => false,
         };
 
+        let listed: Vec<String> = priority.order().to_vec();
+
         let mut answers = HashMap::new();
-        for (name, constraint, origin) in questions {
-            if let Some(backend) = lock.get(&name) {
-                // A frozen backend that `priority` no longer lists is not a lock to honour
-                // silently: `priority` says which managers LiNix may use at all (V.15).
-                if priority.allows(backend) {
-                    debug!("bare `{}` is locked to `{}`.", name, backend);
-                    answers.insert(name, backend.to_string());
+        for question in questions {
+            let Question { name, candidates, constraint, origin } = question;
+            // A candidate `priority` does not list is not a candidate at all: `priority` says
+            // which managers LiNix may use on this host, whatever a line asks for (V.15).
+            let chain: Vec<String> = candidates
+                .order(&listed)
+                .into_iter()
+                .filter(|b| priority.allows(b))
+                .collect();
+
+            if let Some(backend) = lock.get(&name).map(str::to_string) {
+                // Honoured only when the line still accepts it and this machine still has
+                // it. The lock exists to stop an unedited line quietly changing meaning — it
+                // was never a licence to demand a manager that is not here.
+                let usable = self.registry.get(&backend).is_some_and(|b| b.is_available());
+                if chain.contains(&backend) && usable {
+                    debug!("`{}` is locked to `{}`.", name, backend);
+                    answers.insert(name, backend);
                     continue;
                 }
                 warn!(
-                    "`{}` was locked to `{}`, which is no longer in `priority`. Asking again.",
-                    name, backend
+                    "`{}` was locked to `{}`, which {}. Asking again.",
+                    name,
+                    backend,
+                    if usable { "this line no longer accepts" } else { "this machine does not have" }
                 );
             }
+
             let mut found = None;
-            for backend in priority.order() {
+            for backend in &chain {
                 if self
                     .remote_package_exists(backend, &name, constraint.as_deref())
                     .await
@@ -518,24 +594,35 @@ impl<'a> StateResolver<'a> {
             }
             match found {
                 Some(backend) => {
-                    debug!("bare `{}` resolved to `{}`.", name, backend);
+                    debug!("`{}` resolved to `{}`.", name, backend);
                     lock_changed |= lock.record(&name, &backend);
                     answers.insert(name, backend);
                 }
-                // No backend has it, so there is no honest answer to give. The old code
+                // No candidate has it, so there is no honest answer to give. The old code
                 // fell back to a default backend, which turned a typo into a request to
                 // install a package that does not exist, reported by whichever backend
                 // happened to be first (P3).
                 None => {
                     let grammar = GrammarError::new(
                         origin,
-                        format!("no package manager in your `priority` list has `{}`.", name),
+                        format!(
+                            "no package manager this line accepts has `{}`.",
+                            name
+                        ),
                     )
-                    .with_hint(format!(
-                        "tried {} in order. Check the spelling, or name the backend on the \
-                         line if it comes from somewhere else.",
-                        priority.order().join(", ")
-                    ));
+                    .with_hint(if chain.is_empty() {
+                        format!(
+                            "{} — and none of them is in your `priority` file, so LiNix may \
+                             not use any of them here.",
+                            describe_candidates(&candidates)
+                        )
+                    } else {
+                        format!(
+                            "tried {} in order. Check the spelling, or name a manager on the \
+                             line if it comes from somewhere else.",
+                            chain.join(", ")
+                        )
+                    });
                     return Err(Error::Unresolvable {
                         message: grammar.to_string(),
                         name,
@@ -546,7 +633,9 @@ impl<'a> StateResolver<'a> {
 
         // Written only when it changed: an unchanged lock rewritten every run would make
         // every sync a commit (V.30 commits on success, and there would always be something).
-        if lock_changed {
+        // And only by a run that acts: a preview that froze the backend it guessed at made
+        // the real install afterwards use that guess.
+        if lock_changed && self.may_record_locks && !self.config.dry_run {
             lock.save(&lock_path)?;
         }
         Ok(answers)

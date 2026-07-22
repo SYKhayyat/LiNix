@@ -3,8 +3,56 @@ use super::options::{parse_short, Options};
 
 /// `re` is reserved: `apt:re:^fonts-` must always mean a regex, so a custom backend named
 /// `re` (which the onboarder would otherwise happily accept) would make `re:foo`
-/// ambiguous forever.
-pub const RESERVED_BACKEND_NAMES: &[&str] = &["re"];
+/// ambiguous forever. `list` is reserved for the same reason — it names the `priority` file
+/// inside a backend chain (`apt,list:rg`), so a backend called `list` would make that
+/// unreadable.
+pub const RESERVED_BACKEND_NAMES: &[&str] = &["re", "list"];
+
+/// The word that means "the `priority` file" where a backend name is expected.
+pub const PRIORITY_KEYWORD: &str = "list";
+
+/// Which managers a line will accept, when it has not pinned exactly one.
+///
+/// A pin (`apt:rg`) says apt or nothing — carried in `PackageDecl::backend`, so this only
+/// describes the unpinned case. Separating the two is what lets `apt:rg` keep meaning apt on
+/// a machine that also has dnf, while `apt,dnf:rg` and a bare `rg` stay installable on a
+/// machine that has neither apt nor the manager some other machine froze the name to.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Candidates {
+    /// A bare name (`rg`), spelled explicitly as `list:rg`: every manager in `priority`, in
+    /// that order.
+    #[default]
+    Priority,
+    /// `apt,dnf:rg` — these, in this order, and nothing else.
+    Named(Vec<String>),
+    /// `apt,list:rg` — these first, then the rest of `priority` in its own order.
+    NamedThenPriority(Vec<String>),
+}
+
+impl Candidates {
+    /// The managers to ask, in order. `priority` supplies the tail for the two variants that
+    /// end in `list`; a name already asked for is not asked twice.
+    pub fn order(&self, priority: &[String]) -> Vec<String> {
+        let (head, tail): (&[String], &[String]) = match self {
+            Candidates::Priority => (&[], priority),
+            Candidates::Named(names) => (names, &[]),
+            Candidates::NamedThenPriority(names) => (names, priority),
+        };
+        let mut out: Vec<String> = head.to_vec();
+        for name in tail {
+            if !out.contains(name) {
+                out.push(name.clone());
+            }
+        }
+        out
+    }
+
+    /// Whether this line would accept `backend`. A lock naming a manager the line no longer
+    /// lists is not an answer to the question the line is now asking.
+    pub fn accepts(&self, backend: &str, priority: &[String]) -> bool {
+        self.order(priority).iter().any(|b| b == backend)
+    }
+}
 
 /// What a package line selects inside its backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,9 +75,12 @@ impl Selector {
 /// selects, and its options.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageDecl {
-    /// `None` for a bare name. II.7 resolves it via `priority`, then locks the answer —
-    /// the bare name is the question, the lock is the answer (V.16).
+    /// `Some` only when the line pinned exactly one manager (`apt:rg`). II.7 resolves the
+    /// rest through `candidates`, then locks the answer — the unpinned name is the question,
+    /// the lock is the answer (V.16).
     pub backend: Option<String>,
+    /// Which managers may answer, when `backend` is `None`. Ignored when it is `Some`.
+    pub candidates: Candidates,
     pub selector: Selector,
     pub options: Options,
 }
@@ -364,6 +415,86 @@ fn split_options(origin: &Origin, text: &str) -> Result<(String, Options)> {
     }
 }
 
+/// Read the `backend:` prefix of a package line, which may name a chain.
+///
+/// `apt` pins. `apt,dnf` and `apt,list` do not — they say what the line will accept, in
+/// order, and leave the choosing to the machine. A comma rather than a hyphen because
+/// package managers have hyphens in their names (`nix-env`, `apt-get`), and a separator a
+/// backend name can contain is a separator that stops working the day such a backend is
+/// added.
+fn parse_prefix(
+    origin: &Origin,
+    prefix: &str,
+    backends: &dyn BackendNames,
+) -> Result<(Option<String>, Candidates)> {
+    let parts: Vec<&str> = prefix.split(',').map(str::trim).collect();
+
+    let unknown = |name: &str| {
+        GrammarError::new(
+            origin.clone(),
+            format!("`{}` is not a backend LiNix uses", name),
+        )
+        .with_hint(format!(
+            "add `{}` to your `priority` file, or check the spelling. Not listed means \
+             LiNix does not use it at all.",
+            name
+        ))
+    };
+
+    // `list` is only a tail: everything after it would never be reached, and writing
+    // something unreachable means the line does not say what its author thinks it says.
+    if let Some(pos) = parts.iter().position(|p| *p == PRIORITY_KEYWORD) {
+        if pos != parts.len() - 1 {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`{}` must come last in `{}`", PRIORITY_KEYWORD, prefix),
+            )
+            .with_hint(format!(
+                "`{}` already means every manager in `priority`, so nothing written after \
+                 it can ever be reached.",
+                PRIORITY_KEYWORD
+            )));
+        }
+    }
+
+    let mut named: Vec<String> = Vec::new();
+    let mut ends_in_priority = false;
+    for part in &parts {
+        if part.is_empty() {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`{}` has an empty backend in it", prefix),
+            )
+            .with_hint("write `apt,dnf:rg` — one manager between each comma."));
+        }
+        if *part == PRIORITY_KEYWORD {
+            ends_in_priority = true;
+            continue;
+        }
+        if !backends.is_backend(part) {
+            return Err(unknown(part));
+        }
+        if named.iter().any(|n| n == part) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`{}` is named twice in `{}`", part, prefix),
+            )
+            .with_hint("the first one already decides; the second can never be reached."));
+        }
+        named.push(part.to_string());
+    }
+
+    Ok(match (named.len(), ends_in_priority) {
+        // `list:rg`, which is what a bare `rg` means spelled out.
+        (0, true) => (None, Candidates::Priority),
+        (0, false) => return Err(unknown(prefix)),
+        // One manager and no tail is the pin: apt or nothing.
+        (1, false) => (Some(named.remove(0)), Candidates::Priority),
+        (_, false) => (None, Candidates::Named(named)),
+        (_, true) => (None, Candidates::NamedThenPriority(named)),
+    })
+}
+
 fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Result<PackageDecl> {
     let (head, options) = match text.split_once('@') {
         Some((head, opts)) => (head.trim(), parse_short(origin, opts)?),
@@ -384,24 +515,12 @@ fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Re
         .with_hint("write `apt:re:^fonts-`. A pattern has to be matched somewhere."));
     }
 
-    let (backend, rest) = match head.split_once(':') {
-        Some((prefix, rest)) if backends.is_backend(prefix) => {
-            (Some(prefix.to_string()), rest.trim())
+    let (backend, candidates, rest) = match head.split_once(':') {
+        Some((prefix, rest)) => {
+            let (backend, candidates) = parse_prefix(origin, prefix, backends)?;
+            (backend, candidates, rest.trim())
         }
-        // A colon that is not a known backend. Guessing it is a backend is C13; guessing it
-        // is part of the name silently accepts `snap:foo` on a host with no snap. Refuse.
-        Some((prefix, _)) => {
-            return Err(GrammarError::new(
-                origin.clone(),
-                format!("`{}` is not a backend LiNix uses", prefix),
-            )
-            .with_hint(format!(
-                "add `{}` to your `priority` file, or check the spelling. Not listed means \
-                 LiNix does not use it at all.",
-                prefix
-            )));
-        }
-        None => (None, head),
+        None => (None, Candidates::Priority, head),
     };
 
     let selector = match rest.strip_prefix("re:") {
@@ -409,6 +528,19 @@ fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Re
             let pattern = pattern.trim();
             if pattern.is_empty() {
                 return Err(GrammarError::new(origin.clone(), "`re:` has no pattern"));
+            }
+            // A pattern is matched against one manager's catalogue and frozen in that
+            // manager's regex lock. Spread over a chain there is no single catalogue to
+            // match and no single lock to write, so the line has to pin.
+            if backend.is_none() {
+                return Err(GrammarError::new(
+                    origin.clone(),
+                    format!("`{}` must match in exactly one backend", head),
+                )
+                .with_hint(
+                    "write `apt:re:^fonts-`. A pattern is matched against one manager's \
+                     catalogue, so a chain has nothing to match against.",
+                ));
             }
             Selector::Regex(pattern.to_string())
         }
@@ -431,6 +563,7 @@ fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Re
 
     Ok(PackageDecl {
         backend,
+        candidates,
         selector,
         options,
     })
@@ -850,6 +983,102 @@ mod tests {
         assert_eq!(d.selector, Selector::Name("ripgrep".into()));
     }
 
+    /// The `Candidates` of a line that parses, for the chain tests.
+    fn cands(line: &str) -> (Option<String>, Candidates) {
+        let Statement::Package(d) = p(line).unwrap() else {
+            panic!("`{}` did not parse as a package", line)
+        };
+        (d.backend, d.candidates)
+    }
+
+    #[test]
+    fn a_lone_backend_pins_and_a_chain_does_not() {
+        // The distinction the whole design rests on: `apt:rg` is apt or nothing, so it is
+        // still apt on a machine that also has cargo. Anything with a comma is a preference,
+        // not a pin, and the machine gets to answer.
+        assert_eq!(cands("apt:curl"), (Some("apt".into()), Candidates::Priority));
+        assert_eq!(
+            cands("apt,cargo:ripgrep"),
+            (None, Candidates::Named(vec!["apt".into(), "cargo".into()]))
+        );
+    }
+
+    #[test]
+    fn list_is_how_a_bare_name_is_spelled_out() {
+        assert_eq!(cands("ripgrep"), (None, Candidates::Priority));
+        assert_eq!(cands("list:ripgrep"), (None, Candidates::Priority));
+    }
+
+    #[test]
+    fn a_chain_can_end_in_the_whole_priority_list() {
+        assert_eq!(
+            cands("apt,list:ripgrep"),
+            (None, Candidates::NamedThenPriority(vec!["apt".into()]))
+        );
+    }
+
+    #[test]
+    fn nothing_may_follow_list_in_a_chain() {
+        // Unreachable syntax that parses is syntax that lies about what the line does.
+        let err = p("list,apt:ripgrep").unwrap_err();
+        assert!(err.what.contains("must come last"), "{}", err.what);
+    }
+
+    #[test]
+    fn a_backend_named_twice_in_a_chain_is_refused() {
+        let err = p("apt,cargo,apt:ripgrep").unwrap_err();
+        assert!(err.what.contains("named twice"), "{}", err.what);
+    }
+
+    #[test]
+    fn an_unknown_backend_inside_a_chain_is_still_unknown() {
+        // C13 again, one level down: the chain must not become a place where an unchecked
+        // prefix slips through.
+        let err = p("apt,nope:ripgrep").unwrap_err();
+        assert!(err.what.contains("`nope` is not a backend"), "{}", err.what);
+    }
+
+    #[test]
+    fn an_empty_slot_in_a_chain_is_refused() {
+        let err = p("apt,,cargo:ripgrep").unwrap_err();
+        assert!(err.what.contains("empty backend"), "{}", err.what);
+    }
+
+    #[test]
+    fn a_pattern_cannot_span_a_chain() {
+        // A pattern is matched against one catalogue and frozen in one regex lock; a chain
+        // gives it neither.
+        let err = p("apt,cargo:re:^fonts-").unwrap_err();
+        assert!(err.what.contains("exactly one backend"), "{}", err.what);
+        assert!(p("apt:re:^fonts-").is_ok());
+    }
+
+    #[test]
+    fn the_order_asked_is_the_order_written_then_priority() {
+        let priority: Vec<String> = ["apt", "snap", "cargo"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(Candidates::Priority.order(&priority), priority);
+        assert_eq!(
+            Candidates::Named(vec!["cargo".into()]).order(&priority),
+            vec!["cargo".to_string()],
+            "a closed chain never reaches priority"
+        );
+        // The named head keeps its place and is not repeated when the tail names it again.
+        assert_eq!(
+            Candidates::NamedThenPriority(vec!["cargo".into()]).order(&priority),
+            vec!["cargo".to_string(), "apt".to_string(), "snap".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_chain_only_accepts_what_it_lists() {
+        let priority: Vec<String> = ["apt", "snap"].iter().map(|s| s.to_string()).collect();
+        let chain = Candidates::Named(vec!["apt".into()]);
+        assert!(chain.accepts("apt", &priority));
+        // The lock naming `snap` is not an answer to this line, even though the host lists it.
+        assert!(!chain.accepts("snap", &priority));
+        assert!(Candidates::Priority.accepts("snap", &priority));
+    }
+
     #[test]
     fn an_explicit_backend_is_read() {
         let Statement::Package(d) = p("apt:curl").unwrap() else {
@@ -891,8 +1120,12 @@ mod tests {
     }
 
     #[test]
-    fn re_is_reserved_against_a_custom_backend() {
+    fn the_reserved_words_are_the_ones_the_prefix_grammar_spends() {
+        // `re:` introduces a pattern and `list` names the priority file, so a backend
+        // answering to either would make `re:foo` / `apt,list:foo` ambiguous forever. The
+        // onboarder refuses these names; this pins the list it refuses.
         assert!(RESERVED_BACKEND_NAMES.contains(&"re"));
+        assert!(RESERVED_BACKEND_NAMES.contains(&PRIORITY_KEYWORD));
     }
 
     #[test]

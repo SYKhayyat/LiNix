@@ -154,6 +154,7 @@ async fn main() -> Result<()> {
         Commands::Run { packages, command } => handle_run(&app, packages, command).await,
         Commands::Status { json } => handle_status(&app, *json).await,
         Commands::Lock => handle_lock(&app).await,
+        Commands::Unlock { names, list } => handle_unlock(&app, names, *list).await,
         Commands::Plan { out } => handle_plan(&app, out).await,
         Commands::Apply { plan, yes } => handle_apply(&app, plan, *yes).await,
         Commands::Update => handle_update(&app).await,
@@ -431,7 +432,8 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         app.registry.clone(),
         opts.locked,
     )
-    .await;
+    .await
+    .recording_locks();
     // The whole desired state, extras included — repos must be applied before packages
     // (II.7), so this needs more than the package map.
     let state = resolver.resolve_model().await?;
@@ -3111,6 +3113,51 @@ async fn handle_lock(app: &App) -> Result<()> {
                 &app.config.config_root().join("locks")
             )
             .display()
+        );
+    }
+    Ok(())
+}
+
+async fn handle_unlock(app: &App, names: &[String], list: bool) -> Result<()> {
+    let path = linix::core::BareLock::path_in(&app.config.config_root().join("locks"));
+    let mut lock = linix::core::BareLock::load(&path)?;
+
+    if list || (names.is_empty() && lock.is_empty()) {
+        if lock.is_empty() {
+            info!("Nothing is frozen on this host.");
+            return Ok(());
+        }
+        for (name, backend) in lock.entries() {
+            info!("{} -> {}", name, backend);
+        }
+        return Ok(());
+    }
+
+    let changed = if names.is_empty() {
+        let n = lock.entries().count();
+        lock.clear();
+        info!("Unlocked {} name(s). The next sync asks again.", n);
+        true
+    } else {
+        let mut any = false;
+        for name in names {
+            if lock.forget(name) {
+                any = true;
+                info!("Unlocked `{}`. The next sync asks again.", name);
+            } else {
+                // Not an error: a name with a manager written on its line was never frozen,
+                // and saying so is more use than a failure the caller has to interpret.
+                warn!("`{}` was not frozen on this host — nothing to unlock.", name);
+            }
+        }
+        any
+    };
+
+    if changed {
+        lock.save(&path)?;
+        info!(
+            "Run `linix sync` to re-resolve. A name that moves manager is reinstalled from \
+             the new one and removed from the old."
         );
     }
     Ok(())

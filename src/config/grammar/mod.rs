@@ -13,7 +13,8 @@ pub use error::{GrammarError, Origin, Result};
 pub use gated::{GatedLine, Vocabulary};
 pub use options::Options;
 pub use statement::{
-    BackendNames, PackageDecl, Reference, Selector, Statement, RESERVED_BACKEND_NAMES,
+    BackendNames, Candidates, PackageDecl, Reference, Selector, Statement,
+    PRIORITY_KEYWORD, RESERVED_BACKEND_NAMES,
 };
 
 use crate::config::parser::{eval_when, HostFacts};
