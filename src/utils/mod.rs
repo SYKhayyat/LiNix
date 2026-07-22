@@ -10,7 +10,7 @@ use std::path::PathBuf;
 pub use archive::{extract_archive, is_archive};
 pub use file::{
     atomic_write, bin_destination, deploy_executable, ensure_dir, read_lines_filtered,
-    remove_deployed_path,
+    remove_deployed_path, strip_archive_suffixes,
 };
 pub use progress::{create_progress_reporter, ProgressHandle, ProgressReporter};
 pub use retry::{retry, retry_default, RetryConfig};

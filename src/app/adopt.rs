@@ -166,7 +166,23 @@ impl Adopter {
     #[instrument(skip(self))]
     pub async fn adopt(&self) -> Result<()> {
         debug!("scanning for packages to adopt");
-        let found = self.discover().await?;
+        let mut found = self.discover().await?;
+
+        // Before the count is reported, or "3 candidates" is followed by a manifest holding
+        // one. II.9: one `modules/adopted.txt`, overwritten. Adopting twice must answer "the
+        // machine as it is now" and not "the machine plus history" — a per-run file would
+        // declare every package twice, which the resolver refuses as a contradiction
+        // (II.7 rule 5).
+        let priority = crate::app::sync::resolver::StateResolver::new(
+            &self.config,
+            self.registry.clone(),
+            false,
+        )
+        .await
+        .priority_for_host()
+        .await?;
+        let vocab = crate::app::vocab::Vocab::new(&self.registry, &self.config, &priority);
+        Self::hold_back_what_cannot_be_written(&mut found);
 
         if found.adopt.is_empty() {
             info!("nothing new to adopt");
@@ -183,21 +199,7 @@ impl Adopter {
 
         info!("{} candidate(s) for adoption.", found.adopt.len());
 
-        // II.9: one `modules/adopted.txt`, overwritten. Adopting twice must answer "the
-        // machine as it is now" and not "the machine plus history" — a per-run file would
-        // declare every package twice, which the resolver refuses as a contradiction
-        // (II.7 rule 5).
-        let priority = crate::app::sync::resolver::StateResolver::new(
-            &self.config,
-            self.registry.clone(),
-            false,
-        )
-        .await
-        .priority_for_host()
-        .await?;
-        let vocab = crate::app::vocab::Vocab::new(&self.registry, &self.config, &priority);
         let layout = self.config.layout();
-
         let manifest = self.render_manifest(&found);
         let facts = crate::app::sync::StateResolver::new(&self.config, self.registry.clone(), false)
             .await
@@ -250,6 +252,35 @@ impl Adopter {
 
     /// The manifest, as a string. Split out from the write so it can be tested without a
     /// filesystem, and so the exact words a user is asked to trust are pinned by a test.
+    /// Move every candidate whose `backend:name` the grammar cannot read into `skipped`.
+    ///
+    /// A manager may report something that is not a declarable name: `winget list` answers
+    /// for Add/Remove-Programs entries with pseudo-IDs like `ARP\Machine\X64\Android Studio`,
+    /// and a package name is one word (II.2). Written out, that line is a parse error in the
+    /// file LiNix just generated — and since every later command parses the model, adopting
+    /// wedged the whole config until someone hand-edited it.
+    ///
+    /// Asked through `statement::parse`, not a second copy of the naming rule: whatever the
+    /// grammar accepts is exactly what may be written.
+    fn hold_back_what_cannot_be_written(found: &mut Discovery) {
+        let mut kept = Vec::with_capacity(found.adopt.len());
+        for pkg in std::mem::take(&mut found.adopt) {
+            if crate::config::grammar::is_declarable(&pkg.backend, &pkg.name) {
+                kept.push(pkg);
+            } else {
+                warn!("`{}:{}` cannot be written as a package line.", pkg.backend, pkg.name);
+                found.skipped.push(Skipped {
+                    package: pkg,
+                    reason: "its manager reports a name no package line can hold".to_string(),
+                });
+            }
+        }
+        found.adopt = kept;
+        found.skipped.sort_by(|a, b| {
+            (&a.package.backend, &a.package.name).cmp(&(&b.package.backend, &b.package.name))
+        });
+    }
+
     fn render_manifest(&self, found: &Discovery) -> String {
         let mut out = String::new();
 
@@ -295,11 +326,13 @@ impl Adopter {
         if !found.skipped.is_empty() {
             out.push_str(
                 "\n\
-# === The OS says these are essential ===\n\
+# === Found, but left alone ===\n\
 #   Commented out on purpose: they are listed so you know they exist, not handed to\n\
 #   you as lines whose deletion means \"uninstall\". They stay installed either way.\n\
-#   Uncomment one to manage it — the guard still refuses to remove it unless you put\n\
-#   it in `unprotected_packages`.\n\
+#   Most are packages the OS calls essential — uncomment one to manage it, and the\n\
+#   guard still refuses to remove it unless you put it in `unprotected_packages`.\n\
+#   The rest are names their manager reports in a form no line can hold, so there is\n\
+#   nothing to uncomment: the reason says which.\n\
 #\n",
             );
             for s in &found.skipped {
@@ -613,6 +646,32 @@ mod tests {
         // protection stops the removal, not the adoption (V.26). Here both are just manual.
         assert!(text.contains("\napt:jq\n"), "{}", text);
         assert!(text.contains("\napt:python3\n"), "{}", text);
+    }
+
+    #[test]
+    fn a_name_no_line_can_hold_is_reported_rather_than_written() {
+        // `winget list` answers for Add/Remove-Programs entries with pseudo-IDs like
+        // `ARP\Machine\X64\Android Studio`. Written into `modules/adopted.txt`, that is a
+        // parse error in a file LiNix generated — and since every later command parses the
+        // model, one such name wedged the whole config until it was hand-edited. Found by
+        // the live Windows sweep, where `rollback` died on adopted.txt:69.
+
+        let mut found = Discovery {
+            adopt: vec![
+                Package::new("7zip.7zip", "winget"),
+                Package::new(r"ARP\Machine\X64\Android Studio", "winget"),
+            ],
+            ..Default::default()
+        };
+        Adopter::hold_back_what_cannot_be_written(&mut found);
+
+        assert_eq!(found.adopt.len(), 1, "only the writable name is adopted");
+        assert_eq!(found.adopt[0].name, "7zip.7zip");
+        assert_eq!(found.skipped.len(), 1, "and the other is reported, not dropped");
+        assert!(
+            found.skipped[0].package.name.contains("Android Studio"),
+            "the manifest has to name what it could not take"
+        );
     }
 
     #[tokio::test]

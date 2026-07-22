@@ -17,6 +17,10 @@ ENV PATH="/root/.local/bin:/root/.cargo/bin:${PATH}"
 # leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
 RUN corepack enable || true
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
+# `--no-cache` above fetches the index per command and keeps none, so at runtime apk could
+# answer nothing and every unpinned name skipped it. A real Alpine box has an index; this
+# gives the container one, or the sweep is not testing apk at all.
+RUN apk update
 WORKDIR /src
 COPY . /src
 RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix

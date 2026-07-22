@@ -25,7 +25,11 @@ cargo install --git $repo --locked
 if ($LASTEXITCODE -ne 0) { cargo install --git $repo }
 
 $cargoBin = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin' } else { Join-Path $HOME '.cargo\bin' }
-$linix = if (Get-Command linix -ErrorAction SilentlyContinue) { 'linix' } else { Join-Path $cargoBin 'linix.exe' }
+# The binary just installed, by path, in preference to whatever `linix` resolves to on this
+# session's PATH — that could be an older install elsewhere, and the health check below is
+# supposed to vouch for the one this script produced.
+$fresh = Join-Path $cargoBin 'linix.exe'
+$linix = if (Test-Path $fresh) { $fresh } else { 'linix' }
 
 if (-not (Get-Command linix -ErrorAction SilentlyContinue)) {
     Err "Add $cargoBin to your PATH to use 'linix'."

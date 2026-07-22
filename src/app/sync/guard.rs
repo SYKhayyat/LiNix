@@ -71,6 +71,9 @@ pub enum Protection {
     Rule(String),
     /// The backend reports the OS itself treats this as essential.
     OsEssential(String),
+    /// The manager reports a name that cannot be written as a package line, so LiNix can
+    /// never declare it — and what it cannot be asked to keep, it must not take away.
+    Undeclarable,
 }
 
 impl Protection {
@@ -80,9 +83,15 @@ impl Protection {
             Self::OsEssential(backend) => {
                 format!("{} reports it as essential to the system", backend)
             }
+            Self::Undeclarable => {
+                "its manager reports a name no package line can hold, so LiNix cannot manage \
+                 it — and removing what you cannot declare is not something you asked for"
+                    .to_string()
+            }
         }
     }
 }
+
 
 /// The single decision function: may `name` be removed from `backend`?
 ///
@@ -99,6 +108,14 @@ pub fn protection_of(
     name: &str,
     os_essential: &HashSet<String>,
 ) -> Option<Protection> {
+    // Before the escape hatch, because this one is not a policy: a name no line can hold
+    // cannot be declared, so LiNix never manages it and `unprotected_packages` has nothing
+    // to release. Saying yes here would let `purge-unmanaged` remove programs that could
+    // never have been adopted in the first place.
+    if !crate::config::grammar::is_declarable(backend, name) {
+        return Some(Protection::Undeclarable);
+    }
+
     // An explicit un-protect entry wins over everything, including the OS's own essential
     // flag. It is the user saying "I know, I manage this one myself", and nothing should
     // be able to overrule that — otherwise the escape hatch does not open for exactly the
@@ -429,6 +446,38 @@ mod tests {
             .iter()
             .map(|n| ("apt".to_string(), n.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn a_name_no_line_can_hold_is_never_removed() {
+        // `winget list` reports Add/Remove-Programs entries as `ARP\Machine\X64\Android
+        // Studio`. A package name is one word, so `adopt` cannot take it — which leaves it
+        // unmanaged forever and therefore a standing `purge-unmanaged` candidate. LiNix must
+        // not remove what it could never have been asked to keep.
+        let cfg = Config::default();
+        let empty = HashSet::new();
+        assert!(matches!(
+            protection_of(&cfg, "winget", r"ARP\Machine\X64\Android Studio", &empty),
+            Some(Protection::Undeclarable)
+        ));
+        assert!(protection_of(&cfg, "winget", "7zip.7zip", &empty).is_none());
+    }
+
+    #[test]
+    fn unprotecting_cannot_release_a_name_that_cannot_be_declared() {
+        // `unprotected_packages` says "I manage this one myself". You cannot manage what you
+        // cannot write down, so this is the one protection the escape hatch does not open.
+        let cfg = Config {
+            guard: crate::config::GuardSettings {
+                unprotected_packages: vec!["*".into()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(matches!(
+            protection_of(&cfg, "winget", "Some Program 1.0", &HashSet::new()),
+            Some(Protection::Undeclarable)
+        ));
     }
 
     fn config_with(max: usize) -> Config {

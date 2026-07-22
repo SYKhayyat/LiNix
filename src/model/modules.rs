@@ -7,6 +7,20 @@ use crate::config::grammar::{
 use crate::config::parser::HostFacts;
 use std::collections::HashMap;
 
+/// Names the set operation if `stmt` is one, and `None` if a module may hold it.
+///
+/// II.3: a module is a list. `-` subtraction does not exist in one; `absent:` does. Choosing
+/// is the profile's job (II.4, V.2), and set math is choosing.
+pub fn set_math_in_a_module(stmt: &Statement) -> Option<&'static str> {
+    match stmt {
+        Statement::Exclude(_) => Some("exclude"),
+        Statement::Intersect(_) => Some("intersect"),
+        Statement::Subtract(_) => Some("`-` subtraction"),
+        Statement::Expr(_) => Some("a set expression"),
+        _ => None,
+    }
+}
+
 /// Loads modules on demand (SPEC II.3).
 ///
 /// **LiNix only parses what the active profiles reach.** Not an optimisation: the old
@@ -54,6 +68,10 @@ impl<'a> ModuleLoader<'a> {
     ///
     /// The layering rule. Without it, "what does `editors` contain?" has a different answer
     /// depending on what you activated — the library cannot depend on the app (V.2).
+    ///
+    /// The per-statement half is [`set_math_in_a_module`], shared with the editor: what may
+    /// not be read out of a module file may not be written into one either, and two copies of
+    /// that rule is how a writer comes to produce files the reader refuses.
     fn reject_profile_references(&self, doc: &Document) -> Result<()> {
         for (stmt, origin) in flatten(doc) {
             if let Statement::Use(Reference::Profile(p)) = stmt {
@@ -66,16 +84,7 @@ impl<'a> ModuleLoader<'a> {
                      module contains would depend on what you activated.",
                 ));
             }
-            // II.3: a module is a list. `-` subtraction does not exist in one; `absent:`
-            // does. Choosing is the profile's job (II.4, V.2), and set math is choosing.
-            let what = match stmt {
-                Statement::Exclude(_) => Some("exclude"),
-                Statement::Intersect(_) => Some("intersect"),
-                Statement::Subtract(_) => Some("`-` subtraction"),
-                Statement::Expr(_) => Some("a set expression"),
-                _ => None,
-            };
-            if let Some(what) = what {
+            if let Some(what) = set_math_in_a_module(stmt) {
                 return Err(GrammarError::new(
                     origin.clone(),
                     format!("a module cannot use {}", what),

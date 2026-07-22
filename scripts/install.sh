@@ -31,6 +31,10 @@ fi
 
 # cargo installs into ~/.cargo/bin; make sure the user can find it.
 CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin"
+# The shell caches where it found a name. Upgrading over an older `linix` on PATH leaves the
+# cache pointing at the binary that was just replaced, and every line below would then run
+# the old one — including the health check that is supposed to vouch for the new.
+hash -r 2>/dev/null || true
 if ! command -v linix >/dev/null 2>&1; then
   case ":$PATH:" in
     *":$CARGO_BIN:"*) : ;;
@@ -38,7 +42,14 @@ if ! command -v linix >/dev/null 2>&1; then
   esac
 fi
 
-LINIX="$(command -v linix || echo "$CARGO_BIN/linix")"
+# The binary just installed, by path, in preference to whatever `linix` resolves to on this
+# PATH — that could be an older install elsewhere, and the health check is supposed to vouch
+# for the one this script produced.
+if [ -x "$CARGO_BIN/linix" ]; then
+  LINIX="$CARGO_BIN/linix"
+else
+  LINIX="$(command -v linix || echo "$CARGO_BIN/linix")"
+fi
 
 say "running health check..."
 "$LINIX" doctor || true

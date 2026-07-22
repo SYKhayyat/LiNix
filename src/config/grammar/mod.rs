@@ -20,6 +20,26 @@ pub use statement::{
 use crate::config::parser::{eval_when, HostFacts};
 use std::path::Path;
 
+/// Whether `backend:name` could be written on a line and read back as the same package.
+///
+/// A package manager may report something that is not a declarable name: `winget list`
+/// answers for Add/Remove-Programs entries with pseudo-IDs like
+/// `ARP\Machine\X64\Android Studio`, and a package name is one word (II.2). Anything that
+/// turns a manager's answer into a declaration — or decides whether LiNix could ever have
+/// been asked to keep one — has to agree on that, so they all ask here.
+///
+/// Round-tripped rather than parsed: `winget:ARP\Machine\X64\Android Studio` *parses*, as a
+/// set expression, and only reading it back as the package it came from catches that.
+pub fn is_declarable(backend: &str, name: &str) -> bool {
+    let line = format!("{}:{}", backend, name);
+    let is_this_backend = |n: &str| n == backend;
+    matches!(
+        statement::parse(&Origin::argument(), &line, &is_this_backend),
+        Ok(Statement::Package(d))
+            if d.backend.as_deref() == Some(backend) && d.selector.as_str() == name
+    )
+}
+
 /// A `{ }` block, already classified by its header. II.2: the header decides what the body
 /// is — `module` and `when` are keywords whose bodies are lines; anything else is a
 /// declaration whose body is options.

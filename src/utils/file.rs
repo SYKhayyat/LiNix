@@ -75,6 +75,31 @@ pub fn force_remove(path: &Path) -> Result<()> {
 ///
 /// `confined` is the `[guard] confine_bin` key: off restores the unchecked join. The opening is
 /// the user's to make, and it is the whole file's worth of blast radius.
+/// Archive and package extensions, longest-tail first so `.tar.gz` comes off as a unit.
+const ARCHIVE_SUFFIXES: &[&str] = &[
+    ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tgz", ".tbz2", ".txz",
+    ".zip", ".gz", ".bz2", ".xz", ".zst", ".7z", ".exe", ".appimage",
+];
+
+/// The name a downloaded file installs under.
+///
+/// Only known suffixes come off, and repeatedly: cutting at the first `.` turned
+/// `ripgrep-14.1.0-x86_64.tar.gz` into `ripgrep-14`, and that misnamed binary is what
+/// landed on PATH.
+pub fn strip_archive_suffixes(filename: &str) -> &str {
+    let mut name = filename;
+    loop {
+        let lower = name.to_ascii_lowercase();
+        match ARCHIVE_SUFFIXES
+            .iter()
+            .find(|s| lower.ends_with(*s))
+        {
+            Some(suffix) => name = &name[..name.len() - suffix.len()],
+            None => return name,
+        }
+    }
+}
+
 pub fn bin_destination(bin_dir: &Path, name: &str, confined: bool) -> Result<PathBuf> {
     let refuse = |why: &str| {
         Err(Error::Validation(format!(
@@ -352,5 +377,30 @@ mod tests {
         assert!(deploy_executable(&src, &dest, src.parent().unwrap(), None)
             .await
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod suffix_tests {
+    use super::strip_archive_suffixes;
+
+    #[test]
+    fn a_dotted_version_is_not_mistaken_for_an_extension() {
+        // Cutting at the first `.` named the installed binary `ripgrep-14`.
+        assert_eq!(strip_archive_suffixes("ripgrep-14.1.0-x86_64.tar.gz"), "ripgrep-14.1.0-x86_64");
+        assert_eq!(strip_archive_suffixes("fd-v10.2.0-x86_64-unknown-linux-gnu.tar.gz"),
+                   "fd-v10.2.0-x86_64-unknown-linux-gnu");
+    }
+
+    #[test]
+    fn a_bare_name_is_left_alone() {
+        assert_eq!(strip_archive_suffixes("jq"), "jq");
+        assert_eq!(strip_archive_suffixes("socket.io"), "socket.io");
+    }
+
+    #[test]
+    fn the_suffix_match_is_case_insensitive_and_repeats() {
+        assert_eq!(strip_archive_suffixes("Tool-1.0.ZIP"), "Tool-1.0");
+        assert_eq!(strip_archive_suffixes("tool.tar.gz"), "tool");
     }
 }

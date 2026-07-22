@@ -149,6 +149,29 @@ impl<'a> Editor<'a> {
     /// A line in a module nothing activates is a line that does nothing, so this refuses
     /// rather than write one: `install` that quietly installs nothing is the disease.
     pub fn add(&self, target: &Target, line: &str) -> Result<Edit> {
+        // Before anything is written, and here rather than in each caller. A line the grammar
+        // cannot read wedges every later command — they all parse the model — and the file it
+        // wedges is one LiNix generated, so nobody sees it until the next command dies. The
+        // pm-hook path reaches this with whatever was on a real `choco install` command line
+        // (`choco:Google Chrome`), and `adopt` reached it with `winget list`'s
+        // `ARP\Machine\X64\Android Studio`.
+        let stmt = statement::parse(&Origin::argument(), line, self.backends)?;
+        if let Target::Module(_) = target {
+            if let Some(what) = super::modules::set_math_in_a_module(&stmt) {
+                // Parsing is not enough: `winget:ARP\Machine\X64\Android Studio` parses — as
+                // a set expression — and only the module-file context refuses it. Sharing
+                // that rule with the reader is what keeps a written file readable.
+                return Err(GrammarError::new(
+                    Origin::argument(),
+                    format!("a module cannot use {}", what),
+                )
+                .with_hint(
+                    "a module is a list of what it holds; set math is how a profile chooses \
+                     between them.",
+                ));
+            }
+        }
+
         // Decided before writing. Writing the line and then failing to wire it leaves the
         // file changed and the machine not converging, which is the worst of both.
         let wired_into = match target {
@@ -661,6 +684,41 @@ mod tests {
             .unwrap();
         assert!(read(&f, "modules/imperative.txt").contains("apt:jq"));
         assert_eq!(edit.line, "apt:jq");
+    }
+
+    #[test]
+    fn a_line_the_grammar_cannot_read_is_refused_before_the_file_is_touched() {
+        // The root of the adopted.txt:69 wedge. `key_of` parsed and returned `None` on an
+        // error, and the line was then appended anyway — so a write could put a parse error
+        // into a file LiNix generated, and every later command died reading it. Both live
+        // sources produced real ones: `winget list`'s `ARP\Machine\X64\Android Studio`, and
+        // the pm-hook taking its target off a `choco install "Google Chrome"` command line.
+        let f = fx(&[("active", "Work\n"), ("profiles/Work", "use dev\n")]);
+        for bad in [
+            r"winget:ARP\Machine\X64\Android Studio",
+            "choco:Google Chrome",
+            "nosuchbackend:jq",
+        ] {
+            assert!(
+                editor(&f).add(&Landing::Imperative.target(), bad).is_err(),
+                "`{}` must be refused",
+                bad
+            );
+        }
+        assert_eq!(
+            read(&f, "modules/imperative.txt"),
+            "",
+            "a refused write leaves no file behind"
+        );
+        // And the neighbouring statement kinds still write, so the check refuses only what
+        // the grammar refuses.
+        for good in ["apt:jq", "service:nginx@enabled=true", "cargo,apt:ripgrep"] {
+            assert!(
+                editor(&f).add(&Landing::Imperative.target(), good).is_ok(),
+                "`{}` must still be accepted",
+                good
+            );
+        }
     }
 
     #[test]

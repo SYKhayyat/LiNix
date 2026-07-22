@@ -58,9 +58,12 @@ fn strip_rpm_arch(name: &str) -> &str {
 pub fn parse_zypper_search(output: &str) -> Vec<Package> {
     sanitize(output)
         .lines()
-        // Zypper search output has several header lines
-        .skip_while(|l| !l.contains("---"))
-        .skip(1)
+        // The rule under the header is skipped where it appears, rather than used as the
+        // gate that starts reading. `skip_while(|l| !l.contains("---"))` consumed the WHOLE
+        // output when zypper printed no rule — and this parser is wired as zypper's
+        // installed lister as well as its search, so "no rule" meant "nothing is installed",
+        // which is not a bad search result but a mass-removal input.
+        .filter(|l| !l.trim_start().starts_with("---"))
         .filter_map(|line| {
             // Table format: S | Name | Summary | Type
             let parts: Vec<&str> = line.split('|').collect();
@@ -68,6 +71,11 @@ pub fn parse_zypper_search(output: &str) -> Vec<Package> {
                 let status = parts[0].trim();
                 let name = parts[1].trim();
                 let summary = parts[2].trim();
+                // The header row names its own columns; without the rule to skip past, it
+                // would otherwise become a package called `Name`.
+                if name.is_empty() || name == "Name" {
+                    return None;
+                }
 
                 let mut p = Package::new(name, "zypper");
                 p.properties.insert("summary".into(), summary.to_string());
@@ -129,6 +137,29 @@ mod tests {
             res[0].properties.get("description").unwrap(),
             "Command-line JSON processor"
         );
+    }
+
+    #[test]
+    fn zypper_rows_are_read_with_or_without_the_header_rule() {
+        // This parser is zypper's installed lister as well as its search, so returning
+        // nothing is not a bad search result — it is "nothing is installed", which is a
+        // mass-removal input. Waiting for a `---` rule before reading anything meant one
+        // missing rule produced exactly that.
+        let with_rule = "S | Name | Summary | Type\n\
+                         --+------+---------+-----\n\
+                         i | jq   | JSON    | package\n\
+                           | htop | Viewer  | package\n";
+        let without_rule = "S | Name | Summary | Type\n\
+                            i | jq   | JSON    | package\n\
+                              | htop | Viewer  | package\n";
+        for (label, input) in [("with", with_rule), ("without", without_rule)] {
+            let res = parse_zypper_search(input);
+            assert_eq!(res.len(), 2, "{} the rule", label);
+            assert_eq!(res[0].name, "jq");
+            assert_eq!(res[0].properties.get("installed").map(String::as_str), Some("true"));
+            assert_eq!(res[1].name, "htop");
+            assert_eq!(res[1].properties.get("installed"), None);
+        }
     }
 
     #[test]

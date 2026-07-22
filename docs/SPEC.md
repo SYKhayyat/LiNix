@@ -938,13 +938,14 @@ built** — Stage 2 routed adopt's skipping through `guard::protection_of`, whic
 code while keeping the word ambiguous. Adopting a protected package is correct: it belongs
 in your file, and deleting that line is refused (V.26).
 
-## II.10 The guard — nine refusals, one function
+## II.10 The guard — ten refusals, one function
 
 | | |
 |---|---|
 | `protected_packages` | never remove this |
 | `unprotected_packages` | …unless I say so. **Wins over everything, including OS-essential** |
 | OS-essential | never remove what the OS says is load-bearing |
+| undeclarable | never remove a name no package line can hold — **not even `unprotected_packages` releases this one** |
 | `max_removals` (default **20**) | never remove more than this at once |
 | `max_installs` (default **unset**) | never install more than this at once |
 | `deny_packages` | never install this |
@@ -2305,6 +2306,22 @@ named it. Everything else LiNix touches, it owns. `absent:` is you reaching outs
 deliberately, by name. It stays a line rather than a file because a file can't be turned off
 per profile, can't be shared, and puts LiNix's bookkeeping back in a folder you author.
 
+**V.7b — Why a name no line can hold is protected, and why the escape hatch does not open
+it.** `winget list` answers for Add/Remove-Programs entries with pseudo-IDs like
+`ARP\Machine\X64\Android Studio`. A package name is one word (II.2), so no module line can
+hold that: `adopt` cannot take it, nothing can declare it, and it is therefore **unmanaged
+forever** — which made it a standing `purge-unmanaged` candidate that `linix adopt` could
+never clear. The documented safe sequence, adopt-then-purge, proposed deleting Android Studio.
+
+Removing what you could never have been asked to keep is the inverse of "LiNix only removes
+what it manages" (V.34), so it is a protection rather than a warning. It is checked **before**
+`unprotected_packages`, which is otherwise absolute (V.35): that hatch means *"I manage this
+one myself"*, and you cannot manage what you cannot write down — there is nothing for it to
+release. Asked through the one grammar, not a second copy of the naming rule.
+
+*Found by the live Windows sweep, where `adopt` wrote those IDs into `modules/adopted.txt` and
+every later command — `rollback` included — died parsing the file LiNix had just generated.*
+
 **V.8 — Why blocks use `{ }` and not `( )` or `end`.** `( )` is already the grouping operator
 in profile math — same character, two meanings, the trap we removed from `include:`. `end` is
 clumsy. "Pick your own delimiter" means nobody can read anyone else's files.
@@ -3001,7 +3018,17 @@ behind.
   hash table, so a package looked up in section 4 still "existed" in section 9 after apt had
   deleted the file. Every PATH assertion goes through a fresh `sh` now. This was the last
   Ubuntu failure and it was never LiNix's bug — worth recording because a check that cannot
-  fail is worse than no check.
+  fail is worse than no check. The same check, plus its twin (`sh -c "lx …"`, which cannot see
+  a shell function and so ran nothing at all), was live in `scripts/integration-windows.sh`
+  and is fixed there too.
+- **`adopt` wrote a file LiNix could not parse, and it wedged the config.** Found by the live
+  Windows sweep: `winget list` reports Add/Remove-Programs entries as `ARP\Machine\X64\Android
+  Studio`, and a package name is one word, so `modules/adopted.txt:69` was a parse error in a
+  file LiNix had just generated — `rollback` and every other command that reads the model died
+  on it. `adopt` now holds such names back and reports them in the commented section instead
+  of writing them. That left a second hole, so the guard closed it: a name no line can hold is
+  **protected** (V.7b), because it can never be adopted and would otherwise be a permanent
+  `purge-unmanaged` candidate that adopt could not clear.
 
 ### 5. Still owed from this session
 

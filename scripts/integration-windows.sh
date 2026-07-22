@@ -61,6 +61,11 @@ grep_ok() {
 }
 soft() { SOFTC=$((SOFTC + 1)); echo "  soft  $1"; }
 
+# Is NAME runnable right now? `command -v` alone answers from the shell's hash table
+# and keeps naming a path after the file is gone, so a removal check written with it
+# cannot fail. A fresh `sh` has an empty cache and has to look.
+on_path() { sh -c 'command -v "$1" >/dev/null 2>&1' _ "$1"; }
+
 echo "=============================================================="
 echo " LiNix v7 Windows/macOS harness — backend=$BACKEND package=$PKG"
 echo " LINIX=$LINIX"
@@ -108,24 +113,45 @@ ok "adopt runs" lx -y adopt
 
 # --- 7. The guard ----------------------------------------------------------
 echo "[7] The guard"
-nok "uninstall of a protected package is refused/no-op" \
-    sh -c "lx -y uninstall linix >/dev/null 2>&1; command -v $LINIX"
+# `lx` is a shell function, so `sh -c "lx …"` ran nothing at all and this asserted
+# only that the binary still exists — which it would whatever LiNix did.
+"$LINIX" -y uninstall linix >/dev/null 2>&1 || true
+ok "linix survives an uninstall attempt" on_path "$LINIX"
 nok "purge-unmanaged is not a silent mass-delete" lx -y purge-unmanaged
 
 # --- 8. Git history + rollback --------------------------------------------
 echo "[8] Git history + rollback"
 if ok "git init" lx git init; then
-    ok "sync commits" sh -c "lx -y sync >/dev/null 2>&1; lx git log --limit 5"
+    # Driven through the binary, not `sh -c "lx …"`: `lx` is a function and a subshell
+    # never sees it, so the old form ran nothing and reported whatever came after.
+    "$LINIX" -y sync >/dev/null 2>&1 || true
+    ok "sync commits" lx git log --limit 5
     grep_ok "git log shows a linix commit" "linix" lx git log --limit 10
     ok "diff HEAD runs" lx diff HEAD
     ok "rollback HEAD accepted" lx -y rollback HEAD
 fi
 
-# --- 9. Command-surface smoke ---------------------------------------------
-echo "[9] Command surface"
+# --- 9. Backend chains, the per-host lock, and unlock (II.7b) -------------
+echo "[9] Chains and the per-host lock"
+LOCKFILE=$(ls "$LINIX_CONFIG_DIR"/locks/bare.*.toml 2>/dev/null | head -1)
+echo "        lock file: ${LOCKFILE:-<none>}"
+ok  "a chain is legal"           lx --dry-run install "$BACKEND,cargo:$PKG"
+ok  "a chain may end in list"    lx --dry-run install "$BACKEND,list:$PKG"
+ok  "list alone is legal"        lx --dry-run install "list:$PKG"
+nok "an empty slot is refused"   lx --dry-run install "$BACKEND,,cargo:$PKG"
+nok "an unknown link is refused" lx --dry-run install "$BACKEND,nope:$PKG"
+nok "list must come last"        lx --dry-run install "list,$BACKEND:$PKG"
+nok "a name repeated is refused" lx --dry-run install "$BACKEND,$BACKEND:$PKG"
+# A manager no Windows host has: a pin to it must say so rather than no-op.
+nok "a pin to a manager this host lacks is not silent" lx -y install "apt:$PKG"
+ok  "unlock --list runs"         lx unlock --list
+ok  "unlocking an unfrozen name is not an error" lx unlock linix-never-frozen-zzz
+
+# --- 10. Command-surface smoke --------------------------------------------
+echo "[10] Command surface"
 for c in install uninstall sync plan status list search adopt check absent \
          protected purge-unmanaged rollback diff git snapshot schedule \
-         profile module bundle export doctor; do
+         profile module bundle export doctor unlock; do
     ok "\`$c --help\` exists" lx "$c" --help
 done
 

@@ -176,7 +176,10 @@ impl Installable for WebInstallable {
                 // `web` (it picks between several files of one release, and a `web:` URL names
                 // exactly one). Reading it here was the SEC1 traversal's entry point, and a
                 // dead branch besides.
-                let bin_name = filename.split('.').next().unwrap_or(filename);
+                // Cut at the first `.` and `ripgrep-14.1.0-x86_64.tar.gz` installs a binary
+                // called `ripgrep-14`. Only a known archive/package suffix comes off, and
+                // repeatedly, so `.tar.gz` goes but a dotted version stays.
+                let bin_name = crate::utils::strip_archive_suffixes(filename);
 
                 let bin_dir = dirs::home_dir()
                     .ok_or_else(|| Error::Other("Home directory not found".into()))?

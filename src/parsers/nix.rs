@@ -55,9 +55,14 @@ pub fn parse_list(output: &str) -> Vec<Package> {
     // Fallback: `nix-env -q` text, "name-version".
     clean
         .lines()
-        .filter_map(|line| {
-            let (name, ver) = line.rsplit_once('-')?;
-            Some(Package::with_version(name.trim(), ver.trim(), "nix"))
+        .map(|line| {
+            // The version half must start with a digit: `gnu-config` split blind gives
+            // name `gnu`, version `config`, and a package under the wrong name can never
+            // be matched again. `xbps` and `pkgsrc` already parse this shape that way.
+            match crate::parsers::common::split_trailing_version(line.trim()) {
+                Some((name, ver)) => Package::with_version(name, &ver, "nix"),
+                None => Package::new(line.trim(), "nix"),
+            }
         })
         .collect()
 }
@@ -71,10 +76,9 @@ pub fn parse_search(output: &str) -> Vec<Package> {
             let parts: Vec<&str> = line.split_whitespace().collect();
             let full_name = parts.first()?;
 
-            if let Some((name, ver)) = full_name.rsplit_once('-') {
-                Some(Package::with_version(name, ver, "nix"))
-            } else {
-                Some(Package::new(*full_name, "nix"))
+            match crate::parsers::common::split_trailing_version(full_name) {
+                Some((name, ver)) => Some(Package::with_version(name, &ver, "nix")),
+                None => Some(Package::new(*full_name, "nix")),
             }
         })
         .collect()

@@ -81,7 +81,7 @@ soft() { SOFTC=$((SOFTC + 1)); echo "  soft  $1"; }
 # where it found a name, and keeps answering from that cache after the file is
 # deleted — so a package removed in section 9 still "existed" because section 4 had
 # looked it up. A fresh `sh` has an empty cache and has to touch the filesystem.
-on_path() { sh -c "command -v $1 >/dev/null 2>&1"; }
+on_path() { sh -c 'command -v "$1" >/dev/null 2>&1' _ "$1"; }
 
 echo "=============================================================="
 echo " LiNix v7 harness — backend=$BACKEND package=$PKG"

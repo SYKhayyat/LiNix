@@ -398,9 +398,11 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // bare name. `parse_simple_list` would keep the whole token as the name, so
             // installed lookups (and therefore `remove`) never found the package.
             installed_fn: |o| crate::parsers::common::parse_dash_version_list(o, "apk"),
-            // Search output (`apk search -v`) is `name-ver  - description` — whitespace
-            // separated, so the simple splitter is the right one here.
-            search_fn: |o| crate::parsers::common::parse_simple_list(o, "apk"),
+            // `apk search -v` answers with the same dash-joined token, followed by
+            // ` - description`. Splitting on whitespace alone kept `jq-1.7.1-r0` as the name,
+            // so a search result could never equal the name asked for — which made apk
+            // invisible to every unpinned line, the way dnf was on Fedora.
+            search_fn: |o| crate::parsers::common::parse_dash_version_list(o, "apk"),
         }),
     });
     reg.register(Arc::new(
@@ -596,8 +598,11 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             ])),
             install_args: vec!["install".into(), "-y".into()],
             remove_args: vec!["uninstall".into(), "-y".into()],
-            list_args: vec!["list".into(), "-lo".into(), "-r".into()],
-            // `choco list -lo` reports locally-installed packages, all user-requested.
+            // Chocolatey 2.x removed `-lo`: `list` is local-only now and the flag is an
+            // error, so the command failed, the output was empty, and LiNix read that as
+            // "nothing is installed" — the input to a mass removal, not a bad listing.
+            list_args: vec!["list".into(), "-r".into()],
+            // `choco list` reports locally-installed packages, all user-requested.
             manual: ManualListing::AllInstalled,
             essential_args: None,
             search_args: vec!["search".into()],
