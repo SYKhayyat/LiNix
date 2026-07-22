@@ -212,8 +212,10 @@ impl ExecutionLayer for DryRunExecutor {
         Ok(DryRunOutput::new().into())
     }
 
-    fn check_command(&self, _cmd: &str) -> bool {
-        true
+    /// Whether a command exists is a fact about this machine, not something a preview gets
+    /// to invent. Answering `true` for everything made every backend look installed.
+    fn check_command(&self, cmd: &str) -> bool {
+        RawExecutor.check_command(cmd)
     }
 
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
@@ -291,6 +293,12 @@ pub struct CommandExecutor {
     pub dry_run: bool,
     pub verbose: bool,
     pub inner: Arc<dyn ExecutionLayer>,
+    /// Where questions go. A search or an existence probe changes nothing, so it runs for
+    /// real even under `--dry-run`: stubbing it does not make the preview safer, it makes
+    /// the preview wrong. `apt-cache search jq` answered from a stub is an empty answer,
+    /// which reads as "apt does not have jq" and hands the name to whichever manager
+    /// answers over the network instead.
+    reader: Arc<dyn ExecutionLayer>,
     vfs: Arc<DashMap<PathBuf, String>>,
     lock_map: Arc<DashMap<String, Arc<Mutex<()>>>>,
 }
@@ -308,6 +316,7 @@ impl CommandExecutor {
             dry_run,
             verbose,
             inner,
+            reader: Arc::new(RawExecutor),
             vfs,
             lock_map,
         }
@@ -320,9 +329,11 @@ impl CommandExecutor {
         vfs: Arc<DashMap<PathBuf, String>>,
         lock_map: Arc<DashMap<String, Arc<Mutex<()>>>>,
     ) -> Self {
+        // A test injects one layer and expects to see every call on it, reads included.
         Self {
             dry_run,
             verbose,
+            reader: layer.clone(),
             inner: layer,
             vfs,
             lock_map,
@@ -349,6 +360,21 @@ impl CommandExecutor {
     /// is frequently a normal answer there — an empty search, a "not installed" query, an
     /// inactive service unit. Mutating callers must use `run`/`run_exclusive` instead.
     async fn run_raw(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<StdOutput> {
+        self.run_on(&self.inner, cmd, args, sudo).await
+    }
+
+    /// The same primitive, aimed at the layer that never stubs. Reads only.
+    async fn read_raw(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<StdOutput> {
+        self.run_on(&self.reader, cmd, args, sudo).await
+    }
+
+    async fn run_on(
+        &self,
+        layer: &Arc<dyn ExecutionLayer>,
+        cmd: &str,
+        args: &[&str],
+        sudo: bool,
+    ) -> Result<StdOutput> {
         let mut final_cmd = cmd.to_string();
         let mut final_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
 
@@ -357,7 +383,7 @@ impl CommandExecutor {
             final_cmd = "sudo".to_string();
         }
 
-        self.inner
+        layer
             .execute(&final_cmd, &final_args, &HashMap::new())
             .await
     }
@@ -375,7 +401,7 @@ impl CommandExecutor {
     pub async fn run_output(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<String> {
         // Reads tolerate a non-zero exit on purpose (empty results, missing packages),
         // so this goes through the unchecked primitive, never `run`.
-        let output = self.run_raw(cmd, args, sudo).await?;
+        let output = self.read_raw(cmd, args, sudo).await?;
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
@@ -550,11 +576,11 @@ impl CommandExecutor {
     }
 
     pub async fn command_exists(&self, cmd: &str) -> bool {
-        self.inner.check_command(cmd)
+        self.reader.check_command(cmd)
     }
 
     pub fn command_exists_sync(&self, cmd: &str) -> bool {
-        self.inner.check_command(cmd)
+        self.reader.check_command(cmd)
     }
 
     pub async fn start_sudo_keepalive(&self) -> Option<tokio::task::JoinHandle<()>> {
