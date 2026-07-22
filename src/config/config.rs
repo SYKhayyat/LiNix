@@ -465,7 +465,18 @@ impl Config {
             }
             Err(e) => return Err(Error::Config(format!("Failed to read config file: {}", e))),
         };
-        let mut config: Self = toml::from_str(&content)?;
+        // Named, because this refusal stops every command LiNix has and the bare TOML error
+        // says only "line 17" — of which of several files, it does not say. A key deleted in
+        // the rewrite (NO LEGACY) is still on disk in configs written by an older build, so
+        // this is the first thing a returning user meets.
+        let mut config: Self = toml::from_str(&content).map_err(|e| {
+            Error::Config(format!(
+                "{} is not readable:\n{}\nDelete the line it names — the key no longer \
+                 exists, and LiNix refuses a setting it would otherwise silently ignore.",
+                path.display(),
+                e
+            ))
+        })?;
         config.preferences_file = path.to_path_buf();
         // Empty protection means the built-in defaults, never "no protection" — a config
         // that omits (or empties) the list must not silently disarm the guard.

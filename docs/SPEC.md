@@ -2963,8 +2963,10 @@ verified against the tree at the commit that last touched this section, not reca
 installs and removals. That is where everything below came from: none of it was visible from a
 green `cargo test` on Windows, which is rule 11 in one line.
 
-**Ubuntu: 79 hard checks, 0 failures.** First time green. Fedora is not, and the reason is
-recorded below.
+**Ubuntu, Fedora, Arch: 79 hard checks each, 0 failures. Alpine: 77, 0 failures.** First time
+green on any of them. Two of those four only went green because of bugs found *by* the run —
+recorded below. (`gentoo` is opt-in and still unrun; two builds failed transiently on the
+registry and passed on retry, which is worth knowing before reading a red result as a defect.)
 
 ### 1. Backend chains (II.7b) — owner ruling, 2026-07-22
 
@@ -3030,9 +3032,62 @@ behind.
   **protected** (V.7b), because it can never be adopted and would otherwise be a permanent
   `purge-unmanaged` candidate that adopt could not clear.
 
-### 5. Still owed from this session
+### 5. The families behind those bugs
 
-- Fedora, arch, alpine and tools re-run after the dnf fix; the Windows scoop/winget sweep.
+Owner added *"fix the whole family, not one instance"* to `CLAUDE.md` mid-session. Applied
+backwards to the four fixes above, the siblings were live:
+
+**A manager that cannot answer is read as a manager that said no.** That is what made the dnf
+bug invisible — and it is the shape of the whole class, because a parser that returns zero
+looks exactly like a repository that has nothing. Three more did it:
+
+- **zypper** — `skip_while(|l| !l.contains("---"))` consumed the *entire* output when no header
+  rule was printed. This parser is zypper's **installed lister** as well as its search, so
+  zero is not a bad search result: it is *"nothing is installed"*, which is the input to a mass
+  removal.
+- **apk search** used the whitespace splitter, keeping `jq-1.7.1-r0` as the name, so a result
+  could never equal the name asked for. apk was invisible to every unpinned line, exactly as
+  dnf was.
+- **choco** — `list -lo` is an error on Chocolatey 2.x, so the command failed and its empty
+  output read as an empty installed set.
+
+**A name truncated at a delimiter that occurs inside real names.** `parse_dash_version_list`
+turned `xz-libs-dev` into `xz`, and it is apk's installed lister — a package recorded under
+the wrong name can never be matched by `info()`, so `remove` silently did nothing. `nix-env`
+parsing had the same missing guard; both use the digit check `xbps` and `pkgsrc` already had.
+`web.rs` cut a filename at the first `.` and installed `ripgrep-14.1.0-x86_64.tar.gz` as a
+binary named `ripgrep-14`.
+
+**`adopt` was one caller of a general hole.** `Editor::add` never validated the line at all:
+`key_of` parsed, returned `None` on an error, and the line was appended anyway. The second
+caller is the pm-hook, which takes its target off a real `choco install "Google Chrome"`
+command line and writes it **behind your back** — so the file would break with nobody having
+typed anything. `add` refuses first now, and the module-file rule is *shared* with the reader
+(`set_math_in_a_module`) rather than copied, because a writer and a reader with two copies of
+one rule is how a generated file comes to be unreadable.
+
+**Checked and not affected**, so the sweep is honest about its edges: pacman, xbps, pkgsrc,
+brew, winget's column slicing, dotnet, conda and every JSON path (no literal separator, or
+already digit-guarded); `export`/`bundle`/`sbom`/`unmanage`/`profile save` (not LiNix grammar,
+or built from lines that already parsed). `fix.ps1` was **deleted** — it overwrote
+`src/backends/apk.rs` with a pre-v7 `PackageManager` implementation carrying the un-fixed dash
+bug, so running it reintroduced a fixed bug (NO LEGACY).
+
+### 6. Still owed from this session
+
+- `tools` and the opt-in `gentoo` image.
+- **A config written by an older build stops every command, and the error does not say which
+  file.** `confirm_destructive` was deleted in the rewrite (V.23), so a `preferences.toml`
+  still carrying it is refused — correctly, since silently ignoring a setting someone wrote is
+  worse. But the bare TOML error says `line 17` of nothing in particular. It names the path
+  now. Found on the owner's own machine, where the current binary would not run at all.
+- **A backend that errors is indistinguishable from one that says no** (`remote_package_exists`
+  returns `false` for both). Every bug in §5's first group was *survivable* only because of
+  this: a broken index, a dropped network, or a changed output format all resolve an unpinned
+  name to a lower-priority manager and then **freeze that answer in the lock**. Fixing the
+  parsers removes today's instances; it does not remove the shape. **Needs an owner ruling**,
+  because treating "could not tell" as a hard stop makes a flaky manager fail a sync that
+  currently succeeds.
 - The cargo-library-crate resolution gap above.
 
 ## Session 2026-07-21 (eighth session) — the owed list, continued

@@ -106,6 +106,12 @@ fi
 # --- 5. Negative path ------------------------------------------------------
 echo "[5] Negative path"
 nok "installing a nonexistent package fails" lx -y install "$BACKEND:linix-no-such-pkg-zzz"
+# The line stays on purpose: a pinned name that a manager could not install is a failed sync,
+# not a wrong name, and only a name nothing can resolve is withdrawn. So the harness clears it,
+# exactly as the container one does — left in, it is committed and then reinstalled by the
+# `rollback` in section 8, which fails there instead of here.
+ok "a failed install leaves the model parseable" lx status
+sed -i '/linix-no-such-pkg-zzz/d' "$LINIX_CONFIG_DIR/modules/imperative.txt" 2>/dev/null || true
 
 # --- 6. Adopt (II.9: Windows managers install no deps, so adopt is exact) --
 echo "[6] Adopt"
