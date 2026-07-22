@@ -3174,6 +3174,16 @@ which enforce status; `list_installed` still tolerates a failed read, because an
 installed list can only cause a reinstall attempt, never a removal (removals come from managed
 state, not from listing).
 
+*Verified against the binary and the harnesses:* the live Windows scoop sweep at **61/0** (58
+before these three checks), and **every container image green with the new check in it** —
+ubuntu, arch and tools at 82, fedora and alpine likewise passing, no failures anywhere. The
+check stages the fault rather than waiting for one: it shadows **cargo's `search` only**, so
+exactly one candidate in the chain goes silent while the manager under test is untouched
+(breaking the network would break both), then asserts the package still resolves, that the
+lock stays empty, and that the plan names which manager could not answer. Both the
+fall-through warning and the nothing-found error were also read back off a real run before
+being worded — the first draft of each said the same phrase twice.
+
 **One gap left knowingly, and not hidden:** `apt-cache search` with an empty index exits zero
 and prints nothing, indistinguishable from a real miss. No generic signal remains to read;
 closing it needs a per-manager index-health check. The `tools` image works around it with a
