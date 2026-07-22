@@ -2256,6 +2256,10 @@ async fn handle_diff(app: &App, from: &str, to: Option<&str>) -> Result<()> {
 }
 
 async fn handle_git(app: &App, cmd: &GitCommand) -> Result<()> {
+    // Asked once, for every subcommand. Only `init` used to ask, so on a machine without
+    // git the others answered from `.git`'s absence: `log` printed an empty history, and
+    // `status` advised running `git init`, which could only refuse.
+    linix::core::GitManager::require()?;
     let git = app.git_manager();
     match cmd {
         GitCommand::Init => {

@@ -26,8 +26,9 @@ RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chm
 FROM gentoo/stage3:latest
 # SMOKE-ONLY: no source builds; plan/parse/read-only only.
 ENV SMOKE_ONLY=1
-ENV LINIX=/src/target/release/linix
-COPY --from=builder /src/target/release/linix /src/target/release/linix
+# On PATH, as in every other image: a second way to find the binary is a second way
+# to get it wrong, and this one was wrong — the harness never read the env var it set.
+COPY --from=builder /usr/local/bin/linix /usr/local/bin/linix
 # run-in-container.sh is .dockerignored on purpose (it's bind-mounted at run time by run.sh,
 # so editing it never busts the build cache). Just create the mount-target dir; the runtime
 # `-v …/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro` provides the file.

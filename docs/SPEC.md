@@ -3015,8 +3015,9 @@ green `cargo test` on Windows, which is rule 11 in one line.
 **Every image green: Ubuntu, Fedora, Arch and `tools` at 79 hard checks each, Alpine at 77,
 0 failures anywhere. The live Windows scoop sweep: 58, 0 failures.** First time green on any
 of them, and three only went green because of bugs found *by* the run — recorded below.
-(`gentoo` is opt-in and still unrun. Two image builds failed transiently on the registry and
-passed on retry, which is worth knowing before reading a red result as a defect.)
+(`gentoo` is opt-in; it ran later the same day — see §8. Two image builds failed transiently
+on the registry and passed on retry, which is worth knowing before reading a red result as a
+defect.)
 
 ### 1. Backend chains (II.7b) — owner ruling, 2026-07-22
 
@@ -3125,7 +3126,7 @@ bug, so running it reintroduced a fixed bug (NO LEGACY).
 
 ### 6. Still owed from this session
 
-- The opt-in `gentoo` image.
+- The opt-in `gentoo` image. **Ran** — see §8 below.
 - **A config written by an older build stops every command, and the error does not say which
   file.** `confirm_destructive` was deleted in the rewrite (V.23), so a `preferences.toml`
   still carrying it is refused — correctly, since silently ignoring a setting someone wrote is
@@ -3188,6 +3189,45 @@ being worded — the first draft of each said the same phrase twice.
 and prints nothing, indistinguishable from a real miss. No generic signal remains to read;
 closing it needs a per-manager index-health check. The `tools` image works around it with a
 final `apt-get update`.
+
+### 8. The gentoo image ran, and it had never been able to
+
+The last item on the owed list. It had **three** reasons it could not have passed, none of
+which any other image could reach:
+
+- **`SMOKE_ONLY` was declared in three places and read in none.** The Dockerfile bakes
+  `ENV SMOKE_ONLY=1`, `run.sh` forwards it, and the harness never looked at it — so the run
+  would have driven a full install→remove lifecycle through Portage and built jq from source,
+  which is exactly what the image's own header says it must not do. The harness honours it
+  now: everything that does not mutate the machine still runs (the grammar, the planner, the
+  guard's refusals, every read verb), each skipped check is **named**, and the closing banner
+  says which run it was — *"OK" over a third of the checks, printed the same way, is how a
+  narrower sweep gets mistaken for a full one.* Proved both directions on ubuntu before
+  gentoo was touched: **60 hard checks with 6 named skips under `SMOKE_ONLY`, 82 and no skips
+  without it.**
+- **Two names for the binary.** The image set `ENV LINIX=…`; the harness read `LINIX_BIN`,
+  which nothing sets. gentoo was also the only image not to put the binary on PATH. Both
+  halves deleted rather than reconciled: the harness now reads `LINIX` (what the Windows
+  script and `release-check.sh` already use) and the image installs to `/usr/local/bin/linix`
+  like the other five. The `FATAL: not runnable in this image` guard caught it on the first
+  run, which is what it was added for.
+- **A live bug, and the reason this image was worth running: X.5's audit was wrong.** See
+  X.5 — `is_repo()` guards the *directory* question, not the *git* question, so on gentoo's
+  git-less stage3 base `linix git log` printed an empty history and `git status` advised an
+  `init` that could only refuse. `GitManager::require()` is now asked by every history verb.
+  The harness asserts the refusal rather than skipping the section, so the one image that can
+  reach this path also tests it.
+
+*Ruled while reading the failure:* the fix is **not** to install git into the image. A
+git-less machine is a supported machine (X.5), so the honest thing is for the sweep to have
+one — and for the harness to assert the refusal there rather than skip past it.
+
+**Result: gentoo (emerge) PASS — 59 hard checks, 0 failures, 6 named soft skips**, and
+ubuntu re-run alongside it at 82/0/0 to show the gating changed nothing where nothing was
+gated. The soft six are the whole of what Portage's source builds cost: install, remove,
+rebuild+K14, the per-host lock, the sync past a silent manager, and history. Everything
+declarative — the grammar, the chain rules, the guard's refusals, adopt, the planner, the
+resolver's silence rule, the full command surface — ran for real against emerge.
 
 ## Session 2026-07-21 (eighth session) — the owed list, continued
 
@@ -4108,7 +4148,7 @@ after C13 was declared closed.
 | *"three of six paths have no reader"* | 2026-07-17 audit | **Stale.** Five of six read cleanly. `schedules` and `preferences.toml` both gained readers. The one real gap is `locks/`, and it is a different gap: a reader exists and nobody calls it. |
 | *"`linix why` answers from the old model"* | 2026-07-17 audit | **Fixed.** Note the entry's own tripwire grep (`layout()\|Layout\|profiles_dir`) returns 0 and **always would** — `why` reaches the model through `StateResolver`, not `Layout`. **A tripwire that cannot go quiet is not a tripwire.** |
 | *"`shim --source` is a live bug"* | VI.1 rows | **Dead by deletion.** There is no `shim` command; `create_shim` no longer takes a discarded source. |
-| *"the pre-v7 `run-in-container.sh` was deleted"* | Phase 5 | **False.** The file is on disk (`docker/integration/`), alongside six Dockerfiles. Phase 6 says "five containers"; there are **six** (gentoo is opt-in). |
+| *"the pre-v7 `run-in-container.sh` was deleted"* | Phase 5 | **False.** The file is on disk (`docker/integration/`), alongside six Dockerfiles. Phase 6 says "five containers"; there are **six** (gentoo is opt-in, and ran 2026-07-22). |
 | *"`teleport` … goes through `model/edit.rs`"* | Phase 2 checklist | **Stale text.** `teleport` is fully deleted — the grep is silent. The checklist still lists it as a writer. |
 
 ### II.17 — five things it says are deleted are alive
@@ -6504,10 +6544,25 @@ says *"This is a git repo"* flatly; the ruling is that **git buys rollback and h
 nothing else**. Everything else — parsing, resolution, sync, the guard, locks, schedules —
 reads files off a disk and does not care whether a `.git` exists beside them.
 
-**Largely already true, and closed 2026-07-20.** The audit found the core paths already
-degrade rather than fail: `git_autocommit` no-ops without a repo, and `is_repo()` guards every
-history command. What was missing was K8's standing notice, now built (see K8). No path
-requires the git binary to be installed; a machine with no git is supported. **What is still
+**Largely already true, and closed 2026-07-20 — with one sentence of it wrong, corrected
+2026-07-22.** The audit found the core paths already degrade rather than fail:
+`git_autocommit` no-ops without a repo, and K8's standing notice in `doctor` was built. But
+*"`is_repo()` guards every history command"* was **false in the way that matters**:
+`is_repo()` tests whether `.git` exists, which is a question about the directory, not about
+git. Only `init` ever asked whether the binary was there. So on a machine with no git,
+`linix git log` printed an empty history — the answer of a repo with no commits yet — and
+`linix git status` advised running `linix git init`, which could only refuse. Found by the
+gentoo image, whose stage3 base ships no git; unreachable on every other image, all of
+which have one.
+
+**Degrading is not answering.** `GitManager::require()` is now asked by every history verb
+(`init`, `log`, `pull`, `checkout_files`, `signature_of`, and the whole `linix git`
+dispatch), and it names git as what is missing. That is the II.1 amendment below being kept:
+history is unavailable **and LiNix says so**. What X.5 forbids is a *non-history* command
+failing for want of git, and none does — `head()` and `show_at_head()` stay best-effort
+because they feed baselines, not answers.
+
+No path requires the git binary to be installed; a machine with no git is supported. **What is still
 owed is the backup command (K9, deliberately unproposed)** — the requirement that the config
 be recoverable on a git-less machine, with the one constraint that it not be a second archive
 writer.

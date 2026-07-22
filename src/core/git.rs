@@ -101,6 +101,25 @@ impl GitManager {
             .unwrap_or(false)
     }
 
+    /// git itself, asked before anything about this directory.
+    ///
+    /// "No history yet" is a normal state that reads as success, and [`is_repo`] answers it
+    /// from the filesystem alone — so without this a missing git wears that answer: `git log`
+    /// printed an empty history and `git status` advised running `git init`, which cannot
+    /// succeed. X.5 keeps git optional; it does not make its absence an empty answer.
+    ///
+    /// [`is_repo`]: Self::is_repo
+    pub fn require() -> Result<()> {
+        if Self::git_available() {
+            return Ok(());
+        }
+        Err(Error::Other(
+            "git is not installed; install it to use LiNix's manifest history — \
+             `linix git`, `diff`, `rollback` and `bundle`. Everything else works without it."
+                .into(),
+        ))
+    }
+
     pub fn is_repo(&self) -> bool {
         self.root.join(".git").exists()
     }
@@ -132,17 +151,14 @@ impl GitManager {
     /// A non-fast-forward or missing remote surfaces as an error the caller can downgrade
     /// to a warning — `watch --pull` must not abort a sync because a remote moved.
     pub fn pull(&self) -> Result<String> {
+        Self::require()?;
         self.run_checked(&["pull", "--ff-only"])
     }
 
     /// Idempotent. The written `.gitignore` excludes the per-file backups LiNix drops
     /// during rollbacks, which would otherwise be committed as manifest content.
     pub fn init(&self) -> Result<()> {
-        if !Self::git_available() {
-            return Err(Error::Other(
-                "git is not installed; install it to use `linix git`".into(),
-            ));
-        }
+        Self::require()?;
         std::fs::create_dir_all(&self.root).map_err(Error::from)?;
         if !self.is_repo() {
             self.run_checked(&["init"])?;
@@ -228,6 +244,7 @@ impl GitManager {
     /// HEAD — i.e. roll back your *manifests* to a past state, leaving installed packages
     /// untouched. This is the "config half" of a rollback.
     pub fn checkout_files(&self, reference: &str) -> Result<()> {
+        Self::require()?;
         if !self.is_repo() {
             return Err(Error::Other("not a git repo".into()));
         }
@@ -237,6 +254,7 @@ impl GitManager {
 
     /// The most recent `limit` commits, newest first.
     pub fn log(&self, limit: usize) -> Result<Vec<GitCommit>> {
+        Self::require()?;
         if !self.is_repo() || self.head()?.is_none() {
             return Ok(vec![]);
         }
@@ -250,6 +268,7 @@ impl GitManager {
     /// What git says about one commit's signature (II.13). Asked of the commit a rollback is
     /// about to restore, so the answer is about that commit and not about HEAD.
     pub fn signature_of(&self, reference: &str) -> Result<Signature> {
+        Self::require()?;
         let raw = self.run_checked(&["log", "-1", "--pretty=format:%G?%x1f%GS", reference])?;
         let mut parts = raw.split('\u{1f}');
         Ok(Signature::from_git(
