@@ -42,6 +42,15 @@ pub fn hook_id(hook_name: &str, package_name: &str) -> String {
     format!("{}:{}", hook_name, package_name)
 }
 
+/// The ledger identity of a `vars` provider (V.55). A provider that executes — `vars.linix`
+/// or an external `vars.<ext>` — is a script that runs on your machine, so it lives in the
+/// same ledger as a hook, keyed by its filename. It runs at step 0 of resolution, before any
+/// plan and on read-only commands, so this is the only thing between a pulled config and a
+/// shell.
+pub fn vars_id(filename: &str) -> String {
+    format!("vars:{}", filename)
+}
+
 /// What the ledger says about a hook whose current hash we just computed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {

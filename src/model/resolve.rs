@@ -210,12 +210,48 @@ impl<'a> Resolver<'a> {
             return Ok(Default::default());
         };
         match selected.kind {
+            // The line file declares values and executes nothing, so it is not hashed.
             Kind::LineFile => self.load_vars_linefile(&selected.path),
-            Kind::External => vars_provider::run_external_with_origins(&selected.path, &self.facts),
+            Kind::External => {
+                self.verify_provider_approved(&selected.path)?;
+                vars_provider::run_external_with_origins(&selected.path, &self.facts)
+            }
             Kind::Embedded => {
+                self.verify_provider_approved(&selected.path)?;
                 crate::model::vars_embedded::resolve_with_origins(&selected.path, &self.facts)
             }
         }
+    }
+
+    /// A `vars` provider that executes goes through the hook ledger before it runs (V.55).
+    /// It resolves at step 0 — before any plan, on `status`/`plan`, and under `watch --pull`
+    /// on a pulled repo — so an unapproved or changed provider is a refusal here, exactly as
+    /// a changed hook stops a sync. `-y` cannot approve; `linix lock` does.
+    fn verify_provider_approved(&self, path: &Path) -> Result<()> {
+        use crate::core::hook_lock::{hash_script, refusal, vars_id, HookLedger};
+        let origin = Origin::new(
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("vars provider")
+                .to_string(),
+            0,
+        );
+        let body = std::fs::read_to_string(path).map_err(|e| {
+            GrammarError::new(origin.clone(), format!("could not read the vars provider: {}", e))
+        })?;
+        let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        let id = vars_id(filename);
+        let locks = self.layout.config_root().join("locks");
+        let ledger = HookLedger::load(&HookLedger::path_in(&locks))
+            .map_err(|e| GrammarError::new(origin.clone(), e.to_string()))?;
+        let verdict = ledger.verdict(&id, &hash_script(&body));
+        if verdict.is_approved() {
+            return Ok(());
+        }
+        Err(GrammarError::new(
+            origin,
+            refusal(&id, "vars provider", &verdict),
+        ))
     }
 
     /// The line-file provider (`vars`): parse it, enforce IX.3, resolve to typed values and their
@@ -1802,5 +1838,43 @@ apt:nginx
         let d = resolve(&f).unwrap();
         let spec = d.present().find(|p| p.name == "curl").unwrap();
         assert!(spec.options["__source"].contains("base.txt:1"));
+    }
+
+    #[test]
+    fn an_unapproved_executing_vars_provider_is_refused_until_the_ledger_approves_it() {
+        use crate::core::hook_lock::{hash_script, vars_id, HookLedger};
+
+        let f = fx("Work\n", &[("Work", "use base\n")], &[("base.txt", "apt:curl\n")]);
+        // An embedded provider is a script that runs at step 0 — it must be approved first.
+        let provider = f.layout.config_root().join("vars.linix");
+        std::fs::write(&provider, "#{ role: \"work\" }").unwrap();
+
+        let run = || {
+            Resolver::new(&f.layout, &known, &f.priority)
+                .with_facts(facts())
+                .load_vars_with_origins()
+        };
+
+        let err = run().unwrap_err().to_string();
+        assert!(err.contains("never been approved"), "{}", err);
+
+        // `linix lock` records the current hash; the same provider now runs.
+        let locks = f.layout.config_root().join("locks");
+        let path = HookLedger::path_in(&locks);
+        let mut ledger = HookLedger::load(&path).unwrap();
+        let body = std::fs::read_to_string(&provider).unwrap();
+        ledger.approve(&vars_id("vars.linix"), &hash_script(&body));
+        ledger.save(&path).unwrap();
+
+        let (vars, _) = run().expect("an approved provider runs");
+        assert_eq!(
+            vars.get("role"),
+            Some(&crate::model::vars::Value::Str("work".into()))
+        );
+
+        // A changed provider stops again — the case the ledger exists for.
+        std::fs::write(&provider, "#{ role: \"travel\" }").unwrap();
+        let err = run().unwrap_err().to_string();
+        assert!(err.contains("changed") || err.contains("approve"), "{}", err);
     }
 }

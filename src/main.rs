@@ -3147,7 +3147,43 @@ async fn handle_lock(app: &App) -> Result<()> {
             .display()
         );
     }
+    // A `vars` provider that executes is a script on the same ledger (V.55). Approving it
+    // here is the one deliberate act that lets it run — a changed provider stops resolution,
+    // which is `status` and `plan`, not just `sync`.
+    if let Some(file) = approve_vars_provider(app)? {
+        info!("Lock: approved the vars provider `{}` at its current hash.", file);
+    }
     Ok(())
+}
+
+/// Record the active executing `vars` provider's current hash in the hook ledger. Returns the
+/// filename if one was approved, `None` if the repo has no provider or a non-executing line
+/// file. The single source of which provider is active is `vars_provider::select`, shared
+/// with resolution so `lock` and the gate can never disagree about what runs.
+fn approve_vars_provider(app: &App) -> Result<Option<String>> {
+    use linix::core::hook_lock::{hash_script, vars_id, HookLedger};
+    use linix::model::vars_provider::{self, Kind};
+
+    let root = app.config.config_root();
+    let Some(selected) = vars_provider::select(&root, &app.config.vars.source)? else {
+        return Ok(None);
+    };
+    if matches!(selected.kind, Kind::LineFile) {
+        return Ok(None);
+    }
+    let filename = selected
+        .path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let body = std::fs::read_to_string(&selected.path)?;
+    let locks = root.join("locks");
+    let path = HookLedger::path_in(&locks);
+    let mut ledger = HookLedger::load(&path)?;
+    ledger.approve(&vars_id(&filename), &hash_script(&body));
+    ledger.save(&path)?;
+    Ok(Some(filename))
 }
 
 async fn handle_unlock(app: &App, names: &[String], list: bool) -> Result<()> {
