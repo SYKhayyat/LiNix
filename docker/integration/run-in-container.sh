@@ -77,6 +77,12 @@ grep_ok() {
 
 soft() { SOFTC=$((SOFTC + 1)); echo "  soft  $1"; }
 
+# Is NAME runnable right now? `command -v` alone is not an answer: the shell caches
+# where it found a name, and keeps answering from that cache after the file is
+# deleted — so a package removed in section 9 still "existed" because section 4 had
+# looked it up. A fresh `sh` has an empty cache and has to touch the filesystem.
+on_path() { sh -c "command -v $1 >/dev/null 2>&1"; }
+
 echo "=============================================================="
 echo " LiNix v7 harness — backend=$BACKEND package=$PKG"
 echo "=============================================================="
@@ -112,13 +118,13 @@ grep_ok "protected includes a system essential" "linix\|libc\|systemd\|kernel\|b
 echo "[3] Dry-run safety"
 ok "sync --dry-run does not error" lx --dry-run sync
 ok "a dry-run install shows a plan" lx --dry-run install "$PKG"
-nok "dry-run did NOT actually install $PKG" command -v "$PKG"
+nok "dry-run did NOT actually install $PKG" on_path "$PKG"
 
 # --- 4. Imperative install -> list -> coherence ---------------------------
 echo "[4] Install"
 ok "install $PKG" lx -y install "$PKG"
 grep_ok "list shows $PKG" "$PKG" lx list
-ok "$PKG binary is on PATH" command -v "$PKG"
+ok "$PKG binary is on PATH" on_path "$PKG"
 
 # --- 5. Idempotency --------------------------------------------------------
 echo "[5] Idempotency"
@@ -140,7 +146,7 @@ ok "adopt takes manual packages" lx -y adopt
 # python3 (apt/dnf) survives; and it is far fewer than every installed package.
 if [ "$BACKEND" = "apt" ] || [ "$BACKEND" = "dnf" ] || [ "$BACKEND" = "pacman" ]; then
     if command -v python3 >/dev/null 2>&1; then
-        ok "python3 still installed after adopt" command -v python3
+        ok "python3 still installed after adopt" on_path python3
     else
         soft "python3 not on this image — cannot check the survival proof"
     fi
@@ -155,7 +161,7 @@ echo "[8] The guard"
 # verb refuses or no-ops depends on whether bash was declared, and the earlier
 # form asserted an exit code so convoluted that a correct refusal failed it.
 lx -y uninstall bash >/dev/null 2>&1 || true
-ok "bash survives an uninstall attempt" command -v bash
+ok "bash survives an uninstall attempt" on_path bash
 # purge-unmanaged after adopt: a big removal must be refused without the flag OR
 # gated by the ratio; either way, the bare command must not silently purge.
 nok "purge-unmanaged is not a silent mass-delete" lx -y purge-unmanaged
@@ -163,10 +169,7 @@ nok "purge-unmanaged is not a silent mass-delete" lx -y purge-unmanaged
 # --- 9. Remove -------------------------------------------------------------
 echo "[9] Remove"
 ok "uninstall $PKG" lx -y uninstall "$PKG"
-echo "        DIAG path=[$(command -v "$PKG" 2>&1)] ls=[$(ls -l /usr/bin/"$PKG" 2>&1 | head -1)]"
-echo "        DIAG pkgstate=[$(dpkg -l "$PKG" 2>/dev/null | tail -1)]"
-echo "        DIAG declared=[$(grep -rl "$PKG" "$LINIX_CONFIG_DIR"/modules/ 2>/dev/null | tr '\n' ' ')]"
-nok "$PKG binary gone after uninstall" command -v "$PKG"
+nok "$PKG binary gone after uninstall" on_path "$PKG"
 
 # --- 10. Git-backed history (Phase 4 / v7) --------------------------------
 echo "[10] Git history + rollback"
@@ -194,16 +197,54 @@ ok "there is history for a rebuild to leave alone" test "$BEFORE_COMMITS" -ge 1
 # Scoped to $PKG, not --all: the machine was adopted in section 7, so `--all`
 # would churn every manual package on the image to prove a claim about one.
 ok "rebuild $PKG runs" lx -y rebuild "$PKG"
-ok "$PKG is reinstalled, not left removed" command -v "$PKG"
+ok "$PKG is reinstalled, not left removed" on_path "$PKG"
 AFTER_COMMITS=$(commits)
 echo "        commits before=$BEFORE_COMMITS after=$AFTER_COMMITS"
 ok "rebuild wrote no git commit (K14)" test "$BEFORE_COMMITS" = "$AFTER_COMMITS"
 
-# --- 12. Command-surface smoke (exists + --help) --------------------------
-echo "[12] Command surface"
+# --- 12. Backend chains, the per-host lock, and unlock (II.7b) ------------
+echo "[12] Chains and the per-host lock"
+LOCKFILE=$(ls "$LINIX_CONFIG_DIR"/locks/bare.*.toml 2>/dev/null | head -1)
+echo "        lock file: ${LOCKFILE:-<none>}"
+# Per-host: the answer is about this machine, so the filename has to be too, or
+# two machines sharing a config overwrite each other on every sync.
+ok "the lock is named for this host" test -n "$LOCKFILE"
+grep_ok "an unpinned name froze to $BACKEND" "\"$BACKEND\"" cat "$LOCKFILE"
+
+# A lock written by another machine is not an answer about this one.
+printf '[resolved]\n%s = "linix-no-such-backend"\n' "$PKG" \
+    > "$LINIX_CONFIG_DIR/locks/bare.some-other-box.toml"
+ok "sync ignores another host's lock file" lx -y sync
+ok "and leaves it alone" test -f "$LINIX_CONFIG_DIR/locks/bare.some-other-box.toml"
+rm -f "$LINIX_CONFIG_DIR/locks/bare.some-other-box.toml"
+
+# The chain grammar. `list` is the priority file; a comma separates candidates.
+ok  "a chain is legal"            lx --dry-run install "$BACKEND,cargo:$PKG"
+ok  "a chain may end in list"     lx --dry-run install "$BACKEND,list:$PKG"
+ok  "list alone is legal"         lx --dry-run install "list:$PKG"
+nok "an empty slot is refused"    lx --dry-run install "$BACKEND,,cargo:$PKG"
+nok "an unknown link is refused"  lx --dry-run install "$BACKEND,nope:$PKG"
+nok "list must come last"         lx --dry-run install "list,$BACKEND:$PKG"
+nok "a name repeated is refused"  lx --dry-run install "$BACKEND,$BACKEND:$PKG"
+nok "a pattern cannot span one"   lx --dry-run install "$BACKEND,cargo:re:^$PKG"
+
+# A pin naming a manager this host does not have must fail out loud, not quietly
+# decide there is nothing to do — that silence is the bug chains exist to end.
+FOREIGN=dnf; [ "$BACKEND" = "dnf" ] && FOREIGN=apt
+command -v "$FOREIGN" >/dev/null 2>&1 \
+    && soft "$FOREIGN exists on this image — cannot test a pin to a missing manager" \
+    || nok "a pin to a manager this host lacks is not silent" lx -y install "$FOREIGN:$PKG"
+
+grep_ok "unlock --list names the frozen package" "$PKG" lx unlock --list
+ok "unlock forgets one name" lx unlock "$PKG"
+nok "the entry is really gone" grep -q "$PKG" "$LOCKFILE"
+ok "unlocking a name that was never frozen is not an error" lx unlock linix-never-frozen-zzz
+
+# --- 13. Command-surface smoke (exists + --help) --------------------------
+echo "[13] Command surface"
 for c in install uninstall sync plan status list search adopt check absent \
          protected purge-unmanaged rebuild rollback diff git snapshot schedule \
-         profile module bundle export doctor; do
+         profile module bundle export doctor unlock; do
     ok "\`$c --help\` exists" lx "$c" --help
 done
 
