@@ -110,6 +110,11 @@ RUN (nimble -y refresh || true) 2>/dev/null; echo done
 RUN (/opt/spack/bin/spack compiler find || true) 2>/dev/null; echo done
 RUN (flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo || true) 2>/dev/null; echo done
 
+# The layers above delete `/var/lib/apt/lists` to stay small, which leaves apt unable to
+# answer `search` at runtime — so every unpinned name skipped the native manager and landed
+# on a language registry. A real machine has an index; the sweep needs one to be testing apt
+# at all. Last, so it is not thrown away again.
+RUN apt-get update
 WORKDIR /src
 COPY . /src
 RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix

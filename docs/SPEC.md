@@ -2963,10 +2963,11 @@ verified against the tree at the commit that last touched this section, not reca
 installs and removals. That is where everything below came from: none of it was visible from a
 green `cargo test` on Windows, which is rule 11 in one line.
 
-**Ubuntu, Fedora, Arch: 79 hard checks each, 0 failures. Alpine: 77, 0 failures.** First time
-green on any of them. Two of those four only went green because of bugs found *by* the run —
-recorded below. (`gentoo` is opt-in and still unrun; two builds failed transiently on the
-registry and passed on retry, which is worth knowing before reading a red result as a defect.)
+**Every image green: Ubuntu, Fedora, Arch and `tools` at 79 hard checks each, Alpine at 77,
+0 failures anywhere. The live Windows scoop sweep: 58, 0 failures.** First time green on any
+of them, and three only went green because of bugs found *by* the run — recorded below.
+(`gentoo` is opt-in and still unrun. Two image builds failed transiently on the registry and
+passed on retry, which is worth knowing before reading a red result as a defect.)
 
 ### 1. Backend chains (II.7b) — owner ruling, 2026-07-22
 
@@ -3075,19 +3076,23 @@ bug, so running it reintroduced a fixed bug (NO LEGACY).
 
 ### 6. Still owed from this session
 
-- `tools` and the opt-in `gentoo` image.
+- The opt-in `gentoo` image.
 - **A config written by an older build stops every command, and the error does not say which
   file.** `confirm_destructive` was deleted in the rewrite (V.23), so a `preferences.toml`
   still carrying it is refused — correctly, since silently ignoring a setting someone wrote is
   worse. But the bare TOML error says `line 17` of nothing in particular. It names the path
   now. Found on the owner's own machine, where the current binary would not run at all.
-- **A backend that errors is indistinguishable from one that says no** (`remote_package_exists`
-  returns `false` for both). Every bug in §5's first group was *survivable* only because of
-  this: a broken index, a dropped network, or a changed output format all resolve an unpinned
-  name to a lower-priority manager and then **freeze that answer in the lock**. Fixing the
-  parsers removes today's instances; it does not remove the shape. **Needs an owner ruling**,
-  because treating "could not tell" as a hard stop makes a flaky manager fail a sync that
-  currently succeeds.
+- **A manager that cannot answer is read as a manager that said no** — the single root under
+  everything above. `remote_package_exists` returns `false` for "no such package", for a
+  command that errored, and for output it could not parse. **Three images hit it for three
+  different reasons in one session**: Fedora (dnf5 changed its format), Alpine (`--no-cache`
+  left no index), and `tools` (the image deletes `/var/lib/apt/lists` to stay small). Each
+  time, bare `jq` skipped the system manager, fell through the whole priority list to `cargo`,
+  matched a **library** crate named `jq`, and failed at install — and had cargo carried a
+  binary, it would have installed the wrong package and **frozen that answer in the lock**.
+  The parser fixes remove today's instances. They do not remove the shape: a stale index or a
+  dropped network reproduces it on a real machine. **Needs an owner ruling**, because treating
+  "could not tell" as a hard stop makes a flaky manager fail a sync that currently succeeds.
 - The cargo-library-crate resolution gap above.
 
 ## Session 2026-07-21 (eighth session) — the owed list, continued
