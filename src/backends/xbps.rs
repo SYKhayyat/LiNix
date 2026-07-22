@@ -187,7 +187,7 @@ impl Searchable for XbpsSearchable {
         let output = self
             .core
             .executor
-            .run_output("xbps-query", &["-Rs", query], false)
+            .search_output("xbps-query", &["-Rs", query], false)
             .await?;
         Ok(XbpsBackendCore::parse_search(&output))
     }

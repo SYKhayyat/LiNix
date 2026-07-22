@@ -173,7 +173,7 @@ impl Searchable for BrewSearchable {
         let output = self
             .core
             .executor
-            .run_output("brew", &["search", query], false)
+            .search_output("brew", &["search", query], false)
             .await?;
         Ok(parse_brew_search(&output))
     }

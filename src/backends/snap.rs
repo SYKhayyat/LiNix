@@ -182,7 +182,7 @@ impl Searchable for SnapSearchable {
         let output = self
             .core
             .executor
-            .run_output("snap", &["find", query], false)
+            .search_output("snap", &["find", query], false)
             .await?;
         Ok(parse_snap_find(&output))
     }

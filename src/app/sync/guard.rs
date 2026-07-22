@@ -613,7 +613,7 @@ mod tests {
     async fn no_setting_can_opt_a_command_out_of_the_guard() {
         // `[guard.enforce_on]` used to do exactly this: a config key that switched the
         // guard off per command, so `enforce_on.sync = false` — copied from a dotfiles repo
-        // — made a routine sync remove python3. II.10 lists nine refusals and that was not
+        // — made a routine sync remove python3. II.10 lists ten refusals and that was not
         // one of them; V.21 says no setting anyone can flip makes sync dangerous.
         let reg = Arc::new(BackendRegistry::new());
         let cfg = config_with(20);

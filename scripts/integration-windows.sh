@@ -153,6 +153,42 @@ nok "a pin to a manager this host lacks is not silent" lx -y install "apt:$PKG"
 ok  "unlock --list runs"         lx unlock --list
 ok  "unlocking an unfrozen name is not an error" lx unlock linix-never-frozen-zzz
 
+# --- 9b. A manager that could not answer is not one that said no (V.7c) ---
+echo "[9b] Silence is not a no"
+REAL_CARGO=$(sh -c 'command -v cargo' 2>/dev/null)
+if [ -z "$REAL_CARGO" ]; then
+    soft "no cargo on this host — cannot stage a manager that fails to answer"
+else
+    # Shadow only cargo's *search*, so exactly one candidate in the chain goes silent
+    # while the manager under test is untouched. A `.bat` because Windows resolves a
+    # bare `cargo` through PATHEXT, so the shim has to be something CreateProcess runs.
+    SILENT_BIN="${TMPDIR:-/tmp}/linix-it-silent-bin"
+    rm -rf "$SILENT_BIN"; mkdir -p "$SILENT_BIN"
+    printf '@echo off\r\nif "%%1"=="search" (\r\n  echo error: failed to fetch the registry index 1>&2\r\n  exit /b 1\r\n)\r\n"%s" %%*\r\n' \
+        "$(cygpath -w "$REAL_CARGO" 2>/dev/null || echo "$REAL_CARGO")" > "$SILENT_BIN/cargo.bat"
+
+    SILENT_CFG="${TMPDIR:-/tmp}/linix-it-silent"
+    rm -rf "$SILENT_CFG"; mkdir -p "$SILENT_CFG/modules" "$SILENT_CFG/profiles"
+    printf 'cargo\n%s\n' "$BACKEND" > "$SILENT_CFG/priority"
+    printf 'Work\n' > "$SILENT_CFG/active"
+    printf 'use base\n' > "$SILENT_CFG/profiles/Work"
+    printf '%s\n' "$PKG" > "$SILENT_CFG/modules/base.txt"
+
+    silent_lx() {
+        env PATH="$SILENT_BIN:$PATH" \
+            LINIX_CONFIG_DIR="$(cygpath -w "$SILENT_CFG" 2>/dev/null || echo "$SILENT_CFG")" \
+            LINIX_DATA_DIR="$(cygpath -w "$SILENT_CFG/state" 2>/dev/null || echo "$SILENT_CFG/state")" \
+            "$LINIX" "$@"
+    }
+    grep_ok "a plan past a silent manager says which one" "could not answer" \
+        silent_lx --dry-run plan
+    ok "a sync past a silent manager still resolves" silent_lx -y sync
+    # The ruling: it resolved, and wrote nothing down, so the next sync asks again.
+    nok "and freezes nothing" sh -c \
+        "cat '$SILENT_CFG'/locks/bare.*.toml 2>/dev/null | grep -q '$PKG'"
+    rm -rf "$SILENT_BIN" "$SILENT_CFG"
+fi
+
 # --- 10. Command-surface smoke --------------------------------------------
 echo "[10] Command surface"
 for c in install uninstall sync plan status list search adopt check absent \

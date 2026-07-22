@@ -41,12 +41,30 @@ impl PsResourceCore {
 
     async fn run_ps(&self, script: &str) -> Result<String> {
         self.executor
-            .run_output(
-                &self.shell,
-                &["-NoProfile", "-NonInteractive", "-Command", script],
-                false,
-            )
+            .run_output(&self.shell, &Self::argv(script), false)
             .await
+    }
+
+    /// The same shell, for a question whose empty answer means "no such resource". A
+    /// repository that could not be reached prints nothing, and must not be read as one
+    /// that looked and found nothing.
+    async fn search_ps(&self, script: &str) -> Result<String> {
+        self.executor
+            .search_output(&self.shell, &Self::argv(script), false)
+            .await
+    }
+
+    /// The same shell, for a *change*. `run_output` hands back a failed cmdlet's empty
+    /// output as success, so an install that never happened read as done.
+    async fn change_ps(&self, script: &str) -> Result<()> {
+        self.executor
+            .run(&self.shell, &Self::argv(script), false)
+            .await
+            .map(|_| ())
+    }
+
+    fn argv(script: &str) -> [&str; 4] {
+        ["-NoProfile", "-NonInteractive", "-Command", script]
     }
 }
 
@@ -136,7 +154,7 @@ impl Installable for PsResourceInstallable {
                 script.push_str(&format!(" -Version '{}'", ver));
             }
             info!("PSResource: Installing {}...", spec.name);
-            self.core.run_ps(&script).await?;
+            self.core.change_ps(&script).await?;
         }
         Ok(())
     }
@@ -146,7 +164,7 @@ impl Installable for PsResourceInstallable {
             validate_name(name)?;
             let script = format!("Uninstall-PSResource -Name '{}'", name);
             info!("PSResource: Uninstalling {}...", name);
-            self.core.run_ps(&script).await?;
+            self.core.change_ps(&script).await?;
         }
         Ok(())
     }
@@ -188,7 +206,7 @@ impl Searchable for PsResourceSearchable {
             r#"Find-PSResource -Name '{}' | Select-Object -First 50 | ForEach-Object {{ "$($_.Name) $($_.Version)" }}"#,
             query
         );
-        let output = self.core.run_ps(&script).await?;
+        let output = self.core.search_ps(&script).await?;
         Ok(parse_simple_list(&output, "psresource"))
     }
 }
@@ -206,7 +224,7 @@ impl Upgradable for PsResourceUpgradable {
     async fn upgrade(&self, _sudo: bool) -> Result<()> {
         info!("PSResource: Updating all installed resources...");
         let script = r#"Get-InstalledPSResource | ForEach-Object { Update-PSResource -Name $_.Name -TrustRepository -AcceptLicense }"#;
-        self.core.run_ps(script).await?;
+        self.core.change_ps(script).await?;
         Ok(())
     }
 

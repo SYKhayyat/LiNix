@@ -191,7 +191,7 @@ impl Searchable for FlatpakSearchable {
         let output = self
             .core
             .executor
-            .run_output("flatpak", &["search", query], false)
+            .search_output("flatpak", &["search", query], false)
             .await?;
         Ok(parse_flatpak_search(&output))
     }

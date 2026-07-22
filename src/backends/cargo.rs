@@ -74,7 +74,8 @@ impl Installable for CargoInstallable {
             self.core
                 .executor
                 .run_exclusive("cargo", "cargo", &args, false)
-                .await?;
+                .await
+                .map_err(|e| library_crate(&spec.name, e))?;
         }
         Ok(())
     }
@@ -89,6 +90,23 @@ impl Installable for CargoInstallable {
         }
         Ok(())
     }
+}
+
+/// crates.io keeps programs and libraries in one namespace and `cargo search` cannot tell
+/// them apart, so a name that reached cargo because no other manager had it can turn out
+/// to install nothing at all. `cargo install` is the first step that knows; say what
+/// happened rather than passing on a bare exit code.
+fn library_crate(name: &str, e: Error) -> Error {
+    let text = e.to_string();
+    if text.contains("no binaries") || text.contains("nothing to install") {
+        return Error::Other(format!(
+            "`cargo:{name}` is a library crate: crates.io has it, but it installs no \
+             program. `cargo search` cannot tell a program from a library, so a name can \
+             reach cargo and still install nothing — if `{name}` is a command you wanted, \
+             it comes from another manager."
+        ));
+    }
+    e
 }
 
 pub struct CargoQueryable {
@@ -146,7 +164,7 @@ impl Searchable for CargoSearchable {
         let output = self
             .core
             .executor
-            .run_output("cargo", &["search", query], false)
+            .search_output("cargo", &["search", query], false)
             .await?;
         Ok(parse_cargo_search(&output))
     }
@@ -265,6 +283,29 @@ mod tests {
         assert_eq!(pkgs[1].name, "exa");
         // none should be empty-named (the indented binary lines)
         assert!(pkgs.iter().all(|p| !p.name.is_empty()));
+    }
+
+    #[test]
+    fn a_library_crate_says_why_the_install_did_nothing() {
+        let raw = Error::CommandFailed(
+            "`cargo` failed (exit 101): error: there is nothing to install in `jq v0.1.0`, \
+             because it has no binaries"
+                .into(),
+        );
+        let said = library_crate("jq", raw).to_string();
+        assert!(said.contains("library crate"), "{}", said);
+        assert!(said.contains("installs no program"), "{}", said);
+        // And why a name can reach cargo and still install nothing — the part cargo's own
+        // message does not say. True whether the line pinned cargo or resolved to it.
+        assert!(said.contains("cannot tell a program from a library"), "{}", said);
+    }
+
+    #[test]
+    fn an_unrelated_cargo_failure_is_passed_through_untouched() {
+        let raw = Error::CommandFailed("`cargo` failed (exit 101): linker `cc` not found".into());
+        let said = library_crate("ripgrep", raw).to_string();
+        assert!(said.contains("linker"), "{}", said);
+        assert!(!said.contains("library crate"), "{}", said);
     }
 
     #[test]

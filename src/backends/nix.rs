@@ -150,7 +150,7 @@ impl Searchable for NixSearchable {
         let output = self
             .core
             .executor
-            .run_output("nix", &["search", "nixpkgs", query, "--json"], false)
+            .search_output("nix", &["search", "nixpkgs", query, "--json"], false)
             .await?;
         parse_nix_search(&output)
     }

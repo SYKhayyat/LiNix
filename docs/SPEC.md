@@ -805,6 +805,20 @@ accepting it.
 to one manager on one machine, so picking either list silently would make the other line a lie —
 the same reasoning as rule 5.
 
+**A manager that could not answer has not said no** (owner ruling, 2026-07-22). Asking a
+candidate has three outcomes, not two: it has the name, it does not, or **it could not be
+asked** — a package index that was never fetched, a registry that timed out, a command that
+failed. The name still falls through to the next candidate, so one broken manager does not
+fail a sync. **But nothing is written down.** The lock records only a pick that every
+manager ahead of it actually refused; a pick made past silence is a guess, and the next sync
+asks again. When the silent manager comes back and turns out to have the name, the package
+**moves there on that sync** — installed from the manager that has it, and the copy the guess
+installed removed, because nothing declares it any more (the `unlock` migration, II.6).
+
+**And when nothing has it either, "no such package" is a lie.** The error names which
+managers could not answer and what they said, because a stale index and a misspelling look
+identical from the outside and only one of them is fixed by editing the line.
+
 ### Cycles
 
 **A `use` cycle is an error, at both layers.** `Work` uses `Gaming` uses `Work`. Module `a`
@@ -957,7 +971,7 @@ All in `[guard]` in `preferences.toml`. One decision function. **Every removal p
 it** — sync, `absent:`, expiry, `purge-unmanaged`, `clean`, shell exit, `uninstall`. The
 last three also gate *installs* and *changes*, so the install paths call it too.
 
-**`[guard]` holds two keys that are not among the nine: `confine_bin`** (default on), which
+**`[guard]` holds two keys that are not among the ten: `confine_bin`** (default on), which
 refuses a downloaded file a destination outside the backend's bin directory (SEC1), **and
 `require_signed_history`** (default off), which refuses a rollback to a commit git does not
 vouch for (II.13). Both are refusals in kind and neither is in the decision function, for the
@@ -965,7 +979,7 @@ same reason: the fact each one needs — the deploy destination, git's verdict o
 exists only at the moment its own command asks — a `confine_bin` check anywhere but a deploy
 would be checking a path nobody was about to write. They live in this table's home because
 they are the same kind of promise, a refusal with one deliberate opening. **Counting either
-among the nine would make "one decision function" false**, and a table that quietly stops
+among the ten would make "one decision function" false**, and a table that quietly stops
 describing its own function is how the last one drifted.
 
 **A confirmation asks; a refusal says no.**
@@ -2322,6 +2336,41 @@ release. Asked through the one grammar, not a second copy of the naming rule.
 *Found by the live Windows sweep, where `adopt` wrote those IDs into `modules/adopted.txt` and
 every later command — `rollback` included — died parsing the file LiNix had just generated.*
 
+**V.7c — Why silence is not a no, and what it costs to say so.** *(Owner ruling,
+2026-07-22.)* Every read in this codebase went through `run_output`, which hands back a
+failed command's empty output as an ordinary empty answer — deliberately, because a
+non-zero exit from `pacman -Ss` or `dnf search` usually just means the query matched
+nothing. So a search that could not run and a package that does not exist arrived at the
+resolver as the same thing: `false`.
+
+**Three container images hit it for three different reasons in one session.** Fedora,
+because dnf5 changed its output format and the parser read dnf4's. Alpine, because
+`--no-cache` left no index to search. The `tools` image, because it deletes
+`/var/lib/apt/lists` to stay small. Every time, a bare `jq` walked past the system manager
+that had it, fell through the whole priority list to cargo, matched a **library** crate
+named `jq`, and failed at install — and had that crate shipped a binary, LiNix would have
+installed the wrong package and **frozen the wrong manager into the lock**, where it would
+stay after the index was fixed. The parser fixes removed the day's instances; a dropped
+network reproduces the shape on any real machine.
+
+**A hard stop was the wrong answer**, because one flaky manager would then fail a sync that
+has nothing to do with it. **The lock is the thing to withhold, not the install.** So the
+name still falls through, and what changes is what gets remembered: a pick made past a
+silent manager is never recorded, so the next sync re-asks and moves the package once the
+index is back (II.7b). The cost is one extra probe per affected name per sync, which is what
+the owner ruled acceptable — *"it's just about efficiency."*
+
+**What counts as silence has to be conservative in the other direction**, or the lock never
+gets written. A non-zero exit alone is an ordinary empty result for pacman, dnf and brew, so
+the signal is a non-zero exit **with a complaint on stderr**: `search_output` in the executor,
+used by every backend's `search` and nothing else. A manager this machine does not have, and
+one with no search facility at all, still count as a plain no — those are settled facts, and
+re-asking would get the same answer forever.
+
+**One gap survives, knowingly.** `apt-cache search` with an empty index exits zero and says
+nothing, which is indistinguishable from a real miss. There is no generic signal left to read
+there; it needs a per-manager index-health check, which is a different feature.
+
 **V.8 — Why blocks use `{ }` and not `( )` or `end`.** `( )` is already the grouping operator
 in profile math — same character, two meanings, the trap we removed from `include:`. `end` is
 clumsy. "Pick your own delimiter" means nobody can read anyone else's files.
@@ -2555,7 +2604,7 @@ but *how many of those cores to use* is a *preference* — you may want to cap i
 machine responsive while a big sync runs. A preference LiNix cannot look up is not homework. So
 `max_parallel` stays: detected as the default, overridable by hand.
 
-**V.43 — Why the guard has nine refusals and not five.** The first draft said five (then
+**V.43 — Why the guard has ten refusals and not five.** The first draft said five (then
 listed six). It was written before anyone re-read `policy.toml`, which held five rules and
 was marked in II.17 as moving to `[guard]`. Two of them had somewhere to go —
 `deny_packages` was already in the list, and `allow_backends` is what the `priority` file
@@ -2932,7 +2981,7 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S19** | **`@lease=2h` still worked by hand, and it was the one option key that could uninstall your package. FIXED.** II.16 retired it — nothing LiNix writes used it — but `StateRegistry::add` still read `options["lease"]` and turned it into a real `expires_at`, and **the grammar validated no option keys at all**, so a hand-written `apt:jq@lease=2h` was silently a package that uninstalls itself, on the `sweep_expired_leases` path C3 says bypasses the guard. Both halves closed: **II.2's key table is now enforced by the grammar** (an unknown key is an error naming the file and line, and `@lease` gets a hint pointing at `@expires=<absolute>`), and `state.rs` no longer reads `lease`/`duration`. **This was Phase 1's job** — "unit tests for every grammar rule above, including every error case" — and II.2's table was the one rule with no test → **Phase 1** (fixed in 2l) |
 | **S18** | **`auto_lock_checksums` rewrote your module files on every sync. FIXED (Phase 2n) by deletion.** It spliced `@sha256=…` into the line you wrote — II.16 says LiNix must not rewrite your files, and a checksum is a generated fact, which II.6 keeps in `locks/`. The whole `attempt_auto_lock` path is gone, and with it `ManifestEngine` (its last caller): a second file-editor with its own `split_once(':')` parser (C13), `load_locks`/`update_lock`/`manifest_files` all already dead. `groups_dir` refs 77 → 64. **The supply-chain intent survives, unbuilt:** recording an artifact's hash so a changed artifact is caught (II.12) belongs in `locks/<backend>.toml` → **Phase 4** (locks and git) |
 | **S16** | **`--allow-mass-removal` deleted protected packages. FIXED.** `guard::enforce` returned `Ok(())` for *every* objection once the flag was set, so the flag meaning "yes, 50 packages is what I meant" also carried `python3` through. II.10 is explicit — `max_removals` exceeded → "cannot skip, `--allow-mass-removal`"; protected / OS-essential → **"nothing overrides"**. A confirmation asks; a refusal says no (V.26). The flag now clears only the count objection. **There was a test asserting the old behaviour** (`enforce_refuses_without_opt_in_and_proceeds_with_it`, which asserted the flag lets `python3` through) — the bug was written down as an expectation, which is why nothing caught it → **Phase 3** (fixed) |
-| **S17** | **`[guard.enforce_on]` was a config key that switched the guard off, per command. DELETED.** Ten booleans — `apply`, `prune`, `sync`, `watch`, `upgrade`, `rollback`, `canary`, `remove`, `shell-exit`, `leases` — each of which made that command able to remove **anything, without limit**, protected and OS-essential included. It is not one of II.10's nine refusals; it is a switch that turns off all nine. V.21 says **no setting anyone can flip, inherit, or copy from a dotfiles repo** makes a routine sync delete something it did not install, and this was exactly that setting. The config template documented it, and `linix protected` printed which commands were unguarded. All gone → **Phase 3** (fixed) |
+| **S17** | **`[guard.enforce_on]` was a config key that switched the guard off, per command. DELETED.** Ten booleans — `apply`, `prune`, `sync`, `watch`, `upgrade`, `rollback`, `canary`, `remove`, `shell-exit`, `leases` — each of which made that command able to remove **anything, without limit**, protected and OS-essential included. It is not one of II.10's refusals; it is a switch that turns off all of them. V.21 says **no setting anyone can flip, inherit, or copy from a dotfiles repo** makes a routine sync delete something it did not install, and this was exactly that setting. The config template documented it, and `linix protected` printed which commands were unguarded. All gone → **Phase 3** (fixed) |
 | **S15** | **`install` and `uninstall` both had P1 backwards. FIXED for both (`install` 2g, `uninstall` 2l).** P1 says an imperative command *is* a shortcut for editing a file and syncing, so the edit is the operation and the install is what convergence then does about it. Backwards, every refusal on the write landed *after* the package was on the machine. `install` is now `declare` -> `sync` (behind the guard for the first time; `--temp 2h` writes `@expires=<absolute>`). **`uninstall` is now `undeclare` -> `sync` too** (`main.rs:1182` edits the file, `:1190` calls `handle_sync`), so removal goes through the guard, the plan and the counts like any other drift — the symmetric pair V.39 describes. **Verified adversarially 2026-07-17: the old "still inverted, blocked on `prune_on_sync` default false" claim was stale in both halves** — `prune_on_sync`/`with_prune` are deleted (Phase 2h; only comments remain), and sync removes drift by definition (V.34). `uninstall --temp` is likewise done: it writes `absent:...@until=` (II.16). → **Phase 2** (done) |
 
 | **S14** | **FIXED (Phase 2w).** `linix init` filled `priority` from `registry.available()`, which includes the pseudo-backends `service`, `link`, `web`, `github` — teaching a new user that the file answering *"which package managers, in what order"* contains four things that cannot resolve a package. `starter_order` now drops `service` and `link` (dependent statements, never priority-gated, never resolving a bare name). **`web`/`github`/`appimage` stay on purpose:** the model refuses an explicit `web:…` unless `web` is listed (V.15), so excluding them would break those specs — **the original S14 was imprecise to lump them in.** Test: `service_and_link_are_not_listed_but_artifact_backends_are`. *(The deeper "is this a package manager" capability probe the row imagined proved unnecessary: the two truly-not-managers are a fixed pair, and the rest legitimately need listing.)* → **Phase 2** (done) |
@@ -3082,18 +3131,53 @@ bug, so running it reintroduced a fixed bug (NO LEGACY).
   still carrying it is refused — correctly, since silently ignoring a setting someone wrote is
   worse. But the bare TOML error says `line 17` of nothing in particular. It names the path
   now. Found on the owner's own machine, where the current binary would not run at all.
-- **A manager that cannot answer is read as a manager that said no** — the single root under
-  everything above. `remote_package_exists` returns `false` for "no such package", for a
-  command that errored, and for output it could not parse. **Three images hit it for three
-  different reasons in one session**: Fedora (dnf5 changed its format), Alpine (`--no-cache`
-  left no index), and `tools` (the image deletes `/var/lib/apt/lists` to stay small). Each
-  time, bare `jq` skipped the system manager, fell through the whole priority list to `cargo`,
-  matched a **library** crate named `jq`, and failed at install — and had cargo carried a
-  binary, it would have installed the wrong package and **frozen that answer in the lock**.
-  The parser fixes remove today's instances. They do not remove the shape: a stale index or a
-  dropped network reproduces it on a real machine. **Needs an owner ruling**, because treating
-  "could not tell" as a hard stop makes a flaky manager fail a sync that currently succeeds.
-- The cargo-library-crate resolution gap above.
+- **A manager that cannot answer is read as a manager that said no.** **Ruled and built** —
+  see §7 below.
+
+### 7. RULED and BUILT (owner, 2026-07-22): silence falls through, but is never recorded
+
+*(Options offered: hard-stop on "could not tell", or fall through. The owner ruled the third
+thing neither option said — fall through, **and do not write the lock** — plus "leave the
+cargo gap, but make the failure and cause clear", and asked the question that decides whether
+the ruling is worth anything: **"then, on the next sync, it will be changed — will it even?"*
+The answer is yes, and it is the `unlock` migration doing it: the guessed copy is a managed
+package that nothing declares once the real manager is back, and "a managed package nothing
+declares is drift, and removing it is what sync is".)*
+
+Reasoned in **V.7c**; the rule is in **II.7b**. What changed:
+
+- **`CommandExecutor::search_output`** — a read whose emptiness is an *answer*, so a command
+  that could not produce one errors instead of returning nothing. Non-zero exit alone is not
+  the signal (`pacman -Ss` and `dnf search` exit non-zero on an ordinary miss); a non-zero
+  exit **with a complaint on stderr** is. Every backend's `search` uses it — the generic one
+  (apt, apk, zypper, choco, scoop, winget) plus brew, cargo, conda, dnf, flatpak, krew, mise,
+  nix, pacman, snap, xbps, emacs and psresource. The registry-backed ones (npm, pnpm, yarn,
+  pip, vscode) already failed loudly on an HTTP error.
+- **`Verdict::{Has, Lacks, CouldNotTell}`** in the resolver, replacing a `bool`. A manager
+  this machine does not have, and one with no search facility, are still a plain `Lacks`:
+  settled facts, and re-asking gets the same answer forever.
+- **The lock records only an unanimous no.** A pick made past silence resolves, warns naming
+  the silent manager and what it said, and writes nothing.
+- **"No package manager has it" now says which ones could not answer**, because a stale index
+  and a misspelling look identical from outside and only one is fixed by editing the line.
+- **The cargo gap is explained rather than closed**, as ruled: `cargo install` failing on a
+  library crate now says crates.io has the name but ships no program, **and that
+  `cargo search` cannot tell the two apart** — so a name can reach cargo and install
+  nothing. Worded to be true of a pinned `cargo:jq` as well as a resolved one.
+
+**Two siblings found by the same sweep, in the same family** (a command that could not do its
+job read as one that did): `psresource` ran **install, uninstall and upgrade** through
+`run_output`, which discards the exit status — a failed `Install-PSResource` reported success.
+`emacs` did the same for its archive refresh. Both now use the checked path. **Checked and not
+affected:** every other backend's install/remove already goes through `run`/`run_exclusive`,
+which enforce status; `list_installed` still tolerates a failed read, because an empty
+installed list can only cause a reinstall attempt, never a removal (removals come from managed
+state, not from listing).
+
+**One gap left knowingly, and not hidden:** `apt-cache search` with an empty index exits zero
+and prints nothing, indistinguishable from a real miss. No generic signal remains to read;
+closing it needs a per-manager index-health check. The `tools` image works around it with a
+final `apt-get update`.
 
 ## Session 2026-07-21 (eighth session) — the owed list, continued
 
@@ -5199,7 +5283,7 @@ that says `use x`.
 
 | | |
 |---|---|
-| **V.43** | Keep all nine guard refusals, including the three orphaned `policy.toml` rules (`pinned_only`, `require_snapshot`, `deny_vulnerable`). II.10's "five" was wrong. |
+| **V.43** | Keep every guard refusal, including the three orphaned `policy.toml` rules (`pinned_only`, `require_snapshot`, `deny_vulnerable`). II.10's "five" was wrong. |
 | **S6** | `sync` heals **automatically**. Asking permission to fix drift asks permission to do sync's own job. Automatic ≠ silent: it must say what it did, and the removal still goes through the guard. |
 | **S8** | Keep `undo`. Keep its path check (renamed to say it guards the snapshot-read path). Delete the false global claim. Restore must state it rolls back the whole filesystem before asking. |
 | **II.6 verbs** (2026-07-17) | **Three verbs, as II.6 already said: `activate` SETS, `activate -a` ADDS, `deactivate` REMOVES.** The code had `activate` adding and the CLI help documenting it that way — **the spec was right and the code was wrong.** Not a re-opening: II.6 was already correct, the audit found the drift. |

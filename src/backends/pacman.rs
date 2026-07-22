@@ -183,7 +183,7 @@ impl Searchable for PacmanSearchable {
         let output = self
             .core
             .executor
-            .run_output("pacman", &["-Ss", query], false)
+            .search_output("pacman", &["-Ss", query], false)
             .await?;
         Ok(pacman::parse_search(&output))
     }

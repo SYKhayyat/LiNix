@@ -127,7 +127,7 @@ impl Searchable for KrewSearchable {
         let output = self
             .core
             .executor
-            .run_output("kubectl", &["krew", "search", query], false)
+            .search_output("kubectl", &["krew", "search", query], false)
             .await?;
         // Output is `NAME  DESCRIPTION  INSTALLED`; take the plugin name (first column).
         Ok(crate::parsers::ecosystem::names_only(&output, "krew"))

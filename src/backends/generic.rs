@@ -409,7 +409,7 @@ impl Searchable for GenericSearchable {
             .search_binary
             .as_deref()
             .unwrap_or(&self.core.name);
-        let output = self.core.executor.run_output(bin, &args, false).await?;
+        let output = self.core.executor.search_output(bin, &args, false).await?;
         Ok(self.core.parser.parse_search(&output))
     }
 }

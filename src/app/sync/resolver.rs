@@ -24,6 +24,18 @@ enum Coverage {
     OneLine,
 }
 
+/// What one manager said when asked whether it has a name.
+///
+/// `Lacks` and `CouldNotTell` both send the name on to the next candidate; they differ in
+/// what may be *written down* afterwards. An answer nobody could give is not a no, and
+/// freezing a lower manager on the strength of it is how an unedited line comes to mean a
+/// different package the day an index goes stale (V.7c).
+enum Verdict {
+    Has,
+    Lacks,
+    CouldNotTell(String),
+}
+
 /// A candidate list as the line wrote it, for an error to quote back.
 fn describe_candidates(candidates: &Candidates) -> String {
     match candidates {
@@ -583,20 +595,59 @@ impl<'a> StateResolver<'a> {
             }
 
             let mut found = None;
+            let mut silent: Vec<String> = Vec::new();
             for backend in &chain {
-                if self
-                    .remote_package_exists(backend, &name, constraint.as_deref())
-                    .await
-                {
-                    found = Some(backend.clone());
-                    break;
+                match self.ask(backend, &name, constraint.as_deref()).await {
+                    Verdict::Has => {
+                        found = Some(backend.clone());
+                        break;
+                    }
+                    Verdict::Lacks => {}
+                    Verdict::CouldNotTell(why) => silent.push(why),
                 }
             }
             match found {
-                Some(backend) => {
+                // Recorded only when every manager ahead of the winner actually said no.
+                // If one of them could not answer, this pick is the best available guess
+                // and not a decision: leaving it out of the lock is what makes the next
+                // sync ask again, and move the package once the silent manager is back.
+                Some(backend) if silent.is_empty() => {
                     debug!("`{}` resolved to `{}`.", name, backend);
                     lock_changed |= lock.record(&name, &backend);
                     answers.insert(name, backend);
+                }
+                Some(backend) => {
+                    warn!(
+                        "`{}` is being taken from `{}` only because {}. Not recorded — the \
+                         next sync asks again, and moves `{}` if the manager that could not \
+                         answer turns out to have it.",
+                        name,
+                        backend,
+                        silent.join("; "),
+                        name,
+                    );
+                    answers.insert(name, backend);
+                }
+                // Every candidate was asked and none has it — except that some could not
+                // be asked, and "not found" would then be a lie.
+                None if !silent.is_empty() => {
+                    let grammar = GrammarError::new(
+                        origin,
+                        format!(
+                            "no package manager this line accepts has `{}` — and {}",
+                            name,
+                            silent.join("; "),
+                        ),
+                    )
+                    .with_hint(
+                        "this may not be a misspelling. A manager that cannot reach its \
+                         package index says nothing, which reads the same as a manager \
+                         that does not have it — fix that manager and run again.",
+                    );
+                    return Err(Error::Unresolvable {
+                        message: grammar.to_string(),
+                        name,
+                    });
                 }
                 // No candidate has it, so there is no honest answer to give. The old code
                 // fell back to a default backend, which turned a typo into a request to
@@ -761,52 +812,53 @@ impl<'a> StateResolver<'a> {
         Ok(resolved)
     }
 
-    async fn remote_package_exists(
+    /// Ask one manager whether it has a name, keeping "it does not" apart from "it could
+    /// not say".
+    ///
+    /// A manager this machine does not have, and one with no way to search at all, both
+    /// answer `Lacks`: those are settled facts about the machine, and asking again next
+    /// run would get the same answer. Only a command that failed is `CouldNotTell`.
+    async fn ask(
         &self,
         backend_name: &str,
         package_name: &str,
         constraint: Option<&str>,
-    ) -> bool {
-        let backend_cap = match self.registry.get(backend_name) {
-            Some(b) if b.is_available() => b,
-            _ => return false,
+    ) -> Verdict {
+        let Some(backend_cap) = self.registry.get(backend_name).filter(|b| b.is_available()) else {
+            return Verdict::Lacks;
+        };
+        let Some(searchable) = backend_cap.as_searchable() else {
+            return Verdict::Lacks;
         };
 
-        if let Some(searchable) = backend_cap.as_searchable() {
-            if let Ok(true) = searchable.remote_has(package_name).await {
-                if let Some(req) = constraint {
-                    match searchable.remote_info(package_name).await {
-                        Ok(Some(pkg)) => {
-                            if let Some(ver) = pkg.version.as_deref() {
-                                return self.satisfies_constraint(ver, req);
-                            }
-                        }
-                        _ => return false,
-                    }
-                }
-                return true;
-            }
-
-            // `remote_has` returning false is not proof of absence — a backend may not
-            // implement it — so an inconclusive answer falls through to a real search.
-            if let Ok(results) = searchable.search(package_name).await {
-                return results.iter().any(|pkg| {
-                    if pkg.name == package_name {
-                        match constraint {
-                            Some(req) => pkg
-                                .version
-                                .as_deref()
-                                .is_some_and(|v| self.satisfies_constraint(v, req)),
-                            None => true,
-                        }
-                    } else {
-                        false
-                    }
-                });
-            }
+        let has = match searchable.remote_has(package_name).await {
+            Ok(true) => true,
+            // `false` here is not proof of absence — a backend may not implement it — so
+            // an inconclusive answer falls through to a real search.
+            Ok(false) => match searchable.search(package_name).await {
+                Ok(results) => results.iter().any(|pkg| pkg.name == package_name),
+                Err(e) => return Verdict::CouldNotTell(e.to_string()),
+            },
+            Err(e) => return Verdict::CouldNotTell(e.to_string()),
+        };
+        if !has {
+            return Verdict::Lacks;
         }
 
-        false
+        let Some(req) = constraint else {
+            return Verdict::Has;
+        };
+        match searchable.remote_info(package_name).await {
+            // It has the package but will not say which version. The manager is the one
+            // that enforces the pin at install time; refusing here would send the name to
+            // a manager that merely talks about versions more.
+            Ok(Some(pkg)) => match pkg.version.as_deref() {
+                Some(ver) if !self.satisfies_constraint(ver, req) => Verdict::Lacks,
+                _ => Verdict::Has,
+            },
+            Ok(None) => Verdict::Lacks,
+            Err(e) => Verdict::CouldNotTell(e.to_string()),
+        }
     }
 
     fn satisfies_constraint(&self, version: &str, constraint: &str) -> bool {
@@ -883,6 +935,162 @@ mod tests {
             .unwrap_or_default();
         v.sort();
         v
+    }
+
+    mod silent_managers {
+        use super::*;
+        use crate::backends::generic::{
+            GenericBackendCore, GenericSearchable, ManagerConfig, ManualListing,
+        };
+        use crate::core::executor::{DryRunOutput, MockExecutor};
+        use crate::core::{BackendCapabilities, CommandExecutor, Package};
+        use std::process::Output as StdOutput;
+        use dashmap::DashMap;
+        use std::collections::HashMap as Map;
+        use std::path::PathBuf;
+
+        fn one_per_line(output: &str) -> Vec<Package> {
+            crate::parsers::parse_bare_names(output, "test")
+        }
+
+        fn manager(name: &str, exec: CommandExecutor) -> Arc<BackendCapabilities> {
+            let config = ManagerConfig {
+                name: name.into(),
+                install_args: vec![],
+                remove_args: vec![],
+                list_args: vec![],
+                manual: ManualListing::AllInstalled,
+                essential_args: None,
+                search_args: vec!["search".into()],
+                search_binary: None,
+                enumerate_args: None,
+                enumerate_binary: None,
+                list_binary: None,
+                upgrade_args: vec![],
+                update_args: None,
+                orphan_args: None,
+                repo_add_args: None,
+                repo_remove_args: None,
+                depends_args: None,
+                repo_list_args: None,
+                version_pin: None,
+                needs_root: false,
+                is_exclusive: false,
+                flag_map: Map::new(),
+            };
+            let core = Arc::new(GenericBackendCore {
+                name: name.into(),
+                executor: exec,
+                config,
+                parser: Arc::new(crate::parsers::LambdaParser {
+                    installed_fn: one_per_line,
+                    search_fn: one_per_line,
+                }),
+            });
+            Arc::new(
+                BackendCapabilities::builder(core.clone())
+                    .with_searchable(Arc::new(GenericSearchable { core }))
+                    .build(),
+            )
+        }
+
+        /// Two managers named on `priority`, each answering a `search jq` however the
+        /// test says.
+        fn registry(first: StdOutput, second: StdOutput) -> Arc<BackendRegistry> {
+            let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+            let mock = Arc::new(MockExecutor::new(vfs.clone()));
+            mock.set_command_exists("first", true);
+            mock.set_command_exists("second", true);
+            mock.set_response("first search jq", Ok(first));
+            mock.set_response("second search jq", Ok(second));
+            let exec = CommandExecutor::with_layer(
+                false,
+                false,
+                mock,
+                vfs,
+                Arc::new(DashMap::new()),
+            );
+            let mut reg = BackendRegistry::new();
+            reg.register(manager("first", exec.duplicate()));
+            reg.register(manager("second", exec));
+            Arc::new(reg)
+        }
+
+        fn found() -> StdOutput {
+            let mut out: StdOutput = DryRunOutput::new().into();
+            out.stdout = b"jq\n".to_vec();
+            out
+        }
+
+        async fn settle(r: &Repo, reg: Arc<BackendRegistry>) -> Result<(String, Option<String>)> {
+            let state = StateResolver::new(&r.config, reg, false)
+                .await
+                .recording_locks()
+                .resolve_model()
+                .await?;
+            let backend = state
+                .packages
+                .iter()
+                .find(|(_, specs)| specs.iter().any(|s| s.name == "jq"))
+                .map(|(b, _)| b.clone())
+                .expect("jq resolved somewhere");
+            let lock = crate::core::BareLock::load(&crate::core::BareLock::path_in(
+                &r.config.layout().locks_dir(),
+            ))
+            .unwrap();
+            let recorded = lock.get("jq").map(str::to_string);
+            Ok((backend, recorded))
+        }
+
+        fn bare_jq() -> Repo {
+            repo(&[
+                ("priority", "first\nsecond\n"),
+                ("active", "Work\n"),
+                ("profiles/Work", "use base\n"),
+                ("modules/base.txt", "jq\n"),
+            ])
+        }
+
+        #[tokio::test]
+        async fn a_manager_that_said_no_lets_the_pick_be_recorded() {
+            let (backend, recorded) = settle(&bare_jq(), registry(DryRunOutput::new().into(), found()))
+                .await
+                .unwrap();
+            assert_eq!(backend, "second");
+            assert_eq!(recorded.as_deref(), Some("second"));
+        }
+
+        /// The ruling: a manager that could not answer has not said no, so the name still
+        /// falls through — but nothing is written down, and the next sync asks again.
+        #[tokio::test]
+        async fn a_manager_that_could_not_answer_leaves_no_lock() {
+            let (backend, recorded) = settle(
+                &bare_jq(),
+                registry(DryRunOutput::faulted("E: package lists are empty"), found()),
+            )
+            .await
+            .unwrap();
+            assert_eq!(backend, "second");
+            assert_eq!(recorded, None, "a guess must not be frozen");
+        }
+
+        /// And when nothing has it either, "no such package" would be a lie.
+        #[tokio::test]
+        async fn nothing_found_past_a_silent_manager_says_so() {
+            let err = settle(
+                &bare_jq(),
+                registry(
+                    DryRunOutput::faulted("E: package lists are empty"),
+                    DryRunOutput::new().into(),
+                ),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(err.contains("could not answer"), "{}", err);
+            assert!(err.contains("`first`"), "{}", err);
+            assert!(err.contains("not be a misspelling"), "{}", err);
+        }
     }
 
     #[tokio::test]

@@ -173,7 +173,7 @@ impl Searchable for DnfSearchable {
         let output = self
             .core
             .executor
-            .run_output("dnf", &["search", query], false)
+            .search_output("dnf", &["search", query], false)
             .await?;
         Ok(dnf::parse_dnf_search(&output))
     }

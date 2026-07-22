@@ -205,7 +205,7 @@ impl Searchable for MiseSearchable {
         let output = self
             .core
             .executor
-            .run_output("mise", &["registry"], false)
+            .search_output("mise", &["registry"], false)
             .await?;
         Ok(filter_mise_registry(&output, query))
     }

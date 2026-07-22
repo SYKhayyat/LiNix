@@ -36,7 +36,7 @@ impl Default for SandboxSettings {
     }
 }
 
-/// The `[guard]` table (II.10): the one home for all nine refusals. The v7 spec split them —
+/// The `[guard]` table (II.10): the one home for all ten refusals. The v7 spec split them —
 /// four removal rules lived as top-level `Config` fields and four install/change rules lived
 /// in a separate `policy.toml` (II.17 deletes it) and a parallel `Policy` struct. Both are
 /// now here. Every rule matches V.26's definition of a refusal ("I will not, and there is no
@@ -239,7 +239,7 @@ pub struct Config {
     #[serde(skip)]
     pub allow_mass_install: bool,
 
-    /// The `[guard]` table (II.10): all nine refusals — protection, the removal/install
+    /// The `[guard]` table (II.10): all ten refusals — protection, the removal/install
     /// count ceilings, and the install/change rules. See [`GuardSettings`].
     #[serde(default)]
     pub guard: GuardSettings,

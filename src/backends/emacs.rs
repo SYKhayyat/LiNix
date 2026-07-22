@@ -47,6 +47,24 @@ impl EmacsBackendCore {
             .run_output("emacs", &["--batch", "--eval", lisp], false)
             .await
     }
+
+    /// The same evaluation, for a question whose empty answer means "no such package".
+    /// An emacs that could not reach its archives prints nothing and must not be read as
+    /// one that looked and found nothing.
+    async fn search_lisp(&self, lisp: &str) -> Result<String> {
+        self.executor
+            .search_output("emacs", &["--batch", "--eval", lisp], false)
+            .await
+    }
+
+    /// The same evaluation, for a *change*. `run_output` reports a failed batch run as
+    /// empty output and exit-zero, so an install that never happened read as done.
+    async fn change_lisp(&self, lisp: &str) -> Result<()> {
+        self.executor
+            .run("emacs", &["--batch", "--eval", lisp], false)
+            .await
+            .map(|_| ())
+    }
 }
 
 #[async_trait]
@@ -191,7 +209,7 @@ impl Searchable for EmacsSearchable {
                                 (package-version-join (package-desc-version (cadr p))))))))) ",
             needle
         );
-        let out = self.core.run_lisp(&lisp).await?;
+        let out = self.core.search_lisp(&lisp).await?;
         Ok(out
             .lines()
             .filter_map(|l| {
@@ -211,7 +229,7 @@ impl Upgradable for EmacsUpgradable {
     async fn update(&self, _: bool) -> Result<()> {
         info!("Emacs: Refreshing package archives...");
         let lisp = "(progn (require 'package) (package-initialize) (package-refresh-contents))";
-        self.core.run_lisp(lisp).await?;
+        self.core.change_lisp(lisp).await?;
         Ok(())
     }
 

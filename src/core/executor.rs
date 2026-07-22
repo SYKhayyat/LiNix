@@ -23,6 +23,22 @@ impl DryRunOutput {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// A run that exited non-zero and complained — what a manager with no package index
+    /// does. `ExitStatus` cannot be constructed, so a real failing process supplies one.
+    pub fn faulted(stderr: &str) -> StdOutput {
+        let status = if cfg!(windows) {
+            StdCommand::new("cmd").args(["/C", "exit", "1"]).status()
+        } else {
+            StdCommand::new("false").status()
+        }
+        .expect("failed to create dummy status");
+        StdOutput {
+            status,
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
 }
 
 impl From<DryRunOutput> for StdOutput {
@@ -405,6 +421,31 @@ impl CommandExecutor {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// A read whose emptiness is an *answer*, so a command that could not produce one must
+    /// say so instead of returning nothing.
+    ///
+    /// "This manager has no such package" and "this manager has no package index" both print
+    /// nothing. Reading the second as the first is how a bare name walks past the manager
+    /// that has it and freezes to a lower one (V.7c). A non-zero exit alone is not the
+    /// signal — `pacman -Ss`, `dnf search` and `brew search` all exit non-zero for an
+    /// ordinary empty result — so the fault is a non-zero exit *with* a complaint on stderr.
+    pub async fn search_output(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<String> {
+        let output = self.read_raw(cmd, args, sudo).await?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let complaint = stderr.trim();
+        if !output.status.success() && !complaint.is_empty() {
+            let first = complaint.lines().next().unwrap_or(complaint);
+            // Not `CommandFailed`: this sentence is read by a user, in a line that
+            // already says which manager and which package, and "Command execution
+            // failed:" in front of it is noise.
+            return Err(Error::Other(format!(
+                "`{}` could not answer: {}",
+                cmd, first
+            )));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
     pub async fn run_exclusive(
         &self,
         lock_key: &str,
@@ -640,6 +681,71 @@ mod windows_shim_tests {
     #[test]
     fn leaves_exe_alone() {
         assert!(windows_shim_wrap("winget", Path::new(r"C:\x\winget.exe"), &[]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod search_read_tests {
+    use super::{CommandExecutor, DryRunOutput, MockExecutor, StdOutput};
+    use dashmap::DashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn exec(cmdline: &str, response: StdOutput) -> (CommandExecutor, Arc<MockExecutor>) {
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        mock.set_response(cmdline, Ok(response));
+        let e = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(DashMap::new()),
+        );
+        (e, mock)
+    }
+
+    /// Every manager that can be first in `priority` reaches this through its own
+    /// `search`; the rule has to hold for all of them, so it is tested here once.
+    #[tokio::test]
+    async fn a_search_that_could_not_run_is_an_error_not_an_empty_answer() {
+        let (e, _m) = exec(
+            "apt-cache search jq",
+            DryRunOutput::faulted("E: The package lists are empty."),
+        );
+        let err = e
+            .search_output("apt-cache", &["search", "jq"], false)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("could not answer"), "{}", err);
+        assert!(err.contains("package lists are empty"), "{}", err);
+    }
+
+    /// `pacman -Ss`, `dnf search` and `brew search` all exit non-zero when the query
+    /// simply matched nothing. That is an answer, and must survive as one.
+    #[tokio::test]
+    async fn a_quiet_nonzero_exit_is_an_ordinary_empty_result() {
+        let (e, _m) = exec("pacman -Ss nosuchpkg", DryRunOutput::faulted(""));
+        let out = e
+            .search_output("pacman", &["-Ss", "nosuchpkg"], false)
+            .await
+            .expect("an empty search is not a fault");
+        assert!(out.is_empty());
+    }
+
+    /// A manager that warns on the way to a real answer has still answered.
+    #[tokio::test]
+    async fn a_warning_alongside_a_successful_run_is_not_a_fault() {
+        let mut ok: StdOutput = DryRunOutput::new().into();
+        ok.stdout = b"jq - lightweight JSON processor\n".to_vec();
+        ok.stderr = b"WARNING: repository is out of date\n".to_vec();
+        let (e, _m) = exec("apt-cache search jq", ok);
+        let out = e
+            .search_output("apt-cache", &["search", "jq"], false)
+            .await
+            .unwrap();
+        assert!(out.contains("lightweight JSON processor"), "{}", out);
     }
 }
 

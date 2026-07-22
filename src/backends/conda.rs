@@ -167,7 +167,7 @@ impl Searchable for CondaSearchable {
         let output = self
             .core
             .executor
-            .run_output("conda", &["search", query, "--json"], false)
+            .search_output("conda", &["search", query, "--json"], false)
             .await?;
         Ok(parse_conda_search(&output))
     }

@@ -240,6 +240,47 @@ ok "unlock forgets one name" lx unlock "$PKG"
 nok "the entry is really gone" grep -q "$PKG" "$LOCKFILE"
 ok "unlocking a name that was never frozen is not an error" lx unlock linix-never-frozen-zzz
 
+# --- 12b. A manager that could not answer is not one that said no (V.7c) --
+echo "[12b] Silence is not a no"
+REAL_CARGO=$(sh -c 'command -v cargo' 2>/dev/null)
+if [ -z "$REAL_CARGO" ]; then
+    soft "no cargo in this image — cannot stage a manager that fails to answer"
+else
+    # Shadow only cargo's *search*, so exactly one candidate in the chain goes
+    # silent while every other manager on the image is untouched. Breaking the
+    # network instead would break the manager under test too.
+    mkdir -p /tmp/silent-bin
+    cat > /tmp/silent-bin/cargo <<EOSHIM
+#!/bin/sh
+if [ "\$1" = "search" ]; then
+    echo "error: failed to fetch the registry index" >&2
+    exit 1
+fi
+exec "$REAL_CARGO" "\$@"
+EOSHIM
+    chmod +x /tmp/silent-bin/cargo
+
+    SILENT_CFG=/tmp/linix-it-silent
+    rm -rf "$SILENT_CFG"; mkdir -p "$SILENT_CFG/modules" "$SILENT_CFG/profiles"
+    printf 'cargo\n%s\n' "$BACKEND" > "$SILENT_CFG/priority"
+    printf 'Work\n' > "$SILENT_CFG/active"
+    printf 'use base\n' > "$SILENT_CFG/profiles/Work"
+    printf '%s\n' "$PKG" > "$SILENT_CFG/modules/base.txt"
+
+    silent_lx() {
+        env PATH="/tmp/silent-bin:$PATH" LINIX_CONFIG_DIR="$SILENT_CFG" \
+            LINIX_DATA_DIR=/tmp/linix-it-silent-state $TO "$LINIX" "$@"
+    }
+    ok "a sync past a silent manager still resolves" silent_lx -y sync
+    # The point of the ruling: it resolved, and wrote nothing down, so the next
+    # sync asks again and can still move the package to cargo.
+    nok "and freezes nothing" sh -c \
+        "cat $SILENT_CFG/locks/bare.*.toml 2>/dev/null | grep -q '$PKG'"
+    grep_ok "and says which manager could not answer" "could not answer" \
+        silent_lx --dry-run plan
+    rm -rf /tmp/silent-bin "$SILENT_CFG" /tmp/linix-it-silent-state
+fi
+
 # --- 13. Command-surface smoke (exists + --help) --------------------------
 echo "[13] Command surface"
 for c in install uninstall sync plan status list search adopt check absent \

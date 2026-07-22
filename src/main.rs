@@ -3848,7 +3848,7 @@ nix_gc_age = "30d"
 # user = "true"
 
 # ---------------------------------------------------------------------------
-# [guard] — the nine refusals (II.10). One table, one home.
+# [guard] — the ten refusals (II.10). One table, one home.
 #
 # Drift removal is derived from managed state, and managed state can be wrong: a
 # mis-scoped manifest, a bad `adopt` run, or a state file from another machine can
@@ -4166,7 +4166,7 @@ async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> {
 /// Enforce the `[guard]` install/change rules against the desired state before any change
 /// (II.10). The spec-level rules (`deny_packages`, `pinned_only`) are checked purely by the
 /// guard; the two that need runtime state (`require_snapshot`, `deny_vulnerable`) are checked
-/// here, where the snapshot provider and the audit report are in hand. All nine refusals now
+/// here, where the snapshot provider and the audit report are in hand. All ten refusals now
 /// share one decision surface — this replaces the old parallel `policy.toml` gate (II.17).
 async fn enforce_policy(
     app: &App,
