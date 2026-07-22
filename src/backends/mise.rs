@@ -76,9 +76,12 @@ impl Installable for MiseInstallable {
                 .unwrap_or("latest");
             let tool_spec = format!("{}@{}", spec.name, version);
             info!("Mise: Installing global tool {}...", tool_spec);
+            let mut args = vec!["use".to_string(), "-g".to_string()];
+            crate::core::argv::push_names(&mut args, "mise", [&tool_spec]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("mise", "mise", &["use", "-g", &tool_spec], false)
+                .run_exclusive("mise", "mise", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -87,9 +90,12 @@ impl Installable for MiseInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("Mise: Uninstalling tool {}...", name);
+            let mut args = vec!["uninstall".to_string()];
+            crate::core::argv::push_names(&mut args, "mise", [name]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("mise", "mise", &["uninstall", name], false)
+                .run_exclusive("mise", "mise", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -280,7 +286,42 @@ pub fn register(
 
 #[cfg(test)]
 mod tests {
-    use super::filter_mise_registry;
+    use super::*;
+
+    #[tokio::test]
+    async fn mise_tool_names_come_after_the_terminator() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(MiseBackendCore::new(exec));
+
+        MiseInstallable { core: core.clone() }
+            .install(
+                &[PackageSpec {
+                    name: "node".into(),
+                    backend: "mise".into(),
+                    ..Default::default()
+                }],
+                false,
+            )
+            .await
+            .unwrap();
+        MiseInstallable { core: core.clone() }
+            .remove(&["node".to_string()], false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec!["mise use -g -- node@latest", "mise uninstall -- node"]
+        );
+    }
 
     #[test]
     fn mise_registry_filters_by_query() {

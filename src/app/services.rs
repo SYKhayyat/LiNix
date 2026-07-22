@@ -62,11 +62,7 @@ impl AppServices {
                 app.diagnostics.clone(),
             ),
             shim_manager,
-            undo_manager: UndoManager::new(
-                app.snapshot_manager.clone(),
-                app.state.clone(),
-                app.executor.clone(),
-            ),
+            undo_manager: UndoManager::new(app.snapshot_manager.clone(), app.state.clone()),
             profile_manager: ProfileManager::new(
                 app.registry.clone(),
                 app.executor.clone(),

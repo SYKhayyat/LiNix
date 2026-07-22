@@ -13,29 +13,6 @@ static PACKAGE_NAME_REGEX: Lazy<Regex> =
 static SHELL_INJECTION_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"[;&|><`$\(\)\[\]\{\}\*\?\!\\]").unwrap());
 
-/// Destructive patterns blocked at the command layer.
-static DESTRUCTIVE_PATTERNS: &[&str] = &[
-    "rm -rf /",
-    "dd if=",
-    "mkfs",
-    ":(){ :|:& };:",
-    "chmod -R 777",
-    "chown -R",
-    "> /dev/sda",
-    "mv / /dev/null",
-];
-
-static TRUSTED_BIN_PATHS: &[&str] = &[
-    "/usr/bin",
-    "/bin",
-    "/usr/sbin",
-    "/sbin",
-    "/usr/local/bin",
-    "C:\\Windows\\System32",
-    "C:\\Program Files",
-    "C:\\Program Files (x86)",
-];
-
 /// Sensitive system paths that LiNix is prohibited from accessing.
 static FORBIDDEN_PATHS: &[&str] = &[
     "/etc/shadow",
@@ -113,45 +90,6 @@ impl Validator {
         Ok(())
     }
 
-    pub fn validate_command(cmd: &str, args: &[&str]) -> Result<()> {
-        let full = format!("{} {}", cmd, args.join(" ")).to_lowercase();
-
-        for pattern in DESTRUCTIVE_PATTERNS {
-            if full.contains(pattern) {
-                return Err(Error::Validation(format!(
-                    "Destructive command blocked: {}",
-                    full
-                )));
-            }
-        }
-
-        if SHELL_INJECTION_REGEX.is_match(&full) {
-            return Err(Error::Validation("Command injection detected".into()));
-        }
-
-        let cmd_path = Path::new(cmd);
-        if cmd_path.is_absolute() {
-            // Canonicalize before the prefix check: a symlink or `..` in an untrusted
-            // location would otherwise present a trusted-looking prefix.
-            let canonical_cmd = cmd_path
-                .canonicalize()
-                .unwrap_or_else(|_| cmd_path.to_path_buf());
-            let is_trusted = TRUSTED_BIN_PATHS.iter().any(|trusted| {
-                let t_path = Path::new(trusted);
-                canonical_cmd.starts_with(t_path)
-            });
-
-            if !is_trusted {
-                return Err(Error::Validation(format!(
-                    "Untrusted binary origin: {}",
-                    cmd
-                )));
-            }
-        }
-
-        Ok(())
-    }
-
     /// Forbidden zones are matched as path prefixes on the *resolved* path, never as
     /// substrings: a substring test both misses `/etc/../etc/shadow` and rejects innocent
     /// names that merely contain a forbidden one. A path that does not exist is returned
@@ -167,9 +105,26 @@ impl Validator {
             .map_err(|e| Error::Other(e.to_string()))?
             .map_err(|e| Error::Validation(format!("Path resolution failed: {}", e)))?;
 
+        Self::refuse_forbidden(&canonical)?;
+        Ok(canonical)
+    }
+
+    /// [`Validator::validate_path`] for a caller that cannot await — the `vars` standard
+    /// library's `read_file`, which runs inside Rhai.
+    pub fn validate_path_sync(path: &Path) -> Result<PathBuf> {
+        if !path.exists() {
+            return Ok(path.to_path_buf());
+        }
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| Error::Validation(format!("Path resolution failed: {}", e)))?;
+        Self::refuse_forbidden(&canonical)?;
+        Ok(canonical)
+    }
+
+    fn refuse_forbidden(canonical: &Path) -> Result<()> {
         for forbidden in FORBIDDEN_PATHS {
-            let f_path = Path::new(forbidden);
-            if canonical.starts_with(f_path) {
+            if canonical.starts_with(Path::new(forbidden)) {
                 warn!(
                     "Security Block: Attempted access to forbidden path: {:?}",
                     canonical
@@ -177,8 +132,7 @@ impl Validator {
                 return Err(Error::Permission(format!("Access Denied: {}", forbidden)));
             }
         }
-
-        Ok(canonical)
+        Ok(())
     }
 
     pub fn validate_backend_name(name: &str) -> Result<()> {

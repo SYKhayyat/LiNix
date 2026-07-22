@@ -1,5 +1,5 @@
 use crate::core::{
-    CommandExecutor, Error, ManagedPackage, Result, Snapshot, SnapshotManager, StateRegistry,
+    Error, ManagedPackage, Result, Snapshot, SnapshotManager, StateRegistry,
 };
 use dialoguer::{theme::ColorfulTheme, Select};
 use std::collections::HashMap;
@@ -12,7 +12,6 @@ use tracing::{debug, info, warn};
 pub struct UndoManager {
     snapshot_manager: Arc<SnapshotManager>,
     state: Arc<Mutex<StateRegistry>>,
-    executor: CommandExecutor,
 }
 
 #[derive(Debug, Default)]
@@ -49,15 +48,10 @@ const REGISTRY_READ_FORBIDDEN_PATHS: &[&str] = &[
 ];
 
 impl UndoManager {
-    pub fn new(
-        snapshot_manager: Arc<SnapshotManager>,
-        state: Arc<Mutex<StateRegistry>>,
-        executor: CommandExecutor,
-    ) -> Self {
+    pub fn new(snapshot_manager: Arc<SnapshotManager>, state: Arc<Mutex<StateRegistry>>) -> Self {
         Self {
             snapshot_manager,
             state,
-            executor,
         }
     }
 
@@ -68,6 +62,16 @@ impl UndoManager {
         if snapshots.is_empty() {
             println!("No system snapshots found. LiNix cannot perform time travel on this system.");
             return Ok(());
+        }
+
+        // Said before the gallery, not after the confirmation: a list of restore points is
+        // read as an offer to restore one.
+        if let Some(cap) = self.snapshot_manager.restore_capability() {
+            if !cap.is_live() {
+                let name = self.snapshot_manager.provider_name().unwrap_or("this provider");
+                println!("\n{}", cap.describe(name));
+                println!("The snapshots below can be inspected here, and put back elsewhere.");
+            }
         }
 
         println!("\n--- LiNix Snapshot Gallery ---");
@@ -297,45 +301,14 @@ impl UndoManager {
     }
 
     async fn execute_restore(&self, snapshot: &Snapshot) -> Result<()> {
-        info!(
-            "restoring the filesystem via {}",
-            snapshot.backend
-        );
+        info!("restoring the filesystem via {}", snapshot.backend);
 
-        match snapshot.backend.as_str() {
-            "btrfs" => {
-                let snapshot_path = format!("/.snapshots/{}", snapshot.id);
-                self.executor
-                    .run(
-                        "btrfs",
-                        &["subvolume", "snapshot", &snapshot_path, "/"],
-                        true,
-                    )
-                    .await?;
-            }
-            "timeshift" => {
-                let args = [
-                    "--restore",
-                    "--snapshot",
-                    &snapshot.id,
-                    "--target-device",
-                    "/",
-                    "--yes",
-                ];
-                self.executor.run("timeshift", &args, true).await?;
-            }
-            _ => {
-                return Err(Error::Snapshot(format!(
-                    "Unsupported provider: {}",
-                    snapshot.backend
-                )))
-            }
-        }
+        self.snapshot_manager.restore(&snapshot.id).await?;
 
         // The filesystem snapshot is a whole-`/` restore, so it already reverts your manifests
         // and `registry.json` along with everything else — there is no separate generation to
         // pair with anymore (the generation format was deleted; git is the manifest history).
-        println!("\nSUCCESS: System root has been restored. Please reboot.");
+        println!("\nRestored from {}. Reboot to run the restored system.", snapshot.id);
         Ok(())
     }
 }

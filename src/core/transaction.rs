@@ -307,6 +307,23 @@ impl Transaction {
         let start_time_utc = chrono::Utc::now();
         let start_instant = Instant::now();
 
+        // The grammar checks what a *file* declares. A removal target comes from
+        // `registry.json`, which apt's post-invoke hook also writes, so it has not been
+        // through the grammar at all.
+        if let Err(e) = crate::core::Validator::validate_package_name_for(&p_name, &b_name) {
+            return TaskResult {
+                node_index,
+                backend_name: b_name,
+                package_name: p_name,
+                properties: HashMap::new(),
+                attempt: 0,
+                duration: Duration::ZERO,
+                bytes_downloaded: 0,
+                start_time: start_time_utc,
+                result: Err(e),
+            };
+        }
+
         let backend_cap = match registry.get(&b_name) {
             Some(cap) => cap,
             None => {

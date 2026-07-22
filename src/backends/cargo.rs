@@ -56,24 +56,31 @@ pub struct CargoInstallable {
     pub core: Arc<CargoBackendCore>,
 }
 
+/// `--version` precedes the crate name: behind the terminator cargo reads it as a crate.
+fn install_argv(spec: &PackageSpec) -> Vec<String> {
+    let mut args = vec!["install".to_string()];
+    if let Some(v) = spec
+        .options
+        .get("version")
+        .filter(|v| crate::backends::concrete_version(v))
+    {
+        args.push("--version".to_string());
+        args.push(v.clone());
+    }
+    crate::core::argv::push_names(&mut args, "cargo", [&spec.name]);
+    args
+}
+
 #[async_trait]
 impl Installable for CargoInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
             info!("Cargo: Installing {}...", spec.name);
-            let mut args = vec!["install", spec.name.as_str()];
-            // Reproducible installs: pin the exact version with `--version` when set.
-            if let Some(v) = spec
-                .options
-                .get("version")
-                .filter(|v| crate::backends::concrete_version(v))
-            {
-                args.push("--version");
-                args.push(v.as_str());
-            }
+            let args = install_argv(spec);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("cargo", "cargo", &args, false)
+                .run_exclusive("cargo", "cargo", &arg_refs, false)
                 .await
                 .map_err(|e| library_crate(&spec.name, e))?;
         }
@@ -83,9 +90,12 @@ impl Installable for CargoInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("Cargo: Uninstalling {}...", name);
+            let mut args = vec!["uninstall".to_string()];
+            crate::core::argv::push_names(&mut args, "cargo", [name]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("cargo", "cargo", &["uninstall", name], false)
+                .run_exclusive("cargo", "cargo", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -161,10 +171,13 @@ pub struct CargoSearchable {
 #[async_trait]
 impl Searchable for CargoSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let mut args = vec!["search".to_string()];
+        crate::core::argv::push_names(&mut args, "cargo", [query]);
+        let search_args: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self
             .core
             .executor
-            .search_output("cargo", &["search", query], false)
+            .search_output("cargo", &search_args, false)
             .await?;
         Ok(parse_cargo_search(&output))
     }
@@ -232,10 +245,13 @@ impl Upgradable for CargoUpgradable {
         info!("Cargo: Upgrading all installed packages...");
         let installed = self.core.list_installed_internal().await?;
         for pkg in installed {
+            let mut args = vec!["install".to_string(), "--force".to_string()];
+            crate::core::argv::push_names(&mut args, "cargo", [&pkg.name]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             let _ = self
                 .core
                 .executor
-                .run_exclusive("cargo", "cargo", &["install", &pkg.name, "--force"], false)
+                .run_exclusive("cargo", "cargo", &arg_refs, false)
                 .await;
         }
         Ok(())
@@ -306,6 +322,60 @@ mod tests {
         let said = library_crate("ripgrep", raw).to_string();
         assert!(said.contains("linker"), "{}", said);
         assert!(!said.contains("library crate"), "{}", said);
+    }
+
+    fn spec(name: &str, version: Option<&str>) -> PackageSpec {
+        PackageSpec {
+            name: name.to_string(),
+            backend: "cargo".to_string(),
+            options: version
+                .into_iter()
+                .map(|v| ("version".to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_version_flag_precedes_the_terminator_and_the_crate_follows_it() {
+        assert_eq!(install_argv(&spec("ripgrep", None)), ["install", "--", "ripgrep"]);
+        assert_eq!(
+            install_argv(&spec("ripgrep", Some("13.0.0"))),
+            ["install", "--version", "13.0.0", "--", "ripgrep"]
+        );
+        // A floating version is not a pin, so no flag — but the terminator stays.
+        assert_eq!(
+            install_argv(&spec("ripgrep", Some("latest"))),
+            ["install", "--", "ripgrep"]
+        );
+    }
+
+    #[tokio::test]
+    async fn cargos_other_name_carrying_commands_terminate_too() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(CargoBackendCore::new(exec));
+
+        CargoInstallable { core: core.clone() }
+            .remove(&["ripgrep".to_string()], false)
+            .await
+            .unwrap();
+        CargoSearchable { core: core.clone() }
+            .search("ripgrep")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec!["cargo uninstall -- ripgrep", "cargo search -- ripgrep"]
+        );
     }
 
     #[test]

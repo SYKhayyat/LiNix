@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(
     name = "linix",
-    version = "6.0.0",
+    version = env!("CARGO_PKG_VERSION"),
     about = "A declarative package manager: edit a file, sync the machine to match"
 )]
 pub struct Cli {

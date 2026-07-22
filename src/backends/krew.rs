@@ -61,14 +61,12 @@ impl Installable for KrewInstallable {
         // krew installs the index's current version; it has no per-install version pin.
         for spec in specs {
             info!("krew: Installing {}...", spec.name);
+            let mut args = vec!["krew".to_string(), "install".to_string()];
+            crate::core::argv::push_names(&mut args, "kubectl", [&spec.name]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive(
-                    "kubectl",
-                    "kubectl",
-                    &["krew", "install", &spec.name],
-                    false,
-                )
+                .run_exclusive("kubectl", "kubectl", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -77,9 +75,12 @@ impl Installable for KrewInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("krew: Uninstalling {}...", name);
+            let mut args = vec!["krew".to_string(), "uninstall".to_string()];
+            crate::core::argv::push_names(&mut args, "kubectl", [name]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("kubectl", "kubectl", &["krew", "uninstall", name], false)
+                .run_exclusive("kubectl", "kubectl", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -124,10 +125,13 @@ pub struct KrewSearchable {
 #[async_trait]
 impl Searchable for KrewSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let mut args = vec!["krew".to_string(), "search".to_string()];
+        crate::core::argv::push_names(&mut args, "kubectl", [query]);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self
             .core
             .executor
-            .search_output("kubectl", &["krew", "search", query], false)
+            .search_output("kubectl", &arg_refs, false)
             .await?;
         // Output is `NAME  DESCRIPTION  INSTALLED`; take the plugin name (first column).
         Ok(crate::parsers::ecosystem::names_only(&output, "krew"))
@@ -174,4 +178,52 @@ pub fn register(
             .with_metadata_provider(core.clone())
             .build(),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn krew_plugin_names_come_after_the_terminator() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(KrewBackendCore::new(exec));
+
+        KrewInstallable { core: core.clone() }
+            .install(
+                &[PackageSpec {
+                    name: "ctx".into(),
+                    backend: "krew".into(),
+                    ..Default::default()
+                }],
+                false,
+            )
+            .await
+            .unwrap();
+        KrewInstallable { core: core.clone() }
+            .remove(&["ctx".to_string()], false)
+            .await
+            .unwrap();
+        KrewSearchable { core: core.clone() }
+            .search("ctx")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec![
+                "kubectl krew install -- ctx",
+                "kubectl krew uninstall -- ctx",
+                "kubectl krew search -- ctx",
+            ]
+        );
+    }
 }

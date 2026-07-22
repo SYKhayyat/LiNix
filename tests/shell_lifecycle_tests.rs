@@ -19,7 +19,7 @@ async fn test_ephemeral_shell_transient_registration_logic() {
 
     kernel
         .mock_executor
-        .set_response("brew install vim", Ok(DryRunOutput::default().into()));
+        .set_response("brew install -- vim", Ok(DryRunOutput::default().into()));
 
     let session_id = "test-session-v3.6.0";
 

@@ -13,6 +13,11 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tracing::info;
 
+/// Set on every process LiNix spawns, carrying the pid of the LiNix that spawned it. A
+/// `linix` that finds it in its environment was started by a package manager LiNix is
+/// already driving.
+pub const INSIDE_LINIX: &str = "LINIX_INSIDE";
+
 #[derive(Debug, Clone, Default)]
 pub struct DryRunOutput {
     pub stdout: Vec<u8>,
@@ -399,9 +404,17 @@ impl CommandExecutor {
             final_cmd = "sudo".to_string();
         }
 
-        layer
-            .execute(&final_cmd, &final_args, &HashMap::new())
-            .await
+        // `apt install`, run by a sync that already holds the data-directory lock, fires the
+        // `DPkg::Post-Invoke` hook LiNix installed — which is another `linix`, and it would
+        // wait on a lock this process does not release until it exits. The env var travels
+        // to every descendant, and `hook-reconcile` stands down when it sees it.
+        let mut env = HashMap::new();
+        env.insert(
+            crate::core::executor::INSIDE_LINIX.to_string(),
+            std::process::id().to_string(),
+        );
+
+        layer.execute(&final_cmd, &final_args, &env).await
     }
 
     /// Run a *mutating* command and enforce success. `RawExecutor::execute` hands back the

@@ -700,6 +700,16 @@ for a value no fact can derive, e.g. `env("LINIX_ROLE")`), the network (`http_ge
 (`sh`, `read_file`, `http_get`) throws, because a fetch that silently returned nothing would
 resolve a variable to the wrong value with no sign it failed.
 
+**The ledger is what makes "trusted the same as a hook" true (V.55).** Every provider that
+executes — `vars.linix` and every external `vars.<ext>` — is hashed into `locks/` and goes
+through **II.12's ledger**: first sight asks, a changed hash stops. The powers listed above are
+`sh` and `http_get`, and the file carrying them resolves at step 0 of II.7 — **before** the plan
+exists — so `status`, `plan` and `plan --dry-run` have all already run it by the time they print
+anything. "I only previewed it" is not a state in which the script has not run. Under `-y`, or
+with no terminal, an unapproved or changed provider is a **refusal**, not a skipped prompt;
+`linix lock` shows the file and approves it. The `vars` line file is not hashed — it declares
+values and executes nothing.
+
 ### Resolved once, and frozen into a plan (W4, W13)
 
 A provider may read the clock or the network, so **a value can move between two commands** —
@@ -873,13 +883,15 @@ else, ever.**
 | `lock [NAME]` | freeze versions / expansions, approve hooks |
 | `unlock [NAME…] [--list]` | forget which manager an unpinned name resolved to, so sync asks again (II.6) |
 | `purge-unmanaged` | delete everything LiNix doesn't manage |
-| `clean` | ask each backend to tidy its own orphans |
+| `remove-orphans` | the names each backend can say are orphaned — shown, guarded, removed (II.11c) |
+| `clean-cache` | downloaded archives and build caches. Removes no installed package |
 | `unmanaged` | what `adopt` would adopt |
 | `absent` | every `absent:` line in force, and its module |
 | `diff COMMIT COMMIT` | the change in **packages**, not text |
-| `teleport PKG BACKEND` | edit the line, sync |
+| `teleport PKG BACKEND` | move a package to another manager: edit the line, sync. **Owed — not built (2026-07-22)** |
 | `shell` | throwaway shell. Outside the model |
 | `bundle` | git bundle + artifacts + registry |
+| `restore DIR` | put a bundle back — the other half of `bundle` (V.59) |
 | `export FORMAT` | Brewfile / requirements.txt / package.json |
 | `activate NAME… [-a]` | write `active` — the list, or `-a` to add to it (II.6), sync |
 | `deactivate NAME…` | take away from `active` (II.6), sync |
@@ -888,6 +900,28 @@ else, ever.**
 **`shell` must be honest about being outside the model:** it writes no module, and **stops
 recording transient packages in the registry** — which is what lets a session's leftovers
 look like managed drift later.
+
+**One writer at a time (V.61).** Every command that mutates state takes an exclusive lock on the
+data directory for its whole run, and a second one waits or says who holds it — LiNix is not the
+only thing that starts LiNix. The package-manager hooks (`DPkg::Post-Invoke` and its siblings)
+mean an ordinary `apt install`, typed by someone who has never heard of this tool, spawns a
+process that rewrites `registry.json` while a `sync` or a `watch` tick may be part-way through
+its own. The registry is written whole; two whole writes are last-one-wins, and the entry that
+loses is a managed package nothing declares any more, which is the definition of drift and the
+input to a removal.
+
+**`bundle` writes and `restore` reads, and they are one feature (V.59).** `bundle` already
+packs the config root, `locks/`, the resolved package list, the git history as `config.bundle`,
+and optionally the artifacts; `restore DIR` is that in reverse, and it is **a command, not a
+README** — an instruction file cannot be tested, and a backup nothing has ever restored is a
+guess. **`restore` refuses to write into a config directory that is not empty** unless told
+otherwise, because the machine you reach for a backup on is usually one that still has
+something on it.
+
+This is the answer to **K9**: the backup command is `bundle`, finished — not a second archive
+writer, which X.5 forbids. **It is also what a git-less machine has instead of history** (X.5),
+so its end-to-end proof runs without git: bundle a config, restore it into a clean directory,
+and assert the model parses and resolves to the same package set.
 
 **Destroying a file you wrote** (e.g. `module create` over an existing file) is a **plain
 refusal plus `--force`**, like every other tool. It has nothing to do with packages and must
@@ -968,8 +1002,14 @@ in your file, and deleting that line is refused (V.26).
 | `deny_vulnerable` (default **off**) | never apply when `audit` reports a managed package vulnerable |
 
 All in `[guard]` in `preferences.toml`. One decision function. **Every removal path calls
-it** — sync, `absent:`, expiry, `purge-unmanaged`, `clean`, shell exit, `uninstall`. The
-last three also gate *installs* and *changes*, so the install paths call it too.
+it** — sync, `absent:`, expiry, `purge-unmanaged`, `remove-orphans`, shell exit, `uninstall`.
+The last three also gate *installs* and *changes*, so the install paths call it too.
+
+**A removal is always a list of names (V.56).** No path may hand a manager its own
+bulk-removal verb — `apt autoremove`, `dnf autoremove`, and every verb like it — because the
+set those verbs delete is chosen at execution time, *after* the guard has judged and after the
+user has read the plan. There is nothing for the guard to hold and nothing for the plan to
+show. **A backend that cannot say what it would remove does not remove.**
 
 **`[guard]` holds two keys that are not among the ten: `confine_bin`** (default on), which
 refuses a downloaded file a destination outside the backend's bin directory (SEC1), **and
@@ -1049,6 +1089,33 @@ the difference is empty (X.1). `rebuild` removes what is declared so it can inst
 - **`rebuild` is not a mode of `sync`** and cannot appear in `schedules` (K13), because
   `schedules` runs sync unattended and a mode of sync is a mode a schedule can reach.
 
+## II.11c `remove-orphans`, and what "remove" means
+
+**It removes exactly the names it showed.** Every backend's orphan set is enumerated, printed
+under "Planned changes:", judged by `guard::enforce` as one total (so the ceiling and the
+protected list see the whole removal, not one backend at a time), confirmed, and then removed
+through each backend's ordinary `remove`.
+
+**A manager that cannot list its orphans is asked a different question, not trusted with a
+blind one (V.56).** Where a dry run can produce the list — `apt-get autoremove --dry-run`,
+`dnf autoremove --assumeno` — that is how the list is produced, and those backends join the
+enumerated set like any other. Where nothing can produce it, the backend **loses orphan
+removal** and `remove-orphans` says so by name. It does not fall through to the native verb.
+
+**`remove` means remove, not purge.** A package's configuration in `/etc` is not the package,
+and deleting a module line means *"stop installing this"*, which is not the same sentence as
+*"destroy how I had it set up"*. Debian's `purge` is available and never the default:
+
+| how | scope |
+|---|---|
+| `linix uninstall --purge NAME` | this removal only |
+| `[remove] purge = true` in `preferences.toml` | this machine, every removal |
+
+Drift removal has only the second, and that is the constraint that shapes this: by the time a
+deleted line is removed **the line is gone**, so there is nothing left to carry a per-package
+option. A setting that can only be machine-wide must therefore be off by default, because the
+alternative is a machine-wide destructive default nobody typed.
+
 ## II.12 Hooks and the supply chain
 
 **The lock is the approval.** `locks/` records each hook script's hash. Hash mismatch →
@@ -1061,6 +1128,11 @@ Run `linix lock fonts` to see the new script and approve it.
 ```
 
 **Hash everything, including your own scripts.** One rule, no exceptions.
+
+**A `vars` provider is one of those scripts.** `vars.linix` and every external `vars.<ext>` are
+hashed and approved here too (II.6b, V.55). They run earlier than any hook — before the plan
+exists, and on read-only commands — so for them the ledger is the only thing between a pulled
+config and a shell.
 
 **Two kinds of hook, by when they run — both go through the ledger.** Whole-sync lifecycle
 hooks live in the `[hooks]` config block (`before_sync`/`after_sync`, target `*`, run once
@@ -1079,6 +1151,20 @@ module `fonts` (github:x/y)
 module `dev` (local)
   runs script      after_install: ./build.sh   [CHANGED — needs approval]
 ```
+
+## II.12b What reaches a command line (V.62)
+
+**A package name is data, and every backend must say so.** Each manager invocation ends its
+own options before the names begin — `apt-get install -y -- ripgrep` — so a name can never be
+read as a flag. This is not defence in depth behind the grammar; it is the only layer that
+holds, because the set of flags belongs to the manager and changes without us.
+
+**A name that starts with `-` is refused at parse time**, wherever it appears — not only in the
+`Subtract` position at the start of a line, which is the one place it was ever checked.
+
+**A validator with no caller is not a validator.** Every check the tree carries is called on the
+path it names, or it is deleted. Two of everything is bad; one of everything, unwired, is worse
+— it reads as a defence in the source and is absent at runtime.
 
 ## II.13 History
 
@@ -1101,6 +1187,15 @@ stored, because declaration + convergence reproduces it. **There is no generatio
 
 **Snapshots are a preference**, default on if the machine can do it (btrfs, ZFS, or
 Timeshift). Retention prunes — **one engine** (`retention`), not two.
+
+**A restore that cannot restore says so, before it is needed (V.60).** Taking a snapshot and
+restoring one are different capabilities and a provider may have the first without the second:
+`btrfs subvolume snapshot SRC /` does not roll back a mounted root, whatever its exit code says.
+So **a provider that cannot perform a live restore must refuse the restore**, and `doctor` and
+the pre-change notice must say which kind of snapshot this machine takes. **No command prints
+"rolled back" on the strength of an exit code** — the sentence is a claim about the machine, and
+it is the one sentence a user cannot check for themselves at the moment they read it. There is
+**one restore implementation**, not one in the provider and another in `undo`.
 
 **No commit algebra.** Git covers what's real:
 
@@ -1236,6 +1331,24 @@ the whole-sync kind, which modules cannot express. See II.12.)*
 
 **Code:** `locksig.rs` · the generation format · `ManifestArchive` · `quick()` ·
 `ScopedFilter::None` as a spare-everything switch · every legacy branch
+
+## II.18 The version, and the way in (V.58)
+
+**The repo is `github.com/SYKhayyat/linix`.** Everything that names a source names that — the
+two install scripts, the README's one-liner, the release job.
+
+**The version is `0.1.0`, because nothing has been released.** The tree carried `6.0.0` while
+the CHANGELOG called the same commit *"v7, the declarative rewrite"* under `[Unreleased]`, so
+`linix --version` answered with a number no user has ever been given, for a model that had
+replaced the one that number described. "v7" is the name of the rewrite and belongs in the
+CHANGELOG and in Part VII; it is not a version anyone can install. A version number is a promise
+about what someone already has, and the honest promise here is that this is the first one.
+
+**The install path is a tested path.** `install.sh` and `install.ps1` end by offering to take
+over the machine, and that step must name a command that exists — both called `migrate`, which
+**II.17 lists as deleted** (→ `adopt`), so the documented first run installed the binary and
+then failed on the only step that makes it useful. A rename sweeps the scripts and the docs in
+the same change as the source, or it is not done.
 
 ---
 
@@ -1907,6 +2020,14 @@ implementing agent's call; that it goes is not.**
   removal until they can list, that is a one-line change** - the predicate is
   `Upgradable::has_native_orphan_removal`.
 
+  **RULED 2026-07-22: the owner took that change, and more of it.** The judgement call above was
+  sound about the trade and wrong about the safety, because the sentence naming the unpreviewable
+  backends is printed *by the confirmation*, and `--yes` skips the confirmation. See **V.56**;
+  the rule is in **II.10** and **II.11c**. A backend that cannot list is now asked by dry run
+  (`apt-get autoremove --dry-run`, `dnf autoremove --assumeno`) and joins the enumerated set; one
+  that cannot even do that loses orphan removal and is named. The native-verb branch is deleted,
+  not gated.
+
   **`has_native_orphan_removal` exists because of a bug in this session's own first draft:** the
   code asked whether a backend supported unlistable removal by *calling* `clean_orphans` and
   checking for `Unsupported` - which performed the removal it was seeking permission for. A
@@ -1990,9 +2111,16 @@ implementing agent's call; that it goes is not.**
 >
 > **The early batch LANDED 2026-07-19: SEC4, SEC5 and SEC6 are built, each with tests, suite
 > green and clippy silent.** Read each entry for what was built — **SEC5's `id` half deviates
-> from the ruling's letter and its entry says how and why.** What is left in this section is
-> exactly the deferred pass: **SEC1** (`@bin` confinement), **SEC2** (HTTPS + checksum by
-> default), and **SEC3's** outside-home confirmation. Nothing in the deferred set was touched.
+> from the ruling's letter and its entry says how and why.**
+>
+> **The deferred pass then LANDED too, and this paragraph said otherwise until 2026-07-22.**
+> **SEC1** (`@bin` confinement, `[guard] confine_bin`, default on) and **SEC2** (HTTPS +
+> checksum by default) landed 2026-07-19; **SEC3's** outside-home confirmation landed in the
+> eighth session, asked in `reconcile` before the repo phase. **Nothing in SEC1–SEC6 is now
+> unimplemented** — which is what the head of this document has said since, while these three
+> lines still read "nothing in the deferred set was touched." A status line that outlives its
+> status is the same failure as a check that cannot fail: it reports safely and is not read
+> again.
 
 Unlike R1–R23 above (owner-approved fixes), these were recorded vulnerabilities held back from
 implementation until the owner ruled on the approach. **All six approaches are now ruled on;**
@@ -2275,6 +2403,51 @@ Owed from the last sprint; not run since Stage 2.
 **Guard:** one test per removal path in Phase 3.
 
 **Hooks:** a changed script hash refuses under `-y`.
+
+## IV.1 What a check has to be (V.57)
+
+**Every proof above is a proof against a machine, not against a mock.** Each of the four named
+ubuntu proofs is an assertion with a number or a name in it — the adopted count is *compared*,
+not printed; the mass-removal refusal and the `purge-unmanaged` ratio each run in the state that
+makes them meaningful (the ratio check on an **unadopted** machine, which means before `adopt`,
+not after) and assert *which* rule refused, because a `nok` that accepts any non-zero exit
+accepts a panic and an unknown flag just as happily.
+
+**A check that cannot fail is worse than a missing check**, because a missing one is visible in
+the count and a vacuous one reports as coverage. Three rules follow, and each exists because
+this harness has broken all three:
+
+- **Grep for something only the right answer contains.** `linix` matches the config path, the
+  binary name and half the error messages; `linix:` matches a manifest line.
+- **A negative assertion runs in a fresh `sh`.** The shell caches where it found a name and
+  keeps answering after the file is deleted.
+- **A toggle that is declared must be read.** `SMOKE_ONLY` was declared in three places and read
+  in none; so was `FAST`. A run that quietly tests less than another and prints the same "OK" is
+  the failure this harness exists to catch.
+
+**A coverage audit closes the set.** The harness enumerates every `[READY]` backend from
+`doctor` and every subcommand, and **hard-fails on any that no real lifecycle and no plan-smoke
+touched** — outside a named exempt set. This is what makes a backend added next year fail the
+audit until it is covered, and it is the only mechanism that can: a fixed list of checks cannot
+notice what is missing from it.
+
+**An image tests what it claims or drops the claim.** The `tools` image exists to give the
+ecosystem managers — composer, opam, luarocks, nimble, cabal, stack, mix, helm, krew, pixi,
+spack, go, dotnet, pub — a real install → list → remove against the real manager. Until it does,
+it is the `ubuntu` image with a longer build, and saying otherwise in a Dockerfile header is the
+same lie as a check that cannot fail.
+
+## IV.2 Where it runs
+
+**The hermetic gates and the fast half of the matrix run in CI, on every change.** `cargo build`,
+`cargo test`, `cargo clippy -D warnings`, and the **ubuntu, alpine and arch** images. The slow
+ones — `tools`, `gentoo` — run on manual dispatch, because a 40-minute image would make the gate
+something people learn to skip.
+
+**Verification that only ever ran by hand on one machine is a claim, not a gate.** Every green
+number in Part VII was produced through WSL on the owner's box; nothing made those runs
+repeatable and nothing would have noticed them going red. That is how a harness comes to declare
+`FAST` in three places and read it in none for a whole session.
 
 ---
 
@@ -2898,6 +3071,239 @@ which admitting the clock is safe at all. It also means a `vars` edit reaches th
 other change — the desired state is computed from the frozen variables, so a one-line edit that
 would remove a hundred packages is caught by `max_removals` before anything runs.
 
+**V.55 — Why a `vars` provider goes through the hook ledger.** *(Found by audit 2026-07-22;
+owner ruling the same day.)* II.6b handed `vars.linix` the shell, the filesystem, the
+environment and the network on the stated grounds that it "is trusted the same as a hook" — and
+that trust boundary was a sentence, not a mechanism. No hash was recorded and nothing ever
+asked. II.12's rule is *"hash everything, including your own scripts. One rule, no exceptions"*,
+and the provider files were the exception, which is the shape of every V entry here: the
+document described a protection the code did not have, so reading the document could not find
+the hole.
+
+Three things made it the worst place in the tree to leave one. **Variables resolve at step 0 of
+II.7**, before any `when` and before the plan, so the script runs on `status`, `plan` and even
+`plan --dry-run` — the commands someone runs *precisely* to avoid acting, and the ones whose
+whole promise is that nothing happened. **`watch --pull` pulls a config repo and reconciles
+unattended**, so a provider file pushed to that repo executes on the next tick with nobody
+present — and it runs before `verify_all_approved`, so the hook ledger that would have caught an
+equivalent hook never gets the chance. And **the hole was two holes**: the embedded provider and
+the external `vars.py`/`vars.js` path had it identically, so closing one would have moved the
+problem rather than fixed it.
+
+Ruled to match hooks exactly rather than strip the standard library. Removing `sh` and
+`http_get` would not buy safety — it would push people to the external provider, which has the
+same exposure plus an interpreter dependency across the fleet — and it would break the feature's
+reason to exist, since detecting what a machine *is* needs to ask the machine. The rule is
+therefore the ledger, applied to both providers in the same change.
+
+**V.56 — Why a removal is always a list of names, and why `remove` is not `purge`.** *(Found by
+audit 2026-07-22; owner ruling the same day, taking the one-line change the 2026-07-19 entry in
+Phase 5 had already offered.)*
+
+`remove-orphans` had two branches. The enumerated one is correct and was built that way
+deliberately — list, show, guard the total, remove exactly those names. The second ran the
+manager's own verb, `apt autoremove -y`, for backends that could not enumerate. That was a
+recorded judgement call rather than an oversight: deleting a working capability looked like
+feature removal nobody had approved, and the code was honest about it, printing that those
+removals could not be previewed or checked against the protected list.
+
+The honesty is where it broke. That sentence is printed by the **confirmation**, and the
+confirmation returns yes under `--yes` — so on the path where a human would have read the
+warning, the warning is the thing that gets skipped, and `remove-orphans -y` became unguarded
+root-level mass removal on the single most common backend there is. `apt autoremove` routinely
+takes old kernels. II.10's own text says `--yes` never overrides the guard, and here it did not
+need to override anything: there was no list, so there was nothing for the guard to judge. **A
+protection that only exists inside a prompt is not a protection**, which is the general lesson —
+the same shape as a check that cannot fail.
+
+The rule is therefore about the *verb*, not the flag: a manager's bulk-removal verb chooses its
+own set at execution time, after the guard has judged and after the plan was read, so no amount
+of confirming can make it safe. Where the set can be fetched instead — `--dry-run`,
+`--assumeno` — it becomes an ordinary enumerated removal and the whole problem dissolves; where
+it cannot, the backend loses the capability and says so. That is V.7c's shape again: a manager
+that cannot answer gets asked differently or is recorded as silent, never guessed at.
+
+**And `purge` is the same mistake one layer down.** apt's remove arguments were
+`["purge", "-y"]`, so *ordinary drift removal* — deleting a line from a module — destroyed the
+package's `/etc` configuration. Nobody asked for that and no message said it happened. Deleting
+a line means "stop installing this"; it is a statement about what should be installed, and
+`/etc/nginx` is not that. Purge stays available because wanting it is legitimate, but it is
+opt-in, and — because a removal happens *after* its line is gone, leaving nothing to carry a
+per-package option — the machine-wide setting is the only form drift removal can have, which is
+exactly why it must default to off.
+
+**V.57 — Why a harness must fail, and must run somewhere other than one laptop.** *(Found by
+audit 2026-07-22; owner ruling the same day. The rules are in IV.1 and IV.2.)*
+
+Session 9 fixed a check that could not fail — `command -v` answering from the shell's hash table,
+so a package deleted in section 4 still "existed" in section 9 — and recorded that *"a check that
+cannot fail is worse than no check."* The audit found three more still live, one of them the
+direct twin of a fixed one: the Windows script greps `linix` against `git log` where the
+container greps `linix:`, and the config directory is named `linix-it-win-config`, so it matches
+on every run forever. Another asserts that the build artifact is still on disk and calls it
+*"linix survives an uninstall attempt."* One fixed, siblings live, in the sibling file — the
+exact pattern `CLAUDE.md` names.
+
+The larger version of the same fault is an image that claims coverage it does not have.
+`Dockerfile.tools` says the harness runs a real install→list→remove for composer, opam,
+luarocks, nimble, spack, pixi, helm and krew; none of those names appears in the harness. The
+README describes a coverage audit that hard-fails on an untouched backend; no such code exists.
+`run.sh` maps `tools → apt`, so the image is `ubuntu` with a forty-minute build — which is
+exactly why ubuntu, arch and tools all report the same 82. Every expansion backend was therefore
+proven only against mocked output, and mocked output is the one thing that never drifts, while
+output-format drift is where every real bug in Part VII came from.
+
+`FAST` is the mechanism-level version: declared in `run.sh`, two Dockerfiles and both
+release-check scripts, read nowhere. It is `SMOKE_ONLY`'s bug, left live in the same file during
+the session that fixed `SMOKE_ONLY` and wrote three paragraphs about it. A toggle that is
+documented and unread does not make a run narrower — it makes a run that *looks* narrower
+identical to one that is not, which is the vacuous check again, one level up.
+
+And none of it ran anywhere but one machine. There is no Docker job in CI, no call to
+`release-check`, and the branch carrying all of this sat 219 commits ahead of the remote, so CI
+had never executed against the rewrite at all. **A gate that depends on someone remembering to
+run it is not a gate**, and the evidence is that the three faults above survived a session whose
+entire subject was the harness. The fast images belong in CI for that reason and the slow ones do
+not: a forty-minute required check is a check people route around, and a routed-around gate fails
+the same way a vacuous one does.
+
+**V.58 — Why the version went down, and why a rename sweeps the scripts.** *(Found by audit
+2026-07-22; owner ruling the same day. The rule is in II.18.)*
+
+`Cargo.toml` said `6.0.0`. The CHANGELOG called the same tree *"v7, the declarative rewrite"*
+and filed it under `[Unreleased]`. Both cannot be true, and the one that reaches a user is
+`linix --version`, which was answering `6.0.0` — a number describing the model this rewrite
+exists to delete. Nothing has ever been released: the branch sat 219 commits ahead of the
+remote, no tag was ever pushed, and the tag-triggered release job in CI has never fired. So the
+number was not a version, it was a counter of internal rewrites, and it was **counting up while
+the thing it named was being thrown away**. `0.1.0` is what it means to have shipped nothing
+yet, and going down is the only honest direction from a number nobody was ever given. The
+rewrite keeps its name — "v7" is what Part VII and the CHANGELOG call this work — because a
+codename and a version answer different questions.
+
+The install scripts are the same fault at the other end. Both fetched from
+`github.com/OWNER/linix`, a placeholder that was never substituted, and both finished by running
+`linix migrate` — a command **II.17 has listed as deleted since the rename to `adopt`**. So the
+one documented path a new user takes installed the binary and then failed on the step that takes
+over the machine, and the spec already contained the sentence that predicted it. `src/` was
+swept, `scripts/` was not: the family rule, on the layer furthest from the code and therefore
+the one nothing in the build ever compiles, lints or tests. Which is the point — **the install
+path has no compiler**, so it needs the harness to run it, or it needs a human to notice, and
+neither had.
+
+**V.59 — Why `restore` is a command and not a README.** *(K9 answered 2026-07-22, owner ruling,
+after it had been deliberately left open since 2026-07-19. The rule is in II.8; the requirement
+it satisfies is X.5's.)*
+
+`bundle` was built as half a feature and read as a whole one. It packs the config root, `locks/`,
+the resolved package list, the full manifest history as `config.bundle`, and optionally the
+artifacts — and then writes `RESTORE.md`, a file telling a person which directories to copy
+where. So the restore path was prose. Nothing in the tree had ever performed one; the only test
+asserts that a tar archive round-trips, which proves the archiver works and says nothing about
+whether what comes out is a machine.
+
+**That is the vacuous-check family again (V.57), one layer out.** A test that cannot fail is a
+check with no teeth; a restore that is documentation cannot even be a check, because there is
+nothing to run. And the thing it is supposedly protecting is the case where everything else is
+already gone — the one moment when finding out that a step was mis-described is most expensive
+and least recoverable. **A backup nobody has ever restored is not a backup, it is an intention.**
+
+It matters more than a spare feature because of X.5. A git-less machine is a supported machine —
+session 9 spent the gentoo image proving that history *refuses honestly* there rather than
+lying — and git is what provides history, rollback and `diff`. Take git away and `bundle` is the
+only mechanism that carries a config off a machine at all. So the git-less case, which the
+document says is supported, rested entirely on the half of `bundle` that did not exist.
+
+K9 asked whether the backup command is `bundle`, an alias, or nothing, and fenced the answer with
+one constraint: **not a second archive writer.** That constraint decides it. There is no room for
+a new backup feature beside a bundler that already writes everything a backup needs; the only
+move left is to finish the one that exists. Hence `restore DIR`, and hence its refusal to write
+into a non-empty config directory — the machine you reach for a backup on usually still has
+something on it, and a restore that silently overwrites the work that made you want a backup has
+chosen the wrong default.
+
+**V.60 — Why a snapshot provider must be able to refuse a restore.** *(Found by audit
+2026-07-22; owner directed the fix.)* `SnapshotProvider::restore` ran
+`btrfs subvolume snapshot <snap> /` for btrfs. That command does not roll a mounted root back to
+a snapshot — with an existing destination it **creates a new nested subvolume** and exits **0**.
+A live btrfs root rollback means moving the current subvolume aside and setting the default
+subvolid, which cannot be done over the running `/` at all. So the status check passed, the
+caller took that as success, and the machine was reported restored while nothing had been
+restored.
+
+Every recovery path in the binary consumed it. `rebuild` printed *"Rolled back to snapshot X —
+the machine is as it was before the rebuild started"* over a machine whose packages were still
+removed; `upgrade --canary` printed *"System left unchanged"*; `bisect` relied on it between
+steps. Worst is `purge-unmanaged`, which prints *"Snapshot taken: X. That is your undo"* — the
+command that removes everything unmanaged, offering an undo that does not exist, in the one
+message II.11 calls the most important sentence it can print.
+
+Two rules come out of it. **Taking and restoring are separate capabilities**, so a provider that
+can do the first and not the second must say so where it can still be acted on — in `doctor`, and
+before the change, not after it fails. And **a claim about the machine is never inferred from an
+exit code**: "rolled back" is the one sentence a user cannot verify at the moment they read it,
+which is exactly why the code has to. There was also a second implementation in `undo.rs`
+carrying the identical bug and printing *"SUCCESS: System root has been restored."* — and
+handling only btrfs and Timeshift, so ZFS and Windows silently restored nothing at all, while
+the provider it duplicated implements both. **One restore, not two** (P-prefer-deleting): the
+weaker copy is the one wired to `undo`.
+
+**V.61 — Why the data directory takes a lock.** *(Found by audit 2026-07-22; owner directed the
+fix.)* `registry.json` was loaded once per process into a `tokio::Mutex` — which coordinates
+tasks inside one process and nothing between processes — and written back whole, with no re-read
+and no compare-and-swap. `fs2` was in the dependency list and used at exactly one site, around a
+single subprocess, never around state.
+
+That would be a latent race in most tools. Here it is a live one, because **LiNix installs
+package-manager hooks**: `DPkg::Post-Invoke` and its dnf/zypper/apk/xbps/portage siblings spawn
+`linix hook-reconcile` on every ordinary `apt install`. So the second writer is not another
+LiNix the user ran — it is `apt`, run by someone who does not know LiNix is involved, at a moment
+nobody chose, possibly during a `sync` or between two ticks of a `watch` loop that never reloads
+state. Two whole-file writes are last-one-wins, and **the entry that loses is not lost data, it
+is a removal**: a package installed and managed, missing from the registry, is a managed package
+nothing declares — which is drift, and converging drift is what `sync` does.
+
+The lock is on the data directory rather than the file because the registry is not the only
+thing a run writes; the journal and the `locks/` ledgers move with it, and a lock that covers one
+of a set that must agree is the same as no lock. It is taken for the whole run and names its
+holder when it is contended, because "waiting" with no reason given is indistinguishable from
+hanging.
+
+**V.62 — Why a name is terminated, and why an uncalled check is deleted.** *(Found by audit
+2026-07-22; owner directed the fix. The rule is in II.12b.)*
+
+The pass-5 security review concluded that the core was sound because *"every package-manager
+command is built as argv (no `sh -c`, no `format!`-into-shell)"*. That is true and it is not
+enough. Argv stops a **shell** from reinterpreting a name; it does nothing to stop the **manager**
+from doing so. The grammar constrains a package name to "one word", and a leading `-` is caught
+only in the `Subtract` position at the start of a line — so `apt:--allow-downgrades` parses as an
+ordinary package, and no backend emits a `--` terminator before its names. `generic.rs` install
+and remove, `brew`, `snap`, `flatpak`, `nix`, `conda`, `krew`, `mise`, `setting`, `service`,
+`vscode` — around thirty call sites, roughly half of them running under sudo. `conda` extends
+the reach to a value read out of `preferences.toml`.
+
+**The fix already exists in the tree and was applied once.** `fleet.rs` rejects a leading dash
+and emits `-- `; nothing else does. That is the family rule in its plainest form: the correct
+version was written, and its thirty siblings were never visited. Terminating is the rule rather
+than name-filtering because the flag set belongs to the manager, not to us — a denylist of
+dangerous options is a promise to track every manager's option parser forever, and `--` is a
+promise the managers already keep.
+
+**The same audit found the mirror image**: `Validator::validate_command` and `validate_path` —
+carrying the `rm -rf /` / `mkfs` / fork-bomb denylist, a trusted-binary-path list, and a
+forbidden-path list including `/etc/shadow` and the SAM hive — have **zero callers** outside
+their own tests. The tests pass. The module reads as a security layer to anyone grepping for
+one, and enforces nothing at runtime; `validate_package_name_for` *is* called, but only on
+desired-state specs, not on removal targets, CLI arguments, or link and hook inputs.
+`FORBIDDEN_PATHS` is additionally duplicated in `undo.rs`.
+
+These are one bug wearing two faces: **a protection that is written but not on the path.** A
+missing check is visible — someone looks for it and it is not there. An unwired one answers the
+search and fails the job, which is the vacuous-check family (V.57) at the level of the source
+rather than the harness. So the rule is symmetric: every check is called where it claims to
+apply, or it is deleted, and the choice between wiring and deleting is made deliberately per
+check rather than left to whoever greps next.
+
 ---
 
 # Part VI — Bugs
@@ -3005,6 +3411,162 @@ Three suspicions did not survive scrutiny:
 **Living section. It is the one place that records progress — Part III stays the plan, this
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
+
+## Session 2026-07-22 (tenth session) — a readiness audit, and what it found
+
+A full-tree audit against the question *"can someone else run this on a machine they cannot
+rebuild?"* The hermetic gates were green when it started and still are — `cargo build
+--all-targets` clean, `cargo clippy --all-targets` silent, **915 tests, 0 failures** (847 lib
++ 17 `main` + 51 across eleven integration binaries), and **16 `.unwrap()` in non-test code**,
+each checked and structurally infallible.
+
+### RULED and OWED (owner, 2026-07-22): a `vars` provider goes through the hook ledger
+
+**Ruled, not yet built.** Reasoned in **V.55**; the rule is in **II.6b** and **II.12**.
+`vars.linix` was given `sh`/`read_file`/`env`/`http_get` on the stated grounds that it is
+"trusted the same as a hook", and no hash was ever recorded — so the trust boundary was the
+sentence and not the mechanism, on a file that runs at step 0 of II.7 (before the plan, and so
+on `status`, `plan` and `plan --dry-run`) and that `watch --pull` will execute unattended from a
+pulled repo before `verify_all_approved` can fire. The external `vars.py`/`vars.js` path has it
+identically and is fixed in the same change (*options offered: the ledger, or stripping the
+standard library; the owner ruled the ledger, because stripping `sh` moves people to the
+external provider rather than closing anything*).
+
+### RULED and OWED (owner, 2026-07-22): a removal is a list of names, and `remove` is not `purge`
+
+**Ruled, not yet built.** Reasoned in **V.56**; the rules are in **II.10** and **II.11c**, and
+the Phase 5 entry that offered the choice now records that it was taken. `remove-orphans` ran
+`apt autoremove -y` for backends that cannot enumerate, and the one thing standing there — a
+printed warning that those removals could not be previewed or checked against the protected
+list — was printed *by the confirmation*, which `--yes` skips. The native-verb branch is deleted
+rather than gated: where a dry run can produce the list it becomes an ordinary enumerated
+removal, and where it cannot the backend loses the capability by name. In the same change, apt's
+`remove_args` stops being `["purge", "-y"]` — drift removal was destroying `/etc` configuration
+for every package whose line someone deleted — with purge available as `--purge` and
+`[remove] purge`.
+
+### RULED and OWED (owner, 2026-07-22): the harness tells the truth, and CI runs it
+
+**Ruled, not yet built.** Reasoned in **V.57**; the rules are in **IV.1** and **IV.2**. Three
+things, all yes:
+
+- **The `tools` image gets the ecosystem lifecycle it already advertises** — a real
+  install → list → remove against composer, opam, luarocks, nimble, cabal, stack, mix, helm,
+  krew, pixi, spack, go, dotnet and pub — plus the **coverage audit** the README describes and
+  the tree does not contain, which hard-fails on any `[READY]` backend or subcommand that no
+  real lifecycle and no plan-smoke touched. Until then those backends are proven only against
+  mocks, which is where format drift is invisible by construction.
+- **CI runs the hermetic gates and ubuntu + alpine + arch on every change**; `tools` and
+  `gentoo` on manual dispatch.
+- **The rest is bug-fixing, not choice:** `FAST` read or deleted (`SMOKE_ONLY`'s sibling, left
+  live in the same file); the three checks that cannot fail; `full-test.ps1` and `verify.ps1`
+  **deleted** — pre-v7, they call the nonexistent `linix backends` and `full-test.ps1` has one
+  `exit 1` in the whole file (NO LEGACY); and Part IV's three unproven named proofs turned into
+  real assertions, with the `purge-unmanaged` ratio check moved **before** `adopt`, which is the
+  only state in which it tests anything.
+
+**Measured this session, and the record is honest:** ubuntu **82/0/0** and the live Windows scoop
+sweep **61/0/0**, re-run against this tree and matching session 9 exactly. What that number does
+*not* say is how much of it is `--help`: **24 of ubuntu's 82 and 23 of Windows' 61** are
+`<cmd> --help` exit checks, which prove clap is wired and nothing else.
+
+### RULED and OWED (owner, 2026-07-22): `0.1.0`, and an install path that works
+
+**Ruled, not yet built.** Reasoned in **V.58**; the rule is in **II.18**.
+
+- **`0.1.0`.** Nothing has been released, so `6.0.0` was a count of internal rewrites answering a
+  question about what a user has. The rewrite keeps the name **v7** in Part VII and the
+  CHANGELOG; that is a codename, not a version.
+- **The repo is `github.com/SYKhayyat/linix`** — renamed, and confirmed resolving. The local
+  `origin` still says `Nexus` (GitHub redirects, so nothing broke loudly) and both install
+  scripts still say `OWNER/linix`, which never resolved at all.
+- **`migrate` → `adopt` in both install scripts.** II.17 has listed `migrate` as deleted since
+  the rename; the scripts kept calling it, so the documented first run failed at the adopt step.
+- **The branch is 219 commits ahead of the remote.** Pushing is what makes IV.2's CI real, and
+  what lets the tag-triggered release job fire for the first time.
+
+### RULED (owner, 2026-07-22): K9 is answered — `bundle`, finished
+
+**Ruled, not yet built.** Reasoned in **V.59**; the rule is in **II.8**, and X.5 and the K9
+register entry are updated. `bundle` packs everything a backup needs and stops at a `RESTORE.md`,
+so the restore path was prose that nothing had ever executed — while X.5 makes a git-less machine
+a supported machine, and on such a machine `bundle` is the *only* way a config leaves at all.
+K9's own constraint (**not a second archive writer**) decided the shape: finish the command that
+exists. `restore DIR`, refusing a non-empty config directory unless told otherwise, with an
+end-to-end test that runs **without git** — bundle, restore into a clean directory, assert the
+model parses and resolves to the same package set.
+
+### DIRECTED (owner, 2026-07-22): what reaches a command line, and `teleport`
+
+**Not yet built.** Reasoned in **V.62**; the rule is in **II.12b**.
+
+- **No backend terminates its arguments.** A package name is constrained to "one word" and a
+  leading `-` is refused only in the `Subtract` position at line start, so `apt:--allow-downgrades`
+  parses as an ordinary package and reaches the manager as an option. ~30 call sites
+  (`generic.rs` install/remove, brew, snap, flatpak, nix, conda, krew, mise, setting, service,
+  vscode), about half under sudo; `conda` reaches a `preferences.toml` value. **`fleet.rs`
+  already does it correctly** — rejects the dash, emits `--` — and is the only one that does.
+- **`Validator::validate_command`/`validate_path` have zero callers.** The `rm -rf /` / `mkfs`
+  denylist, `TRUSTED_BIN_PATHS` and `FORBIDDEN_PATHS` (`/etc/shadow`, SAM) enforce nothing;
+  their tests pass. Wire each on the path it names or delete it — deliberately, per check.
+  `FORBIDDEN_PATHS` is also duplicated in `undo.rs`.
+- **`teleport PKG BACKEND` is in II.8's command table and is not a subcommand.** Confirmed
+  against the binary: `error: unrecognized subcommand 'teleport'`. **Owner ruled 2026-07-22 that
+  it is to be built**, not struck from the table — moving a package between managers is a real
+  want, and it is an edit-the-line-then-sync command like every other, so it introduces no new
+  mechanism. Until it exists the table describes a command that is not there, which is the
+  Part VIII/X header fault at the level of a single row.
+
+### DIRECTED (owner, 2026-07-22): the two that needed no ruling, only fixing
+
+**Not yet built.** Reasoned in **V.60** and **V.61**; the rules are in **II.13** and **II.8**.
+
+- **btrfs restore never restored anything.** `btrfs subvolume snapshot <snap> /` creates a
+  nested subvolume and exits 0; a live root rollback needs a subvolume swap and cannot be done
+  over a mounted `/`. Every recovery path believed it — including `purge-unmanaged`'s *"Snapshot
+  taken. That is your undo."* The duplicate in `undo.rs` has the same bug, prints *"SUCCESS:
+  System root has been restored."*, and handles only btrfs and Timeshift, so ZFS and Windows
+  restored nothing at all. **One implementation survives, and a provider that cannot restore
+  refuses and says so in `doctor` and before the change.**
+- **No cross-process lock on the data directory.** `fs2` was used at one site, around a
+  subprocess, never around state. The second writer is `apt`, via the `DPkg::Post-Invoke` hook
+  LiNix installs — so the race needs no second LiNix user, and the entry that loses a
+  last-one-wins whole-file write becomes drift, which is a removal.
+
+### Corrected in this audit, without a ruling needed
+
+The document described itself wrongly in four places, each in the direction that makes it harder
+to trust:
+
+- **Part VIII said "Not built. Not in Part II."** It is essentially fully built and it *is* in
+  Part II (V.48). **Part X said the same**; four of its six sections are built. A banner like
+  that is read as capability that is absent, or as absence by someone about to build it twice.
+- **The 2026-07-17 security block said "nothing in the deferred set was touched"** while the head
+  of the document said SEC1–SEC6 are built. Both SEC1/SEC2 (2026-07-19) and SEC3's confirmation
+  (eighth session) had landed.
+- **II.10 named `clean`** — deleted and split into `remove-orphans` and `clean-cache` — as a
+  removal path that calls the guard, and II.8's command table still listed it.
+- **Two Part VII entries describe live bugs in code that no longer exists** (`linix shim
+  --source`, `confirm_destructive`), and session 9 cites the deletion of `confirm_destructive`
+  as the *cause* of a real bug two thousand lines from an entry calling it live.
+
+### The runs, re-executed against this tree
+
+Not recalled — re-run during the audit, full matrix and no `FAST`:
+
+| image | hard pass | fail | soft |
+|---|---|---|---|
+| ubuntu (apt) | 82 | 0 | 0 |
+| fedora (dnf) | 82 | 0 | 0 |
+| arch (pacman) | 82 | 0 | 0 |
+| alpine (apk) | 80 | 0 | 0 |
+| tools (apt) | 82 | 0 | 0 |
+| gentoo (emerge) | 59 | 0 | 6 named |
+| Windows scoop (native) | 61 | 0 | 0 |
+
+Session 9's record is accurate. **`tools` scoring identically to `ubuntu` is the evidence for
+IV.1's last rule**, not a coincidence: it runs the same apt lifecycle and none of the ecosystem
+managers its Dockerfile advertises.
 
 ## Session 2026-07-22 (ninth session) — Phase 6 actually ran, and the lock got a shape
 
@@ -5493,9 +6055,17 @@ failure mode rule 9 describes, in prose instead of a ✅.*
 
 # Part VIII — Proposed: artifact selection and channels
 
-**Status: PROPOSED, 2026-07-19 (owner-raised). Not built. Not in Part II.** Nothing here is
-target state yet. When a rule below is adopted it moves into Part II and **owes a Part V entry**
-like every other rule; until then this section is the whole record.
+**Status: BUILT. Migrated into Part II (artifact selection, V.48); header corrected 2026-07-22.**
+Raised 2026-07-19 and proposed here; it read "Not built. Not in Part II." for three sessions
+after it was both. What is built: `formats` as an ordered preference (`src/backends/artifact/`),
+the `priority`-level block (D7), `channel` on the two backends that have one (`snap --channel`,
+`flatpak name//branch`), `@asset=all` (session 7), and the resolved asset/url/format/hash in
+`locks/github.toml`. **One deviation from the rulings is recorded in Part VII**: specificity
+beats shortest-filename, contra D3.
+
+This section stays as the reasoning — the alternatives weighed and refused, which Part II does
+not carry. **A "Proposed / Not built" banner on shipped work is not a harmless stale line:** it
+is read as capability that does not exist, or as absence by someone about to build it twice.
 
 The problem: `github:sharkdp/fd` does not name a file. A release ships a `.deb`, an `.rpm`, an
 `.AppImage`, a `.tar.gz`, a `.zip` and a bare binary, and today the backend picks one. **A
@@ -6307,9 +6877,16 @@ a one-line fix that will be forgotten if it is not written down here. **BUILT (2
 
 # Part X — Proposed: rebuild, caches, desktops, backup, and finding your files
 
-**Status: PROPOSED, 2026-07-19 (owner-raised). Not built. Not in Part II.** Six independent
-requests, recorded together because three of them touch the same two files (`preferences.toml`
-and the command table) and two of them **contradict a sentence Part II states as settled** —
+**Status: MOSTLY BUILT; header corrected 2026-07-22.** Raised 2026-07-19. Four of the six are
+built and migrated: **X.1** `rebuild` (Part II as II.11b, V.49), **X.4** `setting:`, **X.6**
+`locate`/`path`/`edit`, and **X.3**'s `reset` and `clean-cache`. **X.2** (`clean_cache_on_remove`)
+is genuinely **not built** and says so in place — it needs a download-cache layer that does not
+exist, and a version of it was built and reverted. **X.5**'s git-optional half is built
+(`GitManager::require()`); its backup half is **K9, answered 2026-07-22** — see V.59.
+
+Six independent requests, recorded together because three of them touch the same two files
+(`preferences.toml` and the command table) and two of them **contradict a sentence Part II
+states as settled** —
 X.5 contradicts *"This is a git repo"* (II.1) and X.6 contradicts the idea that the config's
 own location could be a config key. Those are marked where they occur. As with Parts VIII and
 IX, anything adopted here moves into Part II and owes a Part V entry naming the bug it prevents.
@@ -6562,10 +7139,12 @@ history is unavailable **and LiNix says so**. What X.5 forbids is a *non-history
 failing for want of git, and none does — `head()` and `show_at_head()` stay best-effort
 because they feed baselines, not answers.
 
-No path requires the git binary to be installed; a machine with no git is supported. **What is still
-owed is the backup command (K9, deliberately unproposed)** — the requirement that the config
-be recoverable on a git-less machine, with the one constraint that it not be a second archive
-writer.
+No path requires the git binary to be installed; a machine with no git is supported. **K9 is
+answered (2026-07-22): the backup command is `bundle`, finished with a `restore DIR` that is a
+command rather than a `RESTORE.md`** — not a second archive writer, which is the constraint this
+section set. Until that half exists, the git-less case this section calls supported has no
+tested way to get a config off a machine at all: git carries history, and `bundle` was carrying
+the rest one direction only. See **V.59** and **II.8**.
 
 **Not a dependency means not a dependency**: no git binary required to install LiNix, no git
 call on a path that is not history, and no command that fails because git is absent rather than
@@ -6716,9 +7295,13 @@ crashing, and `git_autocommit` is a silent no-op without a repo. The one gap was
 `doctor` line, now added: `doctor` reports git as *degraded* (not a fault) when it is absent or
 the config is not a repo, naming exactly what is unavailable. Nothing warns on `sync`.
 
-**K9 — Is the backup command `bundle`, an alias, or nothing?** **OPEN — implementation
-deliberately not proposed (owner, 2026-07-19).** The requirement is recorded in X.5; the shape
-is not. The one constraint that holds regardless of the answer: **not a second archive writer.**
+**K9 — Is the backup command `bundle`, an alias, or nothing?** **RULED 2026-07-22 (owner): it is
+`bundle`, finished.** Open since 2026-07-19 with the implementation deliberately unproposed; the
+constraint that was recorded then — **not a second archive writer** — is what decided it. `bundle`
+already writes everything a backup needs and stops at a `RESTORE.md`, so the answer is the
+missing half: **`restore DIR`**, a command rather than an instruction file, refusing a non-empty
+config directory unless told otherwise, with an end-to-end test that runs **without git** because
+that is the case X.5 leaves it carrying alone. Reasoned in **V.59**; the rule is in **II.8**.
 
 ### Scope and shape
 

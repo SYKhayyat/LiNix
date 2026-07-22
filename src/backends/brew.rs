@@ -37,10 +37,10 @@ impl BackendCore for BrewBackendCore {
 #[async_trait]
 impl MetadataProvider for BrewBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
-        let output = self
-            .executor
-            .run_output("brew", &["deps", name], false)
-            .await?;
+        let mut args = vec!["deps".to_string()];
+        crate::core::argv::push_names(&mut args, "brew", [name]);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = self.executor.run_output("brew", &arg_refs, false).await?;
         Ok(output
             .lines()
             .map(|l| l.trim().to_string())
@@ -64,9 +64,12 @@ impl Installable for BrewInstallable {
                 _ => spec.name.clone(),
             };
             info!("Brew: Installing {}...", target);
+            let mut args = vec!["install".to_string()];
+            crate::core::argv::push_names(&mut args, "brew", [&target]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("brew", "brew", &["install", &target], false)
+                .run_exclusive("brew", "brew", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -75,9 +78,12 @@ impl Installable for BrewInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("Brew: Uninstalling {}...", name);
+            let mut args = vec!["uninstall".to_string()];
+            crate::core::argv::push_names(&mut args, "brew", [name]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("brew", "brew", &["uninstall", name], false)
+                .run_exclusive("brew", "brew", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -120,10 +126,13 @@ impl Queryable for BrewQueryable {
 
     /// Uses `brew info --json=v1`, the only form that reports the install path.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let mut args = vec!["info".to_string(), "--json=v1".to_string()];
+        crate::core::argv::push_names(&mut args, "brew", [name]);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self
             .core
             .executor
-            .run_output("brew", &["info", "--json=v1", name], false)
+            .run_output("brew", &arg_refs, false)
             .await?;
         if output.is_empty() || output == "[]" {
             return Ok(None);
@@ -170,10 +179,13 @@ pub struct BrewSearchable {
 #[async_trait]
 impl Searchable for BrewSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let mut args = vec!["search".to_string()];
+        crate::core::argv::push_names(&mut args, "brew", [query]);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self
             .core
             .executor
-            .search_output("brew", &["search", query], false)
+            .search_output("brew", &arg_refs, false)
             .await?;
         Ok(parse_brew_search(&output))
     }
@@ -255,6 +267,55 @@ pub fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::executor::MockExecutor;
+    use dashmap::DashMap;
+
+    fn mocked() -> (Arc<MockExecutor>, Arc<BrewBackendCore>) {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        (mock, Arc::new(BrewBackendCore::new(exec)))
+    }
+
+    #[tokio::test]
+    async fn every_brew_command_ends_its_options_before_the_name() {
+        let (mock, core) = mocked();
+        let spec = PackageSpec {
+            name: "ripgrep".into(),
+            backend: "brew".into(),
+            ..Default::default()
+        };
+        BrewInstallable { core: core.clone() }
+            .install(&[spec], false)
+            .await
+            .unwrap();
+        BrewInstallable { core: core.clone() }
+            .remove(&["ripgrep".to_string()], false)
+            .await
+            .unwrap();
+        BrewQueryable { core: core.clone() }
+            .info("ripgrep")
+            .await
+            .ok();
+        BrewSearchable { core: core.clone() }
+            .search("ripgrep")
+            .await
+            .unwrap();
+        core.get_dependencies("ripgrep").await.unwrap();
+
+        let calls = mock.get_calls().await;
+        assert_eq!(
+            calls,
+            vec![
+                "brew install -- ripgrep",
+                "brew uninstall -- ripgrep",
+                "brew info --json=v1 -- ripgrep",
+                "brew search -- ripgrep",
+                "brew deps -- ripgrep",
+            ]
+        );
+    }
 
     #[test]
     fn brew_search_skips_section_headers() {

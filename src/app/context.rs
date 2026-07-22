@@ -174,11 +174,7 @@ impl App {
     }
 
     pub fn undo_manager(&self) -> UndoManager {
-        UndoManager::new(
-            self.snapshot_manager.clone(),
-            self.state.clone(),
-            self.executor.clone(),
-        )
+        UndoManager::new(self.snapshot_manager.clone(), self.state.clone())
     }
 
     pub fn runner(&self) -> Runner {

@@ -172,6 +172,9 @@ impl SnapshotProvider for MockSnapshotProvider {
             )))
         }
     }
+    fn restore_capability(&self) -> linix::core::snapshot::RestoreCapability {
+        linix::core::snapshot::RestoreCapability::Live
+    }
     async fn restore(&self, _id: &str) -> Result<()> {
         Ok(())
     }

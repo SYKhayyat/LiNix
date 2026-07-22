@@ -64,7 +64,7 @@ async fn test_apt_backend_hermetic_logic() {
     );
     kernel
         .mock_executor
-        .set_response("sudo apt purge -y curl", Ok(DryRunOutput::default().into()));
+        .set_response("sudo apt purge -y -- curl", Ok(DryRunOutput::default().into()));
 
     timeout(Duration::from_secs(5), run_capability_test(backend, "curl"))
         .await
@@ -134,10 +134,10 @@ async fn test_brew_backend_hermetic_logic() {
 
     kernel
         .mock_executor
-        .set_response("brew install htop", Ok(DryRunOutput::default().into()));
+        .set_response("brew install -- htop", Ok(DryRunOutput::default().into()));
     kernel
         .mock_executor
-        .set_response("brew uninstall htop", Ok(DryRunOutput::default().into()));
+        .set_response("brew uninstall -- htop", Ok(DryRunOutput::default().into()));
 
     timeout(Duration::from_secs(5), run_capability_test(backend, "htop"))
         .await
@@ -155,7 +155,7 @@ async fn test_cargo_backend_hermetic_logic() {
 
     kernel
         .mock_executor
-        .set_response("cargo install ripgrep", Ok(DryRunOutput::default().into()));
+        .set_response("cargo install -- ripgrep", Ok(DryRunOutput::default().into()));
     kernel.mock_executor.set_response(
         "cargo uninstall ripgrep",
         Ok(DryRunOutput::default().into()),

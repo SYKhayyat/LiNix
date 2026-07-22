@@ -50,7 +50,7 @@ async fn test_planner_recursive_native_dependencies() {
     // Mock Scenario: brew package 'pkg-a' natively depends on 'pkg-b'
     let mock_output = "pkg-b\n";
     kernel.mock_executor.set_response(
-        "brew deps pkg-a",
+        "brew deps -- pkg-a",
         Ok(DryRunOutput {
             stdout: mock_output.as_bytes().to_vec(),
             stderr: vec![],
@@ -59,7 +59,7 @@ async fn test_planner_recursive_native_dependencies() {
     );
     kernel
         .mock_executor
-        .set_response("brew deps pkg-b", Ok(DryRunOutput::default().into()));
+        .set_response("brew deps -- pkg-b", Ok(DryRunOutput::default().into()));
 
     let mut desired = HashMap::new();
     desired.insert(
@@ -155,7 +155,7 @@ async fn test_transaction_rollback_fidelity() {
 
     // Set response to failure
     kernel.mock_executor.set_response(
-        "brew install fail-node",
+        "brew install -- fail-node",
         Err(Error::CommandFailed("Simulated Network Timeout".into())),
     );
 
@@ -211,7 +211,7 @@ async fn test_journal_self_healing_logic() {
     );
     kernel
         .mock_executor
-        .set_response("brew install stale-pkg", Ok(DryRunOutput::default().into()));
+        .set_response("brew install -- stale-pkg", Ok(DryRunOutput::default().into()));
 
     // 3. Execute Heal
     engine.heal().await.expect("Healing cycle crashed.");

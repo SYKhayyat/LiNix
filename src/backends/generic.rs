@@ -208,15 +208,25 @@ impl Installable for GenericInstallable {
         }
 
         let mut final_args: Vec<String> = self.core.config.install_args.clone();
+        let mut names: Vec<String> = Vec::with_capacity(specs.len());
+        // A `Flag` pin puts an option *after* the name it pins (`gem install jq -v 1.6`), so
+        // the terminator cannot precede it — behind `--` that `-v` is a package.
+        let mut trailing_flags = false;
         for spec in specs {
             // Honor an exact version pin (reproducible/locked installs) using the
             // backend's native syntax, when both a pin syntax and a concrete version exist.
             match (spec.options.get("version"), &self.core.config.version_pin) {
                 (Some(ver), Some(pin)) if is_concrete_version(ver) => {
-                    final_args.extend(pin.apply(&spec.name, ver));
+                    trailing_flags |= matches!(pin, VersionPin::Flag(_));
+                    names.extend(pin.apply(&spec.name, ver));
                 }
-                _ => final_args.push(spec.name.clone()),
+                _ => names.push(spec.name.clone()),
             }
+        }
+        if trailing_flags {
+            final_args.extend(names);
+        } else {
+            crate::core::argv::push_names(&mut final_args, &self.core.name, names);
         }
 
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
@@ -248,9 +258,7 @@ impl Installable for GenericInstallable {
         }
 
         let mut args: Vec<String> = self.core.config.remove_args.clone();
-        for name in names {
-            args.push(name.clone());
-        }
+        crate::core::argv::push_names(&mut args, &self.core.name, names);
 
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
@@ -395,20 +403,15 @@ pub struct GenericSearchable {
 #[async_trait]
 impl Searchable for GenericSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        let mut args: Vec<&str> = self
-            .core
-            .config
-            .search_args
-            .iter()
-            .map(|s| s.as_str())
-            .collect();
-        args.push(query);
         let bin = self
             .core
             .config
             .search_binary
             .as_deref()
             .unwrap_or(&self.core.name);
+        let mut owned: Vec<String> = self.core.config.search_args.clone();
+        crate::core::argv::push_names(&mut owned, bin, [query]);
+        let args: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
         let output = self.core.executor.search_output(bin, &args, false).await?;
         Ok(self.core.parser.parse_search(&output))
     }

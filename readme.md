@@ -31,7 +31,16 @@ That indirection is what lets one repo describe several machines — see [Profil
 
 ## Install
 
-LiNix is written in Rust.
+```bash
+curl -fsSL https://raw.githubusercontent.com/SYKhayyat/linix/HEAD/scripts/install.sh | sh
+```
+
+```powershell
+irm https://raw.githubusercontent.com/SYKhayyat/linix/HEAD/scripts/install.ps1 | iex
+```
+
+Either script installs the binary, runs `linix doctor`, and offers to `adopt` the packages
+already on the machine. From a checkout, LiNix is written in Rust:
 
 ```bash
 cargo build --release

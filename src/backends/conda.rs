@@ -72,17 +72,21 @@ impl Installable for CondaInstallable {
             self.core.env.clone(),
             "-y".into(),
         ];
-        for spec in specs {
-            // Reproducible installs: Conda pins with `name=version`.
-            match spec
-                .options
-                .get("version")
-                .filter(|v| crate::backends::concrete_version(v))
-            {
-                Some(ver) => args.push(format!("{}={}", spec.name, ver)),
-                None => args.push(spec.name.clone()),
-            }
-        }
+        let names: Vec<String> = specs
+            .iter()
+            .map(|spec| {
+                // Reproducible installs: Conda pins with `name=version`.
+                match spec
+                    .options
+                    .get("version")
+                    .filter(|v| crate::backends::concrete_version(v))
+                {
+                    Some(ver) => format!("{}={}", spec.name, ver),
+                    None => spec.name.clone(),
+                }
+            })
+            .collect();
+        crate::core::argv::push_names(&mut args, "conda", names);
         info!("Conda: Installing into env '{}'...", self.core.env);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.core
@@ -102,7 +106,7 @@ impl Installable for CondaInstallable {
             self.core.env.clone(),
             "-y".into(),
         ];
-        args.extend(names.iter().cloned());
+        crate::core::argv::push_names(&mut args, "conda", names);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.core
             .executor
@@ -164,10 +168,13 @@ pub struct CondaSearchable {
 impl Searchable for CondaSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
         // Search spans all configured channels, not a single env, so it takes no `-n`.
+        let mut args = vec!["search".to_string(), "--json".to_string()];
+        crate::core::argv::push_names(&mut args, "conda", [query]);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self
             .core
             .executor
-            .search_output("conda", &["search", query, "--json"], false)
+            .search_output("conda", &arg_refs, false)
             .await?;
         Ok(parse_conda_search(&output))
     }
@@ -247,6 +254,52 @@ mod tests {
         conda.insert("env".to_string(), "ml".to_string());
         cfg.backend_settings.insert("conda".to_string(), conda);
         assert_eq!(resolve_env(&cfg), "ml");
+    }
+
+    #[tokio::test]
+    async fn conda_names_and_queries_come_after_the_terminator() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(CondaBackendCore::new(exec, "ml".into()));
+
+        let mut options = HashMap::new();
+        options.insert("version".to_string(), "1.2.3".to_string());
+        CondaInstallable { core: core.clone() }
+            .install(
+                &[PackageSpec {
+                    name: "numpy".into(),
+                    backend: "conda".into(),
+                    options,
+                    ..Default::default()
+                }],
+                false,
+            )
+            .await
+            .unwrap();
+        CondaInstallable { core: core.clone() }
+            .remove(&["numpy".to_string()], false)
+            .await
+            .unwrap();
+        CondaSearchable { core: core.clone() }
+            .search("numpy")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec![
+                "conda install -n ml -y -- numpy=1.2.3",
+                "conda remove -n ml -y -- numpy",
+                "conda search --json -- numpy",
+            ]
+        );
     }
 
     #[test]

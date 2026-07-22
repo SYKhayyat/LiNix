@@ -59,7 +59,7 @@ async fn test_e2e_sync_flow_hermetic() {
     // 5. Prime Mocks: Set expected CLI output for the executor
     kernel
         .mock_executor
-        .set_response("brew install neovim", Ok(DryRunOutput::default().into()));
+        .set_response("brew install -- neovim", Ok(DryRunOutput::default().into()));
 
     // 6. Execution Phase: Apply the transaction closure
     // Modernized v3.6.0: Uses the Kernel's sync_engine factory to ensure 10-arg DI is correct

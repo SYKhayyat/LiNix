@@ -277,15 +277,15 @@ async fn pinned_version_reaches_install_command() {
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
-        calls.iter().any(|c| c.contains("install requests==2.31.0")),
+        calls.iter().any(|c| c.contains("install -- requests==2.31.0")),
         "pip should pin with ==, got: {:?}",
         calls
     );
     assert!(
         calls
             .iter()
-            .any(|c| c.contains("install ripgrep --version 13.0.0")),
-        "cargo should pin with --version, got: {:?}",
+            .any(|c| c.contains("install --version 13.0.0 -- ripgrep")),
+        "cargo should pin with --version, ahead of the terminator, got: {:?}",
         calls
     );
 }
@@ -304,7 +304,7 @@ async fn floating_version_is_not_pinned() {
     assert!(
         calls
             .iter()
-            .any(|c| c.contains("install requests") && !c.contains("==")),
+            .any(|c| c.contains("install -- requests") && !c.contains("==")),
         "latest should install bare name, got: {:?}",
         calls
     );

@@ -64,9 +64,12 @@ impl Installable for NixInstallable {
             };
 
             info!("Nix: Installing {} to user profile...", flake_uri);
+            let mut args = vec!["profile".to_string(), "install".to_string()];
+            crate::core::argv::push_names(&mut args, "nix", [&flake_uri]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("nix", "nix", &["profile", "install", &flake_uri], sudo)
+                .run_exclusive("nix", "nix", &arg_refs, sudo)
                 .await?;
         }
         Ok(())
@@ -102,18 +105,24 @@ impl Installable for NixInstallable {
                 "Nix: Removing package at profile index {} ({})",
                 idx_str, name
             );
+            let mut args = vec!["profile".to_string(), "remove".to_string()];
+            crate::core::argv::push_names(&mut args, "nix", [&idx_str]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("nix", "nix", &["profile", "remove", &idx_str], sudo)
+                .run_exclusive("nix", "nix", &arg_refs, sudo)
                 .await?;
         }
 
         // Fallback path: remove by attribute name (modern `nix profile remove <name>`).
         for name in by_name {
             info!("Nix: Removing package by name ({})", name);
+            let mut args = vec!["profile".to_string(), "remove".to_string()];
+            crate::core::argv::push_names(&mut args, "nix", [name]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("nix", "nix", &["profile", "remove", name], sudo)
+                .run_exclusive("nix", "nix", &arg_refs, sudo)
                 .await?;
         }
         Ok(())
@@ -147,10 +156,14 @@ pub struct NixSearchable {
 #[async_trait]
 impl Searchable for NixSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        // `--json` moves ahead of the terminator: behind it nix would read it as a flake ref.
+        let mut args = vec!["search".to_string(), "--json".to_string()];
+        crate::core::argv::push_names(&mut args, "nix", ["nixpkgs", query]);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self
             .core
             .executor
-            .search_output("nix", &["search", "nixpkgs", query, "--json"], false)
+            .search_output("nix", &arg_refs, false)
             .await?;
         parse_nix_search(&output)
     }
@@ -308,6 +321,44 @@ mod tests {
         assert_eq!(rg.version.as_deref(), Some("14.1.0"));
         assert!(rg.properties.get("attr_path").unwrap().ends_with("ripgrep"));
         assert!(pkgs.iter().any(|p| p.name == "bat"));
+    }
+
+    #[tokio::test]
+    async fn nix_flake_refs_and_queries_come_after_the_terminator() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(NixBackendCore::new(exec, "30d".into()));
+
+        NixInstallable { core: core.clone() }
+            .install(
+                &[PackageSpec {
+                    name: "ripgrep".into(),
+                    backend: "nix".into(),
+                    ..Default::default()
+                }],
+                false,
+            )
+            .await
+            .unwrap();
+        NixSearchable { core: core.clone() }
+            .search("ripgrep")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec![
+                "nix profile install -- nixpkgs#ripgrep",
+                "nix search --json -- nixpkgs ripgrep",
+            ]
+        );
     }
 
     #[test]

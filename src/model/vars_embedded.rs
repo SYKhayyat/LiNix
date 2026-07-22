@@ -155,7 +155,10 @@ fn register_stdlib(engine: &mut Engine) {
 
     // --- read-only filesystem ---
     engine.register_fn("read_file", |path: &str| -> std::result::Result<String, Box<EvalAltResult>> {
-        std::fs::read_to_string(path).map_err(|e| rt_err(format!("read_file: {}: {}", path, e)))
+        let resolved = crate::core::Validator::validate_path_sync(std::path::Path::new(path))
+            .map_err(|e| rt_err(format!("read_file: {}: {}", path, e)))?;
+        std::fs::read_to_string(&resolved)
+            .map_err(|e| rt_err(format!("read_file: {}: {}", path, e)))
     });
     engine.register_fn("path_exists", |path: &str| std::path::Path::new(path).exists());
 

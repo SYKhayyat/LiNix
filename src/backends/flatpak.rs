@@ -66,15 +66,20 @@ impl BackendCore for FlatpakBackendCore {
 #[async_trait]
 impl MetadataProvider for FlatpakBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
-        let args = self.scope_args();
-        let mut final_args = args.clone();
-        final_args.extend(["info", "--show-metadata", name]);
+        let mut final_args: Vec<String> = self
+            .scope_args()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        final_args.extend(["info".to_string(), "--show-metadata".to_string()]);
+        crate::core::argv::push_names(&mut final_args, "flatpak", [name]);
+        let arg_refs: Vec<&str> = final_args.iter().map(String::as_str).collect();
 
         // Flatpak metadata contains a [Extension] or [Runtime] section.
         // We look for 'runtime=' which is the primary transitive dependency.
         let output = self
             .executor
-            .run_output("flatpak", &final_args, false)
+            .run_output("flatpak", &arg_refs, false)
             .await?;
         let mut deps = Vec::new();
 
@@ -101,6 +106,18 @@ fn install_ref(spec: &PackageSpec) -> String {
     }
 }
 
+fn install_argv(scope: &[&str], specs: &[PackageSpec]) -> Vec<String> {
+    let mut args: Vec<String> = scope.iter().map(|s| s.to_string()).collect();
+    args.extend([
+        "install".to_string(),
+        "-y".to_string(),
+        "--noninteractive".to_string(),
+    ]);
+    let names: Vec<String> = specs.iter().map(install_ref).collect();
+    crate::core::argv::push_names(&mut args, "flatpak", names);
+    args
+}
+
 #[async_trait]
 impl Installable for FlatpakInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
@@ -108,17 +125,13 @@ impl Installable for FlatpakInstallable {
             return Ok(());
         }
 
-        let mut args = self.core.scope_args();
-        args.extend(["install", "-y", "--noninteractive"]);
-
-        let names: Vec<String> = specs.iter().map(install_ref).collect();
-        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-        args.extend(name_refs);
+        let args = install_argv(&self.core.scope_args(), specs);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
         info!("Flatpak: Installing {} package(s)...", specs.len());
         self.core
             .executor
-            .run_exclusive("flatpak", "flatpak", &args, sudo)
+            .run_exclusive("flatpak", "flatpak", &arg_refs, sudo)
             .await?;
         Ok(())
     }
@@ -128,15 +141,24 @@ impl Installable for FlatpakInstallable {
             return Ok(());
         }
 
-        let mut args = self.core.scope_args();
-        args.extend(["uninstall", "-y", "--noninteractive"]);
-        let name_refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-        args.extend(name_refs);
+        let mut args: Vec<String> = self
+            .core
+            .scope_args()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        args.extend([
+            "uninstall".to_string(),
+            "-y".to_string(),
+            "--noninteractive".to_string(),
+        ]);
+        crate::core::argv::push_names(&mut args, "flatpak", names);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
         info!("Flatpak: Removing {} package(s)...", names.len());
         self.core
             .executor
-            .run_exclusive("flatpak", "flatpak", &args, sudo)
+            .run_exclusive("flatpak", "flatpak", &arg_refs, sudo)
             .await?;
         Ok(())
     }
@@ -188,10 +210,13 @@ pub struct FlatpakSearchable {
 #[async_trait]
 impl Searchable for FlatpakSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let mut args = vec!["search".to_string()];
+        crate::core::argv::push_names(&mut args, "flatpak", [query]);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self
             .core
             .executor
-            .search_output("flatpak", &["search", query], false)
+            .search_output("flatpak", &arg_refs, false)
             .await?;
         Ok(parse_flatpak_search(&output))
     }
@@ -337,5 +362,58 @@ mod tests {
     fn flatpak_without_a_channel_installs_the_bare_name() {
         let spec = spec_with("org.gimp.GIMP", &[]);
         assert_eq!(install_ref(&spec), "org.gimp.GIMP");
+    }
+
+    #[test]
+    fn flatpak_refs_come_after_the_terminator() {
+        let argv = install_argv(
+            &["--system"],
+            &[spec_with("org.gimp.GIMP", &[]), spec_with("--user", &[])],
+        );
+        assert_eq!(
+            argv,
+            [
+                "--system",
+                "install",
+                "-y",
+                "--noninteractive",
+                "--",
+                "org.gimp.GIMP",
+                "--user"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn flatpaks_other_name_carrying_commands_terminate_too() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(FlatpakBackendCore::new(exec, HashMap::new()));
+
+        FlatpakInstallable { core: core.clone() }
+            .remove(&["org.gimp.GIMP".to_string()], false)
+            .await
+            .unwrap();
+        FlatpakSearchable { core: core.clone() }
+            .search("gimp")
+            .await
+            .unwrap();
+        core.get_dependencies("org.gimp.GIMP").await.unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec![
+                "flatpak --system uninstall -y --noninteractive -- org.gimp.GIMP",
+                "flatpak search -- gimp",
+                "flatpak --system info --show-metadata -- org.gimp.GIMP",
+            ]
+        );
     }
 }

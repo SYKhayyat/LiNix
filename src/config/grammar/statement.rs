@@ -238,6 +238,7 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
             return Err(GrammarError::new(origin.clone(), "`-` subtracts nothing")
                 .with_hint("write `-vim` to take one package out."));
         }
+        reject_leading_dash(origin, target)?;
         return Ok(Statement::Subtract(target.to_string()));
     }
 
@@ -280,6 +281,7 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
             )
             .with_hint("name the package manager that owns this repository, e.g. `apt`."));
         }
+        reject_leading_dash(origin, spec)?;
         return Ok(Statement::Repo {
             backend: backend.to_string(),
             spec: spec.to_string(),
@@ -301,6 +303,7 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
                     format!("`{}` names nothing", prefix),
                 ));
             }
+            reject_leading_dash(origin, &name)?;
             return Ok(build(name, options));
         }
     }
@@ -495,6 +498,23 @@ fn parse_prefix(
     })
 }
 
+/// A name reaches a manager's command line, where a leading `-` is an option and not a name.
+/// The `--` every invocation emits (II.12b) holds for managers that honour it; this holds for
+/// the rest, and it is the layer that can say *which line* is wrong.
+fn reject_leading_dash(origin: &Origin, name: &str) -> Result<()> {
+    if name.starts_with('-') {
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`{}` starts with `-`, so it is an option and not a package name", name),
+        )
+        .with_hint(
+            "package names reach the manager's command line. If you meant to take a package \
+             out of the set, a subtraction is `-name` at the start of its own line.",
+        ));
+    }
+    Ok(())
+}
+
 fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Result<PackageDecl> {
     let (head, options) = match text.split_once('@') {
         Some((head, opts)) => (head.trim(), parse_short(origin, opts)?),
@@ -557,6 +577,7 @@ fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Re
                     format!("`{}` is not a package name", rest),
                 ));
             }
+            reject_leading_dash(origin, rest)?;
             Selector::Name(rest.to_string())
         }
     };

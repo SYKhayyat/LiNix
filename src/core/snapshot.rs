@@ -115,6 +115,37 @@ impl std::fmt::Display for SnapshotLabel {
     }
 }
 
+/// Taking a snapshot and putting one back are different capabilities, and a provider can
+/// have the first without the second. `btrfs subvolume snapshot SRC /` exits 0 and creates a
+/// nested subvolume; nothing is rolled back. Everything that offers an undo asks this first,
+/// so the offer is not made where it cannot be kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoreCapability {
+    /// The running system is put back by `restore`.
+    Live,
+    /// The snapshot is real and restorable, but not from a running system. `how` says what
+    /// the person at the machine has to do instead.
+    NotFromRunningSystem { how: &'static str },
+}
+
+impl RestoreCapability {
+    pub fn is_live(&self) -> bool {
+        matches!(self, Self::Live)
+    }
+
+    /// The one sentence `doctor` and the pre-change notice both print, so the two cannot
+    /// come to disagree about what this machine can do.
+    pub fn describe(&self, provider: &str) -> String {
+        match self {
+            Self::Live => format!("{}: snapshots can be taken and restored.", provider),
+            Self::NotFromRunningSystem { how } => format!(
+                "{}: snapshots can be taken but NOT restored from a running system — {}",
+                provider, how
+            ),
+        }
+    }
+}
+
 #[async_trait]
 pub trait SnapshotProvider: Send + Sync {
     fn name(&self) -> &str;
@@ -123,6 +154,7 @@ pub trait SnapshotProvider: Send + Sync {
     async fn list(&self) -> Result<Vec<Snapshot>>;
     async fn delete(&self, id: &str) -> Result<()>;
     async fn restore(&self, id: &str) -> Result<()>;
+    fn restore_capability(&self) -> RestoreCapability;
 }
 
 pub struct BtrfsProvider {
@@ -192,14 +224,29 @@ impl SnapshotProvider for BtrfsProvider {
     }
 
     async fn restore(&self, id: &str) -> Result<()> {
-        let path = format!("{}/{}", self.snapshot_root, id);
-        info!("BTRFS: Rolling back to: {}", id);
-        self.executor
-            .run("btrfs", &["subvolume", "snapshot", &path, "/"], true)
-            .await
-            .map(|_| ())
+        Err(Error::Snapshot(format!(
+            "LiNix cannot roll this machine back to {} while it is running.\n  \
+             {}\n  \
+             The snapshot is intact at {}/{}. Rolling back to it means swapping the root \
+             subvolume from a live USB or the boot menu — a step LiNix will not take on your \
+             behalf, because getting it wrong leaves a machine that does not boot.",
+            id,
+            BTRFS_NOT_LIVE,
+            self.snapshot_root,
+            id
+        )))
+    }
+
+    fn restore_capability(&self) -> RestoreCapability {
+        RestoreCapability::NotFromRunningSystem { how: BTRFS_NOT_LIVE }
     }
 }
+
+/// `btrfs subvolume snapshot <snap> /` exits 0 and creates `<snap>` *inside* `/` as a nested
+/// subvolume. Every recovery path in this tree believed that exit code once.
+const BTRFS_NOT_LIVE: &str =
+    "a btrfs rollback replaces the root subvolume, which cannot be done over a mounted `/`; \
+     boot from other media and swap the subvolume there.";
 
 pub struct ZfsProvider {
     pub executor: CommandExecutor,
@@ -271,6 +318,10 @@ impl SnapshotProvider for ZfsProvider {
             .run("zfs", &["rollback", "-r", id], true)
             .await
             .map(|_| ())
+    }
+
+    fn restore_capability(&self) -> RestoreCapability {
+        RestoreCapability::Live
     }
 }
 
@@ -355,6 +406,10 @@ impl SnapshotProvider for TimeshiftProvider {
             .await
             .map(|_| ())
     }
+
+    fn restore_capability(&self) -> RestoreCapability {
+        RestoreCapability::Live
+    }
 }
 
 pub struct WindowsRestoreProvider {
@@ -438,6 +493,10 @@ impl SnapshotProvider for WindowsRestoreProvider {
             .await
             .map(|_| ())
     }
+
+    fn restore_capability(&self) -> RestoreCapability {
+        RestoreCapability::Live
+    }
 }
 
 impl WindowsRestoreProvider {
@@ -520,6 +579,24 @@ impl SnapshotManager {
     /// safety net rather than performing an unrecoverable change.
     pub fn has_provider(&self) -> bool {
         self.provider.is_some()
+    }
+
+    pub fn provider_name(&self) -> Option<&str> {
+        self.provider.as_ref().map(|p| p.name())
+    }
+
+    /// What this machine's provider can do, or `None` when it takes no snapshots at all.
+    pub fn restore_capability(&self) -> Option<RestoreCapability> {
+        self.provider.as_ref().map(|p| p.restore_capability())
+    }
+
+    /// The one place a snapshot is put back. `undo` and every other recovery path calls
+    /// this, so a provider that refuses refuses everywhere.
+    pub async fn restore(&self, id: &str) -> Result<()> {
+        let p = self.provider.as_ref().ok_or_else(|| {
+            Error::Snapshot("this machine takes no snapshots, so there is none to restore".into())
+        })?;
+        p.restore(id).await
     }
 
     pub async fn list_snapshots(&self) -> Result<Vec<Snapshot>> {

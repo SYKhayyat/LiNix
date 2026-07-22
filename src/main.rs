@@ -70,10 +70,23 @@ async fn main() -> Result<()> {
     let config = load_and_merge_config(&cli).await?;
     linix::backends::node_registry::set_http_timeout(config.network_timeout_secs);
 
-    // 4. Kernel Initialization
+    // 4. A reconcile fired by a manager that LiNix itself is driving has nothing to add —
+    //    the run that spawned it is already recording what it installed, and it holds the
+    //    lock this process would wait two minutes for.
+    if matches!(cli.command, Commands::HookReconcile { .. })
+        && env::var_os(linix::core::executor::INSIDE_LINIX).is_some()
+    {
+        return Ok(());
+    }
+
+    // 5. One writer at a time. Held for the whole run, released when `main` returns — a
+    //    lock dropped before the last write is a lock over part of a set that must agree.
+    let _data_lock = acquire_data_lock(&cli)?;
+
+    // 6. Kernel Initialization
     let app = App::new(config).await?;
 
-    // 5. Command Dispatcher (Modular A+ Routing)
+    // 7. Command Dispatcher (Modular A+ Routing)
     match &cli.command {
         Commands::Sync { locked, json } => handle_sync(&app, *locked, *json).await,
         Commands::Watch {
@@ -228,7 +241,7 @@ async fn main() -> Result<()> {
 fn self_upgrade_repo(git: Option<&str>) -> String {
     git.map(|s| s.to_string())
         .or_else(|| std::env::var("LINIX_REPO").ok())
-        .unwrap_or_else(|| "https://github.com/OWNER/linix".to_string())
+        .unwrap_or_else(|| "https://github.com/SYKhayyat/linix".to_string())
 }
 
 async fn cargo_install_from(repo: &str, locked: bool) -> std::io::Result<std::process::ExitStatus> {
@@ -308,6 +321,40 @@ fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::PathBuf> {
 
 /// The set of built-in subcommand names (and their clap aliases), so a user command-alias can
 /// never shadow a real command.
+/// Commands that only read. Everything else takes the data-directory lock, because the
+/// default has to be the safe one: locking a reader costs a wait, and not locking a writer
+/// costs an entry out of `registry.json`, which is a removal.
+///
+/// `plan` and `status` are here and `plan --save` is not a counter-example: it writes a plan
+/// file, not state.
+const READ_ONLY_COMMANDS: &[&str] = &[
+    "plan", "status", "check", "list", "search", "doctor", "diff", "unmanaged", "absent",
+    "vars", "export", "sbom", "insight", "why", "info", "show", "audit", "outdated",
+    "history", "log", "completions", "help", "locate", "metrics", "verify",
+];
+
+/// Take the lock for a mutating command. The command is read from argv rather than matched
+/// out of `Commands`, so a subcommand added later is locked by default instead of being
+/// forgotten by a match arm nobody updated.
+fn acquire_data_lock(cli: &Cli) -> Result<Option<linix::core::datalock::DataLock>> {
+    if cli.dry_run {
+        return Ok(None);
+    }
+    let argv: Vec<String> = std::env::args().collect();
+    let name = find_subcommand_index(&argv)
+        .map(|i| argv[i].clone())
+        .unwrap_or_default();
+    if READ_ONLY_COMMANDS.contains(&name.as_str()) {
+        return Ok(None);
+    }
+    let lock = linix::core::datalock::DataLock::acquire(
+        &linix::utils::safe_data_dir(),
+        &name,
+        std::time::Duration::from_secs(120),
+    )?;
+    Ok(Some(lock))
+}
+
 fn known_subcommands() -> std::collections::HashSet<String> {
     <Cli as clap::CommandFactory>::command()
         .get_subcommands()

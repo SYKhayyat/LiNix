@@ -1,5 +1,7 @@
+pub mod argv;
 pub mod artifact_lock;
 pub mod cache;
+pub mod datalock;
 pub mod error;
 pub mod executor;
 pub mod bare_lock;
@@ -18,6 +20,8 @@ pub mod snapshot;
 pub mod state;
 pub mod transaction;
 pub mod validator;
+
+pub use argv::{push_names, terminates_options};
 
 pub use cache::{PackageCache, SmartCache};
 

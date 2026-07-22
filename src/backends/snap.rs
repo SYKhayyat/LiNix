@@ -40,10 +40,10 @@ impl BackendCore for SnapBackendCore {
 #[async_trait]
 impl MetadataProvider for SnapBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
-        let output = self
-            .executor
-            .run_output("snap", &["info", name], false)
-            .await?;
+        let mut args = vec!["info".to_string()];
+        crate::core::argv::push_names(&mut args, "snap", [name]);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let output = self.executor.run_output("snap", &arg_refs, false).await?;
         let mut deps = Vec::new();
 
         // Snap dependencies (base snaps like core22, or content interface connections)
@@ -75,7 +75,7 @@ fn install_args(spec: &PackageSpec) -> Vec<String> {
         args.push(channel.clone());
     }
 
-    args.push(spec.name.clone());
+    crate::core::argv::push_names(&mut args, "snap", [&spec.name]);
     args
 }
 
@@ -99,9 +99,12 @@ impl Installable for SnapInstallable {
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
         for name in names {
             info!("Snap: Removing {}...", name);
+            let mut args = vec!["remove".to_string()];
+            crate::core::argv::push_names(&mut args, "snap", [name]);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("snap", "snap", &["remove", name], sudo)
+                .run_exclusive("snap", "snap", &arg_refs, sudo)
                 .await?;
         }
         Ok(())
@@ -149,10 +152,13 @@ impl Queryable for SnapQueryable {
     }
 
     async fn info(&self, name: &str) -> Result<Option<Package>> {
+        let mut args = vec!["info".to_string()];
+        crate::core::argv::push_names(&mut args, "snap", [name]);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self
             .core
             .executor
-            .run_output("snap", &["info", name], false)
+            .run_output("snap", &arg_refs, false)
             .await?;
         if output.is_empty() {
             return Ok(None);
@@ -179,10 +185,13 @@ pub struct SnapSearchable {
 #[async_trait]
 impl Searchable for SnapSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let mut args = vec!["find".to_string()];
+        crate::core::argv::push_names(&mut args, "snap", [query]);
+        let search_args: Vec<&str> = args.iter().map(String::as_str).collect();
         let output = self
             .core
             .executor
-            .search_output("snap", &["find", query], false)
+            .search_output("snap", &search_args, false)
             .await?;
         Ok(parse_snap_find(&output))
     }
@@ -287,12 +296,53 @@ mod tests {
     #[test]
     fn snap_channel_reaches_the_command() {
         let args = install_args(&spec_with("code", &[("channel", "edge")]));
-        assert_eq!(args, ["install", "--channel", "edge", "code"]);
+        assert_eq!(args, ["install", "--channel", "edge", "--", "code"]);
     }
 
     #[test]
     fn snap_without_a_channel_passes_no_channel_flag() {
         let args = install_args(&spec_with("code", &[]));
-        assert_eq!(args, ["install", "code"]);
+        assert_eq!(args, ["install", "--", "code"]);
+    }
+
+    #[tokio::test]
+    async fn snaps_other_name_carrying_commands_terminate_too() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(SnapBackendCore::new(exec));
+
+        SnapInstallable { core: core.clone() }
+            .remove(&["code".to_string()], false)
+            .await
+            .unwrap();
+        SnapQueryable { core: core.clone() }.info("code").await.ok();
+        SnapSearchable { core: core.clone() }
+            .search("code")
+            .await
+            .unwrap();
+        core.get_dependencies("code").await.unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec![
+                "snap remove -- code",
+                "snap info -- code",
+                "snap find -- code",
+                "snap info -- code",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_snap_named_like_a_flag_stays_a_name() {
+        let args = install_args(&spec_with("--classic", &[]));
+        assert_eq!(args, ["install", "--", "--classic"]);
     }
 }

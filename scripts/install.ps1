@@ -1,12 +1,12 @@
 # LiNix bootstrap installer for Windows — the 30-second first run.
 #
-#   irm https://raw.githubusercontent.com/OWNER/linix/HEAD/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/SYKhayyat/linix/HEAD/scripts/install.ps1 | iex
 #
 # Installs the `linix` binary, runs a health check, and offers to adopt the packages already
 # on this machine. Override with env vars: $env:LINIX_REPO, $env:LINIX_NO_ADOPT.
 $ErrorActionPreference = 'Stop'
 
-$repo = if ($env:LINIX_REPO) { $env:LINIX_REPO } else { 'https://github.com/OWNER/linix' }
+$repo = if ($env:LINIX_REPO) { $env:LINIX_REPO } else { 'https://github.com/SYKhayyat/linix' }
 
 function Say($m) { Write-Host "linix " -ForegroundColor Cyan -NoNewline; Write-Host $m }
 function Err($m) { Write-Host "linix " -ForegroundColor Red  -NoNewline; Write-Host $m }
@@ -40,7 +40,7 @@ Say "running health check..."
 
 if (-not $env:LINIX_NO_ADOPT) {
     $ans = Read-Host "linix  adopt the packages already installed on this machine into a manifest now? [y/N]"
-    if ($ans -match '^(y|yes)$') { & $linix migrate } else { Say "skipped - run 'linix migrate' whenever you're ready." }
+    if ($ans -match '^(y|yes)$') { & $linix adopt } else { Say "skipped - run 'linix adopt' whenever you're ready." }
 }
 
 Say "done. Try 'linix status' or 'linix doctor'."
