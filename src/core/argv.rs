@@ -27,7 +27,9 @@ const TERMINATES: &[&str] = &[
     "go", "composer", "luarocks", "opam", "nimble", "mix", "cabal", "stack", //
     "conda", "mamba", "micromamba", "uv", "pixi", "spack", "asdf", "mise", //
     "brew", "port", "pkgin", "pkg", "pkg_add", "pkg_delete", "eopkg", "slackpkg", //
-    "helm", "kubectl", "krew", "dart", "flutter", "emacs", "systemctl",
+    "helm", "kubectl", "krew", "dart", "flutter", "emacs", "systemctl", //
+    // Go-flag parsers: `age` and `sops` are handed a source path a declaration chose.
+    "age", "sops",
 ];
 
 /// Managers whose CLI has no `--`, checked and recorded so the absence is a fact and not an
@@ -39,6 +41,14 @@ const DOES_NOT_TERMINATE: &[&str] = &[
     // `code` takes an extension id as the *value* of `--install-extension`, never as a
     // positional, so a `--` in front of it would become the value.
     "code",
+    // `gsettings` dispatches on argv[1] by hand — no getopt, so a bare `--` is read as the
+    // command name and the call fails before it reaches the schema.
+    "gsettings",
+    // Init systems other than systemd. `sc` and `launchctl` take the service positionally
+    // with no option terminator; the OpenRC and SysVinit wrappers are shell scripts that
+    // read `$1` as the service, and all of them put the name *between* two positionals
+    // (`rc-service <name> start`), which leaves no place a terminator could go.
+    "sc", "launchctl", "rc-service", "rc-update", "update-rc.d", "service",
 ];
 
 /// Whether `binary` ends its option parsing at `--`.

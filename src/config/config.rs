@@ -125,6 +125,16 @@ impl GuardSettings {
     }
 }
 
+/// The `[remove]` table (II.11c): what a removal means.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct RemoveSettings {
+    /// Also destroy the package's configuration in `/etc` (Debian's `purge`). A deleted
+    /// module line means "stop installing this", which is not "destroy how I had it set up",
+    /// so this is off unless the machine's owner turns it on.
+    #[serde(default)]
+    pub purge: bool,
+}
+
 /// Feature 5: Configuration for background scheduled tasks.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScheduleConfig {
@@ -243,6 +253,19 @@ pub struct Config {
     /// count ceilings, and the install/change rules. See [`GuardSettings`].
     #[serde(default)]
     pub guard: GuardSettings,
+
+    /// The `[remove]` table (II.11c). `purge = true` makes every removal on this machine also
+    /// destroy the package's configuration. Off by default and machine-wide by construction:
+    /// a removal happens after the line that would have carried a per-package option is gone,
+    /// so the only place the choice can live is the machine, and a machine-wide destructive
+    /// default nobody typed is exactly what must not happen.
+    #[serde(default)]
+    pub remove: RemoveSettings,
+
+    /// A `uninstall --purge` for this run only. Never serialized — the file form is
+    /// `[remove] purge`, and this is its per-invocation sibling.
+    #[serde(skip)]
+    pub purge_this_run: bool,
 
     #[serde(default = "default_btrfs_path")]
     pub btrfs_path: String,
@@ -435,6 +458,8 @@ impl Default for Config {
             backend_settings: HashMap::new(),
             allow_mass_install: false,
             guard: GuardSettings::default(),
+            remove: RemoveSettings::default(),
+            purge_this_run: false,
             btrfs_path: default_btrfs_path(),
             zfs_dataset: None,
             tmp_dir: default_tmp_dir(),

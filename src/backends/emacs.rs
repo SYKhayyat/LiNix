@@ -252,21 +252,6 @@ impl Upgradable for EmacsUpgradable {
             .await?;
         Ok(())
     }
-
-    fn has_native_orphan_removal(&self) -> bool {
-        true
-    }
-
-    async fn clean_orphans(&self, _: bool) -> Result<()> {
-        info!("Emacs: Autoremoving unused packages...");
-        let lisp = "(progn (require 'package) (package-initialize) \
-            (when (fboundp 'package-autoremove) (package-autoremove)))";
-        self.core
-            .executor
-            .run_exclusive("emacs", "emacs", &["--batch", "--eval", lisp], false)
-            .await?;
-        Ok(())
-    }
 }
 
 pub fn register(

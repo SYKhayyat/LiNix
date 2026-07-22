@@ -111,6 +111,12 @@ pub struct YarnInstallable {
     pub core: Arc<YarnBackendCore>,
 }
 
+fn global_argv(subcommand: &str, name: &str) -> Vec<String> {
+    let mut args = vec!["global".to_string(), subcommand.to_string()];
+    crate::core::argv::push_names(&mut args, "yarn", [name]);
+    args
+}
+
 #[async_trait]
 impl Installable for YarnInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
@@ -120,9 +126,11 @@ impl Installable for YarnInstallable {
                 _ => spec.name.clone(),
             };
             info!("Yarn: Installing {} globally...", target);
+            let args = global_argv("add", &target);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("yarn", "yarn", &["global", "add", &target], false)
+                .run_exclusive("yarn", "yarn", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -131,9 +139,11 @@ impl Installable for YarnInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("Yarn: Uninstalling {} globally...", name);
+            let args = global_argv("remove", name);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("yarn", "yarn", &["global", "remove", name], false)
+                .run_exclusive("yarn", "yarn", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -228,10 +238,12 @@ impl Upgradable for YarnUpgradable {
         info!("Yarn: Upgrading all global packages...");
         let installed = self.core.list_installed_internal().await?;
         for pkg in installed {
+            let args = global_argv("add", &pkg.name);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             let _ = self
                 .core
                 .executor
-                .run_exclusive("yarn", "yarn", &["global", "add", &pkg.name], false)
+                .run_exclusive("yarn", "yarn", &arg_refs, false)
                 .await;
         }
         Ok(())
@@ -267,7 +279,46 @@ pub fn register(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_yarn_json_stream, split_name_version};
+    use super::*;
+    use crate::core::executor::MockExecutor;
+    use dashmap::DashMap;
+
+    #[test]
+    fn the_global_subcommand_precedes_the_terminator_and_the_name_follows_it() {
+        assert_eq!(global_argv("add", "cowsay"), ["global", "add", "--", "cowsay"]);
+        assert_eq!(
+            global_argv("remove", "@scope/pkg"),
+            ["global", "remove", "--", "@scope/pkg"]
+        );
+    }
+
+    #[tokio::test]
+    async fn install_and_remove_end_their_options_before_the_name() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let core = Arc::new(YarnBackendCore::new(exec));
+
+        let spec = PackageSpec {
+            name: "cowsay".into(),
+            backend: "yarn".into(),
+            ..Default::default()
+        };
+        YarnInstallable { core: core.clone() }
+            .install(&[spec], false)
+            .await
+            .unwrap();
+        YarnInstallable { core: core.clone() }
+            .remove(&["cowsay".to_string()], false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec!["yarn global add -- cowsay", "yarn global remove -- cowsay"]
+        );
+    }
 
     #[test]
     fn ndjson_stream_yields_packages_and_ignores_noise() {

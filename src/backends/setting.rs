@@ -244,6 +244,20 @@ mod tests {
         assert_eq!(a, vec!["reset", "org.gnome.x", "k"]);
     }
 
+    /// `gsettings` dispatches on argv[1] by hand, so a `--` is read as the command name and
+    /// the call fails before it reaches the schema.
+    #[test]
+    fn gsettings_deliberately_gets_no_option_terminator() {
+        assert!(!crate::core::argv::terminates_options("gsettings"));
+        for (_, args) in [
+            read_command(SettingStore::GSettings, "org.gnome.x", "k").unwrap(),
+            write_command(SettingStore::GSettings, "org.gnome.x", "k", "v").unwrap(),
+            reset_command(SettingStore::GSettings, "org.gnome.x", "k").unwrap(),
+        ] {
+            assert!(!args.iter().any(|a| a == "--"), "{:?}", args);
+        }
+    }
+
     #[test]
     fn no_adapter_plans_no_command() {
         assert!(read_command(SettingStore::None, "s", "k").is_none());

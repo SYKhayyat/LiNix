@@ -286,7 +286,6 @@ pub struct CustomBackendDef {
     #[serde(default)]
     pub upgrade_args: Vec<String>,
     pub update_args: Option<Vec<String>>,
-    pub orphan_args: Option<Vec<String>>,
     #[serde(default)]
     pub needs_root: bool,
     #[serde(default)]
@@ -410,7 +409,10 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         list_binary: None,
         upgrade_args: def.upgrade_args,
         update_args: def.update_args,
-        orphan_args: def.orphan_args,
+        purge_args: None,
+        // A definition that names an `autoremove` verb cannot say what that verb would
+        // delete, and a removal LiNix cannot enumerate is one it does not make.
+        orphan_dry_run: None,
         repo_add_args: None,
         repo_remove_args: None,
         repo_list_args: None,
@@ -559,7 +561,6 @@ mod tests {
             search_args: vec![],
             upgrade_args: vec![],
             update_args: None,
-            orphan_args: None,
             needs_root: false,
             is_exclusive: false,
             version_pin: None,

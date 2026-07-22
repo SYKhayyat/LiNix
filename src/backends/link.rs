@@ -40,6 +40,33 @@ pub fn is_outside_home(resolved: &Path) -> bool {
     }
 }
 
+/// The argument list for a decrypt tool. `-i` takes the identity as its value, so it stays
+/// in front of the terminator; only the source path goes behind it.
+fn decrypt_argv(tool: &str, source: &Path, identity: Option<&Path>) -> Result<Vec<String>> {
+    let mut args = vec!["--decrypt".to_string()];
+    match tool {
+        "age" => {
+            let identity = identity.ok_or_else(|| {
+                Error::Other(
+                    "age decrypt needs an identity — set @identity=<path> or $LINIX_AGE_IDENTITY"
+                        .into(),
+                )
+            })?;
+            args.push("-i".to_string());
+            args.push(identity.to_string_lossy().to_string());
+        }
+        "sops" => {}
+        other => {
+            return Err(Error::Other(format!(
+                "unknown decrypt tool '{}' (use age or sops)",
+                other
+            )))
+        }
+    }
+    crate::core::argv::push_names(&mut args, tool, [source.to_string_lossy().to_string()]);
+    Ok(args)
+}
+
 impl LinkBackendCore {
     pub fn new(executor: CommandExecutor, config: Arc<Config>) -> Self {
         Self {
@@ -72,29 +99,10 @@ impl LinkBackendCore {
         spec: &PackageSpec,
     ) -> Result<String> {
         use tokio::process::Command;
-        let mut cmd;
-        match tool {
-            "age" => {
-                let identity = self.age_identity(spec).ok_or_else(|| {
-                    Error::Other(
-                        "age decrypt needs an identity — set @identity=<path> or $LINIX_AGE_IDENTITY"
-                            .into(),
-                    )
-                })?;
-                cmd = Command::new("age");
-                cmd.arg("--decrypt").arg("-i").arg(&identity).arg(source);
-            }
-            "sops" => {
-                cmd = Command::new("sops");
-                cmd.arg("--decrypt").arg(source);
-            }
-            other => {
-                return Err(Error::Other(format!(
-                    "unknown decrypt tool '{}' (use age or sops)",
-                    other
-                )))
-            }
-        }
+        let identity = self.age_identity(spec);
+        let args = decrypt_argv(tool, source, identity.as_deref())?;
+        let mut cmd = Command::new(tool);
+        cmd.args(&args);
         let output = cmd.output().await.map_err(|e| {
             Error::Other(format!(
                 "could not launch '{}' to decrypt {:?}: {} — is it installed and on PATH?",
@@ -507,6 +515,27 @@ mod tests {
             !tokio::fs::try_exists(&target).await.unwrap(),
             "dry-run must not decrypt or write the secret"
         );
+    }
+
+    #[test]
+    fn the_source_path_goes_behind_the_terminator_and_the_identity_stays_in_front() {
+        let identity = PathBuf::from("/home/u/.config/linix/age.key");
+        assert_eq!(
+            decrypt_argv("age", Path::new("/cfg/token.age"), Some(&identity)).unwrap(),
+            [
+                "--decrypt",
+                "-i",
+                "/home/u/.config/linix/age.key",
+                "--",
+                "/cfg/token.age"
+            ]
+        );
+        assert_eq!(
+            decrypt_argv("sops", Path::new("/cfg/token.enc"), None).unwrap(),
+            ["--decrypt", "--", "/cfg/token.enc"]
+        );
+        assert!(decrypt_argv("age", Path::new("/cfg/token.age"), None).is_err());
+        assert!(decrypt_argv("rot13", Path::new("/cfg/x"), None).is_err());
     }
 
     #[tokio::test]

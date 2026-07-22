@@ -23,6 +23,10 @@ pub struct TransactionConfig {
     pub initial_backoff: Duration,
     pub max_backoff: Duration,
     pub auto_rollback: bool,
+    /// Remove also destroys configuration (`[remove] purge`, or `uninstall --purge`). A
+    /// backend that draws no such distinction removes as usual — the decision cannot be
+    /// per-package because a removal happens after the line that carried it is gone.
+    pub purge: bool,
 }
 
 impl Default for TransactionConfig {
@@ -41,6 +45,7 @@ impl TransactionConfig {
             initial_backoff: Duration::from_millis(500),
             max_backoff: Duration::from_secs(30),
             auto_rollback: true,
+            purge: false,
         }
     }
 }
@@ -439,9 +444,13 @@ impl Transaction {
                     }
                     GraphAction::Remove { name, .. } => {
                         if let Some(handler) = backend_cap.as_installable() {
-                            handler
-                                .remove(std::slice::from_ref(name), backend_cap.sudo_for_write())
-                                .await?;
+                            let one = std::slice::from_ref(name);
+                            let sudo = backend_cap.sudo_for_write();
+                            if config.purge && handler.supports_purge() {
+                                handler.purge(one, sudo).await?;
+                            } else {
+                                handler.remove(one, sudo).await?;
+                            }
                             Ok((HashMap::new(), 0))
                         } else {
                             Err(Error::Transaction(format!(

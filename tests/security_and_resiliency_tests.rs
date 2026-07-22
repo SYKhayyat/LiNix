@@ -143,7 +143,7 @@ async fn test_transaction_atomic_rollback_fidelity() {
         .mock_executor
         .set_response("brew install -- pkg-a", Ok(DryRunOutput::default().into()));
     kernel.mock_executor.set_response(
-        "brew install pkg-b",
+        "brew install -- pkg-b",
         Err(Error::CommandFailed("Network Timeout".into())),
     );
     kernel
@@ -172,10 +172,10 @@ async fn test_transaction_atomic_rollback_fidelity() {
 
     let calls: Vec<String> = kernel.mock_executor.get_calls().await;
 
-    assert!(calls.iter().any(|c| c.contains("install pkg-a")));
-    assert!(calls.iter().any(|c| c.contains("install pkg-b")));
+    assert!(calls.iter().any(|c| c.contains("install -- pkg-a")));
+    assert!(calls.iter().any(|c| c.contains("install -- pkg-b")));
     assert!(
-        calls.iter().any(|c| c.contains("uninstall pkg-a")),
+        calls.iter().any(|c| c.contains("uninstall -- pkg-a")),
         "Integrity Failure: Node A was not reverted after B failed. Log: {:?}",
         calls
     );
@@ -192,11 +192,11 @@ async fn test_journal_wal_healing_logic() {
     }
 
     kernel.mock_executor.set_response(
-        "brew uninstall stuck-component",
+        "brew uninstall -- stuck-component",
         Ok(DryRunOutput::default().into()),
     );
     kernel.mock_executor.set_response(
-        "brew install stuck-component",
+        "brew install -- stuck-component",
         Ok(DryRunOutput::default().into()),
     );
 

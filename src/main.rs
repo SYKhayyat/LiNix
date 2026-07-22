@@ -134,6 +134,7 @@ async fn main() -> Result<()> {
             packages,
             json,
             temp,
+            purge: _,
         } => handle_uninstall(&app, packages, *json, temp.as_ref()).await,
         Commands::Shell { packages } => handle_shell(&app, packages).await,
         Commands::Module(args) => handle_module(&app, &args.command).await,
@@ -2529,7 +2530,7 @@ async fn handle_remove_orphans(app: &App) -> Result<()> {
     use linix::app::sync::guard::{enforce, GuardScope};
 
     let mut listed: Vec<(String, Vec<String>)> = Vec::new();
-    let mut unlistable: Vec<String> = Vec::new();
+    let mut cannot_say: Vec<String> = Vec::new();
 
     for backend in app.registry.available() {
         let up = match backend.as_upgradable() {
@@ -2539,18 +2540,23 @@ async fn handle_remove_orphans(app: &App) -> Result<()> {
         match up.list_orphans().await {
             Ok(names) if names.is_empty() => {}
             Ok(names) => listed.push((backend.name().to_string(), names)),
-            // A backend that cannot list but removes natively is asked about separately,
-            // because there is nothing to show. Probing by CALLING clean_orphans would
-            // perform the removal it is trying to get permission for.
-            Err(linix::core::Error::Unsupported(_)) if up.has_native_orphan_removal() => {
-                unlistable.push(backend.name().to_string());
+            Err(linix::core::Error::Unsupported(_)) => {
+                cannot_say.push(backend.name().to_string())
             }
-            Err(linix::core::Error::Unsupported(_)) => {}
             Err(e) => warn!("could not list orphans for {}: {}", backend.name(), e),
         }
     }
 
-    if listed.is_empty() && unlistable.is_empty() {
+    // Named, every time, whether or not anything else was found: a manager silently missing
+    // from a removal report reads as a manager with nothing to remove.
+    if !cannot_say.is_empty() {
+        println!(
+            "No orphan removal for: {}. These managers cannot say what they would delete, so              LiNix does not let them delete it.",
+            cannot_say.join(", ")
+        );
+    }
+
+    if listed.is_empty() {
         println!("No orphaned packages.");
         return Ok(());
     }
@@ -2560,13 +2566,11 @@ async fn handle_remove_orphans(app: &App) -> Result<()> {
         .flat_map(|(b, names)| names.iter().map(move |n| (b.clone(), n.clone())))
         .collect();
 
-    if !listed.is_empty() {
-        println!("Planned changes:");
-        for (backend, names) in &listed {
-            println!("  {} — remove {} package(s):", backend, names.len());
-            for n in names {
-                println!("      {}:{}", backend, n);
-            }
+    println!("Planned changes:");
+    for (backend, names) in &listed {
+        println!("  {} — remove {} package(s):", backend, names.len());
+        for n in names {
+            println!("      {}:{}", backend, n);
         }
     }
 
@@ -2580,7 +2584,7 @@ async fn handle_remove_orphans(app: &App) -> Result<()> {
         return Ok(());
     }
 
-    if !confirm_orphan_removal(app, &unlistable)? {
+    if !confirm_orphan_removal(app)? {
         println!("Nothing removed.");
         return Ok(());
     }
@@ -2601,33 +2605,10 @@ async fn handle_remove_orphans(app: &App) -> Result<()> {
         }
     }
 
-    for backend_name in &unlistable {
-        let backend = match app.registry.get(backend_name) {
-            Some(b) => b,
-            None => continue,
-        };
-        if let Some(up) = backend.as_upgradable() {
-            match up.clean_orphans(backend.sudo_for_write()).await {
-                Ok(()) => println!("  {}: ran its own orphan removal", backend_name),
-                Err(e) => warn!("orphan removal failed for {}: {}", backend_name, e),
-            }
-        }
-    }
-
     perform_maintenance(app).await
 }
 
-/// Confirmation for `remove-orphans`. `unlistable` names the backends whose orphan set could
-/// not be enumerated, so the user is told those removals cannot be previewed rather than
-/// having them folded silently into a list that looks complete.
-fn confirm_orphan_removal(app: &App, unlistable: &[String]) -> Result<bool> {
-    if !unlistable.is_empty() {
-        println!(
-            "
-Also: {} cannot list what it would remove, so those packages are not in the list above and cannot be checked against your protected list.",
-            unlistable.join(", ")
-        );
-    }
+fn confirm_orphan_removal(app: &App) -> Result<bool> {
     if app.config.yes {
         return Ok(true);
     }
@@ -5112,6 +5093,11 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
     // --quiet has no config-file merge counterpart; apply it directly (a set flag wins).
     if cli.quiet {
         config.quiet = true;
+    }
+    // `uninstall --purge` is a `[remove] purge` for this run only. Read here, where CLI flags
+    // become config, because `config` is shared read-only by the time a command runs.
+    if let Commands::Uninstall { purge: true, .. } = cli.command {
+        config.purge_this_run = true;
     }
     // --no-progress is the real off-switch for the progress indicators (S5). A set flag wins
     // over the `show_progress` config default.

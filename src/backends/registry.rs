@@ -203,7 +203,8 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             name: "apt".into(),
             version_pin: Some(VersionPin::Inline("{name}={version}".into())),
             install_args: vec!["install".into(), "-y".into()],
-            remove_args: vec!["purge".into(), "-y".into()],
+            remove_args: vec!["remove".into(), "-y".into()],
+            purge_args: Some(vec!["purge".into(), "-y".into()]),
             // apt lists installed packages via the SEPARATE `dpkg-query` binary, not
             // `apt dpkg-query`.
             list_binary: Some("dpkg-query".into()),
@@ -232,7 +233,11 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             enumerate_binary: Some("apt-cache".into()),
             upgrade_args: vec!["dist-upgrade".into(), "-y".into()],
             update_args: Some(vec!["update".into()]),
-            orphan_args: Some(vec!["autoremove".into(), "-y".into()]),
+            orphan_dry_run: Some(OrphanDryRun {
+                binary: Some("apt-get".into()),
+                args: vec!["autoremove".into(), "--dry-run".into()],
+                removes_line_prefix: "Remv ".into(),
+            }),
             repo_add_args: Some(vec![
                 "add-apt-repository".into(),
                 "-y".into(),
@@ -295,6 +300,7 @@ fn register_aur_helper(
             version_pin: None,
             install_args: vec!["-S".into(), "--noconfirm".into(), "--needed".into()],
             remove_args: vec!["-Rs".into(), "--noconfirm".into()],
+            purge_args: None,
             list_args: vec!["-Q".into()],
             // `-Qe` = explicitly installed only (11 of 173 on the arch test image).
             manual: ManualListing::Command {
@@ -314,7 +320,7 @@ fn register_aur_helper(
             update_args: Some(vec!["-Sy".into()]),
             // Orphan cleanup semantics differ per helper; leave it to the pacman backend
             // rather than guess, so we report Unsupported honestly instead of misfiring.
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -349,6 +355,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             version_pin: Some(VersionPin::Inline("{name}={version}".into())),
             install_args: vec!["add".into()],
             remove_args: vec!["del".into()],
+            purge_args: None,
             list_args: vec!["info".into(), "-v".into()],
             // apk's explicit set IS the world file — `apk add`/`del` are edits to it. The
             // `apk world` subcommand only exists in apk 3.x (it errors on Alpine's 2.x, so
@@ -368,7 +375,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["upgrade".into()],
             update_args: Some(vec!["update".into()]),
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: Some(vec![
                 "sh".into(),
                 "-c".into(),
@@ -427,6 +434,7 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             version_pin: Some(VersionPin::Inline("{name}={version}".into())),
             install_args: vec!["install".into(), "-y".into()],
             remove_args: vec!["remove".into(), "-y".into()],
+            purge_args: None,
             list_args: vec!["search".into(), "--installed-only".into()],
             // zypper resolves dependencies, so its installed set is not the user's set.
             // `zypper packages --userinstalled` would answer this, but it emits a
@@ -441,7 +449,7 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["update".into(), "-y".into()],
             update_args: Some(vec!["refresh".into()]),
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: Some(vec!["addrepo".into(), "{url}".into(), "{name}".into()]),
             repo_remove_args: Some(vec!["removerepo".into(), "{name}".into()]),
             repo_list_args: Some(vec!["repos".into()]),
@@ -485,6 +493,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 "--accept-package-agreements".into(),
             ],
             remove_args: vec!["uninstall".into(), "--silent".into()],
+            purge_args: None,
             list_args: vec!["list".into()],
             // winget installs no dependencies of its own: everything listed was asked for.
             manual: ManualListing::AllInstalled,
@@ -496,7 +505,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["upgrade".into(), "--all".into(), "--silent".into()],
             update_args: Some(vec!["source".into(), "update".into()]),
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: Some(vec![
                 "source".into(),
                 "add".into(),
@@ -544,6 +553,7 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
+            purge_args: None,
             list_args: vec!["list".into()],
             // scoop apps are each installed on request; it tracks no dependency graph.
             manual: ManualListing::AllInstalled,
@@ -555,7 +565,7 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["update".into(), "*".into()],
             update_args: Some(vec!["update".into()]),
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: Some(vec![
                 "bucket".into(),
                 "add".into(),
@@ -598,6 +608,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             ])),
             install_args: vec!["install".into(), "-y".into()],
             remove_args: vec!["uninstall".into(), "-y".into()],
+            purge_args: None,
             // Chocolatey 2.x removed `-lo`: `list` is local-only now and the flag is an
             // error, so the command failed, the output was empty, and LiNix read that as
             // "nothing is installed" — the input to a mass removal, not a bad listing.
@@ -612,7 +623,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["upgrade".into(), "all".into(), "-y".into()],
             update_args: None,
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: Some(vec![
                 "source".into(),
                 "add".into(),
@@ -661,6 +672,7 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
+            purge_args: None,
             list_args: vec!["list".into()],
             // Every App Store app was installed by a person clicking Get.
             manual: ManualListing::AllInstalled,
@@ -672,7 +684,7 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["upgrade".into()],
             update_args: None,
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -708,6 +720,7 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             version_pin: Some(VersionPin::Inline("{name}=={version}".into())),
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into(), "-y".into()],
+            purge_args: None,
             list_args: vec!["list".into(), "--format=json".into()],
             // `pip list` includes every pulled-in dependency and pip keeps no record of
             // which distributions a person actually asked for. (`--not-required` reports
@@ -721,7 +734,7 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["install".into(), "--upgrade".into()],
             update_args: None,
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -754,6 +767,7 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             version_pin: Some(VersionPin::Flag(vec!["-v".into(), "{version}".into()])),
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
+            purge_args: None,
             list_args: vec!["list".into(), "--local".into()],
             // `gem list --local` mixes user-installed gems with their dependencies, and
             // RubyGems records no explicit-install marker.
@@ -766,7 +780,7 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["update".into()],
             update_args: None,
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: Some(vec!["sources".into(), "-a".into(), "{url}".into()]),
             repo_remove_args: Some(vec!["sources".into(), "-r".into(), "{url}".into()]),
             repo_list_args: Some(vec!["sources".into()]),
@@ -800,6 +814,7 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             version_pin: Some(VersionPin::Inline("{name}@{version}".into())),
             install_args: vec!["add".into(), "-g".into()],
             remove_args: vec!["remove".into(), "-g".into()],
+            purge_args: None,
             list_args: vec!["pm".into(), "ls".into(), "-g".into()],
             // `bun pm ls -g` lists the top-level global installs (dependencies only appear
             // under `--all`), so what it reports is what was asked for.
@@ -812,7 +827,7 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["upgrade".into()],
             update_args: None,
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -847,6 +862,7 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             version_pin: None,
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
+            purge_args: None,
             list_args: vec!["installed".into()],
             // `port installed requested` = ports the user asked for, not pulled-in deps.
             manual: ManualListing::Command {
@@ -862,7 +878,7 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["upgrade".into(), "outdated".into()],
             update_args: Some(vec!["selfupdate".into()]),
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -898,6 +914,7 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             version_pin: None,
             install_args: vec!["-y".into(), "install".into()],
             remove_args: vec!["-y".into(), "remove".into()],
+            purge_args: None,
             list_args: vec!["list".into()],
             // pkgin installs dependencies and `pkgin list` reports them all; its
             // automatic-install marker is not exposed through a stable listing command.
@@ -910,7 +927,7 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             list_binary: None,
             upgrade_args: vec!["-y".into(), "full-upgrade".into()],
             update_args: Some(vec!["update".into()]),
-            orphan_args: Some(vec!["-y".into(), "autoremove".into()]),
+            orphan_dry_run: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -950,6 +967,7 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             ])),
             install_args: vec!["tool".into(), "install".into(), "--global".into()],
             remove_args: vec!["tool".into(), "uninstall".into(), "--global".into()],
+            purge_args: None,
             list_args: vec!["tool".into(), "list".into(), "--global".into()],
             // Global .NET tools are installed one by one, on request.
             manual: ManualListing::AllInstalled,
@@ -966,7 +984,7 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 "--all".into(),
             ],
             update_args: None,
-            orphan_args: None,
+            orphan_dry_run: None,
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
@@ -1005,6 +1023,7 @@ fn base_config(name: &str) -> ManagerConfig {
         name: name.into(),
         install_args: vec![],
         remove_args: vec![],
+        purge_args: None,
         list_args: vec![],
         // Default to the safe answer, not the convenient one: an unlabelled backend is one
         // nobody has confirmed can separate user-chosen packages from dependencies, so
@@ -1019,7 +1038,7 @@ fn base_config(name: &str) -> ManagerConfig {
         list_binary: None,
         upgrade_args: vec![],
         update_args: None,
-        orphan_args: None,
+        orphan_dry_run: None,
         repo_add_args: None,
         repo_remove_args: None,
         repo_list_args: None,

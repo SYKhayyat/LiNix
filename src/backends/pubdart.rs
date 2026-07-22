@@ -56,23 +56,44 @@ pub struct PubInstallable {
     pub core: Arc<PubBackendCore>,
 }
 
+/// pub pins with a trailing positional version (`activate <pkg> <version>`), so the version
+/// belongs behind the terminator with the name, not in front of it as a flag.
+fn activate_argv(name: &str, version: Option<&str>) -> Vec<String> {
+    let mut args = vec![
+        "pub".to_string(),
+        "global".to_string(),
+        "activate".to_string(),
+    ];
+    let names: Vec<&str> = std::iter::once(name).chain(version).collect();
+    crate::core::argv::push_names(&mut args, "dart", names);
+    args
+}
+
+fn deactivate_argv(name: &str) -> Vec<String> {
+    let mut args = vec![
+        "pub".to_string(),
+        "global".to_string(),
+        "deactivate".to_string(),
+    ];
+    crate::core::argv::push_names(&mut args, "dart", [name]);
+    args
+}
+
 #[async_trait]
 impl Installable for PubInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
-            let mut args = vec!["pub", "global", "activate", spec.name.as_str()];
-            // pub pins with a trailing positional version: `activate <pkg> <version>`.
-            if let Some(v) = spec
+            let version = spec
                 .options
                 .get("version")
                 .filter(|v| crate::backends::concrete_version(v))
-            {
-                args.push(v.as_str());
-            }
+                .map(String::as_str);
+            let args = activate_argv(&spec.name, version);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             info!("pub: Activating {} globally...", spec.name);
             self.core
                 .executor
-                .run_exclusive("dart", "dart", &args, false)
+                .run_exclusive("dart", "dart", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -81,14 +102,11 @@ impl Installable for PubInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("pub: Deactivating {}...", name);
+            let args = deactivate_argv(name);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive(
-                    "dart",
-                    "dart",
-                    &["pub", "global", "deactivate", name],
-                    false,
-                )
+                .run_exclusive("dart", "dart", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -141,15 +159,12 @@ impl Upgradable for PubUpgradable {
             core: self.core.clone(),
         };
         for pkg in q.scan().await? {
+            let args = activate_argv(&pkg.name, None);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             let _ = self
                 .core
                 .executor
-                .run_exclusive(
-                    "dart",
-                    "dart",
-                    &["pub", "global", "activate", &pkg.name],
-                    false,
-                )
+                .run_exclusive("dart", "dart", &arg_refs, false)
                 .await;
         }
         Ok(())
@@ -172,4 +187,58 @@ pub fn register(
             .with_metadata_provider(core.clone())
             .build(),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::executor::MockExecutor;
+    use dashmap::DashMap;
+
+    #[test]
+    fn the_name_and_its_pinned_version_both_sit_behind_the_terminator() {
+        assert_eq!(
+            activate_argv("webdev", None),
+            ["pub", "global", "activate", "--", "webdev"]
+        );
+        assert_eq!(
+            activate_argv("webdev", Some("2.7.0")),
+            ["pub", "global", "activate", "--", "webdev", "2.7.0"]
+        );
+        assert_eq!(
+            deactivate_argv("webdev"),
+            ["pub", "global", "deactivate", "--", "webdev"]
+        );
+    }
+
+    #[tokio::test]
+    async fn activate_and_deactivate_end_their_options_before_the_name() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let core = Arc::new(PubBackendCore::new(exec));
+
+        let spec = PackageSpec {
+            name: "webdev".into(),
+            backend: "pub".into(),
+            ..Default::default()
+        };
+        PubInstallable { core: core.clone() }
+            .install(&[spec], false)
+            .await
+            .unwrap();
+        PubInstallable { core: core.clone() }
+            .remove(&["webdev".to_string()], false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec![
+                "dart pub global activate -- webdev",
+                "dart pub global deactivate -- webdev",
+            ]
+        );
+    }
 }

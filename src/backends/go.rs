@@ -122,6 +122,12 @@ pub struct GoInstallable {
     pub core: Arc<GoBackendCore>,
 }
 
+fn install_argv(target: &str) -> Vec<String> {
+    let mut args = vec!["install".to_string()];
+    crate::core::argv::push_names(&mut args, "go", [target]);
+    args
+}
+
 #[async_trait]
 impl Installable for GoInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
@@ -141,9 +147,11 @@ impl Installable for GoInstallable {
                 format!("{}@{}", spec.name, ver)
             };
             info!("Go: Installing {}...", target);
+            let args = install_argv(&target);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("go", "go", &["install", &target], false)
+                .run_exclusive("go", "go", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -208,10 +216,13 @@ impl GoQueryable {
             }
             let file_name = entry.file_name().to_string_lossy().to_string();
             let path_str = path.to_string_lossy().to_string();
+            let mut ver_args = vec!["version".to_string(), "-m".to_string()];
+            crate::core::argv::push_names(&mut ver_args, "go", [&path_str]);
+            let ver_refs: Vec<&str> = ver_args.iter().map(String::as_str).collect();
             let (name, version) = match self
                 .core
                 .executor
-                .run_output("go", &["version", "-m", &path_str], false)
+                .run_output("go", &ver_refs, false)
                 .await
                 .ok()
                 .and_then(|o| parse_go_version_m(&o))
@@ -271,11 +282,12 @@ impl Upgradable for GoUpgradable {
             if !pkg.name.contains('/') {
                 continue;
             }
-            let target = format!("{}@latest", pkg.name);
+            let args = install_argv(&format!("{}@latest", pkg.name));
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             let _ = self
                 .core
                 .executor
-                .run_exclusive("go", "go", &["install", &target], false)
+                .run_exclusive("go", "go", &arg_refs, false)
                 .await;
         }
         Ok(())
@@ -328,6 +340,43 @@ mod tests {
             expected
         );
         assert_eq!(GoBackendCore::binary_name("fzf"), expected);
+    }
+
+    #[test]
+    fn the_module_path_goes_behind_the_terminator() {
+        assert_eq!(
+            install_argv("github.com/junegunn/fzf@latest"),
+            ["install", "--", "github.com/junegunn/fzf@latest"]
+        );
+    }
+
+    #[tokio::test]
+    async fn install_and_upgrade_end_their_options_before_the_module() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(GoBackendCore::new(exec));
+
+        let spec = PackageSpec {
+            name: "github.com/junegunn/fzf".into(),
+            backend: "go".into(),
+            ..Default::default()
+        };
+        GoInstallable { core: core.clone() }
+            .install(&[spec], false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec!["go install -- github.com/junegunn/fzf@latest"]
+        );
     }
 
     #[test]

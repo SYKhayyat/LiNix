@@ -135,7 +135,7 @@ async fn test_ephemeral_shell_mount_point_resolution() {
         log.clear();
     }
 
-    let expected_cmd = "brew info --json=v1 curl";
+    let expected_cmd = "brew info --json=v1 -- curl";
 
     // Build JSON safely using serde_json to escape backslashes on Windows
     let json_value = serde_json::json!([{

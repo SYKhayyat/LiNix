@@ -377,6 +377,11 @@ pub enum Commands {
         #[arg(long)]
         json: bool,
 
+        /// Also destroy the package's configuration (Debian's `purge`), for this run only.
+        /// The machine-wide form is `[remove] purge` in preferences.toml.
+        #[arg(long)]
+        purge: bool,
+
         /// Temporary uninstall: reinstall the package(s) later. With a DURATION
         /// (e.g. `--temp=2h`) they return when it elapses; bare `--temp` inside a
         /// `linix shell` restores them when that ephemeral session ends. The duration must

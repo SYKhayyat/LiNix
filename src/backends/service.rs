@@ -28,6 +28,14 @@ pub enum InitSystem {
     Unknown,
 }
 
+/// Only systemd takes the unit as a trailing positional; every other init here puts the name
+/// between two positionals, which leaves no place a terminator could go.
+fn systemctl(verb: &str, name: &str) -> Vec<(String, Vec<String>)> {
+    let mut args = vec![verb.to_string()];
+    crate::core::argv::push_names(&mut args, "systemctl", [name]);
+    vec![("systemctl".to_string(), args)]
+}
+
 /// Pure: the ordered list of `(program, args)` commands that realize `action` for a service
 /// named `name` under a given init system. Empty when the platform can't express the action.
 /// Kept free of I/O so every mapping is unit-testable.
@@ -44,11 +52,11 @@ pub fn plan_service(
         )]
     };
     match (init, action) {
-        (InitSystem::Systemd, ServiceAction::Enable) => one("systemctl", &["enable", &s]),
-        (InitSystem::Systemd, ServiceAction::Disable) => one("systemctl", &["disable", &s]),
-        (InitSystem::Systemd, ServiceAction::Start) => one("systemctl", &["start", &s]),
-        (InitSystem::Systemd, ServiceAction::Stop) => one("systemctl", &["stop", &s]),
-        (InitSystem::Systemd, ServiceAction::Restart) => one("systemctl", &["restart", &s]),
+        (InitSystem::Systemd, ServiceAction::Enable) => systemctl("enable", name),
+        (InitSystem::Systemd, ServiceAction::Disable) => systemctl("disable", name),
+        (InitSystem::Systemd, ServiceAction::Start) => systemctl("start", name),
+        (InitSystem::Systemd, ServiceAction::Stop) => systemctl("stop", name),
+        (InitSystem::Systemd, ServiceAction::Restart) => systemctl("restart", name),
 
         (InitSystem::OpenRc, ServiceAction::Enable) => one("rc-update", &["add", &s, "default"]),
         (InitSystem::OpenRc, ServiceAction::Disable) => one("rc-update", &["del", &s, "default"]),
@@ -330,14 +338,24 @@ impl Queryable for ServiceQueryable {
 
 impl ServiceQueryable {
     async fn fill_platform_metadata(&self, p: &mut Package) -> Result<()> {
-        let (prog, args): (&str, Vec<&str>) = match self.core.detect_init() {
-            InitSystem::Systemd => ("systemctl", vec!["status", &p.name]),
-            InitSystem::OpenRc => ("rc-service", vec![&p.name, "status"]),
-            InitSystem::SysVinit => ("service", vec![&p.name, "status"]),
-            InitSystem::WindowsSc => ("sc", vec!["qc", &p.name]),
+        let one = |prog: &str, args: &[&str]| {
+            (
+                prog.to_string(),
+                args.iter().map(|a| a.to_string()).collect::<Vec<String>>(),
+            )
+        };
+        let (prog, args): (String, Vec<String>) = match self.core.detect_init() {
+            InitSystem::Systemd => {
+                let (_, args) = systemctl("status", &p.name).remove(0);
+                ("systemctl".to_string(), args)
+            }
+            InitSystem::OpenRc => one("rc-service", &[&p.name, "status"]),
+            InitSystem::SysVinit => one("service", &[&p.name, "status"]),
+            InitSystem::WindowsSc => one("sc", &["qc", &p.name]),
             InitSystem::Launchd | InitSystem::Unknown => return Ok(()),
         };
-        if let Ok(out) = self.core.executor.run_output(prog, &args, false).await {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        if let Ok(out) = self.core.executor.run_output(&prog, &args, false).await {
             p.properties.insert("status_raw".into(), out);
         }
         Ok(())
@@ -364,21 +382,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn systemd_maps_each_action() {
-        assert_eq!(
-            plan_service(InitSystem::Systemd, ServiceAction::Enable, "nginx"),
-            vec![(
-                "systemctl".to_string(),
-                vec!["enable".into(), "nginx".into()]
-            )]
-        );
-        assert_eq!(
-            plan_service(InitSystem::Systemd, ServiceAction::Restart, "nginx"),
-            vec![(
-                "systemctl".to_string(),
-                vec!["restart".into(), "nginx".into()]
-            )]
-        );
+    fn systemd_maps_each_action_and_ends_its_options_before_the_unit() {
+        for (action, verb) in [
+            (ServiceAction::Enable, "enable"),
+            (ServiceAction::Disable, "disable"),
+            (ServiceAction::Start, "start"),
+            (ServiceAction::Stop, "stop"),
+            (ServiceAction::Restart, "restart"),
+        ] {
+            assert_eq!(
+                plan_service(InitSystem::Systemd, action, "nginx"),
+                vec![(
+                    "systemctl".to_string(),
+                    vec![verb.into(), "--".into(), "nginx".into()]
+                )]
+            );
+        }
+    }
+
+    /// These inits take the service between two positionals, so there is nowhere a `--`
+    /// could go — and each of them would read it as the service name.
+    #[test]
+    fn the_other_inits_deliberately_emit_no_terminator() {
+        for init in [
+            InitSystem::OpenRc,
+            InitSystem::SysVinit,
+            InitSystem::Launchd,
+            InitSystem::WindowsSc,
+        ] {
+            for action in [
+                ServiceAction::Enable,
+                ServiceAction::Disable,
+                ServiceAction::Start,
+                ServiceAction::Stop,
+                ServiceAction::Restart,
+            ] {
+                for (prog, args) in plan_service(init, action, "nginx") {
+                    assert!(
+                        !args.iter().any(|a| a == "--"),
+                        "{:?}/{:?} emitted a terminator to `{}`",
+                        init,
+                        action,
+                        prog
+                    );
+                }
+            }
+        }
     }
 
     #[test]

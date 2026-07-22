@@ -282,21 +282,6 @@ impl Upgradable for FlatpakUpgradable {
             .await?;
         Ok(())
     }
-
-    fn has_native_orphan_removal(&self) -> bool {
-        true
-    }
-
-    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
-        let mut args = self.core.scope_args();
-        args.extend(["uninstall", "--unused", "-y", "--noninteractive"]);
-        info!("Flatpak: Removing unused runtimes and extensions...");
-        self.core
-            .executor
-            .run_exclusive("flatpak", "flatpak", &args, sudo)
-            .await?;
-        Ok(())
-    }
 }
 
 pub fn register(

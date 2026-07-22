@@ -268,6 +268,7 @@ impl<'a> SyncEngine<'a> {
         // setting's reach to `search` alone. Floor at 1: zero would stall the transaction.
         let mut tx_config = TransactionConfig::patient();
         tx_config.max_concurrent = self.config.max_parallel.max(1);
+        tx_config.purge = self.config.remove.purge || self.config.purge_this_run;
 
         let tx = Transaction::with_config(
             changes.graph.clone(),

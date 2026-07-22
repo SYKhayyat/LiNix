@@ -49,6 +49,21 @@ pub trait Installable: Send + Sync {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()>;
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()>;
+
+    /// Remove, and also destroy the package's configuration — Debian's `purge`.
+    ///
+    /// Separate from `remove` because a deleted module line says "stop installing this",
+    /// which is not the same sentence as "destroy how I had it set up". A manager that
+    /// draws no such distinction refuses, rather than silently doing an ordinary removal
+    /// under a name that promised more.
+    async fn purge(&self, _names: &[String], _sudo: bool) -> Result<()> {
+        Err(crate::core::Error::Unsupported("purge".into()))
+    }
+
+    /// Whether [`Installable::purge`] would do something different from `remove`.
+    fn supports_purge(&self) -> bool {
+        false
+    }
 }
 
 #[async_trait]
@@ -136,24 +151,6 @@ pub trait Upgradable: Send + Sync {
     /// a backend that cannot list its orphans never has them removed.
     async fn list_orphans(&self) -> Result<Vec<String>> {
         Err(crate::core::Error::Unsupported("orphan listing".into()))
-    }
-
-    /// Native orphan removal, for a backend whose orphan set cannot be enumerated.
-    ///
-    /// This is the unpreviewable path: the caller cannot show what will go or check it
-    /// against the protected list, so it must confirm by naming the backend and saying so.
-    /// A backend that implements [`Upgradable::list_orphans`] must not implement this —
-    /// the listable path previews, guards, and removes exactly what it showed.
-    async fn clean_orphans(&self, _sudo: bool) -> Result<()> {
-        Err(crate::core::Error::Unsupported("orphan removal".into()))
-    }
-
-    /// Whether [`Upgradable::clean_orphans`] would actually do something.
-    ///
-    /// The caller needs this before it asks the user, and asking the backend by *calling*
-    /// `clean_orphans` would perform the removal it is trying to get permission for.
-    fn has_native_orphan_removal(&self) -> bool {
-        false
     }
 
     /// Delete downloaded package archives and other caches. Frees disk and removes no

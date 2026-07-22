@@ -66,6 +66,12 @@ pub struct UvInstallable {
     pub core: Arc<UvBackendCore>,
 }
 
+fn tool_argv(subcommand: &str, name: &str) -> Vec<String> {
+    let mut args = vec!["tool".to_string(), subcommand.to_string()];
+    crate::core::argv::push_names(&mut args, "uv", [name]);
+    args
+}
+
 #[async_trait]
 impl Installable for UvInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
@@ -76,9 +82,11 @@ impl Installable for UvInstallable {
                 _ => spec.name.clone(),
             };
             info!("uv: Installing tool {}...", target);
+            let args = tool_argv("install", &target);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("uv", "uv", &["tool", "install", target.as_str()], false)
+                .run_exclusive("uv", "uv", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -87,9 +95,11 @@ impl Installable for UvInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("uv: Uninstalling tool {}...", name);
+            let args = tool_argv("uninstall", name);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("uv", "uv", &["tool", "uninstall", name.as_str()], false)
+                .run_exclusive("uv", "uv", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -222,5 +232,47 @@ ruff v0.2.1
     fn ignores_non_package_chatter() {
         assert!(UvQueryable::parse_list("No tools installed.").is_empty());
         assert!(UvQueryable::parse_list("").is_empty());
+    }
+
+    #[test]
+    fn the_tool_subcommand_precedes_the_terminator_and_the_name_follows_it() {
+        assert_eq!(tool_argv("install", "ruff"), ["tool", "install", "--", "ruff"]);
+        assert_eq!(
+            tool_argv("uninstall", "ruff==0.2.1"),
+            ["tool", "uninstall", "--", "ruff==0.2.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn install_and_remove_end_their_options_before_the_name() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(UvBackendCore::new(exec));
+
+        let spec = PackageSpec {
+            name: "ruff".into(),
+            backend: "uv".into(),
+            ..Default::default()
+        };
+        UvInstallable { core: core.clone() }
+            .install(&[spec], false)
+            .await
+            .unwrap();
+        UvInstallable { core: core.clone() }
+            .remove(&["ruff".to_string()], false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec!["uv tool install -- ruff", "uv tool uninstall -- ruff"]
+        );
     }
 }

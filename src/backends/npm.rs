@@ -55,6 +55,12 @@ pub struct NpmInstallable {
     pub core: Arc<NpmBackendCore>,
 }
 
+fn global_argv(subcommand: &str, name: &str) -> Vec<String> {
+    let mut args = vec![subcommand.to_string(), "-g".to_string()];
+    crate::core::argv::push_names(&mut args, "npm", [name]);
+    args
+}
+
 #[async_trait]
 impl Installable for NpmInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
@@ -64,9 +70,11 @@ impl Installable for NpmInstallable {
                 _ => spec.name.clone(),
             };
             info!("npm: Installing {} globally...", target);
+            let args = global_argv("install", &target);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("npm", "npm", &["install", "-g", &target], false)
+                .run_exclusive("npm", "npm", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -75,9 +83,11 @@ impl Installable for NpmInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("npm: Uninstalling {} globally...", name);
+            let args = global_argv("uninstall", name);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("npm", "npm", &["uninstall", "-g", name], false)
+                .run_exclusive("npm", "npm", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -166,10 +176,12 @@ impl Upgradable for NpmUpgradable {
         info!("npm: Upgrading all global packages...");
         let installed = self.core.list_installed_internal().await?;
         for pkg in installed {
+            let args = global_argv("install", &pkg.name);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             let _ = self
                 .core
                 .executor
-                .run_exclusive("npm", "npm", &["install", "-g", &pkg.name], false)
+                .run_exclusive("npm", "npm", &arg_refs, false)
                 .await;
         }
         Ok(())
@@ -201,4 +213,48 @@ pub fn register(
             .with_metadata_provider(core.clone())
             .build(),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::executor::MockExecutor;
+    use dashmap::DashMap;
+
+    #[test]
+    fn the_global_flag_precedes_the_terminator_and_the_name_follows_it() {
+        assert_eq!(global_argv("install", "cowsay"), ["install", "-g", "--", "cowsay"]);
+        assert_eq!(
+            global_argv("uninstall", "@scope/pkg"),
+            ["uninstall", "-g", "--", "@scope/pkg"]
+        );
+    }
+
+    #[tokio::test]
+    async fn install_and_remove_end_their_options_before_the_name() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let core = Arc::new(NpmBackendCore::new(exec));
+
+        let spec = PackageSpec {
+            name: "cowsay".into(),
+            backend: "npm".into(),
+            ..Default::default()
+        };
+        NpmInstallable { core: core.clone() }
+            .install(&[spec], false)
+            .await
+            .unwrap();
+        NpmInstallable { core: core.clone() }
+            .remove(&["cowsay".to_string()], false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec!["npm install -g -- cowsay", "npm uninstall -g -- cowsay"]
+        );
+    }
 }

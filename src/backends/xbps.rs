@@ -89,9 +89,12 @@ impl MetadataProvider for XbpsBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
         // `xbps-query -x <pkg>` lists run-time dependencies as version-constrained
         // patterns (e.g. `glibc>=2.36_1`); strip the constraint to the bare name.
+        let mut args = vec!["-x".to_string()];
+        crate::core::argv::push_names(&mut args, "xbps-query", [name]);
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let output = self
             .executor
-            .run_output("xbps-query", &["-x", name], false)
+            .run_output("xbps-query", &arg_refs, false)
             .await
             .unwrap_or_default();
         Ok(output
@@ -118,7 +121,11 @@ impl Installable for XbpsInstallable {
         // (mirrors the pacman/rolling stance), so `version` options are intentionally
         // ignored here rather than silently mis-encoded.
         let mut args = vec!["-Sy".to_string()];
-        args.extend(specs.iter().map(|s| s.name.clone()));
+        crate::core::argv::push_names(
+            &mut args,
+            "xbps-install",
+            specs.iter().map(|s| s.name.as_str()),
+        );
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         info!("XBPS: Installing {} package(s)...", specs.len());
@@ -134,7 +141,7 @@ impl Installable for XbpsInstallable {
             return Ok(());
         }
         let mut args = vec!["-y".to_string()];
-        args.extend(names.iter().cloned());
+        crate::core::argv::push_names(&mut args, "xbps-remove", names);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         info!("XBPS: Removing {} package(s)...", names.len());
@@ -184,10 +191,13 @@ pub struct XbpsSearchable {
 #[async_trait]
 impl Searchable for XbpsSearchable {
     async fn search(&self, query: &str) -> Result<Vec<Package>> {
+        let mut args = vec!["-Rs".to_string()];
+        crate::core::argv::push_names(&mut args, "xbps-query", [query]);
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let output = self
             .core
             .executor
-            .search_output("xbps-query", &["-Rs", query], false)
+            .search_output("xbps-query", &arg_refs, false)
             .await?;
         Ok(XbpsBackendCore::parse_search(&output))
     }
@@ -284,6 +294,68 @@ ii xbps-triggers-0.128_1    XBPS triggers for Void Linux
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "curl");
         assert_eq!(pkgs[1].name, "git");
+    }
+
+    #[tokio::test]
+    async fn every_xbps_binary_ends_its_options_before_the_names() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(XbpsBackendCore::new(exec));
+
+        let spec = PackageSpec {
+            name: "ripgrep".into(),
+            backend: "xbps".into(),
+            ..Default::default()
+        };
+        XbpsInstallable { core: core.clone() }
+            .install(&[spec], false)
+            .await
+            .unwrap();
+        XbpsInstallable { core: core.clone() }
+            .remove(&["ripgrep".to_string()], false)
+            .await
+            .unwrap();
+        XbpsSearchable { core: core.clone() }
+            .search("ripgrep")
+            .await
+            .ok();
+        core.get_dependencies("ripgrep").await.unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec![
+                "xbps-install -Sy -- ripgrep",
+                "xbps-remove -y -- ripgrep",
+                "xbps-query -Rs -- ripgrep",
+                "xbps-query -x -- ripgrep",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_removal_emits_no_terminator() {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        let core = Arc::new(XbpsBackendCore::new(exec));
+        XbpsInstallable { core: core.clone() }
+            .remove(&[], false)
+            .await
+            .unwrap();
+        assert!(mock.get_calls().await.is_empty());
     }
 
     #[test]

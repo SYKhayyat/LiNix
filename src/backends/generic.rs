@@ -79,12 +79,28 @@ pub enum ManualFormat {
     BareNames,
 }
 
+/// A dry run of the manager's own orphan verb, and how to read the names back out of it.
+///
+/// `apt-get autoremove --dry-run` prints `Remv libfoo1 [1.2-3]` per package; the prefix is
+/// what separates those lines from the summary counts and the "0 upgraded" line.
+#[derive(Debug, Clone)]
+pub struct OrphanDryRun {
+    /// Binary to run, when it is not the backend's own (apt's autoremove is `apt-get`).
+    pub binary: Option<String>,
+    pub args: Vec<String>,
+    pub removes_line_prefix: String,
+}
+
 /// Configuration for the Generic Manager Strategy.
 #[derive(Debug, Clone)]
 pub struct ManagerConfig {
     pub name: String,
     pub install_args: Vec<String>,
     pub remove_args: Vec<String>,
+    /// Args that also destroy the package's configuration (Debian's `purge`). `None` means
+    /// this manager draws no such distinction, and `--purge` on it is refused rather than
+    /// quietly doing an ordinary removal.
+    pub purge_args: Option<Vec<String>>,
     pub list_args: Vec<String>,
     pub manual: ManualListing,
     /// Optional: args (run with `list_binary`) that report the packages the OS treats as
@@ -107,9 +123,9 @@ pub struct ManagerConfig {
     pub list_binary: Option<String>,
     pub upgrade_args: Vec<String>,
     pub update_args: Option<Vec<String>>,
-    /// Native args for orphan/unused-dependency removal (e.g. apt `autoremove -y`).
-    /// `None` means the backend has no orphan concept → `clean_orphans` reports Unsupported.
-    pub orphan_args: Option<Vec<String>>,
+    /// How to ask the manager what its own orphan verb *would* remove, without removing it.
+    /// `None` means this manager cannot say, and a manager that cannot say does not remove.
+    pub orphan_dry_run: Option<OrphanDryRun>,
     pub repo_add_args: Option<Vec<String>>,
     pub repo_remove_args: Option<Vec<String>>,
     pub repo_list_args: Option<Vec<String>>,
@@ -246,20 +262,42 @@ impl Installable for GenericInstallable {
     }
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
-        if names.is_empty() {
-            return Ok(());
-        }
-
         // Some managers (e.g. Haskell's cabal/stack) genuinely have no uninstall verb.
         // An empty `remove_args` encodes that: report it honestly as Unsupported instead
         // of running the bare binary with just the package names, which would misbehave.
         if self.core.config.remove_args.is_empty() {
             return Err(crate::core::Error::Unsupported(self.core.name.clone()));
         }
+        self.run_removal(self.core.config.remove_args.clone(), names, sudo)
+            .await
+    }
 
-        let mut args: Vec<String> = self.core.config.remove_args.clone();
+    fn supports_purge(&self) -> bool {
+        self.core.config.purge_args.is_some()
+    }
+
+    async fn purge(&self, names: &[String], sudo: bool) -> Result<()> {
+        let Some(args) = self.core.config.purge_args.clone() else {
+            return Err(crate::core::Error::Unsupported(format!(
+                "{} has no purge — it does not keep a package's configuration apart from the                  package",
+                self.core.name
+            )));
+        };
+        self.run_removal(args, names, sudo).await
+    }
+}
+
+impl GenericInstallable {
+    async fn run_removal(
+        &self,
+        mut args: Vec<String>,
+        names: &[String],
+        sudo: bool,
+    ) -> Result<()> {
+        if names.is_empty() {
+            return Ok(());
+        }
         crate::core::argv::push_names(&mut args, &self.core.name, names);
-
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         if self.core.config.is_exclusive {
@@ -480,31 +518,19 @@ impl Upgradable for GenericUpgradable {
         Ok(())
     }
 
-    fn has_native_orphan_removal(&self) -> bool {
-        self.core.config.orphan_args.is_some()
-    }
-
-    async fn clean_orphans(&self, sudo: bool) -> Result<()> {
-        // If the backend declares native orphan-removal args, run them; otherwise be
-        // honest that it has no orphan concept (LSP) rather than silently succeeding.
-        match &self.core.config.orphan_args {
-            Some(args) => {
-                let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-                if self.core.config.is_exclusive {
-                    self.core
-                        .executor
-                        .run_exclusive(&self.core.name, &self.core.name, &arg_refs, sudo)
-                        .await?;
-                } else {
-                    self.core
-                        .executor
-                        .run(&self.core.name, &arg_refs, sudo)
-                        .await?;
-                }
-                Ok(())
-            }
-            None => Err(crate::core::Error::Unsupported(self.core.name.clone())),
-        }
+    async fn list_orphans(&self) -> Result<Vec<String>> {
+        let Some(dry) = &self.core.config.orphan_dry_run else {
+            return Err(crate::core::Error::Unsupported(self.core.name.clone()));
+        };
+        let args: Vec<&str> = dry.args.iter().map(String::as_str).collect();
+        let binary = dry.binary.as_deref().unwrap_or(&self.core.name);
+        let out = self.core.executor.run_output(binary, &args, false).await?;
+        Ok(out
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix(&dry.removes_line_prefix))
+            .filter_map(|rest| rest.split_whitespace().next())
+            .map(|n| n.to_string())
+            .collect())
     }
 }
 
@@ -645,7 +671,8 @@ mod tests {
                 list_binary: None,
                 upgrade_args: vec![],
                 update_args: None,
-                orphan_args: None,
+                purge_args: None,
+                orphan_dry_run: None,
                 repo_add_args: None,
                 repo_remove_args: None,
                 repo_list_args: None,
@@ -833,14 +860,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clean_orphans_reports_unsupported_without_orphan_args() {
-        // A generic backend with no `orphan_args` must report Unsupported (an honest,
-        // benign skip) instead of silently returning Ok — the LSP fix.
+    async fn list_orphans_reports_unsupported_without_a_dry_run() {
+        // A generic backend with no `orphan_dry_run` cannot say what its orphan verb would
+        // delete, so it reports Unsupported and never removes blind.
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
-        let core = Arc::new(apt_like_core(mock, vfs)); // apt_like_core sets orphan_args: None
+        let core = Arc::new(apt_like_core(mock, vfs)); // apt_like_core sets orphan_dry_run: None
         let up = GenericUpgradable { core };
-        match up.clean_orphans(true).await {
+        match up.list_orphans().await {
             Err(crate::core::Error::Unsupported(name)) => assert_eq!(name, "apt"),
             other => panic!("expected Unsupported, got {:?}", other),
         }

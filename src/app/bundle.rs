@@ -34,20 +34,23 @@ pub fn offline_fetch_command(
     name: &str,
     dest: &str,
 ) -> Option<(String, Vec<String>)> {
-    let v = |p: &str, a: &[&str]| {
-        Some((
-            p.to_string(),
-            a.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        ))
+    // The flags of the fetch command belong to the manager; the package name is a bare word
+    // that must not be read as one of them. So each invocation ends its options with `--`
+    // before the name — which also means a flag can never trail the name (pip's `-d <dest>`
+    // moves ahead of it here).
+    let v = |binary: &str, flags: &[&str], name: &str| {
+        let mut args: Vec<String> = flags.iter().map(|s| s.to_string()).collect();
+        crate::core::argv::push_names(&mut args, binary, [name]);
+        Some((binary.to_string(), args))
     };
     match backend {
-        "apt" => v("apt-get", &["download", name]), // downloads into the working dir
-        "dnf" => v("dnf", &["download", "--destdir", dest, name]),
-        "pip" | "pipx" => v("pip", &["download", name, "-d", dest]),
-        "npm" | "pnpm" | "yarn" | "bun" => v("npm", &["pack", name]), // into working dir
-        "brew" => v("brew", &["fetch", name]),
-        "pacman" => v("pacman", &["-Sw", "--noconfirm", name]),
-        "apk" => v("apk", &["fetch", name]),
+        "apt" => v("apt-get", &["download"], name), // downloads into the working dir
+        "dnf" => v("dnf", &["download", "--destdir", dest], name),
+        "pip" | "pipx" => v("pip", &["download", "-d", dest], name),
+        "npm" | "pnpm" | "yarn" | "bun" => v("npm", &["pack"], name), // into working dir
+        "brew" => v("brew", &["fetch"], name),
+        "pacman" => v("pacman", &["-Sw", "--noconfirm"], name),
+        "apk" => v("apk", &["fetch"], name),
         _ => None,
     }
 }
@@ -265,17 +268,36 @@ mod tests {
     fn offline_fetch_covers_common_backends() {
         assert_eq!(
             offline_fetch_command("apt", "curl", "/d"),
-            Some(("apt-get".into(), vec!["download".into(), "curl".into()]))
+            Some((
+                "apt-get".into(),
+                vec!["download".into(), "--".into(), "curl".into()]
+            ))
         );
+        // The name lands behind the terminator, with `-d <dest>` moved ahead of it so no flag
+        // trails the name.
         assert_eq!(
             offline_fetch_command("pip", "requests", "/d"),
             Some((
                 "pip".into(),
                 vec![
                     "download".into(),
-                    "requests".into(),
                     "-d".into(),
-                    "/d".into()
+                    "/d".into(),
+                    "--".into(),
+                    "requests".into()
+                ]
+            ))
+        );
+        assert_eq!(
+            offline_fetch_command("dnf", "curl", "/d"),
+            Some((
+                "dnf".into(),
+                vec![
+                    "download".into(),
+                    "--destdir".into(),
+                    "/d".into(),
+                    "--".into(),
+                    "curl".into()
                 ]
             ))
         );

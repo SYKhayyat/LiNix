@@ -59,6 +59,12 @@ pub struct PipxInstallable {
     pub core: Arc<PipxBackendCore>,
 }
 
+fn pipx_argv(subcommand: &str, name: &str) -> Vec<String> {
+    let mut args = vec![subcommand.to_string()];
+    crate::core::argv::push_names(&mut args, "pipx", [name]);
+    args
+}
+
 #[async_trait]
 impl Installable for PipxInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
@@ -69,9 +75,11 @@ impl Installable for PipxInstallable {
                 _ => spec.name.clone(),
             };
             info!("pipx: Installing {}...", target);
+            let args = pipx_argv("install", &target);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("pipx", "pipx", &["install", &target], false)
+                .run_exclusive("pipx", "pipx", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -80,9 +88,11 @@ impl Installable for PipxInstallable {
     async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
         for name in names {
             info!("pipx: Uninstalling {}...", name);
+            let args = pipx_argv("uninstall", name);
+            let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core
                 .executor
-                .run_exclusive("pipx", "pipx", &["uninstall", name], false)
+                .run_exclusive("pipx", "pipx", &arg_refs, false)
                 .await?;
         }
         Ok(())
@@ -173,4 +183,48 @@ pub fn register(
             .with_metadata_provider(core.clone())
             .build(),
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::executor::MockExecutor;
+    use dashmap::DashMap;
+
+    #[test]
+    fn the_subcommand_precedes_the_terminator_and_the_name_follows_it() {
+        assert_eq!(pipx_argv("install", "black"), ["install", "--", "black"]);
+        assert_eq!(
+            pipx_argv("uninstall", "black==24.1.0"),
+            ["uninstall", "--", "black==24.1.0"]
+        );
+    }
+
+    #[tokio::test]
+    async fn install_and_remove_end_their_options_before_the_name() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let core = Arc::new(PipxBackendCore::new(exec));
+
+        let spec = PackageSpec {
+            name: "black".into(),
+            backend: "pipx".into(),
+            ..Default::default()
+        };
+        PipxInstallable { core: core.clone() }
+            .install(&[spec], false)
+            .await
+            .unwrap();
+        PipxInstallable { core: core.clone() }
+            .remove(&["black".to_string()], false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            mock.get_calls().await,
+            vec!["pipx install -- black", "pipx uninstall -- black"]
+        );
+    }
 }
