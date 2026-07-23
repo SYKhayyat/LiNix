@@ -1143,6 +1143,22 @@ whatever it picks becomes the convention for macOS `defaults` too.
 question of what makes a vendored module safe to run once `exec:` exists. Building the
 convenient half first is how this ends badly.
 
+**7o — `firewall:` (Part XI, N1–N3 ruled 2026-07-23).** Approved to build, and it rides K17's
+adapter table rather than being five Rust backends — so it comes after that work, not before.
+Windows Defender Firewall and one Linux adapter (`ufw` or `firewalld`) are the first set; P7
+means Windows is not a later phase.
+
+**The session-port refusal is not a feature of this item, it is its precondition.** LiNix detects
+the port carrying the controlling connection and refuses any plan that would deny it — on every
+path that can close a port, which N1's ruling means includes `purge-unmanaged` and an unattended
+`watch` tick, **the more dangerous of the two, because nobody is there to read the refusal.**
+Building the backend before this check is building the lockout.
+
+**Exit:** one config opens the same port on a Windows box and a Linux box from one line; a rule
+changed out of band is reported by name rather than by file; a plan that would close the port
+carrying the session is refused naming the port and the rule, from `sync`, from
+`purge-unmanaged`, and from a `watch` tick.
+
 **7n — the dotfiles directory (XIII.21, U22–U25).** **Exit:** a file added under the dotfiles
 tree appears at its mirrored destination after one `sync` with no line written anywhere, a file
 deleted from the tree has its link removed by the same `extras_lock` teardown every other extra

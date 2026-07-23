@@ -883,6 +883,14 @@ Plan: install 30,207 · remove 0 · upgrade 3
 
 ## II.11 `purge-unmanaged`
 
+**`sync` is additive; `purge-unmanaged` is exclusive. This is the answer for every backend, and
+no backend gets its own** (owner ruling, 2026-07-23, N1). A thing LiNix declared and then stopped
+declaring is removed by `sync`, because the ledger knows LiNix put it there. A thing LiNix never
+declared is left alone by `sync` and removed by `purge-unmanaged` — packages, links, services,
+firewall rules, and whatever the next backend manages. **A backend that wants an exclusive mode
+of its own is asking for a second `purge-unmanaged`**, which is the two-of-everything failure
+wearing a new name; the opt-in already exists and is this command.
+
 - **The guard is a RATIO, not a count:**
   ```
   LiNix manages 3 packages.

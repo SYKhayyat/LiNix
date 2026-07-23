@@ -42,7 +42,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-### Open, and blocking — 17
+### Open, and blocking — 14
 
 | | question | feature |
 |---|---|---|
@@ -50,9 +50,6 @@ status loses that, so it is kept here:
 | **D5** | A `.deb` installed by `github:` — does apt own it or does LiNix? | artifacts |
 | **K2** | What is `rebuild`'s default scope? Is a bare `linix rebuild` an error? | rebuild |
 | **K4** | Is `clean_cache_on_remove` every backend, or only the ones whose file LiNix knows? | rebuild |
-| **N1** | Is a declared perimeter exclusive (undeclared rules are drift) or additive? | firewall |
-| **N2** | What happens when the change would close the SSH session running it? | firewall |
-| **N3** | Which adapters ship — and is one adapter enough to justify the backend at all? | firewall |
 | **U1** | Where does a custom backend definition live — the repo, or machine-local? | next |
 | **U3** | What does removing an `exec:` line mean when a script has no inverse? | next |
 | **U9** | Do the ten status commands collapse into one `linix check`? | next |
@@ -108,10 +105,13 @@ status loses that, so it is kept here:
 because the category refills on its own: it is what happens whenever a recommendation gets
 implemented before anyone rules on it.
 
-### Answered — 39
+### Answered — 42
 
 | | question | feature |
 |---|---|---|
+| **N1** | Is a declared perimeter exclusive (undeclared rules are drift) or additive? | firewall |
+| **N2** | What happens when the change would close the SSH session running it? | firewall |
+| **N3** | Which adapters ship — and is one adapter enough to justify the backend at all? | firewall |
 | **T1** | `backup_once` leaves a plaintext copy of the previous secret forever. | secrets |
 | **T2** | Nothing stops `@target=` writing a plaintext secret back inside the git repo. | secrets |
 | **T5** | Is the plaintext 0600 at creation, or chmod'd after? And on Windows? | secrets |
@@ -222,50 +222,6 @@ artifact?** LiNix knows the file for `github:`/`web:`/`appimage:` (it is in `loc
 or pacman it needs a new per-backend capability. *Recommendation:* download-backends only,
 documented as such in the key's own description — a preference that silently does nothing on
 most backends is worse than a narrower one that is honest.
-
----
-
-## N1
-
-**Status: OPEN — blocking.**
-
-**In the tree today:** Nothing. No firewall code exists in `src/`.
-
-**N1 — Is the declared perimeter exclusive?** *This is the whole feature.* Additive means the
-lines say "these rules exist" and anything else a human added survives. Exclusive means they say
-"these rules and no others", and an undeclared rule is drift to be removed — which is what
-"instantly detecting and purging any unauthorised out-of-band changes" asks for, and is the only
-version that makes the perimeter a fact rather than a floor. It is also the version that deletes
-the rule someone added for a reason nobody wrote down. *Recommendation:* exclusive, because an
-additive firewall answers no question worth asking, **but only with N2 answered and only behind
-`purge-unmanaged`'s existing opt-in shape** (II.11) rather than on by default in `sync`.
-
----
-
-## N2
-
-**Status: OPEN — blocking.**
-
-**In the tree today:** Nothing. No firewall code exists in `src/`.
-
-**N2 — What does LiNix do when the change would close the session it is running over?** A
-confirmation prompt cannot work: the prompt travels over the connection the change severs.
-*Recommendation:* refuse. Detect the port of the controlling connection, and refuse any plan
-that would deny it, naming the port and the rule — overridable only by a flag that says the
-user has console access. Building this feature without this check is building the lockout.
-
----
-
-## N3
-
-**Status: OPEN — blocking.**
-
-**In the tree today:** Nothing. No firewall code exists in `src/`.
-
-**N3 — Which adapters ship, and does one adapter justify the backend?** XI.2 says the backend
-earns its place across firewalls and not within one. *Recommendation:* it is not worth starting
-below two adapters plus Windows; if only `ufw` is in reach, document the `link:` pair and close
-this part.
 
 ---
 
@@ -851,6 +807,106 @@ both, which is II.7 rule 5 reached by a new road rather than a new rule.
 ---
 
 # Answered
+
+## N1
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** Nothing. No firewall code exists in `src/`.
+
+**N1 — Is the declared perimeter exclusive?** *This is the whole feature.* Additive means the
+lines say "these rules exist" and anything else a human added survives. Exclusive means they say
+"these rules and no others", and an undeclared rule is drift to be removed — which is what
+"instantly detecting and purging any unauthorised out-of-band changes" asks for, and is the only
+version that makes the perimeter a fact rather than a floor. It is also the version that deletes
+the rule someone added for a reason nobody wrote down. *Recommendation:* exclusive, because an
+additive firewall answers no question worth asking, **but only with N2 answered and only behind
+`purge-unmanaged`'s existing opt-in shape** (II.11) rather than on by default in `sync`.
+
+**RULED (owner, 2026-07-23): the firewall does not get its own answer. `sync` is additive and
+`purge-unmanaged` is exclusive, as always.**
+
+The question was framed as a choice about firewalls and it is not one — **it is the model's
+existing split, applied to a new backend**, and the right answer to *"is my declaration
+exclusive?"* is the same for every backend that ever asks it. The three cases, spelled out
+because the framing hid that they were already decided:
+
+| the rule | who made it | `sync` | `purge-unmanaged` |
+|---|---|---|---|
+| declared, and present | you, in a file | left alone | left alone |
+| declared once, now undeclared | LiNix, and the declaration is gone | **removed** — it is in the extras ledger | removed |
+| never declared, added out of band | a human at 2am | **left alone** | **removed** |
+
+**This deletes the special shape the recommendation proposed.** There is no "exclusive mode
+behind an opt-in": `purge-unmanaged` *is* the opt-in, it already exists, and inventing a
+firewall-shaped version of it would have been a second implementation of the one question this
+model answers once.
+
+**Recorded in II.11, with its reason in V.63**, because it is a general rule about the two
+commands and not a fact about firewalls — and because the question could only be asked in the
+first place by someone who could not find it written down.
+
+**It also narrows N7.** "Does `watch` revert firewall drift" no longer means "does it purge
+rules nobody declared" — it cannot, that is `purge-unmanaged`'s job now. It means only: when a
+rule **LiNix owns** is changed out of band, does an unattended tick put it back? That is a
+smaller question and a sharper one, because putting a rule back can close a port somebody opened
+at 2am to fix something, with nobody there to read about it (N2).
+
+---
+
+## N2
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** Nothing. No firewall code exists in `src/`.
+
+**N2 — What does LiNix do when the change would close the session it is running over?** A
+confirmation prompt cannot work: the prompt travels over the connection the change severs.
+*Recommendation:* refuse. Detect the port of the controlling connection, and refuse any plan
+that would deny it, naming the port and the rule — overridable only by a flag that says the
+user has console access. Building this feature without this check is building the lockout.
+
+**RULED (owner, 2026-07-23): refuse, and detect the port rather than asking.** A confirmation
+cannot work — the prompt travels over the connection the change severs. LiNix detects the port
+carrying the controlling connection and refuses any plan that would deny it, naming the port and
+the rule that would close it. The only override is a flag asserting console access.
+
+**This check binds every path that can close a port, not just `sync`.** N1's ruling means
+`purge-unmanaged` can close one, and a `watch` tick reconciling a rule LiNix owns can close one
+while nobody is watching — **which is the more dangerous of the two, because nobody is there to
+read the refusal.** A check on one command is a check on nothing; this is II.10's rule about the
+guard, reached by a new road.
+
+---
+
+## N3
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** Nothing. No firewall code exists in `src/`.
+
+**N3 — Which adapters ship, and does one adapter justify the backend?** XI.2 says the backend
+earns its place across firewalls and not within one. *Recommendation:* it is not worth starting
+below two adapters plus Windows; if only `ufw` is in reach, document the `link:` pair and close
+this part.
+
+**RULED (owner, 2026-07-23): build it — and the reason the answer changed is K17.**
+
+The entry's own position was that below two adapters plus Windows the honest recommendation is
+to build nothing and document the `link:`+`service:` pair instead. **That argument was entirely
+about cost per adapter, and K17 changed the cost.** Adapters are a declarable table with the
+built-ins as rows in it, so five firewalls are five rows rather than five Rust backends, and
+XIII.12's field split already showed `firewall:22/tcp` working from six lines of TOML.
+
+**Windows Defender Firewall is in the first set**, not a later platform phase — P7, and the
+owner's daily machine. A Linux adapter (`ufw` or `firewalld`) is the other.
+
+**What does not change is XI.2's honesty about the alternative.** The `link:`+`service:` pair
+still works and is still the right answer for someone with one machine and one firewall; what
+the backend buys is one spelling across several, per-rule drift instead of per-file, and
+read-before-write.
+
+---
 
 ## T1
 

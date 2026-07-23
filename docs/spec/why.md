@@ -853,5 +853,29 @@ rather than the harness. So the rule is symmetric: every check is called where i
 apply, or it is deleted, and the choice between wiring and deleting is made deliberately per
 check rather than left to whoever greps next.
 
+**V.63 — Why `sync` is additive and `purge-unmanaged` is exclusive, for every backend.**
+*(Owner ruling 2026-07-23, N1; the rule was always true and had never been written.)*
+
+The firewall proposal asked whether a declared perimeter is exclusive — whether a rule LiNix
+never declared counts as drift. It is a reasonable question and it should not have been askable:
+**the model answered it years of decisions ago, for every backend at once, and nobody had put
+the sentence anywhere a reader could find it.**
+
+The split is what makes LiNix safe to point at a machine that already has software on it. `sync`
+only ever removes what the ledger says LiNix put there, which is why running it on an unadopted
+box does not empty it. `purge-unmanaged` removes what LiNix did not declare, which is why it
+carries a ratio guard, a full listing and a snapshot — it is the one command whose whole job is
+acting on things LiNix does not own.
+
+**The bug this prevents is a second `purge-unmanaged` per backend.** A backend that ships its own
+exclusive mode has re-implemented that command with none of its protections: no ratio check
+noticing you have not adopted the machine, no listing, no snapshot, and a different opt-in for
+the user to learn. It would also make the answer to *"will this delete something I made by
+hand?"* depend on which backend the line happened to name — which is the two-of-everything
+failure at the level of a promise rather than a function.
+
+So: **a backend does not decide its own exclusivity.** If a new backend seems to need an
+exclusive mode, the thing it needs is `purge-unmanaged` to learn about its resources.
+
 ---
 

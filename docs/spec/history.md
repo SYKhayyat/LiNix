@@ -62,6 +62,30 @@ now empty. Twelve were confirmed as built. Three were not:
   refused by a constant — the exact patch-one-line-leave-the-sibling failure `CLAUDE.md` names,
   which the first draft of this ruling had walked straight back into.
 
+### The firewall, approved — and N1 turned out not to be a firewall question
+
+**N1, N2, N3 ruled; N4–N7 still open.** The useful part is N1. It was written as *"is a declared
+perimeter exclusive or additive"* and offered as the feature's central choice. The owner's answer
+was that **it is not a firewall question at all: `sync` is additive and `purge-unmanaged` is
+exclusive, as always** — the model's existing split, applied to a new backend, and the same
+answer for every backend that will ever ask.
+
+**The rule was true the whole time and had never been written down anywhere.** That is why the
+question could be asked, and why answering it produced two edits rather than one: **II.11** now
+states it, and **V.63** records the bug it prevents — a backend shipping its own exclusive mode
+has re-implemented `purge-unmanaged` without its ratio guard, its listing, or its snapshot.
+
+**N3's answer changed because of a ruling made an hour earlier.** The entry argued that below two
+adapters the honest recommendation was to build nothing, and that argument was entirely about
+cost per adapter. **K17 changed the cost** — adapters are a declarable table, so five firewalls
+are five rows, not five Rust backends. The revised recommendation was put to the owner *as* a
+change of position rather than presented as if it had always been the answer.
+
+**N1 also narrowed N7 without anyone deciding N7.** "Does `watch` revert firewall drift" can no
+longer mean "does it purge rules nobody declared" — that is `purge-unmanaged`'s job. It now means
+only: when a rule LiNix owns is changed out of band, does an unattended tick put it back? Which
+can close a port somebody opened at 2am, with nobody there to read the refusal.
+
 ### The secrets batch, and a recorded defect whose stated mechanism was false
 
 **T1, T2 and T5 ruled; T6 and T7 opened.** T1 is the one worth recording, because checking it
