@@ -32,11 +32,11 @@ That indirection is what lets one repo describe several machines — see [Profil
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/SYKhayyat/linix/HEAD/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/SYKhayyat/LiNix/HEAD/scripts/install.sh | sh
 ```
 
 ```powershell
-irm https://raw.githubusercontent.com/SYKhayyat/linix/HEAD/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/SYKhayyat/LiNix/HEAD/scripts/install.ps1 | iex
 ```
 
 Either script installs the binary, runs `linix doctor`, and offers to `adopt` the packages

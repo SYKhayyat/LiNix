@@ -1334,7 +1334,7 @@ the whole-sync kind, which modules cannot express. See II.12.)*
 
 ## II.18 The version, and the way in (V.58)
 
-**The repo is `github.com/SYKhayyat/linix`.** Everything that names a source names that — the
+**The repo is `github.com/SYKhayyat/LiNix`.** Everything that names a source names that — the
 two install scripts, the README's one-liner, the release job.
 
 **The version is `0.1.0`, because nothing has been released.** The tree carried `6.0.0` while
@@ -3442,7 +3442,7 @@ commit that last touched this section: `cargo build --all-targets` clean, `cargo
   non-empty config unless `--force`; end-to-end proof runs without git.
 - **teleport PKG BACKEND** — built (owner-ruled); rewrites the line in place, syncs, no second
   copy left behind.
-- **V.58 — `0.1.0`, `SYKhayyat/linix` everywhere, `migrate`→`adopt` in the install scripts,
+- **V.58 — `0.1.0`, `SYKhayyat/LiNix` everywhere, `migrate`→`adopt` in the install scripts,
   `full-test.ps1`/`verify.ps1` deleted.** **Still owed:** the branch is not pushed — the first
   push is what makes IV.2's CI real and fires the release job, and it is the owner's to make.
 - **V.57 — partial.** `FAST` (declared, never read) is deleted everywhere; CI now runs the fast
@@ -3516,7 +3516,7 @@ sweep **61/0/0**, re-run against this tree and matching session 9 exactly. What 
 - **`0.1.0`.** Nothing has been released, so `6.0.0` was a count of internal rewrites answering a
   question about what a user has. The rewrite keeps the name **v7** in Part VII and the
   CHANGELOG; that is a codename, not a version.
-- **The repo is `github.com/SYKhayyat/linix`** — renamed, and confirmed resolving. The local
+- **The repo is `github.com/SYKhayyat/LiNix`** — renamed, and confirmed resolving. The local
   `origin` still says `Nexus` (GitHub redirects, so nothing broke loudly) and both install
   scripts still say `OWNER/linix`, which never resolved at all.
 - **`migrate` → `adopt` in both install scripts.** II.17 has listed `migrate` as deleted since

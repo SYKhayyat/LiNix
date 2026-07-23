@@ -1,12 +1,12 @@
 # LiNix bootstrap installer for Windows — the 30-second first run.
 #
-#   irm https://raw.githubusercontent.com/SYKhayyat/linix/HEAD/scripts/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/SYKhayyat/LiNix/HEAD/scripts/install.ps1 | iex
 #
 # Installs the `linix` binary, runs a health check, and offers to adopt the packages already
 # on this machine. Override with env vars: $env:LINIX_REPO, $env:LINIX_NO_ADOPT.
 $ErrorActionPreference = 'Stop'
 
-$repo = if ($env:LINIX_REPO) { $env:LINIX_REPO } else { 'https://github.com/SYKhayyat/linix' }
+$repo = if ($env:LINIX_REPO) { $env:LINIX_REPO } else { 'https://github.com/SYKhayyat/LiNix' }
 
 function Say($m) { Write-Host "linix " -ForegroundColor Cyan -NoNewline; Write-Host $m }
 function Err($m) { Write-Host "linix " -ForegroundColor Red  -NoNewline; Write-Host $m }

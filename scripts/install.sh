@@ -1,16 +1,16 @@
 #!/bin/sh
 # LiNix bootstrap installer — the 30-second first run.
 #
-#   curl -fsSL https://raw.githubusercontent.com/SYKhayyat/linix/HEAD/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/SYKhayyat/LiNix/HEAD/scripts/install.sh | sh
 #
 # It installs the `linix` binary, runs a health check, and offers to adopt the packages
 # already on this machine into a LiNix manifest. Override defaults with env vars:
-#   LINIX_REPO      git source           (default: the SYKhayyat/linix repo)
+#   LINIX_REPO      git source           (default: the SYKhayyat/LiNix repo)
 #   LINIX_BIN_DIR   install location     (default: cargo's bin dir)
 #   LINIX_NO_ADOPT  set to skip the `adopt` prompt
 set -eu
 
-REPO="${LINIX_REPO:-https://github.com/SYKhayyat/linix}"
+REPO="${LINIX_REPO:-https://github.com/SYKhayyat/LiNix}"
 
 say() { printf '\033[1;36mlinix\033[0m %s\n' "$1"; }
 err() { printf '\033[1;31mlinix\033[0m %s\n' "$1" >&2; }

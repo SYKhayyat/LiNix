@@ -244,7 +244,7 @@ async fn main() -> Result<()> {
 fn self_upgrade_repo(git: Option<&str>) -> String {
     git.map(|s| s.to_string())
         .or_else(|| std::env::var("LINIX_REPO").ok())
-        .unwrap_or_else(|| "https://github.com/SYKhayyat/linix".to_string())
+        .unwrap_or_else(|| "https://github.com/SYKhayyat/LiNix".to_string())
 }
 
 async fn cargo_install_from(repo: &str, locked: bool) -> std::io::Result<std::process::ExitStatus> {
