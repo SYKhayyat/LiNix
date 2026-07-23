@@ -1,4 +1,4 @@
-# The decision register — all 89, and which are answered
+# The decision register — all 91, and which are answered
 
 **One file, six features.** Every decision this design forces lives here, with its status. The
 registers used to sit at the tail of six proposal parts and **none of them recorded whether they
@@ -42,7 +42,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-### Open, and blocking — 18
+### Open, and blocking — 17
 
 | | question | feature |
 |---|---|---|
@@ -53,8 +53,6 @@ status loses that, so it is kept here:
 | **N1** | Is a declared perimeter exclusive (undeclared rules are drift) or additive? | firewall |
 | **N2** | What happens when the change would close the SSH session running it? | firewall |
 | **N3** | Which adapters ship — and is one adapter enough to justify the backend at all? | firewall |
-| **T1** | `backup_once` writes the previous secret to a world-readable file. Fix it how? | secrets |
-| **T2** | Nothing stops `@target=` writing a plaintext secret back inside the git repo. | secrets |
 | **U1** | Where does a custom backend definition live — the repo, or machine-local? | next |
 | **U3** | What does removing an `exec:` line mean when a script has no inverse? | next |
 | **U9** | Do the ten status commands collapse into one `linix check`? | next |
@@ -64,11 +62,13 @@ status loses that, so it is kept here:
 | **U23** | What happens when a dotfile destination already holds the user's own file? | next |
 | **U24** | Is a `.age` file inside the dotfiles tree a secret to decrypt? | next |
 | **U26** | Is BSD supported, and what does `when family` answer there? | next |
+| **T6** | Must there be a way to opt out of `backup_once`, or bound how many pile up? | secrets |
 
 ### Open, not blocking — 33
 
 | | question | feature |
 |---|---|---|
+| **T7** | Runtime injection of secrets into process memory — reopened. | secrets |
 | **D8** | May a `when` block appear inside an options body? | artifacts |
 | **D11** | The default format order is detected, so a LiNix upgrade can silently change it. | artifacts |
 | **D12** | Network, GitHub rate limits, and whether `sync` works on a plane. | artifacts |
@@ -85,7 +85,6 @@ status loses that, so it is kept here:
 | **N7** | Does `watch` revert firewall drift unattended, or only report it? | firewall |
 | **T3** | What does a missing hardware token look like — prompt, hang, or error? | secrets |
 | **T4** | May an unattended `watch` tick decrypt with a touch-required key? | secrets |
-| **T5** | Is the plaintext 0600 at creation, or chmod'd after? What about Windows? | secrets |
 | **U2** | Is a custom backend a full peer of a built-in (repos, orphans, dependencies)? | next |
 | **U4** | Is `exec:` a licence to put a shell script where a backend belongs? | next |
 | **U6** | Does this document mark its Linux-only guarantees (snapshots, rollback)? | next |
@@ -109,10 +108,13 @@ status loses that, so it is kept here:
 because the category refills on its own: it is what happens whenever a recommendation gets
 implemented before anyone rules on it.
 
-### Answered — 36
+### Answered — 39
 
 | | question | feature |
 |---|---|---|
+| **T1** | `backup_once` leaves a plaintext copy of the previous secret forever. | secrets |
+| **T2** | Nothing stops `@target=` writing a plaintext secret back inside the git repo. | secrets |
+| **T5** | Is the plaintext 0600 at creation, or chmod'd after? And on Windows? | secrets |
 | **K17** | How does `setting:` reach a store nobody wrote an adapter for? | rebuild |
 | **D2** | How is a format recognised from a filename? — built as extension match plus `binary`. | artifacts |
 | **K5** | A level-3 reset with a config repo — built as refuse unless `--force`. | rebuild |
@@ -267,39 +269,6 @@ this part.
 
 ---
 
-## T1
-
-**Status: OPEN — blocking.**
-
-**In the tree today:** **Still live.** `link.rs:319` calls `backup_once` on the managed-content write path that mode D uses; `:172` is the copy. The 0600 at `:285` is applied to the target only.
-
-**T1 — `backup_once` copies the previous secret to a world-readable file.** `link.rs:319` and
-`:154` run for every managed-content write, including mode D: if the target already holds a
-secret, LiNix copies it to `<target>.linix-backup` before overwriting — with default umask
-permissions, and with no `.linix-backup` in any ignore file. The 0600 at `:285` is applied to the
-target only. *Recommendation:* mode D never backs up. The point of `backup_once` is that a user
-is not silently robbed of a config file they hand-wrote; a secret LiNix itself wrote a moment ago
-is not that, and the backup is a plaintext credential in a predictable path nobody will think to
-delete. **This is a defect in shipped code, not a design question — but it is recorded here
-rather than fixed silently, per rule 4.**
-
----
-
-## T2
-
-**Status: OPEN — blocking.**
-
-**In the tree today:** **Still live.** Nothing in `link.rs` compares the resolved `@target=` against the config root.
-
-**T2 — Nothing stops `@target=` from pointing back into the config repo.** A
-`link:./secrets/token.age@target=./secrets/token@decrypt=age` writes the plaintext next to the
-ciphertext, inside git, and the next `sync` commits it. *Recommendation:* refuse a `@target=`
-that resolves inside the config root when `@decrypt` is set — the check is cheap, the failure is
-unrecoverable (a secret in git history is a rotated secret), and X.5's promise that a backup is
-safe to hand to someone depends on it holding.
-
----
-
 ## U1
 
 **Status: OPEN — blocking.**
@@ -446,7 +415,68 @@ drives (`pkgin` is registered today).
 
 ---
 
+## T6
+
+**Status: OPEN — blocking.**
+
+**In the tree today:** `backup_once` (`link.rs:172`) has **no opt-out and no bound of any kind
+beyond one-per-target.** It never clobbers an existing backup, so a target accumulates exactly
+one — and `remove` (`link.rs:369`) does not delete or restore it, so that one is permanent.
+
+**T6 — There must be a way to opt out of the backup, or to limit how many accumulate (owner
+request, 2026-07-23).** Raised while ruling T1, and **it is not a secrets question** — every
+`link:` managed-content write calls `backup_once`, so this governs ordinary config files too.
+Four things need answering and they are not the same question:
+
+1. **The opt-out's shape.** A per-line `@backup=no` says it where the exception is, at the cost
+   of an option key on every `link:` line. A `preferences.toml` key says it once for the machine
+   and cannot express *"this one file, not the others"*. Both is two mechanisms for one question.
+2. **What "limit amounts" means, given it is already one per target.** The accumulation is across
+   *targets*, not within one — forty linked files means up to forty orphaned backups. So the
+   candidates are an age (delete a backup older than N days), a command that lists and clears
+   them, or a rule tying the backup's life to the declaration's.
+3. **Does removing the `link:` line remove the backup, restore it, or leave it?** Today: leave
+   it, and that is almost certainly wrong. **Restoring it is the shape every other extra
+   already has** — `extras_lock` undoes what a declaration did — and it is the answer that makes
+   the backup a rollback rather than a leak.
+4. **Is there a command to see them at all?** They are invisible to `check` because they are not
+   managed, which means the one thing standing between a user and forty stale plaintexts is
+   remembering the file-naming convention.
+
+*Recommendation:* per-line `@backup=no` **and** removal restoring the backup (3), which together
+answer 1 and 2 without a retention policy: a backup that is put back when the declaration goes
+does not accumulate, and the line that wants no backup says so. A `linix` command to list orphaned
+backups then covers the case where the user deleted the line before this existed.
+
+---
+
 # Open, not blocking
+
+## T7
+
+**Status: OPEN.**
+
+**In the tree today:** nothing. `app/run.rs:138` is the only place LiNix is in a process's launch
+path at all.
+
+**T7 — Runtime injection of secrets into process memory: REOPENED for discussion (owner,
+2026-07-23).** XII.2 ruled this out on 2026-07-23 and told the reader not to re-open it; **the
+owner has since said the conversation stays open**, so the refusal is downgraded to a question
+and XII.2 is amended to say so. The reasoning that produced the refusal is not withdrawn and is
+the thing to argue with:
+
+- **It asks LiNix to be a supervisor.** For a credential never to touch disk, LiNix must be in
+  the launch path of every program that reads one. That is `systemd`'s `LoadCredential`, a
+  `direnv`, or a secrets agent — three things that already exist and that LiNix is not.
+- **The half-measure is worse than either end.** Injecting only into children of `linix run`
+  protects exactly the processes LiNix starts and none of the ones that actually read
+  `~/.npmrc`, while reading as though it protected both.
+- **The bar the original ruling set:** a use case that lives entirely inside `linix run`. That is
+  still the sharpest question to answer first — **what program, run how, needs the secret?**
+
+*No recommendation.* The refusal was argued; what has not been heard is the case for it.
+
+---
 
 ## D8
 
@@ -629,18 +659,6 @@ identity file rather than passing the plugin's own text through.
 **T4 — May an unattended `watch` tick decrypt?** A touch-required key turns a background
 reconcile into a silent block. *Recommendation:* `watch` skips `@decrypt` lines whose identity
 is a plugin stub and says so once, rather than hanging.
-
----
-
-## T5
-
-**Status: OPEN.**
-
-**T5 — Is the plaintext 0600 at creation, or after?** Today `write_atomic` creates under the
-umask and `set_permissions` follows (`link.rs:285-292`). The window is small and local, and on
-Windows there is no restriction at all. *Recommendation:* create restricted rather than
-chmod after, and on Windows either set an ACL or say plainly in the docs that mode D gives the
-file no special protection there — the second is acceptable, silence is not.
 
 ---
 
@@ -833,6 +851,84 @@ both, which is II.7 rule 5 reached by a new road rather than a new rule.
 ---
 
 # Answered
+
+## T1
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** **Still live.** `link.rs:319` calls `backup_once` on the managed-content write path that mode D uses; `:172` is the copy. The 0600 at `:285` is applied to the target only.
+
+**T1 — `backup_once` copies the previous secret to a world-readable file.** `link.rs:319` and
+`:154` run for every managed-content write, including mode D: if the target already holds a
+secret, LiNix copies it to `<target>.linix-backup` before overwriting — with default umask
+permissions, and with no `.linix-backup` in any ignore file. The 0600 at `:285` is applied to the
+target only. *Recommendation:* mode D never backs up. The point of `backup_once` is that a user
+is not silently robbed of a config file they hand-wrote; a secret LiNix itself wrote a moment ago
+is not that, and the backup is a plaintext credential in a predictable path nobody will think to
+delete. **This is a defect in shipped code, not a design question — but it is recorded here
+rather than fixed silently, per rule 4.**
+
+**CORRECTED 2026-07-23, before the ruling — two of the three facts above are false, and the real
+defect is worse than the one recorded.** Read from the code rather than from the sentence:
+
+- **The backup is not written under the default umask.** `link.rs:203` uses `tokio::fs::copy`,
+  which copies the source file's permission bits. A `0600` original produces a `0600` backup.
+- **`.linix-backup` is not absent from every ignore file.** `core/git.rs:169` writes
+  `*.linix-backup` into the config repo's `.gitignore` at `linix git init`. It only covers
+  backups that land *inside* the repo, which is T2's case, but the claim as written is wrong.
+- **What is actually true, and was not recorded: nothing ever removes the backup.** `remove`
+  (`link.rs:369`) deletes the target and leaves `<target>.linix-backup` untouched, and
+  `backup_once` refuses to clobber an existing one. So a decrypted credential's predecessor
+  **survives the declaration being deleted, and survives forever.** No command lists them, no
+  command cleans them, and the file is invisible to `check` because it is not managed.
+
+**RULED (owner, 2026-07-23): decrypt mode never backs up.** The point of `backup_once` is that a
+user is not silently robbed of a config file they hand-wrote. A secret is not that, and a
+plaintext credential in a predictable path that nothing will ever delete is a worse outcome than
+the one the backup exists to prevent.
+
+---
+
+## T2
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** **Still live.** Nothing in `link.rs` compares the resolved `@target=` against the config root.
+
+**T2 — Nothing stops `@target=` from pointing back into the config repo.** A
+`link:./secrets/token.age@target=./secrets/token@decrypt=age` writes the plaintext next to the
+ciphertext, inside git, and the next `sync` commits it. *Recommendation:* refuse a `@target=`
+that resolves inside the config root when `@decrypt` is set — the check is cheap, the failure is
+unrecoverable (a secret in git history is a rotated secret), and X.5's promise that a backup is
+safe to hand to someone depends on it holding.
+
+**RULED (owner, 2026-07-23): refuse a `@target=` that resolves inside the config root when
+`@decrypt` is set.** The check is cheap and the failure it prevents is unrecoverable — a secret
+in git history is a rotated secret. X.5's promise that a `bundle` is safe to hand to someone
+depends on this holding, and `core/git.rs:169`'s `*.linix-backup` ignore line does not cover it:
+the plaintext target is not named `.linix-backup`.
+
+---
+
+## T5
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**T5 — Is the plaintext 0600 at creation, or after?** Today `write_atomic` creates under the
+umask and `set_permissions` follows (`link.rs:285-292`). The window is small and local, and on
+Windows there is no restriction at all. *Recommendation:* create restricted rather than
+chmod after, and on Windows either set an ACL or say plainly in the docs that mode D gives the
+file no special protection there — the second is acceptable, silence is not.
+
+**RULED (owner, 2026-07-23): create restricted, and Windows gets a real answer rather than
+silence.** The plaintext is created with its final permissions rather than created under the
+umask and chmod'd afterwards.
+
+**On Windows the file gets an ACL or the documentation says plainly that it does not.** Silence
+is not acceptable — this is the owner's daily platform, and an unqualified *"the plaintext is
+0600"* that holds on one of three platforms is P3's failure written as prose.
+
+---
 
 ## K17
 

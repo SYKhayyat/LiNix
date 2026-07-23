@@ -1148,9 +1148,25 @@ tree appears at its mirrored destination after one `sync` with no line written a
 deleted from the tree has its link removed by the same `extras_lock` teardown every other extra
 uses, and a destination LiNix did not create is refused by name rather than replaced.
 
-**Two open bugs gate nothing but should not wait for a phase (VI.2):** **T1** (the decrypt
-backup leaks the previous secret) and **T2** (nothing stops a secret being written into the git
-repo). Both are small, both are live, and both are in shipped code.
+**The three decrypt-mode defects, all ruled 2026-07-23, all live in shipped code (VI.2):**
+
+- **T1 — decrypt mode never backs up.** `apply_managed_content` must not call `backup_once` when
+  `@decrypt` is set. **The recorded reason for T1 was wrong and the real one is worse:** the copy
+  preserves the original's permission bits (`link.rs:203`), and `*.linix-backup` *is* in the
+  repo's gitignore (`core/git.rs:169`) — but **nothing ever deletes the backup.** `remove`
+  (`link.rs:369`) drops the target and leaves it, and `backup_once` will not overwrite it, so a
+  credential's predecessor outlives the declaration permanently. **Exit:** a decrypt line whose
+  target already exists writes no `.linix-backup`, and a test asserts the absence by path.
+- **T2 — a `@target=` inside the config root is refused when `@decrypt` is set.** **Exit:** the
+  line errors naming both paths before anything is written; the same target without `@decrypt`
+  still works.
+- **T5 — the plaintext is created restricted, not chmod'd after.** On Windows it gets an ACL, or
+  the documentation says plainly that it gets no protection there. **Exit:** no window exists in
+  which the file is readable and not yet restricted; the Windows behaviour is stated somewhere a
+  user reads, whichever way it goes.
+
+**T6 blocks none of these and should be settled before the first one lands** — if removing a
+declaration restores its backup, T1's fix is smaller than it looks.
 
 **Owed by the rulings of 2026-07-23, small and each independent of a phase:**
 

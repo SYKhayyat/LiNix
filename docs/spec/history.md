@@ -62,6 +62,36 @@ now empty. Twelve were confirmed as built. Three were not:
   refused by a constant — the exact patch-one-line-leave-the-sibling failure `CLAUDE.md` names,
   which the first draft of this ruling had walked straight back into.
 
+### The secrets batch, and a recorded defect whose stated mechanism was false
+
+**T1, T2 and T5 ruled; T6 and T7 opened.** T1 is the one worth recording, because checking it
+against the code before writing the ruling found that **two of the three facts the register gave
+for it were wrong**, and the real defect was worse than the recorded one:
+
+- The backup is *not* written under the default umask — `tokio::fs::copy` (`link.rs:203`) copies
+  the source's permission bits, so a `0600` original yields a `0600` backup.
+- `.linix-backup` is *not* absent from every ignore file — `core/git.rs:169` writes
+  `*.linix-backup` into the config repo's `.gitignore` at `linix git init`.
+- **What nobody had written down: nothing ever deletes the backup.** `remove` (`link.rs:369`)
+  drops the target and leaves `<target>.linix-backup`, and `backup_once` refuses to clobber an
+  existing one. A decrypted credential's predecessor therefore outlives the declaration
+  permanently, invisible to `check` because it is not managed.
+
+The entry had been reviewed as a security finding twice and the mechanism was never checked
+against the file it names. **This is the fourteenth session's lesson arriving again in the same
+week:** an audit reads what is written; only running it reads what is there.
+
+**T6 came out of the ruling rather than the register** — the owner asked for a way to opt out of
+`backup_once` or bound how many pile up, which is not a secrets question at all: every `link:`
+managed-content write calls it. Its sharpest sub-question is whether removing a declaration
+should *restore* the backup, which is the shape `extras_lock` already has for every other extra,
+and which would make the backup a rollback rather than a leak.
+
+**T7 reopens runtime injection into process memory.** XII.2 ruled it out and said not to re-open
+it; the owner has since said the conversation stays open. The refusal is downgraded to a
+question rather than withdrawn, and XII.2 now says so — a document that still reads *"do not
+re-open"* about a live discussion is the drift this whole refactor exists to end.
+
 **`linix reset` appeared in K16's explanation as a contrast and read as part of the decision.**
 Recorded in the entry, because a comparison offered to clarify a decision became a second thing
 the reader had to rule on.

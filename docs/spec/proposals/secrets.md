@@ -39,7 +39,13 @@ only on the machine that can decrypt it.**
 
 **Hardware-backed identities (TPM 2.0, YubiKey) — not built, in scope, see XII.3.**
 
-**Runtime injection into process memory — out of scope (owner, 2026-07-23).** The proposal was
+**Runtime injection into process memory — REOPENED (owner, 2026-07-23), tracked as T7.** It was
+ruled out earlier the same day, in the words below, and the owner has since said the conversation
+stays open. **The refusal is not withdrawn — it is downgraded to a question**, and the reasoning
+below is what any case for the feature has to answer. The sentence at the end of this section
+telling you not to re-open it no longer holds; the bar it sets does.
+
+The proposal was
 that credentials never touch the disk at all: LiNix decrypts into the memory of the process that
 needs them. Ruled out rather than deferred. It requires LiNix to be in the process-launch path
 for every consumer of a secret, which is a supervisor's job (`systemd`'s `LoadCredential`, a
