@@ -42,7 +42,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-### Open, and blocking — 19
+### Open, and blocking — 18
 
 | | question | feature |
 |---|---|---|
@@ -63,7 +63,6 @@ status loses that, so it is kept here:
 | **U22** | Does the dotfiles tree link files, or whole directories? | next |
 | **U23** | What happens when a dotfile destination already holds the user's own file? | next |
 | **U24** | Is a `.age` file inside the dotfiles tree a secret to decrypt? | next |
-| **K17** | How does `setting:` reach a store nobody wrote an adapter for? | rebuild |
 | **U26** | Is BSD supported, and what does `when family` answer there? | next |
 
 ### Open, not blocking — 33
@@ -104,20 +103,22 @@ status loses that, so it is kept here:
 | **U21** | Is the exit-code table settled once, up front? | next |
 | **U25** | One dotfiles tree, or several? | next |
 
-### Built to the recommendation, never ruled — 5
+### Built to the recommendation, never ruled — 0
+
+**Empty, as of 2026-07-23.** All fifteen were put to the owner and ruled. The heading stays
+because the category refills on its own: it is what happens whenever a recommendation gets
+implemented before anyone rules on it.
+
+### Answered — 36
 
 | | question | feature |
 |---|---|---|
+| **K17** | How does `setting:` reach a store nobody wrote an adapter for? | rebuild |
 | **D2** | How is a format recognised from a filename? — built as extension match plus `binary`. | artifacts |
 | **K5** | A level-3 reset with a config repo — built as refuse unless `--force`. | rebuild |
 | **K11** | May the settings file hold more than the repo path — built as no, parser-enforced. | rebuild |
 | **K14** | Does `rebuild` produce a git commit — built as no, and asserted by no test. | rebuild |
 | **K16** | Does `clean-cache --all` need the guard — built as no; `reset` does. | rebuild |
-
-### Answered — 30
-
-| | question | feature |
-|---|---|---|
 | **U5** | Does `setting:` get a Windows registry and a macOS `defaults` adapter? | next |
 | **D1** | What is "the release"? — built as latest non-draft, non-prerelease; `v` prefix tolerated. | artifacts |
 | **D10** | Where the closed vocabulary lives — built as one table in `artifact/format.rs`. | artifacts |
@@ -442,38 +443,6 @@ itself is the owner's: P7 is already unpaid on `setting:` (GNOME-only) and the s
 a slogan. A legitimate answer is *"listed, dated, not scheduled"* — what is not legitimate is
 leaving `family` returning a wrong answer on a platform whose package manager LiNix already
 drives (`pkgin` is registered today).
-
----
-
-## K17
-
-**Status: OPEN — blocking.**
-
-**In the tree today:** `backends/setting.rs` has a closed `enum SettingStore` with two variants,
-`GSettings` and `None`. Adding a store means adding a variant, which means shipping a release.
-
-**K17 — How does `setting:` reach a store nobody has written an adapter for?** Raised by K7's
-2026-07-23 ruling, which says *everywhere* rather than naming a closed set. Every adapter is the
-same three operations — read a key, write a key, reset a key to its default — and for most stores
-each is one command with the key interpolated into it. That is exactly the shape
-`custom_backends.toml` already describes for package managers (XIII.2, XIII.12): argv from a
-table, output read by a declared parser.
-
-- **A closed enum, grown per release.** Simplest, and it is today's code. It means the machine
-  running the store LiNix has not heard of gets a refusal until a LiNix release reaches it, which
-  is the machine most likely to be running something unusual in the first place.
-- **A declarable adapter, the way custom backends already are.** Three commands and a value
-  encoding in a table, so a COSMIC or a Hyprland or a thing not invented yet is six lines rather
-  than a pull request. It costs what U1 costs — a definition that a shared repo can execute is
-  II.12's supply-chain surface and must inherit the hook trust model, not a new one.
-- **Both, with the built-ins as data too**, so there is one code path rather than a fast one and
-  a slow one. **Two of everything is how this repo got into trouble**, and an enum plus a table
-  is exactly two.
-
-*Recommendation:* the third. The built-in adapters become rows in the same table the user can
-add a row to, `setting:` reads that table and nothing else, and the refusal for an unadapted
-store stays exactly as it is. **Decide before the registry adapter (7e) is written** — it is the
-second adapter, and the second one is where the shape is set.
 
 ---
 
@@ -848,6 +817,7 @@ LiNix failed, 2 differences found, 3 refused by the guard — decided in one pla
 `--locked`, `try` and `check` are written. An exit code decided per command is a convention no
 script can rely on, and the separation that matters is 3: a guard refusal is neither a failure
 nor a difference.
+
 ---
 
 ## U25
@@ -862,11 +832,60 @@ both, which is II.7 rule 5 reached by a new road rather than a new rule.
 
 ---
 
-# Built to the recommendation, never ruled
+# Answered
+
+## K17
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** `backends/setting.rs` has a closed `enum SettingStore` with two variants,
+`GSettings` and `None`. Adding a store means adding a variant, which means shipping a release.
+
+**K17 — How does `setting:` reach a store nobody has written an adapter for?** Raised by K7's
+2026-07-23 ruling, which says *everywhere* rather than naming a closed set. Every adapter is the
+same three operations — read a key, write a key, reset a key to its default — and for most stores
+each is one command with the key interpolated into it. That is exactly the shape
+`custom_backends.toml` already describes for package managers (XIII.2, XIII.12): argv from a
+table, output read by a declared parser.
+
+- **A closed enum, grown per release.** Simplest, and it is today's code. It means the machine
+  running the store LiNix has not heard of gets a refusal until a LiNix release reaches it, which
+  is the machine most likely to be running something unusual in the first place.
+- **A declarable adapter, the way custom backends already are.** Three commands and a value
+  encoding in a table, so a COSMIC or a Hyprland or a thing not invented yet is six lines rather
+  than a pull request. It costs what U1 costs — a definition that a shared repo can execute is
+  II.12's supply-chain surface and must inherit the hook trust model, not a new one.
+- **Both, with the built-ins as data too**, so there is one code path rather than a fast one and
+  a slow one. **Two of everything is how this repo got into trouble**, and an enum plus a table
+  is exactly two.
+
+*Recommendation:* the third. The built-in adapters become rows in the same table the user can
+add a row to, `setting:` reads that table and nothing else, and the refusal for an unadapted
+store stays exactly as it is. **Decide before the registry adapter (7e) is written** — it is the
+second adapter, and the second one is where the shape is set.
+
+**RULED (owner, 2026-07-23): a lot of stores, and adding one is a plugin, not a release.** The
+third option — the built-in adapters become rows in the same table a user can add a row to,
+`setting:` reads that table and nothing else. **One code path, not a compiled fast one and a
+declared slow one**, because an enum plus a table is two of everything with a new name.
+
+- **`gsettings` stops being special.** It becomes a row like the rest, which is the only way the
+  built-ins stay honest: an adapter mechanism that the built-ins bypass is a mechanism nobody has
+  actually tested.
+- **The refusal survives.** A store with no row makes every `setting:` line an error naming it.
+  That is what lets adapters land one at a time and what keeps a key from being silently
+  unapplied.
+- **It inherits the hook trust model, not a new one.** An adapter definition is argv that a
+  shared config repo can execute, which is II.12's supply-chain surface — the same consequence
+  U1 carries for custom backends, and it must be answered the same way rather than twice.
+
+---
+
+---
 
 ## D2
 
-**Status: BUILT, NEVER RULED.**
+**Status: ANSWERED — ruled 2026-07-23.**
 
 **In the tree today:** `backends/artifact/select.rs:260` (`classify_format`) and `platform.rs:96` (`classify`). The entry's own caveat — *"needs testing against real releases before it is a rule"* — is still unmet.
 
@@ -878,11 +897,21 @@ extension match for everything that has one, and `binary` means "matched this ma
 and has no recognised extension" — but this needs testing against real releases before it is a
 rule, because it is the one part of this feature that fails quietly rather than loudly.
 
+**RULED (owner, 2026-07-23): confirmed as the rule, and the testing the entry asked for is now
+work rather than an assumption.** An extension decides the format; a name with no recognised
+extension that matches this machine's os/arch is `binary`.
+
+**The caveat is the reason the work is filed, not a reservation about the rule.** A wrong
+*extension* guess produces an error. A wrong *`binary`* guess installs the wrong file and says
+nothing — the one place in this feature that fails quietly rather than loudly. The entry said it
+needed checking against real releases before becoming a rule; that never happened, and it is now
+in the plan.
+
 ---
 
 ## K5
 
-**Status: BUILT, NEVER RULED.**
+**Status: ANSWERED — ruled 2026-07-23.**
 
 **In the tree today:** Built as recommended.
 
@@ -892,11 +921,16 @@ otherwise. *Recommendation:* refuse unless the repo is empty or `--force`, and s
 **BUILT the recommendation, 2026-07-20:** `linix reset` refuses when `modules/`, `profiles/`
 or `active` exists unless `--force`, and the refusal names the repo path and both ways forward.
 
+**RULED (owner, 2026-07-23): confirmed as built.** `linix reset` refuses while a config repo
+exists unless `--force`, and the refusal names the repo and both ways forward. Forgetting the
+registry while the declarations remain leaves LiNix believing it manages nothing and the files
+saying otherwise, and there is no reading of that state that is not a trap.
+
 ---
 
 ## K11
 
-**Status: BUILT, NEVER RULED.**
+**Status: ANSWERED — ruled 2026-07-23.**
 
 **In the tree today:** `config/settings.rs:17` — `const ONLY_KEY: &str = "config_root"`, enforced by the parser.
 
@@ -906,11 +940,15 @@ one key is the file that grows a second one** — and the moment it does, there 
 systems (it and `preferences.toml`) and a new question about which wins on every key either
 could hold. The one key it holds is the one key `preferences.toml` structurally cannot.
 
+**RULED (owner, 2026-07-23): confirmed as built.** One key, enforced by the parser rather than
+by discipline. A second key would make two preference systems, and every key either file could
+hold would raise a new question about which one wins.
+
 ---
 
 ## K14
 
-**Status: BUILT, NEVER RULED.**
+**Status: ANSWERED — ruled 2026-07-23.**
 
 **In the tree today:** `handle_rebuild` never reaches `git_autocommit`. **No test asserts it**, as the entry says.
 
@@ -925,11 +963,19 @@ a test** (2026-07-21): the honest one needs a backend that can really remove and
 a test that only greps the source would pass on a rebuild that committed through some other
 route. Recorded rather than faked.
 
+**RULED (owner, 2026-07-23): confirmed as built.** `rebuild` writes no git commit. Nothing about
+the declared state changed, so there is nothing to record as intent; a rebuild is recorded
+wherever snapshots are.
+
+**The test stays owed and is filed.** A test that greps the source would pass on a rebuild that
+committed through some other route, so the honest one needs a backend that really removes and
+reinstalls.
+
 ---
 
 ## K16
 
-**Status: BUILT, NEVER RULED.**
+**Status: ANSWERED — ruled 2026-07-23.**
 
 **In the tree today:** Built as recommended.
 
@@ -941,9 +987,19 @@ packages, not disk space, and widening it to cover caches dilutes what a guard r
 touches caches and `tmp_dir`, no installed software); `linix reset` takes the typed-count
 confirmation because it destroys the registry. The reason is written into `handle_clean_cache`.
 
+**RULED (owner, 2026-07-23): confirmed as built.** `clean-cache --all` takes no guard and no
+confirmation. **The guard protects packages, not disk space** — widening it to cover caches would
+dilute what a guard refusal means, and the worst outcome of a wrong `clean-cache --all` is
+re-downloading.
+
+**`linix reset` is not part of this entry and was only ever the contrast** (owner asked,
+2026-07-23). It is a different command answering a different question: it makes every managed
+package unmanaged, which is why it takes the typed-count confirmation and `clean-cache` does not.
+K5 is where that lives. Recorded because the contrast read as though the two were one decision.
+
 ---
 
-# Answered
+---
 
 ## U5
 
@@ -1173,25 +1229,25 @@ is one that will run at 3am on a machine nobody is watching.
 (`rebuild`, `purge-unmanaged`) checked against the first word of `run`, so `run = sync --locked`
 still parses. The refusal names the command and says why.
 
-**RULED (owner, 2026-07-23): REVERSED. `rebuild` may be scheduled, behind a key that says so.**
-The blanket refusal by name goes. The reasoning that produced it — a destructive repair that can
-be scheduled is one that will run at 3am on a machine nobody is watching — is a reason to make
-the user say so once, not a reason to decide for them.
+**RULED (owner, 2026-07-23): REVERSED, and generalised. The forbidden set is a list in config,
+defaulted, and each command in it is independently removable.**
 
-**The key is a `[guard]` key, not a `[schedules]` one.** `[schedules]` in `preferences.toml` was
-deleted by the 2026-07-20 audit so that the `schedules` file is the only schedule store, and
-resurrecting it would be the zombie key that audit killed. `[guard]` is already the home of a
-**refusal with one deliberate opening** — `confine_bin` and `require_signed_history` are both
-that shape, and both sit outside the ten refusals for the same reason this one does: the fact
-each needs exists only at the moment its own command asks.
+The hardcoded `NEVER_UNATTENDED` constant goes. In its place, **one `[guard]` list naming the
+commands this machine refuses to run unattended, shipped with `rebuild` and `purge-unmanaged` in
+it.** Taking a name out is how you permit it; that is the "one key for each" the owner asked for,
+without a key per command and without a new mechanism the next dangerous verb would need adding
+to by hand.
 
-**Default off.** An absent key refuses exactly as today, so no existing config changes meaning.
-
-**The sibling is not ruled.** `NEVER_UNATTENDED` holds two names, and only one was asked about:
-`purge-unmanaged` is still refused by name in `schedules`. Whether it gets the same opening — one
-key covering both, a key each, or no opening at all for the command that deletes everything LiNix
-does not manage — is open. Recorded rather than assumed, because a fix that patches the one line
-reported and leaves its sibling live has hidden the class rather than closed it.
+- **The default preserves today's behaviour exactly.** A config that says nothing refuses both
+  commands, as it does now, so no existing setup changes meaning.
+- **It answers the sibling in the same change.** `purge-unmanaged` is not a separate ruling and
+  does not need one — it is a row in the same list, removable on the same terms, which is what
+  makes this a fix to the class rather than to `rebuild`.
+- **It is a `[guard]` list, not a `[schedules]` one.** `[schedules]` in `preferences.toml` was
+  deleted by the 2026-07-20 audit so the `schedules` file is the only schedule store;
+  resurrecting it would be the zombie key that audit killed.
+- **The refusal names the list.** A `schedules` entry naming a forbidden command is refused with
+  the list's own name in the message, so the way out is in the error rather than in the docs.
 
 ---
 
@@ -1631,6 +1687,8 @@ narrating (`metrics::Narration`, from the guard scope): under a rebuild the coun
 `Reinstalled` and `Removed to reinstall`, and plain `Removals` is reserved for removals that
 stay removed. The backends' own progress logs are unchanged, deliberately: `apt` really is
 removing those packages at that moment.
+
+---
 
 ---
 

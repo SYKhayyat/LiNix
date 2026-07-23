@@ -845,10 +845,13 @@ show. **A backend that cannot say what it would remove does not remove.**
 **`[guard]` holds three keys that are not among the ten: `confine_bin`** (default on), which
 refuses a downloaded file a destination outside the backend's bin directory (SEC1),
 **`require_signed_history`** (default off), which refuses a rollback to a commit git does not
-vouch for (II.13), **and the key that lets `rebuild` be scheduled** (default off, K13 ruled
-2026-07-23) — without it a `schedules` entry naming `rebuild` is refused, because a destructive
-repair that runs at 3am on a machine nobody is watching is a thing the user says yes to once,
-by name, in the file. All three are refusals in kind and none is in the decision function, for the
+vouch for (II.13), **and the list of commands that may not run unattended** (K13, ruled
+2026-07-23), shipped as `rebuild` and `purge-unmanaged` and edited by taking a name out. A
+`schedules` entry naming a command on that list is refused, with the list named in the message
+so the way out is in the error. The default preserves the refusal exactly as it was, so a config
+that says nothing changes no behaviour; what the list adds is that **the set is the user's, not a
+constant in the source**, and the next dangerous verb joins it by being written down rather than
+by someone remembering to add an arm. All three are refusals in kind and none is in the decision function, for the
 same reason: the fact each one needs — the deploy destination, git's verdict on one commit, the
 verb at the head of a `run` line — exists only at the moment its own command asks. A
 `confine_bin` check anywhere but a deploy would be checking a path nobody was about to write.

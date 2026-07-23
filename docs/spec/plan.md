@@ -1078,10 +1078,11 @@ the package, the locked version and the offered one, and changes nothing.
 one store the owner does not run. `setting:` adapts to whatever the machine is actually running —
 the list below is a priority order, not the set.
 
-**K17 is decided first, because it decides whether this item is four adapters or a table.** A
-closed enum means every new desktop is a LiNix release; a declarable adapter means six lines in
-a file. **Do not write the registry adapter before K17** — the second adapter is where the shape
-is set, and the wrong shape here is four hard-coded arms nobody can extend.
+**K17 ruled 2026-07-23: adapters are a table, and the built-ins are rows in it.** Adding a store
+is a plugin, not a LiNix release. `gsettings` stops being special and goes through the same path,
+because an adapter mechanism the built-ins bypass is one nobody has tested. **That work precedes
+every adapter below** — the second adapter is where the shape sets, and four hard-coded arms
+nobody can extend is the shape this ruling exists to prevent.
 
 1. **Windows registry.** `HKCU` or `HKLM` is **U19**, still open, and it must be answered before
    the first line — whatever this picks becomes the convention macOS `defaults` inherits.
@@ -1153,14 +1154,24 @@ repo). Both are small, both are live, and both are in shipped code.
 
 **Owed by the rulings of 2026-07-23, small and each independent of a phase:**
 
-- **`rebuild` may be scheduled, behind a `[guard]` key that says so (K13, reversed).** Delete
-  `rebuild` from `NEVER_UNATTENDED` in `model/schedule.rs:69` and gate it on the key instead;
-  absent key refuses exactly as today, so no existing config changes meaning. **Exit:** a
-  `schedules` file naming `rebuild` is refused with the key's name in the message, and accepted
-  once the key is set. *(Whether `purge-unmanaged` gets the same opening is not ruled.)*
+- **The unattended-refusal set becomes a `[guard]` list (K13, reversed and generalised).** The
+  `NEVER_UNATTENDED` constant at `model/schedule.rs:69` goes; the same two names ship as the
+  list's default, and taking a name out is how a machine permits that command. **Exit:** a
+  `schedules` file naming `rebuild` is refused with the list named in the message; removing
+  `rebuild` from the list makes the same file parse; a config that sets nothing refuses both
+  commands exactly as today. **Covers `purge-unmanaged` in the same change** — it is a row, not a
+  second mechanism.
+- **`setting:` adapters become a table, and the built-ins become rows in it (K17).** Precedes 7e.
+  **Exit:** a store with no compiled-in support is driven from a definition the user wrote, and
+  `gsettings` goes through the same path — an adapter mechanism the built-ins bypass is one
+  nobody has tested.
 - **Two tags for one version is an error (D1).** A GitHub repo carrying both `10.2.0` and
   `v10.2.0` must fail naming both, rather than one winning silently. **Exit:** a release set with
   both spellings errors; with either alone it resolves as today.
+- **Format recognition is checked against real releases (D2).** The rule is ruled; what was never
+  done is the check the entry asked for. **Exit:** the classifier is run against the asset lists
+  of real releases and every answer is verified by hand — particularly `binary`, which is the one
+  outcome that fails quietly rather than loudly.
 - **A test that `rebuild` writes no git commit (K14).** The behaviour is ruled and the code does
   it; nothing proves it. A test that greps the source would pass on a rebuild that committed
   through some other route, so the honest one needs a backend that really removes and reinstalls.

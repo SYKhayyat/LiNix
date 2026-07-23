@@ -40,6 +40,32 @@ answered.** Checked against the tree rather than against the sentence:
 **Kept deliberately:** the PROMPT and its rules of engagement, verbatim, in `SPEC.md`. It is
 instruction, not description, and the one part of the document that every session reads first.
 
+### Eighteen rulings the same day, and the two that changed a design
+
+All fifteen *built, never ruled* entries were put to the owner and answered, so that category is
+now empty. Twelve were confirmed as built. Three were not:
+
+- **K7 — `setting:` must work everywhere, and `gsettings` is a stage.** The owner runs KDE,
+  Hyprland, COSMIC and Windows; **the only adapter that exists is the one store they do not
+  use.** "Everywhere" was then explicitly widened from the four they named to the general rule:
+  a blessed list of five is a list always missing the sixth, and the machine holding the sixth
+  gets a refusal for a key LiNix could have written.
+- **K17, which that ruling created and which is filed as blocking.** A closed
+  `enum SettingStore` cannot mean everywhere — every new desktop would be a LiNix release.
+  **Ruled: adapters are a table, the built-ins are rows in it, and adding a store is a plugin.**
+  `gsettings` stops being special, because *an adapter mechanism the built-ins bypass is one
+  nobody has tested.* This precedes 7e: the second adapter is where the shape sets.
+- **K13 — reversed, then generalised past the question that was asked.** The proposal was a key
+  that opts `rebuild` into `schedules`. The owner's answer was better: **the forbidden set is a
+  list in `[guard]`, shipped with `rebuild` and `purge-unmanaged` in it, and you take a name
+  out.** That answers the sibling in the same change rather than leaving `purge-unmanaged`
+  refused by a constant — the exact patch-one-line-leave-the-sibling failure `CLAUDE.md` names,
+  which the first draft of this ruling had walked straight back into.
+
+**`linix reset` appeared in K16's explanation as a contrast and read as part of the decision.**
+Recorded in the entry, because a comparison offered to clarify a decision became a second thing
+the reader had to rule on.
+
 ## Session 2026-07-23 (fourteenth session) — a live uninstall, found while reading the document
 
 **No code changed. Four bugs recorded (S24–S27), one of them caught mid-execution.** The
