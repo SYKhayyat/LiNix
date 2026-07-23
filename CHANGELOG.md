@@ -99,14 +99,22 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
 - **A `link:` line that writes outside your home directory asks first.** `@target` can still
   point anywhere — that is what the link backend is for — but a destination like `/etc/cron.d/x`
   is listed and confirmed before the first install places it. Dotfiles under `~` are unaffected.
+- **Secrets in a public config repo.** `link:` takes `@decrypt=age` or `@decrypt=sops`: the
+  encrypted file is what git holds, the plaintext is written at `@target` (owner-only on Unix)
+  and removed when the line goes. `--dry-run` never decrypts. Documented in the readme — the
+  capability shipped earlier and went unmentioned until 2026-07-23.
 
 ### Removed
 
 Each of these was a second way to do something the model already does. Deleted, not deprecated.
+Where a name survives, it is because the command was rebuilt as "edit the line, then sync" —
+the old engine underneath it is gone.
 
-- **`teleport`** — a backend move is "rewrite the prefix, sync". It also built its own
-  transaction graph and executed it **without calling the guard**, so it could remove a
-  protected package that every other path refused to touch.
+- **`teleport`'s implementation** — it built its own transaction graph and executed it
+  **without calling the guard**, so it could remove a protected package every other path
+  refused to touch. The command survives with none of that: `teleport ripgrep apt` rewrites
+  wherever `ripgrep` is declared and syncs, so the move goes through the plan and the guard
+  like any other change.
 - **`shim`** — shims are declarative (`@shim=true` on a line). The imperative command was a
   second path that the next sync undid, and its required `--source` flag was never read.
 - **`clean`** — split into `remove-orphans` and `clean-cache`. The old command ran
@@ -152,6 +160,41 @@ Each of these was a second way to do something the model already does. Deleted, 
   `setting:` / `schedule:` line is drift that `sync` undoes, and status called it nothing to do.
 - **`linix init` did not create the `vars` file** it documents. It now writes a commented one,
   with no variable invented for you.
+- **The Linux build did not compile.** `registry.rs` used `OrphanDryRun` in the apt block
+  without importing it — invisible on Windows, where that block is `cfg`-ed out, so the whole
+  container matrix failed to build until a run on Linux said so.
+- **A refused `install` wedged the config.** `install` writes the line and syncs after it
+  (S15), and the write happened before anything checked whether the backend was one LiNix
+  uses — so `linix install dnf:jq` on a machine without dnf left `dnf:jq` in
+  `modules/imperative.txt`, and from that moment `status`, `plan`, `check`, `why`, `upgrade`,
+  `conflicts`, `activate` and every later install were a hard parse error until someone edited
+  the file by hand. `App::declare` now refuses such a line before writing it, which covers
+  every landing (imperative, hooks, adopted) and `absent:`/`repo:` lines with it. A name
+  nothing can resolve is still written and then withdrawn — that one is a failed install, not
+  an unusable line.
+- **`teleport` had the same fault one file over.** Moving a package to a manager `priority`
+  does not list rewrote the line in place — leaving a backend nothing can parse, with the
+  original already gone. Refused before the rewrite now.
+- **`gem` could not install anything.** It was listed as a manager that ends its options at
+  `--`, but RubyGems' `--` introduces the **build arguments** for a C extension — so
+  `gem install -- colorize` named no gem at all and failed with "Please specify at least one
+  gem name". Every `gem` install and removal through LiNix had been broken since the option
+  terminator was introduced.
+- **`krew` reported READY on a machine without krew.** Its probe asked for `kubectl`; krew is
+  a *plugin*, so `kubectl krew …` works only when krew has installed `kubectl-krew`. Every
+  krew command failed with `unknown command "krew"` — and took `linix update` down with it.
+- **One backend could cancel every backend after it.** `update` and `upgrade` swept the
+  registry and gave up on the first failure, so a single manager that could not refresh
+  silently skipped the rest. Each failure is named now and the sweep finishes.
+- **scoop's `list` counted a failed install as installed.** scoop keeps such a row forever
+  with an empty Version and Source and `Install failed` in Info; splitting on whitespace read
+  that as a package named `jq` at version `2026-07-21`, so `sync` thought there was nothing to
+  do and no `jq` was ever on PATH. `scoop list` and `scoop search` are sliced by header
+  offsets now, sharing one table reader with the winget parser.
+- **`cargo test` wrote into the repository on Linux.** Three test helpers fell back to the
+  current directory when neither `TMP` nor `TMPDIR` was set — which is every plain Linux
+  shell — leaving `linix-embedded-*.linix`, `linix-marker-*` and `linix-vars-test-*/` in the
+  working tree. All three use the platform temp directory now.
 
 ## [6.0.0] — 2026-07-02
 

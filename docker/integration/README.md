@@ -1,18 +1,11 @@
 # LiNix integration harness (real package managers)
 
-> **v7 note (2026-07-17):** `run-in-container.sh` was rewritten lean for v7 (real CLI,
-> `LINIX_CONFIG_DIR`/`LINIX_DATA_DIR` isolation, `linix init` scaffolding, HARD exit-code
-> assertions). The pre-v7 comprehensive script — built on the deleted `-g` flag and 102 soft
-> assertions — was **deleted (NO LEGACY)**. Some of the section-by-section description below still
-> reflects that older, broader sweep; re-porting its full multi-backend real-lifecycle coverage
-> into the lean v7 harness is a tracked follow-up (see the SPEC's Phase 5 harness note).
-
 The unit/integration test suite in `tests/` is **hermetic** — it mocks command execution,
 so it proves the *logic* but never touches a real package manager. This harness fills that
-gap: it runs the real `linix` binary against **real** apt / dnf / pacman / apk (and, on the
-host, scoop / winget / brew), doing a full **search → install → verify → remove → verify**
-cycle in disposable containers. This is where real-world bugs live (output-format drift,
-shim quirks, exit-code edges).
+gap: it runs the real `linix` binary against **real** apt / dnf / pacman / apk / emerge (and,
+on the host, scoop / winget / brew), doing a full **install → list → verify → remove →
+verify** cycle in disposable containers. This is where real-world bugs live (output-format
+drift, shim quirks, exit-code edges).
 
 ## Linux (containers)
 
@@ -34,65 +27,62 @@ manager — which also warms its package DB), builds `linix`, and runs
 `run-in-container.sh <backend> <package>`. A non-zero exit means that backend's real
 install/remove path failed.
 
-### Real-by-default coverage (every feasible backend + every feature)
+## What the harness asserts
 
-The guiding rule: **everything that can physically run in the image gets a REAL
-install→list→remove lifecycle — even if it compiles from source and takes minutes.** Only the
-genuinely-impossible-here set is plan-smoked, and each such case is named explicitly. Three
-mechanisms enforce this:
+Every check either passes or fails the whole run. A short list of genuinely
+network/ecosystem-optional checks is reported as `soft` and never fails the run; each one
+says by name what it did not exercise.
 
-1. **REAL multi-backend lifecycle (section 11)** — a real install → list(parser) → manifest
-   coherence → remove → verify-gone → coherent cycle for every feasible backend: the language
-   managers (npm/pnpm/yarn/bun/pipx/uv/gem/pip/luarocks/pixi), the ecosystem managers
-   (composer, dotnet, pub, krew, mix, conda, **nix**), the source-compilers (**cargo, go,
-   opam, nimble, spack** — real builds), the
-   no-uninstall-verb ones (**cabal** — install+list are HARD, then `remove` must report a
-   graceful *unsupported*, verifying the designed contract), and the special-identifier ones
-   (**github** does a real release download→symlink→remove; **link** creates and deletes a
-   real symlink). Install failure is *soft* (ecosystem/network variance is not a core bug);
-   **everything after a successful install is HARD** — that is exactly what caught the pixi
-   `global remove` vs `global uninstall` bug that a dry-run plan could never see.
+| § | What it proves |
+|---|---|
+| 1–3 | `init` scaffolds the II.1 repo; the read-only verbs run; `--dry-run` really installs nothing |
+| 4 | `purge-unmanaged` is refused on an **unadopted** machine — the only state in which the ratio rule fires — and the refusal names *that* rule |
+| 5–7 | Real install → `list` → PATH for the native manager; a second sync is a no-op; a bad name fails and leaves the model parseable |
+| 8 | `adopt` takes the **manual** set: the count is compared against the manager's own user-chosen list and against every installed package, not printed |
+| 9–10 | The guard keeps a protected package; `purge-unmanaged` after adopt is refused by the *protected set*, a different rule than §4's; real uninstall → gone from PATH |
+| 11–12 | git-backed manifest history, `diff`, `rollback`; `rebuild` repairs and writes **no** commit (K14) |
+| 13 | Backend chains and the per-host lock file; `unlock`; a pin to a manager this host lacks is not silent |
+| 13b | A manager that could not answer is not one that said no (V.7c) |
+| **14** | **A real install → list → PATH → remove → gone cycle for every other manager the image ships** |
+| **15** | **A plan-smoke for every registered backend the image cannot run**, so its argv/planner wiring is still proven |
+| 16 | **Every subcommand executed**, not `--help`'d — plus `bundle`→`restore` round-tripped, and `--help` kept as a separate, weaker pass |
+| **17** | **The coverage audit** |
 
-2. **COMMAND-SURFACE SMOKE (section 11 of the v7 harness)** — every current `linix` subcommand
-   is exercised at least once via `--help`/dry-run: install, uninstall, sync, plan, status,
-   list, search, adopt, check, absent, protected, purge-unmanaged, rollback, diff, git,
-   snapshot, schedule, profile, module, bundle, export, doctor — plus the install→list→
-   idempotency→remove lifecycle driven by the earlier sections.
-   *(`generation`, `lease`, and the `-g` flag were removed in v7 — git is the manifest history,
-   `@expires` replaced leases, and `LINIX_CONFIG_DIR` replaced `-g`. The pre-v7 harness that
-   drove them was deleted, NO LEGACY.)*
+### The two mechanisms that keep it honest
 
-3. **PLAN-SMOKE (section 13)** — reserved for the *only* things that cannot run a real
-   lifecycle in a plain container: distro-native managers on the wrong distro (emerge/guix/
-   eopkg/slackpkg/zypper/xbps/yay/paru), the Windows/macOS-native backends, and daemon/
-   filesystem-gated ones (snap needs snapd, service needs systemd, btrfs needs a btrfs FS).
-   Each still gets its argv/planner wiring proven via a dry-run JSON plan.
+**Real-by-default (§14).** Everything that can physically run in the image gets a REAL
+lifecycle, even when it compiles from source. Install failure is **soft** (a registry outage
+is not a LiNix bug); **everything after a successful install is HARD** — that split is what
+caught the pixi `global remove` vs `global uninstall` bug a dry-run plan could never see. A
+READY backend that cannot run a lifecycle here is named with its reason
+(`no_lifecycle_reason`), and an unexplained skip is impossible: a READY backend with no
+canary and no reason fails the audit.
 
-4. **COVERAGE AUDIT (section 14)** — enumerates **every `[READY]` backend from `doctor`** and
-   HARD-fails if any went untouched by a real lifecycle *or* a plan-smoke, and likewise
-   HARD-fails on any `linix` subcommand that was never exercised (outside a documented
-   interactive/remote-SSH exempt set: `shell`, `undo`, `bisect`, `clone`, `fleet`). So nothing
-   registered is silently untested, and **a backend or command added in the future fails the
-   audit until it's covered.**
+**The coverage audit (§17).** It enumerates every backend from `doctor --json` and every
+subcommand from `--help`, and **hard-fails on any that no real lifecycle and no plan-smoke
+touched**, outside a named exempt set (`shell`, `undo`, `history`, `bisect`, `fleet` — each
+printed with why). `<cmd> --help` is ledgered separately and does **not** satisfy it. This is
+the only mechanism that can notice what is *missing* from a list of checks, and it is what
+makes a backend or command added next year fail until it is covered.
 
-Where they run:
+### Where the images differ
 
-- **Every image** runs the real lifecycle for whatever managers it ships, full feature
-  coverage, and the audit.
-- **`tools` image** (in the default set) — an Ubuntu base with the ecosystem managers
-  installed **and initialized** (opam switch, cabal/nimble index refresh, spack compilers,
-  conda channels, flathub remote, krew index, nix made READY, and the go/dotnet/pub bin dirs
-  on PATH) so each runs a genuine build/install, not a dry run. A full real run compiles from
+- **Every image** runs the real lifecycle for whatever managers it ships, the full command
+  surface, and the audit.
+- **`tools`** (in the default set) — an Ubuntu base with the ecosystem managers installed
+  **and initialized** (opam switch, cabal/nimble index refresh, spack compilers, conda
+  channels, flathub remote, krew index, nix made READY, and the go/dotnet/pub bin dirs on
+  PATH) so each runs a genuine build/install, not a dry run. A full real run compiles from
   source and can take 20–40 min.
-- **`gentoo` image** (opt-in; `DISTROS="gentoo"`) — real Portage in **SMOKE_ONLY** mode
-  (baked in): discovery + plan-smoke + read-only, no source builds.
+- **`gentoo`** (opt-in; `DISTROS="gentoo"`) — real Portage in **SMOKE_ONLY** mode (baked
+  into the image): discovery + plan-smoke + read-only, no source builds. A SMOKE run says so
+  in its summary and names every check it skipped, so a narrower sweep cannot be mistaken for
+  a full one.
 - **Guix / eopkg / slackpkg** are distro-locked — run the harness on a Guix System / Solus /
-  Slackware host and their real rows light up automatically; elsewhere they plan-smoke. Their
-  registration and output parsing are also covered by the hermetic Rust tests (`cargo test`).
+  Slackware host and their real rows light up automatically; elsewhere they plan-smoke.
 
-Toggle: `SMOKE_ONLY=1` skips
-real mutation entirely (discovery + plan-smoke + read-only). Both are forwarded into the
-container by `run.sh`.
+Toggle: `SMOKE_ONLY=1` skips real mutation entirely (discovery + plan-smoke + read-only).
+`run.sh` forwards it into the container.
 
 ### One-shot release gate
 
@@ -128,8 +118,15 @@ backends natively:
 
 ```bash
 cargo build
-scripts/integration-windows.sh scoop busybox
+scripts/integration-windows.sh scoop jq
 ```
+
+`scripts/integration-windows.sh` mirrors the container harness section for section, with the
+same coverage audit. One deliberate difference: **it runs on a real machine, not a disposable
+one**, so the real-lifecycle sweep covers only managers that install per-user and uninstall
+cleanly (scoop, cargo, npm, pipx, uv, gem, github, brew). The machine-wide ones — winget,
+choco, psresource, system pip, and the ones that rewrite a live desktop or editor profile —
+are plan-smoked and **named with that reason**, not silently skipped.
 
 ## macOS — why it's not in the matrix
 
@@ -139,13 +136,14 @@ macOS off Apple hardware. There is no legitimate macOS container image. So brew 
 needs a **real Mac** or a **macOS CI runner**:
 
 - On any Mac: `cargo build && ./scripts/integration-windows.sh brew wget` (the script is
-  backend-agnostic despite the name — or copy `run-in-container.sh` and run
-  `run-in-container.sh brew wget`).
+  backend-agnostic despite the name).
 - In CI: GitHub Actions provides `macos-latest` runners; run the same steps there.
 
 ## What each run proves (and its limits)
 
-- **Proves:** the backend spawns, its real search/list output parses, and a real package
-  can be installed and removed end-to-end.
-- **Doesn't prove:** long-tail package edge cases, version-pin fidelity on every backend,
-  or dependency-resolution corners. Extend `run-in-container.sh` to cover more.
+- **Proves:** every registered backend is either driven end-to-end against the real manager
+  or has its argv/planner wiring exercised; every non-exempt subcommand actually runs; and
+  nothing registered is silently untested.
+- **Doesn't prove:** long-tail package edge cases, version-pin fidelity on every backend, or
+  dependency-resolution corners. Extend the canary table in `run-in-container.sh` to cover
+  more.

@@ -185,6 +185,33 @@ reason. If you can't state the reason, don't add the number.
 does — the line does that. Not where it came from — git does that. Not that it's good —
 that's the reader's call.
 
+**P7. LiNix is not Linux-first, whatever the name says (owner ruling, 2026-07-23).** Windows
+and macOS are not ports and not a later phase. **A feature designed for one system is not
+finished until the other two have an equivalent or a stated, written reason there can be
+none** — and "the Linux tool has no counterpart" is a reason only after someone looked. The
+name is a pun, not a scope.
+
+This is a design rule, not an aspiration, and it has teeth in three places:
+
+- **A new statement or backend arrives with its adapters, or arrives with the gap named in
+  this document.** `setting:` shipped speaking `gsettings` and nothing else, and the Windows
+  registry — the one store on any platform that answers a read-before-write query cleanly —
+  was never even filed. That is the failure this rule exists to stop repeating.
+- **A refusal beats a pretence.** A statement with no adapter on this host errors and names
+  what is missing; it never reports success (X.4's `SettingStore::None`).
+- **The competition is Linux-only.** Nix, decman, metapac and the rest stop at the Linux
+  boundary. Being the tool that declares a Windows machine as readily as a Debian one is not
+  a courtesy to Windows users; it is the only ground where LiNix is alone.
+
+**P8. LiNix does the thing. It does not hand you the thing to do (owner ruling, 2026-07-23).**
+Output whose next step is the user retyping it is not a feature — a command that prints lines
+to paste into a module has done the easy half and left the half that fails. Where LiNix knows
+what should happen, it happens: it edits the declaration (`install`, `adopt`, `teleport`) or it
+performs the repair. **Two things this does not license**, both already rules here: it must not
+rewrite your files unasked (II.16), and it must not act without the plan being visible first
+(`plan`, `--dry-run`, the guard). The correct shape is *ask, then do* — never *inform, then
+leave*.
+
 ---
 
 # Part II — The target state
@@ -2385,6 +2412,97 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
 
 Owed from the last sprint; not run since Stage 2.
 
+## Phase 7 — Extensibility, parity, and the rehearsal (approved 2026-07-23)
+
+**Parts XI–XIII are a plan, not a record.** The owner's instruction on the day they were written
+was that the point is not what the document says but what gets built, so the approved items are
+listed here, in Part III, where the work lives — and each carries the one command that shows it
+is done.
+
+**The theme is that LiNix stops being a fixed set of things it knows how to do.** Three axes of
+extension already half-exist and are finished here: conditions are user-programmable (Part IX's
+providers — built), backends are user-programmable (the onboarder — built but marooned on one
+machine), and actions become user-programmable (`exec:` — not built). With all three, a user
+adds a capability LiNix has never heard of without touching the binary. That is the whole of
+this phase's ambition, and two of the three legs are already standing.
+
+**Order is by dependency and by blast radius, not by size.**
+
+**7a — Custom backends move into the config repo, and gain a separate `binary` (XIII.2, XIII.12,
+U1, U2, U16).** Two changes to one file, done together because they touch the same loader and
+the same trust question. The definition travels with the config or the config is not portable;
+and `name` stops being forced to equal the executable, which turns the onboarder from "teach
+LiNix a package manager" into "teach LiNix a noun". A definition in a shared repo is argv a
+shared repo can execute, so it inherits II.12's hook model rather than getting its own.
+**Exit:** a repo carrying a `[[backend]]` definition resolves and installs that backend's
+package **on a machine that has never seen the file**; a definition whose `name` and `binary`
+differ (`firewall` → `ufw`) installs, lists and removes; and the machine-local path is gone from
+the tree (`grep -rn "custom_backends" src/` finds one loader, not two).
+
+**7b — `exec:`, conditioned by `when`, locked by content hash (XIII.3).** No `@unless=`, no
+`@creates=` — the condition is a `when` over a provider variable, and the state is
+`locks/exec.toml` keyed by the hash of the script with a run count. **Exit:** a script runs once,
+does not run on the next sync, runs again after one byte of it changes, and `plan` prints the
+hash, the count and the decision before any of it happens.
+
+**7c — Backend bootstrap (XIII.9, U10).** The declared-and-missing manager is obtainable, by
+asking first and then doing it. **Exit:** on a machine with no Homebrew, a config declaring
+`brew:` explains what it would run, and — on yes — the next sync installs the package.
+
+**7d — `sync --locked` (XIII.10, U11).** **Exit:** a machine whose index has moved on fails with
+the package, the locked version and the offered one, and changes nothing.
+
+**7e — `setting:` on Windows, then macOS (XIII.4, U5, P7).** The registry adapter first: it is
+the cleanest read-before-write store on any platform. **Exit:** a `setting:` line sets a registry
+value, a second sync is a no-op, and removing the line restores the default — the same three
+proofs the gsettings adapter passed.
+
+**7f — Health-checked upgrades (XIII.5, U7).** **Exit:** an upgrade whose `@health=` command
+fails restores the snapshot, and says so in those words; with no snapshot provider it fails
+loudly and says it cannot revert, before it starts.
+
+**7g — The kernel/DKMS rebuild (XIII.1).** **Exit:** a sync that changes a kernel package
+rebuilds the declared out-of-tree modules and fails loudly on a module that will not build —
+before the reboot.
+
+**7h — `linix try` (XIII.11, U12).** **Exit:** a config with a deliberate error is rejected by
+`try` on a clean container, having touched nothing on the host; with no container runtime, `try`
+refuses and names what is missing rather than running anywhere.
+
+**7i — The ten status commands become one (XIII.8, U9).** Last, because it breaks invocations
+and because everything above adds to what it must report. **Exit:** `linix check` covers drift,
+unmanaged, absent, conflicts, health and policy, and `grep -rn "Commands::\(Status\|Doctor\|
+Unmanaged\|Absent\|Conflicts\|Insight\|Metrics\|Audit\)" src/` is silent. **`heal` survives —
+it acts, the rest only look.**
+
+**7j — LiNix-level event hooks (XIII.13, U15).** **Exit:** a sync that finds drift runs the
+declared `on_drift` hook with the drift on stdin as JSON; a hook that exits non-zero warns and
+does not fail the sync; and an undeclared event costs nothing.
+
+**7k — `linix eval` (XIII.15, U17).** Cheap, and it makes several later questions answerable
+without new commands. **Exit:** the resolved desired state prints as versioned JSON, with every
+`when` decided and every bare name resolved, and the command takes no locks and changes nothing.
+
+**7l — `git blame` for a declaration (XIII.19).** **Exit:** asking about a declared package names
+the commit that introduced it, its date and its message, and the implementation reads git —
+`grep` finds no new store written at sync time to support it.
+
+**7m — The exit-code table (XIII.20, U21).** Not a feature; a decision applied everywhere at
+once. **Exit:** 0/1/2/3 mean the same thing in every command that can produce them, a guard
+refusal is 3 and nothing else is, and the table is in the readme.
+
+**Decided before 7e, not during it: user-or-system scope (XIII.17, U19).** The registry adapter
+cannot be written without an answer — `HKCU` and `HKLM` are a choice with no safe default — and
+whatever it picks becomes the convention for macOS `defaults` too.
+
+**Not in this phase, and deliberately: sharing (XIII.14).** It is blocked on **U14**, the
+question of what makes a vendored module safe to run once `exec:` exists. Building the
+convenient half first is how this ends badly.
+
+**Two open bugs gate nothing but should not wait for a phase (VI.2):** **T1** (the decrypt
+backup leaks the previous secret) and **T2** (nothing stops a secret being written into the git
+repo). Both are small, both are live, and both are in shipped code.
+
 ---
 
 # Part IV — Verification
@@ -3393,6 +3511,9 @@ that recorded it. Assigned to the phase that owns the mechanism, not the phase t
 | **S14** | **FIXED (Phase 2w).** `linix init` filled `priority` from `registry.available()`, which includes the pseudo-backends `service`, `link`, `web`, `github` — teaching a new user that the file answering *"which package managers, in what order"* contains four things that cannot resolve a package. `starter_order` now drops `service` and `link` (dependent statements, never priority-gated, never resolving a bare name). **`web`/`github`/`appimage` stay on purpose:** the model refuses an explicit `web:…` unless `web` is listed (V.15), so excluding them would break those specs — **the original S14 was imprecise to lump them in.** Test: `service_and_link_are_not_listed_but_artifact_backends_are`. *(The deeper "is this a package manager" capability probe the row imagined proved unnecessary: the two truly-not-managers are a fixed pair, and the rest legitimately need listing.)* → **Phase 2** (done) |
 | **S11** | ~~**The test harness is not hermetic by construction, only by remembering.**~~ **DONE 2026-07-19, and the row was half-stale in a way that proves its own point.** `mock_providers::TestKernel` had already been fixed to isolate both roots, with a test asserting it — but **`tests/exhaustive_backend_suite.rs` is a SECOND fixture, and it set `config_root` and `tmp_dir` and forgot `data_root`**, so every run of that suite wrote the registry, journal and snapshots into the developer's real data dir. The fix that was applied in one place was never applied in the other, which is exactly "isolation that depends on remembering" — the row was fixed and filed as open, while the thing it described was still happening one file over. Now structural: `Config::sandboxed(&Path)` sets **every** path (config root, data root, tmp, github, web, appimages) in one place, both fixtures call it, `grep -rn "Config::default()" tests/` is empty of fixtures, and `sandboxed_puts_every_path_under_the_sandbox` asserts all six rather than the two obvious ones. → **Phase 5** (done) |
 
+| **T1** | **OPEN, needs a decision (2026-07-23). `link:`'s decrypt mode leaks the previous secret in plaintext.** `apply_managed_content` calls `backup_once` (`link.rs:154`, `:319`) for every managed write, mode D included — so when the target already holds a secret, LiNix copies it to `<target>.linix-backup` under the ordinary umask before writing the new one. The `0600` at `:285` is applied to the target and to nothing else, and no ignore file mentions `.linix-backup`. Found while documenting mode D for the readme; the code is shipped and the leak is live. *Recommendation:* mode D never backs up — `backup_once` exists so a user is not silently robbed of a config file they hand-wrote, and a secret LiNix itself decrypted a moment ago is not that. **Sibling check owed with the fix:** the template and inline-content modes share `apply_managed_content`, so the change must be scoped to the decrypt path and not to all three. See **XII.5**. → **Part XII** |
+| **T2** | **OPEN, needs a decision (2026-07-23). Nothing stops a decrypted secret being written back into the git-tracked config repo.** `resolve_target` (`link.rs:19`) accepts any path; a `link:./secrets/token.age@target=./secrets/token@decrypt=age` writes the plaintext beside the ciphertext, inside the repo, and the next sync commits it. A secret in git history is a rotated secret, so the failure is unrecoverable rather than merely bad. *Recommendation:* refuse at resolve time when `@decrypt` is set and `@target` resolves inside the config root. **The related question the fix should answer at the same time:** `bundle` copies the config root (X.5), and its promise that a backup is safe to hand to someone depends on exactly this invariant holding. See **XII.5**. → **Part XII** |
+
 ## VI.3 Do not re-decide these
 
 Three suspicions did not survive scrutiny:
@@ -3411,6 +3532,320 @@ Three suspicions did not survive scrutiny:
 **Living section. It is the one place that records progress — Part III stays the plan, this
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
+
+## Session 2026-07-23 (thirteenth session) — three feature requests, answered in three ways
+
+**No code changed. This session was scope.** Three features were proposed; they got three
+different answers, and the difference is the useful part of the record.
+
+- **A kernel-building engine: refused, and not filed as a K-item.** LiNix builds nothing — it
+  drives managers that are already on the host. Reasoning in **XI.7**. Two smaller things
+  were kept out of it and are in **XIII.1** (a DKMS-after-kernel-upgrade check, and a
+  `hardware` command that suggests declarations and writes none).
+- **A firewall backend: accepted as a proposal, written up as Part XI.** It fits because it is
+  a new *backend*, not a new mechanism: `setting:`'s statement shape, `extras_lock`'s drift
+  path and the guard all already exist. **XI.2 records the case against building it** — an
+  nftables user can declare their perimeter today with `link:` plus `service:`, and the
+  backend only earns its cost across several firewalls (N3). **Seven open decisions, three
+  blocking**; N1 (is the perimeter exclusive) and N2 (refusing to close the port carrying the
+  session) are the two that decide whether this is a feature or a lockout.
+- **Hardware-backed secrets: half of it was already built and undocumented.** `link:` mode D
+  (`link.rs:271-295`) has shipped age/sops decryption since Phase 2p and this document
+  mentioned it only in a table of option keys. Now **Part XII**. Runtime injection into
+  process memory is **ruled out** (owner, 2026-07-23) — XII.2 says why and says not to
+  re-open it. Hardware identities (TPM, YubiKey) are in scope and are probably a change to
+  what `@identity=` accepts rather than new crypto.
+
+**Two live defects were found while documenting mode D, and are recorded, not fixed (rule 4):**
+`backup_once` copies a previous secret to a world-readable `<target>.linix-backup` (**T1**), and
+nothing stops `@target=` from writing the plaintext back inside the git-tracked config root
+(**T2**). Both are in XII.5 **and are filed as open rows in VI.2**, because a decision that lives
+only in a proposal part is a decision the bug ledger cannot see. **The secrets half is
+documented for users in `readme.md`**; the firewall half is not, because it does not exist.
+
+### Two principles, ruled the same day
+
+**P7 — LiNix is not Linux-first, whatever the name says.** Windows and macOS are not ports and
+not a later phase; a feature is unfinished until they have an equivalent or a written reason
+there can be none. XIII.4 turns the rule into the actual gap list, which is shorter than it
+sounds: `service:` already covers all five init systems, packages are covered everywhere, and
+the two real holes are **`setting:` (GNOME only)** and **the snapshot safety net (Linux
+filesystems only)** — the second being the quiet one, because `rebuild`'s revert and the guard's
+pre-sync snapshot are written here as unqualified promises that silently do not hold on two of
+three platforms (**U6**).
+
+**P8 — LiNix does the thing; it does not hand you the thing to do.** Ruled while rejecting a
+`hardware` command that would have printed declarations for the user to paste into a module.
+Output whose next step is retyping has done the easy half. The correct shape is *ask, then do*
+(`install`, `adopt`), never *inform, then leave*.
+
+### Part XIII — seven proposals, five of them compositions of built things
+
+Written from one conversation. Nine decisions (**U1–U9**), four blocking. The two findings that
+matter most are not proposals at all but things already in the tree that nobody had written
+down:
+
+- **The onboarder is the plugin system, and it has been shipped all along.**
+  `src/backends/onboarder.rs` (593 lines) teaches LiNix a whole package manager from
+  `custom_backends.toml` — argv from TOML, output parser as a declarative `ParserSpec`. This
+  document had mentioned it twice, in passing, and never described it. **Its real defect is
+  location:** the file is read from the machine-local config dir, never from the config repo,
+  so a repo that says `paru:yay-bin` works on the one machine where somebody hand-wrote a TOML
+  file and fails on the fresh machine the repo exists to set up (**U1**).
+- **LiNix already upgrades the kernel** — as a package, with no kernel awareness beyond the
+  guard's protected prefixes. XIII.1 answers why out-of-tree modules still break: the
+  distribution's DKMS hook fires for its own manager only, and LiNix's whole premise is
+  several managers at once, so the cross-manager case is the one nothing covers.
+
+The rest: `exec:`, the escape hatch (XIII.3); health-checked upgrades that revert on failure
+(XIII.5, reusing K3's rulings wholesale); a preview for *what leaves if I deactivate this*
+(XIII.6); cross-machine diff on `fleet`'s existing parse (XIII.7); and **collapsing the ten "is
+my machine all right?" commands into one `linix check`** (XIII.8, **U9**) — the only item here
+that breaks existing invocations, and under P2 that means the old names go in the same change
+rather than being aliased.
+
+### `exec:` — approved, and the first draft of it was ruled against
+
+The draft proposed two new option keys, `@unless=<command>` and `@creates=<path>`. **The owner
+ruled that the condition is `when` and there is no second condition system** — Part IX already
+made `when`'s variables user-programmable (a `vars.sh` / `vars.py` provider is run by LiNix, is
+handed the machine's facts, and returns name/value pairs), so *"unless this command succeeds"*
+is `when $tpm_enrolled == no` with nothing added to the grammar. The condition also gains a
+name, and a named condition can gate a package and a `setting:` and an `exec:` at once.
+
+**And the state that `when` cannot supply is a lock keyed by the script's hash, recording how
+many times that hash has run** (owner ruling). Content-addressed, so editing the script makes it
+a different script that runs again, and renaming it does not. The default is once per distinct
+content; `@runs=always` is the explicit, loud opt-out (**U13**). This is what lets `plan` print
+the true sentence — *hash `a1b2…`, run 0 times, condition true → this will run* — which is the
+test every statement in this model has to pass.
+
+### Three more approved the same day, and a Phase to build them in
+
+**XIII.9 — backends are software too.** LiNix cannot install the one class of software it
+installs *with*: declare `brew:` on a fresh Mac and the line fails because Homebrew is not
+there. That is the first ten minutes of every new machine, which is the ten minutes the tool
+exists to delete. Refusal-first, never a silent fetch — installing a package manager is running
+someone's script as root.
+
+**XIII.10 — `sync --locked`.** The line between *describing* a machine and *reproducing* one.
+Fails on a resolution that differs from the lock; changes nothing. `watch` should probably imply
+it (**U11**).
+
+**XIII.11 — `linix try`.** Phase 6's containers, pointed at the user's config instead of at
+LiNix: rehearse the sync on a clean machine before it touches the real one. A dry run predicts
+from LiNix's model; `try` finds out what the package manager actually does — which is the exact
+gap the twelfth session's container run proved was invisible to `cargo test`.
+
+### `exec:` has three states, and that is the one place this model bends
+
+**Owner note, recorded because it is an exception someone will later "correct".** For every
+other statement a false `when` and a deleted line are the same fact — an undeclared package is
+drift and gets removed. **For a verb they are different**, and the example that forces it is the
+one the feature was designed around: a script that enrols a TPM makes `$tpm_enrolled` true,
+which turns its own `when` false. If false meant removed and removed meant undo, the sync that
+enrolled would un-enrol on the way out. So: `when` true → run if the hash's count allows; `when`
+false → **nothing runs and nothing is undone, and the lock row is kept** (dropping it would
+re-run the script every time a flapping condition swung back); line deleted → `@undo=` if given,
+and the row goes. **`exec:` must therefore stay out of `reconcile_extras`** — that ledger undoes
+nouns, and wiring a verb into it reintroduces the un-enrol bug through the back door.
+
+### Four more, approved the same day
+
+- **XIII.12 — the onboarder is one field from user-defined nouns.** `name` is currently both the
+  prefix and the executable. Split them and `firewall:22/tcp` works from six lines of TOML with
+  no Rust. **Part XI stays** — a TOML definition names `ufw` and therefore means nothing on
+  Windows, and *one spelling across five firewalls* is the half only a built-in backend can
+  supply (P7). What the split changes is that the built-in becomes optional rather than urgent.
+- **XIII.13 — hooks on LiNix's own events.** `after_sync`, `on_drift`, `on_guard_refusal`, in
+  `preferences.toml`, context on stdin as JSON. Today every integration request — notify me,
+  push the repo, open a ticket — has to become a LiNix feature. This is why.
+- **XIII.14 — sharing, and it is BLOCKED on U14.** `use` takes a name, never a URL, so there is
+  no way to consume anyone else's module. The rule-compatible answer is vendoring (`linix add
+  <git-url>` copies files into your repo, once, reviewable in a diff) rather than importing.
+  **Not scheduled**: once `exec:` exists, a vendored module can contain a verb, and the safety
+  story has to be decided before the convenient half is built.
+- **XIII.15 — `linix eval`.** Print the resolved desired state as versioned JSON. Not a feature
+  for LiNix; the feature that stops LiNix needing a new one every time somebody wants to know
+  something the resolver already computed.
+
+### And five more, in three categories
+
+**Approved and phased:** **XIII.19**, `git blame` for a declaration — *when did `openssl` enter
+my config, in which commit* — which reads git and keeps no store of its own (7l); and
+**XIII.20**, the exit-code table, settled in one place before the commands that need it exist:
+0 converged, 1 LiNix failed, 2 differences found, **3 refused by the guard** (7m). Separating 3
+is the point — a guard refusal is neither a crash nor a divergence, and a CI job that cannot
+tell those apart will either retry a legitimate refusal or report a crash as healthy drift.
+
+**Recorded as maybes, deliberately not scheduled:** **XIII.16**, grouped backends with
+per-group priority (**U18**) — the right resolution order genuinely differs by *kind* of thing
+(CLI tools want `cargo` first, system libraries want the distro and nothing else), one list
+cannot say that, and the workaround of writing the prefix costs the portability a bare name
+exists for. It is a maybe because it can break II.7 rule 5 from a new direction: two modules
+resolving the same bare name through different groups puts two `ripgrep` binaries on one
+`$PATH`, the failure `app/conflicts.rs` already exists to catch. And **XIII.18**, a language
+server (**U20**) — the grammar's closed vocabularies are exactly what completion and hover want,
+but it is only worth building as a thin front end over the same parser; a reimplementation is
+the second implementation this rewrite exists to end.
+
+**Recorded as a decision owed, gating work already scheduled:** **XIII.17** (**U19**) — *is
+LiNix acting for a user or for the machine?* Today the answer is implicit (whoever ran the
+command) and the Linux backends agree with it by accident. **7e ends that on its first line**,
+because the registry's opening question is `HKCU` or `HKLM` and this document has nothing to
+answer it with. Decide before writing it, or the adapter's guess becomes the convention and then
+spreads to macOS `defaults`.
+
+**The owner's instruction that day was that a specification which only *says* is worth
+nothing.** So the approved items are also **Phase 7 in Part III**, in dependency order, each with
+the one command that shows it is done: custom backends into the repo (7a), `exec:` (7b), backend
+bootstrap (7c), `--locked` (7d), `setting:` on Windows (7e), health checks (7f), the DKMS rebuild
+(7g), `try` (7h), and the command collapse last (7i) because everything above adds to what it
+must report.
+
+## Session 2026-07-23 (twelfth session) — V.57's last two pieces, and what running them found
+
+The eleventh session left two things owed because they "need a Docker/WSL run this machine
+could not do". They are built, and the run happened: **the coverage audit** and **the `tools`
+image's real ecosystem lifecycle**. Everything below the first heading was found *by running
+it*, and none of it was visible from reading the tree or from `cargo test`.
+
+**The harness — `docker/integration/run-in-container.sh`, mirrored section for section in
+`scripts/integration-windows.sh`.**
+
+- **§14, the real multi-backend lifecycle.** A real install → `list` → PATH → remove → gone
+  cycle for every manager the image ships, from a canary table — not just the distro's
+  native one. Install failure is soft (a registry outage is not a LiNix bug); **everything
+  after a successful install is hard.** A READY backend that cannot run a lifecycle here is
+  named with its reason, and one with neither a canary nor a reason says so out loud.
+- **§15, the plan-smoke.** Every registered backend the image cannot run gets its
+  argv/planner wiring proven by a dry-run install, enumerated from `doctor --json` against a
+  config whose `priority` lists all of them — V.15 refuses an unlisted backend, so the smoke
+  config has to list every one. `service:`/`link:`/`setting:` are statements rather than
+  package names, so they are smoked through `check` and a dry-run sync instead, and `btrfs`
+  through `snapshot`.
+- **§16, the command surface executed.** Every subcommand is *run*, not `--help`'d;
+  `<cmd> --help` is ledgered separately and does not satisfy the audit. `bundle` → `restore`
+  is round-tripped in both directions.
+- **§17, the coverage audit.** Hard-fails on any backend or subcommand that no lifecycle and
+  no plan-smoke touched, outside an exempt set that is printed **with a reason for each**
+  (`shell`, `undo`, `history`, `bisect`, `fleet`; a SMOKE run names `rollback`, `diff` and
+  `run` too). It caught `nix` on its first run, which is the point: a fixed list of checks
+  cannot notice what is missing from it.
+- **Part IV's named proofs are numbers now.** The `purge-unmanaged` ratio check runs
+  **before** `adopt` — the only state in which it tests anything — and each refusal asserts
+  *which* rule refused, so the ratio and the protected set cannot pass on each other's
+  behalf. `adopt` is counted from `modules/adopted.txt` against the manager's own
+  user-chosen list and against every installed package: the old check read `linix list`,
+  which answers "what is installed" and which `adopt` does not change, so its before/after
+  numbers were identical by construction.
+
+**Measured, 2026-07-23, WSL2 + Docker 29.6.1, full transcript in `docker_log_7_23.txt`:**
+
+| image | result | real lifecycles |
+|---|---|---|
+| ubuntu (apt) | **271 / 0 / 5 soft** | apt, cargo, gem, github, npm, pipx, uv |
+| fedora (dnf) | **279 / 0 / 5** | dnf + the same language managers |
+| arch (pacman) | **271 / 0 / 5** | pacman + the same |
+| alpine (apk) | **266 / 0 / 3** | apk + the same |
+| **tools (apt)** | **316 / 2 / 14** | **18** — apt, bun, cargo, composer, conda, dotnet, emacs, gem, github, go, krew, luarocks, mise, npm, pipx, pixi, pub, uv |
+| gentoo (emerge) | **214 / 0 / 9** | none — SMOKE_ONLY, and it says so |
+
+The comparison that matters is not the totals but what they are made of: the previous
+record for ubuntu was **82**, and **24 of those were `<cmd> --help`**. Hermetic gates ran
+alongside: `cargo test` **967 on Linux / 970 on Windows, 0 failures**, `cargo clippy
+--all-targets` silent, on both platforms.
+
+`tools`' two failures are one finding and it is left red on purpose: **`mise` installs and
+its binary lands on PATH, but `linix list --backend mise` does not report it and the removal
+therefore leaves it behind.** `mise list --json` in the same image reports the tool
+correctly and LiNix's parser reads that shape, with or without the option terminator — so
+the fault is somewhere between them and is not yet explained. It is a real defect found by
+a real run, and softening it would be the vacuous check IV.1 bans.
+
+**What the run found.**
+
+- **The Linux build did not compile at all.** `registry.rs` used `OrphanDryRun` without
+  importing it, inside the `#[cfg(target_os = "linux")]` apt block — so a Windows-only
+  session could not see it, and every container image failed at `cargo build`.
+- **A refused `install` wedged the config.** `install` writes the line and syncs after it
+  (S15), and nothing checked the backend before the write: `linix install dnf:jq` on a host
+  without dnf left `dnf:jq` in `modules/imperative.txt`, and from that moment `status`,
+  `plan`, `check`, `why`, `upgrade`, `conflicts`, `activate` and **every later install** were
+  a hard parse error until a human edited the file. `App::declare` refuses such a line before
+  writing, which covers every landing and `absent:`/`repo:` with it; `retarget` (`teleport`)
+  had the identical fault one file over and is refused the same way. A name nothing can
+  resolve is still written and then withdrawn — that is a failed install, not an unusable line.
+- **`gem` has been unable to install anything since V.62.** `core/argv.rs` listed `gem` as a
+  manager that ends its options at `--`. RubyGems' `--` is not an option terminator: it is the
+  separator before the **build arguments** for a C extension, so `gem install -- colorize`
+  names no gem and dies with *"Please specify at least one gem name"*. The module's own
+  header says a manager joins that table only "when someone has checked its argument parser";
+  this one had not been. Moved, with the reason recorded and a test on both verbs.
+- **A failed install by one manager failed every manager after it.** Every later install
+  syncs the whole model, so the line `gem` could not install was retried by each subsequent
+  backend and nine lifecycles reported *gem's* stack trace under their own names. That is the
+  designed behaviour for a pinned name (V.7c), so the harness clears the line, as its own
+  negative-path section already did.
+- **`krew` was READY on a host without krew.** Its probe asked for `kubectl`, and krew is a
+  *plugin* — `kubectl krew …` works only because krew installs `kubectl-krew`. So every krew
+  command failed with `unknown command "krew"`, and it took `linix update` down with it.
+- **One backend could cancel every backend after it.** `App::update` and `App::upgrade` swept
+  the registry with `?`, so the first manager that could not refresh or upgrade silently
+  skipped the rest and the ones that had succeeded went unmentioned. Each failure is named
+  now and the sweep finishes.
+- **scoop's `list` counted a failed install as an installed package.** scoop keeps the row
+  forever with an empty Version and Source and `Install failed` in Info; read by splitting on
+  whitespace, that is a package named `jq` at version `2026-07-21` — so `sync` believed there
+  was nothing to do, `adopt` would write it into a manifest, and no `jq` was ever on PATH.
+  It is sliced by header offsets now, sharing one `slice_fixed_table` with the winget parser
+  that had already learned this exact lesson — and `scoop search` was moved onto it too.
+- **`cargo test` wrote into the repository.** Three test helpers fell back to `"."` when
+  neither `TMP` nor `TMPDIR` was set, which is every plain Linux shell — so a Linux
+  `cargo test` left `linix-embedded-*.linix`, `linix-marker-*` and `linix-vars-test-*/` in
+  the working tree. All three use `std::env::temp_dir()` now.
+
+**Reported, not changed — they are the owner's call.**
+
+- **A helm plugin LiNix installs, LiNix cannot remove.** `helm plugin install` takes a URL
+  and `helm plugin uninstall` takes the plugin **name**; a declaration carries one name, so
+  the removal goes out as `helm plugin uninstall https://github.com/databus23/helm-diff` and
+  helm answers `Plugin: <url> not found`. Proven by a real run on the `tools` image — the
+  install passed and the removal failed — and it is worse than a failed command: the
+  registry then reports the plugin as drift on every later sync, and each one fails
+  identically, so one helm plugin wedges every subsequent operation. It needs a decision
+  about how a helm plugin is identified, not a guessed URL→name mapping, so `helm` is
+  plan-smoked with that sentence as its reason rather than left as a permanently red row.
+- **`bun`'s own `remove -g` keeps the launcher.** Reproduced against bun directly with no
+  LiNix involved: the package leaves the lockfile and `cowsay.exe`/`cowsay.bunx` stay on
+  PATH. The harness reports it every run rather than tolerating it, and only when it
+  actually happens, so a bun that starts cleaning up still has to pass the strict check.
+  Whether LiNix should delete another manager's leftovers is a decision, not a bug fix.
+- **A flake reference cannot be written in a manifest.** `nix.rs` supports `nixpkgs#hello`,
+  and `#` opens a comment in the one grammar — so the branch is unreachable from a file and
+  the validator rejects the name besides. The harness uses `nix:hello`, which the backend
+  turns into `nixpkgs#hello` itself.
+- **Two commands hung on Windows, in different backends, and I could not say why.**
+  `linix -y uninstall gem:colorize` ran eight minutes with no child process and no output,
+  on a host where `gem uninstall colorize` typed directly finishes instantly; then
+  `linix -y install github:sharkdp/fd` ran fifteen minutes on the same host, while the same
+  spec had completed normally in the ubuntu container minutes earlier. `scoop`, `bun` and
+  `cargo` lifecycles in the same run were fine. Both were killed rather than diagnosed, and
+  neither reproduced under a single command by hand — so what is recorded is the shape:
+  **on Windows a sync-path command can stop returning**, and `network_timeout_secs` did not
+  bound the second one. The *harness* fault it exposed is fixed either way: the Windows
+  sweep drove the binary with no timeout at all, so a wedged command stopped the whole run
+  indefinitely and reported nothing. Every call is wrapped now, the way the container one
+  already was — which is what turns this from a hang into a named failure next time.
+- **`pip`'s real lifecycle cannot pass on a PEP 668 distro.** The harness detects the
+  `EXTERNALLY-MANAGED` marker and names that as the reason rather than letting a permanent,
+  expected refusal read as ecosystem flakiness run after run.
+
+**Still owed.** The Windows sweep is written and its audit passes, but no clean end-to-end
+run of it exists: the two hangs above ate it twice, and both interventions contaminated the
+rows after them. It needs one uninterrupted run on a Windows host now that every call is
+wrapped in a timeout. The `mise` failure above needs an explanation, and `helm` needs a
+ruling before it can leave the plan-smoke list.
 
 ## Session 2026-07-22 (eleventh session) — the tenth session's rulings, built
 
@@ -7427,3 +7862,1147 @@ packages, not disk space, and widening it to cover caches dilutes what a guard r
 **BUILT the split, 2026-07-20:** `clean-cache --all` takes no confirmation and no guard (it
 touches caches and `tmp_dir`, no installed software); `linix reset` takes the typed-count
 confirmation because it destroys the registry. The reason is written into `handle_clean_cache`.
+
+---
+
+# Part XI — Proposed: `firewall:`, the perimeter as a declaration
+
+**Asked for on 2026-07-23**, alongside two neighbours that were answered differently: a
+kernel-building engine (**out of scope — see XI.7**) and hardware-backed secrets (**Part XII**,
+where half of it turns out to be built already).
+
+Nothing in the tree speaks to a firewall today. `grep -rn "nftables\|iptables\|firewalld\|ufw\|
+New-NetFirewallRule" src/` is silent, and there is no `firewall` in `src/backends/`.
+
+## XI.1 The reason this one fits, when the kernel one did not
+
+Everything the feature needs already exists in some other statement's machinery:
+
+- **The statement shape** — II.16 says everything is a line, and `setting:` (X.4) is already a
+  `key/subkey @value=` statement with a per-store adapter behind it. A firewall rule is the
+  same shape with a different adapter.
+- **The drift half** — "detect and purge unauthorised out-of-band changes" is `extras_lock`
+  (S20) plus `watch` (R11's single reconcile). Both are built. A firewall backend inherits
+  them by being an extra, exactly as `service:` does.
+- **The refusal half** — `app/sync/guard.rs` already gates every removal. Closing a port is a
+  removal, and it is the removal with the largest blast radius in this document.
+
+So this is a new *backend*, not a new mechanism. That is the test X.4 set for `setting:` and it
+is the test that fails for the kernel engine.
+
+## XI.2 What is already possible today, and why the backend still earns its place
+
+**An nftables user can already declare their firewall, with no new code:**
+
+```
+link:./firewall/nftables.conf@target=/etc/nftables.conf
+service:nftables
+```
+
+That is a file and a unit, and LiNix has statements for both. It is genuinely declarative: the
+ruleset is in git, `sync` writes it, removing the line removes it.
+
+**What it does not give you is the three things a backend would:**
+
+1. **One spelling across five firewalls.** `ufw`, `firewalld`, raw `nft`, `pf` and Windows
+   Defender Firewall have nothing in common at the file level. A config that opens port 22 on
+   a Debian laptop and a Windows workstation cannot be a `link:` twice.
+2. **Per-rule drift, not per-file drift.** `link:` notices the file changed. It cannot notice
+   that someone ran `ufw allow 3306` at 2am, because that did not touch the file.
+3. **Read-before-write.** X.4 established this as the line between a declaration and a hook. A
+   `link:`-plus-`service:` pair restarts the firewall on every sync that touches the file; a
+   `firewall:` line that reads the live ruleset first writes only on a difference.
+
+**If the answer to N3 is "one adapter",** the honest recommendation is to build nothing and
+document the two lines above instead. The backend is worth its cost only across firewalls.
+
+## XI.3 The statement
+
+Proposed shape, mirroring `setting:<schema>/<key>` deliberately so there is one thing to learn:
+
+```
+firewall:allow/22            @proto=tcp
+firewall:allow/443           @proto=tcp @from=any
+firewall:allow/5432          @proto=tcp @from=10.0.0.0/8
+firewall:deny/23             @proto=tcp
+firewall:default/incoming    @value=deny
+firewall:default/outgoing    @value=allow
+```
+
+It inherits the model rather than extending it — which, per X.4, is the bar a new statement has
+to clear:
+
+- `when` wraps it, so `when host == laptop { firewall:default/incoming@value=deny }` is a
+  per-machine perimeter with no new mechanism.
+- Two active declarations of the same rule that disagree is II.7 rule 5's error, not a
+  last-one-wins.
+- `plan` shows the rule before it exists.
+- It is a dependent extra (II.7's third ordering phase, S12) — a rule can name a port a package
+  is about to start listening on, so it applies after packages.
+- Removing the line removes the rule, through `extras_lock`'s existing undo path.
+
+**`@from=` is one value, not a list, in the short form** — a CIDR contains no comma, and a rule
+that needs several sources is the block form, per II.2's rule about commas.
+
+## XI.4 The adapter is per-firewall, not per-distro
+
+`ufw` and `firewalld` both ship on Fedora; neither is the one in charge unless it is running.
+The detection question is *which firewall is enforcing*, not *which distro is this* — the same
+distinction X.4 drew for desktops, and the same one `service.rs` draws for init systems
+(`InitSystem::Systemd | OpenRc | Launchd`).
+
+**A host with no adapter refuses, naming the gap.** `SettingStore::None` is the precedent: a
+`setting:` line on an unadapted desktop errors rather than writing something nothing reads. A
+`firewall:` line on an unadapted host must do the same, because the alternative — reporting
+success while the port stays open — is a security claim that is false.
+
+## XI.5 The thing that must not happen
+
+**This feature's flagship bug is locking the owner out of a remote machine**, and it is the
+exact shape of the bug this rewrite exists to prevent: `apt-get purge` ran across hundreds of
+system packages because a removal path had no guard on it. A perimeter that "instantly purges
+unauthorised changes" is a removal path by construction.
+
+Minimum, and not negotiable if this is built:
+
+- **Every rule teardown goes through `app/sync/guard.rs`.** A guard on one command is a guard
+  on nothing (CLAUDE.md).
+- **A change that would drop the port carrying the current session is a refusal**, not a
+  confirmation — see N2. The user cannot type `yes` to a prompt they will never see, because
+  the connection carrying it is what the change closes.
+- **`--dry-run` never touches the live ruleset.** `link:`'s decrypt mode is the pattern
+  (`link.rs:274`): dry-run logs what it would do and returns before the side effect.
+
+## XI.6 What it is not
+
+**Not a packet-filter language.** There is no LiNix syntax for connection tracking, NAT, rate
+limits or chains. Anyone who needs those needs `nft` itself, and XI.2's `link:` pair is how they
+get it. The vocabulary here is ports, protocols, sources and the two defaults — the set that
+means the same thing on every firewall. Inventing a portable spelling for what is not portable
+is how this document's closed `formats` vocabulary (VIII.2) got its rule.
+
+**Not a second place rules live.** If a host declares `firewall:` lines *and* a `link:` to
+`/etc/nftables.conf`, two things own the perimeter and the last one to run wins. That is the
+two-of-everything failure. See N6.
+
+## XI.7 The neighbouring request that was refused: kernel building
+
+**Recorded because it was asked, and because the reasoning generalises.** The proposal was a
+Rust engine that reads the active hardware layout, generates a minimal kernel configuration,
+and compiles a custom kernel — "zero distribution bloat".
+
+**Out of scope, and not a K-item.** Three reasons, in the order they matter:
+
+1. **It makes LiNix a distribution builder.** LiNix drives package managers that are already on
+   the host; it builds nothing. Compiling a kernel brings a toolchain, a build cache, artifact
+   storage, and a boot story — what happens when the new kernel does not boot — and none of
+   those exist here. It is not an extension of this design; it is a second product sharing a
+   binary.
+2. **It is meaningless on two of the three supported systems.** `os` is `linux | macos |
+   windows` (II.2). A core feature that only exists on one is a wrong shape for the core.
+3. **The mechanism it describes already exists elsewhere and is known to be fragile.**
+   Generating a config from currently-present hardware is `make localmodconfig`, in the kernel
+   tree for over a decade, and its documented failure is hardware that was not plugged in when
+   the config was taken.
+
+**What was kept from it — see XIII.1**, which also answers the question this refusal raises:
+*LiNix already upgrades the kernel, so why not the driver that depends on it?* One thing in this
+area is genuinely in scope — rebuilding the declared out-of-tree modules that a kernel change
+just invalidated, because no package manager's hook fires for a module a different manager
+installed. A second, a `hardware` command that printed declarations to paste, was **withdrawn
+under P8**.
+
+## XI.8 The decision register
+
+Blocking means: this cannot be built without an answer, because two reasonable implementations
+differ.
+
+### Blocking
+
+**N1 — Is the declared perimeter exclusive?** *This is the whole feature.* Additive means the
+lines say "these rules exist" and anything else a human added survives. Exclusive means they say
+"these rules and no others", and an undeclared rule is drift to be removed — which is what
+"instantly detecting and purging any unauthorised out-of-band changes" asks for, and is the only
+version that makes the perimeter a fact rather than a floor. It is also the version that deletes
+the rule someone added for a reason nobody wrote down. *Recommendation:* exclusive, because an
+additive firewall answers no question worth asking, **but only with N2 answered and only behind
+`purge-unmanaged`'s existing opt-in shape** (II.11) rather than on by default in `sync`.
+
+**N2 — What does LiNix do when the change would close the session it is running over?** A
+confirmation prompt cannot work: the prompt travels over the connection the change severs.
+*Recommendation:* refuse. Detect the port of the controlling connection, and refuse any plan
+that would deny it, naming the port and the rule — overridable only by a flag that says the
+user has console access. Building this feature without this check is building the lockout.
+
+**N3 — Which adapters ship, and does one adapter justify the backend?** XI.2 says the backend
+earns its place across firewalls and not within one. *Recommendation:* it is not worth starting
+below two adapters plus Windows; if only `ufw` is in reach, document the `link:` pair and close
+this part.
+
+### Not blocking
+
+**N4 — Is `default/incoming` a `firewall:` statement or a preference key?** As a statement it
+inherits `when` and the plan; as a key in `preferences.toml` it is machine-local and invisible
+to git. *Recommendation:* a statement — the default policy is the most important line in a
+firewall and belongs in the repo with the rest.
+
+**N5 — What does removal restore?** X.4 ruled that a removed `setting:` resets to the schema
+default rather than to the value the user had before LiNix. *Recommendation:* the same answer,
+for the same reason — restoring a per-rule prior state means keeping a per-rule store of it,
+and "undeclared means the firewall's own default" is the shape every other statement's removal
+already has. The cost is the same one X.4 recorded and it must be documented, not hidden.
+
+**N6 — What happens when a config declares both `firewall:` lines and a `link:` to the
+ruleset file?** *Recommendation:* an error at resolve time naming both files and lines, in the
+class of II.7 rule 5. Two owners of one perimeter is the two-of-everything failure, and it
+should be caught before any command runs, not discovered at 2am.
+
+**N7 — Does `watch` revert firewall drift unattended, or only report it?** Everything else
+`watch` reconciles is software; this reconciles reachability. *Recommendation:* report by
+default, revert only under an explicit key, and never revert a rule that would trip N2.
+
+---
+
+# Part XII — Secrets: what is built, what is not, and what will not be
+
+**Asked for on 2026-07-23** as "hardware modules like TPM 2.0 or YubiKeys decrypt and inject
+credentials at runtime, keeping public config repositories completely clean." **Half of that
+sentence has been true since Phase 2p and was never written down here** — which is why this part
+exists at all: an undocumented feature is a feature nobody uses and the next session reimplements.
+
+## XII.1 What is built
+
+**`link:` mode D — decrypt a file from the repo, write the plaintext to disk.**
+`src/backends/link.rs:271-295`, with `decrypt_argv` at `:45` and identity resolution at `:81`.
+
+```
+link:./secrets/npmrc.age {
+  target   = ~/.npmrc
+  decrypt  = age
+  identity = ~/.config/linix/age.key
+}
+```
+
+- **Two tools, closed set:** `age` and `sops`. Anything else is an error naming both
+  (`link.rs:59`) — the same closed-vocabulary rule as `formats` (VIII.2).
+- **The identity resolves in three steps:** `@identity=`, then `$LINIX_AGE_IDENTITY`, then
+  `~/.config/linix/age.key`. `sops` takes no identity flag; it reads its own configuration.
+- **LiNix embeds no crypto.** It runs the binary the user already trusts, and captures stdout
+  raw — never trimmed — so key material survives byte-for-byte.
+- **Dry-run never decrypts** (`link.rs:274`). It says what it would do and returns. A dry run
+  that produced a plaintext file would make `--dry-run` the leak.
+- **The plaintext is 0600 on Unix** after the write (`link.rs:285`).
+- **Removing the line removes the plaintext**, through the same `remove` path as every other
+  `link:` mode.
+
+**So the headline promise already holds: the repository is public-safe, and the plaintext exists
+only on the machine that can decrypt it.**
+
+## XII.2 What is not built, and what will not be
+
+**Hardware-backed identities (TPM 2.0, YubiKey) — not built, in scope, see XII.3.**
+
+**Runtime injection into process memory — out of scope (owner, 2026-07-23).** The proposal was
+that credentials never touch the disk at all: LiNix decrypts into the memory of the process that
+needs them. Ruled out rather than deferred. It requires LiNix to be in the process-launch path
+for every consumer of a secret, which is a supervisor's job (`systemd`'s `LoadCredential`, a
+`direnv`, a secrets agent), and LiNix is not a supervisor. The half-measure — injecting only into
+children of `linix run` (`app/run.rs:138`) — would protect exactly the processes LiNix starts and
+none of the ones that actually read `~/.npmrc`, while reading as though it protected both. **Do
+not re-open without a use case that lives entirely inside `linix run`.**
+
+## XII.3 The hardware half, proposed
+
+`age` already delegates identity to plugins — `age-plugin-yubikey`, `age-plugin-tpm` — and a
+plugin identity is consumed through the same `age --decrypt -i <identity>` invocation
+`decrypt_argv` already builds. **The likely shape of this work is therefore relaxing what
+`@identity=` accepts, not new crypto and not a new mode.** What it needs on top:
+
+- A plugin identity file is a stub, not a key. The failure when the token is absent is a
+  prompt-or-hang from the plugin, not an error from `age` — so the timeout and the message are
+  the work here, not the invocation (T3).
+- Touch-required tokens make decryption interactive. A `sync` that silently blocks on a
+  YubiKey nobody is standing next to is the unattended-`watch` failure (T4).
+
+**This should not be started until T1 and T2 are closed,** because they are live defects in the
+half that already ships, and hardware keys make a leaked plaintext no less leaked.
+
+## XII.4 The invariant this sits next to, and does not contradict
+
+II.1 says secrets are *"the environment only. `GITHUB_TOKEN`. Never a file."* Mode D writes a
+secret to a file. **These are two different secrets and the distinction must stay explicit, or
+the next reader will delete one of them as a violation of the other:**
+
+| | II.1's rule | mode D |
+|---|---|---|
+| whose secret | **LiNix's own** credential, for its own API calls | **the user's** credential, for some other program |
+| where it may live | environment variable, never on disk | encrypted in the repo, plaintext at `@target=` |
+| why | LiNix must never be configured with a secret, so a config is always safe to hand over | the program that needs it reads a file, and always will |
+
+X.5's backup rule holds under both: a `bundle` copies the config root, and the config root holds
+only the *encrypted* file. **What a bundle must never pick up is the decrypted target** — which
+is a live question, because nothing checks where `@target=` points (T2).
+
+## XII.5 The decision register
+
+### Blocking
+
+**T1 — `backup_once` copies the previous secret to a world-readable file.** `link.rs:319` and
+`:154` run for every managed-content write, including mode D: if the target already holds a
+secret, LiNix copies it to `<target>.linix-backup` before overwriting — with default umask
+permissions, and with no `.linix-backup` in any ignore file. The 0600 at `:285` is applied to the
+target only. *Recommendation:* mode D never backs up. The point of `backup_once` is that a user
+is not silently robbed of a config file they hand-wrote; a secret LiNix itself wrote a moment ago
+is not that, and the backup is a plaintext credential in a predictable path nobody will think to
+delete. **This is a defect in shipped code, not a design question — but it is recorded here
+rather than fixed silently, per rule 4.**
+
+**T2 — Nothing stops `@target=` from pointing back into the config repo.** A
+`link:./secrets/token.age@target=./secrets/token@decrypt=age` writes the plaintext next to the
+ciphertext, inside git, and the next `sync` commits it. *Recommendation:* refuse a `@target=`
+that resolves inside the config root when `@decrypt` is set — the check is cheap, the failure is
+unrecoverable (a secret in git history is a rotated secret), and X.5's promise that a backup is
+safe to hand to someone depends on it holding.
+
+### Not blocking
+
+**T3 — What does a missing hardware token look like?** The plugin may prompt on a terminal
+nobody is watching. *Recommendation:* a timeout, and a message naming the token and the
+identity file rather than passing the plugin's own text through.
+
+**T4 — May an unattended `watch` tick decrypt?** A touch-required key turns a background
+reconcile into a silent block. *Recommendation:* `watch` skips `@decrypt` lines whose identity
+is a plugin stub and says so once, rather than hanging.
+
+**T5 — Is the plaintext 0600 at creation, or after?** Today `write_atomic` creates under the
+umask and `set_permissions` follows (`link.rs:285-292`). The window is small and local, and on
+Windows there is no restriction at all. *Recommendation:* create restricted rather than
+chmod after, and on Windows either set an ACL or say plainly in the docs that mode D gives the
+file no special protection there — the second is acceptable, silence is not.
+
+---
+
+# Part XIII — Proposed: the next round (2026-07-23)
+
+Seven proposals from one conversation. They are one part rather than seven because they share a
+question — *what is LiNix allowed to do without being told twice* — and because five of them
+turn out to be **compositions of things already built**, which is the cheapest kind of feature
+and the easiest to miss while reading the tree file by file.
+
+Decisions in this part are numbered **U**.
+
+## XIII.1 The kernel, answered: LiNix already upgrades it, and should finish the job
+
+**Does LiNix upgrade the kernel? Yes — incidentally, and with no special knowledge of what a
+kernel is.** `linux-image-generic`, `linux`, `linux-lts`, `kernel-core` are packages, and
+`upgrade` upgrades them through the backend like anything else. There is no kernel concept
+anywhere in the tree. The single mention is `config/config.rs:380`, where `linux-image`,
+`linux-headers` and `kernel` sit in the guard's protected-prefix list so that no removal path
+can ever take them — a refusal, not an understanding.
+
+**So why not `nvidia` and the like? Mostly the distribution already does it, and on a
+single-manager machine there is nothing for LiNix to add.** An out-of-tree module —
+`nvidia-dkms`, `virtualbox-modules`, `zfs-dkms` — is also just a package. Declaring
+`pacman:nvidia-dkms` installs it, and the rebuild against a newly-installed kernel is done by
+that package manager's own DKMS hook, at the moment the kernel lands.
+
+**The hole is the machine LiNix exists to make possible.** The whole premise is that software
+comes from several managers at once. The kernel comes from `apt`; the driver may come from
+`github:` or `web:` as a blob, or from another backend entirely. **No package manager's hook
+fires for a module a different manager installed** — so the rebuild a single-manager machine
+gets for free silently does not happen, and the symptom is a black screen after the next
+reboot rather than an error during the sync that caused it.
+
+**LiNix is the only thing on the machine that can see both halves.** It knows a kernel package
+changed, because it changed it; it knows which out-of-tree modules are declared, because they
+are in the config.
+
+*Proposed:* after a sync that changed a kernel package, **rebuild the declared out-of-tree
+modules, and fail loudly before the reboot** — while there is still a working shell to fix it
+from. Constraints:
+
+- **Declared modules only.** A module LiNix did not install is not LiNix's to rebuild.
+- **It rebuilds; it does not advise (P8).** `dkms autoinstall`, or `dkms build`/`install` per
+  module where the version is known.
+- **A module that will not build is a loud failure naming the module, the kernel version and
+  the log path** — the one moment where saying nothing costs the user their display.
+- **P7:** Windows and macOS have no DKMS. Windows' nearest analogue is a driver package bound
+  to an OS build, and the honest answer may be *nothing to do here* — but under P7 that answer
+  gets written down after someone looks, not assumed because the feature smelled like Linux.
+
+**Withdrawn: the `hardware` command that printed suggestions (owner ruling, 2026-07-23).** It
+would have detected an undeclared GPU or fingerprint reader and printed lines for the user to
+paste into a module. **That is precisely what P8 forbids** — LiNix does the thing, it does not
+hand you the thing to do. If hardware detection is ever worth it, its output is an edit LiNix
+offers to make (the `install`/`adopt` shape: ask, then do), never a block of text to retype.
+
+## XIII.2 Custom backends already exist — and they live in the wrong place
+
+**`src/backends/onboarder.rs` (593 lines, shipped) already lets a user teach LiNix a package
+manager with no source change.** `~/.config/linix/custom_backends.toml`:
+
+```toml
+[[backend]]
+name         = "paru"
+install_args = ["-S", "--noconfirm"]
+remove_args  = ["-R", "--noconfirm"]
+list_args    = ["-Qm"]
+search_args  = ["-Ss"]
+needs_root   = false
+[backend.parser]
+format      = "columns"
+name_col    = 0
+version_col = 1
+```
+
+Both halves of a backend are data: the argv come from the TOML, and the output parser is a
+declarative `ParserSpec` (`lines` / `columns` / `json` / `regex`) interpreted at runtime by
+`ConfiguredParser`. `paru:yay-bin` then works everywhere a built-in prefix works. Custom
+backends register **last** and never override a built-in (collisions are skipped with a
+warning), and `is_valid_backend_name` refuses any name the grammar spends — no whitespace, no
+`/`, no `:`, no `,`, nothing in `RESERVED_BACKEND_NAMES`.
+
+**This document has mentioned it twice, in passing, and never described it.** That is the first
+defect: a capability nobody knows about is a capability nobody uses, and the next session
+reimplements it.
+
+**The second defect is where the file lives, and it is the real one.** `custom_backends.toml`
+is read from `safe_config_dir()` — LiNix's own settings directory, the machine-local one that
+II.1 says is *never in git*. So:
+
+> A config repo that declares `paru:yay-bin` works on the machine where somebody once hand-wrote
+> a TOML file, and fails on every other machine with an unknown-backend error — including the
+> fresh machine the repo exists to set up.
+
+**The one thing that cannot travel is the thing that teaches LiNix what the lines mean.** That
+contradicts the model's central claim (one repo describes the machine) more sharply than any
+missing backend does. See **U1**.
+
+**Known capability gaps** (a custom backend is not yet a peer of a built-in): no repository
+management, no orphan/enumerate support, no dependency query, no `is_essential`. Each is a
+field `ManagerConfig` already has and `CustomBackendDef` does not expose. Filling them is
+mechanical; deciding whether a custom backend *should* be a full peer is **U2**.
+
+## XIII.3 Running a script, and naming a command — what exists, and the one shape that does not
+
+**Asked 2026-07-23: can a user point LiNix at a file and have it run, or alias a name to a
+command? Four ways already exist, and each is deliberately attached to something.**
+
+| you want | write | what it is |
+|---|---|---|
+| a script around a package | `apt:nginx@after_install=./setup.sh` | II.12 hooks — `before_`/`after_install`, `after_remove` |
+| a script on a clock | a line in `schedules`, `@cron=`/`@run=` | the scheduler |
+| a name that resolves to a binary | `shim:node` | `ShimManager` — a PATH stand-in |
+| a name that resolves to argv | `[[backend]]` in `custom_backends.toml` | XIII.2 — a whole manager, from data |
+
+**What does not exist is a bare script with nothing to attach it to** — the NixOS
+`activationScripts` shape, "run this as part of making the machine right".
+
+**And the reason it does not exist is not an oversight.** A statement that just runs a command
+has no state to converge to, so it either runs on every sync — which makes it a cron job with
+worse ergonomics, and makes `sync` non-idempotent, the one property the whole model rests on —
+or it runs once and never again, which makes it an install script with no record. Neither is a
+declaration. `setting:`'s ruling (X.4) is the precedent: *a `setting:` that shells out
+unconditionally is a command that runs every sync; one that reads the current value first and
+writes only on a difference is a declaration, and only the second belongs in this model.*
+
+**`exec:` is approved (owner, 2026-07-23), with two rulings that between them supply the
+missing state.**
+
+### The condition is `when`. There is no `@unless=` (owner ruling, 2026-07-23)
+
+The first draft of this section proposed `@unless=<command>` and `@creates=<path>` as new option
+keys. **Ruled against, and they are not to be built** — the condition system already exists and
+adding a second one is the failure this rewrite is for.
+
+`when` gates every line in every file, and Part IX made the variables it reads
+*user-programmable*: a provider file (`vars.py`, `vars.sh`, `vars.linix`, or the plain `vars`
+line file) is run by LiNix, is handed the machine's facts as `LINIX_OS`/`LINIX_ARCH`/
+`LINIX_HOST`/`LINIX_FAMILY`, and returns `name = value` pairs. **So "unless this command
+succeeds" is already expressible, with nothing new in the grammar:**
+
+```
+# vars.sh — a program, so it may ask the machine anything
+tpm_enrolled = $(tpm2_getcap properties-fixed >/dev/null 2>&1 && echo yes || echo no)
+```
+
+```
+when $tpm_enrolled == no {
+  exec:./bin/enroll-tpm.sh
+}
+```
+
+Three things this buys that a dedicated key would not: the condition is **named**, so the reason
+the script runs is legible at the point of declaration; it is **reusable**, because the same
+variable can gate a package, a `setting:` and an `exec:` at once; and it is **one mechanism**,
+so a user who has learned `when` has learned this. `@creates=<path>` is likewise a variable a
+provider computes, not a key.
+
+### The lock is the script's hash and how many times that hash has run (owner ruling, 2026-07-23)
+
+`when` decides *whether the machine wants this*. It cannot decide *whether this already
+happened* — variables are resolved once and frozen into the plan (W4/W13), so a condition that
+the script itself would have falsified is still true within the run that executes it. That is
+what the lock is for.
+
+`locks/exec.toml`, keyed by **the hash of the script's contents**, recording **the number of
+times that hash has run** and when it last did.
+
+- **The hash is the identity, not the path.** Editing the script makes it a different script, so
+  it runs again. Renaming it does not. That is content-addressing, and it is the same reasoning
+  II.12 uses for artifacts: what you declared is the content, and a changed content is a changed
+  declaration.
+- **The default is: run once per distinct content.** `@runs=` sets the ceiling; `@runs=always`
+  is the explicit opt-out for a script that genuinely must run every sync, and being explicit is
+  the point — nothing becomes a per-sync command by accident.
+- **`plan` can now say the true thing:** *hash `a1b2…`, run 0 times, `$tpm_enrolled` is `no` →
+  this will run*. A statement whose preview cannot be computed has no business in this model,
+  and this one's can.
+- **The limit gets written down, not hidden:** the hash covers the file LiNix executes. A script
+  that sources another file, or curls one, changes behaviour without changing its hash, and
+  LiNix cannot see that. Say so in the readme rather than implying a guarantee.
+- **Removing the line drops the lock row.** What it does *not* do is undo the script's effects —
+  see U3.
+
+### Three states, and the one place `exec:` is not like everything else
+
+**Note this, because it is the exception that will be "fixed" by someone who has not read it
+(owner, 2026-07-23).** Every other statement has two states that collapse into each other: a
+line whose `when` is false is *exactly* a line that is not there. `when $gaming { apt:steam }`
+on a machine where `$gaming` is false means Steam is not declared, which means Steam is drift,
+which means Steam is removed. **False and absent are the same fact for a noun.**
+
+**For a verb they are not**, and the reason is the example this feature was designed around:
+
+```
+when $tpm_enrolled == no {
+  exec:./bin/enroll-tpm.sh
+}
+```
+
+**The script's success flips its own condition false.** If a false `when` meant "removed", and
+removed meant "undo", the sync that enrolled the TPM would immediately un-enroll it — and every
+sync after would flap. A verb that succeeds makes itself unwanted; that is what success *means*,
+and it must not be read as a request to undo.
+
+So `exec:` has three states, not two:
+
+| state | what it means | what happens | lock row |
+|---|---|---|---|
+| declared, `when` **true** | wanted, and possibly not done yet | runs if this hash's count is below its ceiling | created / incremented |
+| declared, `when` **false** | not wanted *on this machine, right now* | **nothing runs, and nothing is undone** | **kept, untouched** |
+| **not declared** (line deleted) | no longer part of the configuration | `@undo=` if one was given, else nothing (U3) | dropped |
+
+Two consequences that are easy to get wrong and expensive to debug:
+
+- **The lock row survives a false `when`.** Dropping it would make a condition that flaps — a
+  laptop on battery, a host that comes and goes — re-run the script every time the condition
+  swung back true, because the count would have been forgotten. Keeping the row is what makes
+  the count mean *"this content has run n times on this machine"* rather than *"n times since
+  the last time the condition happened to be false"*.
+- **`exec:` is not in the extras teardown path.** `reconcile_extras` (S20) undoes a `service:`,
+  `link:`, `shim:`, `repo:` or `schedule:` that stopped being declared, and `extra_key` must
+  either exclude `exec:` or handle it as its own case. Wiring a verb into a ledger built for
+  nouns is how the un-enrol bug gets in through the back door.
+
+Still open: what an `exec:` **removal** should mean (U3), and whether this becomes the way people
+avoid writing a backend (U4).
+
+## XIII.4 Parity is a gap list, not a sentiment (P7)
+
+P7 says a feature is unfinished until Windows and macOS have an equivalent or a written reason
+there can be none. **Applying the rule to the tree as it stands produces a short, concrete
+list** — and one entry that turns out to be fine, which is worth recording so nobody re-audits
+it:
+
+| capability | Linux | macOS | Windows | verdict |
+|---|---|---|---|---|
+| `service:` | systemd, OpenRC, SysVinit | launchd | `sc` | **done** — `InitSystem` covers all five |
+| `setting:` | `gsettings` (GNOME) | **nothing** | **nothing** | **the gap** |
+| snapshot / rollback safety net | btrfs, ZFS, Timeshift | **nothing** | **nothing** | **the gap** |
+| packages | apt, dnf, pacman, … | brew, mas | winget, scoop, choco, psresource | done |
+
+**The Windows registry is the highest-value single adapter in this document.** `setting:`'s
+whole mechanism is read-before-write, and the registry answers a typed read-then-write cleanly
+— better than KDE's schemaless ini files, which is why the KDE adapter (K7) is still blocked.
+`setting:HKCU\Software\...\Key@value=` would make LiNix the only tool that declares a Windows
+machine's *configuration* and not merely its software. macOS's counterpart is `defaults
+read`/`write`, which has the same shape. See **U5**.
+
+**The snapshot gap is the more serious one, and it is quiet.** Every dangerous path in this
+document — `rebuild`'s revert (K3), the guard's pre-sync snapshot, `rollback` — is written as
+though a snapshot provider exists. On Windows and macOS none does, so those paths fall back to
+their no-provider branch and the safety net silently is not there. Windows has VSS; macOS has
+APFS local snapshots. **Until one of them is adapted, this document should say plainly which
+guarantees are Linux-only** rather than describing them unqualified. See **U6**.
+
+## XIII.5 Health-checked upgrades, with automatic rollback
+
+**Every part of this is built. What is missing is the wiring, and the wiring is the feature.**
+
+An upgrade today: snapshot (where a provider exists), upgrade, done. Whether the machine still
+works is discovered by the human, later, by using it. That is acceptable when a person ran the
+command and is watching; it is **not** acceptable for `watch`, the unattended reconcile, which
+is exactly where an upgrade that breaks the box does so with nobody present.
+
+*Proposed:* a declared health check, run after the upgrade, whose failure reverts it.
+
+```
+apt:postgresql {
+  version = 16
+  health  = pg_isready -q
+}
+```
+
+- The check runs after the transaction that touched the package, not on every sync.
+- A failing check **restores the snapshot** — the mechanism K3 already ruled for `rebuild`'s
+  failed reinstall, reused rather than reinvented.
+- **No snapshot provider is not a refusal** (K3's second ruling, again): the check still runs
+  and still fails loudly, it simply cannot revert, and it says so before it starts.
+- A failed *restore* is its own reported outcome (K3's third ruling). The machine is then both
+  broken and un-restored, and saying "rolled back" would be a lie.
+- **P7:** the check is a command the user wrote; it is portable if theirs is. Nothing here is
+  Linux-shaped.
+
+The scope question is whether health is per-package or per-sync (**U7**).
+
+## XIII.6 The question `why` cannot answer
+
+`linix why <package>` says where a package came from. **The reverse question is the one people
+actually hesitate over**, and nothing answers it: *if I deactivate this profile, or delete this
+module, what leaves this machine?*
+
+The computation already exists — `deactivate` runs exactly this set-math today, then acts on
+it. This proposal is that pressing it is not the only way to see it. *Proposed:* a preview mode
+on the existing commands rather than a new verb (`deactivate --dry-run`, `why --if-removed`),
+because a new verb for an existing computation is the two-of-everything failure. See **U8**.
+
+## XIII.7 Cross-machine diff
+
+`app/fleet.rs` SSHes to each declared host, runs `linix status --json`, and reports **each
+host's drift against its own manifests** — optionally reconciling. It cannot answer the
+question two machines actually raise: *the laptop and the desktop run the same profile, so why
+does one have ripgrep 14 and the other 13?*
+
+That is the same parse `fleet` already does, on a different axis: compare hosts to each other
+rather than each host to itself. Version skew inside one declared set is real drift — the two
+machines match their manifests and do not match each other, which is what a version range or a
+stale index does — and it is invisible today. Small, given `HostDrift` exists.
+
+## XIII.8 Sixty commands, one question
+
+**`linix --help` lists around sixty subcommands. Ten of them answer a version of "is my machine
+all right?"** — `status`, `check`, `doctor`, `heal`, `unmanaged`, `absent`, `conflicts`,
+`insight`, `metrics`, `audit`. Nobody can hold that in their head, and the practical result is
+that a user runs the one they remember and never learns the other nine exist. **The
+consolidation is worth more than any new backend**, and it is the repo's own rule applied to
+its command surface: *prefer deleting to fixing; when you find a second implementation of
+something, remove one rather than reconcile them.*
+
+**This needs a decision before any work (U9), because it is the one change here that breaks
+existing invocations** — and "no change breaks existing code" is binding. Under P2 there are no
+users to migrate and no deprecation period, so the honest form is: one command, the old names
+gone in the same change, the docs and tests renamed with them.
+
+The shape to aim at: **one `linix check`, sectioned**, with flags to narrow it — drift,
+unmanaged, absent, conflicts, health, policy. `heal` stays separate because it *acts*; the
+other nine only look.
+
+## XIII.9 The one kind of software LiNix cannot install: its own backends
+
+**Approved 2026-07-23.** Declare `brew:ripgrep` on a fresh Mac with no Homebrew and the line
+fails: the backend is unavailable, and LiNix — a program whose entire job is installing software
+— cannot install the thing it installs *with*. The same holds for `scoop` on a new Windows box,
+`krew` without `kubectl`, `cargo` without a toolchain, `pipx` without Python.
+
+**This is the first ten minutes of every new machine, which is precisely the ten minutes the
+tool exists to delete.** A config repo that describes a machine completely still requires a
+human to read a wiki and paste an install line before LiNix can act on any of it.
+
+`priority` already names every backend the machine uses, in order, and V.15 already refuses a
+line whose backend is not listed — so the file that knows which backends matter is the file that
+should know how to obtain one.
+
+*Proposed shape:* an optional bootstrap per backend, used only when the backend is declared,
+absent from the machine, and the user has said yes.
+
+- **It is a refusal by default, never a silent fetch.** Installing a package manager is running
+  someone's shell script as root; it is II.12's supply-chain surface at its widest. LiNix says
+  *`brew` is declared and missing; here is exactly what I would run to get it* and stops. That
+  is *ask, then do* (P8), not *inform, then leave* — the difference is that the answer to the
+  question performs the work.
+- **A bootstrap that is already a package is a package.** `pipx` is `apt:pipx`; `krew` is a
+  `github:` release. Those need no new mechanism at all and should not get one — the mechanism
+  is for the managers that genuinely ship as a shell script (`brew`, `rustup`, `scoop`).
+- **P7:** this is *more* valuable on Windows and macOS than on Linux, where the system manager
+  is already present. A fresh Windows box has no scoop and no choco; that is the machine with
+  the longest manual prelude today.
+- **The bootstrap is recorded like any other install**, so `unmanaged` and the registry do not
+  suddenly disagree about where `brew` came from.
+
+Open: does a bootstrap live in `priority` beside the backend it obtains, or in
+`custom_backends.toml` beside the definition (U10)?
+
+## XIII.10 `sync --locked` — the difference between describing and reproducing
+
+**Approved 2026-07-23.** `locks/` records what each declaration resolved to. Nothing lets a user
+say **converge, and fail if the lock would change.**
+
+That single flag is the line between *"my config describes this machine"* and *"my config
+reproduces this machine"*, and the second is the claim people actually adopt a declarative tool
+for. Today an unpinned line resolves to whatever the index offers this morning, the lock is
+updated to match, and the machine has drifted from its sibling with nothing anywhere reporting
+it — every file matches, every check is green.
+
+- **`--locked` fails; it does not fix.** A resolution that differs from the lock is an error
+  naming the package, the locked version and the offered one. Exactly `cargo --locked`'s
+  contract, and worth matching deliberately, because the audience already knows it.
+- **This is what CI runs**, and it is what makes a fleet reproducible rather than merely
+  convergent (XIII.7's cross-machine skew is this bug seen from the other end).
+- **`watch` should probably default to it** — an unattended reconcile that silently accepts a
+  new upstream version is the least supervised place for that to happen (U11).
+- Backends that cannot pin a version cannot honour `--locked`, and must say so rather than
+  passing. `ManualListing`'s distinction is the precedent: *"cannot answer"* must never be
+  reported as *"nothing changed"*.
+
+## XIII.11 `linix try` — rehearse the config before it touches the machine
+
+**Approved 2026-07-23.** Phase 6 built container images to test LiNix. Point that machinery at
+**the user's config** and it becomes the feature this tool most obviously lacks: *run my config
+in a clean container and tell me whether it converges — before it runs on my laptop.*
+
+`sync` is the scariest command in the product. It installs and removes real software on a real
+machine, and the guard, the plan, the snapshot and the confirmation all exist to make that
+survivable. **`try` makes it rehearsable, which is strictly better than survivable**, and the
+harness for it already exists.
+
+- **A `--dry-run` is not this.** Dry-run predicts from LiNix's model of the world; `try` finds
+  out what the package manager actually does — the conflict, the missing dependency, the
+  post-install script that fails on a clean box. Every bug Phase 6 found was invisible to
+  `cargo test` for exactly this reason (the twelfth session's entry is the evidence).
+- **The output is a verdict and a transcript**, not a shell to poke at.
+- **P7 makes this bigger than it looks:** `try --on debian` and `try --on windows` is how a user
+  finds out that the config they wrote on a laptop works on the desktop they have not booted
+  yet — and it is how *this project* enforces P7 on itself instead of asserting it.
+- **It needs no daemon and no privilege on the host beyond a container runtime**, and where
+  there is none, it refuses and names what is missing rather than falling back to running on the
+  real machine. That fallback would be the single most dangerous line of code in the repo.
+
+Open: does `try` reuse the Phase 6 images or build from the config's own declared base (U12)?
+
+## XIII.12 One field away from user-defined nouns
+
+**Approved 2026-07-23.** In `custom_backends.toml`, `name` is both the backend id **and the
+binary invoked** — the loader requires them to match. Separate the two and the onboarder stops
+being "teach LiNix a package manager" and becomes **"teach LiNix a noun"**:
+
+```toml
+[[backend]]
+name         = "firewall"      # the prefix a line is written with
+binary       = "ufw"           # the program actually run
+install_args = ["allow"]
+remove_args  = ["delete", "allow"]
+list_args    = ["status", "numbered"]
+[backend.parser]
+format = "regex"
+```
+
+`firewall:22/tcp` then resolves, installs, lists and removes **with no Rust at all**.
+
+**This does not replace Part XI, and Part XI stays.** The two answer different questions and the
+distinction is the point:
+
+- **A user-defined noun is one person's machine, one firewall, one spelling.** It runs `ufw`
+  because that user has `ufw`. It cannot know that `firewalld` and `nft` and Windows Defender
+  Firewall are the same idea wearing three commands, which is XI.2's entire justification for a
+  built-in backend — *one spelling across five firewalls* — and it is the half a TOML file
+  cannot supply.
+- **A built-in backend is the portable spelling.** Under P7 that is not a nicety; a config that
+  opens port 22 must mean the same thing on the Debian laptop and the Windows workstation, and
+  a definition naming `ufw` means nothing on Windows.
+- **The escape hatch is what makes the built-in optional rather than urgent.** If N3 comes back
+  *"only one adapter is in reach"*, the honest answer stops being "build nothing" and becomes
+  "ship the noun mechanism, and let the user who has `ufw` write six lines of TOML today."
+
+**What it needs beyond the field split** is `U2` — the capability gaps that make a custom
+backend a peer of a built-in — because a noun that can install and remove but cannot *report
+what is currently there* is not declarative, and read-before-write is the line X.4 drew.
+
+**The field split is small and it is not cosmetic.** `is_valid_backend_name` refuses a name the
+grammar spends; that check now guards a prefix rather than an executable, and the executable
+needs its own validation, because a `binary` from a shared repo is a command from a shared repo
+(U1's trust question, arriving a second time by a different door).
+
+## XIII.13 Hooks on LiNix's own events
+
+**Approved 2026-07-23.** Hooks today are per-package: `apt:nginx@after_install=./setup.sh`
+(II.12). There is no way to say *"whenever a sync finishes"*, *"whenever drift is found"*,
+*"whenever the guard refuses something"*.
+
+That gap is why every integration request becomes a feature request. Notify me on Slack when a
+machine drifts; push the repo after every sync; open a ticket when the guard refuses a removal;
+run the fleet report nightly — **none of those should be LiNix features, and today each of them
+would have to be.**
+
+*Proposed:* a small, closed set of LiNix-level events, declared where the machine's own settings
+live rather than in a module, because they describe *this installation's* behaviour rather than
+*this machine's* software:
+
+```
+# preferences.toml
+[events]
+after_sync      = ./bin/notify.sh
+on_drift        = ./bin/alert.sh
+on_guard_refusal = ./bin/ticket.sh
+```
+
+- **The set is closed and small**, for VIII.2's reason: a closed vocabulary can name the legal
+  values in the error, and an open one cannot.
+- **The event is handed its context on stdin as JSON** — what synced, what drifted, what was
+  refused — so a hook does not have to re-derive the state LiNix already computed.
+- **A failing event hook does not fail the sync**, and never silently: it warns, naming the hook
+  and its exit code. An observer that can break the observed is not an observer.
+- **`on_guard_refusal` is deliberately included.** The guard's refusals are the most important
+  events LiNix produces and today they are visible only to whoever is watching the terminal.
+- **Same trust model as II.12's hooks** — this is argv from a file, and the file may travel.
+
+## XIII.14 Sharing — RULED TO NEED A DECISION (U14)
+
+**`use` takes a name, never a path or a URL** (II.2). That is deliberate, and it means there is
+**no way to consume anyone else's module or backend definition.** Sharing a working config today
+is copy and paste. Emacs has MELPA; LiNix has nothing, and the closer the three extension axes
+get to done, the more that absence costs — a mechanism nobody can share definitions through
+produces the same six TOML files written a thousand times.
+
+**The version that does not break the rule is vendoring, not importing.** `linix add <git-url>`
+copies the module (or backend definition) **into your repo as ordinary files**, once, at the
+moment you ask:
+
+- It is still `use <name>`. The grammar does not change and no line ever names a URL.
+- The files are **yours** — in your git, in your diff, reviewable before they run, and offline
+  forever after.
+- There is no fetch at sync time, so no network dependency and no upstream that can change what
+  your machine does without a commit of yours.
+- Updating is `linix add` again, which shows up as a diff you approve — the `adopt` shape.
+
+**What must be decided (U14), because it is not obvious:** whether this is wanted at all;
+whether a vendored module records where it came from (provenance is useful, and it is also a
+second place a URL lives); and what stops the first person who publishes a module with an
+`exec:` in it from owning every machine that vendors it. **The last is the real question** —
+vendoring makes the code visible in a diff, which is a genuine defence, and "visible in a diff"
+has never been much of one in practice.
+
+## XIII.15 `linix eval` — hand the resolved state to everything else
+
+**Approved 2026-07-23.** LiNix computes something no other tool on the machine has: the fully
+resolved desired state — every module and profile flattened, every `when` decided, every
+variable substituted, every bare name resolved to a backend. It is used internally and then
+discarded.
+
+*Proposed:* print it, as JSON, on demand.
+
+This is not a feature for LiNix. **It is the feature that stops LiNix needing a new feature
+every time someone wants to know something.** Which machines declare `openssl`? Is this package
+declared but only under a `when` that is false here? What does the desktop's resolved set have
+that the laptop's does not? Each of those is a question someone will eventually ask for a
+command, and each of them is `linix eval | jq` if the resolved model is readable from outside.
+
+- **It is read-only and takes no locks.** It resolves and prints; it touches nothing.
+- **It prints the *resolved* state, not the files.** Re-parsing the config is what other tools
+  do today when they have no choice, and every one of them becomes a second parser (C13's whole
+  family of bugs).
+- **The shape is versioned**, because the moment anything consumes it, it is an interface.
+
+## XIII.16 Grouped backends and per-group priority — MAYBE (U18)
+
+**Raised 2026-07-23, recorded as a maybe rather than an approval**, because the workaround is
+real and the cost is a rule that has never had an exception.
+
+`priority` is **one ordered list for the whole machine**. A bare `ripgrep` walks it and takes the
+first backend that has the package. That single ordering has to serve every kind of thing at
+once — and the right answer genuinely differs by kind:
+
+- **CLI tools:** `cargo`, then a `github:` release, then the distro — you want the current one.
+- **System libraries and daemons:** the distro, and nothing else — you want the one the rest of
+  the system was built against.
+- **Language runtimes:** `mise` or `asdf` before either.
+
+One list cannot say that. Today you say it by writing the prefix — `cargo:ripgrep` — **and that
+works**, which is why this is a maybe. What it costs is the thing a bare name is for: a bare name
+resolves per machine, so the same config installs from `apt` on the server and `brew` on the Mac.
+Spelling the backend out to get the right *kind* of ordering throws away the portability to buy
+the precision.
+
+*Proposed shape:* named groups in the file that already answers "which backends, in what order",
+and a module selects one.
+
+```
+# priority
+group tools  { cargo, github, apt }
+group system { apt }
+group runtime { mise, asdf }
+```
+
+```
+# modules/dev.txt
+priority tools
+
+ripgrep       # cargo, then github, then apt
+fd
+```
+
+- **A module is the right scope, not a line.** Per-line selection is exactly writing the prefix,
+  which already exists and reads better. A module is already a coherent set of things of one
+  kind, which is why the grouping wants to attach there.
+- **No group declared means today's behaviour**, the whole list in order. Nothing breaks, and a
+  config that never uses this never sees it.
+- **A backend may be in several groups**, and one not in `priority` at all is still refused
+  (V.15) — groups narrow and reorder, they never admit.
+
+**The rule this has to not break, and the reason it is a maybe.** II.7 rule 5: two active
+declarations that disagree are an error naming both. If `ripgrep` in `modules/dev.txt` resolves
+through `tools` and `ripgrep` in `modules/server.txt` resolves through `system`, **the same word
+means two packages in one config**, and the machine ends up with two `ripgrep` binaries fighting
+over `$PATH`. That failure is not hypothetical — `app/conflicts.rs` already detects exactly it
+(*"the same tool would be installed by more than one backend"*), which is evidence the model has
+met this before.
+
+*Recommendation if it is built:* **a name still resolves once per machine.** Two modules that
+would resolve the same bare name through different groups is an error naming both files and both
+lines — the existing rule applied to a new way of reaching it, not a new rule. Groups then buy
+the ordering without buying the ambiguity.
+
+## XIII.17 User or system — the question 7e asks first (U19, DECISION OWED)
+
+**Recorded 2026-07-23 as a decision to be made, not a proposal.** LiNix installs to *a machine*.
+A machine has users, and the model has never said which one it is acting for:
+
+- `apt` is system-wide; `cargo`, `pipx`, `npm -g` and `krew` are per-user by default.
+- `gsettings` is per-user. There is no such thing as a system-wide GNOME setting in `setting:`'s
+  current adapter.
+- `link:@target=~/.npmrc` resolves `~` to *the home of whoever ran the command* — so the same
+  config, run once with `sudo` and once without, writes two different files and both are
+  "correct".
+- `shim:` deploys into `~/.local/bin`.
+
+**Today the answer is implicit and inconsistent: whoever ran the command.** That has survived
+because the Linux backends mostly agree with it by accident.
+
+**7e ends that immediately.** The Windows registry's first question is `HKCU` or `HKLM` — there
+is no third option and no default that is right for both — and **there is currently nothing in
+this document to answer it with.** Whatever the registry adapter picks becomes the convention by
+precedent, and then spreads to the macOS `defaults` adapter, which has the same split.
+
+This is why it is filed as a decision owed rather than a feature: **it should be answered before
+7e is written, not discovered during it.** The candidate answers are in U19.
+
+## XIII.18 An editor that knows the grammar — MAYBE (U20)
+
+**Recorded as a maybe.** The config language is a real grammar with a real parser: errors name
+the file, the line and what was expected, and every vocabulary in it is closed — backends,
+option keys per statement kind, `formats`, `when` keys and operators. That is exactly the raw
+material a language server consumes, and almost none of it would have to be written twice.
+
+What it would give: completion for backend prefixes and for the option keys legal on *this*
+statement kind; hover showing what a bare name resolves to **on this machine**, through this
+`priority`; the error at the moment of typing rather than at the moment of syncing. **It turns
+the closed vocabulary from a thing you must remember into a thing the editor tells you** —
+which is the strongest argument for closed vocabularies and currently the argument nobody gets
+to feel.
+
+**Why it is a maybe and not an approval:** it is a second program with its own protocol, its own
+release cadence and its own way of going stale, and this repo's history is that a second
+implementation of anything eventually disagrees with the first. It is only worth it if the
+server is a thin front end over the same parser and the same resolver the binary uses — never a
+reimplementation — and `linix eval` (XIII.15) already supplies most of what the interesting half
+needs. See U20.
+
+## XIII.19 `git blame` for a declaration
+
+**Approved 2026-07-23.** History is git (II.13), so the data is already there and nothing else
+has to be recorded. What is missing is the question, asked package-shaped:
+
+> *When did `openssl` enter my config, in which commit, and what landed alongside it?*
+
+That is `git log -S` over the config repo with the answer rendered as a declaration rather than
+as a diff hunk. It is thin by construction, and it is the question people actually ask — on a
+config that has been running a year, the line you do not remember writing is most lines.
+
+- **It reads git and nothing else.** No new store, no new record kept at sync time. The moment
+  this needs its own ledger it has stopped being worth building.
+- **It answers for any declaration**, not only packages — a `setting:`, a `link:`, a `repo:` and
+  an `exec:` all have the same question and the same answer shape.
+- It pairs with `why` (which says *what makes this package present*) and completes it: `why` is
+  the current state, this is how the state got here.
+
+## XIII.20 Exit codes are an interface now
+
+**Approved 2026-07-23.** Once `sync --locked`, `try`, `check` and event hooks exist, LiNix's exit
+codes are consumed by scripts and CI rather than read by a person. **A script has to be able to
+tell "the command ran and the answer is no" from "the command broke"**, and today it cannot.
+
+The failure this prevents is specific and quiet: a CI job that treats every non-zero as a crash
+will retry a legitimate *drift found*, and one that treats every non-zero as drift will report a
+crashed LiNix as a healthy divergence.
+
+*Proposed, and small enough to settle now rather than discover one command at a time:*
+
+| code | means |
+|---|---|
+| **0** | converged / no differences / the answer is yes |
+| **1** | LiNix failed — a bug, a missing backend, an unreadable file |
+| **2** | ran fine, and the answer is **differences found** — drift, a lock mismatch, a failed `try` |
+| **3** | **refused by the guard** — the plan was understood and declined |
+
+**3 is the one worth separating.** A guard refusal is not a failure and not a difference: it is
+LiNix working exactly as designed, and it is the event an operator most wants routed somewhere
+special (XIII.13's `on_guard_refusal` is the same event from the other side).
+
+**Decide it once, in one table, before the commands that need it are written** (U21) — an exit
+code decided per command is a convention nobody can rely on.
+
+## XIII.21 The decision register
+
+Blocking means: this cannot be built without an answer, because two reasonable implementations
+differ.
+
+### Blocking
+
+**U1 — Where does a custom backend definition live?** Today `~/.config/linix/custom_backends.
+toml`, machine-local, never in git — so a repo that uses `paru:` breaks on every machine but
+the one where somebody hand-wrote the file. *Recommendation:* the config repo, as a
+first-class file beside `priority` and `schedules`, with the machine-local path kept **only**
+if there is a case for a definition that must not travel — and if there is not, deleted in the
+same change rather than left as a second place to look. **The consequence that makes this a
+decision and not an obvious fix:** a definition in the repo is argv that a shared repo can
+execute, which is II.12's supply-chain surface. It must inherit the hook trust model, not a
+new one.
+
+**U3 — What does removing an `exec:` line mean?** Every other statement's removal undoes
+something. A script has no inverse. *Recommendation:* an optional `@undo=` command; without it,
+removing the line removes only the record, and `plan` says so in those words rather than
+implying a revert that will not happen.
+
+**U5 — Does `setting:` get a Windows registry adapter and a macOS `defaults` adapter?** This is
+P7's first real test. *Recommendation:* yes, registry first — it is the cleanest
+read-before-write store on any platform, and it is the difference between LiNix declaring a
+Windows machine's software and declaring the machine.
+
+**U9 — Do the ten status commands collapse into one?** *Recommendation:* yes, one `linix check`
+with sections and narrowing flags; `heal` stays separate because it acts. Old names deleted in
+the same change (P2), not aliased.
+
+**U14 — Is sharing wanted, and what makes a vendored module safe to run?** Vendoring puts
+someone else's files in your repo, and once `exec:` exists those files can contain a verb. The
+defence on offer is that it lands as a reviewable diff, which is a real defence and a weak one —
+nobody reads the whole diff. *Recommendation:* decide the safety story before deciding the
+feature. The candidates are: vendor everything but refuse to run an `exec:` that arrived this way
+without an explicit per-module opt-in; or vendor modules but never backend definitions and never
+`exec:`; or do not build it. **This is blocking because building the convenient version first
+and the safety story afterwards is how supply-chain incidents are written.**
+
+**U19 — Is LiNix acting for a user or for the machine?** Today: implicitly, whoever ran the
+command — which the Linux backends mostly agree with by accident, and which the Windows registry
+adapter (7e) cannot use, because `HKCU` and `HKLM` are a choice with no default that is right
+for both. Three candidate answers, and they are not equally good:
+
+1. **LiNix is per-user, and system-wide is just what some managers happen to do.** Simplest, and
+   it is roughly today's behaviour made explicit. It cannot express *"this setting applies to
+   every account on this box"*, which is most of what a Windows or a shared Linux machine wants.
+2. **`@scope=user|system` on the statements where it can vary** (`setting:`, `link:`, `shim:`),
+   with a per-backend default. Precise, and it puts the question in front of the user at the one
+   moment they know the answer. Costs a new option key on three statement kinds.
+3. **The config repo declares its scope once**, at the top, and every line inherits it. One
+   decision per repo rather than per line — and a machine that needs both then needs two repos,
+   which is the wrong shape.
+
+*Recommendation:* **2**, with a default per statement kind that matches what the underlying store
+does anyway (`gsettings` → user, registry → `HKCU`, `apt` → system). **Answer this before 7e is
+written**, because whatever the registry adapter picks becomes the convention by precedent and
+then spreads to macOS `defaults`.
+
+### Not blocking
+
+**U2 — Is a custom backend a full peer of a built-in?** Repos, orphans, dependency queries and
+`is_essential` are `ManagerConfig` fields `CustomBackendDef` does not expose.
+*Recommendation:* expose them as optional keys, absent meaning *this backend cannot answer
+that* — the `ManualListing` distinction already made for exactly this reason: "not configured"
+must not be read as "the answer is none".
+
+**U4 — Is `exec:` a licence to put a shell script where a backend belongs?** The onboarder is
+the better answer for anything that installs software, and `exec:` should not become the way
+people avoid writing eight lines of TOML. *Recommendation:* document the boundary in the
+readme, and treat repeated `exec:` lines that install things as a sign the onboarder needs a
+missing field (U2), not as usage to encourage.
+
+**U6 — Does this document mark its Linux-only guarantees?** The pre-sync snapshot, `rebuild`'s
+revert and `rollback`'s safety net all assume a provider that exists only on Linux
+filesystems. *Recommendation:* yes, immediately and independently of whether VSS or APFS is
+ever adapted — an unqualified promise that silently does not hold on two of three platforms is
+P3's failure in prose form.
+
+**U7 — Is a health check per-package or per-sync?** Per-package answers "did *this* upgrade
+break it" and is precise; per-sync catches the breakage a package cannot see (the boot, the
+network). *Recommendation:* both, and they are not alternatives — `@health=` on a line, plus a
+`health` list in `preferences.toml` for the machine-wide checks, with the same revert path.
+
+**U8 — Is the removal preview a flag or a verb?** *Recommendation:* a flag on the commands that
+already compute it. A new verb for an existing computation is how this repo got two of
+everything.
+
+**U10 — Where does a backend's bootstrap live?** In `priority`, beside the backend it obtains,
+or in `custom_backends.toml`, beside the definition. *Recommendation:* `priority` — it is the
+file that already decides which backends this machine uses, and a custom backend's definition is
+about *how to drive* a manager, not *how to get* one. The two files stay one-question-each.
+
+**U11 — Does `watch` imply `--locked`?** An unattended reconcile that silently accepts a new
+upstream version is the least supervised place for a version to change. *Recommendation:* yes by
+default, overridable by a key — a machine reconciling itself at 3am should be converging to what
+was decided, not to what was published.
+
+**U12 — Does `try` reuse the Phase 6 images, or build from a base the config names?** Reusing
+them is nearly free and covers debian/alpine/arch today; a config-named base is what a user with
+an unusual host actually needs. *Recommendation:* start with the Phase 6 images, and treat a
+config-named base as the second step rather than the blocker — the value is in the rehearsal
+existing at all.
+
+**U13 — Does `@runs=always` exist?** It is the escape hatch inside the escape hatch, and every
+such key eventually becomes the default somebody copies. *Recommendation:* yes, but it prints
+what it is doing on every sync — a line that runs unconditionally must be visible in the run it
+made non-idempotent, or the next person debugging a slow sync has no thread to pull.
+
+**U15 — Where do LiNix-level event hooks live, and are they per-machine?** `preferences.toml` is
+machine-local, so `after_sync` on the laptop is invisible to the desktop. That is right for a
+notification hook and wrong for a policy one. *Recommendation:* `preferences.toml` first —
+machine-local behaviour is the honest default for something that talks to *this* machine's
+Slack — and revisit only when a real case wants a fleet-wide event.
+
+**U16 — Does the field split (XIII.12) allow an absolute path as `binary`?** A prefix that runs
+`/opt/vendor/thing` is more useful and is also a definition that only works on one machine.
+*Recommendation:* allow it, resolve `~`, and have `doctor` report a custom backend whose binary
+is missing — the failure should be a named diagnosis, not an unknown-backend error three layers
+away.
+
+**U17 — Is `linix eval`'s output versioned from the first release?** *Recommendation:* yes, a
+top-level schema version, decided before anything consumes it. P2 says there is no legacy to
+carry, and this is the one output that will acquire consumers LiNix cannot see.
+
+**U18 — Are grouped backends with per-group priority worth building at all?** The workaround —
+write the prefix — already works, and what it costs is the portability a bare name exists for.
+*Recommendation:* build it only with the invariant attached: **a bare name still resolves once
+per machine**, and two modules that would resolve the same name through different groups is an
+error naming both, which is II.7 rule 5 reached by a new road rather than a new rule. Without
+that, this feature ships two `ripgrep` binaries fighting over `$PATH` — the failure
+`app/conflicts.rs` already exists to catch.
+
+**U20 — Is a language server wanted, and is it allowed to be a second implementation?** *This is
+the whole question, not the feature.* *Recommendation:* wanted, but only as a thin front end
+over the same parser and resolver the binary uses — the moment it re-implements the grammar it
+becomes the second implementation this rewrite exists to end, and it will disagree with the
+first within a release. If it cannot be thin, do not build it.
+
+**U21 — Is the exit-code table settled once, up front?** *Recommendation:* yes — 0 converged, 1
+LiNix failed, 2 differences found, 3 refused by the guard — decided in one place before
+`--locked`, `try` and `check` are written. An exit code decided per command is a convention no
+script can rely on, and the separation that matters is 3: a guard refusal is neither a failure
+nor a difference.

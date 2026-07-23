@@ -94,7 +94,7 @@ RUN git clone --depth 1 https://github.com/spack/spack.git /opt/spack || true
 # Cargo, krew, pixi, nix, asdf, spack, conda. Best-effort clones/installers that failed just
 # leave a missing dir; PATH entries for absent dirs are harmless.
 ENV GOPATH=/root/go
-ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:/root/go/bin:/root/.dotnet/tools:/root/.pub-cache/bin:/root/.krew/bin:/root/.pixi/bin:/nix/var/nix/profiles/default/bin:/root/.nix-profile/bin:/opt/asdf/bin:/opt/asdf/shims:/opt/spack/bin:/opt/conda/bin:/usr/lib/dart/bin:${PATH}"
+ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:/root/go/bin:/root/.dotnet/tools:/root/.pub-cache/bin:/root/.krew/bin:/root/.pixi/bin:/root/.cabal/bin:/nix/var/nix/profiles/default/bin:/root/.nix-profile/bin:/opt/asdf/bin:/opt/asdf/shims:/opt/spack/bin:/opt/conda/bin:/usr/lib/dart/bin:${PATH}"
 
 # Prepare each ecosystem so a REAL install resolves without interactive setup:
 #  - opam: init a switch (sandboxing off — no nested namespaces in a container)

@@ -300,13 +300,12 @@ mod tests {
     use super::*;
 
     fn tmp() -> PathBuf {
-        let base = std::env::var("TMP")
-            .or_else(|_| std::env::var("TMPDIR"))
-            .unwrap_or_else(|_| ".".to_string());
         // A per-test directory, named by a counter that does not need a clock or randomness.
+        // `env::temp_dir()`, not TMP-or-TMPDIR-or-".": neither variable is set in a plain
+        // Linux shell, so the fallback was the repo the test was run from.
         use std::sync::atomic::{AtomicUsize, Ordering};
         static N: AtomicUsize = AtomicUsize::new(0);
-        let dir = PathBuf::from(base).join(format!(
+        let dir = std::env::temp_dir().join(format!(
             "linix-vars-test-{}-{}",
             std::process::id(),
             N.fetch_add(1, Ordering::Relaxed)

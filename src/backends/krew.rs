@@ -36,8 +36,13 @@ impl BackendCore for KrewBackendCore {
     fn name(&self) -> &str {
         &self.name
     }
+    /// Both binaries, not just `kubectl`. krew is a *plugin*: `kubectl krew …` only works
+    /// because krew installs `kubectl-krew` on PATH. A host with kubectl and no krew
+    /// reported this backend READY and then failed every command with `unknown command
+    /// "krew"` — including `linix update`, which refreshes every backend at once.
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("kubectl")
+            && self.executor.command_exists_sync("kubectl-krew")
     }
     fn needs_root(&self) -> bool {
         false

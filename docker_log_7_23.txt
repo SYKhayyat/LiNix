@@ -1,0 +1,2128 @@
+===============================================================================
+ LiNix v7 integration matrix — 2026-07-23, WSL2 + Docker 29.6.1 (Ubuntu 26.04)
+ Harness: docker/integration/run-in-container.sh (sections 1-17, coverage audit)
+          scripts/integration-windows.sh (host-native sweep, same audit)
+===============================================================================
+
+SUMMARY
+  ubuntu    RESULT  pass=271  fail=0  soft=5
+  fedora    RESULT  pass=279  fail=0  soft=5
+  arch      RESULT  pass=271  fail=0  soft=5
+  alpine    RESULT  pass=266  fail=0  soft=3
+  tools     RESULT  pass=316  fail=2  soft=14
+  gentoo    RESULT  pass=214  fail=0  soft=9
+  windows  
+
+
+===============================================================================
+=== ubuntu
+===============================================================================
+==============================================================
+ LiNix v7 harness — backend=apt package=jq
+==============================================================
+[1] Bootstrap
+  PASS  init scaffolds the repo
+  PASS  priority file exists
+  PASS  priority names this backend
+  PASS  active file exists
+[2] Discovery / read-only verbs
+  PASS  doctor
+  PASS  status
+  PASS  plan (no changes yet)
+  PASS  check parses the model
+  PASS  absent lists nothing
+  PASS  protected lists guarded packages
+  PASS  protected includes a system essential
+[3] Dry-run safety
+  PASS  sync --dry-run does not error
+  PASS  a dry-run install shows a plan
+  PASS  dry-run did NOT actually install jq (correctly refused)
+[4] purge-unmanaged, before adopt (the state that makes it a test)
+  PASS  purge-unmanaged is refused on a machine LiNix has not adopted (correctly refused)
+  PASS  and it is the unadopted-machine ratio that refused
+[5] Install
+  PASS  install jq
+  PASS  list shows jq
+  PASS  jq binary is on PATH
+[6] Idempotency
+  PASS  second sync is a no-op (exit 0)
+[7] Negative path
+  PASS  installing a nonexistent package fails (correctly refused)
+  PASS  a failed install leaves the model parseable
+[8] Adopt
+  PASS  nothing is adopted before adopt runs (correctly refused)
+  PASS  adopt takes manual packages
+  PASS  python3 still installed after adopt
+        adopted=70 (of which apt: 70)  apt manual set=104  apt installed=582
+  PASS  adopt wrote an adoption manifest
+  PASS  adopt recorded at least one package
+  PASS  adopt took the manual set, not the whole dependency closure
+  PASS  adopt took no more than what apt calls user-chosen
+[9] The guard
+  PASS  bash survives an uninstall attempt
+  PASS  purge-unmanaged is still not a silent mass-delete after adopt (correctly refused)
+  PASS  and the refusal after adopt still names its rule
+[10] Remove
+  PASS  uninstall jq
+  PASS  jq binary gone after uninstall (correctly refused)
+[11] Git history + rollback
+  PASS  git init enables manifest history
+  PASS  git status reads the repo
+  PASS  an install after git init succeeds
+  PASS  the install left a commit behind
+  PASS  git log shows a linix commit
+  PASS  git commit records the current state on demand
+  PASS  diff against a commit runs
+  PASS  rollback to HEAD is accepted
+[12] rebuild
+  PASS  bare rebuild is refused — scope is required (correctly refused)
+  PASS  there is history for a rebuild to leave alone
+  PASS  rebuild jq runs
+  PASS  jq is reinstalled, not left removed
+        commits before=2 after=2
+  PASS  rebuild wrote no git commit (K14)
+[13] Chains and the per-host lock
+        lock file: /tmp/linix-it-config/locks/bare.9efab28c5702.toml
+  PASS  the lock is named for this host
+  PASS  an unpinned name froze to apt
+  PASS  sync ignores another host's lock file
+  PASS  and leaves it alone
+  PASS  a chain is legal
+  PASS  a chain may end in list
+  PASS  list alone is legal
+  PASS  an empty slot is refused (correctly refused)
+  PASS  an unknown link is refused (correctly refused)
+  PASS  list must come last (correctly refused)
+  PASS  a name repeated is refused (correctly refused)
+  PASS  a pattern cannot span one (correctly refused)
+  PASS  a pin to a manager this host lacks is not silent (correctly refused)
+  PASS  unlock --list names the frozen package
+  PASS  unlock forgets one name
+  PASS  the entry is really gone (correctly refused)
+  PASS  unlocking a name that was never frozen is not an error
+[13b] Silence is not a no
+  PASS  a sync past a silent manager still resolves
+  PASS  and freezes nothing (correctly refused)
+  PASS  and says which manager could not answer
+[14] Real lifecycle, every other manager on this image
+        READY backends: appimage apt cargo gem github link npm pip pipx service uv web 
+  soft  appimage: no real lifecycle here — needs FUSE, which a plain container does not have — smoked in 15
+    -- cargo:hexyl
+  PASS  cargo installed hexyl for real
+  PASS  cargo: list shows hexyl
+  PASS  cargo: hexyl is on PATH
+  PASS  cargo: uninstall hexyl
+  PASS  cargo: hexyl is gone from list (correctly refused)
+  PASS  cargo: hexyl is off PATH
+    -- gem:colorize
+  PASS  gem installed colorize for real
+  PASS  gem: list shows colorize
+  PASS  gem: uninstall colorize
+  PASS  gem: colorize is gone from list (correctly refused)
+    -- github:sharkdp/fd
+  PASS  github installed sharkdp/fd for real
+  PASS  github: list shows fd
+  PASS  github: fd is on PATH
+  PASS  github: uninstall sharkdp/fd
+  PASS  github: fd is gone from list (correctly refused)
+  PASS  github: fd is off PATH
+  soft  link: no real lifecycle here — a dependent statement (link:SRC), not a package name — smoked in 15
+    -- npm:cowsay
+  PASS  npm installed cowsay for real
+  PASS  npm: list shows cowsay
+  PASS  npm: cowsay is on PATH
+  PASS  npm: uninstall cowsay
+  PASS  npm: cowsay is gone from list (correctly refused)
+  PASS  npm: cowsay is off PATH
+  soft  pip: no real lifecycle here — this distro marks its Python EXTERNALLY-MANAGED (PEP 668), so a system pip install is refused by design
+    -- pipx:pycowsay
+  PASS  pipx installed pycowsay for real
+  PASS  pipx: list shows pycowsay
+  PASS  pipx: pycowsay is on PATH
+  PASS  pipx: uninstall pycowsay
+  PASS  pipx: pycowsay is gone from list (correctly refused)
+  PASS  pipx: pycowsay is off PATH
+  soft  service: no real lifecycle here — a dependent statement (service:NAME), not a package name — smoked in 15
+    -- uv:pycowsay
+  PASS  uv installed pycowsay for real
+  PASS  uv: list shows pycowsay
+  PASS  uv: pycowsay is on PATH
+  PASS  uv: uninstall pycowsay
+  PASS  uv: pycowsay is gone from list (correctly refused)
+  PASS  uv: pycowsay is off PATH
+  soft  web: no real lifecycle here — installs from a pasted URL; no stable public canary — smoked in 15
+[15] Plan-smoke, every backend this image cannot run
+        registered backends: 52
+  PASS  doctor --json enumerates the registry
+  PASS  apk: a dry-run install plans apk:jq
+  PASS  appimage: a dry-run install plans appimage:https://example.invalid/tool.AppImage
+  PASS  asdf: a dry-run install plans asdf:jq
+  PASS  brew: a dry-run install plans brew:jq
+  PASS  btrfs: the snapshot verb runs
+  PASS  bun: a dry-run install plans bun:jq
+  PASS  cabal: a dry-run install plans cabal:jq
+  PASS  composer: a dry-run install plans composer:psr/log
+  PASS  conda: a dry-run install plans conda:jq
+  PASS  dnf: a dry-run install plans dnf:jq
+  PASS  dotnet: a dry-run install plans dotnet:jq
+  PASS  emacs: a dry-run install plans emacs:jq
+  PASS  emerge: a dry-run install plans emerge:app-misc/jq
+  PASS  eopkg: a dry-run install plans eopkg:jq
+  PASS  flatpak: a dry-run install plans flatpak:org.freedesktop.Platform
+  PASS  go: a dry-run install plans go:golang.org/x/example/hello
+  PASS  guix: a dry-run install plans guix:jq
+  PASS  helm: a dry-run install plans helm:https://github.com/databus23/helm-diff
+  PASS  krew: a dry-run install plans krew:jq
+  PASS  link: a link statement parses
+  PASS  link: and reaches a plan
+  PASS  luarocks: a dry-run install plans luarocks:jq
+  PASS  mise: a dry-run install plans mise:jq
+  PASS  mix: a dry-run install plans mix:jq
+  PASS  nimble: a dry-run install plans nimble:jq
+  PASS  nix: a dry-run install plans nix:jq
+  PASS  opam: a dry-run install plans opam:jq
+  PASS  pacman: a dry-run install plans pacman:jq
+  PASS  paru: a dry-run install plans paru:jq
+  PASS  pip: a dry-run install plans pip:jq
+  PASS  pixi: a dry-run install plans pixi:jq
+  PASS  pkgin: a dry-run install plans pkgin:jq
+  PASS  pnpm: a dry-run install plans pnpm:jq
+  PASS  pub: a dry-run install plans pub:jq
+  PASS  service: a service statement parses
+  PASS  service: and reaches a plan
+  PASS  setting: a setting statement parses
+  PASS  setting: and reaches a plan
+  PASS  slackpkg: a dry-run install plans slackpkg:jq
+  PASS  snap: a dry-run install plans snap:jq
+  PASS  spack: a dry-run install plans spack:jq
+  PASS  stack: a dry-run install plans stack:jq
+  PASS  vscode: a dry-run install plans vscode:ms-python.python
+  PASS  web: a dry-run install plans web:https://example.invalid/tool.tar.gz
+  PASS  xbps: a dry-run install plans xbps:jq
+  PASS  yarn: a dry-run install plans yarn:jq
+  PASS  yay: a dry-run install plans yay:jq
+  PASS  zypper: a dry-run install plans zypper:jq
+[16] Command surface, executed
+  PASS  vars resolves this machine's variables
+  PASS  unmanaged lists what LiNix does not manage
+  PASS  path prints the config repo
+  PASS  path --explain says which source won
+  PASS  config show prints the active configuration
+  PASS  policy checks the desired state against [guard]
+  PASS  conflicts reports cross-backend conflicts
+  PASS  sbom emits a bill of materials
+  PASS  completions bash generates a script
+  PASS  profile list
+  PASS  profile active
+  PASS  profile create scaffolds one
+  PASS  profile show reads it back
+  PASS  module list
+  PASS  module create scaffolds one
+  PASS  module show reads it back
+  PASS  snapshot list
+  PASS  schedule list
+  PASS  service list
+  PASS  repo list says which backends cannot enumerate
+  PASS  list enumerates what is installed
+  PASS  hooks status says which managers are hookable
+  PASS  hooks shell-init prints the wrapper functions
+  PASS  heal recovers an uninterrupted transaction
+  PASS  clean-cache frees archives without removing a package
+  PASS  update refreshes repository metadata
+  PASS  watch --once runs a single unattended reconcile
+  PASS  search finds something
+  PASS  info reads a package's metadata
+  PASS  why explains a package's provenance
+  PASS  lock records installed versions
+  PASS  upgrade --dry-run previews
+  PASS  remove-orphans previews without removing
+  PASS  activate converges onto the named profiles
+  PASS  deactivate previews dropping one
+  PASS  hold pins a package against bulk upgrade
+  PASS  unhold releases it
+  PASS  teleport previews moving a package between managers
+  PASS  unmanage forgets a package without uninstalling it
+  PASS  jq is still installed after unmanage
+  PASS  audit scans for vulnerabilities
+  PASS  export writes native manifests
+  PASS  run executes inside an ephemeral environment
+  PASS  plan freezes a reviewable file
+  PASS  the plan file exists
+  PASS  apply reads a saved plan
+  PASS  edit opens a file in $EDITOR
+  PASS  reset refuses while a config repo still exists (correctly refused)
+  PASS  and says --force is what overrides it
+  PASS  self-upgrade --check reports the version and source
+[16b] bundle → restore
+  PASS  bundle packs the config
+  PASS  the bundle directory exists
+  PASS  restore into a clean config directory
+  PASS  the restored model parses
+  PASS  restore refuses a config directory that is not empty (correctly refused)
+  PASS  and --force overrides it
+[16c] --help across the surface
+  PASS  `absent --help` exists
+  PASS  `activate --help` exists
+  PASS  `adopt --help` exists
+  PASS  `apply --help` exists
+  PASS  `audit --help` exists
+  PASS  `bisect --help` exists
+  PASS  `bundle --help` exists
+  PASS  `check --help` exists
+  PASS  `clean-cache --help` exists
+  PASS  `completions --help` exists
+  PASS  `config --help` exists
+  PASS  `conflicts --help` exists
+  PASS  `deactivate --help` exists
+  PASS  `diff --help` exists
+  PASS  `doctor --help` exists
+  PASS  `edit --help` exists
+  PASS  `export --help` exists
+  PASS  `fleet --help` exists
+  PASS  `git --help` exists
+  PASS  `heal --help` exists
+  PASS  `history --help` exists
+  PASS  `hold --help` exists
+  PASS  `hooks --help` exists
+  PASS  `info --help` exists
+  PASS  `init --help` exists
+  PASS  `install --help` exists
+  PASS  `list --help` exists
+  PASS  `lock --help` exists
+  PASS  `module --help` exists
+  PASS  `path --help` exists
+  PASS  `plan --help` exists
+  PASS  `policy --help` exists
+  PASS  `profile --help` exists
+  PASS  `protected --help` exists
+  PASS  `purge-unmanaged --help` exists
+  PASS  `rebuild --help` exists
+  PASS  `remove-orphans --help` exists
+  PASS  `repo --help` exists
+  PASS  `reset --help` exists
+  PASS  `restore --help` exists
+  PASS  `rollback --help` exists
+  PASS  `run --help` exists
+  PASS  `sbom --help` exists
+  PASS  `schedule --help` exists
+  PASS  `search --help` exists
+  PASS  `self-upgrade --help` exists
+  PASS  `service --help` exists
+  PASS  `shell --help` exists
+  PASS  `snapshot --help` exists
+  PASS  `status --help` exists
+  PASS  `sync --help` exists
+  PASS  `teleport --help` exists
+  PASS  `undo --help` exists
+  PASS  `unhold --help` exists
+  PASS  `uninstall --help` exists
+  PASS  `unlock --help` exists
+  PASS  `unmanage --help` exists
+  PASS  `unmanaged --help` exists
+  PASS  `update --help` exists
+  PASS  `upgrade --help` exists
+  PASS  `vars --help` exists
+  PASS  `watch --help` exists
+  PASS  `why --help` exists
+[17] Coverage audit
+        backends: 7 real lifecycle, 0 install-attempted, 45 plan-smoked
+  PASS  every registered backend got a lifecycle or a plan-smoke
+        exempt: shell — opens an interactive subshell
+        exempt: undo — an interactive snapshot gallery
+        exempt: history — an interactive manifest-history TUI
+        exempt: bisect — restores system snapshots, and may need a reboot between steps
+        exempt: fleet — compares machines over SSH; there are no peers here
+        subcommands: 63 in --help, 58 executed, 5 exempt
+  PASS  every non-exempt subcommand was executed, not just --help'd
+==============================================================
+ RESULT  pass=271  fail=0  soft=5
+ OK — every hard check passed.
+==============================================================
+
+===============================================================================
+=== fedora
+===============================================================================
+==============================================================
+ LiNix v7 harness — backend=dnf package=jq
+==============================================================
+[1] Bootstrap
+  PASS  init scaffolds the repo
+  PASS  priority file exists
+  PASS  priority names this backend
+  PASS  active file exists
+[2] Discovery / read-only verbs
+  PASS  doctor
+  PASS  status
+  PASS  plan (no changes yet)
+  PASS  check parses the model
+  PASS  absent lists nothing
+  PASS  protected lists guarded packages
+  PASS  protected includes a system essential
+[3] Dry-run safety
+  PASS  sync --dry-run does not error
+  PASS  a dry-run install shows a plan
+  PASS  dry-run did NOT actually install jq (correctly refused)
+[4] purge-unmanaged, before adopt (the state that makes it a test)
+  PASS  purge-unmanaged is refused on a machine LiNix has not adopted (correctly refused)
+  PASS  and it is the unadopted-machine ratio that refused
+[5] Install
+  PASS  install jq
+  PASS  list shows jq
+  PASS  jq binary is on PATH
+[6] Idempotency
+  PASS  second sync is a no-op (exit 0)
+[7] Negative path
+  PASS  installing a nonexistent package fails (correctly refused)
+  PASS  a failed install leaves the model parseable
+[8] Adopt
+  PASS  nothing is adopted before adopt runs (correctly refused)
+  PASS  adopt takes manual packages
+  PASS  python3 still installed after adopt
+        adopted=1 (of which dnf: 1)  dnf manual set=33  dnf installed=495
+  PASS  adopt wrote an adoption manifest
+  PASS  adopt recorded at least one package
+  PASS  adopt took the manual set, not the whole dependency closure
+  PASS  adopt took no more than what dnf calls user-chosen
+[9] The guard
+  PASS  bash survives an uninstall attempt
+  PASS  purge-unmanaged is still not a silent mass-delete after adopt (correctly refused)
+  PASS  and the refusal after adopt still names its rule
+[10] Remove
+  PASS  uninstall jq
+  PASS  jq binary gone after uninstall (correctly refused)
+[11] Git history + rollback
+  PASS  git init enables manifest history
+  PASS  git status reads the repo
+  PASS  an install after git init succeeds
+  PASS  the install left a commit behind
+  PASS  git log shows a linix commit
+  PASS  git commit records the current state on demand
+  PASS  diff against a commit runs
+  PASS  rollback to HEAD is accepted
+[12] rebuild
+  PASS  bare rebuild is refused — scope is required (correctly refused)
+  PASS  there is history for a rebuild to leave alone
+  PASS  rebuild jq runs
+  PASS  jq is reinstalled, not left removed
+        commits before=2 after=2
+  PASS  rebuild wrote no git commit (K14)
+[13] Chains and the per-host lock
+        lock file: /tmp/linix-it-config/locks/bare.4bb6c7b50ea4.toml
+  PASS  the lock is named for this host
+  PASS  an unpinned name froze to dnf
+  PASS  sync ignores another host's lock file
+  PASS  and leaves it alone
+  PASS  a chain is legal
+  PASS  a chain may end in list
+  PASS  list alone is legal
+  PASS  an empty slot is refused (correctly refused)
+  PASS  an unknown link is refused (correctly refused)
+  PASS  list must come last (correctly refused)
+  PASS  a name repeated is refused (correctly refused)
+  PASS  a pattern cannot span one (correctly refused)
+  PASS  a pin to a manager this host lacks is not silent (correctly refused)
+  PASS  unlock --list names the frozen package
+  PASS  unlock forgets one name
+  PASS  the entry is really gone (correctly refused)
+  PASS  unlocking a name that was never frozen is not an error
+[13b] Silence is not a no
+  PASS  a sync past a silent manager still resolves
+  PASS  and freezes nothing (correctly refused)
+  PASS  and says which manager could not answer
+[14] Real lifecycle, every other manager on this image
+        READY backends: appimage bun cargo dnf gem github link npm pip pipx service setting uv web 
+  soft  appimage: no real lifecycle here — needs FUSE, which a plain container does not have — smoked in 15
+    -- bun:cowsay
+  PASS  bun installed cowsay for real
+  PASS  bun: list shows cowsay
+  PASS  bun: cowsay is on PATH
+  PASS  bun: uninstall cowsay
+  PASS  bun: cowsay is gone from list (correctly refused)
+  PASS  bun: cowsay is off PATH
+    -- cargo:hexyl
+  PASS  cargo installed hexyl for real
+  PASS  cargo: list shows hexyl
+  PASS  cargo: hexyl is on PATH
+  PASS  cargo: uninstall hexyl
+  PASS  cargo: hexyl is gone from list (correctly refused)
+  PASS  cargo: hexyl is off PATH
+    -- gem:colorize
+  PASS  gem installed colorize for real
+  PASS  gem: list shows colorize
+  PASS  gem: uninstall colorize
+  PASS  gem: colorize is gone from list (correctly refused)
+    -- github:sharkdp/fd
+  PASS  github installed sharkdp/fd for real
+  PASS  github: list shows fd
+  PASS  github: fd is on PATH
+  PASS  github: uninstall sharkdp/fd
+  PASS  github: fd is gone from list (correctly refused)
+  PASS  github: fd is off PATH
+  soft  link: no real lifecycle here — a dependent statement (link:SRC), not a package name — smoked in 15
+    -- npm:cowsay
+  PASS  npm installed cowsay for real
+  PASS  npm: list shows cowsay
+  PASS  npm: cowsay is on PATH
+  PASS  npm: uninstall cowsay
+  PASS  npm: cowsay is gone from list (correctly refused)
+  PASS  npm: cowsay is off PATH
+    -- pip:six
+  PASS  pip installed six for real
+  PASS  pip: list shows six
+  PASS  pip: uninstall six
+  PASS  pip: six is gone from list (correctly refused)
+    -- pipx:pycowsay
+  PASS  pipx installed pycowsay for real
+  PASS  pipx: list shows pycowsay
+  PASS  pipx: pycowsay is on PATH
+  PASS  pipx: uninstall pycowsay
+  PASS  pipx: pycowsay is gone from list (correctly refused)
+  PASS  pipx: pycowsay is off PATH
+  soft  service: no real lifecycle here — a dependent statement (service:NAME), not a package name — smoked in 15
+  soft  setting: no real lifecycle here — a dependent statement (setting:K @value=), not a package name — smoked in 15
+    -- uv:pycowsay
+  PASS  uv installed pycowsay for real
+  PASS  uv: list shows pycowsay
+  PASS  uv: pycowsay is on PATH
+  PASS  uv: uninstall pycowsay
+  PASS  uv: pycowsay is gone from list (correctly refused)
+  PASS  uv: pycowsay is off PATH
+  soft  web: no real lifecycle here — installs from a pasted URL; no stable public canary — smoked in 15
+[15] Plan-smoke, every backend this image cannot run
+        registered backends: 52
+  PASS  doctor --json enumerates the registry
+  PASS  apk: a dry-run install plans apk:jq
+  PASS  appimage: a dry-run install plans appimage:https://example.invalid/tool.AppImage
+  PASS  apt: a dry-run install plans apt:jq
+  PASS  asdf: a dry-run install plans asdf:jq
+  PASS  brew: a dry-run install plans brew:jq
+  PASS  btrfs: the snapshot verb runs
+  PASS  cabal: a dry-run install plans cabal:jq
+  PASS  composer: a dry-run install plans composer:psr/log
+  PASS  conda: a dry-run install plans conda:jq
+  PASS  dotnet: a dry-run install plans dotnet:jq
+  PASS  emacs: a dry-run install plans emacs:jq
+  PASS  emerge: a dry-run install plans emerge:app-misc/jq
+  PASS  eopkg: a dry-run install plans eopkg:jq
+  PASS  flatpak: a dry-run install plans flatpak:org.freedesktop.Platform
+  PASS  go: a dry-run install plans go:golang.org/x/example/hello
+  PASS  guix: a dry-run install plans guix:jq
+  PASS  helm: a dry-run install plans helm:https://github.com/databus23/helm-diff
+  PASS  krew: a dry-run install plans krew:jq
+  PASS  link: a link statement parses
+  PASS  link: and reaches a plan
+  PASS  luarocks: a dry-run install plans luarocks:jq
+  PASS  mise: a dry-run install plans mise:jq
+  PASS  mix: a dry-run install plans mix:jq
+  PASS  nimble: a dry-run install plans nimble:jq
+  PASS  nix: a dry-run install plans nix:jq
+  PASS  opam: a dry-run install plans opam:jq
+  PASS  pacman: a dry-run install plans pacman:jq
+  PASS  paru: a dry-run install plans paru:jq
+  PASS  pixi: a dry-run install plans pixi:jq
+  PASS  pkgin: a dry-run install plans pkgin:jq
+  PASS  pnpm: a dry-run install plans pnpm:jq
+  PASS  pub: a dry-run install plans pub:jq
+  PASS  service: a service statement parses
+  PASS  service: and reaches a plan
+  PASS  setting: a setting statement parses
+  PASS  setting: and reaches a plan
+  PASS  slackpkg: a dry-run install plans slackpkg:jq
+  PASS  snap: a dry-run install plans snap:jq
+  PASS  spack: a dry-run install plans spack:jq
+  PASS  stack: a dry-run install plans stack:jq
+  PASS  vscode: a dry-run install plans vscode:ms-python.python
+  PASS  web: a dry-run install plans web:https://example.invalid/tool.tar.gz
+  PASS  xbps: a dry-run install plans xbps:jq
+  PASS  yarn: a dry-run install plans yarn:jq
+  PASS  yay: a dry-run install plans yay:jq
+  PASS  zypper: a dry-run install plans zypper:jq
+[16] Command surface, executed
+  PASS  vars resolves this machine's variables
+  PASS  unmanaged lists what LiNix does not manage
+  PASS  path prints the config repo
+  PASS  path --explain says which source won
+  PASS  config show prints the active configuration
+  PASS  policy checks the desired state against [guard]
+  PASS  conflicts reports cross-backend conflicts
+  PASS  sbom emits a bill of materials
+  PASS  completions bash generates a script
+  PASS  profile list
+  PASS  profile active
+  PASS  profile create scaffolds one
+  PASS  profile show reads it back
+  PASS  module list
+  PASS  module create scaffolds one
+  PASS  module show reads it back
+  PASS  snapshot list
+  PASS  schedule list
+  PASS  service list
+  PASS  repo list enumerates repositories
+  PASS  list enumerates what is installed
+  PASS  hooks status says which managers are hookable
+  PASS  hooks shell-init prints the wrapper functions
+  PASS  heal recovers an uninterrupted transaction
+  PASS  clean-cache frees archives without removing a package
+  PASS  update refreshes repository metadata
+  PASS  watch --once runs a single unattended reconcile
+  PASS  search finds something
+  PASS  info reads a package's metadata
+  PASS  why explains a package's provenance
+  PASS  lock records installed versions
+  PASS  upgrade --dry-run previews
+  PASS  remove-orphans previews without removing
+  PASS  activate converges onto the named profiles
+  PASS  deactivate previews dropping one
+  PASS  hold pins a package against bulk upgrade
+  PASS  unhold releases it
+  PASS  teleport previews moving a package between managers
+  PASS  unmanage forgets a package without uninstalling it
+  PASS  jq is still installed after unmanage
+  PASS  audit scans for vulnerabilities
+  PASS  export writes native manifests
+  PASS  run executes inside an ephemeral environment
+  PASS  plan freezes a reviewable file
+  PASS  the plan file exists
+  PASS  apply reads a saved plan
+  PASS  edit opens a file in $EDITOR
+  PASS  reset refuses while a config repo still exists (correctly refused)
+  PASS  and says --force is what overrides it
+  PASS  self-upgrade --check reports the version and source
+[16b] bundle → restore
+  PASS  bundle packs the config
+  PASS  the bundle directory exists
+  PASS  restore into a clean config directory
+  PASS  the restored model parses
+  PASS  restore refuses a config directory that is not empty (correctly refused)
+  PASS  and --force overrides it
+[16c] --help across the surface
+  PASS  `absent --help` exists
+  PASS  `activate --help` exists
+  PASS  `adopt --help` exists
+  PASS  `apply --help` exists
+  PASS  `audit --help` exists
+  PASS  `bisect --help` exists
+  PASS  `bundle --help` exists
+  PASS  `check --help` exists
+  PASS  `clean-cache --help` exists
+  PASS  `completions --help` exists
+  PASS  `config --help` exists
+  PASS  `conflicts --help` exists
+  PASS  `deactivate --help` exists
+  PASS  `diff --help` exists
+  PASS  `doctor --help` exists
+  PASS  `edit --help` exists
+  PASS  `export --help` exists
+  PASS  `fleet --help` exists
+  PASS  `git --help` exists
+  PASS  `heal --help` exists
+  PASS  `history --help` exists
+  PASS  `hold --help` exists
+  PASS  `hooks --help` exists
+  PASS  `info --help` exists
+  PASS  `init --help` exists
+  PASS  `install --help` exists
+  PASS  `list --help` exists
+  PASS  `lock --help` exists
+  PASS  `module --help` exists
+  PASS  `path --help` exists
+  PASS  `plan --help` exists
+  PASS  `policy --help` exists
+  PASS  `profile --help` exists
+  PASS  `protected --help` exists
+  PASS  `purge-unmanaged --help` exists
+  PASS  `rebuild --help` exists
+  PASS  `remove-orphans --help` exists
+  PASS  `repo --help` exists
+  PASS  `reset --help` exists
+  PASS  `restore --help` exists
+  PASS  `rollback --help` exists
+  PASS  `run --help` exists
+  PASS  `sbom --help` exists
+  PASS  `schedule --help` exists
+  PASS  `search --help` exists
+  PASS  `self-upgrade --help` exists
+  PASS  `service --help` exists
+  PASS  `shell --help` exists
+  PASS  `snapshot --help` exists
+  PASS  `status --help` exists
+  PASS  `sync --help` exists
+  PASS  `teleport --help` exists
+  PASS  `undo --help` exists
+  PASS  `unhold --help` exists
+  PASS  `uninstall --help` exists
+  PASS  `unlock --help` exists
+  PASS  `unmanage --help` exists
+  PASS  `unmanaged --help` exists
+  PASS  `update --help` exists
+  PASS  `upgrade --help` exists
+  PASS  `vars --help` exists
+  PASS  `watch --help` exists
+  PASS  `why --help` exists
+[17] Coverage audit
+        backends: 9 real lifecycle, 0 install-attempted, 43 plan-smoked
+  PASS  every registered backend got a lifecycle or a plan-smoke
+        exempt: shell — opens an interactive subshell
+        exempt: undo — an interactive snapshot gallery
+        exempt: history — an interactive manifest-history TUI
+        exempt: bisect — restores system snapshots, and may need a reboot between steps
+        exempt: fleet — compares machines over SSH; there are no peers here
+        subcommands: 63 in --help, 58 executed, 5 exempt
+  PASS  every non-exempt subcommand was executed, not just --help'd
+==============================================================
+ RESULT  pass=279  fail=0  soft=5
+ OK — every hard check passed.
+==============================================================
+
+===============================================================================
+=== arch
+===============================================================================
+==============================================================
+ LiNix v7 harness — backend=pacman package=jq
+==============================================================
+[1] Bootstrap
+  PASS  init scaffolds the repo
+  PASS  priority file exists
+  PASS  priority names this backend
+  PASS  active file exists
+[2] Discovery / read-only verbs
+  PASS  doctor
+  PASS  status
+  PASS  plan (no changes yet)
+  PASS  check parses the model
+  PASS  absent lists nothing
+  PASS  protected lists guarded packages
+  PASS  protected includes a system essential
+[3] Dry-run safety
+  PASS  sync --dry-run does not error
+  PASS  a dry-run install shows a plan
+  PASS  dry-run did NOT actually install jq (correctly refused)
+[4] purge-unmanaged, before adopt (the state that makes it a test)
+  PASS  purge-unmanaged is refused on a machine LiNix has not adopted (correctly refused)
+  PASS  and it is the unadopted-machine ratio that refused
+[5] Install
+  PASS  install jq
+  PASS  list shows jq
+  PASS  jq binary is on PATH
+[6] Idempotency
+  PASS  second sync is a no-op (exit 0)
+[7] Negative path
+  PASS  installing a nonexistent package fails (correctly refused)
+  PASS  a failed install leaves the model parseable
+[8] Adopt
+  PASS  nothing is adopted before adopt runs (correctly refused)
+  PASS  adopt takes manual packages
+  PASS  python3 still installed after adopt
+        adopted=15 (of which pacman: 11)  pacman manual set=12  pacman installed=175
+  PASS  adopt wrote an adoption manifest
+  PASS  adopt recorded at least one package
+  PASS  adopt took the manual set, not the whole dependency closure
+  PASS  adopt took no more than what pacman calls user-chosen
+[9] The guard
+  PASS  bash survives an uninstall attempt
+  PASS  purge-unmanaged is still not a silent mass-delete after adopt (correctly refused)
+  PASS  and the refusal after adopt still names its rule
+[10] Remove
+  PASS  uninstall jq
+  PASS  jq binary gone after uninstall (correctly refused)
+[11] Git history + rollback
+  PASS  git init enables manifest history
+  PASS  git status reads the repo
+  PASS  an install after git init succeeds
+  PASS  the install left a commit behind
+  PASS  git log shows a linix commit
+  PASS  git commit records the current state on demand
+  PASS  diff against a commit runs
+  PASS  rollback to HEAD is accepted
+[12] rebuild
+  PASS  bare rebuild is refused — scope is required (correctly refused)
+  PASS  there is history for a rebuild to leave alone
+  PASS  rebuild jq runs
+  PASS  jq is reinstalled, not left removed
+        commits before=2 after=2
+  PASS  rebuild wrote no git commit (K14)
+[13] Chains and the per-host lock
+        lock file: /tmp/linix-it-config/locks/bare.fb0652a59b84.toml
+  PASS  the lock is named for this host
+  PASS  an unpinned name froze to pacman
+  PASS  sync ignores another host's lock file
+  PASS  and leaves it alone
+  PASS  a chain is legal
+  PASS  a chain may end in list
+  PASS  list alone is legal
+  PASS  an empty slot is refused (correctly refused)
+  PASS  an unknown link is refused (correctly refused)
+  PASS  list must come last (correctly refused)
+  PASS  a name repeated is refused (correctly refused)
+  PASS  a pattern cannot span one (correctly refused)
+  PASS  a pin to a manager this host lacks is not silent (correctly refused)
+  PASS  unlock --list names the frozen package
+  PASS  unlock forgets one name
+  PASS  the entry is really gone (correctly refused)
+  PASS  unlocking a name that was never frozen is not an error
+[13b] Silence is not a no
+  PASS  a sync past a silent manager still resolves
+  PASS  and freezes nothing (correctly refused)
+  PASS  and says which manager could not answer
+[14] Real lifecycle, every other manager on this image
+        READY backends: appimage cargo gem github link npm pacman pipx service setting uv web 
+  soft  appimage: no real lifecycle here — needs FUSE, which a plain container does not have — smoked in 15
+    -- cargo:hexyl
+  PASS  cargo installed hexyl for real
+  PASS  cargo: list shows hexyl
+  PASS  cargo: hexyl is on PATH
+  PASS  cargo: uninstall hexyl
+  PASS  cargo: hexyl is gone from list (correctly refused)
+  PASS  cargo: hexyl is off PATH
+    -- gem:colorize
+  PASS  gem installed colorize for real
+  PASS  gem: list shows colorize
+  PASS  gem: uninstall colorize
+  PASS  gem: colorize is gone from list (correctly refused)
+    -- github:sharkdp/fd
+  PASS  github installed sharkdp/fd for real
+  PASS  github: list shows fd
+  PASS  github: fd is on PATH
+  PASS  github: uninstall sharkdp/fd
+  PASS  github: fd is gone from list (correctly refused)
+  PASS  github: fd is off PATH
+  soft  link: no real lifecycle here — a dependent statement (link:SRC), not a package name — smoked in 15
+    -- npm:cowsay
+  PASS  npm installed cowsay for real
+  PASS  npm: list shows cowsay
+  PASS  npm: cowsay is on PATH
+  PASS  npm: uninstall cowsay
+  PASS  npm: cowsay is gone from list (correctly refused)
+  PASS  npm: cowsay is off PATH
+    -- pipx:pycowsay
+  PASS  pipx installed pycowsay for real
+  PASS  pipx: list shows pycowsay
+  PASS  pipx: pycowsay is on PATH
+  PASS  pipx: uninstall pycowsay
+  PASS  pipx: pycowsay is gone from list (correctly refused)
+  PASS  pipx: pycowsay is off PATH
+  soft  service: no real lifecycle here — a dependent statement (service:NAME), not a package name — smoked in 15
+  soft  setting: no real lifecycle here — a dependent statement (setting:K @value=), not a package name — smoked in 15
+    -- uv:pycowsay
+  PASS  uv installed pycowsay for real
+  PASS  uv: list shows pycowsay
+  PASS  uv: pycowsay is on PATH
+  PASS  uv: uninstall pycowsay
+  PASS  uv: pycowsay is gone from list (correctly refused)
+  PASS  uv: pycowsay is off PATH
+  soft  web: no real lifecycle here — installs from a pasted URL; no stable public canary — smoked in 15
+[15] Plan-smoke, every backend this image cannot run
+        registered backends: 52
+  PASS  doctor --json enumerates the registry
+  PASS  apk: a dry-run install plans apk:jq
+  PASS  appimage: a dry-run install plans appimage:https://example.invalid/tool.AppImage
+  PASS  apt: a dry-run install plans apt:jq
+  PASS  asdf: a dry-run install plans asdf:jq
+  PASS  brew: a dry-run install plans brew:jq
+  PASS  btrfs: the snapshot verb runs
+  PASS  bun: a dry-run install plans bun:jq
+  PASS  cabal: a dry-run install plans cabal:jq
+  PASS  composer: a dry-run install plans composer:psr/log
+  PASS  conda: a dry-run install plans conda:jq
+  PASS  dnf: a dry-run install plans dnf:jq
+  PASS  dotnet: a dry-run install plans dotnet:jq
+  PASS  emacs: a dry-run install plans emacs:jq
+  PASS  emerge: a dry-run install plans emerge:app-misc/jq
+  PASS  eopkg: a dry-run install plans eopkg:jq
+  PASS  flatpak: a dry-run install plans flatpak:org.freedesktop.Platform
+  PASS  go: a dry-run install plans go:golang.org/x/example/hello
+  PASS  guix: a dry-run install plans guix:jq
+  PASS  helm: a dry-run install plans helm:https://github.com/databus23/helm-diff
+  PASS  krew: a dry-run install plans krew:jq
+  PASS  link: a link statement parses
+  PASS  link: and reaches a plan
+  PASS  luarocks: a dry-run install plans luarocks:jq
+  PASS  mise: a dry-run install plans mise:jq
+  PASS  mix: a dry-run install plans mix:jq
+  PASS  nimble: a dry-run install plans nimble:jq
+  PASS  nix: a dry-run install plans nix:jq
+  PASS  opam: a dry-run install plans opam:jq
+  PASS  paru: a dry-run install plans paru:jq
+  PASS  pip: a dry-run install plans pip:jq
+  PASS  pixi: a dry-run install plans pixi:jq
+  PASS  pkgin: a dry-run install plans pkgin:jq
+  PASS  pnpm: a dry-run install plans pnpm:jq
+  PASS  pub: a dry-run install plans pub:jq
+  PASS  service: a service statement parses
+  PASS  service: and reaches a plan
+  PASS  setting: a setting statement parses
+  PASS  setting: and reaches a plan
+  PASS  slackpkg: a dry-run install plans slackpkg:jq
+  PASS  snap: a dry-run install plans snap:jq
+  PASS  spack: a dry-run install plans spack:jq
+  PASS  stack: a dry-run install plans stack:jq
+  PASS  vscode: a dry-run install plans vscode:ms-python.python
+  PASS  web: a dry-run install plans web:https://example.invalid/tool.tar.gz
+  PASS  xbps: a dry-run install plans xbps:jq
+  PASS  yarn: a dry-run install plans yarn:jq
+  PASS  yay: a dry-run install plans yay:jq
+  PASS  zypper: a dry-run install plans zypper:jq
+[16] Command surface, executed
+  PASS  vars resolves this machine's variables
+  PASS  unmanaged lists what LiNix does not manage
+  PASS  path prints the config repo
+  PASS  path --explain says which source won
+  PASS  config show prints the active configuration
+  PASS  policy checks the desired state against [guard]
+  PASS  conflicts reports cross-backend conflicts
+  PASS  sbom emits a bill of materials
+  PASS  completions bash generates a script
+  PASS  profile list
+  PASS  profile active
+  PASS  profile create scaffolds one
+  PASS  profile show reads it back
+  PASS  module list
+  PASS  module create scaffolds one
+  PASS  module show reads it back
+  PASS  snapshot list
+  PASS  schedule list
+  PASS  service list
+  PASS  repo list enumerates repositories
+  PASS  list enumerates what is installed
+  PASS  hooks status says which managers are hookable
+  PASS  hooks shell-init prints the wrapper functions
+  PASS  heal recovers an uninterrupted transaction
+  PASS  clean-cache frees archives without removing a package
+  PASS  update refreshes repository metadata
+  PASS  watch --once runs a single unattended reconcile
+  PASS  search finds something
+  PASS  info reads a package's metadata
+  PASS  why explains a package's provenance
+  PASS  lock records installed versions
+  PASS  upgrade --dry-run previews
+  PASS  remove-orphans previews without removing
+  PASS  activate converges onto the named profiles
+  PASS  deactivate previews dropping one
+  PASS  hold pins a package against bulk upgrade
+  PASS  unhold releases it
+  PASS  teleport previews moving a package between managers
+  PASS  unmanage forgets a package without uninstalling it
+  PASS  jq is still installed after unmanage
+  PASS  audit scans for vulnerabilities
+  PASS  export writes native manifests
+  PASS  run executes inside an ephemeral environment
+  PASS  plan freezes a reviewable file
+  PASS  the plan file exists
+  PASS  apply reads a saved plan
+  PASS  edit opens a file in $EDITOR
+  PASS  reset refuses while a config repo still exists (correctly refused)
+  PASS  and says --force is what overrides it
+  PASS  self-upgrade --check reports the version and source
+[16b] bundle → restore
+  PASS  bundle packs the config
+  PASS  the bundle directory exists
+  PASS  restore into a clean config directory
+  PASS  the restored model parses
+  PASS  restore refuses a config directory that is not empty (correctly refused)
+  PASS  and --force overrides it
+[16c] --help across the surface
+  PASS  `absent --help` exists
+  PASS  `activate --help` exists
+  PASS  `adopt --help` exists
+  PASS  `apply --help` exists
+  PASS  `audit --help` exists
+  PASS  `bisect --help` exists
+  PASS  `bundle --help` exists
+  PASS  `check --help` exists
+  PASS  `clean-cache --help` exists
+  PASS  `completions --help` exists
+  PASS  `config --help` exists
+  PASS  `conflicts --help` exists
+  PASS  `deactivate --help` exists
+  PASS  `diff --help` exists
+  PASS  `doctor --help` exists
+  PASS  `edit --help` exists
+  PASS  `export --help` exists
+  PASS  `fleet --help` exists
+  PASS  `git --help` exists
+  PASS  `heal --help` exists
+  PASS  `history --help` exists
+  PASS  `hold --help` exists
+  PASS  `hooks --help` exists
+  PASS  `info --help` exists
+  PASS  `init --help` exists
+  PASS  `install --help` exists
+  PASS  `list --help` exists
+  PASS  `lock --help` exists
+  PASS  `module --help` exists
+  PASS  `path --help` exists
+  PASS  `plan --help` exists
+  PASS  `policy --help` exists
+  PASS  `profile --help` exists
+  PASS  `protected --help` exists
+  PASS  `purge-unmanaged --help` exists
+  PASS  `rebuild --help` exists
+  PASS  `remove-orphans --help` exists
+  PASS  `repo --help` exists
+  PASS  `reset --help` exists
+  PASS  `restore --help` exists
+  PASS  `rollback --help` exists
+  PASS  `run --help` exists
+  PASS  `sbom --help` exists
+  PASS  `schedule --help` exists
+  PASS  `search --help` exists
+  PASS  `self-upgrade --help` exists
+  PASS  `service --help` exists
+  PASS  `shell --help` exists
+  PASS  `snapshot --help` exists
+  PASS  `status --help` exists
+  PASS  `sync --help` exists
+  PASS  `teleport --help` exists
+  PASS  `undo --help` exists
+  PASS  `unhold --help` exists
+  PASS  `uninstall --help` exists
+  PASS  `unlock --help` exists
+  PASS  `unmanage --help` exists
+  PASS  `unmanaged --help` exists
+  PASS  `update --help` exists
+  PASS  `upgrade --help` exists
+  PASS  `vars --help` exists
+  PASS  `watch --help` exists
+  PASS  `why --help` exists
+[17] Coverage audit
+        backends: 7 real lifecycle, 0 install-attempted, 45 plan-smoked
+  PASS  every registered backend got a lifecycle or a plan-smoke
+        exempt: shell — opens an interactive subshell
+        exempt: undo — an interactive snapshot gallery
+        exempt: history — an interactive manifest-history TUI
+        exempt: bisect — restores system snapshots, and may need a reboot between steps
+        exempt: fleet — compares machines over SSH; there are no peers here
+        subcommands: 63 in --help, 58 executed, 5 exempt
+  PASS  every non-exempt subcommand was executed, not just --help'd
+==============================================================
+ RESULT  pass=271  fail=0  soft=5
+ OK — every hard check passed.
+==============================================================
+
+===============================================================================
+=== alpine
+===============================================================================
+==============================================================
+ LiNix v7 harness — backend=apk package=jq
+==============================================================
+[1] Bootstrap
+  PASS  init scaffolds the repo
+  PASS  priority file exists
+  PASS  priority names this backend
+  PASS  active file exists
+[2] Discovery / read-only verbs
+  PASS  doctor
+  PASS  status
+  PASS  plan (no changes yet)
+  PASS  check parses the model
+  PASS  absent lists nothing
+  PASS  protected lists guarded packages
+  PASS  protected includes a system essential
+[3] Dry-run safety
+  PASS  sync --dry-run does not error
+  PASS  a dry-run install shows a plan
+  PASS  dry-run did NOT actually install jq (correctly refused)
+[4] purge-unmanaged, before adopt (the state that makes it a test)
+  PASS  purge-unmanaged is refused on a machine LiNix has not adopted (correctly refused)
+  PASS  and it is the unadopted-machine ratio that refused
+[5] Install
+  PASS  install jq
+  PASS  list shows jq
+  PASS  jq binary is on PATH
+[6] Idempotency
+  PASS  second sync is a no-op (exit 0)
+[7] Negative path
+  PASS  installing a nonexistent package fails (correctly refused)
+  PASS  a failed install leaves the model parseable
+[8] Adopt
+  PASS  nothing is adopted before adopt runs (correctly refused)
+  PASS  adopt takes manual packages
+[9] The guard
+  PASS  bash survives an uninstall attempt
+  PASS  purge-unmanaged is still not a silent mass-delete after adopt (correctly refused)
+  PASS  and the refusal after adopt still names its rule
+[10] Remove
+  PASS  uninstall jq
+  PASS  jq binary gone after uninstall (correctly refused)
+[11] Git history + rollback
+  PASS  git init enables manifest history
+  PASS  git status reads the repo
+  PASS  an install after git init succeeds
+  PASS  the install left a commit behind
+  PASS  git log shows a linix commit
+  PASS  git commit records the current state on demand
+  PASS  diff against a commit runs
+  PASS  rollback to HEAD is accepted
+[12] rebuild
+  PASS  bare rebuild is refused — scope is required (correctly refused)
+  PASS  there is history for a rebuild to leave alone
+  PASS  rebuild jq runs
+  PASS  jq is reinstalled, not left removed
+        commits before=2 after=2
+  PASS  rebuild wrote no git commit (K14)
+[13] Chains and the per-host lock
+        lock file: /tmp/linix-it-config/locks/bare.975ac52c8872.toml
+  PASS  the lock is named for this host
+  PASS  an unpinned name froze to apk
+  PASS  sync ignores another host's lock file
+  PASS  and leaves it alone
+  PASS  a chain is legal
+  PASS  a chain may end in list
+  PASS  list alone is legal
+  PASS  an empty slot is refused (correctly refused)
+  PASS  an unknown link is refused (correctly refused)
+  PASS  list must come last (correctly refused)
+  PASS  a name repeated is refused (correctly refused)
+  PASS  a pattern cannot span one (correctly refused)
+  PASS  a pin to a manager this host lacks is not silent (correctly refused)
+  PASS  unlock --list names the frozen package
+  PASS  unlock forgets one name
+  PASS  the entry is really gone (correctly refused)
+  PASS  unlocking a name that was never frozen is not an error
+[13b] Silence is not a no
+  PASS  a sync past a silent manager still resolves
+  PASS  and freezes nothing (correctly refused)
+  PASS  and says which manager could not answer
+[14] Real lifecycle, every other manager on this image
+        READY backends: apk appimage cargo gem github link npm pipx uv web 
+  soft  appimage: no real lifecycle here — needs FUSE, which a plain container does not have — smoked in 15
+    -- cargo:hexyl
+  PASS  cargo installed hexyl for real
+  PASS  cargo: list shows hexyl
+  PASS  cargo: hexyl is on PATH
+  PASS  cargo: uninstall hexyl
+  PASS  cargo: hexyl is gone from list (correctly refused)
+  PASS  cargo: hexyl is off PATH
+    -- gem:colorize
+  PASS  gem installed colorize for real
+  PASS  gem: list shows colorize
+  PASS  gem: uninstall colorize
+  PASS  gem: colorize is gone from list (correctly refused)
+    -- github:sharkdp/fd
+  PASS  github installed sharkdp/fd for real
+  PASS  github: list shows fd
+  PASS  github: fd is on PATH
+  PASS  github: uninstall sharkdp/fd
+  PASS  github: fd is gone from list (correctly refused)
+  PASS  github: fd is off PATH
+  soft  link: no real lifecycle here — a dependent statement (link:SRC), not a package name — smoked in 15
+    -- npm:cowsay
+  PASS  npm installed cowsay for real
+  PASS  npm: list shows cowsay
+  PASS  npm: cowsay is on PATH
+  PASS  npm: uninstall cowsay
+  PASS  npm: cowsay is gone from list (correctly refused)
+  PASS  npm: cowsay is off PATH
+    -- pipx:pycowsay
+  PASS  pipx installed pycowsay for real
+  PASS  pipx: list shows pycowsay
+  PASS  pipx: pycowsay is on PATH
+  PASS  pipx: uninstall pycowsay
+  PASS  pipx: pycowsay is gone from list (correctly refused)
+  PASS  pipx: pycowsay is off PATH
+    -- uv:pycowsay
+  PASS  uv installed pycowsay for real
+  PASS  uv: list shows pycowsay
+  PASS  uv: pycowsay is on PATH
+  PASS  uv: uninstall pycowsay
+  PASS  uv: pycowsay is gone from list (correctly refused)
+  PASS  uv: pycowsay is off PATH
+  soft  web: no real lifecycle here — installs from a pasted URL; no stable public canary — smoked in 15
+[15] Plan-smoke, every backend this image cannot run
+        registered backends: 52
+  PASS  doctor --json enumerates the registry
+  PASS  appimage: a dry-run install plans appimage:https://example.invalid/tool.AppImage
+  PASS  apt: a dry-run install plans apt:jq
+  PASS  asdf: a dry-run install plans asdf:jq
+  PASS  brew: a dry-run install plans brew:jq
+  PASS  btrfs: the snapshot verb runs
+  PASS  bun: a dry-run install plans bun:jq
+  PASS  cabal: a dry-run install plans cabal:jq
+  PASS  composer: a dry-run install plans composer:psr/log
+  PASS  conda: a dry-run install plans conda:jq
+  PASS  dnf: a dry-run install plans dnf:jq
+  PASS  dotnet: a dry-run install plans dotnet:jq
+  PASS  emacs: a dry-run install plans emacs:jq
+  PASS  emerge: a dry-run install plans emerge:app-misc/jq
+  PASS  eopkg: a dry-run install plans eopkg:jq
+  PASS  flatpak: a dry-run install plans flatpak:org.freedesktop.Platform
+  PASS  go: a dry-run install plans go:golang.org/x/example/hello
+  PASS  guix: a dry-run install plans guix:jq
+  PASS  helm: a dry-run install plans helm:https://github.com/databus23/helm-diff
+  PASS  krew: a dry-run install plans krew:jq
+  PASS  link: a link statement parses
+  PASS  link: and reaches a plan
+  PASS  luarocks: a dry-run install plans luarocks:jq
+  PASS  mise: a dry-run install plans mise:jq
+  PASS  mix: a dry-run install plans mix:jq
+  PASS  nimble: a dry-run install plans nimble:jq
+  PASS  nix: a dry-run install plans nix:jq
+  PASS  opam: a dry-run install plans opam:jq
+  PASS  pacman: a dry-run install plans pacman:jq
+  PASS  paru: a dry-run install plans paru:jq
+  PASS  pip: a dry-run install plans pip:jq
+  PASS  pixi: a dry-run install plans pixi:jq
+  PASS  pkgin: a dry-run install plans pkgin:jq
+  PASS  pnpm: a dry-run install plans pnpm:jq
+  PASS  pub: a dry-run install plans pub:jq
+  PASS  service: a service statement parses
+  PASS  service: and reaches a plan
+  PASS  setting: a setting statement parses
+  PASS  setting: and reaches a plan
+  PASS  slackpkg: a dry-run install plans slackpkg:jq
+  PASS  snap: a dry-run install plans snap:jq
+  PASS  spack: a dry-run install plans spack:jq
+  PASS  stack: a dry-run install plans stack:jq
+  PASS  vscode: a dry-run install plans vscode:ms-python.python
+  PASS  web: a dry-run install plans web:https://example.invalid/tool.tar.gz
+  PASS  xbps: a dry-run install plans xbps:jq
+  PASS  yarn: a dry-run install plans yarn:jq
+  PASS  yay: a dry-run install plans yay:jq
+  PASS  zypper: a dry-run install plans zypper:jq
+[16] Command surface, executed
+  PASS  vars resolves this machine's variables
+  PASS  unmanaged lists what LiNix does not manage
+  PASS  path prints the config repo
+  PASS  path --explain says which source won
+  PASS  config show prints the active configuration
+  PASS  policy checks the desired state against [guard]
+  PASS  conflicts reports cross-backend conflicts
+  PASS  sbom emits a bill of materials
+  PASS  completions bash generates a script
+  PASS  profile list
+  PASS  profile active
+  PASS  profile create scaffolds one
+  PASS  profile show reads it back
+  PASS  module list
+  PASS  module create scaffolds one
+  PASS  module show reads it back
+  PASS  snapshot list
+  PASS  schedule list
+  PASS  service list
+  PASS  repo list enumerates repositories
+  PASS  list enumerates what is installed
+  PASS  hooks status says which managers are hookable
+  PASS  hooks shell-init prints the wrapper functions
+  PASS  heal recovers an uninterrupted transaction
+  PASS  clean-cache frees archives without removing a package
+  PASS  update refreshes repository metadata
+  PASS  watch --once runs a single unattended reconcile
+  PASS  search finds something
+  PASS  info reads a package's metadata
+  PASS  why explains a package's provenance
+  PASS  lock records installed versions
+  PASS  upgrade --dry-run previews
+  PASS  remove-orphans previews without removing
+  PASS  activate converges onto the named profiles
+  PASS  deactivate previews dropping one
+  PASS  hold pins a package against bulk upgrade
+  PASS  unhold releases it
+  PASS  teleport previews moving a package between managers
+  PASS  unmanage forgets a package without uninstalling it
+  PASS  jq is still installed after unmanage
+  PASS  audit scans for vulnerabilities
+  PASS  export writes native manifests
+  PASS  run executes inside an ephemeral environment
+  PASS  plan freezes a reviewable file
+  PASS  the plan file exists
+  PASS  apply reads a saved plan
+  PASS  edit opens a file in $EDITOR
+  PASS  reset refuses while a config repo still exists (correctly refused)
+  PASS  and says --force is what overrides it
+  PASS  self-upgrade --check reports the version and source
+[16b] bundle → restore
+  PASS  bundle packs the config
+  PASS  the bundle directory exists
+  PASS  restore into a clean config directory
+  PASS  the restored model parses
+  PASS  restore refuses a config directory that is not empty (correctly refused)
+  PASS  and --force overrides it
+[16c] --help across the surface
+  PASS  `absent --help` exists
+  PASS  `activate --help` exists
+  PASS  `adopt --help` exists
+  PASS  `apply --help` exists
+  PASS  `audit --help` exists
+  PASS  `bisect --help` exists
+  PASS  `bundle --help` exists
+  PASS  `check --help` exists
+  PASS  `clean-cache --help` exists
+  PASS  `completions --help` exists
+  PASS  `config --help` exists
+  PASS  `conflicts --help` exists
+  PASS  `deactivate --help` exists
+  PASS  `diff --help` exists
+  PASS  `doctor --help` exists
+  PASS  `edit --help` exists
+  PASS  `export --help` exists
+  PASS  `fleet --help` exists
+  PASS  `git --help` exists
+  PASS  `heal --help` exists
+  PASS  `history --help` exists
+  PASS  `hold --help` exists
+  PASS  `hooks --help` exists
+  PASS  `info --help` exists
+  PASS  `init --help` exists
+  PASS  `install --help` exists
+  PASS  `list --help` exists
+  PASS  `lock --help` exists
+  PASS  `module --help` exists
+  PASS  `path --help` exists
+  PASS  `plan --help` exists
+  PASS  `policy --help` exists
+  PASS  `profile --help` exists
+  PASS  `protected --help` exists
+  PASS  `purge-unmanaged --help` exists
+  PASS  `rebuild --help` exists
+  PASS  `remove-orphans --help` exists
+  PASS  `repo --help` exists
+  PASS  `reset --help` exists
+  PASS  `restore --help` exists
+  PASS  `rollback --help` exists
+  PASS  `run --help` exists
+  PASS  `sbom --help` exists
+  PASS  `schedule --help` exists
+  PASS  `search --help` exists
+  PASS  `self-upgrade --help` exists
+  PASS  `service --help` exists
+  PASS  `shell --help` exists
+  PASS  `snapshot --help` exists
+  PASS  `status --help` exists
+  PASS  `sync --help` exists
+  PASS  `teleport --help` exists
+  PASS  `undo --help` exists
+  PASS  `unhold --help` exists
+  PASS  `uninstall --help` exists
+  PASS  `unlock --help` exists
+  PASS  `unmanage --help` exists
+  PASS  `unmanaged --help` exists
+  PASS  `update --help` exists
+  PASS  `upgrade --help` exists
+  PASS  `vars --help` exists
+  PASS  `watch --help` exists
+  PASS  `why --help` exists
+[17] Coverage audit
+        backends: 7 real lifecycle, 0 install-attempted, 45 plan-smoked
+  PASS  every registered backend got a lifecycle or a plan-smoke
+        exempt: shell — opens an interactive subshell
+        exempt: undo — an interactive snapshot gallery
+        exempt: history — an interactive manifest-history TUI
+        exempt: bisect — restores system snapshots, and may need a reboot between steps
+        exempt: fleet — compares machines over SSH; there are no peers here
+        subcommands: 63 in --help, 58 executed, 5 exempt
+  PASS  every non-exempt subcommand was executed, not just --help'd
+==============================================================
+ RESULT  pass=266  fail=0  soft=3
+ OK — every hard check passed.
+==============================================================
+
+===============================================================================
+=== tools
+===============================================================================
+==============================================================
+ LiNix v7 harness — backend=apt package=jq
+==============================================================
+[1] Bootstrap
+  PASS  init scaffolds the repo
+  PASS  priority file exists
+  PASS  priority names this backend
+  PASS  active file exists
+[2] Discovery / read-only verbs
+  PASS  doctor
+  PASS  status
+  PASS  plan (no changes yet)
+  PASS  check parses the model
+  PASS  absent lists nothing
+  PASS  protected lists guarded packages
+  PASS  protected includes a system essential
+[3] Dry-run safety
+  PASS  sync --dry-run does not error
+  PASS  a dry-run install shows a plan
+  PASS  dry-run did NOT actually install jq (correctly refused)
+[4] purge-unmanaged, before adopt (the state that makes it a test)
+  PASS  purge-unmanaged is refused on a machine LiNix has not adopted (correctly refused)
+  PASS  and it is the unadopted-machine ratio that refused
+[5] Install
+  PASS  install jq
+  PASS  list shows jq
+  PASS  jq binary is on PATH
+[6] Idempotency
+  PASS  second sync is a no-op (exit 0)
+[7] Negative path
+  PASS  installing a nonexistent package fails (correctly refused)
+  PASS  a failed install leaves the model parseable
+[8] Adopt
+  PASS  nothing is adopted before adopt runs (correctly refused)
+  PASS  adopt takes manual packages
+  PASS  python3 still installed after adopt
+        adopted=94 (of which apt: 89)  apt manual set=123  apt installed=758
+  PASS  adopt wrote an adoption manifest
+  PASS  adopt recorded at least one package
+  PASS  adopt took the manual set, not the whole dependency closure
+  PASS  adopt took no more than what apt calls user-chosen
+[9] The guard
+  PASS  bash survives an uninstall attempt
+  PASS  purge-unmanaged is still not a silent mass-delete after adopt (correctly refused)
+  PASS  and the refusal after adopt still names its rule
+[10] Remove
+  PASS  uninstall jq
+  PASS  jq binary gone after uninstall (correctly refused)
+[11] Git history + rollback
+  PASS  git init enables manifest history
+  PASS  git status reads the repo
+  PASS  an install after git init succeeds
+  PASS  the install left a commit behind
+  PASS  git log shows a linix commit
+  PASS  git commit records the current state on demand
+  PASS  diff against a commit runs
+  PASS  rollback to HEAD is accepted
+[12] rebuild
+  PASS  bare rebuild is refused — scope is required (correctly refused)
+  PASS  there is history for a rebuild to leave alone
+  PASS  rebuild jq runs
+  PASS  jq is reinstalled, not left removed
+        commits before=2 after=2
+  PASS  rebuild wrote no git commit (K14)
+[13] Chains and the per-host lock
+        lock file: /tmp/linix-it-config/locks/bare.db100fb203b3.toml
+  PASS  the lock is named for this host
+  PASS  an unpinned name froze to apt
+  PASS  sync ignores another host's lock file
+  PASS  and leaves it alone
+  PASS  a chain is legal
+  PASS  a chain may end in list
+  PASS  list alone is legal
+  PASS  an empty slot is refused (correctly refused)
+  PASS  an unknown link is refused (correctly refused)
+  PASS  list must come last (correctly refused)
+  PASS  a name repeated is refused (correctly refused)
+  PASS  a pattern cannot span one (correctly refused)
+  PASS  a pin to a manager this host lacks is not silent (correctly refused)
+  PASS  unlock --list names the frozen package
+  PASS  unlock forgets one name
+  PASS  the entry is really gone (correctly refused)
+  PASS  unlocking a name that was never frozen is not an error
+[13b] Silence is not a no
+  PASS  a sync past a silent manager still resolves
+  PASS  and freezes nothing (correctly refused)
+  PASS  and says which manager could not answer
+[14] Real lifecycle, every other manager on this image
+        READY backends: appimage apt asdf bun cabal cargo composer conda dotnet emacs flatpak gem github go helm krew link luarocks mise mix nimble npm opam pip pipx pixi pub service spack stack uv web 
+  soft  appimage: no real lifecycle here — needs FUSE, which a plain container does not have — smoked in 15
+    -- asdf:nodejs
+  soft  asdf: install of nodejs failed (ecosystem/network variance) — the checks after it did not run
+        | [2m2026-07-23T16:53:21.746757Z[0m [33m WARN[0m [2mlinix::core::journal[0m[2m:[0m Operation asdf:nodejs:1a5845b91c3a4a5fab4f3c2bdb710e7a recorded as Failed in WAL: Command execution failed: `asdf` failed (exit 1): No such plugin: --
+        | [2m2026-07-23T16:53:21.747089Z[0m [31mERROR[0m [1msync[0m[1m{[0m[3mscope[0m[2m=[0mSync[1m}[0m[2m:[0m [2mlinix::core::transaction[0m[2m:[0m Node asdf:nodejs FAILED: Command execution failed: `asdf` failed (exit 1): No such plugin: --
+        | [2m2026-07-23T16:53:21.747692Z[0m [32m INFO[0m [1msync[0m[1m{[0m[3mscope[0m[2m=[0mSync[1m}[0m[2m:[0m [2mlinix::core::transaction[0m[2m:[0m rolling back
+        | Error: Command execution failed: `asdf` failed (exit 1): No such plugin: --
+    -- bun:cowsay
+  PASS  bun installed cowsay for real
+  PASS  bun: list shows cowsay
+  PASS  bun: cowsay is on PATH
+  PASS  bun: uninstall cowsay
+  PASS  bun: cowsay is gone from list (correctly refused)
+  PASS  bun: cowsay is off PATH
+    -- cabal:hello
+  soft  cabal: install of hello failed (ecosystem/network variance) — the checks after it did not run
+        | [2m2026-07-23T16:53:39.331281Z[0m [33m WARN[0m [2mlinix::core::journal[0m[2m:[0m Operation cabal:hello:9de0cf0b6d1342378cf43637daacb21a recorded as Failed in WAL: Command execution failed: `cabal` failed (exit 1): Unexpected response 404 for http://objects-us-east-1.dream.io/hackage-mirror/root.json
+        | [2m2026-07-23T16:53:39.331600Z[0m [31mERROR[0m [1msync[0m[1m{[0m[3mscope[0m[2m=[0mSync[1m}[0m[2m:[0m [2mlinix::core::transaction[0m[2m:[0m Node cabal:hello FAILED: Command execution failed: `cabal` failed (exit 1): Unexpected response 404 for http://objects-us-east-1.dream.io/hackage-mirror/root.json
+        | [2m2026-07-23T16:53:39.332275Z[0m [32m INFO[0m [1msync[0m[1m{[0m[3mscope[0m[2m=[0mSync[1m}[0m[2m:[0m [2mlinix::core::transaction[0m[2m:[0m rolling back
+        | Error: Command execution failed: `cabal` failed (exit 1): Unexpected response 404 for http://objects-us-east-1.dream.io/hackage-mirror/root.json
+    -- cargo:hexyl
+  PASS  cargo installed hexyl for real
+  PASS  cargo: list shows hexyl
+  PASS  cargo: hexyl is on PATH
+  PASS  cargo: uninstall hexyl
+  PASS  cargo: hexyl is gone from list (correctly refused)
+  PASS  cargo: hexyl is off PATH
+    -- composer:psr/log
+  PASS  composer installed psr/log for real
+  PASS  composer: list shows log
+  PASS  composer: uninstall psr/log
+  PASS  composer: log is gone from list (correctly refused)
+    -- conda:six
+  PASS  conda installed six for real
+  PASS  conda: list shows six
+  PASS  conda: uninstall six
+  PASS  conda: six is gone from list (correctly refused)
+    -- dotnet:dotnetsay
+  PASS  dotnet installed dotnetsay for real
+  PASS  dotnet: list shows dotnetsay
+  PASS  dotnet: dotnetsay is on PATH
+  PASS  dotnet: uninstall dotnetsay
+  PASS  dotnet: dotnetsay is gone from list (correctly refused)
+  PASS  dotnet: dotnetsay is off PATH
+    -- emacs:hydra
+  PASS  emacs installed hydra for real
+  PASS  emacs: list shows hydra
+  PASS  emacs: uninstall hydra
+  PASS  emacs: hydra is gone from list (correctly refused)
+  soft  flatpak: no real lifecycle here — the smallest app pulls a multi-GB runtime, and there is no session bus here
+    -- gem:colorize
+  PASS  gem installed colorize for real
+  PASS  gem: list shows colorize
+  PASS  gem: uninstall colorize
+  PASS  gem: colorize is gone from list (correctly refused)
+    -- github:sharkdp/fd
+  PASS  github installed sharkdp/fd for real
+  PASS  github: list shows fd
+  PASS  github: fd is on PATH
+  PASS  github: uninstall sharkdp/fd
+  PASS  github: fd is gone from list (correctly refused)
+  PASS  github: fd is off PATH
+    -- go:golang.org/x/example/hello
+  PASS  go installed golang.org/x/example/hello for real
+  PASS  go: list shows hello
+  PASS  go: hello is on PATH
+  PASS  go: uninstall golang.org/x/example/hello
+  PASS  go: hello is gone from list (correctly refused)
+  PASS  go: hello is off PATH
+  soft  helm: no real lifecycle here — OPEN: helm's install takes a URL and its uninstall takes a name, so LiNix cannot remove what it installed — see Part VII
+    -- krew:ns
+  PASS  krew installed ns for real
+  PASS  krew: list shows ns
+  PASS  krew: kubectl-ns is on PATH
+  PASS  krew: uninstall ns
+  PASS  krew: ns is gone from list (correctly refused)
+  PASS  krew: kubectl-ns is off PATH
+  soft  link: no real lifecycle here — a dependent statement (link:SRC), not a package name — smoked in 15
+    -- luarocks:luafilesystem
+  PASS  luarocks installed luafilesystem for real
+  PASS  luarocks: list shows luafilesystem
+  PASS  luarocks: uninstall luafilesystem
+  PASS  luarocks: luafilesystem is gone from list (correctly refused)
+    -- mise:jq
+  PASS  mise installed jq for real
+  FAIL  mise: list shows jq (output missing /jq/)
+  PASS  mise: jq is on PATH
+  PASS  mise: uninstall jq
+  PASS  mise: jq is gone from list (correctly refused)
+  FAIL  mise: jq is still on PATH after removal
+    -- mix:hex
+  soft  mix: install of hex failed (ecosystem/network variance) — the checks after it did not run
+        | [2m2026-07-23T16:58:00.162876Z[0m [33m WARN[0m [2mlinix::core::journal[0m[2m:[0m Operation mix:hex:fef7a9ecfe4c4e16af0e44753f71f437 recorded as Failed in WAL: Command execution failed: `mix` failed (exit 1): ** (Mix) Could not find an SCM for dependency :hex from Mix.Local.Installer.MixProject
+        | [2m2026-07-23T16:58:00.163019Z[0m [31mERROR[0m [1msync[0m[1m{[0m[3mscope[0m[2m=[0mSync[1m}[0m[2m:[0m [2mlinix::core::transaction[0m[2m:[0m Node mix:hex FAILED: Command execution failed: `mix` failed (exit 1): ** (Mix) Could not find an SCM for dependency :hex from Mix.Local.Installer.MixProject
+        | [2m2026-07-23T16:58:00.163292Z[0m [32m INFO[0m [1msync[0m[1m{[0m[3mscope[0m[2m=[0mSync[1m}[0m[2m:[0m [2mlinix::core::transaction[0m[2m:[0m rolling back
+        | Error: Command execution failed: `mix` failed (exit 1): ** (Mix) Could not find an SCM for dependency :hex from Mix.Local.Installer.MixProject
+    -- nimble:nimjson
+  soft  nimble: install of nimjson failed (ecosystem/network variance) — the checks after it did not run
+        | [1m[0m[31mError: [0marguments can only be given if the '--run' option is selected[36m[0m[0m
+        | [1m[0m[32mHint: [0mused config file '/etc/nim/nim.cfg'[36m [Conf][0m[0m
+        | [1m[0m[32mHint: [0mused config file '/etc/nim/config.nims'[36m [Conf][0m[0m
+        | [1m[0m[31mError: [0marguments can only be given if the '--run' option is selected[36m[0m[0m
+    -- npm:cowsay
+  PASS  npm installed cowsay for real
+  PASS  npm: list shows cowsay
+  PASS  npm: cowsay is on PATH
+  PASS  npm: uninstall cowsay
+  PASS  npm: cowsay is gone from list (correctly refused)
+  PASS  npm: cowsay is off PATH
+    -- opam:ocamlfind
+  soft  opam: install of ocamlfind failed (ecosystem/network variance) — the checks after it did not run
+        | [ERROR] No switch is currently set. Please use 'opam switch' to set or install a switch
+        | [2m2026-07-23T16:58:46.302299Z[0m [32m INFO[0m [1msync[0m[1m{[0m[3mscope[0m[2m=[0mSync[1m}[0m[2m:[0m [2mlinix::core::transaction[0m[2m:[0m rolling back
+        | Error: Command execution failed: `opam` failed (exit 50): [WARNING] Running as root is not recommended
+        | [ERROR] No switch is currently set. Please use 'opam switch' to set or install a switch
+  soft  pip: no real lifecycle here — this distro marks its Python EXTERNALLY-MANAGED (PEP 668), so a system pip install is refused by design
+    -- pipx:pycowsay
+  PASS  pipx installed pycowsay for real
+  PASS  pipx: list shows pycowsay
+  PASS  pipx: pycowsay is on PATH
+  PASS  pipx: uninstall pycowsay
+  PASS  pipx: pycowsay is gone from list (correctly refused)
+  PASS  pipx: pycowsay is off PATH
+    -- pixi:ripgrep
+  PASS  pixi installed ripgrep for real
+  PASS  pixi: list shows ripgrep
+  PASS  pixi: rg is on PATH
+  PASS  pixi: uninstall ripgrep
+  PASS  pixi: ripgrep is gone from list (correctly refused)
+  PASS  pixi: rg is off PATH
+    -- pub:sass
+  PASS  pub installed sass for real
+  PASS  pub: list shows sass
+  PASS  pub: sass is on PATH
+  PASS  pub: uninstall sass
+  PASS  pub: sass is gone from list (correctly refused)
+  PASS  pub: sass is off PATH
+  soft  service: no real lifecycle here — a dependent statement (service:NAME), not a package name — smoked in 15
+    -- spack:zlib
+  soft  spack: install of zlib failed (ecosystem/network variance) — the checks after it did not run
+        | [2m2026-07-23T16:59:48.198661Z[0m [33m WARN[0m [2mlinix::core::journal[0m[2m:[0m Operation spack:zlib:7cb935b1c14d4e7286cd30aa182295ad recorded as Failed in WAL: Command execution failed: `spack` failed (exit 1): ==> Error: Spec ~~zlib has no name; cannot concretize an anonymous spec
+        | [2m2026-07-23T16:59:48.198799Z[0m [31mERROR[0m [1msync[0m[1m{[0m[3mscope[0m[2m=[0mSync[1m}[0m[2m:[0m [2mlinix::core::transaction[0m[2m:[0m Node spack:zlib FAILED: Command execution failed: `spack` failed (exit 1): ==> Error: Spec ~~zlib has no name; cannot concretize an anonymous spec
+        | [2m2026-07-23T16:59:48.199256Z[0m [32m INFO[0m [1msync[0m[1m{[0m[3mscope[0m[2m=[0mSync[1m}[0m[2m:[0m [2mlinix::core::transaction[0m[2m:[0m rolling back
+        | Error: Command execution failed: `spack` failed (exit 1): ==> Error: Spec ~~zlib has no name; cannot concretize an anonymous spec
+  soft  stack: no real lifecycle here — its first install downloads a whole GHC toolchain (~2 GB) — smoked in 15
+    -- uv:pycowsay
+  PASS  uv installed pycowsay for real
+  PASS  uv: list shows pycowsay
+  PASS  uv: pycowsay is on PATH
+  PASS  uv: uninstall pycowsay
+  PASS  uv: pycowsay is gone from list (correctly refused)
+  PASS  uv: pycowsay is off PATH
+  soft  web: no real lifecycle here — installs from a pasted URL; no stable public canary — smoked in 15
+[15] Plan-smoke, every backend this image cannot run
+        registered backends: 52
+  PASS  doctor --json enumerates the registry
+  PASS  apk: a dry-run install plans apk:jq
+  PASS  appimage: a dry-run install plans appimage:https://example.invalid/tool.AppImage
+  PASS  asdf: a dry-run install plans asdf:jq
+  PASS  brew: a dry-run install plans brew:jq
+  PASS  btrfs: the snapshot verb runs
+  PASS  cabal: a dry-run install plans cabal:jq
+  PASS  dnf: a dry-run install plans dnf:jq
+  PASS  emerge: a dry-run install plans emerge:app-misc/jq
+  PASS  eopkg: a dry-run install plans eopkg:jq
+  PASS  flatpak: a dry-run install plans flatpak:org.freedesktop.Platform
+  PASS  guix: a dry-run install plans guix:jq
+  PASS  helm: a dry-run install plans helm:https://github.com/databus23/helm-diff
+  PASS  link: a link statement parses
+  PASS  link: and reaches a plan
+  PASS  mix: a dry-run install plans mix:jq
+  PASS  nimble: a dry-run install plans nimble:jq
+  PASS  nix: a dry-run install plans nix:jq
+  PASS  opam: a dry-run install plans opam:jq
+  PASS  pacman: a dry-run install plans pacman:jq
+  PASS  paru: a dry-run install plans paru:jq
+  PASS  pip: a dry-run install plans pip:jq
+  PASS  pkgin: a dry-run install plans pkgin:jq
+  PASS  pnpm: a dry-run install plans pnpm:jq
+  PASS  service: a service statement parses
+  PASS  service: and reaches a plan
+  PASS  setting: a setting statement parses
+  PASS  setting: and reaches a plan
+  PASS  slackpkg: a dry-run install plans slackpkg:jq
+  PASS  snap: a dry-run install plans snap:jq
+  PASS  spack: a dry-run install plans spack:jq
+  PASS  stack: a dry-run install plans stack:jq
+  PASS  vscode: a dry-run install plans vscode:ms-python.python
+  PASS  web: a dry-run install plans web:https://example.invalid/tool.tar.gz
+  PASS  xbps: a dry-run install plans xbps:jq
+  PASS  yarn: a dry-run install plans yarn:jq
+  PASS  yay: a dry-run install plans yay:jq
+  PASS  zypper: a dry-run install plans zypper:jq
+[16] Command surface, executed
+  PASS  vars resolves this machine's variables
+  PASS  unmanaged lists what LiNix does not manage
+  PASS  path prints the config repo
+  PASS  path --explain says which source won
+  PASS  config show prints the active configuration
+  PASS  policy checks the desired state against [guard]
+  PASS  conflicts reports cross-backend conflicts
+  PASS  sbom emits a bill of materials
+  PASS  completions bash generates a script
+  PASS  profile list
+  PASS  profile active
+  PASS  profile create scaffolds one
+  PASS  profile show reads it back
+  PASS  module list
+  PASS  module create scaffolds one
+  PASS  module show reads it back
+  PASS  snapshot list
+  PASS  schedule list
+  PASS  service list
+  PASS  repo list says which backends cannot enumerate
+  PASS  list enumerates what is installed
+  PASS  hooks status says which managers are hookable
+  PASS  hooks shell-init prints the wrapper functions
+  PASS  heal recovers an uninterrupted transaction
+  PASS  clean-cache frees archives without removing a package
+  PASS  update refreshes repository metadata
+  PASS  watch --once runs a single unattended reconcile
+  PASS  search finds something
+  PASS  info reads a package's metadata
+  PASS  why explains a package's provenance
+  PASS  lock records installed versions
+  PASS  upgrade --dry-run previews
+  PASS  remove-orphans previews without removing
+  PASS  activate converges onto the named profiles
+  PASS  deactivate previews dropping one
+  PASS  hold pins a package against bulk upgrade
+  PASS  unhold releases it
+  PASS  teleport previews moving a package between managers
+  PASS  unmanage forgets a package without uninstalling it
+  PASS  jq is still installed after unmanage
+  PASS  audit scans for vulnerabilities
+  PASS  export writes native manifests
+  PASS  run executes inside an ephemeral environment
+  PASS  plan freezes a reviewable file
+  PASS  the plan file exists
+  PASS  apply reads a saved plan
+  PASS  edit opens a file in $EDITOR
+  PASS  reset refuses while a config repo still exists (correctly refused)
+  PASS  and says --force is what overrides it
+  PASS  self-upgrade --check reports the version and source
+[16b] bundle → restore
+  PASS  bundle packs the config
+  PASS  the bundle directory exists
+  PASS  restore into a clean config directory
+  PASS  the restored model parses
+  PASS  restore refuses a config directory that is not empty (correctly refused)
+  PASS  and --force overrides it
+[16c] --help across the surface
+  PASS  `absent --help` exists
+  PASS  `activate --help` exists
+  PASS  `adopt --help` exists
+  PASS  `apply --help` exists
+  PASS  `audit --help` exists
+  PASS  `bisect --help` exists
+  PASS  `bundle --help` exists
+  PASS  `check --help` exists
+  PASS  `clean-cache --help` exists
+  PASS  `completions --help` exists
+  PASS  `config --help` exists
+  PASS  `conflicts --help` exists
+  PASS  `deactivate --help` exists
+  PASS  `diff --help` exists
+  PASS  `doctor --help` exists
+  PASS  `edit --help` exists
+  PASS  `export --help` exists
+  PASS  `fleet --help` exists
+  PASS  `git --help` exists
+  PASS  `heal --help` exists
+  PASS  `history --help` exists
+  PASS  `hold --help` exists
+  PASS  `hooks --help` exists
+  PASS  `info --help` exists
+  PASS  `init --help` exists
+  PASS  `install --help` exists
+  PASS  `list --help` exists
+  PASS  `lock --help` exists
+  PASS  `module --help` exists
+  PASS  `path --help` exists
+  PASS  `plan --help` exists
+  PASS  `policy --help` exists
+  PASS  `profile --help` exists
+  PASS  `protected --help` exists
+  PASS  `purge-unmanaged --help` exists
+  PASS  `rebuild --help` exists
+  PASS  `remove-orphans --help` exists
+  PASS  `repo --help` exists
+  PASS  `reset --help` exists
+  PASS  `restore --help` exists
+  PASS  `rollback --help` exists
+  PASS  `run --help` exists
+  PASS  `sbom --help` exists
+  PASS  `schedule --help` exists
+  PASS  `search --help` exists
+  PASS  `self-upgrade --help` exists
+  PASS  `service --help` exists
+  PASS  `shell --help` exists
+  PASS  `snapshot --help` exists
+  PASS  `status --help` exists
+  PASS  `sync --help` exists
+  PASS  `teleport --help` exists
+  PASS  `undo --help` exists
+  PASS  `unhold --help` exists
+  PASS  `uninstall --help` exists
+  PASS  `unlock --help` exists
+  PASS  `unmanage --help` exists
+  PASS  `unmanaged --help` exists
+  PASS  `update --help` exists
+  PASS  `upgrade --help` exists
+  PASS  `vars --help` exists
+  PASS  `watch --help` exists
+  PASS  `why --help` exists
+[17] Coverage audit
+        backends: 18 real lifecycle, 6 install-attempted, 34 plan-smoked
+  PASS  every registered backend got a lifecycle or a plan-smoke
+        exempt: shell — opens an interactive subshell
+        exempt: undo — an interactive snapshot gallery
+        exempt: history — an interactive manifest-history TUI
+        exempt: bisect — restores system snapshots, and may need a reboot between steps
+        exempt: fleet — compares machines over SSH; there are no peers here
+        subcommands: 63 in --help, 58 executed, 5 exempt
+  PASS  every non-exempt subcommand was executed, not just --help'd
+==============================================================
+ RESULT  pass=316  fail=2  soft=14
+ FAILURES:
+    - mise: list shows jq (missing /jq/)
+    - mise: jq is still on PATH after removal
+==============================================================
+
+===============================================================================
+=== gentoo
+===============================================================================
+==============================================================
+ LiNix v7 harness — backend=emerge package=jq
+==============================================================
+[1] Bootstrap
+  PASS  init scaffolds the repo
+  PASS  priority file exists
+  PASS  priority names this backend
+  PASS  active file exists
+[2] Discovery / read-only verbs
+  PASS  doctor
+  PASS  status
+  PASS  plan (no changes yet)
+  PASS  check parses the model
+  PASS  absent lists nothing
+  PASS  protected lists guarded packages
+  PASS  protected includes a system essential
+[3] Dry-run safety
+  PASS  sync --dry-run does not error
+  PASS  a dry-run install shows a plan
+  PASS  dry-run did NOT actually install jq (correctly refused)
+[4] purge-unmanaged, before adopt (the state that makes it a test)
+  PASS  purge-unmanaged is refused on a machine LiNix has not adopted (correctly refused)
+  PASS  and it is the unadopted-machine ratio that refused
+[5] Install
+  soft  install jq, and the list/PATH checks that read its result — SMOKE_ONLY: this run installs and removes nothing
+[6] Idempotency
+  PASS  second sync is a no-op (exit 0)
+[7] Negative path
+  PASS  installing a nonexistent package fails (correctly refused)
+  PASS  a failed install leaves the model parseable
+[8] Adopt
+  PASS  nothing is adopted before adopt runs (correctly refused)
+  PASS  adopt takes manual packages
+[9] The guard
+  PASS  bash survives an uninstall attempt
+  PASS  purge-unmanaged is still not a silent mass-delete after adopt (correctly refused)
+  PASS  and the refusal after adopt still names its rule
+[10] Remove
+  soft  uninstall jq (nothing was installed to remove) — SMOKE_ONLY: this run installs and removes nothing
+[11] Git history + rollback
+  PASS  git init refuses when git is not installed (correctly refused)
+  PASS  and says git is what is missing
+  PASS  git log refuses too, not an empty history
+  soft  the history and rollback checks — this image has no git
+[12] rebuild
+  PASS  bare rebuild is refused — scope is required (correctly refused)
+  soft  the rebuild itself, and K14's no-commit proof (needs an installed package) — SMOKE_ONLY: this run installs and removes nothing
+[13] Chains and the per-host lock
+  soft  the per-host lock file, and unlock (no sync recorded an answer) — SMOKE_ONLY: this run installs and removes nothing
+  PASS  a chain is legal
+  PASS  a chain may end in list
+  PASS  list alone is legal
+  PASS  an empty slot is refused (correctly refused)
+  PASS  an unknown link is refused (correctly refused)
+  PASS  list must come last (correctly refused)
+  PASS  a name repeated is refused (correctly refused)
+  PASS  a pattern cannot span one (correctly refused)
+  PASS  a pin to a manager this host lacks is not silent (correctly refused)
+  PASS  unlocking a name that was never frozen is not an error
+[13b] Silence is not a no
+  soft  the sync past a silent manager, and the lock it must not write — SMOKE_ONLY: this run installs and removes nothing
+  PASS  and says which manager could not answer
+[14] Real lifecycle, every other manager on this image
+        READY backends: appimage cargo emerge github link service web 
+  soft  every other manager's real lifecycle (this image installs nothing) — SMOKE_ONLY: this run installs and removes nothing
+[15] Plan-smoke, every backend this image cannot run
+        registered backends: 52
+  PASS  doctor --json enumerates the registry
+  PASS  apk: a dry-run install plans apk:jq
+  PASS  appimage: a dry-run install plans appimage:https://example.invalid/tool.AppImage
+  PASS  apt: a dry-run install plans apt:jq
+  PASS  asdf: a dry-run install plans asdf:jq
+  PASS  brew: a dry-run install plans brew:jq
+  PASS  btrfs: the snapshot verb runs
+  PASS  bun: a dry-run install plans bun:jq
+  PASS  cabal: a dry-run install plans cabal:jq
+  PASS  cargo: a dry-run install plans cargo:jq
+  PASS  composer: a dry-run install plans composer:psr/log
+  PASS  conda: a dry-run install plans conda:jq
+  PASS  dnf: a dry-run install plans dnf:jq
+  PASS  dotnet: a dry-run install plans dotnet:jq
+  PASS  emacs: a dry-run install plans emacs:jq
+  PASS  emerge: a dry-run install plans emerge:app-misc/jq
+  PASS  eopkg: a dry-run install plans eopkg:jq
+  PASS  flatpak: a dry-run install plans flatpak:org.freedesktop.Platform
+  PASS  gem: a dry-run install plans gem:jq
+  PASS  github: a dry-run install plans github:sharkdp/fd
+  PASS  go: a dry-run install plans go:golang.org/x/example/hello
+  PASS  guix: a dry-run install plans guix:jq
+  PASS  helm: a dry-run install plans helm:https://github.com/databus23/helm-diff
+  PASS  krew: a dry-run install plans krew:jq
+  PASS  link: a link statement parses
+  PASS  link: and reaches a plan
+  PASS  luarocks: a dry-run install plans luarocks:jq
+  PASS  mise: a dry-run install plans mise:jq
+  PASS  mix: a dry-run install plans mix:jq
+  PASS  nimble: a dry-run install plans nimble:jq
+  PASS  nix: a dry-run install plans nix:jq
+  PASS  npm: a dry-run install plans npm:jq
+  PASS  opam: a dry-run install plans opam:jq
+  PASS  pacman: a dry-run install plans pacman:jq
+  PASS  paru: a dry-run install plans paru:jq
+  PASS  pip: a dry-run install plans pip:jq
+  PASS  pipx: a dry-run install plans pipx:jq
+  PASS  pixi: a dry-run install plans pixi:jq
+  PASS  pkgin: a dry-run install plans pkgin:jq
+  PASS  pnpm: a dry-run install plans pnpm:jq
+  PASS  pub: a dry-run install plans pub:jq
+  PASS  service: a service statement parses
+  PASS  service: and reaches a plan
+  PASS  setting: a setting statement parses
+  PASS  setting: and reaches a plan
+  PASS  slackpkg: a dry-run install plans slackpkg:jq
+  PASS  snap: a dry-run install plans snap:jq
+  PASS  spack: a dry-run install plans spack:jq
+  PASS  stack: a dry-run install plans stack:jq
+  PASS  uv: a dry-run install plans uv:jq
+  PASS  vscode: a dry-run install plans vscode:ms-python.python
+  PASS  web: a dry-run install plans web:https://example.invalid/tool.tar.gz
+  PASS  xbps: a dry-run install plans xbps:jq
+  PASS  yarn: a dry-run install plans yarn:jq
+  PASS  yay: a dry-run install plans yay:jq
+  PASS  zypper: a dry-run install plans zypper:jq
+[16] Command surface, executed
+  PASS  vars resolves this machine's variables
+  PASS  unmanaged lists what LiNix does not manage
+  PASS  path prints the config repo
+  PASS  path --explain says which source won
+  PASS  config show prints the active configuration
+  PASS  policy checks the desired state against [guard]
+  PASS  conflicts reports cross-backend conflicts
+  PASS  sbom emits a bill of materials
+  PASS  completions bash generates a script
+  PASS  profile list
+  PASS  profile active
+  PASS  profile create scaffolds one
+  PASS  profile show reads it back
+  PASS  module list
+  PASS  module create scaffolds one
+  PASS  module show reads it back
+  PASS  snapshot list
+  PASS  schedule list
+  PASS  service list
+  PASS  repo list says which backends cannot enumerate
+  PASS  list enumerates what is installed
+  PASS  hooks status says which managers are hookable
+  PASS  hooks shell-init prints the wrapper functions
+  PASS  heal recovers an uninterrupted transaction
+  PASS  clean-cache frees archives without removing a package
+  PASS  update refreshes repository metadata
+  PASS  watch --once runs a single unattended reconcile
+  PASS  search finds something
+  PASS  info reads a package's metadata
+  PASS  why explains a package's provenance
+  PASS  lock records installed versions
+  PASS  upgrade --dry-run previews
+  PASS  remove-orphans previews without removing
+  PASS  activate converges onto the named profiles
+  PASS  deactivate previews dropping one
+  PASS  hold pins a package against bulk upgrade
+  PASS  unhold releases it
+  PASS  teleport previews moving a package between managers
+  PASS  unmanage forgets a package without uninstalling it
+  soft  the proof that unmanage left the package behind (nothing was installed) — SMOKE_ONLY: this run installs and removes nothing
+  PASS  audit scans for vulnerabilities
+  PASS  export writes native manifests
+  soft  run's ephemeral environment (it would install the package it needs) — SMOKE_ONLY: this run installs and removes nothing
+  PASS  plan freezes a reviewable file
+  PASS  the plan file exists
+  PASS  apply reads a saved plan
+  PASS  edit opens a file in $EDITOR
+  PASS  reset refuses while a config repo still exists (correctly refused)
+  PASS  and says --force is what overrides it
+  PASS  self-upgrade --check reports the version and source
+[16b] bundle → restore
+  PASS  bundle packs the config
+  PASS  the bundle directory exists
+  PASS  restore into a clean config directory
+  PASS  the restored model parses
+  PASS  restore refuses a config directory that is not empty (correctly refused)
+  PASS  and --force overrides it
+[16c] --help across the surface
+  PASS  `absent --help` exists
+  PASS  `activate --help` exists
+  PASS  `adopt --help` exists
+  PASS  `apply --help` exists
+  PASS  `audit --help` exists
+  PASS  `bisect --help` exists
+  PASS  `bundle --help` exists
+  PASS  `check --help` exists
+  PASS  `clean-cache --help` exists
+  PASS  `completions --help` exists
+  PASS  `config --help` exists
+  PASS  `conflicts --help` exists
+  PASS  `deactivate --help` exists
+  PASS  `diff --help` exists
+  PASS  `doctor --help` exists
+  PASS  `edit --help` exists
+  PASS  `export --help` exists
+  PASS  `fleet --help` exists
+  PASS  `git --help` exists
+  PASS  `heal --help` exists
+  PASS  `history --help` exists
+  PASS  `hold --help` exists
+  PASS  `hooks --help` exists
+  PASS  `info --help` exists
+  PASS  `init --help` exists
+  PASS  `install --help` exists
+  PASS  `list --help` exists
+  PASS  `lock --help` exists
+  PASS  `module --help` exists
+  PASS  `path --help` exists
+  PASS  `plan --help` exists
+  PASS  `policy --help` exists
+  PASS  `profile --help` exists
+  PASS  `protected --help` exists
+  PASS  `purge-unmanaged --help` exists
+  PASS  `rebuild --help` exists
+  PASS  `remove-orphans --help` exists
+  PASS  `repo --help` exists
+  PASS  `reset --help` exists
+  PASS  `restore --help` exists
+  PASS  `rollback --help` exists
+  PASS  `run --help` exists
+  PASS  `sbom --help` exists
+  PASS  `schedule --help` exists
+  PASS  `search --help` exists
+  PASS  `self-upgrade --help` exists
+  PASS  `service --help` exists
+  PASS  `shell --help` exists
+  PASS  `snapshot --help` exists
+  PASS  `status --help` exists
+  PASS  `sync --help` exists
+  PASS  `teleport --help` exists
+  PASS  `undo --help` exists
+  PASS  `unhold --help` exists
+  PASS  `uninstall --help` exists
+  PASS  `unlock --help` exists
+  PASS  `unmanage --help` exists
+  PASS  `unmanaged --help` exists
+  PASS  `update --help` exists
+  PASS  `upgrade --help` exists
+  PASS  `vars --help` exists
+  PASS  `watch --help` exists
+  PASS  `why --help` exists
+[17] Coverage audit
+        backends: 0 real lifecycle, 0 install-attempted, 52 plan-smoked
+  PASS  every registered backend got a lifecycle or a plan-smoke
+        exempt: shell — opens an interactive subshell
+        exempt: undo — an interactive snapshot gallery
+        exempt: history — an interactive manifest-history TUI
+        exempt: bisect — restores system snapshots, and may need a reboot between steps
+        exempt: fleet — compares machines over SSH; there are no peers here
+        exempt: rollback — SMOKE_ONLY: nothing was installed, so no commit exists to roll back to
+        exempt: diff — SMOKE_ONLY: nothing was installed, so there are no two commits to diff
+        exempt: run — SMOKE_ONLY: an ephemeral environment installs the package it provisions
+        subcommands: 63 in --help, 55 executed, 8 exempt
+  PASS  every non-exempt subcommand was executed, not just --help'd
+==============================================================
+ RESULT  pass=214  fail=0  soft=9
+ OK — every hard check passed (SMOKE_ONLY: no package was installed or
+      removed; the 9 soft lines above name what was not exercised).
+==============================================================
+
+===============================================================================
+=== windows
+===============================================================================
+==============================================================
+ LiNix v7 Windows/macOS harness — backend=scoop package=jq
+ LINIX=/c/Users/Administrator/Videos/Nexus/linix/target/debug/linix.exe
+==============================================================
+[1] Bootstrap
+  PASS  init scaffolds the repo
+  PASS  priority file exists
+  PASS  active file exists
+  PASS  priority names this backend
+[2] Discovery / read-only verbs
+  PASS  doctor
+  PASS  status
+  PASS  check
+  PASS  absent
+  PASS  protected
+  PASS  plan --dry-run
+[3] Dry-run safety
+  PASS  sync --dry-run
+  PASS  install --dry-run shows a plan
+[4] purge-unmanaged, before adopt
+  PASS  purge-unmanaged is refused on a machine LiNix has not adopted (correctly refused)
+  PASS  and it is the unadopted-machine ratio that refused
+[5] Real lifecycle
+  PASS  install scoop:jq
+  PASS  list shows jq
+  PASS  jq binary is on PATH
+  PASS  second sync is a no-op
+  PASS  unmanage forgets a package without uninstalling it
+  PASS  jq is still installed after unmanage
+  PASS  declaring it again takes it back
+  PASS  uninstall scoop:jq
+  FAIL  jq binary gone after uninstall (expected refusal, but it succeeded)
+[6] Negative path
+  PASS  installing a nonexistent package fails (correctly refused)
+  PASS  a failed install leaves the model parseable
+[7] Adopt
+  PASS  nothing is adopted before adopt runs (correctly refused)
+  PASS  adopt runs
+  PASS  adopt wrote an adoption manifest
+        adopted=98 package(s)
+  PASS  adopt recorded at least one package
+[8] The guard
+  PASS  linix survives an uninstall attempt
+  PASS  purge-unmanaged is still not a silent mass-delete after adopt (correctly refused)
+  PASS  and the refusal after adopt still names its rule
+[9] Git history + rollback
+  PASS  git init
+  PASS  git status reads the repo
+  PASS  sync commits
+  PASS  git log shows a linix commit
+  PASS  git commit records the current state on demand
+  PASS  diff HEAD runs
+  PASS  rollback HEAD accepted
+[10] rebuild
+  PASS  bare rebuild is refused — scope is required (correctly refused)
+  PASS  rebuild scoop:jq runs
+        commits before=1 after=1
+  PASS  rebuild wrote no git commit (K14)
+[11] Chains and the per-host lock
+        lock file: <none>
+  PASS  a chain is legal
+  PASS  a chain may end in list
+  PASS  list alone is legal
+  PASS  an empty slot is refused (correctly refused)
+  PASS  an unknown link is refused (correctly refused)
+  PASS  list must come last (correctly refused)
+  PASS  a name repeated is refused (correctly refused)
+  PASS  a pattern cannot span one (correctly refused)
+  PASS  a pin to a manager this host lacks is not silent (correctly refused)
+  PASS  unlock --list runs
+  PASS  unlocking an unfrozen name is not an error
+[11b] Silence is not a no
+  PASS  a plan past a silent manager says which one
+  PASS  a sync past a silent manager still resolves
+  PASS  and freezes nothing (correctly refused)
+[12] Real lifecycle, every other user-scoped manager on this host
+        READY backends: bun cargo choco dotnet emacs gem github go helm link luarocks nimble npm pip pipx pixi pnpm psresource pub scoop service web winget yarn 
+    -- bun:cowsay
+  PASS  bun installed cowsay for real
+  PASS  bun: list shows cowsay
+  PASS  bun: cowsay is on PATH
+  PASS  bun: uninstall cowsay
+  PASS  bun: cowsay is gone from list (correctly refused)
+  soft  bun: cowsay is still on PATH after removal — bun's own `remove -g` drops the package and keeps its .exe/.bunx launchers (reproduced against bun directly, with no LiNix involved)
+    -- cargo:hexyl
+  PASS  cargo installed hexyl for real
+  PASS  cargo: list shows hexyl
+  PASS  cargo: hexyl is on PATH
+  PASS  cargo: uninstall hexyl
+  PASS  cargo: hexyl is gone from list (correctly refused)
+  PASS  cargo: hexyl is off PATH
+  soft  choco: no real lifecycle here — installs machine-wide and needs an elevated shell — plan-smoked instead
+    -- dotnet:dotnetsay
+  PASS  dotnet installed dotnetsay for real
+  PASS  dotnet: list shows dotnetsay
+  PASS  dotnet: dotnetsay is on PATH
+  PASS  dotnet: uninstall dotnetsay
+  PASS  dotnet: dotnetsay is gone from list (correctly refused)
+  PASS  dotnet: dotnetsay is off PATH
+  soft  emacs: no real lifecycle here — installs a package into the developer's real Emacs profile
+    -- gem:colorize
+  PASS  gem installed colorize for real
+  PASS  gem: list shows colorize
+  FAIL  gem: uninstall colorize (rc=127)
+        | [2m2026-07-23T16:46:19.209383Z[0m [32m INFO[0m [2mlinix::app::context[0m[2m:[0m Removed gem:colorize in C:/Users/ADMINI~1/AppData/Local/Temp/linix-it-win-config\modules\imperative.txt
+  FAIL  gem: colorize is gone from list (expected refusal, but it succeeded)
+    -- github:sharkdp/fd
+  soft  github: install of sharkdp/fd failed (ecosystem/network variance) — the checks after it did not run
+        | [2m2026-07-23T16:52:15.168522Z[0m [32m INFO[0m [2mlinix::backends::github[0m[2m:[0m sharkdp/fd: chose fd-v10.4.2-x86_64-pc-windows-gnu.zip over fd-v10.4.2-x86_64-pc-windows-msvc.zip
+        | [2m2026-07-23T16:52:15.168589Z[0m [32m INFO[0m [2mlinix::backends::github[0m[2m:[0m Downloading GitHub release: sharkdp/fd (v10.4.2), 1 artifact(s)
+        | [2m2026-07-23T16:54:15.199091Z[0m [32m INFO[0m [2mlinix::backends::github[0m[2m:[0m sharkdp/fd: chose fd-v10.4.2-x86_64-pc-windows-gnu.zip over fd-v10.4.2-x86_64-pc-windows-msvc.zip
+        | [2m2026-07-23T16:54:15.199302Z[0m [32m INFO[0m [2mlinix::backends::github[0m[2m:[0m Downloading GitHub release: sharkdp/fd (v10.4.2), 1 artifact(s)
+    -- go:golang.org/x/example/hello
+  PASS  go installed golang.org/x/example/hello for real
+  FAIL  go: list shows hello (output missing /hello/)
+  PASS  go: hello is on PATH

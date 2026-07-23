@@ -18,8 +18,9 @@ cd "$REPO_ROOT" || { echo "cannot cd to repo root ($REPO_ROOT)"; exit 1; }
 echo "repo root: $REPO_ROOT"
 
 PKG="${1:-jq}"
-# `tools` is a broad cross-platform image that sweeps the expansion backends (composer, go,
-# opam, luarocks, nimble, cabal, stack, mix, helm, krew, asdf, pixi, spack) via plan-smoke.
+# `tools` is a broad cross-platform image whose expansion backends (composer, go, opam,
+# luarocks, nimble, cabal, stack, mix, helm, krew, asdf, pixi, spack) each get a REAL
+# install→list→remove; what it cannot run is plan-smoked and named.
 # `gentoo` (emerge, SMOKE-ONLY) is opt-in — it pulls a large base — via DISTROS="gentoo".
 DISTROS="${DISTROS:-ubuntu fedora arch alpine tools}"
 

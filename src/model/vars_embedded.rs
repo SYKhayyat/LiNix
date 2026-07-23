@@ -276,10 +276,10 @@ mod tests {
     fn run(body: &str) -> Result<Vars> {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static N: AtomicUsize = AtomicUsize::new(0);
-        let base = std::env::var("TMP")
-            .or_else(|_| std::env::var("TMPDIR"))
-            .unwrap_or_else(|_| ".".to_string());
-        let path = std::path::PathBuf::from(base).join(format!(
+        // `env::temp_dir()`, not TMP-or-TMPDIR-or-".": neither variable is set in a plain
+        // Linux shell, so the fallback was the current directory — which is the repo, and
+        // every `cargo test` left a pile of `linix-embedded-*.linix` in it.
+        let path = std::env::temp_dir().join(format!(
             "linix-embedded-{}-{}.linix",
             std::process::id(),
             N.fetch_add(1, Ordering::Relaxed)
@@ -353,10 +353,7 @@ mod tests {
 
     #[test]
     fn a_file_can_be_read_and_probed() {
-        let dir = std::env::var("TMP")
-            .or_else(|_| std::env::var("TMPDIR"))
-            .unwrap_or_else(|_| ".".into());
-        let marker = std::path::PathBuf::from(&dir).join(format!("linix-marker-{}", std::process::id()));
+        let marker = std::env::temp_dir().join(format!("linix-marker-{}", std::process::id()));
         std::fs::write(&marker, "gpu").unwrap();
         let script = format!(
             r#"#{{ here: path_exists("{p}"), body: read_file("{p}") }}"#,

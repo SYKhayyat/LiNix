@@ -729,6 +729,30 @@ impl<'a> StateResolver<'a> {
     ///
     /// The same grammar and the same probe as a line in a module. P1: an imperative command
     /// is a shortcut for editing a file, so it must not be a second dialect.
+    /// The static half of `parse_and_probe_spec`: does this line name a backend LiNix uses?
+    ///
+    /// Answers without asking any manager anything, so it is cheap enough to run before a
+    /// write. A bare name has no backend to check and passes; a `repo:` names one the same
+    /// way a package does, and `collect` refuses it in the file, so it is refused here too.
+    pub async fn validate_line(&self, line: &str) -> Result<()> {
+        let facts = self.facts_for_host().await?;
+        let priority = self.priority(&facts).await?;
+        let known = Vocab::new(&self.registry, self.config, &priority);
+
+        let origin = Origin::argument();
+        let named = match statement::parse(&origin, line.trim(), &known)? {
+            Statement::Package(d) | Statement::Absent(d) => d.backend,
+            Statement::Repo { backend, .. } => Some(backend),
+            _ => None,
+        };
+        let Some(b) = named else { return Ok(()) };
+        let b = self.config.aliases.get(&b).cloned().unwrap_or(b);
+        if !priority.allows(&b) {
+            return Err(Error::from(priority.reject(&b, &origin)));
+        }
+        Ok(())
+    }
+
     pub async fn parse_and_probe_spec(&self, line: &str) -> Result<PackageSpec> {
         let facts = self.facts_for_host().await?;
         let priority = self.priority(&facts).await?;

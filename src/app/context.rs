@@ -222,6 +222,24 @@ impl App {
         ))
     }
 
+    /// Refuse a line the model would reject on every later read, before it reaches a file.
+    ///
+    /// A backend that is not in `priority` is not a package that failed to install — it is a
+    /// line nothing will ever parse, and once written it is a hard error for `status`,
+    /// `plan`, `check` and every install after it, until a human edits the file. `install`
+    /// writes first and syncs second on purpose (S15), so this is the only place the check
+    /// can happen before the write.
+    ///
+    /// Static only: the grammar, the alias table and V.15's priority check. A bare name is
+    /// NOT probed here — that costs a search per manager, and a name nothing claims is a
+    /// different failure with a different cure (`Unresolvable`, withdrawn after the sync).
+    pub async fn reject_unusable_line(&self, line: &str) -> Result<()> {
+        StateResolver::new(&self.config, self.registry.clone(), false)
+            .await
+            .validate_line(line)
+            .await
+    }
+
     /// Write a declaration into your files (P1: an imperative command is a shortcut for
     /// editing a file and syncing), and say which file it touched (II.8).
     ///
@@ -233,6 +251,7 @@ impl App {
         into: Option<&str>,
         landing: crate::model::Landing,
     ) -> Result<crate::model::Edit> {
+        self.reject_unusable_line(line).await?;
         let vocab = self.vocabulary().await?;
         let layout = self.config.layout();
         let target = match into {
@@ -632,6 +651,11 @@ impl App {
         target_pkg: &str,
         new_backend: &str,
     ) -> Result<Vec<crate::model::Edit>> {
+        // The same write-then-discover fault as `declare`: a move to a manager `priority`
+        // does not list rewrites the line into one nothing can parse, and the package it
+        // came from is already gone from the file.
+        self.reject_unusable_line(&format!("{}:{}", new_backend, target_pkg))
+            .await?;
         let vocab = self.vocabulary().await?;
         let layout = self.config.layout();
         let facts = self.host_facts().await?;
@@ -669,27 +693,57 @@ impl App {
             .await
     }
 
+    /// Refresh every backend's metadata, and do not let one stop the rest.
+    ///
+    /// `?` on the first failure meant a single manager that could not refresh — a plugin
+    /// missing, a repo down — silently skipped every backend after it, and the ones that
+    /// did refresh went unmentioned. Each failure is named and the command still reports
+    /// one, because a refresh that half-happened is not a refresh that worked.
     pub async fn update(&self) -> Result<()> {
         info!("refreshing package metadata");
+        let mut failed: Vec<String> = Vec::new();
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
-                upgradable.update(backend.sudo_for_write()).await?;
+                if let Err(e) = upgradable.update(backend.sudo_for_write()).await {
+                    warn!("{}: could not refresh — {}", backend.name(), e);
+                    failed.push(format!("{} ({})", backend.name(), e));
+                }
             }
         }
-        Ok(())
+        if failed.is_empty() {
+            return Ok(());
+        }
+        Err(Error::Other(format!(
+            "{} backend(s) could not refresh their metadata; the rest were refreshed: {}",
+            failed.len(),
+            failed.join("; ")
+        )))
     }
 
     pub async fn upgrade(&self) -> Result<()> {
         let _ = self.snapshot_manager.auto_snapshot(crate::core::snapshot::SnapshotLabel::PreUpgrade).await?;
         info!("upgrading all packages");
+        // The same rule as `update`, and for the same reason: one manager that cannot
+        // upgrade must not silently cancel every manager after it in the list.
+        let mut failed: Vec<String> = Vec::new();
         for backend in self.registry.available() {
             if let Some(upgradable) = backend.as_upgradable() {
-                upgradable.upgrade(backend.sudo_for_write()).await?;
+                if let Err(e) = upgradable.upgrade(backend.sudo_for_write()).await {
+                    warn!("{}: could not upgrade — {}", backend.name(), e);
+                    failed.push(format!("{} ({})", backend.name(), e));
+                }
             }
         }
         self.metrics
             .print_summary(crate::app::metrics::Narration::Change);
-        Ok(())
+        if failed.is_empty() {
+            return Ok(());
+        }
+        Err(Error::Other(format!(
+            "{} backend(s) could not upgrade; the rest were upgraded: {}",
+            failed.len(),
+            failed.join("; ")
+        )))
     }
 
     pub async fn list(&self, backend_filter: Option<&str>) -> Result<Vec<Package>> {

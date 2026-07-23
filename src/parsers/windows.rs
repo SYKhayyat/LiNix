@@ -41,20 +41,44 @@ fn is_separator(line: &str) -> bool {
 /// "ARP\\Machine\\X64\\Android Studio"), so the columns MUST be sliced by the header
 /// positions — whitespace splitting corrupts multi-word fields.
 fn parse_winget_table(output: &str, columns_wanted: &[&str]) -> Vec<Vec<String>> {
+    // The header is the first line containing both "Name" and "Id".
+    let known = ["Name", "Id", "Version", "Available", "Match", "Source"];
+    slice_fixed_table(
+        output,
+        &known,
+        |line| line.contains("Name") && line.contains("Id"),
+        columns_wanted,
+    )
+}
+
+/// Slice a fixed-width CLI table by its header's column offsets.
+///
+/// `known` names every column that may appear, `header_matches` recognizes the header
+/// row, and `columns_wanted` selects which values each returned row carries, in order.
+/// A column absent from this particular header yields an empty string.
+///
+/// Splitting such a table on whitespace instead is the fault this exists to prevent: an
+/// EMPTY cell disappears, every later value shifts one place left, and the row still
+/// parses — so scoop's failed-install row (no Version, no Source) read as a package
+/// whose version was the date it was attempted.
+fn slice_fixed_table(
+    output: &str,
+    known: &[&str],
+    header_matches: impl Fn(&str) -> bool,
+    columns_wanted: &[&str],
+) -> Vec<Vec<String>> {
     let text = sanitize(output);
     let lines: Vec<&str> = text.lines().collect();
 
-    // The header is the first line containing both "Name" and "Id".
-    let Some(hdr_idx) = lines.iter().position(|l| {
-        let c = strip_cr_spinner(l);
-        c.contains("Name") && c.contains("Id")
-    }) else {
+    let Some(hdr_idx) = lines
+        .iter()
+        .position(|l| header_matches(strip_cr_spinner(l)))
+    else {
         return vec![];
     };
 
     let header = strip_cr_spinner(lines[hdr_idx]);
     // Locate every known column by its char-offset start in the cleaned header.
-    let known = ["Name", "Id", "Version", "Available", "Match", "Source"];
     let mut cols: Vec<(usize, &str)> = known
         .iter()
         .filter_map(|name| {
@@ -131,27 +155,46 @@ fn parse_choco_list(output: &str) -> Vec<Package> {
         .collect()
 }
 
-/// Parses output from 'scoop list'.
-/// Expected input contains a list of installed apps.
+/// Parses output from 'scoop list' (Name / Version / Source / Updated / Info).
+///
+/// Sliced by header offsets, not whitespace — scoop leaves Version and Source EMPTY for
+/// an app whose install failed, and it keeps that row in `list` forever:
+///
+/// ```text
+/// Name     Version         Source Updated             Info
+/// 7zip     26.00           main   2026-04-19 07:09:55
+/// jq                              2026-07-21 13:48:29 Install failed
+/// ```
+///
+/// A row like that is not an installed package. Read by splitting on whitespace it was
+/// one — named `jq`, versioned `2026-07-21` — so `sync` believed there was nothing to
+/// do, `adopt` wrote it into a manifest, and no `jq` was ever on PATH.
 fn parse_scoop_list(output: &str) -> Vec<Package> {
-    sanitize(output)
-        .lines()
-        .filter(|l| !l.is_empty() && !l.contains("---") && !l.contains("Installed apps"))
-        .filter_map(|l| {
-            let parts: Vec<&str> = l.split_whitespace().collect();
-            // Scoop list format: Name [0] Version [1] Source [2] Updated [3].
-            let name = *parts.first()?;
-            // Skip the column header row so it isn't ingested as a package named "Name".
-            if name == "Name" && parts.get(1) == Some(&"Version") {
-                return None;
-            }
-            if parts.len() >= 2 {
-                Some(Package::with_version(name, parts[1], "scoop"))
-            } else {
-                None
-            }
-        })
-        .collect()
+    let known = ["Name", "Version", "Source", "Updated", "Info"];
+    slice_fixed_table(
+        output,
+        &known,
+        |line| line.contains("Name") && line.contains("Version"),
+        &["Name", "Version", "Info"],
+    )
+    .into_iter()
+    .filter_map(|row| {
+        let (name, version, info) = (&row[0], &row[1], &row[2]);
+        if name.is_empty() {
+            return None;
+        }
+        // scoop reports the outcome in Info and nowhere else; the row itself stays.
+        if info.to_ascii_lowercase().contains("failed") {
+            return None;
+        }
+        // No version means scoop has a directory for it and no installed manifest —
+        // the same half-state by a different route.
+        if version.is_empty() {
+            return None;
+        }
+        Some(Package::with_version(name, version, "scoop"))
+    })
+    .collect()
 }
 
 /// Parses 'winget search' output table (Name / Id / Version / Match / Source).
@@ -197,32 +240,114 @@ fn parse_scoop_search(output: &str) -> Vec<Package> {
     //   Name    Version Source Binaries
     //   ----    ------- ------ --------
     //   ripgrep 15.1.0  main
-    // So parse `Name Version [Source] [Binaries...]` rows, skipping the chatter, header,
-    // and separator. (Older scoop used "name (version)"; the table is what ships today.)
-    sanitize(output)
-        .lines()
-        .filter_map(|line| {
-            let t = line.trim();
-            if t.is_empty() || t.starts_with("Results from") {
-                return None;
-            }
-            let parts: Vec<&str> = t.split_whitespace().collect();
-            let name = *parts.first()?;
-            // Skip the separator row ("----") and the column header ("Name Version ...").
-            if name.starts_with('-') || (name == "Name" && parts.get(1) == Some(&"Version")) {
-                return None;
-            }
-            match parts.get(1) {
-                Some(ver) => Some(Package::with_version(name, ver, "scoop")),
-                None => Some(Package::new(name, "scoop")),
-            }
-        })
-        .collect()
+    // Sliced by header offsets like `list`, and for the same reason: an empty Binaries
+    // or Source cell must not shift the row's other values one place left.
+    let known = ["Name", "Version", "Source", "Binaries"];
+    slice_fixed_table(
+        output,
+        &known,
+        |line| line.contains("Name") && line.contains("Version"),
+        &["Name", "Version"],
+    )
+    .into_iter()
+    .filter_map(|row| {
+        let (name, version) = (&row[0], &row[1]);
+        if name.is_empty() {
+            return None;
+        }
+        if version.is_empty() {
+            return Some(Package::new(name, "scoop"));
+        }
+        Some(Package::with_version(name, version, "scoop"))
+    })
+    .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A real `scoop list` from a machine that had a failed install sitting in it. The
+    /// row keeps its Name and Updated and has NO Version and NO Source, so a
+    /// whitespace-split read it as `jq` at version `2026-07-21`.
+    fn scoop_list_fixture() -> String {
+        let row = |name: &str, ver: &str, src: &str, updated: &str, info: &str| {
+            format!("{:<9}{:<16}{:<7}{:<20}{}", name, ver, src, updated, info)
+        };
+        [
+            "Installed apps:".to_string(),
+            String::new(),
+            row("Name", "Version", "Source", "Updated", "Info"),
+            row("----", "-------", "------", "-------", "----"),
+            row("7zip", "26.00", "main", "2026-04-19 07:09:55", ""),
+            row("jq", "", "", "2026-07-21 13:48:29", "Install failed"),
+            row("ripgrep", "15.1.0", "main", "2026-07-08 15:38:44", ""),
+        ]
+        .join("\n")
+    }
+
+    #[test]
+    fn scoop_list_drops_a_failed_install() {
+        let res = parse_scoop_list(&scoop_list_fixture());
+        let names: Vec<&str> = res.iter().map(|p| p.name.as_str()).collect();
+        assert!(
+            !names.contains(&"jq"),
+            "a row whose Info says the install failed is not an installed package: {:?}",
+            names
+        );
+        assert!(names.contains(&"7zip") && names.contains(&"ripgrep"), "{:?}", names);
+    }
+
+    #[test]
+    fn scoop_list_reads_versions_from_the_version_column() {
+        let res = parse_scoop_list(&scoop_list_fixture());
+        let seven = res.iter().find(|p| p.name == "7zip").unwrap();
+        assert_eq!(seven.version.as_deref(), Some("26.00"));
+        // The date must never reach a version field — that is what the shifted read did.
+        assert!(
+            res.iter()
+                .all(|p| !p.version.as_deref().unwrap_or_default().starts_with("2026-")),
+            "an Updated timestamp was parsed as a version: {:?}",
+            res.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn scoop_list_ingests_no_header_or_separator() {
+        let names: Vec<String> = parse_scoop_list(&scoop_list_fixture())
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "Name" || n.starts_with('-') || n == "Installed"),
+            "{:?}",
+            names
+        );
+    }
+
+    /// The same empty-cell shift on the search table: a row with no Binaries must not
+    /// borrow the next column's value, and one with no Version must not borrow Source.
+    #[test]
+    fn scoop_search_survives_empty_trailing_columns() {
+        let row = |name: &str, ver: &str, src: &str, bins: &str| {
+            format!("{:<8}{:<8}{:<7}{}", name, ver, src, bins)
+        };
+        let out = [
+            "Results from local buckets...".to_string(),
+            String::new(),
+            row("Name", "Version", "Source", "Binaries"),
+            row("----", "-------", "------", "--------"),
+            row("rga", "0.10.9", "main", "ripgrep-all.exe"),
+            row("ripgrep", "15.1.0", "main", ""),
+        ]
+        .join("\n");
+        let res = parse_scoop_search(&out);
+        let rg = res.iter().find(|p| p.name == "ripgrep").unwrap();
+        assert_eq!(rg.version.as_deref(), Some("15.1.0"));
+        let rga = res.iter().find(|p| p.name == "rga").unwrap();
+        assert_eq!(rga.version.as_deref(), Some("0.10.9"));
+        assert_eq!(res.len(), 2, "got {:?}", res);
+    }
 
     #[test]
     fn scoop_search_parses_modern_table() {

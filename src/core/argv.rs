@@ -23,7 +23,7 @@ const TERMINATES: &[&str] = &[
     "apk", "xbps-install", "xbps-remove", "xbps-query", //
     "zypper", "emerge", "eix", "equery", //
     "nix-env", "nix", "guix", "flatpak", "snap", //
-    "pip", "pip3", "pipx", "gem", "cargo", "npm", "pnpm", "yarn", "bun", //
+    "pip", "pip3", "pipx", "cargo", "npm", "pnpm", "yarn", "bun", //
     "go", "composer", "luarocks", "opam", "nimble", "mix", "cabal", "stack", //
     "conda", "mamba", "micromamba", "uv", "pixi", "spack", "asdf", "mise", //
     "brew", "port", "pkgin", "pkg", "pkg_add", "pkg_delete", "eopkg", "slackpkg", //
@@ -38,6 +38,12 @@ const TERMINATES: &[&str] = &[
 #[cfg(test)]
 const DOES_NOT_TERMINATE: &[&str] = &[
     "winget", "choco", "scoop", "mas", "dotnet", "pwsh", "powershell", //
+    // RubyGems' `--` is not an option terminator: it is the separator between the gem
+    // names and the BUILD arguments handed to a C extension
+    // (`gem install nokogiri -- --with-xml2-dir=…`). So `gem install -- colorize` names
+    // no gem at all and fails with "Please specify at least one gem name" — which is
+    // exactly what listing it as terminating did to every `gem` install and removal.
+    "gem",
     // `code` takes an extension id as the *value* of `--install-extension`, never as a
     // positional, so a `--` in front of it would become the value.
     "code",
@@ -124,6 +130,24 @@ mod tests {
         let mut args = vec!["install".to_string()];
         push_names(&mut args, "winget", ["ripgrep"]);
         assert_eq!(args, ["install", "ripgrep"]);
+    }
+
+    /// A `--` that the manager reads as something OTHER than "options end here" is worse
+    /// than one it does not understand: RubyGems takes everything after it as build
+    /// arguments, so the gem name is consumed and nothing is installed.
+    #[test]
+    fn gem_does_not_terminate_because_its_dash_dash_means_build_args() {
+        assert!(!terminates_options("gem"));
+        let mut args = vec!["install".to_string()];
+        push_names(&mut args, "gem", ["colorize"]);
+        assert_eq!(
+            args,
+            ["install", "colorize"],
+            "`gem install -- colorize` names no gem at all"
+        );
+        let mut args = vec!["uninstall".to_string()];
+        push_names(&mut args, "gem", ["colorize"]);
+        assert_eq!(args, ["uninstall", "colorize"]);
     }
 
     #[test]

@@ -145,7 +145,8 @@ verbatim and trimmed — no escaping exists because none is needed.
 
 Common keys: `version`, `hold` (never upgrade), `expires` / `until` (absolute datetimes),
 `requires`, the `*_install` hooks, and per-directive keys like `cron`/`run` on `schedule:` or
-`target`/`content` on `link:`.
+`target`/`content`/`template`/`decrypt`/`identity` on `link:` — the last two are
+[Secrets](#secrets).
 
 ### Which file gets installed
 
@@ -300,6 +301,55 @@ with a digit, so `$1` in a value is left alone.
 
 Two `when` blocks that both match and set the same variable to different values is an error
 naming both lines — the same rule as two contradicting package declarations.
+
+## Secrets
+
+**Your config repo can be public.** A secret is committed encrypted and decrypted onto the
+machine at sync time, so what is in git is ciphertext and what your program reads is a normal
+file with the plaintext in it.
+
+```
+link:./secrets/npmrc.age {
+  target   = ~/.npmrc
+  decrypt  = age
+  identity = ~/.config/linix/age.key
+}
+```
+
+`decrypt` takes `age` or `sops` — nothing else, and any other name is an error listing both.
+LiNix does not implement encryption; it runs the tool you already trust and writes what comes
+back, byte for byte.
+
+**The identity** is `@identity=` if you set it, else `$LINIX_AGE_IDENTITY`, else
+`~/.config/linix/age.key`. `sops` reads its own configuration and ignores this.
+
+```
+# encrypt once, commit the .age file, never the plaintext
+age -r age1ql3z... -o secrets/npmrc.age ~/.npmrc
+```
+
+Four things that follow from this being an ordinary declaration:
+
+- **`when` works on it.** `when hostname == build-01 { link:./secrets/ci-token.age { … } }` is
+  a secret that exists on one machine.
+- **`--dry-run` never decrypts.** It tells you what it would write and stops, because a dry run
+  that produced a plaintext file would be the leak.
+- **Removing the line removes the plaintext**, the same as any other managed file.
+- **The plaintext is written owner-only (`0600`) on Linux and macOS.** On Windows it gets no
+  special permissions — the file is as protected as its directory, and no more.
+
+Two limits worth knowing before you rely on this:
+
+- **Point `target` outside your config repo.** Nothing currently stops you aiming it back inside
+  the directory git is watching, and a secret that reaches git history is a secret you have to
+  rotate.
+- **If the target already held a secret, the old one is copied to `<target>.linix-backup`**
+  before the new one is written, with ordinary permissions. Delete it, or start from a target
+  that does not exist yet.
+
+Your `identity` key itself is never managed by LiNix and never belongs in the repo. LiNix's own
+credentials work the other way round and are never files at all: `GITHUB_TOKEN` is read from the
+environment, so a LiNix config is always safe to hand to someone.
 
 ## History and rollback
 

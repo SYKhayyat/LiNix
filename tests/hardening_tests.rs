@@ -309,3 +309,134 @@ async fn floating_version_is_not_pinned() {
         calls
     );
 }
+
+// ---------------------------------------------------------------------------
+// A write that the model will reject must never reach a file.
+//
+// `install` writes the line first and syncs second on purpose (S15), so a spec naming
+// a backend `priority` does not list used to land in `modules/imperative.txt` and only
+// then fail — and from that moment every command that parses the model was a hard
+// error, until a human edited the file. Found by the container harness: one
+// `install dnf:jq` on an image without dnf wedged `status`, `why`, `upgrade`,
+// `conflicts`, `activate` and every later install for the rest of the run.
+//
+// The family is every writer that goes through `App::declare` (install, `absent:@until`,
+// `service enable`, hook-record, `init --interactive`'s starter packages) plus
+// `retarget` (`teleport`), which rewrites a line to a backend the same way.
+// ---------------------------------------------------------------------------
+
+/// The fixture's `priority` is apt/brew/cargo, so `npm` is a backend LiNix does not use.
+#[tokio::test]
+async fn declaring_an_unlisted_backend_writes_nothing() {
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
+
+    let err = kernel
+        .app
+        .declare("npm:cowsay", None, linix::model::Landing::Imperative)
+        .await
+        .expect_err("a backend not in `priority` must be refused");
+    assert!(
+        err.to_string().contains("priority"),
+        "the refusal must name the rule, got: {err}"
+    );
+
+    let imperative = root.join("modules/imperative.txt");
+    assert!(
+        !imperative.exists() || !tokio::fs::read_to_string(&imperative).await.unwrap().contains("npm"),
+        "the refused line reached the manifest anyway"
+    );
+}
+
+/// Every landing writes through the same door, so none of them can poison the model —
+/// this is the sibling check the reported symptom (an `install`) does not cover.
+#[tokio::test]
+async fn no_landing_can_write_an_unlisted_backend() {
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
+
+    for (line, landing) in [
+        ("npm:cowsay", linix::model::Landing::Imperative),
+        ("absent:npm:cowsay", linix::model::Landing::Imperative),
+        ("npm:cowsay", linix::model::Landing::Hooks),
+        ("npm:cowsay", linix::model::Landing::Adopted),
+    ] {
+        assert!(
+            kernel.app.declare(line, None, landing).await.is_err(),
+            "`{line}` was written despite naming a backend `priority` does not list"
+        );
+    }
+
+    let mut wrote_npm = false;
+    let mut dir = tokio::fs::read_dir(root.join("modules")).await.unwrap();
+    while let Ok(Some(entry)) = dir.next_entry().await {
+        if tokio::fs::read_to_string(entry.path())
+            .await
+            .unwrap_or_default()
+            .contains("npm")
+        {
+            wrote_npm = true;
+        }
+    }
+    assert!(!wrote_npm, "a refused declaration still landed in modules/");
+}
+
+/// A backend that IS listed still goes through — the check refuses the unusable line,
+/// not every line. Without this the fix could be "refuse everything" and still pass.
+#[tokio::test]
+async fn declaring_a_listed_backend_still_writes() {
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
+
+    kernel
+        .app
+        .declare("cargo:ripgrep", None, linix::model::Landing::Imperative)
+        .await
+        .expect("cargo is in `priority`, so the line belongs in a file");
+
+    let text = tokio::fs::read_to_string(root.join("modules/imperative.txt"))
+        .await
+        .expect("the manifest was not written");
+    assert!(text.contains("cargo:ripgrep"), "got: {text}");
+}
+
+/// A bare name carries no backend, so nothing static can reject it — and it must not be
+/// probed here either. The pre-write check is the priority rule, not a resolution.
+#[tokio::test]
+async fn a_bare_name_is_not_rejected_before_the_write() {
+    let kernel = TestKernel::new().await;
+    kernel
+        .app
+        .declare("ripgrep", None, linix::model::Landing::Imperative)
+        .await
+        .expect("a bare name has no backend to refuse");
+}
+
+/// `teleport` is the second writer: it rewrites a declared line to another manager, and
+/// a move to an unlisted one would leave the file naming a backend nothing parses — with
+/// the original already gone.
+#[tokio::test]
+async fn teleport_to_an_unlisted_backend_leaves_the_line_alone() {
+    let kernel = TestKernel::new().await;
+    let root = kernel.app.config.config_root();
+    tokio::fs::write(root.join("modules/dev.txt"), "cargo:ripgrep\n")
+        .await
+        .unwrap();
+    tokio::fs::write(root.join("profiles/Main"), "use dev\n")
+        .await
+        .unwrap();
+
+    kernel
+        .app
+        .retarget("ripgrep", "npm")
+        .await
+        .expect_err("npm is not in `priority`, so there is nowhere to move it to");
+
+    let text = tokio::fs::read_to_string(root.join("modules/dev.txt"))
+        .await
+        .unwrap();
+    assert!(
+        text.contains("cargo:ripgrep") && !text.contains("npm"),
+        "the line was rewritten to an unusable backend, got: {text}"
+    );
+}
