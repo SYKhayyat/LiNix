@@ -1,0 +1,857 @@
+# Part V — Why
+
+*[LiNix v7](../SPEC.md) — the map is there; this is one part of it.*
+
+> **Do not change a Part II rule without reading its entry here.** Each is the scar of a
+> real bug.
+
+**V.1 — Why `-g` died.** `Config::groups_dir` meant two things: the wish-list folder, and
+the anchor for `locks.json` / `keep.txt` / `local.txt` / profiles. `-g` moved both, while
+`registry.json` — the ownership record — never moved. So `plan -g /B` read /B's one package
+against an ownership record claiming 579, called 578 of them drift, and purged the machine.
+`-g` is gone because "which folder" stopped being a question anyone asks: files are storage,
+modules are the unit, profiles choose.
+
+**V.2 — Why profiles choose and modules hold.** It's the one sentence that explains the
+whole system. The moment profiles hold things or modules make choices, it stops being true.
+A module can never reference a profile (the layering rule) because otherwise "what does
+`editors` contain?" has a different answer depending on what you activated — the library
+cannot depend on the app.
+
+**V.3 — Why a profile may still hold packages.** Decided knowingly against V.2's tidiness,
+because `--into Work` is a real want. The cost is real: those packages are unshareable
+forever, and you find out the day you want to share them.
+
+**V.4 — Why `group:` and `include:` died.** `group:editors` pointing at a file was **already
+a no-op** — the resolver seeded every `.txt` unconditionally, so the file was loaded before
+you named it. It looked like opt-in and wasn't, which taught people a wrong model of how
+LiNix decides things. `include:` strictly superseded it.
+
+**V.5 — Why conflicts are errors.** Files were read in filesystem order and first
+declaration won. `a.txt: jq@1.6` vs `b.txt: jq@1.7` was decided by the disk. Sorting the
+read order only makes the wrong answer deterministic.
+
+**V.6 — Why `keep.txt` died.** It lived in the groups folder and ended in `.txt`, so the
+resolver ate it: *"never remove firefox"* also silently meant *"install firefox"*. It was
+held back by a hardcoded one-element denylist. **Separate by location, not by denylist** —
+and `forget` gives people the thing they actually wanted, which was a way to make LiNix let
+go.
+
+**V.7 — Why `absent:` is the one exception to "only removes what it manages".** Because you
+named it. Everything else LiNix touches, it owns. `absent:` is you reaching outside that,
+deliberately, by name. It stays a line rather than a file because a file can't be turned off
+per profile, can't be shared, and puts LiNix's bookkeeping back in a folder you author.
+
+**V.7b — Why a name no line can hold is protected, and why the escape hatch does not open
+it.** `winget list` answers for Add/Remove-Programs entries with pseudo-IDs like
+`ARP\Machine\X64\Android Studio`. A package name is one word (II.2), so no module line can
+hold that: `adopt` cannot take it, nothing can declare it, and it is therefore **unmanaged
+forever** — which made it a standing `purge-unmanaged` candidate that `linix adopt` could
+never clear. The documented safe sequence, adopt-then-purge, proposed deleting Android Studio.
+
+Removing what you could never have been asked to keep is the inverse of "LiNix only removes
+what it manages" (V.34), so it is a protection rather than a warning. It is checked **before**
+`unprotected_packages`, which is otherwise absolute (V.35): that hatch means *"I manage this
+one myself"*, and you cannot manage what you cannot write down — there is nothing for it to
+release. Asked through the one grammar, not a second copy of the naming rule.
+
+*Found by the live Windows sweep, where `adopt` wrote those IDs into `modules/adopted.txt` and
+every later command — `rollback` included — died parsing the file LiNix had just generated.*
+
+**V.7c — Why silence is not a no, and what it costs to say so.** *(Owner ruling,
+2026-07-22.)* Every read in this codebase went through `run_output`, which hands back a
+failed command's empty output as an ordinary empty answer — deliberately, because a
+non-zero exit from `pacman -Ss` or `dnf search` usually just means the query matched
+nothing. So a search that could not run and a package that does not exist arrived at the
+resolver as the same thing: `false`.
+
+**Three container images hit it for three different reasons in one session.** Fedora,
+because dnf5 changed its output format and the parser read dnf4's. Alpine, because
+`--no-cache` left no index to search. The `tools` image, because it deletes
+`/var/lib/apt/lists` to stay small. Every time, a bare `jq` walked past the system manager
+that had it, fell through the whole priority list to cargo, matched a **library** crate
+named `jq`, and failed at install — and had that crate shipped a binary, LiNix would have
+installed the wrong package and **frozen the wrong manager into the lock**, where it would
+stay after the index was fixed. The parser fixes removed the day's instances; a dropped
+network reproduces the shape on any real machine.
+
+**A hard stop was the wrong answer**, because one flaky manager would then fail a sync that
+has nothing to do with it. **The lock is the thing to withhold, not the install.** So the
+name still falls through, and what changes is what gets remembered: a pick made past a
+silent manager is never recorded, so the next sync re-asks and moves the package once the
+index is back (II.7b). The cost is one extra probe per affected name per sync, which is what
+the owner ruled acceptable — *"it's just about efficiency."*
+
+**What counts as silence has to be conservative in the other direction**, or the lock never
+gets written. A non-zero exit alone is an ordinary empty result for pacman, dnf and brew, so
+the signal is a non-zero exit **with a complaint on stderr**: `search_output` in the executor,
+used by every backend's `search` and nothing else. A manager this machine does not have, and
+one with no search facility at all, still count as a plain no — those are settled facts, and
+re-asking would get the same answer forever.
+
+**One gap survives, knowingly.** `apt-cache search` with an empty index exits zero and says
+nothing, which is indistinguishable from a real miss. There is no generic signal left to read
+there; it needs a per-manager index-health check, which is a different feature.
+
+**V.8 — Why blocks use `{ }` and not `( )` or `end`.** `( )` is already the grouping operator
+in profile math — same character, two meanings, the trap we removed from `include:`. `end` is
+clumsy. "Pick your own delimiter" means nobody can read anyone else's files.
+
+**V.9 — Why block values are verbatim and `#` doesn't comment inside them.** Fail loud. If
+`#` commented there, `after_install = curl -H "X: #tag"` silently truncates and runs the
+wrong command. The other way, `version = 1.6 # my pin` gives a version the parser visibly
+rejects. **You reached for the block form precisely because you needed a value the short
+form couldn't hold. Verbatim is what you asked for.**
+
+**V.10 — Why no quotes.** `"` needs `\"` needs `\\` needs a newline rule. The block form
+makes the problem stop existing rather than giving it a rule.
+
+**V.11 — Why the extension is cosmetic.** Nothing is active unless a profile names it, so
+`use editors` against a misnamed file says *"no module named `editors`"* with a list. **The
+reference is the safety net**, not the extension.
+
+**V.12 — Why adopt takes manual-only.** Not because 579 is a big number. **Declaring a
+dependency breaks dependency management.** Put `libgpm2` in a module and you've declared it,
+so LiNix keeps it forever; remove vim and it stays, because apt says "orphan" and your file
+says "I want this" and the file wins. Monday's bug was claiming ownership of a set that was
+never LiNix's.
+
+**V.13 — What "estimate" means.** apt records that something was **explicitly requested** —
+not **who** requested it. Canonical's installer marked ~90 packages manual at image-build
+time; they are indistinguishable from the `apt install vim` you typed. There is no field for
+"a human, on purpose." **(measured)**
+
+**V.14 — Why the priority order.** Most of the current 10-backend order is **meaningless** —
+apt, pacman and dnf never coexist. The order that decides something is **system manager vs
+language manager**: if both apt and cargo have `ripgrep`, the **system one wins**, because
+your distro maintains it and updates it with everything else. Language managers are for what
+your distro doesn't carry. That also explains pip last: it installs into your system Python
+and can break it. *(uv and pipx being absent from the order is simply a bug.)*
+
+**V.15 — Why `priority` also means "enabled".** One list, one question: *which package
+managers does this setup use, and in what order.* It replaces four settings for one fact
+(`backend_priority`, `enabled_backends`, `hostname_backends`, `default_backend`) of which
+only two merge today. An explicit `snap:foo` failing when snap isn't listed is a feature: it
+catches typos and makes your backend set declared rather than inherited.
+
+**V.16 — Why unpinned names get locked, per machine.** LiNix *probes* — "does apt have
+ripgrep?" So `ripgrep` lands on cargo today, Ubuntu adds it tomorrow, and the same unchanged
+line resolves to apt: LiNix uninstalls from cargo and installs from apt because a repo you
+don't control changed. **The unpinned name is the question; the lock is the answer.**
+
+**The answer is per machine, and the lock is not a demand.** `locks/` travels with the config,
+but *which manager has ripgrep* is a fact about a host, so one shared file would have the
+Ubuntu and Fedora boxes overwriting each other's answer on every sync — churn in a tracked
+file and a merge conflict every time. One file per host (II.6) settles that. And a lock naming
+a manager this machine does not have is re-asked, not obeyed: it exists to stop an unedited
+line quietly changing meaning, which is a different thing from insisting on a manager that
+isn't here. Insisting is what a pin is for, and a pin is written on the line (II.7b).
+
+**Where this came from:** a config that resolved `jq` to apt on one box and then moved to a box
+without apt. The lock was honoured, apt was asked, and the run went wrong in a way no wording
+of the lock rule could fix — because the lock was answering a question about the wrong machine.
+The fix is not a better fallback inside the lock; it is that the line says what it will accept
+and the lock only ever records what happened here.
+
+**V.47 — Why a `repo:` line names its backend.** *(Decided 2026-07-17.)* A repository belongs
+to exactly one package manager — a PPA is apt's, a COPR is dnf's, and `add-apt-repository`
+run against dnf is a system command that fails, or worse, half-succeeds. A bare `repo:SPEC`
+would make LiNix guess which backend, and the honest ways to guess are all wrong: a
+prefix→backend table (`ppa:`→apt) is a second copy of a fact each backend already owns and grows
+with every ecosystem (P4); "the one system backend in `priority`" fails at run time on the
+machine where the guess is wrong, which is the machine you least want a repo command
+misfiring on. So the backend is named, exactly as a package line names one: `repo:apt:ppa:...`.
+It is refused when the backend is not in `priority` (V.15), and a bare `repo:` is a parse
+error that says so — caught in the file, not at the command. **The repo and the package it
+serves already sit together in a module (II.16); naming the backend once more is the cost of
+never running the wrong tool.**
+
+**V.17 — Why regex is live by default.** "Give me all the fonts, including ones that don't
+exist yet" is real. Mandatory locking turns a living pattern into a frozen list and defeats
+the point of writing a pattern. **The lock file is the switch** — that's how every lockfile
+already works.
+
+**V.18 — Why regex matches names, not meaning.** `photo*` finds `photocollage`,
+`photoprint`, `photoqt` — and misses `gimp`, `darktable`, `krita`, `rawtherapee`,
+`shotwell`, `digikam`, `inkscape`: every actual photo editor. Real prefix *families* are the
+good use (`texlive-*`, `fonts-*`). Debian's own answer to a family is a **metapackage** —
+someone's judgement rather than a naming coincidence — and better where one exists.
+
+**V.19 — Why `max_removals = 20` works and `max_installs` has no default.** **20 is more
+than a person removes on purpose** — calibrated against human behaviour, so a plan removing
+50 is wrong at any scale on any machine. **Installs have no equivalent ceiling: the biggest
+install you'll ever do is the correct one** (a fresh machine). So `max_installs` exists but
+defaults to unset — the number is yours, for your reason. *(Rejected: screen height — the
+same command would behave differently on different machines. Rejected: a ratio — a fresh
+machine's ratio is undefined.)*
+
+**V.20 — Why the ratio catches Monday and a count doesn't.** On Alpine, `adopt` correctly
+took 14 packages and a mis-scoped `prune` scheduled all 14 for removal — **under the count
+limit, none protected, all things you'd cry about**. The count misses it on small machines.
+**Manage 3, delete 576 → you have made a mistake, on every machine, always.**
+
+**V.21 — Why `purge-unmanaged` is a command and not a mode.** **Sync is then never
+dangerous** — not "safe by default", but safe permanently. No setting anyone can flip,
+inherit, or copy from a dotfiles repo makes a routine sync delete something it didn't
+install.
+
+**V.22 — Why `-y` cannot skip a refusal.** Every CI job and every script passes `-y`, and an
+unattended run cannot notice a machine being dismantled. **`-y` means "don't ask me". It has
+never meant "ignore your safety rails", and every place it currently does is a bug.**
+
+**V.23 — Why `confirm_destructive` died.** In a declarative system, **deleting a line is the
+confirmation.** You said what you wanted; asking whether you meant it is asking twice. And
+the setting named after removals gated a module-file overwrite (not a removal) while missing
+both `prune` and `sync`.
+
+**V.24 — Why the plan always leads with counts.** **A warning that only fires sometimes is a
+mechanism that can be miscalibrated. A summary that's always there can't be.**
+
+**V.25 — Why the 16 protections became 5.** **Eleven of them were never protections — they
+were declarations wearing a protection costume.** "Don't remove this, it's leased" →
+`@expires=`. "…you installed it imperatively" → it's in the `imperative` module like
+everything else. "…it's held" → `@hold`. "Do remove this, it's bloatware" → `absent:`. Each
+existed because there was **no way to say the thing directly**, so someone bolted an
+exception onto the removal path instead. `protect_imperative` is the clearest: it exists
+*purely* to stop drift-pruning deleting `linix install`-ed packages, because they lived in
+`local.txt`, which `-g` could move out from under the registry. **Someone met Monday's bug,
+understood the symptom exactly, and patched it with a flag.** Not one behaviour was deleted;
+they moved to where they were always trying to be.
+
+**V.26 — Why protection is a refusal, not a declaration.** Everything else is a statement of
+intent ("I want this"). Protection is "I will not do that, and there is no flag." It doesn't
+care whether the package is managed, declared, adopted, or predates LiNix. That's why it
+lives in preferences and not in a module — and why deleting a declared `apt:python3` line
+makes LiNix refuse until you unprotect it.
+
+**V.27 — Why hooks are lines despite the supply chain.** `use` is **already** a trust
+decision: a `repo:` line in someone's module means they can ship you any package with any
+script in it. Hooks make that road shorter, not different in kind. **The lock is the
+approval** — because you approve a script once and they edit it three months later, which is
+how most npm incidents actually worked: the malicious version was never the one anyone
+reviewed. **Hash everything, including your own scripts**, because "did I write this?" has
+no clean answer once you've cloned your own repo onto a second machine — and the friction
+that catches you editing `setup.sh` is the same friction that catches a teammate's `git
+pull`.
+
+**V.28 — Why schedules got their own file.** `active` answers exactly one question: *what is
+this machine set to right now?* A schedule is written once and forgotten — a fact, not a
+switch. An active-list for schedules would invent a state that needn't exist ("defined but
+off"), so you'd check two files for one fact. And the separate file means a cron job can't
+arrive via `use` at all. **Door left open, deliberately unbuilt:** "sync nightly when I'm in
+Work" — a `schedule:` line can live in a module and be selected by a profile; the grammar
+already allows it.
+
+**V.29 — Why `@requires` survives.** **(verified, `planner.rs:407-426`)** `spec.requires`
+becomes a real `graph.add_edge` — install **ordering**. A module is a *set* and says nothing
+about order. `@requires` is the one thing modules can't say. It matters only for things
+outside a package manager (a `.deb` from a URL, a GitHub binary) — things with **no one to
+ask**. apt's own dependencies are ordered for free at `planner.rs:427`.
+
+**V.30 — Why git is the history.** **LiNix commits only on a successful sync, so every
+commit is a state your machine actually reached** — not one you asked for. `git log` is
+where your machine has been; `git diff` and `linix plan` are the same question; rollback can
+never take you somewhere that never worked. And the registry needs no history, because
+declaration + convergence reproduces it.
+
+**V.31 — Why no commit algebra.** Set math works on profiles because they're choices you're
+making *now*. Commits are moments that already happened, and "the union of March and today"
+isn't a machine anyone asked for. Git covers what's real. **Intersect of commits does not
+exist in git and no use case was found** — twenty years of git not having it is evidence.
+
+**V.32 — Why lock signing died.** **Signing one file in a folder of unsigned files protects
+nothing.** Anyone who can edit `locks.json` can edit your modules — they'd change `apt:jq`
+to `apt:evil` and no signature would notice. It guards one door in a building with no walls.
+Ours was `sha256(key + "|" + text)` — a construction cryptographers warn against — compared
+with `==`, which leaks timing. And **appearance is worse than nothing, because you stop
+looking.** `git commit -S` signs everything, with real crypto, verified by a tool that's been
+attacked for twenty years.
+
+**V.32b — Why the check reads git's verdict and does not compute one.** LiNix runs `git log
+--pretty=%G?` and carries the letter it gets back. It does not decide what a key is worth,
+because that is the twenty-year-old tool's job and re-deciding it is how the previous signing
+scheme ended up with `sha256(key + "|" + text)`. The same reasoning splits `Good` from
+`Unverified`: git distinguishes a signature it trusts from one made by an untrusted, expired or
+revoked key, and folding the second into the first would restore exactly the appearance-without-
+protection V.32 is about. **And why the refusal is off by default:** a rule that fires on every
+rollback in a repo nobody signs is a rule that gets turned off, at which point the signed case
+is unprotected too.
+
+**V.33 — Why `clone` died.** It copied **the installed set, not the intent** — you got a
+machine with the same packages and no idea why. `git clone && linix sync` gives the intent,
+the history, the pins, and the ability to change it afterwards.
+
+**V.34 — Why `prune` and `orphans` died.** sync removes drift by definition, so `prune` is
+sync with the install half amputated. "Prune" meant four unrelated things; deleting the
+command leaves exactly one meaning ("delete old history") for the first time. `orphans`
+shows what sync would remove, which is `plan` — and its message named two commands and
+described neither.
+
+**V.35 — Why `--backend` is refused on removals.** A scoped removal is Monday's exact shape:
+**you narrow what LiNix looks at without narrowing what it owns**, so everything outside the
+scope looks like drift.
+
+**V.36 — Why `clean` survives.** It's apt's housekeeping, not LiNix's drift, and only apt
+knows about it. It goes through the guard because `autoremove` is a mass removal LiNix
+didn't plan and has famously eaten desktop environments. It stays explicit because automatic
+cleanup is a surprise removal.
+
+**V.37 — Why suspensions survive.** Nearly deleted — "I want this and I don't want this"
+smells like a contradiction with a timer. The case that saves it: **"take the game away
+until the weekend."** People genuinely do that; nothing else here does it; and once leases
+exist, suspensions are the same machinery pointed the other way.
+
+**V.38 — Why times are absolute.** "2 hours" can't work in a file: the machine reading it
+next week has no idea when you wrote it. That's exactly why `@lease=2h` is inert today.
+
+**V.39 — Why `install`/`uninstall`/`forget`.** A symmetric pair plus one word that can't be
+misread. `remove` and `unmanage` sat one word apart and did opposite things to your disk —
+reach for the wrong one and you don't get an error, you get a deleted package.
+
+**V.40 — Why three landing modules.** Provenance ends up in the filename: open
+`modules/hooks.txt` and see exactly what got in behind LiNix's back. One `local.txt` mixes
+them and forgets which was which.
+
+**V.41 — Why "detected, not configured".** LiNix should not be *told* you have btrfs; it
+should look. Not told you have four cores. Almost every "local fact" in `config.toml` is
+something LiNix could work out in a second and instead asks you to maintain by hand, forever,
+on every machine. **That is not configuration, it's homework.**
+
+**The `max_parallel` exception (owner ruling, 2026-07-17).** This rule's first draft called
+`max_parallel` homework too — and noted it was overwritten at `sync/mod.rs:296` anyway, "so the
+setting is already a lie." Both halves are now dead: the overwrite is gone (`sync/mod.rs:293-297`
+reads it as *"the user's knob"* and honours `self.config.max_parallel.max(1)`), and the owner has
+ruled to **keep** it. The distinction that saves the rule: the core count is a *fact* (detected),
+but *how many of those cores to use* is a *preference* — you may want to cap it to keep the
+machine responsive while a big sync runs. A preference LiNix cannot look up is not homework. So
+`max_parallel` stays: detected as the default, overridable by hand.
+
+**V.43 — Why the guard has ten refusals and not five.** The first draft said five (then
+listed six). It was written before anyone re-read `policy.toml`, which held five rules and
+was marked in II.17 as moving to `[guard]`. Two of them had somewhere to go —
+`deny_packages` was already in the list, and `allow_backends` is what the `priority` file
+means (V.15). **The other three had nowhere, and "delete" was never decided — it was
+overlooked.** `pinned_only`, `require_snapshot` and `deny_vulnerable` are all exactly the
+shape V.26 defines: not "I want this" but "I will not do that". They are refusals, so they
+live where refusals live, and `-y` cannot skip them for the same reason it cannot skip any
+other (V.22). *Corrected knowingly against the headline: a wrong number in a document is
+cheaper than three deleted safety rails. If a rule here ever stops being a refusal and
+starts being a preference, that is the signal it does not belong in `[guard]`.*
+
+**V.46 — Why set math costs a package its module name, and why `include` died.** *(Decided
+2026-07-17, during Phase 2f. II.4 required set math and nothing implemented it:
+`model::profiles::evaluate_expression` had no caller outside its own tests, and the only
+working implementation was `compose()` in the old `app/profile.rs`, over flat strings.)*
+
+**The shape does not fit, and pretending otherwise is the bug.** Resolution is
+`profiles → the modules they reach → the packages in those modules`. Set math breaks that
+chain: `(Work | gaming) & security` is **an intersection of package sets**, and there is no
+module whose contents are that intersection. So a profile using set math resolves to packages
+directly rather than naming modules.
+
+Making `&` operate on module *names* was the alternative, and it answers a different question
+than the one asked: the intersection of `{editors}` and `{security}` is empty even when both
+hold `vim`. Inventing a synthetic module to hold the result was the other, and it names a
+module that does not exist on disk, so `upgrade --module` would match something nobody can
+open.
+
+**The predicted cost turned out not to exist, and that is worth stating plainly because this
+document predicted it wrongly.** The first draft of this entry said set math costs a package
+its module name. It does not: the implementation maps expression atoms back to **the
+statements they came from**, not to strings, so a package that survives an intersection still
+carries its `Origin` — its file, and therefore its module. `upgrade --module editors` finds
+`vim` through an `exclude`. There is a test (`a_package_surviving_set_math_still_knows_its
+module`). The only lines that get profile scope alone are ones written in the profile itself,
+including a bare package atom inside an expression — which is correct, because that line
+really is in the profile. **Keep mapping back to statements. Mapping back to strings is what
+would make the predicted cost real.**
+
+**`include` died because `use` already is it.** II.4 listed `include`/`exclude`/`intersect` as
+the three directives while II.2 listed `use NAME` as the way to reference a module or profile
+— and for the union case those are the same operation with two names, which is the exact
+"two ways to do one thing" disease this design exists to cure, sitting inside the spec. `use`
+wins: it is II.2's word, it is the one modules use too, and one word for "bring this in"
+everywhere beats two. `include` is an error that says so.
+
+**V.42 — Why the comment rule.** This codebase has been touched by many AIs, and this is what
+that leaves behind: models narrate what they just wrote and congratulate themselves for it,
+because that reads like effort, and each one looks fine on its own. The repo already proves
+the rule works — `core/manager.rs:86-93` explains *why* the `tracks_manual` gate exists and
+what happens if it's wrong; `generic.rs:363-370` explains in nine lines that choco lists
+Title-case "Wget" for install-id "wget" so `remove` silently no-ops, and why the fix must be
+Windows-only because npm has `socket.io`. **Those two are worth more than the other 137
+combined, and they're the same length.** The cost of the rest is that **they trained everyone
+to skip** — the reason 32 comments in this repo are outright false, each of which someone read
+past. *(The first draft's example, `audit()` documented as "a **destructive** Discovery cycle …
+without generating files or acquiring state", has since been fixed in the code and now reads
+correctly. The measured 32 are the ones that remain.)*
+
+**V.44 — Why `activate` writes a list and there is no `-r`.** The file is the state, so a
+command that activated *without* writing `active` would be a second place the answer lives —
+the exact defect `-g` and `keep.txt` died of (V.1, V.6). Set, add, subtract, because those
+are the three things you do to a list. **`deactivate` rather than `activate -r`** because
+`install`/`uninstall` already settled that the opposite of a verb is a verb (V.39), and a
+flag that silently inverts a command is how you delete something at 2am by leaving off one
+character. The empty list is the one refusal: `linix activate $PROFILE` with `$PROFILE`
+unset would otherwise read as *"turn everything off"* and be perfectly valid. The guard would
+catch it (V.19) — but the guard is for decisions you meant, and this one nobody means.
+**`activate NAME…` still overwrites `when` blocks without asking**, and that is not an
+oversight: it is the set form, it sets, and a form that quietly kept part of the old file
+would leave the machine in a state you did not type. The file is in git; that is what git is
+for (V.30). **It does not ask and it does not stay quiet** — it names each block it removed.
+*Asking and reporting got argued as one thing and they are not: the case against a prompt is
+that overwriting the list is the command's own job (S6), and none of that is a case for
+hiding what the job did.*
+
+**Why `deactivate` reaches into a `when` block when `activate -a` does not** *(decided
+2026-07-17, after the first draft of this entry said the opposite)*. The first rule here was
+that LiNix never edits a block — a block is something you wrote — so `deactivate Travel` would
+remove the top-level line and report *"it is still activated by the `when` block on line 4."*
+**That sentence is the argument against itself.** It is a command named "deactivate"
+announcing that it did not deactivate. **A verb that reports the state it failed to reach is
+the `-g` disease in miniature: the name says one thing, the file says another, and you find
+out later.** So it removes the name wherever this host would read it, and the empty block goes
+with it.
+
+**The asymmetry with `activate -a` is real and it is not a compromise: adding has a choice of
+where to put the name, removing has none.** `-a` appends at the top level because a block is a
+rule you wrote and a new name has no business joining it — there is a right answer and it is
+"outside". `deactivate` gets no such freedom; the name is where it is, and the only way to
+leave the block untouched is to not do the job.
+
+**And why it stops at blocks that do not apply to this host.** Not caution — the same rule,
+read carefully. `deactivate` turns off what is on; on the desktop, `when host == laptop {
+Travel }` has nothing on, so there is nothing to turn off, and removing the line would be a
+different command (*"never activate Travel anywhere"*) that nobody typed. **`active` is a file
+you commit and share (V.30), which makes "edit it wherever the name appears" a way to change a
+machine you are not sitting at from one you are.** The blast-radius reasoning is V.22's, and
+it lands in the same place: **the refusal is cheap and the mistake is not.** It says why, and
+names the line, so the hand-edit is one keystroke away for the person who did mean every
+machine.
+
+**V.45 — Why a cycle is an error and not deduped.** If `active` were the only consumer you
+could visit each profile once and move on, because union doesn't care how many times it sees
+a name. But profiles have `&`, `\` and `-` (II.4), so `Work include Gaming` /
+`Gaming exclude Work` has no answer to settle on — not a redundant answer, **no answer**.
+Deduping picks whichever order the resolver happened to walk in, which is V.5's defect
+wearing a different hat: files were read in filesystem order and first won, and the fix was
+to stop guessing and say so. Naming the whole loop instead of the last edge is II.2's rule —
+the error names the file and the line — and it is the difference between *"there is a cycle"*
+and a user who can see which of the three lines they meant to delete.
+
+**V.48 — Why an artifact is selected and not scored.** *(Adopted 2026-07-20 from Part VIII;
+owner rulings D3, D3b, D4.)* The bug this prevents was live in the tree, not hypothetical.
+
+`GithubBackendCore::score_asset` added points for an OS token, points for an arch token,
+points for looking like an archive, five points for `musl`, and took `max_by_key` over the
+result. **Three separate defects, each of which shipped:**
+
+1. **It picked a maximum even when the maximum was negative.** A release offering nothing this
+   machine could run still returned an asset, which was then downloaded and unpacked. The
+   failure surfaced later, somewhere else, as a binary that would not execute.
+2. **`name.contains(arch)` is a substring test.** On a 32-bit box `x86` matched inside
+   `x86_64`, so the wrong artifact scored *higher* than the right one. Substring matching over
+   filenames is why the replacement matches whole tokens and lets the longest alias at a
+   position win.
+3. **There was no tie-break at all**, so between two equally-scored assets the winner was
+   whichever order the GitHub API happened to return them in. **The same declaration could
+   install a different file on two machines on the same afternoon** — which is precisely the
+   property a declarative package manager exists to deny.
+
+**The score also could not be argued with.** A user who got the wrong file had no line to
+change, because the answer was a sum of magic numbers with no vocabulary. `formats` replaces
+the sum with an ordered list of names the user can read, write and override.
+
+**Why `formats` and `channel` stay two keys.** They look alike — both narrow "which of these
+do I get" — and folding them into one key would produce a value whose meaning depends on which
+backend answered. That is the `backend_priority`/`enabled_backends`/`default_backend` defect
+(V.15) in miniature: one name, several meanings, and no way to tell from the file which one is
+in play. **A snap channel is not an artifact.** Snap ships one artifact and several streams of
+it; GitHub ships one stream and several artifacts. Two questions, two keys, each an error where
+it does not apply.
+
+**Why an unmatched selection is an error and never a fallback.** "Whatever was first" is how
+the score behaved and it is what made the bug invisible: something always installed, so nothing
+ever looked wrong. The error prints what the release actually offered and why each asset was
+passed over, so the fix is visible without opening a browser.
+
+**Why the tie-break is printed and locked rather than merely applied.** Shortest-filename-wins
+is a heuristic, and the honest objection to it is that it is indefensible as a written rule. It
+survives here only because it is not silent: the plan names what was chosen and what was passed
+over, and the lock records the resolved filename so a pinned declaration cannot quietly resolve
+to a different file next month. **A guess nobody can see is the guess that drifts; a guess that
+is reported is a default the user can override with `@asset=`.**
+
+**Why `@bin=` turns the guess off instead of falling back to it.** A fallback would put the
+guess back exactly where the user reached for the option to turn it off — and the case where
+`@bin=` is reached for is the case where the guess was already wrong.
+
+**Why several artifacts under one line keep their own names.** *(Owner ruling, 2026-07-21.)*
+The repo's name was the deployed name because a line resolved to one file. `@asset=all` breaks
+that assumption and nothing else does. The alternative considered was prefixing every file with
+the repo's name, which never collides — and which renames the program you asked for, so the
+same tool is `bar` from one line and `bar-bar-linux` from another. The collision it avoids is
+better handled by refusing: two archives that both contain `bar` are two answers to one
+question, and the user has to say which they meant. **Silently deploying the second over the
+first would install a file the declaration does not name, which is the class of bug artifact
+selection exists to close.**
+
+**V.49 — Why `rebuild` is a separate command that batches per backend.** *(Adopted 2026-07-20
+from Part X.1; owner ruling K1.)*
+
+The bug this prevents is the one convergence cannot see. `sync` computes the difference between
+the declaration and the machine, so **every failure where the difference is empty is a failure
+it will report as success, forever**: the half-configured install, the truncated download, the
+closure someone removed by hand. Re-running `sync` on that machine is not a weak repair, it is
+a guaranteed no-op, and the user has no way to tell the difference between "nothing to do" and
+"nothing I can see".
+
+**Why not a flag on `sync`.** Two reasons, and the second is the one that matters. It is
+destructive on a machine that is fine — a flag is one typo from a routine command. And
+`schedules` runs `sync` unattended: a mode of sync is a mode a timer can reach, and a timer
+cannot be the thing that notices a package is broken. The parser now refuses `run = rebuild`
+outright rather than relying on nobody writing it.
+
+**Why batch-per-backend and not the two obvious answers.** All-at-once genuinely forces orphan
+collection and can leave the machine without a shell partway through. One-at-a-time is safe and
+collects almost nothing, because a dependency shared with a still-installed package is never
+orphaned at any instant — it would be a repair that does not repair. **These are different
+features wearing one name, and the backend is the granularity at which the underlying question
+is even defined:** `apt` cannot orphan a `cargo` crate.
+
+**Why foundation backends go first, and why the original reasoning for it was wrong.** X.1
+argued from blast radius — put the risky batch first so a strand lands furthest from the
+machine's ability to boot. *That argument does not survive contact:* if `apt` goes first and
+`apt` strands, the machine has no shell, which is the worst available outcome, and running it
+last would have left it untouched. **The ruling is right for a different reason — dependency
+direction.** A crate can need a system compiler; no `apt` package has ever needed a crate.
+Rebuilding user-space software first would rebuild it against the system state the rebuild is
+about to replace, leaving it stale the instant the foundation batch lands. Foundation is
+`needs_root()`, which already draws that line, rather than a second hand-kept list.
+
+**Why removal and reinstall are two transactions.** The transaction engine runs independent
+graph nodes concurrently, and a `Remove` and an `Install` of the same package have no edge
+between them. In one graph they race, and the winner decides whether the package exists.
+
+**Why protected packages are dropped from the scope rather than exempted in the guard.** A
+rebuild's removal is only safe because a reinstall follows — and if that reinstall fails, the
+machine is genuinely without the package, which is exactly what the guard exists to prevent.
+Teaching the guard that one caller means it differently would make the refusal conditional on
+intent, and intent is what every caller claims. Narrowing the scope keeps `rebuild --all` usable
+on a machine whose `bash` is protected while leaving the refusal absolute. **The skips are
+printed**: a rebuild that silently dropped half its scope would report success over a machine it
+never repaired, which is the same lie convergence was already telling.
+
+**V.50 — Why `setting:` is a statement, and why it reads before it writes.** *(Adopted
+2026-07-20 from Part X.4; owner ruling.)*
+
+The bug this prevents has two halves, and they need two different rules.
+
+**Why a statement and not a `de:`/`gsettings:` backend.** A desktop is packages plus files plus
+a session, all of which already have statements. Inventing a fourth spelling of the same three
+things is the two-of-everything failure the rewrite exists to end — and the adapter is chosen by
+*what is running*, not by what the user typed, so a `backend:name` prefix would encode a choice
+the user does not get to make. A GNOME key and a KDE key are the same declaration; only the tool
+that applies it differs.
+
+**Why read-before-write is the whole mechanism, not an optimisation.** A line that shells out
+every sync is a hook — a command that runs whether or not anything changed, and whose effect on
+a converged machine is "run `gsettings set` again for nothing". A line that reads the current
+value and writes only on a difference is a *declaration*: it describes a state, and does nothing
+when the state already holds. The first belongs in `after_install`; only the second belongs in a
+model whose entire promise is that a settled machine is quiet. This is also why KDE waits — a
+store you cannot cleanly *read* cannot host a read-before-write declaration, so `kwriteconfig`
+is not adapted until that read exists, and a desktop with no adapter is an error rather than a
+blind write.
+
+**Why removal resets to the schema default and not to the prior value.** Every other statement's
+removal means "LiNix stops asserting this", and for a setting the honest meaning of that is "the
+desktop's own default applies again", not "whatever this machine happened to hold before LiNix
+first ran". Restoring a prior value would demand a per-machine store of pre-LiNix state — the
+exact hand-maintained per-box state II.1 forbids — to serve a case (a key customised by hand
+*before* adoption) that is rare and that `gsettings reset` handles acceptably by returning it to
+a known value rather than a remembered one.
+
+**V.51 — Why `vars` values are typed and never coerce.** *(Adopted 2026-07-20 from Part IX,
+W2; owner ruling.)* The bug is a comparison that answers a question the reader did not ask. Once
+a provider can return JSON, `gpu` is `true` the boolean and `ver` is `"1.6.0"` the string, and
+those types are information the user produced on purpose. Flattening everything to text at the
+boundary throws that away and then quietly lies: `"1" == 1` becomes true, a version string
+sorts by ASCII, and `when $gpu` fires on the string `"false"`. So the type is kept, and each
+place two types could meet is decided rather than left to chance — no cross-type equality
+(`"1" == 1` is false), ordering only between numbers (`"10" > "9"` refused, not answered
+wrongly), and no truthiness (a bare `when $flag` is a parse error, so `false`/`""`/`0`/`[]`
+never blur together). The one deviation, string equality being case-insensitive, is not a
+coercion — it is the behaviour a detected fact has always had (`os == LINUX`) and the place
+case matters least.
+
+**V.52 — Why a variable carries a `$` and a fact does not.** *(Adopted 2026-07-20 from Part IX,
+W4/IX.4.)* This is a future-fact collision, the quiet delayed kind this document has recorded
+too many times. Without the sigil, `when role == travel` and `when os == linux` are one syntax
+over two namespaces, and the day LiNix learns to detect `distro` or `init`, every file that
+named a variable `distro` silently changes meaning. **A detected-fact namespace that can never
+grow is a worse cost than one character.** With the sigil, facts can be added forever and no
+user file is touched, and a reader can tell at a glance which half of the condition they
+decided and which half the machine reported.
+
+**V.53 — Why a provider is chosen by filename and ambiguity is refused.** *(Adopted 2026-07-20
+from Part IX, IX.6; owner ruling.)* Two bugs, one entry. First, a **silent precedence guess**:
+if `vars` and `vars.py` both sit in a repo and LiNix picks one by directory order or a built-in
+ranking, the resolved state of the machine depends on something nobody wrote down, and the day
+someone adds the second file the machine changes with no edit to explain it. So two providers
+and no `[vars] source` is a loud error listing them (P3), never a winner. Second, the filename
+*is* the kind — `vars.py` is visibly a program — so what a file does is legible in the repo
+rather than hidden behind a config key that could disagree with the file's contents. The
+embedded provider gets the full standard library (clock, shell, files, env, network) for the
+same reason a hook does: it is a script committed to your own repo, so withholding powers an
+external `vars.py` already has would only push people to the external one and inherit its
+interpreter dependency across the fleet.
+
+**V.54 — Why a plan freezes its resolved variables.** *(Adopted 2026-07-20 from Part IX,
+W4/W13; owner ruling.)* This is the admission price for letting a value come from the clock or
+the network, and without it `plan` is a lie. A value that can move between two commands means
+the preview you read and the action you confirm resolve `$x` independently and can disagree — the
+preview shows nothing to do, and the sync a few seconds later removes packages it never
+displayed. That is not a bug to fix later; it is what "the value moved" means. So a variable is
+resolved **exactly once per invocation**, and the saved plan carries the values it resolved; the
+`apply` that runs a plan reuses them rather than re-running a provider. The preview and the
+action agree by construction, which is the property II.8 rests on and the only condition under
+which admitting the clock is safe at all. It also means a `vars` edit reaches the guard like any
+other change — the desired state is computed from the frozen variables, so a one-line edit that
+would remove a hundred packages is caught by `max_removals` before anything runs.
+
+**V.55 — Why a `vars` provider goes through the hook ledger.** *(Found by audit 2026-07-22;
+owner ruling the same day.)* II.6b handed `vars.linix` the shell, the filesystem, the
+environment and the network on the stated grounds that it "is trusted the same as a hook" — and
+that trust boundary was a sentence, not a mechanism. No hash was recorded and nothing ever
+asked. II.12's rule is *"hash everything, including your own scripts. One rule, no exceptions"*,
+and the provider files were the exception, which is the shape of every V entry here: the
+document described a protection the code did not have, so reading the document could not find
+the hole.
+
+Three things made it the worst place in the tree to leave one. **Variables resolve at step 0 of
+II.7**, before any `when` and before the plan, so the script runs on `status`, `plan` and even
+`plan --dry-run` — the commands someone runs *precisely* to avoid acting, and the ones whose
+whole promise is that nothing happened. **`watch --pull` pulls a config repo and reconciles
+unattended**, so a provider file pushed to that repo executes on the next tick with nobody
+present — and it runs before `verify_all_approved`, so the hook ledger that would have caught an
+equivalent hook never gets the chance. And **the hole was two holes**: the embedded provider and
+the external `vars.py`/`vars.js` path had it identically, so closing one would have moved the
+problem rather than fixed it.
+
+Ruled to match hooks exactly rather than strip the standard library. Removing `sh` and
+`http_get` would not buy safety — it would push people to the external provider, which has the
+same exposure plus an interpreter dependency across the fleet — and it would break the feature's
+reason to exist, since detecting what a machine *is* needs to ask the machine. The rule is
+therefore the ledger, applied to both providers in the same change.
+
+**V.56 — Why a removal is always a list of names, and why `remove` is not `purge`.** *(Found by
+audit 2026-07-22; owner ruling the same day, taking the one-line change the 2026-07-19 entry in
+Phase 5 had already offered.)*
+
+`remove-orphans` had two branches. The enumerated one is correct and was built that way
+deliberately — list, show, guard the total, remove exactly those names. The second ran the
+manager's own verb, `apt autoremove -y`, for backends that could not enumerate. That was a
+recorded judgement call rather than an oversight: deleting a working capability looked like
+feature removal nobody had approved, and the code was honest about it, printing that those
+removals could not be previewed or checked against the protected list.
+
+The honesty is where it broke. That sentence is printed by the **confirmation**, and the
+confirmation returns yes under `--yes` — so on the path where a human would have read the
+warning, the warning is the thing that gets skipped, and `remove-orphans -y` became unguarded
+root-level mass removal on the single most common backend there is. `apt autoremove` routinely
+takes old kernels. II.10's own text says `--yes` never overrides the guard, and here it did not
+need to override anything: there was no list, so there was nothing for the guard to judge. **A
+protection that only exists inside a prompt is not a protection**, which is the general lesson —
+the same shape as a check that cannot fail.
+
+The rule is therefore about the *verb*, not the flag: a manager's bulk-removal verb chooses its
+own set at execution time, after the guard has judged and after the plan was read, so no amount
+of confirming can make it safe. Where the set can be fetched instead — `--dry-run`,
+`--assumeno` — it becomes an ordinary enumerated removal and the whole problem dissolves; where
+it cannot, the backend loses the capability and says so. That is V.7c's shape again: a manager
+that cannot answer gets asked differently or is recorded as silent, never guessed at.
+
+**And `purge` is the same mistake one layer down.** apt's remove arguments were
+`["purge", "-y"]`, so *ordinary drift removal* — deleting a line from a module — destroyed the
+package's `/etc` configuration. Nobody asked for that and no message said it happened. Deleting
+a line means "stop installing this"; it is a statement about what should be installed, and
+`/etc/nginx` is not that. Purge stays available because wanting it is legitimate, but it is
+opt-in, and — because a removal happens *after* its line is gone, leaving nothing to carry a
+per-package option — the machine-wide setting is the only form drift removal can have, which is
+exactly why it must default to off.
+
+**V.57 — Why a harness must fail, and must run somewhere other than one laptop.** *(Found by
+audit 2026-07-22; owner ruling the same day. The rules are in IV.1 and IV.2.)*
+
+Session 9 fixed a check that could not fail — `command -v` answering from the shell's hash table,
+so a package deleted in section 4 still "existed" in section 9 — and recorded that *"a check that
+cannot fail is worse than no check."* The audit found three more still live, one of them the
+direct twin of a fixed one: the Windows script greps `linix` against `git log` where the
+container greps `linix:`, and the config directory is named `linix-it-win-config`, so it matches
+on every run forever. Another asserts that the build artifact is still on disk and calls it
+*"linix survives an uninstall attempt."* One fixed, siblings live, in the sibling file — the
+exact pattern `CLAUDE.md` names.
+
+The larger version of the same fault is an image that claims coverage it does not have.
+`Dockerfile.tools` says the harness runs a real install→list→remove for composer, opam,
+luarocks, nimble, spack, pixi, helm and krew; none of those names appears in the harness. The
+README describes a coverage audit that hard-fails on an untouched backend; no such code exists.
+`run.sh` maps `tools → apt`, so the image is `ubuntu` with a forty-minute build — which is
+exactly why ubuntu, arch and tools all report the same 82. Every expansion backend was therefore
+proven only against mocked output, and mocked output is the one thing that never drifts, while
+output-format drift is where every real bug in Part VII came from.
+
+`FAST` is the mechanism-level version: declared in `run.sh`, two Dockerfiles and both
+release-check scripts, read nowhere. It is `SMOKE_ONLY`'s bug, left live in the same file during
+the session that fixed `SMOKE_ONLY` and wrote three paragraphs about it. A toggle that is
+documented and unread does not make a run narrower — it makes a run that *looks* narrower
+identical to one that is not, which is the vacuous check again, one level up.
+
+And none of it ran anywhere but one machine. There is no Docker job in CI, no call to
+`release-check`, and the branch carrying all of this sat 219 commits ahead of the remote, so CI
+had never executed against the rewrite at all. **A gate that depends on someone remembering to
+run it is not a gate**, and the evidence is that the three faults above survived a session whose
+entire subject was the harness. The fast images belong in CI for that reason and the slow ones do
+not: a forty-minute required check is a check people route around, and a routed-around gate fails
+the same way a vacuous one does.
+
+**V.58 — Why the version went down, and why a rename sweeps the scripts.** *(Found by audit
+2026-07-22; owner ruling the same day. The rule is in II.18.)*
+
+`Cargo.toml` said `6.0.0`. The CHANGELOG called the same tree *"v7, the declarative rewrite"*
+and filed it under `[Unreleased]`. Both cannot be true, and the one that reaches a user is
+`linix --version`, which was answering `6.0.0` — a number describing the model this rewrite
+exists to delete. Nothing has ever been released: the branch sat 219 commits ahead of the
+remote, no tag was ever pushed, and the tag-triggered release job in CI has never fired. So the
+number was not a version, it was a counter of internal rewrites, and it was **counting up while
+the thing it named was being thrown away**. `0.1.0` is what it means to have shipped nothing
+yet, and going down is the only honest direction from a number nobody was ever given. The
+rewrite keeps its name — "v7" is what Part VII and the CHANGELOG call this work — because a
+codename and a version answer different questions.
+
+The install scripts are the same fault at the other end. Both fetched from
+`github.com/OWNER/linix`, a placeholder that was never substituted, and both finished by running
+`linix migrate` — a command **II.17 has listed as deleted since the rename to `adopt`**. So the
+one documented path a new user takes installed the binary and then failed on the step that takes
+over the machine, and the spec already contained the sentence that predicted it. `src/` was
+swept, `scripts/` was not: the family rule, on the layer furthest from the code and therefore
+the one nothing in the build ever compiles, lints or tests. Which is the point — **the install
+path has no compiler**, so it needs the harness to run it, or it needs a human to notice, and
+neither had.
+
+**V.59 — Why `restore` is a command and not a README.** *(K9 answered 2026-07-22, owner ruling,
+after it had been deliberately left open since 2026-07-19. The rule is in II.8; the requirement
+it satisfies is X.5's.)*
+
+`bundle` was built as half a feature and read as a whole one. It packs the config root, `locks/`,
+the resolved package list, the full manifest history as `config.bundle`, and optionally the
+artifacts — and then writes `RESTORE.md`, a file telling a person which directories to copy
+where. So the restore path was prose. Nothing in the tree had ever performed one; the only test
+asserts that a tar archive round-trips, which proves the archiver works and says nothing about
+whether what comes out is a machine.
+
+**That is the vacuous-check family again (V.57), one layer out.** A test that cannot fail is a
+check with no teeth; a restore that is documentation cannot even be a check, because there is
+nothing to run. And the thing it is supposedly protecting is the case where everything else is
+already gone — the one moment when finding out that a step was mis-described is most expensive
+and least recoverable. **A backup nobody has ever restored is not a backup, it is an intention.**
+
+It matters more than a spare feature because of X.5. A git-less machine is a supported machine —
+session 9 spent the gentoo image proving that history *refuses honestly* there rather than
+lying — and git is what provides history, rollback and `diff`. Take git away and `bundle` is the
+only mechanism that carries a config off a machine at all. So the git-less case, which the
+document says is supported, rested entirely on the half of `bundle` that did not exist.
+
+K9 asked whether the backup command is `bundle`, an alias, or nothing, and fenced the answer with
+one constraint: **not a second archive writer.** That constraint decides it. There is no room for
+a new backup feature beside a bundler that already writes everything a backup needs; the only
+move left is to finish the one that exists. Hence `restore DIR`, and hence its refusal to write
+into a non-empty config directory — the machine you reach for a backup on usually still has
+something on it, and a restore that silently overwrites the work that made you want a backup has
+chosen the wrong default.
+
+**V.60 — Why a snapshot provider must be able to refuse a restore.** *(Found by audit
+2026-07-22; owner directed the fix.)* `SnapshotProvider::restore` ran
+`btrfs subvolume snapshot <snap> /` for btrfs. That command does not roll a mounted root back to
+a snapshot — with an existing destination it **creates a new nested subvolume** and exits **0**.
+A live btrfs root rollback means moving the current subvolume aside and setting the default
+subvolid, which cannot be done over the running `/` at all. So the status check passed, the
+caller took that as success, and the machine was reported restored while nothing had been
+restored.
+
+Every recovery path in the binary consumed it. `rebuild` printed *"Rolled back to snapshot X —
+the machine is as it was before the rebuild started"* over a machine whose packages were still
+removed; `upgrade --canary` printed *"System left unchanged"*; `bisect` relied on it between
+steps. Worst is `purge-unmanaged`, which prints *"Snapshot taken: X. That is your undo"* — the
+command that removes everything unmanaged, offering an undo that does not exist, in the one
+message II.11 calls the most important sentence it can print.
+
+Two rules come out of it. **Taking and restoring are separate capabilities**, so a provider that
+can do the first and not the second must say so where it can still be acted on — in `doctor`, and
+before the change, not after it fails. And **a claim about the machine is never inferred from an
+exit code**: "rolled back" is the one sentence a user cannot verify at the moment they read it,
+which is exactly why the code has to. There was also a second implementation in `undo.rs`
+carrying the identical bug and printing *"SUCCESS: System root has been restored."* — and
+handling only btrfs and Timeshift, so ZFS and Windows silently restored nothing at all, while
+the provider it duplicated implements both. **One restore, not two** (P-prefer-deleting): the
+weaker copy is the one wired to `undo`.
+
+**V.61 — Why the data directory takes a lock.** *(Found by audit 2026-07-22; owner directed the
+fix.)* `registry.json` was loaded once per process into a `tokio::Mutex` — which coordinates
+tasks inside one process and nothing between processes — and written back whole, with no re-read
+and no compare-and-swap. `fs2` was in the dependency list and used at exactly one site, around a
+single subprocess, never around state.
+
+That would be a latent race in most tools. Here it is a live one, because **LiNix installs
+package-manager hooks**: `DPkg::Post-Invoke` and its dnf/zypper/apk/xbps/portage siblings spawn
+`linix hook-reconcile` on every ordinary `apt install`. So the second writer is not another
+LiNix the user ran — it is `apt`, run by someone who does not know LiNix is involved, at a moment
+nobody chose, possibly during a `sync` or between two ticks of a `watch` loop that never reloads
+state. Two whole-file writes are last-one-wins, and **the entry that loses is not lost data, it
+is a removal**: a package installed and managed, missing from the registry, is a managed package
+nothing declares — which is drift, and converging drift is what `sync` does.
+
+The lock is on the data directory rather than the file because the registry is not the only
+thing a run writes; the journal and the `locks/` ledgers move with it, and a lock that covers one
+of a set that must agree is the same as no lock. It is taken for the whole run and names its
+holder when it is contended, because "waiting" with no reason given is indistinguishable from
+hanging.
+
+**V.62 — Why a name is terminated, and why an uncalled check is deleted.** *(Found by audit
+2026-07-22; owner directed the fix. The rule is in II.12b.)*
+
+The pass-5 security review concluded that the core was sound because *"every package-manager
+command is built as argv (no `sh -c`, no `format!`-into-shell)"*. That is true and it is not
+enough. Argv stops a **shell** from reinterpreting a name; it does nothing to stop the **manager**
+from doing so. The grammar constrains a package name to "one word", and a leading `-` is caught
+only in the `Subtract` position at the start of a line — so `apt:--allow-downgrades` parses as an
+ordinary package, and no backend emits a `--` terminator before its names. `generic.rs` install
+and remove, `brew`, `snap`, `flatpak`, `nix`, `conda`, `krew`, `mise`, `setting`, `service`,
+`vscode` — around thirty call sites, roughly half of them running under sudo. `conda` extends
+the reach to a value read out of `preferences.toml`.
+
+**The fix already exists in the tree and was applied once.** `fleet.rs` rejects a leading dash
+and emits `-- `; nothing else does. That is the family rule in its plainest form: the correct
+version was written, and its thirty siblings were never visited. Terminating is the rule rather
+than name-filtering because the flag set belongs to the manager, not to us — a denylist of
+dangerous options is a promise to track every manager's option parser forever, and `--` is a
+promise the managers already keep.
+
+**The same audit found the mirror image**: `Validator::validate_command` and `validate_path` —
+carrying the `rm -rf /` / `mkfs` / fork-bomb denylist, a trusted-binary-path list, and a
+forbidden-path list including `/etc/shadow` and the SAM hive — have **zero callers** outside
+their own tests. The tests pass. The module reads as a security layer to anyone grepping for
+one, and enforces nothing at runtime; `validate_package_name_for` *is* called, but only on
+desired-state specs, not on removal targets, CLI arguments, or link and hook inputs.
+`FORBIDDEN_PATHS` is additionally duplicated in `undo.rs`.
+
+These are one bug wearing two faces: **a protection that is written but not on the path.** A
+missing check is visible — someone looks for it and it is not there. An unwired one answers the
+search and fails the job, which is the vacuous-check family (V.57) at the level of the source
+rather than the harness. So the rule is symmetric: every check is called where it claims to
+apply, or it is deleted, and the choice between wiring and deleting is made deliberately per
+check rather than left to whoever greps next.
+
+---
+

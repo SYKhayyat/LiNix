@@ -1,9 +1,14 @@
 # Working in this repo
 
-`docs/SPEC.md` is the plan and the source of truth. Read it before changing behaviour, and
-record what you did in it after — Part III stays the plan, Part VII says how far it got (P4).
-Every rule in Part II has a matching entry in Part V explaining the bug it exists to prevent;
-**do not change a Part II rule without reading its V entry first.**
+`docs/SPEC.md` is the way in: it holds the instructions and the map, and the spec itself is one
+file per part under `docs/spec/`. Read it before changing behaviour, and record what you did
+after — `spec/plan.md` stays the plan, `spec/history.md` says how far it got (P4). Every rule in
+`spec/target-state.md` has a matching entry in `spec/why.md` explaining the bug it exists to
+prevent; **do not change a target-state rule without reading its why entry first.**
+
+**Every open question lives in `docs/spec/decisions.md`, with a status.** Do not answer one in
+code. A decision the register calls open is the owner's to make; a decision it marks *built,
+never ruled* is code that ran ahead of a ruling and is still theirs to reverse.
 
 ## Comments (P6)
 

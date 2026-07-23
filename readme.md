@@ -488,5 +488,6 @@ four sources won with `linix path --explain`.
 
 ## Contributing
 
-`docs/SPEC.md` is the source of truth for design; `CLAUDE.md` is the working agreement. Verify
-with `cargo build --all-targets`, `cargo test`, `cargo clippy --all-targets`.
+`docs/SPEC.md` is the source of truth for design — the map, with the parts themselves under
+`docs/spec/`; `docs/spec/decisions.md` is every open question. `CLAUDE.md` is the working
+agreement. Verify with `cargo build --all-targets`, `cargo test`, `cargo clippy --all-targets`.
