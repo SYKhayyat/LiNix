@@ -13,7 +13,6 @@
 #   ./scripts/release-check.ps1
 #   ./scripts/release-check.ps1 -Backend scoop -Package jq        # choose the primary backend
 #   ./scripts/release-check.ps1 -SkipIntegration                  # hermetic gates only
-#   $env:FAST=1; ./scripts/release-check.ps1                      # downgrade heavy source-compiles
 #
 # The integration step needs Git-Bash (bash), which ships with Git for Windows. Run elevated to
 # exercise choco/winget mutation; scoop alone needs no admin.

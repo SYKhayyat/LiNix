@@ -45,7 +45,7 @@ mechanisms enforce this:
    coherence → remove → verify-gone → coherent cycle for every feasible backend: the language
    managers (npm/pnpm/yarn/bun/pipx/uv/gem/pip/luarocks/pixi), the ecosystem managers
    (composer, dotnet, pub, krew, mix, conda, **nix**), the source-compilers (**cargo, go,
-   opam, nimble, spack** — real builds; `FAST=1` downgrades these to plan-smoke), the
+   opam, nimble, spack** — real builds), the
    no-uninstall-verb ones (**cabal** — install+list are HARD, then `remove` must report a
    graceful *unsupported*, verifying the designed contract), and the special-identifier ones
    (**github** does a real release download→symlink→remove; **link** creates and deletes a
@@ -83,16 +83,16 @@ Where they run:
   installed **and initialized** (opam switch, cabal/nimble index refresh, spack compilers,
   conda channels, flathub remote, krew index, nix made READY, and the go/dotnet/pub bin dirs
   on PATH) so each runs a genuine build/install, not a dry run. A full real run compiles from
-  source and can take 20–40 min; use `FAST=1` for a quick pass.
+  source and can take 20–40 min.
 - **`gentoo` image** (opt-in; `DISTROS="gentoo"`) — real Portage in **SMOKE_ONLY** mode
   (baked in): discovery + plan-smoke + read-only, no source builds.
 - **Guix / eopkg / slackpkg** are distro-locked — run the harness on a Guix System / Solus /
   Slackware host and their real rows light up automatically; elsewhere they plan-smoke. Their
   registration and output parsing are also covered by the hermetic Rust tests (`cargo test`).
 
-Toggles: `FAST=1` downgrades the heaviest source-compilers to plan-smoke; `SMOKE_ONLY=1` skips
+Toggle: `SMOKE_ONLY=1` skips
 real mutation entirely (discovery + plan-smoke + read-only). Both are forwarded into the
-container by `run.sh` (`FAST=1 ./docker/integration/run.sh`).
+container by `run.sh`.
 
 ### One-shot release gate
 
@@ -102,7 +102,6 @@ print a single **GO / NO-GO** verdict with a non-zero exit on any hard failure:
 
 ```bash
 ./scripts/release-check.sh                 # hermetic gates + Docker matrix (incl. gentoo)
-FAST=1 ./scripts/release-check.sh          # quicker: heavy compiles downgraded
 SKIP_DOCKER=1 ./scripts/release-check.sh   # hermetic gates only
 ```
 ```powershell

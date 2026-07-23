@@ -15,7 +15,6 @@
 # Usage:
 #   ./scripts/release-check.sh                 # full: hermetic gates + Docker matrix (incl. gentoo)
 #   SKIP_DOCKER=1 ./scripts/release-check.sh   # hermetic gates only
-#   FAST=1 ./scripts/release-check.sh          # Docker matrix downgrades heavy source-compiles
 #   DISTROS="ubuntu tools" ./scripts/release-check.sh   # subset of images
 #
 # Exit code is non-zero if any HARD gate failed — wire it straight into CI or a pre-release hook.
@@ -32,7 +31,6 @@ fail()  { echo "${RED}[FAIL]${RST} $1"; result="${result}\n  ${RED}FAIL${RST}  $
 info()  { echo "${YEL}[INFO]${RST} $1"; result="${result}\n  ${YEL}INFO${RST}  $1"; }
 
 OS="$(uname -s)"
-FAST="${FAST:-0}"
 SKIP_DOCKER="${SKIP_DOCKER:-0}"
 
 # ------------------------------------------------------------------ 1. hermetic
@@ -58,14 +56,13 @@ if [ "$SKIP_DOCKER" = "1" ]; then
     info "SKIP_DOCKER=1 — skipped the real integration matrix (hermetic gates only)"
 elif [ "$OS" = "Darwin" ]; then
     step "2. NATIVE INTEGRATION (macOS — no Linux containers; sweeping brew)"
-    if FAST="$FAST" LINIX="$REPO_ROOT/target/release/linix" bash scripts/integration-windows.sh brew wget; then
+    if LINIX="$REPO_ROOT/target/release/linix" bash scripts/integration-windows.sh brew wget; then
         pass "native brew integration sweep PASS"
     else fail "native brew integration sweep FAILED"; fi
 elif command -v docker >/dev/null 2>&1; then
     step "2. REAL INTEGRATION MATRIX (Docker: every distro + tools + gentoo)"
     # Full release coverage includes gentoo (emerge, SMOKE-ONLY). Override with DISTROS=…
     export DISTROS="${DISTROS:-ubuntu fedora arch alpine tools gentoo}"
-    export FAST
     if ./docker/integration/run.sh; then pass "integration matrix ($DISTROS) PASS"
     else fail "integration matrix ($DISTROS) had FAILURES"; fi
 else

@@ -47,10 +47,9 @@ for d in $DISTROS; do
     echo "############### RUN $d ($be) ###############"
     # Mount the current test script so edits to it don't require an image rebuild.
     SCRIPT_MOUNT="$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro"
-    # Forward the run-mode toggles into the container: FAST=1 downgrades the heaviest
-    # source-compiling backends to plan-smoke; SMOKE_ONLY=1 skips real mutation entirely.
+    # Forward the run-mode toggle into the container: SMOKE_ONLY=1 skips real mutation
+    # (discovery and plan-smoke only), for a source-building image like gentoo.
     ENVFLAGS=""
-    [ -n "${FAST:-}" ] && ENVFLAGS="$ENVFLAGS -e FAST=$FAST"
     [ -n "${SMOKE_ONLY:-}" ] && ENVFLAGS="$ENVFLAGS -e SMOKE_ONLY=$SMOKE_ONLY"
     # shellcheck disable=SC2086
     if docker run --rm $ENVFLAGS -v "$SCRIPT_MOUNT" "linix-it-$d" "$be" "$PKG"; then

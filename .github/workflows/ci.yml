@@ -2,8 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ master, v5, v6 ]
+    branches: [ master, v5, v6, v7 ]
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -93,3 +94,50 @@ jobs:
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The real integration matrix (IV.2): the fast half runs on every change, so a change that
+  # breaks a manager's install/list/remove is caught here and not months later on someone's
+  # machine. The slow images (tools, gentoo) build for tens of minutes and would teach people
+  # to skip the gate, so they run only on manual dispatch.
+  containers:
+    name: Integration (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: ubuntu, backend: apt,    pkg: jq }
+          - { distro: alpine, backend: apk,    pkg: jq }
+          - { distro: arch,   backend: pacman, pkg: jq }
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build the ${{ matrix.distro }} image
+      run: docker build -f docker/integration/Dockerfile.${{ matrix.distro }} -t linix-it-${{ matrix.distro }} .
+    - name: Run the ${{ matrix.distro }} lifecycle
+      run: |
+        docker run --rm \
+          -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
+          linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
+
+  # Opt-in: the source-building images. `tools` gives the ecosystem managers a real
+  # install → list → remove; `gentoo` runs Portage in SMOKE_ONLY. Both are too slow to gate
+  # every push, so they run on manual dispatch (Actions → CI → Run workflow).
+  slow-containers:
+    name: Integration (${{ matrix.distro }}, opt-in)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { distro: tools,  backend: apt,    pkg: jq, smoke: '' }
+          - { distro: gentoo, backend: emerge, pkg: jq, smoke: '-e SMOKE_ONLY=1' }
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build the ${{ matrix.distro }} image
+      run: docker build -f docker/integration/Dockerfile.${{ matrix.distro }} -t linix-it-${{ matrix.distro }} .
+    - name: Run the ${{ matrix.distro }} lifecycle
+      run: |
+        docker run --rm ${{ matrix.smoke }} \
+          -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
+          linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}

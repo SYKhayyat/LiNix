@@ -6,11 +6,10 @@
 #
 #   docker build -f docker/integration/Dockerfile.tools -t linix-it-tools .
 #   docker run --rm linix-it-tools                 # full REAL lifecycle (slow: source compiles)
-#   docker run --rm -e FAST=1 linix-it-tools       # downgrade the heaviest compilers to plan-smoke
 #
 # The REAL run compiles Rust/OCaml/Haskell/Nim/HPC packages from source and can take 20–40 min;
-# that is intentional (the release owner asked for real, not simulated, coverage). Use FAST=1
-# for a quicker pass. Every extra manager is installed/inited BEST-EFFORT (`|| true`): if one is
+# that is intentional (the release owner asked for real, not simulated, coverage).
+# Every extra manager is installed/inited BEST-EFFORT (`|| true`): if one is
 # unavailable at build time the image still builds and that backend is simply not READY and
 # auto-skipped (and the COVERAGE AUDIT records that honestly).
 FROM ubuntu:24.04
