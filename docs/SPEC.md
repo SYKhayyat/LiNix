@@ -3412,6 +3412,45 @@ Three suspicions did not survive scrutiny:
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
+## Session 2026-07-22 (eleventh session) — the tenth session's rulings, built
+
+Everything the tenth session **RULED and OWED** is now built, verified against the tree at the
+commit that last touched this section: `cargo build --all-targets` clean, `cargo clippy
+--all-targets` silent, **960 tests, 0 failures**.
+
+- **V.62 — a name is data.** The grammar refuses a leading `-` wherever a name appears (package,
+  subtraction target, shim/service/link/setting/schedule name, repo spec). Every manager
+  invocation that honours `--` ends its options before the names, from one table
+  (`core/argv.rs`); flags that must trail a name (cargo `--version`, gem-style pins) move ahead
+  of the terminator. `validate_command`'s uncalled denylist is **deleted**; `validate_path` is
+  wired on the `vars` `read_file`, and `validate_package_name_for` now runs on every removal
+  target — including one out of `registry.json` that never saw the grammar.
+- **V.61 — one writer.** A cross-process lock on the data directory (`core/datalock.rs`), held
+  for the whole run, naming its holder when contended. A `hook-reconcile` spawned by a manager
+  LiNix is driving stands down rather than deadlock on its parent's lock.
+- **V.60 — a restore that cannot restore says so.** `RestoreCapability`; btrfs refuses a live
+  root rollback and explains why. `undo`'s second restore implementation is gone — one lives in
+  the provider, and `undo` calls it.
+- **V.56 — a removal is a list of names; remove ≠ purge.** `remove-orphans` enumerates via a
+  dry run or loses the capability by name; the native-verb path and `clean_orphans` are deleted.
+  apt's `remove_args` is no longer `purge`; purge is a separate capability (`[remove] purge`,
+  `uninstall --purge`), off by default and machine-wide.
+- **V.55 — a `vars` provider goes through the ledger.** `vars.linix` and external `vars.<ext>`
+  are hashed under a `vars:<file>` id and refused if unapproved or changed; `linix lock`
+  approves. The line file executes nothing and is not hashed.
+- **V.59 — `restore DIR`.** The other half of `bundle`, a command not a README; refuses a
+  non-empty config unless `--force`; end-to-end proof runs without git.
+- **teleport PKG BACKEND** — built (owner-ruled); rewrites the line in place, syncs, no second
+  copy left behind.
+- **V.58 — `0.1.0`, `SYKhayyat/linix` everywhere, `migrate`→`adopt` in the install scripts,
+  `full-test.ps1`/`verify.ps1` deleted.** **Still owed:** the branch is not pushed — the first
+  push is what makes IV.2's CI real and fires the release job, and it is the owner's to make.
+- **V.57 — partial.** `FAST` (declared, never read) is deleted everywhere; CI now runs the fast
+  container matrix (ubuntu/alpine/arch) on every push and PR, tools/gentoo on dispatch. **Still
+  owed:** the coverage audit that hard-fails on an untested `[READY]` backend, and the `tools`
+  image's real ecosystem lifecycle assertions — both need a Docker/WSL run this machine could
+  not do.
+
 ## Session 2026-07-22 (tenth session) — a readiness audit, and what it found
 
 A full-tree audit against the question *"can someone else run this on a machine they cannot
