@@ -1073,10 +1073,32 @@ asking first and then doing it. **Exit:** on a machine with no Homebrew, a confi
 **7d — `sync --locked` (XIII.10, U11).** **Exit:** a machine whose index has moved on fails with
 the package, the locked version and the offered one, and changes nothing.
 
-**7e — `setting:` on Windows, then macOS (XIII.4, U5, P7).** The registry adapter first: it is
-the cleanest read-before-write store on any platform. **Exit:** a `setting:` line sets a registry
-value, a second sync is a no-op, and removing the line restores the default — the same three
-proofs the gsettings adapter passed.
+**7e — `setting:` works everywhere, not on one desktop (XIII.4, U5, K7, K17, P7).** Ruled
+2026-07-23: **`gsettings` is a stage, not the answer**, and the only adapter that exists is the
+one store the owner does not run. `setting:` adapts to whatever the machine is actually running —
+the list below is a priority order, not the set.
+
+**K17 is decided first, because it decides whether this item is four adapters or a table.** A
+closed enum means every new desktop is a LiNix release; a declarable adapter means six lines in
+a file. **Do not write the registry adapter before K17** — the second adapter is where the shape
+is set, and the wrong shape here is four hard-coded arms nobody can extend.
+
+1. **Windows registry.** `HKCU` or `HKLM` is **U19**, still open, and it must be answered before
+   the first line — whatever this picks becomes the convention macOS `defaults` inherits.
+2. **KDE** — `kreadconfig`/`kwriteconfig`. Ini files with no schema, so *reading the current
+   value* is the hard half, and it is the half X.4 requires.
+3. **COSMIC** — the file tree under `~/.config/cosmic/`, one file per key.
+4. **Hyprland — decide whether it is a `setting:` at all.** Its truth is a text config file, not
+   a key-value store, and `hyprctl getoption` reports a runtime value that can disagree with it.
+   A `setting:` line there means LiNix owning individual lines inside a file it did not write,
+   which no other adapter does and which `link:` already covers at whole-file granularity.
+
+**A store with no adapter stays a named error, never a silent skip.** That refusal is what lets
+these land one at a time.
+
+**Exit:** a `setting:` line sets a value in a store LiNix does not have compiled-in support for,
+a second sync is a no-op, and removing the line restores the default — the same three proofs the
+gsettings adapter passed, on a store nobody shipped an enum arm for.
 
 **7f — Health-checked upgrades (XIII.5, U7).** **Exit:** an upgrade whose `@health=` command
 fails restores the snapshot, and says so in those words; with no snapshot provider it fails
@@ -1128,6 +1150,20 @@ uses, and a destination LiNix did not create is refused by name rather than repl
 **Two open bugs gate nothing but should not wait for a phase (VI.2):** **T1** (the decrypt
 backup leaks the previous secret) and **T2** (nothing stops a secret being written into the git
 repo). Both are small, both are live, and both are in shipped code.
+
+**Owed by the rulings of 2026-07-23, small and each independent of a phase:**
+
+- **`rebuild` may be scheduled, behind a `[guard]` key that says so (K13, reversed).** Delete
+  `rebuild` from `NEVER_UNATTENDED` in `model/schedule.rs:69` and gate it on the key instead;
+  absent key refuses exactly as today, so no existing config changes meaning. **Exit:** a
+  `schedules` file naming `rebuild` is refused with the key's name in the message, and accepted
+  once the key is set. *(Whether `purge-unmanaged` gets the same opening is not ruled.)*
+- **Two tags for one version is an error (D1).** A GitHub repo carrying both `10.2.0` and
+  `v10.2.0` must fail naming both, rather than one winning silently. **Exit:** a release set with
+  both spellings errors; with either alone it resolves as today.
+- **A test that `rebuild` writes no git commit (K14).** The behaviour is ruled and the code does
+  it; nothing proves it. A test that greps the source would pass on a rebuild that committed
+  through some other route, so the honest one needs a backend that really removes and reinstalls.
 
 **Four found on 2026-07-23 that gate real-machine testing (VI.2):** **S24** (recovering an
 interrupted install uninstalls the package first, past the guard) is the one that removed

@@ -842,16 +842,19 @@ set those verbs delete is chosen at execution time, *after* the guard has judged
 user has read the plan. There is nothing for the guard to hold and nothing for the plan to
 show. **A backend that cannot say what it would remove does not remove.**
 
-**`[guard]` holds two keys that are not among the ten: `confine_bin`** (default on), which
-refuses a downloaded file a destination outside the backend's bin directory (SEC1), **and
-`require_signed_history`** (default off), which refuses a rollback to a commit git does not
-vouch for (II.13). Both are refusals in kind and neither is in the decision function, for the
-same reason: the fact each one needs — the deploy destination, git's verdict on one commit —
-exists only at the moment its own command asks — a `confine_bin` check anywhere but a deploy
-would be checking a path nobody was about to write. They live in this table's home because
-they are the same kind of promise, a refusal with one deliberate opening. **Counting either
-among the ten would make "one decision function" false**, and a table that quietly stops
-describing its own function is how the last one drifted.
+**`[guard]` holds three keys that are not among the ten: `confine_bin`** (default on), which
+refuses a downloaded file a destination outside the backend's bin directory (SEC1),
+**`require_signed_history`** (default off), which refuses a rollback to a commit git does not
+vouch for (II.13), **and the key that lets `rebuild` be scheduled** (default off, K13 ruled
+2026-07-23) — without it a `schedules` entry naming `rebuild` is refused, because a destructive
+repair that runs at 3am on a machine nobody is watching is a thing the user says yes to once,
+by name, in the file. All three are refusals in kind and none is in the decision function, for the
+same reason: the fact each one needs — the deploy destination, git's verdict on one commit, the
+verb at the head of a `run` line — exists only at the moment its own command asks. A
+`confine_bin` check anywhere but a deploy would be checking a path nobody was about to write.
+They live in this table's home because they are the same kind of promise, a refusal with one
+deliberate opening. **Counting any of them among the ten would make "one decision function"
+false**, and a table that quietly stops describing its own function is how the last one drifted.
 
 **A confirmation asks; a refusal says no.**
 

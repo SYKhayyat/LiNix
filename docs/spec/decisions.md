@@ -1,4 +1,4 @@
-# The decision register — all 88, and which are answered
+# The decision register — all 89, and which are answered
 
 **One file, six features.** Every decision this design forces lives here, with its status. The
 registers used to sit at the tail of six proposal parts and **none of them recorded whether they
@@ -39,6 +39,7 @@ status loses that, so it is kept here:
   built without an answer, because two reasonable implementations differ.**
 
 ---
+
 ## Index
 
 ### Open, and blocking — 19
@@ -56,13 +57,13 @@ status loses that, so it is kept here:
 | **T2** | Nothing stops `@target=` writing a plaintext secret back inside the git repo. | secrets |
 | **U1** | Where does a custom backend definition live — the repo, or machine-local? | next |
 | **U3** | What does removing an `exec:` line mean when a script has no inverse? | next |
-| **U5** | Does `setting:` get a Windows registry and a macOS `defaults` adapter? | next |
 | **U9** | Do the ten status commands collapse into one `linix check`? | next |
 | **U14** | Is sharing wanted, and what makes a vendored module safe to run? | next |
 | **U19** | Is LiNix acting for a user or for the machine? (`HKCU` vs `HKLM`) | next |
 | **U22** | Does the dotfiles tree link files, or whole directories? | next |
 | **U23** | What happens when a dotfile destination already holds the user's own file? | next |
 | **U24** | Is a `.age` file inside the dotfiles tree a secret to decrypt? | next |
+| **K17** | How does `setting:` reach a store nobody wrote an adapter for? | rebuild |
 | **U26** | Is BSD supported, and what does `when family` answer there? | next |
 
 ### Open, not blocking — 33
@@ -103,30 +104,31 @@ status loses that, so it is kept here:
 | **U21** | Is the exit-code table settled once, up front? | next |
 | **U25** | One dotfiles tree, or several? | next |
 
-### Built to the recommendation, never ruled — 15
+### Built to the recommendation, never ruled — 5
 
 | | question | feature |
 |---|---|---|
-| **D1** | What is "the release"? — built as latest non-draft, non-prerelease; `v` prefix tolerated. | artifacts |
 | **D2** | How is a format recognised from a filename? — built as extension match plus `binary`. | artifacts |
+| **K5** | A level-3 reset with a config repo — built as refuse unless `--force`. | rebuild |
+| **K11** | May the settings file hold more than the repo path — built as no, parser-enforced. | rebuild |
+| **K14** | Does `rebuild` produce a git commit — built as no, and asserted by no test. | rebuild |
+| **K16** | Does `clean-cache --all` need the guard — built as no; `reset` does. | rebuild |
+
+### Answered — 30
+
+| | question | feature |
+|---|---|---|
+| **U5** | Does `setting:` get a Windows registry and a macOS `defaults` adapter? | next |
+| **D1** | What is "the release"? — built as latest non-draft, non-prerelease; `v` prefix tolerated. | artifacts |
 | **D10** | Where the closed vocabulary lives — built as one table in `artifact/format.rs`. | artifacts |
 | **W1** | The sigil — built as `$role`, never bare. | vars |
 | **W6** | One `vars` file or a directory — built as one file; `vars.d/` ignored. | vars |
-| **K5** | A level-3 reset with a config repo — built as refuse unless `--force`. | rebuild |
 | **K7** | Which desktops `setting:` adapts to — built as GNOME only, KDE refused by name. | rebuild |
 | **K7b** | The `setting:` key syntax — built as the statement form, not a backend prefix. | rebuild |
 | **K8** | How a git-less LiNix announces it — built on the affected commands plus `doctor`. | rebuild |
 | **K10** | `linix edit` and `linix path` — built as two commands. | rebuild |
-| **K11** | May the settings file hold more than the repo path — built as no, parser-enforced. | rebuild |
 | **K11b** | Where that file lives — built in the platform config dir. | rebuild |
 | **K13** | Does `rebuild` appear in `schedules` — built as refused by name. | rebuild |
-| **K14** | Does `rebuild` produce a git commit — built as no, and asserted by no test. | rebuild |
-| **K16** | Does `clean-cache --all` need the guard — built as no; `reset` does. | rebuild |
-
-### Answered — 19
-
-| | question | feature |
-|---|---|---|
 | **D3** | Two assets, same format — RULED 2026-07-20: shortest name, `@asset=` glob, `@asset=all`. | artifacts |
 | **D4** | What installing a tarball does — RULED 2026-07-20: extract, find, shim, `@bin=`. | artifacts |
 | **D6** | `@sha256` per machine — RULED 2026-07-20: checksums live in `locks/`, generated. | artifacts |
@@ -326,17 +328,6 @@ implying a revert that will not happen.
 
 ---
 
-## U5
-
-**Status: OPEN — blocking.**
-
-**U5 — Does `setting:` get a Windows registry adapter and a macOS `defaults` adapter?** This is
-P7's first real test. *Recommendation:* yes, registry first — it is the cleanest
-read-before-write store on any platform, and it is the difference between LiNix declaring a
-Windows machine's software and declaring the machine.
-
----
-
 ## U9
 
 **Status: OPEN — blocking.**
@@ -451,6 +442,38 @@ itself is the owner's: P7 is already unpaid on `setting:` (GNOME-only) and the s
 a slogan. A legitimate answer is *"listed, dated, not scheduled"* — what is not legitimate is
 leaving `family` returning a wrong answer on a platform whose package manager LiNix already
 drives (`pkgin` is registered today).
+
+---
+
+## K17
+
+**Status: OPEN — blocking.**
+
+**In the tree today:** `backends/setting.rs` has a closed `enum SettingStore` with two variants,
+`GSettings` and `None`. Adding a store means adding a variant, which means shipping a release.
+
+**K17 — How does `setting:` reach a store nobody has written an adapter for?** Raised by K7's
+2026-07-23 ruling, which says *everywhere* rather than naming a closed set. Every adapter is the
+same three operations — read a key, write a key, reset a key to its default — and for most stores
+each is one command with the key interpolated into it. That is exactly the shape
+`custom_backends.toml` already describes for package managers (XIII.2, XIII.12): argv from a
+table, output read by a declared parser.
+
+- **A closed enum, grown per release.** Simplest, and it is today's code. It means the machine
+  running the store LiNix has not heard of gets a refusal until a LiNix release reaches it, which
+  is the machine most likely to be running something unusual in the first place.
+- **A declarable adapter, the way custom backends already are.** Three commands and a value
+  encoding in a table, so a COSMIC or a Hyprland or a thing not invented yet is six lines rather
+  than a pull request. It costs what U1 costs — a definition that a shared repo can execute is
+  II.12's supply-chain surface and must inherit the hook trust model, not a new one.
+- **Both, with the built-ins as data too**, so there is one code path rather than a fast one and
+  a slow one. **Two of everything is how this repo got into trouble**, and an enum plus a table
+  is exactly two.
+
+*Recommendation:* the third. The built-in adapters become rows in the same table the user can
+add a row to, `setting:` reads that table and nothing else, and the refusal for an unadapted
+store stays exactly as it is. **Decide before the registry adapter (7e) is written** — it is the
+second adapter, and the second one is where the shape is set.
 
 ---
 
@@ -841,20 +864,6 @@ both, which is II.7 rule 5 reached by a new road rather than a new rule.
 
 # Built to the recommendation, never ruled
 
-## D1
-
-**Status: BUILT, NEVER RULED.**
-
-**In the tree today:** `github.rs:159` takes GitHub's own `releases/latest` (non-draft, non-prerelease) and `:241` strips a leading `v` from a `@version=` pin. The recommendation's "errors if both exist" half is not there.
-
-**D1 — What is "the release"?** `github:sharkdp/fd` names a repo, not a version. GitHub has
-draft releases, prereleases, and tags that never became releases at all. And `@version=10.2.0`
-has to mean *something* here — a tag, presumably, but tags are `v10.2.0` about half the time.
-*Recommendation:* latest non-draft, non-prerelease release; `@version=` matches the tag with and
-without a leading `v` and errors if both exist; no "track prereleases" option until someone asks.
-
----
-
 ## D2
 
 **Status: BUILT, NEVER RULED.**
@@ -868,47 +877,6 @@ extension matching fails on `binary`, which has no extension by definition. *Rec
 extension match for everything that has one, and `binary` means "matched this machine's os/arch
 and has no recognised extension" — but this needs testing against real releases before it is a
 rule, because it is the one part of this feature that fails quietly rather than loudly.
-
----
-
-## D10
-
-**Status: BUILT, NEVER RULED.**
-
-**In the tree today:** `backends/artifact/format.rs` — one `Format` enum, one `ALL` table, the error names the legal set.
-
-**D10 — The closed vocabulary, and where it lives.** VIII.2 fixes ten names and makes an
-eleventh an error. That list has to live somewhere both the parser and the error message read
-from, or it drifts — and a typed list of names that drifts is precisely the failure this document
-has recorded seven times. *Recommendation:* one table in the grammar crate, and the error message
-prints it rather than restating it.
-
----
-
-## W1
-
-**Status: BUILT, NEVER RULED.**
-
-**In the tree today:** `$` shipped throughout `model/vars.rs`; a bare name is not accepted.
-
-**W1 — The sigil: `$role`, or bare `role`?** IX.4 argues for `$`. The counter-argument is real:
-bare names read better, the reserved set is five words and could simply be reserved forever, and
-`$` in a file that is not a shell invites people to expect shell semantics (`${}`, `$(…)`,
-env fallthrough) that will not exist. *Recommendation:* keep the sigil — the future-fact
-collision is the kind of quiet, delayed breakage this document has recorded seven times — but
-this is the single most reversible-now, expensive-later choice in the part.
-
----
-
-## W6
-
-**Status: BUILT, NEVER RULED.**
-
-**In the tree today:** `model/vars_provider.rs:43` ignores directories by name: *"a `vars.d/` …"*.
-
-**W6 — Is `vars` one file or a directory?** One file matches `active`/`priority`. A repo with
-forty machines may want `vars.d/`. *Recommendation:* one file; revisit only with a real fleet
-complaining.
 
 ---
 
@@ -926,70 +894,6 @@ or `active` exists unless `--force`, and the refusal names the repo path and bot
 
 ---
 
-## K7
-
-**Status: BUILT, NEVER RULED.**
-
-**In the tree today:** `backends/setting.rs` — the `SettingStore` enum is `GSettings` and `None`; `None` makes every `setting:` line an error.
-
-**K7 — Which desktops does `setting:` adapt to, and in what order?** In scope as of the owner's
-ruling (X.4), so the question is no longer whether. GNOME via `gsettings` is the largest
-population and the cleanest adapter (typed schemas, readable current values); KDE via
-`kwriteconfig` is ini files with no schema, so *reading the current value* — which X.4 requires —
-is harder there. *Recommendation:* GNOME first, KDE second, and **`setting:` refuses on a desktop
-with no adapter rather than falling back to writing something.** A key silently unapplied is
-worse than an error, because the whole point is that the file is the truth.
-
-**BUILT the recommendation, 2026-07-20: GNOME via `gsettings`, KDE refused for now.** The
-`SettingStore` enum has exactly `GSettings` and `None`; a desktop that resolves to `None` makes
-every `setting:` line an error naming the missing adapter. KDE joins by adding a variant and its
-three command mappings — the pure-function shape is set up so that is the whole change.
-
----
-
-## K7b
-
-**Status: BUILT, NEVER RULED.**
-
-**In the tree today:** `backends/setting.rs` implements the statement form.
-
-**K7b — What is the key syntax?** `setting:SCHEMA/KEY @value=…` is one spelling; a backend-shaped
-`gsettings:org.gnome…` is another and would reuse the `backend:name` parser instead of adding a
-statement. *Recommendation:* the statement form, because the desktop is not a backend (X.4) and
-the adapter is chosen by what is running, not by what the user typed.
-
----
-
-## K8
-
-**Status: BUILT, NEVER RULED.**
-
-**In the tree today:** Built as recommended: the affected commands bail, `doctor` reports git as degraded.
-
-**K8 — How does a git-less LiNix announce what it cannot do?** Once at `init`, on every
-affected command, or only in `doctor`. *Recommendation:* on the affected commands (they are
-few, and that is where the user is when it matters) plus a `doctor` line. Never on `sync` —
-warning on the command that runs unattended, every time, teaches people to ignore it.
-
-**BUILT the recommendation, 2026-07-20.** The affected commands already said it — `rollback`,
-`diff` and `history` each bail with "this needs git, run `linix git init`" rather than
-crashing, and `git_autocommit` is a silent no-op without a repo. The one gap was the standing
-`doctor` line, now added: `doctor` reports git as *degraded* (not a fault) when it is absent or
-the config is not a repo, naming exactly what is unavailable. Nothing warns on `sync`.
-
----
-
-## K10
-
-**Status: BUILT, NEVER RULED.**
-
-**In the tree today:** `cli/args.rs:507` and `:520`; `main.rs:192-193`. Two commands, exactly the recommendation.
-
-**K10 — `linix edit` and `linix path`, or flags on an existing command?** *Recommendation:* two
-small commands, because both are things a shell wants to call directly.
-
----
-
 ## K11
 
 **Status: BUILT, NEVER RULED.**
@@ -1001,35 +905,6 @@ no, and the refusal should be enforced by the parser, not by discipline. **A fil
 one key is the file that grows a second one** — and the moment it does, there are two preference
 systems (it and `preferences.toml`) and a new question about which wins on every key either
 could hold. The one key it holds is the one key `preferences.toml` structurally cannot.
-
----
-
-## K11b
-
-**Status: BUILT, NEVER RULED.**
-
-**In the tree today:** `config/settings.rs` — the platform config dir, and a flat file rather than a nested one so it cannot land inside the repo it locates.
-
-**K11b — What is that file called and where exactly does it live?** It is not in the repo, not in
-git, and not scanned; beyond that the platform config dir and `$LINIX_DATA_DIR` are both
-defensible. *Recommendation:* the platform config dir — it is configuration, not data, and
-putting it next to the data dir invites the assumption that deleting the data dir is safe.
-
----
-
-## K13
-
-**Status: BUILT, NEVER RULED.**
-
-**In the tree today:** `schedule.rs` carries a `NEVER_UNATTENDED` list.
-
-**K13 — Does `rebuild` appear in `schedules`?** *Recommendation:* no, and the parser should
-refuse it by name, for the reason in X.1. A destructive repair operation that can be scheduled
-is one that will run at 3am on a machine nobody is watching.
-
-**BUILT (2026-07-20): the parser refuses it.** `schedule.rs` carries a `NEVER_UNATTENDED` list
-(`rebuild`, `purge-unmanaged`) checked against the first word of `run`, so `run = sync --locked`
-still parses. The refusal names the command and says why.
 
 ---
 
@@ -1069,6 +944,256 @@ confirmation because it destroys the registry. The reason is written into `handl
 ---
 
 # Answered
+
+## U5
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**U5 — Does `setting:` get a Windows registry adapter and a macOS `defaults` adapter?** This is
+P7's first real test. *Recommendation:* yes, registry first — it is the cleanest
+read-before-write store on any platform, and it is the difference between LiNix declaring a
+Windows machine's software and declaring the machine.
+
+**ANSWERED by K7's ruling (owner, 2026-07-23): yes.** `setting:` must work everywhere, so the
+registry and `defaults` adapters are owed rather than optional. **This does not unblock the
+work** — the registry adapter's first decision is `HKCU` or `HKLM`, which is **U19**, still open,
+and whatever it picks becomes the convention macOS inherits.
+
+---
+
+## D1
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** `github.rs:159` takes GitHub's own `releases/latest` (non-draft, non-prerelease) and `:241` strips a leading `v` from a `@version=` pin. The recommendation's "errors if both exist" half is not there.
+
+**D1 — What is "the release"?** `github:sharkdp/fd` names a repo, not a version. GitHub has
+draft releases, prereleases, and tags that never became releases at all. And `@version=10.2.0`
+has to mean *something* here — a tag, presumably, but tags are `v10.2.0` about half the time.
+*Recommendation:* latest non-draft, non-prerelease release; `@version=` matches the tag with and
+without a leading `v` and errors if both exist; no "track prereleases" option until someone asks.
+
+**RULED (owner, 2026-07-23): confirmed as built, and the missing half is owed.** The release is
+GitHub's newest non-draft, non-prerelease; `@version=` matches the tag with and without a leading
+`v`. **Owed:** a repo carrying both `10.2.0` and `v10.2.0` as tags must be an error naming both.
+Today one wins silently, which is the quiet failure this whole entry existed to prevent.
+
+---
+
+## D10
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** `backends/artifact/format.rs` — one `Format` enum, one `ALL` table, the error names the legal set.
+
+**D10 — The closed vocabulary, and where it lives.** VIII.2 fixes ten names and makes an
+eleventh an error. That list has to live somewhere both the parser and the error message read
+from, or it drifts — and a typed list of names that drifts is precisely the failure this document
+has recorded seven times. *Recommendation:* one table in the grammar crate, and the error message
+prints it rather than restating it.
+
+**RULED (owner, 2026-07-23): confirmed as built.** One table, and the error prints the legal set
+rather than restating it.
+
+---
+
+## W1
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** `$` shipped throughout `model/vars.rs`; a bare name is not accepted.
+
+**W1 — The sigil: `$role`, or bare `role`?** IX.4 argues for `$`. The counter-argument is real:
+bare names read better, the reserved set is five words and could simply be reserved forever, and
+`$` in a file that is not a shell invites people to expect shell semantics (`${}`, `$(…)`,
+env fallthrough) that will not exist. *Recommendation:* keep the sigil — the future-fact
+collision is the kind of quiet, delayed breakage this document has recorded seven times — but
+this is the single most reversible-now, expensive-later choice in the part.
+
+**RULED (owner, 2026-07-23): confirmed as built.** The sigil stays. `$role`, never bare.
+
+---
+
+## W6
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** `model/vars_provider.rs:43` ignores directories by name: *"a `vars.d/` …"*.
+
+**W6 — Is `vars` one file or a directory?** One file matches `active`/`priority`. A repo with
+forty machines may want `vars.d/`. *Recommendation:* one file; revisit only with a real fleet
+complaining.
+
+**RULED (owner, 2026-07-23): confirmed as built.** One file. A `vars.d/` directory stays ignored
+by name until a real fleet asks otherwise.
+
+---
+
+## K7
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** `backends/setting.rs` — the `SettingStore` enum is `GSettings` and `None`; `None` makes every `setting:` line an error.
+
+**K7 — Which desktops does `setting:` adapt to, and in what order?** In scope as of the owner's
+ruling (X.4), so the question is no longer whether. GNOME via `gsettings` is the largest
+population and the cleanest adapter (typed schemas, readable current values); KDE via
+`kwriteconfig` is ini files with no schema, so *reading the current value* — which X.4 requires —
+is harder there. *Recommendation:* GNOME first, KDE second, and **`setting:` refuses on a desktop
+with no adapter rather than falling back to writing something.** A key silently unapplied is
+worse than an error, because the whole point is that the file is the truth.
+
+**BUILT the recommendation, 2026-07-20: GNOME via `gsettings`, KDE refused for now.** The
+`SettingStore` enum has exactly `GSettings` and `None`; a desktop that resolves to `None` makes
+every `setting:` line an error naming the missing adapter. KDE joins by adding a variant and its
+three command mappings — the pure-function shape is set up so that is the whole change.
+
+**RULED (owner, 2026-07-23): `setting:` must work everywhere. GNOME-only is a stage, not the
+answer.** The recommendation is confirmed as far as it goes and its scope is rejected: KDE, the
+Windows registry and macOS `defaults` are all owed, not optional, because **P7 says a feature is
+unfinished until Windows and macOS have an equivalent or a written reason there can be none** —
+and there is no such reason here. Every one of these stores can be read before it is written,
+which is the only property X.4 requires.
+
+**The refusal survives the ruling, and is the reason the ruling is safe.** A store with no
+adapter makes every `setting:` line an error naming it. That is what lets the adapters land one
+at a time without any of them being able to silently not apply a key.
+
+**Everywhere means everywhere, and the named stores below are a priority order, not the set
+(owner, 2026-07-23).** A blessed list of five is a list that is always missing the sixth, and the
+machine holding the sixth gets an error for a key LiNix could perfectly well have written. The
+rule is the general one: **`setting:` adapts to whatever settings store the machine is actually
+running.** The table is where to start, not where to stop.
+
+**This forces a mechanism question the old ruling did not have, recorded as [K17](#k17).** A
+closed Rust `enum SettingStore` cannot mean *everywhere*: every new desktop would be a LiNix
+release, and the machine that needs it is the one that cannot wait for one.
+
+**The stores, in the owner's own order of need (2026-07-23):**
+
+| store | how a value is read and written | state |
+|---|---|---|
+| **Windows registry** | the registry itself, typed | **owed, and first** — the owner's daily machine |
+| **KDE** | `kreadconfig5`/`kreadconfig6`, `kwriteconfig` | owed |
+| **COSMIC** | the file tree under `~/.config/cosmic/`, one file per key | owed |
+| **Hyprland** | a plain text config file, plus `hyprctl` at runtime | owed, **and it may not be a `setting:` at all** — see below |
+| GNOME | `gsettings` | built, and **the one store the owner does not use** |
+
+**Hyprland is a different shape and must not be forced into this one.** The other four are
+key-value stores with a read API; Hyprland's truth is a text config file, with `hyprctl
+getoption` reporting a runtime value that can disagree with it. A `setting:` line there means
+LiNix owning individual lines inside a file it did not write — which is not what any other
+adapter does, and `link:` already places whole files. **Whether Hyprland is a `setting:` adapter,
+a `link:` case, or a third thing is open and is not decided by this ruling.**
+
+**This answers U5: yes.** It does not unblock it — the registry adapter's first line is `HKCU` or
+`HKLM`, which is **U19**, still open.
+
+---
+
+## K7b
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** `backends/setting.rs` implements the statement form.
+
+**K7b — What is the key syntax?** `setting:SCHEMA/KEY @value=…` is one spelling; a backend-shaped
+`gsettings:org.gnome…` is another and would reuse the `backend:name` parser instead of adding a
+statement. *Recommendation:* the statement form, because the desktop is not a backend (X.4) and
+the adapter is chosen by what is running, not by what the user typed.
+
+**RULED (owner, 2026-07-23): confirmed as built.** The statement form. The desktop is not a
+backend, and the adapter is chosen by what is running rather than by what the user typed.
+
+---
+
+## K8
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** Built as recommended: the affected commands bail, `doctor` reports git as degraded.
+
+**K8 — How does a git-less LiNix announce what it cannot do?** Once at `init`, on every
+affected command, or only in `doctor`. *Recommendation:* on the affected commands (they are
+few, and that is where the user is when it matters) plus a `doctor` line. Never on `sync` —
+warning on the command that runs unattended, every time, teaches people to ignore it.
+
+**BUILT the recommendation, 2026-07-20.** The affected commands already said it — `rollback`,
+`diff` and `history` each bail with "this needs git, run `linix git init`" rather than
+crashing, and `git_autocommit` is a silent no-op without a repo. The one gap was the standing
+`doctor` line, now added: `doctor` reports git as *degraded* (not a fault) when it is absent or
+the config is not a repo, naming exactly what is unavailable. Nothing warns on `sync`.
+
+**RULED (owner, 2026-07-23): confirmed as built.** The affected commands say it, `doctor` carries
+the standing line, and `sync` never warns.
+
+---
+
+## K10
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** `cli/args.rs:507` and `:520`; `main.rs:192-193`. Two commands, exactly the recommendation.
+
+**K10 — `linix edit` and `linix path`, or flags on an existing command?** *Recommendation:* two
+small commands, because both are things a shell wants to call directly.
+
+**RULED (owner, 2026-07-23): confirmed as built.** Two commands, because both are things a shell
+calls directly.
+
+---
+
+## K11b
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** `config/settings.rs` — the platform config dir, and a flat file rather than a nested one so it cannot land inside the repo it locates.
+
+**K11b — What is that file called and where exactly does it live?** It is not in the repo, not in
+git, and not scanned; beyond that the platform config dir and `$LINIX_DATA_DIR` are both
+defensible. *Recommendation:* the platform config dir — it is configuration, not data, and
+putting it next to the data dir invites the assumption that deleting the data dir is safe.
+
+**RULED (owner, 2026-07-23): confirmed as built.** The platform config directory, and a flat
+file rather than a nested one so it cannot land inside the repo it exists to locate.
+
+---
+
+## K13
+
+**Status: ANSWERED — ruled 2026-07-23.**
+
+**In the tree today:** `schedule.rs` carries a `NEVER_UNATTENDED` list.
+
+**K13 — Does `rebuild` appear in `schedules`?** *Recommendation:* no, and the parser should
+refuse it by name, for the reason in X.1. A destructive repair operation that can be scheduled
+is one that will run at 3am on a machine nobody is watching.
+
+**BUILT (2026-07-20): the parser refuses it.** `schedule.rs` carries a `NEVER_UNATTENDED` list
+(`rebuild`, `purge-unmanaged`) checked against the first word of `run`, so `run = sync --locked`
+still parses. The refusal names the command and says why.
+
+**RULED (owner, 2026-07-23): REVERSED. `rebuild` may be scheduled, behind a key that says so.**
+The blanket refusal by name goes. The reasoning that produced it — a destructive repair that can
+be scheduled is one that will run at 3am on a machine nobody is watching — is a reason to make
+the user say so once, not a reason to decide for them.
+
+**The key is a `[guard]` key, not a `[schedules]` one.** `[schedules]` in `preferences.toml` was
+deleted by the 2026-07-20 audit so that the `schedules` file is the only schedule store, and
+resurrecting it would be the zombie key that audit killed. `[guard]` is already the home of a
+**refusal with one deliberate opening** — `confine_bin` and `require_signed_history` are both
+that shape, and both sit outside the ten refusals for the same reason this one does: the fact
+each needs exists only at the moment its own command asks.
+
+**Default off.** An absent key refuses exactly as today, so no existing config changes meaning.
+
+**The sibling is not ruled.** `NEVER_UNATTENDED` holds two names, and only one was asked about:
+`purge-unmanaged` is still refused by name in `schedules`. Whether it gets the same opening — one
+key covering both, a key each, or no opening at all for the command that deletes everything LiNix
+does not manage — is open. Recorded rather than assumed, because a fix that patches the one line
+reported and leaves its sibling live has hidden the class rather than closed it.
+
+---
 
 ## D3
 
