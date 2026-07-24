@@ -152,12 +152,8 @@ impl<'a> SyncEngine<'a> {
         guard::enforce_installs(self.config, changes.total_install(), scope).await?;
 
         // 7f: a declared health check with no way to revert is refused here, before the first
-        // package is touched — the only moment the answer is still actionable. Not a guard
-        // refusal, so it announces itself.
-        if let Err(e) = self.require_revert_path(&changes) {
-            events.fire_refusal(&e, scope).await;
-            return Err(e);
-        }
+        // package is touched — the only moment the answer is still actionable.
+        self.require_revert_path(&changes)?;
 
         // The pre-sync snapshot is a safety NET, not a precondition: a Windows System
         // Restore checkpoint needs admin (and System Restore enabled), and btrfs/timeshift

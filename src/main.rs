@@ -92,14 +92,14 @@ async fn main() -> Result<()> {
     // guard refusal (3) and a read-only command that found work (2) are distinguishable from
     // a failure (1). `anyhow`'s default would collapse all three into 1.
     let outcome = dispatch(&app, &cli).await;
-    finish(outcome)
+    finish(&app, outcome).await
 }
 
 /// Turn a command's result into this process's exit code (U21, `core::Exit`).
 ///
 /// A refusal and a difference are printed as themselves — plainly, with no `Error:` prefix —
 /// because neither is a malfunction. Only a real failure is reported as one.
-fn finish(outcome: Result<()>) -> Result<()> {
+async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
     use linix::core::Exit;
     match outcome {
         Ok(()) => Ok(()),
@@ -107,6 +107,18 @@ fn finish(outcome: Result<()>) -> Result<()> {
             let code = match e.downcast_ref::<linix::core::Error>() {
                 Some(linix::core::Error::Refused(msg)) => {
                     eprintln!("{}", msg);
+                    // `on_guard_refusal` (XIII.13) fires here and nowhere else: this is the
+                    // one point every refusal in the program passes through, so no command
+                    // can be added that refuses without the hook hearing about it. Fired at
+                    // this layer rather than inside the guard because announcing a refusal is
+                    // a side effect, and a side effect inside a decision function runs
+                    // wherever the decision is evaluated — tests included.
+                    linix::app::events::EventHooks::load(&app.config)
+                        .fire(
+                            linix::model::event::Event::OnGuardRefusal,
+                            serde_json::json!({ "message": msg }),
+                        )
+                        .await;
                     Exit::Refused
                 }
                 Some(linix::core::Error::Differences(msg)) => {

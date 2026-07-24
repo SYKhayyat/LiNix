@@ -117,27 +117,6 @@ impl EventHooks {
         }
     }
 
-    /// Fire `on_guard_refusal` for an error, if it was one.
-    ///
-    /// **Only a refusal fires it.** Every removal path funnels through the guard and every one
-    /// of them can also fail for ordinary reasons — a backend that is missing, a network that
-    /// is down — and a hook told "refused" about a failed download is a hook that cannot be
-    /// trusted about either. The [`Error::Refused`] variant is what makes the distinction
-    /// something the type system holds rather than something each call site remembers.
-    pub async fn fire_refusal(&self, error: &Error, scope: crate::app::sync::guard::GuardScope) {
-        let Error::Refused(message) = error else {
-            return;
-        };
-        self.fire(
-            Event::OnGuardRefusal,
-            serde_json::json!({
-                "message": message,
-                "scope": format!("{:?}", scope).to_lowercase(),
-            }),
-        )
-        .await;
-    }
-
     /// Approve every event hook at its current hash — what `linix lock` does. The only path
     /// that writes an approval, so approval stays a deliberate act.
     pub fn approve_all(&self) -> Result<usize> {

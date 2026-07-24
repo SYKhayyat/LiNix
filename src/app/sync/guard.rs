@@ -307,28 +307,23 @@ pub async fn enforce(
     if report.is_empty() {
         return Ok(());
     }
-    refuse(config, report.message(scope), scope).await
+    refuse(report.message(scope))
 }
 
-/// Turn a refusal into the error every command reports, and tell anyone listening.
+/// Turn a refusal into the error every command reports.
 ///
-/// **Every guard entry point comes through here.** `on_guard_refusal` (XIII.13) fired at the
-/// call sites instead would fire for `sync` and not for `purge-unmanaged`, `rebuild` or `heal`
-/// — a hook named after guard refusals that only hears about some of them is worse than no
-/// hook at all, because you would stop watching the ones it does cover. It is the same
-/// argument as the guard itself: one point every path funnels through, not one call per caller
-/// where it takes a single forgotten site to go quiet.
+/// **Every guard entry point comes through here**, so `Error::Refused` — U21's exit code 3 — is
+/// a property of the guard rather than of each caller remembering to pick the right variant.
+/// The install ceiling returned `Error::Other` until this existed, which made the one refusal
+/// in II.10 that is about installs exit 1 while its eight siblings exited 3.
 ///
-/// `Error::Refused` is U21's exit code 3, so routing every refusal through one constructor is
-/// what makes "a guard refusal is 3 and nothing else is" a property of the code rather than of
-/// each caller remembering.
-async fn refuse(config: &Config, message: String, scope: GuardScope) -> Result<()> {
-    crate::app::events::EventHooks::load(config)
-        .fire(
-            crate::model::event::Event::OnGuardRefusal,
-            serde_json::json!({ "message": message, "scope": scope.as_str() }),
-        )
-        .await;
+/// It does **not** fire `on_guard_refusal`. Announcing a refusal is a side effect, and a side
+/// effect inside a decision function runs wherever the decision is evaluated — including in
+/// tests, which call this with a default `Config` whose `config_root()` is the developer's own
+/// `~/.config/linix`. That would have `cargo test` executing the developer's real hooks. The
+/// event is fired once, where `Error::Refused` becomes an exit code (`finish`), which is the
+/// point every refusal in the program funnels through and the layer where effects belong.
+fn refuse(message: String) -> Result<()> {
     Err(Error::Refused(message))
 }
 
@@ -409,9 +404,7 @@ pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) 
         return Ok(());
     }
 
-    refuse(
-        config,
-        format!(
+    refuse(format!(
         "{}: refusing this install.\n  \
          - it installs {} packages, over the limit of {} (config: max_installs)\n\n\
          This usually means a manifest matched more than you meant — run `linix plan` and \
@@ -419,14 +412,11 @@ pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) 
          What to do:\n  \
          linix plan                     see exactly what would be installed\n  \
          {} --allow-mass-install carry out this install anyway",
-            scope.as_str(),
-            count,
-            config.guard.max_installs,
-            scope.as_str(),
-        ),
-        scope,
-    )
-    .await
+        scope.as_str(),
+        count,
+        config.guard.max_installs,
+        scope.as_str(),
+    ))
 }
 
 /// Enforce for `purge-unmanaged`, where the count is not the question (II.11).
@@ -448,7 +438,7 @@ pub async fn enforce_deliberate(
     if report.is_empty() {
         return Ok(());
     }
-    refuse(config, report.message(scope), scope).await
+    refuse(report.message(scope))
 }
 
 /// Pull the `(backend, name)` removal pairs out of a planned change set.
