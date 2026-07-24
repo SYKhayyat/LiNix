@@ -201,6 +201,12 @@ impl SyncChanges {
                 }
             }
         }
+        // Sort for a stable, readable plan: the graph's node order follows dependency edges
+        // and a HashMap crawl, so without this the same change set prints in a different order
+        // each run. This is display only — execution still follows the graph's topology.
+        let key = |e: &ReportEntry| (e.backend.clone(), e.name.clone());
+        report.install.sort_by_key(key);
+        report.remove.sort_by_key(key);
         report.change_count = report.install.len() + report.remove.len();
         report
     }
@@ -418,44 +424,57 @@ impl<'a> ChangePlanner<'a> {
         &self,
         expanded: &HashMap<String, PackageSpec>,
     ) -> Result<Vec<PackageSpec>> {
-        let mut targets = Vec::new();
-        for spec in expanded.values() {
-            let b_cap = self
-                .registry
-                .get(&spec.backend)
-                .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
-            let is_missing = if let Some(q) = b_cap.as_queryable() {
-                match q.info(&spec.name).await {
-                    Ok(Some(p)) => {
-                        // A held package that is already installed is frozen: never schedule an
-                        // upgrade/version change for it, even if a manifest asks for a newer
-                        // version. (Hold does not block a first install of an absent package.)
-                        if self.state.is_held(&spec.backend, &spec.name) {
-                            false
-                        } else if let Some(req_v) = spec.options.get("version") {
-                            p.version
-                                .as_deref()
-                                .is_none_or(|inst_v| !self.satisfies_constraint(inst_v, req_v))
-                        } else {
-                            if spec.backend == "link"
-                                && spec.options.get("template") == Some(&"true".into())
-                            {
-                                self.template_needs_update(spec).await
-                            } else {
-                                false
-                            }
-                        }
-                    }
-                    _ => true,
-                }
-            } else {
-                true
-            };
-            if is_missing {
-                targets.push(spec.clone());
-            }
+        use futures::stream::{self, StreamExt, TryStreamExt};
+
+        // Each spec's "is it already installed?" check is a separate query — usually a process
+        // spawn (`apt list <pkg>`, `brew info <pkg>`). Done one after another this is the
+        // dominant cost of `sync`/`status`/`plan` on a large config. Overlap the waits, capped
+        // at `max_parallel`; the futures borrow `&self` so this stays on one task (no spawn),
+        // which is all that is needed since the time is spent waiting on child processes.
+        let cap = self.config.max_parallel.max(1);
+        let needed: Vec<PackageSpec> = stream::iter(expanded.values())
+            .map(|spec| async move {
+                Ok::<_, Error>(self.spec_is_missing(spec).await?.then(|| spec.clone()))
+            })
+            .buffer_unordered(cap)
+            .try_filter_map(|opt| async move { Ok(opt) })
+            .try_collect()
+            .await?;
+        Ok(needed)
+    }
+
+    /// Whether one desired spec needs an install/change action: absent, or present but not
+    /// satisfying a `@version=`, or a template whose rendered content has drifted. Held-and-
+    /// present packages are frozen. Extracted so the fan-out in `identify_needed_actions` and
+    /// the decision are one thing described once.
+    async fn spec_is_missing(&self, spec: &PackageSpec) -> Result<bool> {
+        let b_cap = self
+            .registry
+            .get(&spec.backend)
+            .ok_or_else(|| Error::BackendNotFound(spec.backend.clone()))?;
+        let Some(q) = b_cap.as_queryable() else {
+            return Ok(true);
+        };
+        let installed = match q.info(&spec.name).await {
+            Ok(Some(p)) => p,
+            _ => return Ok(true),
+        };
+        // A held package that is already installed is frozen: never schedule an upgrade or
+        // version change for it, even if a manifest asks for a newer version. (Hold does not
+        // block a first install of an absent package.)
+        if self.state.is_held(&spec.backend, &spec.name) {
+            return Ok(false);
         }
-        Ok(targets)
+        if let Some(req_v) = spec.options.get("version") {
+            return Ok(installed
+                .version
+                .as_deref()
+                .is_none_or(|inst_v| !self.satisfies_constraint(inst_v, req_v)));
+        }
+        if spec.backend == "link" && spec.options.get("template") == Some(&"true".into()) {
+            return Ok(self.template_needs_update(spec).await);
+        }
+        Ok(false)
     }
 
     async fn build_execution_graph(
@@ -874,5 +893,37 @@ mod tests {
             "module:dev;profile:Work",
             "profile:Home"
         ));
+    }
+    /// The plan is displayed in a stable, sorted order regardless of how the graph was built
+    /// — the node order follows dependency edges and a HashMap crawl, so without the sort in
+    /// `generate_report` the same change set printed differently each run.
+    #[test]
+    fn the_report_is_sorted_for_a_stable_plan() {
+        use petgraph::stable_graph::StableDiGraph;
+        let ins = |name: &str, backend: &str| {
+            GraphAction::Install(PackageSpec {
+                name: name.into(),
+                backend: backend.into(),
+                options: HashMap::new(),
+                requires: vec![],
+                present: true,
+            })
+        };
+        let mut graph: StableDiGraph<GraphAction, ()> = StableDiGraph::new();
+        // Add out of order, across backends.
+        graph.add_node(ins("zsh", "apt"));
+        graph.add_node(ins("bat", "cargo"));
+        graph.add_node(ins("acl", "apt"));
+        graph.add_node(GraphAction::Remove { name: "nano".into(), backend: "apt".into() });
+        graph.add_node(GraphAction::Remove { name: "amp".into(), backend: "cargo".into() });
+        let changes = SyncChanges { graph, ..Default::default() };
+
+        let report = changes.generate_report();
+        let installs: Vec<(&str, &str)> =
+            report.install.iter().map(|e| (e.backend.as_str(), e.name.as_str())).collect();
+        assert_eq!(installs, vec![("apt", "acl"), ("apt", "zsh"), ("cargo", "bat")]);
+        let removes: Vec<(&str, &str)> =
+            report.remove.iter().map(|e| (e.backend.as_str(), e.name.as_str())).collect();
+        assert_eq!(removes, vec![("apt", "nano"), ("cargo", "amp")]);
     }
 }
