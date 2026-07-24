@@ -87,6 +87,19 @@ pub struct GuardSettings {
     /// turned off before it ever caught anything.
     #[serde(default)]
     pub require_signed_history: bool,
+    /// Commands a `schedules` entry may not run (K13). Matched against the first word of a
+    /// `run =` line, so `run = sync --locked` is unaffected by `sync` never being listed.
+    /// Taking a name out is how a machine permits that command unattended; the shipped pair
+    /// is the set that removes software without a human present to read the refusal.
+    #[serde(default = "default_never_unattended")]
+    pub never_unattended: Vec<String>,
+}
+
+/// `rebuild` and `purge-unmanaged`: the two commands that remove declared software. Unattended,
+/// a failed rebuild leaves a machine missing software at 2am with nobody watching, and a purge
+/// answers a question — "is this machine adopted?" — that only a human can have asked.
+fn default_never_unattended() -> Vec<String> {
+    vec!["rebuild".to_string(), "purge-unmanaged".to_string()]
 }
 
 fn default_confine_bin() -> bool {
@@ -109,6 +122,7 @@ impl Default for GuardSettings {
             deny_vulnerable: false,
             confine_bin: default_confine_bin(),
             require_signed_history: false,
+            never_unattended: default_never_unattended(),
         }
     }
 }

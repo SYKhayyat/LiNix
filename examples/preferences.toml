@@ -66,6 +66,11 @@ protected_packages = [
                            # refuse to roll back to a commit git does not vouch for (II.13).
                            # Off by default: a fresh repo signs nothing. Turn it on together
                            # with `git config commit.gpgsign true`.
+# never_unattended = ["rebuild", "purge-unmanaged"]
+                           # commands a `schedules` entry may not run, matched against the
+                           # first word of `run =`. Both remove declared software, and a
+                           # timer fires with nobody there to read a refusal. Take a name
+                           # out to permit it here.
 
 # Backend Aliases
 [aliases]

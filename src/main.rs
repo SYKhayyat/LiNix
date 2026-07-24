@@ -2207,7 +2207,12 @@ async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
             let mut listed = 0usize;
             for (stmt, origin) in doc.statements_for(&facts)? {
                 if let linix::config::grammar::Statement::Schedule(name, opts) = stmt {
-                    let cfg = linix::model::schedule::schedule_config(&name, &opts, &origin)?;
+                    let cfg = linix::model::schedule::schedule_config(
+                        &name,
+                        &opts,
+                        &origin,
+                        &app.config.guard.never_unattended,
+                    )?;
                     println!("{:<15} {:<15} {}", cfg.name, cfg.cron, cfg.command);
                     listed += 1;
                 }
@@ -3318,7 +3323,12 @@ async fn handle_check(app: &App) -> Result<()> {
     // only validated where it is provisioned — so a missing `cron`, or a `run` a timer may not
     // run, surfaced at sync time on a file `check` had already called clean.
     for (name, opts, origin) in state.schedules() {
-        linix::model::schedule::schedule_config(name, opts, origin)?;
+        linix::model::schedule::schedule_config(
+            name,
+            opts,
+            origin,
+            &app.config.guard.never_unattended,
+        )?;
     }
 
     // II.3/II.7: resolution reads only what the active profiles reach; `check` reads
@@ -4008,6 +4018,12 @@ max_removals = 20
 # the box gets turned off before it ever catches anything. Turn it on together
 # with `git config commit.gpgsign true`.
 # require_signed_history = false
+
+# Commands a `schedules` entry may not run. Matched against the first word of a
+# `run =` line, so `run = sync --locked` is untouched by anything below. Both
+# shipped names remove declared software, and a timer runs with nobody there to
+# read a refusal. Take a name out to permit it on this machine.
+# never_unattended = ["rebuild", "purge-unmanaged"]
 "#;
 
 async fn handle_path(cli: &Cli, explain: bool, set: Option<&std::path::Path>) -> Result<()> {

@@ -1453,6 +1453,16 @@ to by hand.
 - **The refusal names the list.** A `schedules` entry naming a forbidden command is refused with
   the list's own name in the message, so the way out is in the error rather than in the docs.
 
+**BUILT 2026-07-23, exactly as ruled.** `[guard] never_unattended`, defaulted to `["rebuild",
+"purge-unmanaged"]`; the `NEVER_UNATTENDED` constant is deleted. The list reaches
+`schedule_config` as an argument rather than being read inside the model, so the rule has one
+home (`preferences.toml`) and the check is testable without a config on disk. The refusal quotes
+the key **and its current contents**. Five tests, including the two the ruling's own wording
+implies and nothing else would have covered: **taking a name out permits that command and leaves
+the other refused**, and **an empty list refuses nothing** — the alternative, an empty list
+silently restoring the built-in pair, is the shape that makes a guard setting unable to mean what
+it says.
+
 ---
 
 ## D3

@@ -1186,13 +1186,13 @@ declaration restores its backup, T1's fix is smaller than it looks.
 
 **Owed by the rulings of 2026-07-23, small and each independent of a phase:**
 
-- **The unattended-refusal set becomes a `[guard]` list (K13, reversed and generalised).** The
-  `NEVER_UNATTENDED` constant at `model/schedule.rs:69` goes; the same two names ship as the
-  list's default, and taking a name out is how a machine permits that command. **Exit:** a
-  `schedules` file naming `rebuild` is refused with the list named in the message; removing
-  `rebuild` from the list makes the same file parse; a config that sets nothing refuses both
-  commands exactly as today. **Covers `purge-unmanaged` in the same change** — it is a row, not a
-  second mechanism.
+- ~~**The unattended-refusal set becomes a `[guard]` list (K13, reversed and generalised).**~~
+  **DONE 2026-07-23.** `[guard] never_unattended`, defaulted to `["rebuild",
+  "purge-unmanaged"]`; the constant is deleted; the list is threaded into `schedule_config` as an
+  argument, so `preferences.toml` is its one home and the check needs no config on disk to test.
+  All three exit clauses are asserted, plus two the wording implies: the refusal quotes the key
+  *and its current contents*, and an empty list refuses nothing. The template and
+  `examples/preferences.toml` both carry the key.
 - **`setting:` adapters become a table, and the built-ins become rows in it (K17).** Precedes 7e.
   **Exit:** a store with no compiled-in support is driven from a definition the user wrote, and
   `gsettings` goes through the same path — an adapter mechanism the built-ins bypass is one

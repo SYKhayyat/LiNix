@@ -27,7 +27,12 @@ use crate::config::grammar::statement::SCHEDULE_OPTION_KEYS as KNOWN_KEYS;
 
 /// Build a [`ScheduleConfig`] from a `schedule:<name>` line's options, or an error that names
 /// the file and line and says exactly what is missing or unrecognized.
-pub fn schedule_config(name: &str, options: &Options, origin: &Origin) -> Result<ScheduleConfig> {
+pub fn schedule_config(
+    name: &str,
+    options: &Options,
+    origin: &Origin,
+    never_unattended: &[String],
+) -> Result<ScheduleConfig> {
     // Unknown keys are an error, not ignored: a typo'd `crron =` would otherwise leave the job
     // with no schedule and no complaint, which is the class of silent failure II.2 refuses.
     for key in options.keys() {
@@ -49,7 +54,7 @@ pub fn schedule_config(name: &str, options: &Options, origin: &Origin) -> Result
         .with_hint("five fields (min hour dom month dow), e.g. `0 2 * * *`, or a macro like `@daily`.")
     })?;
     let command = required(name, options, "run", origin)?;
-    refuse_unattended(name, &command, origin)?;
+    refuse_unattended(name, &command, origin, never_unattended)?;
     let notification = options.one("notify").map(str::to_string);
 
     Ok(ScheduleConfig {
@@ -61,23 +66,29 @@ pub fn schedule_config(name: &str, options: &Options, origin: &Origin) -> Result
     })
 }
 
-/// Commands a timer may not run.
+/// Refuse a `run` whose command is on this machine's `[guard] never_unattended` list (K13).
 ///
-/// `rebuild` removes declared software in order to reinstall it (II.11b). Unattended, a failed
-/// reinstall leaves the machine missing software at 2am with nobody watching — and the repair
-/// it performs is for a problem a human noticed, so a timer cannot be the thing that notices.
-const NEVER_UNATTENDED: &[&str] = &["rebuild", "purge-unmanaged"];
-
-fn refuse_unattended(name: &str, command: &str, origin: &Origin) -> Result<()> {
+/// The list arrives as an argument rather than being read here so the rule stays one fact in
+/// one place — `preferences.toml` — and so the check is testable without a config on disk.
+fn refuse_unattended(
+    name: &str,
+    command: &str,
+    origin: &Origin,
+    never_unattended: &[String],
+) -> Result<()> {
     let head = command.split_whitespace().next().unwrap_or("");
-    if NEVER_UNATTENDED.contains(&head) {
+    if never_unattended.iter().any(|c| c == head) {
         return Err(GrammarError::new(
             origin.clone(),
             format!("`schedule:{}` may not run `{}`", name, head),
         )
-        .with_hint(
-            "a schedule runs unattended, and this command removes software. Run it yourself.",
-        ));
+        .with_hint(format!(
+            "a schedule runs unattended, and this command removes software. `{}` is in \
+             `[guard] never_unattended` in preferences.toml, which currently reads [{}]; take \
+             it out of that list to permit it, or run the command yourself.",
+            head,
+            never_unattended.join(", ")
+        )));
     }
     Ok(())
 }
@@ -223,6 +234,12 @@ mod tests {
         Origin::new("schedules", 3)
     }
 
+    /// What `[guard] never_unattended` ships with. Tests take it from the config default so a
+    /// change to the shipped set cannot leave these asserting a list nobody has.
+    fn shipped() -> Vec<String> {
+        crate::config::Config::default().guard.never_unattended
+    }
+
     #[test]
     fn cron_accepts_five_fields_six_fields_and_macros_and_refuses_garbage() {
         for good in ["30 4 * * 1", "0 30 4 * * 1", "@daily", "0 2 * * *"] {
@@ -236,7 +253,7 @@ mod tests {
     #[test]
     fn a_bad_cron_is_refused_at_parse_time() {
         let o = opts(&[("cron", "not a cron"), ("run", "sync")]);
-        let err = schedule_config("nightly", &o, &origin()).unwrap_err();
+        let err = schedule_config("nightly", &o, &origin(), &shipped()).unwrap_err();
         assert!(err.to_string().contains("schedules:3"), "{}", err);
     }
 
@@ -270,7 +287,7 @@ mod tests {
     #[test]
     fn a_complete_line_maps_to_a_schedule_config() {
         let o = opts(&[("cron", "0 2 * * *"), ("run", "clean"), ("notify", "desktop")]);
-        let cfg = schedule_config("nightly-tidy", &o, &origin()).unwrap();
+        let cfg = schedule_config("nightly-tidy", &o, &origin(), &shipped()).unwrap();
         assert_eq!(cfg.name, "nightly-tidy");
         assert_eq!(cfg.cron, "0 2 * * *");
         assert_eq!(cfg.command, "clean");
@@ -281,14 +298,14 @@ mod tests {
     #[test]
     fn notify_is_optional() {
         let o = opts(&[("cron", "0 2 * * *"), ("run", "clean")]);
-        let cfg = schedule_config("t", &o, &origin()).unwrap();
+        let cfg = schedule_config("t", &o, &origin(), &shipped()).unwrap();
         assert!(cfg.notification.is_none());
     }
 
     #[test]
     fn a_missing_cron_is_an_error_that_names_the_line() {
         let o = opts(&[("run", "clean")]);
-        let err = schedule_config("t", &o, &origin()).unwrap_err();
+        let err = schedule_config("t", &o, &origin(), &shipped()).unwrap_err();
         assert!(err.what.contains("missing `cron`"), "{}", err);
         assert!(err.to_string().contains("schedules:3"), "{}", err);
     }
@@ -296,37 +313,79 @@ mod tests {
     #[test]
     fn a_missing_run_is_an_error() {
         let o = opts(&[("cron", "0 2 * * *")]);
-        let err = schedule_config("t", &o, &origin()).unwrap_err();
+        let err = schedule_config("t", &o, &origin(), &shipped()).unwrap_err();
         assert!(err.what.contains("missing `run`"), "{}", err);
     }
 
     #[test]
     fn an_empty_cron_value_is_treated_as_missing() {
         let o = opts(&[("cron", "  "), ("run", "clean")]);
-        assert!(schedule_config("t", &o, &origin()).is_err());
+        assert!(schedule_config("t", &o, &origin(), &shipped()).is_err());
     }
 
     #[test]
-    fn a_timer_may_not_run_rebuild() {
-        // K13. `rebuild` removes declared software to put it back; unattended, a failed
-        // reinstall leaves the machine short at 2am with nobody watching.
+    fn a_timer_may_not_run_rebuild_or_purge_unmanaged_out_of_the_box() {
+        // K13. Both shipped names, not just the one the ruling was asked about: a check that
+        // covers `rebuild` alone is how `purge-unmanaged` came to be refused by a constant
+        // nobody could edit.
+        for command in ["rebuild --all", "purge-unmanaged"] {
+            let o = opts(&[("cron", "0 2 * * *"), ("run", command)]);
+            let err = schedule_config("nightly", &o, &origin(), &shipped()).unwrap_err();
+            let head = command.split_whitespace().next().unwrap();
+            assert!(
+                err.what.contains(&format!("may not run `{}`", head)),
+                "{}",
+                err
+            );
+        }
+    }
+
+    /// The refusal names the list and its contents, so the way out is in the error rather than
+    /// in the documentation.
+    #[test]
+    fn the_refusal_names_the_list_it_came_from() {
+        let o = opts(&[("cron", "0 2 * * *"), ("run", "rebuild")]);
+        let err = schedule_config("nightly", &o, &origin(), &shipped())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("never_unattended"), "{}", err);
+        assert!(err.contains("rebuild, purge-unmanaged"), "{}", err);
+    }
+
+    /// Taking a name out of the list is how a machine permits that command — the whole point
+    /// of the ruling that replaced the constant.
+    #[test]
+    fn taking_a_name_out_of_the_list_permits_the_command() {
+        let permitting = vec!["purge-unmanaged".to_string()];
         let o = opts(&[("cron", "0 2 * * *"), ("run", "rebuild --all")]);
-        let err = schedule_config("nightly", &o, &origin()).unwrap_err();
-        assert!(err.what.contains("may not run `rebuild`"), "{}", err);
+        assert!(schedule_config("nightly", &o, &origin(), &permitting).is_ok());
+
+        // And the name still in the list is still refused, so the edit is per-command.
+        let o = opts(&[("cron", "0 2 * * *"), ("run", "purge-unmanaged")]);
+        assert!(schedule_config("nightly", &o, &origin(), &permitting).is_err());
+    }
+
+    /// An empty list refuses nothing. Stated as a test because the alternative — a list whose
+    /// emptiness silently restores the built-in pair — is the shape that makes a guard setting
+    /// unable to mean what it says.
+    #[test]
+    fn an_empty_list_refuses_nothing() {
+        let o = opts(&[("cron", "0 2 * * *"), ("run", "rebuild")]);
+        assert!(schedule_config("nightly", &o, &origin(), &[]).is_ok());
     }
 
     #[test]
     fn the_refusal_reads_the_command_not_the_whole_line() {
         // `run = sync --rebuild-cache` is not `run = rebuild`.
         let o = opts(&[("cron", "0 2 * * *"), ("run", "sync --locked")]);
-        assert!(schedule_config("t", &o, &origin()).is_ok());
+        assert!(schedule_config("t", &o, &origin(), &shipped()).is_ok());
     }
 
     #[test]
     fn an_unknown_key_is_refused_not_ignored() {
         // A typo like `crron =` must not leave the job silently unscheduled.
         let o = opts(&[("crron", "0 2 * * *"), ("run", "clean")]);
-        let err = schedule_config("t", &o, &origin()).unwrap_err();
+        let err = schedule_config("t", &o, &origin(), &shipped()).unwrap_err();
         assert!(err.what.contains("unknown option `crron`"), "{}", err);
     }
 }

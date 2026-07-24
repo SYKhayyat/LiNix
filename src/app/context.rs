@@ -504,7 +504,12 @@ impl App {
     /// equal to what the `schedules` file says.
     pub async fn apply_schedules(&self, state: &crate::model::DesiredState) -> Result<()> {
         for (name, opts, origin) in state.schedules() {
-            let cfg = crate::model::schedule::schedule_config(name, opts, origin)?;
+            let cfg = crate::model::schedule::schedule_config(
+                name,
+                opts,
+                origin,
+                &self.config.guard.never_unattended,
+            )?;
             if self.config.dry_run {
                 info!(
                     "[DRY-RUN] would schedule `{}`: `{}` on `{}`",
