@@ -30,7 +30,18 @@ pub fn extra_key(stmt: &Statement) -> Option<String> {
         Statement::Repo { backend, spec } => Some(format!("repo:{}:{}", backend, spec)),
         Statement::Shim(name, _) => Some(format!("shim:{}", name)),
         Statement::Service(name, _) => Some(format!("service:{}", name)),
-        Statement::Link(name, _) => Some(format!("link:{}", name)),
+        // A link is keyed by its DESTINATION, not by its source. The undo has to remove what
+        // LiNix wrote, and by the time it runs the declaration is gone — so a key naming the
+        // source would hand the teardown the file in your repo and leave the deployed one in
+        // place. Keying the destination also makes an edited `@target=` a removal of the old
+        // destination and an install of the new, instead of leaving the old one forever.
+        Statement::Link(name, opts) => Some(format!(
+            "link:{}",
+            opts.one("target")
+                .and_then(|t| crate::backends::link::resolve_target(t).ok())
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| name.clone())
+        )),
         Statement::Setting(name, _) => Some(format!("setting:{}", name)),
         Statement::Schedule(name, _) => Some(format!("schedule:{}", name)),
         _ => None,

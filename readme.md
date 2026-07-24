@@ -149,6 +149,13 @@ Common keys: `version`, `hold` (never upgrade), `expires` / `until` (absolute da
 `target`/`content`/`template`/`decrypt`/`identity` on `link:` — the last two are
 [Secrets](#secrets).
 
+**A `link:` line puts your file back when you delete it.** If the destination already held a
+file, LiNix keeps it as `<target>.linix-backup` before taking the path over; removing the
+declaration restores that file and deletes the backup. So a `link:` line that comes and goes
+leaves the machine as it found it, and backups do not pile up. If nothing was there to begin
+with, removing the line removes the file. **The source in your repo is never touched** — a
+declaration owns its destination, not your copy.
+
 ### Which file gets installed
 
 `github:sharkdp/fd` names a repo, not a file. One release ships a `.deb`, a `.tar.gz`, an
@@ -336,17 +343,16 @@ Four things that follow from this being an ordinary declaration:
 - **`--dry-run` never decrypts.** It tells you what it would write and stops, because a dry run
   that produced a plaintext file would be the leak.
 - **Removing the line removes the plaintext**, the same as any other managed file.
-- **The plaintext is written owner-only (`0600`) on Linux and macOS.** On Windows it gets no
-  special permissions — the file is as protected as its directory, and no more.
-
-Two limits worth knowing before you rely on this:
-
-- **Point `target` outside your config repo.** Nothing currently stops you aiming it back inside
-  the directory git is watching, and a secret that reaches git history is a secret you have to
-  rotate.
-- **If the target already held a secret, the old one is copied to `<target>.linix-backup`**
-  before the new one is written, with ordinary permissions. Delete it, or start from a target
-  that does not exist yet.
+- **The plaintext is restricted before it exists.** On Linux and macOS it is owner-only
+  (`0600`); on Windows the file is created with inherited access stripped and only your account
+  granted, using `icacls`. Either way the restriction is applied to a temporary file which is
+  then renamed into place, so there is no moment when the destination holds a readable secret.
+- **A `target` inside your config repo is refused.** The repo is git and `sync` commits it, so a
+  plaintext there would be a plaintext in history — and a secret in history has to be rotated,
+  not deleted. The error names the path and the repo.
+- **No backup is taken for a secret.** For ordinary managed files LiNix keeps your original as
+  `<target>.linix-backup`; for a decrypted one it does not, because that copy would be the
+  previous secret sitting in plaintext beside the new one.
 
 Your `identity` key itself is never managed by LiNix and never belongs in the repo. LiNix's own
 credentials work the other way round and are never files at all: `GITHUB_TOKEN` is read from the

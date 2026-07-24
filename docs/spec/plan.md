@@ -1181,6 +1181,18 @@ tree appears at its mirrored destination after one `sync` with no line written a
 deleted from the tree has its link removed by the same `extras_lock` teardown every other extra
 uses, and a destination LiNix did not create is refused by name rather than replaced.
 
+**The three decrypt-mode defects — ALL FIXED 2026-07-23, with T6's ruled half, and the fix
+found a data-loss defect none of them named.**
+
+**The teardown was handed the declaration's source.** `extra_key` keyed a `link:` by its source
+path, so undoing one deleted the file in the user's own dotfiles repo and left the deployed copy
+in place — exactly backwards, and the S1 family again (deleting a user's file by name). A link is
+keyed by its **destination** now, which also makes an edited `@target=` undo the old destination
+instead of orphaning it forever. Found by reading the removal path while implementing T6, not by
+a test: no test called the undo.
+
+Each exit below is met; what the entries did not say is recorded with them in VI.2.
+
 **The three decrypt-mode defects, all ruled 2026-07-23, all live in shipped code (VI.2):**
 
 - **T1 — decrypt mode never backs up.** `apply_managed_content` must not call `backup_once` when

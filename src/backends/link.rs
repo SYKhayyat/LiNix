@@ -29,6 +29,39 @@ pub fn resolve_target(target: &str) -> Result<PathBuf> {
     }
 }
 
+/// Where the pre-existing file at `target` is kept while LiNix owns that path. One function,
+/// because the write path and the undo path must agree on the name or a restore looks for a
+/// file nothing wrote.
+pub fn backup_path(target: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.linix-backup", target.display()))
+}
+
+/// Refuse a decrypted secret whose destination is inside the config repo (T2).
+///
+/// The repo is git-tracked and `sync` commits it, so a plaintext written there is a plaintext
+/// in history — and a secret in git history is a rotated secret, which is unrecoverable rather
+/// than merely bad. The refusal names both paths, because "somewhere inside your repo" is not
+/// something a reader can act on.
+pub fn refuse_target_in_repo(config: &Config, resolved: &Path) -> Result<()> {
+    let root = config.config_root();
+    let inside = match (resolved.canonicalize(), root.canonicalize()) {
+        // Canonicalising the target fails when it does not exist yet, which is the ordinary
+        // case for a first install — so compare the paths as written when it does.
+        (Ok(t), Ok(r)) => t.starts_with(r),
+        _ => resolved.starts_with(&root),
+    };
+    if !inside {
+        return Ok(());
+    }
+    Err(Error::Validation(format!(
+        "refusing to decrypt into {} — it is inside the config repo at {}, which git tracks \
+         and `sync` commits. A secret that reaches git history has to be rotated, not deleted. \
+         Point @target= outside the repo.",
+        resolved.display(),
+        root.display()
+    )))
+}
+
 /// Whether a resolved `@target` lands outside the user's home directory. An unknown home
 /// counts as outside: the point of the question is that the destination is not one of the
 /// dotfiles the link backend exists for, and a machine that cannot say where home is
@@ -177,7 +210,7 @@ impl LinkBackendCore {
         if !tokio::fs::try_exists(target).await.unwrap_or(false) {
             return Ok(()); // nothing there to preserve
         }
-        let backup = PathBuf::from(format!("{}.linix-backup", target.display()));
+        let backup = backup_path(target);
         if tokio::fs::try_exists(&backup).await.unwrap_or(false) {
             return Ok(()); // the original was already preserved on an earlier run
         }
@@ -268,9 +301,12 @@ impl Installable for LinkInstallable {
 
             let source = PathBuf::from(&spec.name);
 
-            // Mode D: Secret — decrypt the source with age/sops and place the plaintext,
-            // locked down to owner-only (0600) on Unix.
+            // Mode D: Secret — decrypt the source with age/sops and place the plaintext.
             if let Some(tool) = spec.options.get("decrypt") {
+                // T2, before anything is decrypted: the config root is a git repo, and a
+                // plaintext written inside it is committed by the next sync. A secret in git
+                // history is a rotated secret, so this is a refusal rather than a warning.
+                refuse_target_in_repo(&self.core.config, &target_path)?;
                 if self.core.executor.dry_run {
                     info!(
                         "[DRY-RUN] Link: would decrypt {:?} with {} and write to {:?}",
@@ -279,18 +315,22 @@ impl Installable for LinkInstallable {
                     continue;
                 }
                 let plaintext = self.core.decrypt_secret(tool, &source, spec).await?;
-                self.core
-                    .apply_managed_content(&target_path, &plaintext)
-                    .await?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = tokio::fs::set_permissions(
-                        &target_path,
-                        std::fs::Permissions::from_mode(0o600),
-                    )
-                    .await;
+                // T1: no backup. `backup_once` exists so a user is not silently robbed of a
+                // config file they hand-wrote; a secret LiNix decrypted a moment ago is not
+                // that, and the copy would sit beside the target under the ordinary umask,
+                // outlasting the declaration that made it.
+                if let Ok(existing) = self.core.executor.read_file(&target_path).await {
+                    if existing == plaintext {
+                        debug!("Link: {:?} is already up-to-date.", target_path);
+                        continue;
+                    }
                 }
+                // T5: restricted before it lands, not chmod'd after.
+                self.core
+                    .executor
+                    .write_secret(&target_path, &plaintext)
+                    .await?;
+                info!("Link: Writing managed secret {:?}", target_path);
                 continue;
             }
 
@@ -366,24 +406,53 @@ impl Installable for LinkInstallable {
         Ok(())
     }
 
+    /// Undo a `link:` declaration. Each name is the DESTINATION LiNix wrote — never the source
+    /// in your repo, which LiNix does not own and must not delete.
+    ///
+    /// **A declaration undoes what it did (T6).** If a `<target>.linix-backup` is sitting there,
+    /// the target was somebody's file before LiNix took it over: the backup is put back and the
+    /// backup file removed, so a `link:` line that comes and goes leaves the machine as it found
+    /// it and nothing accumulates. With no backup there was nothing there before, so the target
+    /// is removed.
     async fn remove(&self, names: &[String], _: bool) -> Result<()> {
         for name in names {
             let path = Path::new(name);
             let exists = tokio::fs::try_exists(path).await.unwrap_or(false);
             let is_symlink = path.is_symlink();
+            let backup = backup_path(path);
+            let has_backup = tokio::fs::try_exists(&backup).await.unwrap_or(false);
+
+            if !exists && !is_symlink && !has_backup {
+                continue;
+            }
+
+            if self.core.executor.dry_run {
+                if has_backup {
+                    info!("[DRY-RUN] Link: would restore {:?} from {:?}", path, backup);
+                } else {
+                    info!("[DRY-RUN] Link: would remove {:?}", path);
+                }
+                continue;
+            }
 
             if exists || is_symlink {
-                info!("Link: Removing link/rendered file {:?}", path);
-                if !self.core.executor.dry_run {
-                    let metadata = tokio::fs::symlink_metadata(path)
-                        .await
-                        .map_err(Error::from)?;
-                    if metadata.is_dir() && !metadata.is_symlink() {
-                        tokio::fs::remove_dir_all(path).await.map_err(Error::from)?;
-                    } else {
-                        tokio::fs::remove_file(path).await.map_err(Error::from)?;
-                    }
+                let metadata = tokio::fs::symlink_metadata(path)
+                    .await
+                    .map_err(Error::from)?;
+                if metadata.is_dir() && !metadata.is_symlink() {
+                    tokio::fs::remove_dir_all(path).await.map_err(Error::from)?;
+                } else {
+                    tokio::fs::remove_file(path).await.map_err(Error::from)?;
                 }
+            }
+
+            if has_backup {
+                // A failed restore leaves the user with neither their file nor an error, so
+                // it propagates rather than being logged past.
+                tokio::fs::rename(&backup, path).await.map_err(Error::from)?;
+                info!("Link: {:?} restored from the backup taken when it was declared.", path);
+            } else {
+                info!("Link: removed {:?}", path);
             }
         }
         Ok(())
@@ -471,7 +540,7 @@ mod tests {
             tokio::fs::read_to_string(&target).await.unwrap(),
             "MANAGED CONTENT"
         );
-        let backup = PathBuf::from(format!("{}.linix-backup", target.display()));
+        let backup = backup_path(&target);
         assert_eq!(
             tokio::fs::read_to_string(&backup).await.unwrap(),
             "ORIGINAL USER CONTENT"
@@ -561,7 +630,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "HELLO");
-        let backup = PathBuf::from(format!("{}.linix-backup", target.display()));
+        let backup = backup_path(&target);
         assert!(
             !tokio::fs::try_exists(&backup).await.unwrap(),
             "nothing pre-existed, so no backup should be written"
@@ -588,7 +657,7 @@ mod tests {
 
         assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "v2");
         // The backup still holds the true pre-LiNix original, not the interim edit.
-        let backup = PathBuf::from(format!("{}.linix-backup", target.display()));
+        let backup = backup_path(&target);
         assert_eq!(
             tokio::fs::read_to_string(&backup).await.unwrap(),
             "PRISTINE ORIGINAL"

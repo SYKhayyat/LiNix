@@ -13,6 +13,9 @@ pub mod emacs;
 pub mod flatpak;
 pub mod github;
 pub mod link;
+
+#[cfg(test)]
+mod link_teardown_test;
 pub mod mise;
 pub mod nix;
 pub mod pacman;

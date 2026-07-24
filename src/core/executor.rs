@@ -1,5 +1,7 @@
 use crate::core::{Error, Result};
 use async_trait::async_trait;
+#[cfg(windows)]
+use std::process::Stdio;
 use dashmap::DashMap;
 use fs2::FileExt;
 use std::collections::HashMap;
@@ -244,6 +246,39 @@ impl ExecutionLayer for DryRunExecutor {
         self.vfs.insert(dst.to_path_buf(), val);
         Ok(())
     }
+}
+
+/// Strip inherited access and grant only the running user, via the tool Windows ships with.
+///
+/// Windows has no `mode` to create a file with, so "created restricted" is achieved by
+/// restricting the temporary file and then renaming it into place — the destination never
+/// exists in a readable state. A failure here is an error rather than a warning: the caller
+/// is about to place a decrypted secret, and a secret that is not protected must not be
+/// written at all (T5).
+#[cfg(windows)]
+fn restrict_to_owner(path: &Path) -> Result<()> {
+    let user = std::env::var("USERNAME").map_err(|_| {
+        Error::Other(
+            "cannot restrict the file: %USERNAME% is unset, so there is no account to grant              access to. Refusing to write a secret nothing protects."
+                .into(),
+        )
+    })?;
+    let output = StdCommand::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{}:F", user))
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| Error::Other(format!("could not run icacls to restrict {:?}: {}", path, e)))?;
+    if !output.status.success() {
+        return Err(Error::Other(format!(
+            "icacls could not restrict {:?}: {}",
+            path,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
 }
 
 pub struct MockExecutor {
@@ -614,6 +649,55 @@ impl CommandExecutor {
         temp_file
             .write_all(content.as_bytes())
             .map_err(Error::from)?;
+        temp_file.persist(path).map_err(Error::from)?;
+        Ok(())
+    }
+
+    /// Write content that must never be world-readable, restricted **before** it reaches its
+    /// destination (T5).
+    ///
+    /// The restriction is applied to the temporary file and the file is then renamed into
+    /// place, so there is no instant at which the target path holds readable plaintext. A
+    /// chmod after the write would be that instant, however short — and a secret is exactly
+    /// the file where "however short" is not an argument.
+    ///
+    /// On Unix the temp file is already created `0600` by `tempfile`; this asserts it rather
+    /// than assuming it. On Windows the inherited ACEs are stripped and only the running user
+    /// is granted access, via `icacls` — LiNix drives the tool the OS already has.
+    pub async fn write_secret(&self, path: &Path, content: &str) -> Result<()> {
+        if self.dry_run {
+            self.vfs.insert(path.to_path_buf(), content.to_string());
+            return Ok(());
+        }
+        let dir = path
+            .parent()
+            .ok_or_else(|| Error::Other("Invalid path: no parent directory".into()))?;
+        tokio::fs::create_dir_all(dir).await.map_err(Error::from)?;
+
+        let mut temp_file = tokio::task::spawn_blocking({
+            let dir = dir.to_path_buf();
+            move || NamedTempFile::new_in(dir)
+        })
+        .await
+        .map_err(|e| Error::Other(format!("IO thread failure: {}", e)))?
+        .map_err(Error::from)?;
+
+        temp_file
+            .write_all(content.as_bytes())
+            .map_err(Error::from)?;
+        temp_file.flush().map_err(Error::from)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(temp_file.path(), std::fs::Permissions::from_mode(0o600))
+                .map_err(Error::from)?;
+        }
+        #[cfg(windows)]
+        {
+            restrict_to_owner(temp_file.path())?;
+        }
+
         temp_file.persist(path).map_err(Error::from)?;
         Ok(())
     }
