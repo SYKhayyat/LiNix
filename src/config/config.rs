@@ -235,6 +235,13 @@ pub struct Config {
     #[serde(default = "default_network_timeout_secs")]
     pub network_timeout_secs: u64,
 
+    /// How long to wait out a remote rate limit before giving up and naming it (S26). A CI
+    /// job and a laptop want different answers, which is why it is a key; the default is
+    /// short because the wait happens while the data lock is held, and a command that looks
+    /// hung is the one people kill — which is the interruption that leaves work to recover.
+    #[serde(default = "default_rate_limit_max_wait_secs")]
+    pub rate_limit_max_wait_secs: u64,
+
     /// Retention window passed to `nix-collect-garbage --delete-older-than` during
     /// orphan cleanup (e.g. "30d", "2w"). Replaces the previously hardcoded "30d".
     #[serde(default = "default_nix_gc_age")]
@@ -365,6 +372,12 @@ fn default_max_parallel() -> usize {
         .map(|n| n.get())
         .unwrap_or(4)
 }
+/// 30 seconds: long enough to ride out GitHub's secondary-limit backoffs, short enough that
+/// a user watching a held data lock does not conclude the process has hung. The old behaviour
+/// was to sleep until the primary limit reset — up to an hour.
+fn default_rate_limit_max_wait_secs() -> u64 {
+    30
+}
 fn default_network_timeout_secs() -> u64 {
     15
 }
@@ -470,6 +483,7 @@ impl Default for Config {
             quiet: false,
             max_parallel: default_max_parallel(),
             network_timeout_secs: default_network_timeout_secs(),
+            rate_limit_max_wait_secs: default_rate_limit_max_wait_secs(),
             nix_gc_age: default_nix_gc_age(),
             backend_settings: HashMap::new(),
             allow_mass_install: false,

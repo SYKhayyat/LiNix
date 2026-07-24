@@ -347,6 +347,10 @@ fn acquire_data_lock() -> Result<Option<linix::core::datalock::DataLock>> {
     if READ_ONLY_COMMANDS.contains(&name.as_str()) {
         return Ok(None);
     }
+    // 120s: long enough to outlast the longest wait a holder can legitimately make before it
+    // starts doing work — the rate-limit ceiling, 30s by default — with room for the install
+    // it then performs. It is not meant to outlast a whole sync: past this point the honest
+    // answer is that someone else is writing, not a longer silence (S27).
     let lock = linix::core::datalock::DataLock::acquire(
         &linix::utils::safe_data_dir(),
         &name,
@@ -3933,6 +3937,11 @@ const CONFIG_TEMPLATE: &str = r#"# LiNix refusals and behaviour (preferences.tom
 # Timeout (seconds) for outbound HTTP search requests (npm/PyPI/marketplace).
 network_timeout_secs = 15
 
+# How long to wait out a remote rate limit (GitHub) before giving up and naming it.
+# The wait happens while the data directory is locked, so a long one looks like a hang.
+# Raise it for an unattended CI job that would rather wait than fail.
+rate_limit_max_wait_secs = 30
+
 # Retention window for `nix-collect-garbage --delete-older-than` during cleanup.
 nix_gc_age = "30d"
 
@@ -5407,6 +5416,22 @@ mod init_tests {
         let cfg: linix::config::Config =
             toml::from_str(CONFIG_TEMPLATE).expect("CONFIG_TEMPLATE must be valid preferences.toml");
         assert_eq!(cfg.guard.max_removals, 20);
+    }
+
+    #[test]
+    fn the_shipped_example_parses_too() {
+        // `examples/preferences.toml` is the long-form copy of the template, and it is the
+        // one a reader is most likely to paste from. Nothing checked it: it carried
+        // `[retention.generations]` and `[retention.manifests]` for a whole phase after the
+        // generation format was deleted, and both were silently ignored — a documented
+        // setting that does nothing is worse than an undocumented one.
+        let text = include_str!("../examples/preferences.toml");
+        let cfg: linix::config::Config =
+            toml::from_str(text).expect("examples/preferences.toml must parse");
+        assert_eq!(
+            cfg.rate_limit_max_wait_secs, 30,
+            "the example and the built-in default disagree"
+        );
     }
 
     #[test]

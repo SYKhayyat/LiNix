@@ -50,11 +50,19 @@ impl DataLock {
                     break;
                 }
                 if Instant::now() >= deadline {
+                    // S27: the old text ended "remove linix.lock if nothing is running", and
+                    // that advice is never right. The lock is an OS lock on an open handle,
+                    // released when the holding process exits — so a lock that is still
+                    // contended after the wait proves a live holder, and deleting the file
+                    // takes the lock away from it rather than from a corpse.
                     return Err(Error::Other(format!(
-                        "the LiNix data directory is locked by {}.\n  \
+                        "the LiNix data directory is locked by {}, and still was after {}s.\n  \
                          {} is where state lives, and two writers make a removal out of a race.\n  \
-                         Wait for that run to finish, or remove {} if nothing is running.",
+                         The lock is held by a running process, not by the file: {} exists\n  \
+                         between runs and deleting it would take the lock from a live writer.\n  \
+                         Wait for that run to finish, or stop it.",
                         Self::holder(&owner_path),
+                        timeout.as_secs(),
                         data_dir.display(),
                         path.display()
                     )));

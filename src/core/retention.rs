@@ -31,7 +31,11 @@ impl RetentionPolicy {
     }
 }
 
+/// `deny_unknown_fields` for the same reason `Config` carries it: a table nobody reads is a
+/// setting that documents itself as working. `[retention.generations]` outlived the
+/// generation format by a whole phase, in the shipped example, silently ignored.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RetentionConfig {
     // `generations` is gone: the generation format was deleted (git is the manifest history
     // now), so there is no generation history to retain — only filesystem snapshots.

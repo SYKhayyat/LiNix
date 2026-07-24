@@ -23,6 +23,11 @@ max_parallel = 8
 # (npm/pnpm/yarn registry, PyPI for pip, the VS Code marketplace).
 network_timeout_secs = 15
 
+# How long to wait out a remote rate limit (GitHub) before giving up and naming the host
+# and its reset time. The wait is taken while the data directory is locked, so a long one
+# is indistinguishable from a hang; raise it for an unattended job that would rather wait.
+rate_limit_max_wait_secs = 30
+
 # Retention window passed to `nix-collect-garbage --delete-older-than` when cleaning
 # Nix orphans (e.g. "30d", "2w"). Replaces the previously hardcoded 30 days.
 nix_gc_age = "30d"
@@ -78,24 +83,18 @@ ext = "vscode"
 # Managed config files are declared with a `link:` line in a module, not here — a file you
 # want on this machine is a declaration, and declarations live in modules/ (II.1).
 
-# Retention: how long to keep each of LiNix's three histories. Each block is independent
-# (they cost very different amounts of disk). Rules combine as a UNION — an entry is kept
-# if it matches ANY rule — and the single most-recent entry is always kept. An empty
-# block keeps everything.
+# Retention: how long to keep filesystem snapshots. Rules combine as a UNION — a snapshot
+# is kept if it matches ANY rule — and the single most-recent one is always kept, so a
+# policy can never leave you with nothing to roll back to.
 #   keep_last  — keep the N newest
 #   keep_days  — keep anything younger than N days
 #   keep       — always keep these ids/labels (pins)
-[retention.generations]
-# keep_last = 50
-# keep_days = 90
-# keep = ["known-good-2026-07"]
-
+# Snapshots are the only history with a retention policy: manifest history is git, and
+# `linix rollback` is `git checkout` + sync, so git decides how much of it there is.
 [retention.snapshots]
-# keep_last = 5
+# keep_last = 10
 # keep_days = 30
-
-[retention.manifests]
-# keep_last = 100
+# keep = ["known-good-2026-07"]
 
 # Scripting Hooks (Phase 4.1)
 [hooks.before_install]

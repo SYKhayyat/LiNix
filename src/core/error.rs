@@ -37,8 +37,8 @@ pub enum Error {
     #[error("Insufficient permissions for this operation: {0}")]
     Permission(String),
 
-    #[error("API Rate limit exceeded")]
-    RateLimit,
+    #[error("API rate limit: {0}")]
+    RateLimit(String),
 
     #[error("Scripting engine error (Lua/Rhai): {0}")]
     LuaScript(String),

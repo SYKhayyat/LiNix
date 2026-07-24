@@ -71,7 +71,54 @@ pub struct GithubBackendCore {
     /// `[guard] confine_bin`: whether the deployed name may reach outside `~/.local/bin` (SEC1).
     pub confine_bin: bool,
     pub github_token: Option<String>,
+    /// `rate_limit_max_wait_secs`: the ceiling on waiting out a 403 (S26).
+    pub rate_limit_max_wait: Duration,
     pub internal_lock: Mutex<()>,
+}
+
+/// What to do with a response that may be a rate limit (S26).
+#[derive(Debug, PartialEq, Eq)]
+enum RateLimit {
+    /// Not a rate limit: a success, or a 403 for a reason waiting cannot change (a bad token,
+    /// a private repo, a limit that has already reset).
+    NotLimited,
+    /// Wait this many seconds, then retry once.
+    WaitThenRetry(u64),
+    /// The reset is further out than the ceiling. Say so; do not sleep on a held lock.
+    TooLong(u64),
+}
+
+/// Decide from a 403's `x-ratelimit-reset` header. Pure — the clock and the ceiling are
+/// arguments — because the decision is the part that has to be right, and an integration test
+/// against api.github.com cannot make a rate limit happen on demand.
+fn rate_limit_action(status: u16, reset_header: Option<&str>, now: u64, cap: u64) -> RateLimit {
+    if status != 403 {
+        return RateLimit::NotLimited;
+    }
+    let Some(reset) = reset_header.and_then(|h| h.trim().parse::<u64>().ok()) else {
+        return RateLimit::NotLimited;
+    };
+    if reset <= now {
+        return RateLimit::NotLimited;
+    }
+    let wait = reset - now + 1;
+    if wait > cap {
+        RateLimit::TooLong(wait)
+    } else {
+        RateLimit::WaitThenRetry(wait)
+    }
+}
+
+fn rate_limit_of(res: &reqwest::Response, cap: u64) -> RateLimit {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let header = res
+        .headers()
+        .get("x-ratelimit-reset")
+        .and_then(|v| v.to_str().ok());
+    rate_limit_action(res.status().as_u16(), header, now, cap)
 }
 
 impl GithubBackendCore {
@@ -81,6 +128,7 @@ impl GithubBackendCore {
         locks_file: PathBuf,
         confine_bin: bool,
         github_token: Option<String>,
+        rate_limit_max_wait: Duration,
     ) -> Self {
         let rate_limiter = if github_token.is_some() {
             RateLimiter::github_authenticated()
@@ -103,6 +151,7 @@ impl GithubBackendCore {
             rate_limiter,
             confine_bin,
             github_token,
+            rate_limit_max_wait,
             internal_lock: Mutex::new(()),
         }
     }
@@ -114,33 +163,41 @@ impl GithubBackendCore {
         crate::core::download::check_scheme(url, false, url)?;
         self.rate_limiter
             .execute(|| async {
-                let mut request_builder =
-                    self.client.get(url).header("User-Agent", "linix-manager");
-
-                if let Some(token) = &self.github_token {
-                    request_builder =
-                        request_builder.header("Authorization", format!("Bearer {}", token));
-                }
-
-                let res = request_builder.send().await.map_err(Error::from)?;
-
-                if res.status() == 403 {
-                    if let Some(reset) = res.headers().get("x-ratelimit-reset") {
-                        let reset_time = reset.to_str().unwrap_or("0").parse::<u64>().unwrap_or(0);
-                        let now = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs();
-                        if reset_time > now {
-                            let wait = reset_time - now + 1;
-                            warn!("GitHub Rate Limit reached. Pausing for {}s...", wait);
-                            tokio::time::sleep(Duration::from_secs(wait)).await;
-                        }
+                let cap = self.rate_limit_max_wait.as_secs();
+                let res = self.send(url).await?;
+                match rate_limit_of(&res, cap) {
+                    RateLimit::NotLimited => Ok(res),
+                    RateLimit::TooLong(wait) => Err(Error::RateLimit(format!(
+                        "api.github.com is rate limiting this machine and does not reset for \
+                         {}s, past the {}s ceiling. Raise `rate_limit_max_wait_secs` in \
+                         preferences.toml to wait it out, or set GITHUB_TOKEN for a far \
+                         larger allowance.",
+                        wait, cap
+                    ))),
+                    RateLimit::WaitThenRetry(wait) => {
+                        warn!(
+                            "api.github.com rate limit reached; waiting {}s for it to reset, \
+                             then retrying once.",
+                            wait
+                        );
+                        tokio::time::sleep(Duration::from_secs(wait)).await;
+                        // One retry. The old code slept and returned the same 403, so the
+                        // wait bought nothing at all — up to an hour of a held data lock
+                        // followed by the identical error.
+                        self.send(url).await
                     }
                 }
-                Ok(res)
             })
             .await
+    }
+
+    async fn send(&self, url: &str) -> Result<reqwest::Response> {
+        let mut request_builder = self.client.get(url).header("User-Agent", "linix-manager");
+        if let Some(token) = &self.github_token {
+            request_builder =
+                request_builder.header("Authorization", format!("Bearer {}", token));
+        }
+        request_builder.send().await.map_err(Error::from)
     }
 
     /// `None` when the release does not exist, which is an answer rather than a failure: a pin
@@ -733,6 +790,7 @@ pub fn register(
         // A secret is the environment only, never a file (II.1) — `preferences.toml` is
         // committed to the repo it lives in, so a token key there is a token in git.
         std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty()),
+        Duration::from_secs(cfg.rate_limit_max_wait_secs),
     ));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())
@@ -746,6 +804,61 @@ pub fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // S26. The old handler slept until the reset — up to an hour, holding the data lock —
+    // and then returned the same 403 it had slept on, so the wait bought nothing.
+    #[test]
+    fn a_reset_inside_the_ceiling_is_waited_out_and_retried() {
+        assert_eq!(
+            rate_limit_action(403, Some("1000"), 980, 30),
+            RateLimit::WaitThenRetry(21)
+        );
+    }
+
+    #[test]
+    fn a_reset_past_the_ceiling_is_refused_with_the_wait_it_would_have_taken() {
+        assert_eq!(
+            rate_limit_action(403, Some("4600"), 1000, 30),
+            RateLimit::TooLong(3601)
+        );
+    }
+
+    #[test]
+    fn the_ceiling_is_the_only_thing_that_decides_between_them() {
+        // The same response, one machine willing to wait an hour and one not.
+        assert_eq!(
+            rate_limit_action(403, Some("4600"), 1000, 7200),
+            RateLimit::WaitThenRetry(3601)
+        );
+    }
+
+    #[test]
+    fn a_403_that_is_not_a_rate_limit_is_never_waited_on() {
+        // A bad token or a private repo: no header, and no amount of waiting changes it.
+        assert_eq!(rate_limit_action(403, None, 1000, 30), RateLimit::NotLimited);
+        // A header that is not a number is not a reset time either.
+        assert_eq!(
+            rate_limit_action(403, Some("soon"), 1000, 30),
+            RateLimit::NotLimited
+        );
+        // And a limit that has already reset is over, whatever the header says.
+        assert_eq!(
+            rate_limit_action(403, Some("999"), 1000, 30),
+            RateLimit::NotLimited
+        );
+    }
+
+    #[test]
+    fn a_response_that_is_not_a_403_is_left_alone() {
+        for status in [200, 404, 429, 500] {
+            assert_eq!(
+                rate_limit_action(status, Some("99999"), 1000, 30),
+                RateLimit::NotLimited,
+                "status {} was treated as a rate limit",
+                status
+            );
+        }
+    }
 
     fn release(tag: &str) -> GithubRelease {
         GithubRelease {

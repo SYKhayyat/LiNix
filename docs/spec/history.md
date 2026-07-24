@@ -46,6 +46,29 @@ entry still resolves; a dry run does none of it and leaves the journal wanting r
 declares it or is known to need it, and a capability with no caller is a second removal path
 with no test — which is the thing being removed here.
 
+### S26 and S27 — the two that stood between anyone and finding S24
+
+**The rate limit is capped, retried once, and settable** (`rate_limit_max_wait_secs`, default
+30). The part the ruling did not name is the part that made the old behaviour pure loss: it
+slept up to an hour and then **returned the same 403 it had slept on**, so the wait bought
+nothing at any length. The decision is a pure function of `(status, header, now, cap)` with five
+tests, because no integration test can make api.github.com rate-limit on demand — and writing it
+that way surfaced a case the entry never mentioned: **a 403 that is not a rate limit** (a bad
+token, a private repo) used to be slept on too, if it happened to carry a future timestamp.
+
+**S27's message was wrong in a way no timing change could fix.** It ended "remove `linix.lock`
+if nothing is running." The lock is an OS lock on an open handle, released when the holder
+process exits — so a lock still contended after the wait *proves* a live holder, and the advice
+was to take the lock away from a running writer. It now says exactly that.
+
+**S30, found by carrying one key across every layer that holds it.** Adding
+`rate_limit_max_wait_secs` to the config template and to `examples/preferences.toml` meant
+reading the example, which still documented `[retention.generations]` and
+`[retention.manifests]` — deleted with the generation format a phase earlier and silently
+ignored ever since, because `RetentionConfig` did not deny unknown fields. **The template has a
+parse test; its long-form twin, the file a reader is likelier to paste from, had none.** It has
+one now, and the struct denies unknown fields for the reason already written on `Config`.
+
 ### The fixture was load-bearing, and it was hiding two more bugs (S28, S29)
 
 Turning off `TestKernel`'s `config.dry_run` did not just enable a test. **It broke one, and the
