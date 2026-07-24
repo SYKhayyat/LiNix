@@ -611,6 +611,120 @@ impl App {
         }
     }
 
+    /// Plan every declared `dotfiles:` tree, resolved against this machine (7n).
+    ///
+    /// Returns each tree with what it would place, so one walk answers the preview, the
+    /// collision check and the apply. Walking three times would be three chances to disagree.
+    pub fn plan_dotfile_trees(
+        &self,
+        state: &crate::model::DesiredState,
+    ) -> Result<Vec<(String, crate::model::dotfiles::TreePlan)>> {
+        let mut out = Vec::new();
+        for (tree, opts, origin) in state.dotfile_trees() {
+            let declared = std::path::Path::new(tree);
+            let root = if declared.is_absolute() {
+                declared.to_path_buf()
+            } else {
+                self.config.config_root().join(declared)
+            };
+            if !root.is_dir() {
+                return Err(Error::Validation(format!(
+                    "{}: `dotfiles:{}` is not a directory ({}). It names a folder to mirror, \
+                     not a file — a single file is a `link:`.",
+                    origin,
+                    tree,
+                    root.display()
+                )));
+            }
+            let target = match opts.one("target") {
+                Some(t) => crate::backends::link::resolve_target(t)?,
+                None => dirs::home_dir()
+                    .ok_or_else(|| Error::Other("could not find the home directory".into()))?,
+            };
+            let owned = |p: &std::path::Path| p.is_symlink();
+            let plan = crate::model::dotfiles::plan(&root, &target, &|p| p.exists() || p.is_symlink(), &owned)
+                .map_err(|e| Error::Io(format!("walking {}: {}", root.display(), e)))?;
+            out.push((tree.to_string(), plan));
+        }
+
+        // U25: several trees are fine; two claiming one destination is not, and the error
+        // names both rather than letting whichever ran last win.
+        let clashes = crate::model::dotfiles::conflicting_destinations(&out);
+        if let Some((dest, trees)) = clashes.iter().next() {
+            return Err(Error::Validation(format!(
+                "two dotfiles trees both place {}: {}. One destination has one source — \
+                 remove it from one tree, or narrow one with a `when`.",
+                dest.display(),
+                trees.join(" and ")
+            )));
+        }
+        Ok(out)
+    }
+
+    /// Mirror the declared trees into place (7n).
+    ///
+    /// **The collisions are shown before anything is written (U23).** A fresh machine's home
+    /// directory is full of files a distribution put there, so the first sync of a new box asks
+    /// this question forty times at once; answering it forty times individually is a refusal
+    /// that teaches people to bypass refusals. So the whole list is printed, once, and the run
+    /// stops — unless `--replace-existing` says they are all expected, which is the owner's
+    /// bypass for the common case where every one of them is an untouched default.
+    pub async fn apply_dotfile_trees(&self, state: &crate::model::DesiredState) -> Result<()> {
+        let plans = self.plan_dotfile_trees(state)?;
+        if plans.is_empty() {
+            return Ok(());
+        }
+
+        let colliding: Vec<&std::path::PathBuf> =
+            plans.iter().flat_map(|(_, p)| p.collisions.iter()).collect();
+        if !colliding.is_empty() && !self.config.replace_existing {
+            let mut msg = format!(
+                "{} destination(s) already hold a file LiNix did not put there:\n",
+                colliding.len()
+            );
+            for dest in &colliding {
+                msg.push_str(&format!("    {}\n", dest.display()));
+            }
+            msg.push_str(
+                "\nNothing has been written. Move or delete them, or re-run with \
+                 `--replace-existing` if they are defaults you do not need.",
+            );
+            return Err(Error::Refused(msg));
+        }
+
+        for (tree, plan) in &plans {
+            if self.config.dry_run {
+                info!(
+                    "[DRY-RUN] would place {} file(s) from `dotfiles:{}`",
+                    plan.placements.len(),
+                    tree
+                );
+                continue;
+            }
+            for placement in &plan.placements {
+                if let Some(parent) = placement.destination.parent() {
+                    tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
+                }
+                // An existing destination is replaced only once the collision check above has
+                // passed or been waived, so this cannot silently overwrite anything.
+                if placement.destination.exists() || placement.destination.is_symlink() {
+                    tokio::fs::remove_file(&placement.destination)
+                        .await
+                        .map_err(Error::from)?;
+                }
+                self.executor
+                    .symlink(&placement.source, &placement.destination)
+                    .await?;
+            }
+            info!(
+                "`dotfiles:{}` placed {} file(s).",
+                tree,
+                plan.placements.len()
+            );
+        }
+        Ok(())
+    }
+
     /// The `[[bootstrap]]` rows this repo carries, if the file is approved (7c/U10).
     pub fn bootstrap_rows(&self) -> Vec<crate::model::bootstrap::BootstrapDef> {
         let layout = self.config.layout();

@@ -562,11 +562,7 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     // A config can be all dependents/schedules and no package changes (just a `service:` or a
     // `schedule:` line). That is still work, so the "nothing to do" exit has to account for
     // the dependent phase and the schedule phase too.
-    if changes.is_empty()
-        && !state.has_dependents()
-        && state.schedules().next().is_none()
-        && !state.has_execs()
-    {
+    if changes.is_empty() && !state.has_non_package_work() {
         // Even with no packages/dependents/schedules to apply, an extra may have been
         // *removed* — deleting the last `service:` line is a real change (S20). Reconcile the
         // applied-extras ledger so that undo still happens; it is a cheap no-op otherwise.
@@ -638,6 +634,9 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     app.apply_dependents(&state).await?;
     // Ordering phase 4 (S21): provision the declared schedules onto the OS scheduler.
     app.apply_schedules(&state).await?;
+    // Phase 3b (7n): the dotfiles trees, with the dependents — a tree is a pile of `link:`
+    // lines and belongs where they do.
+    app.apply_dotfile_trees(&state).await?;
     // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and dependents a
     // script is likely to lean on. A verb, so it has no teardown phase of its own.
     app.apply_execs(&state).await?;
@@ -5585,6 +5584,11 @@ async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Config> {
         Some(cli.allow_mass_removal),
         Some(cli.allow_mass_install),
     )?;
+    // A per-run acknowledgement, never a config key (U23): a machine that always bypasses the
+    // dotfiles collision check is a machine where the check does not exist.
+    if cli.replace_existing {
+        config.replace_existing = true;
+    }
     // --quiet has no config-file merge counterpart; apply it directly (a set flag wins).
     if cli.quiet {
         config.quiet = true;

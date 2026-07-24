@@ -196,6 +196,13 @@ pub struct Config {
     #[serde(skip)]
     pub allow_mass_removal: bool,
 
+    /// Replace what a `dotfiles:` tree would overwrite instead of refusing (U23). CLI-only,
+    /// for the same reason as `allow_mass_removal`: the refusal exists so a home directory
+    /// full of distribution defaults is not silently replaced, and a machine that always
+    /// bypasses it is a machine where the check does not exist.
+    #[serde(skip)]
+    pub replace_existing: bool,
+
     /// The root of your LiNix repo (II.1): the folder that holds `modules/`, `profiles/`,
     /// `active`, `priority`, `locks/` and `preferences.toml`. LiNix's own data (the registry,
     /// snapshots) lives BESIDE it, never inside it — see [`safe_data_dir`].
@@ -486,6 +493,7 @@ impl Default for Config {
             dry_run: false,
             yes: false,
             allow_mass_removal: false,
+            replace_existing: false,
             config_root: default_config_root(),
             data_root: default_data_root(),
             preferences_file: default_config_root().join(PREFERENCES_FILE_NAME),

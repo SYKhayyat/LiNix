@@ -21,6 +21,15 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub yes: bool,
 
+    /// Replace files a `dotfiles:` tree would overwrite, instead of refusing
+    ///
+    /// The refusal exists so a home directory full of distribution defaults is not silently
+    /// backed up forty times. This is the per-run acknowledgement that they are expected.
+    /// Deliberately not a config key: a machine that always bypasses the check is a machine
+    /// where the check does not exist.
+    #[arg(long, global = true)]
+    pub replace_existing: bool,
+
     /// Path to a preferences.toml, overriding the one in the config repo
     #[arg(short, long, global = true)]
     pub config: Option<PathBuf>,

@@ -145,6 +145,13 @@ pub enum Statement {
     /// XIII.3. The script goes through II.12's approval ledger like any other code the repo
     /// runs ("hash everything, no exceptions").
     Exec(String, Options),
+    /// `dotfiles:PATH` — a folder mirrored into place, one file at a time (XIII.21).
+    ///
+    /// Every other statement names one thing; this names a tree and stands for as many
+    /// declarations as it holds. It links **files**, never directories (U22): a symlinked
+    /// directory takes everything the application later writes there into the git-tracked
+    /// repo, and `bundle` then hands it to whoever the backup goes to.
+    Dotfiles(String, Options),
     Use(Reference),
     /// `exclude heavy` — subtract that module's or profile's packages (II.4).
     Exclude(Reference),
@@ -304,6 +311,7 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
         ("link:", Statement::Link),
         ("setting:", Statement::Setting),
         ("exec:", Statement::Exec),
+        ("dotfiles:", Statement::Dotfiles),
     ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             let (name, options) = split_options(origin, rest.trim())?;
@@ -351,7 +359,9 @@ fn parse_var(line: &str) -> Option<Statement> {
 /// statement and must not be mistaken for a set expression (II.4), whatever punctuation its
 /// payload carries — a `link:` target is a path, not a difference.
 fn starts_with_statement_prefix(line: &str) -> bool {
-    ["absent:", "repo:", "shim:", "schedule:", "service:", "link:", "exec:"]
+    [
+        "absent:", "repo:", "shim:", "schedule:", "service:", "link:", "exec:", "dotfiles:",
+    ]
         .iter()
         .any(|p| line.starts_with(p))
 }
@@ -617,6 +627,7 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
         Statement::Schedule(name, o) => validate_extra_options(origin, "schedule", name, o),
         Statement::Setting(name, o) => validate_setting(origin, name, o),
         Statement::Exec(name, o) => validate_exec(origin, name, o),
+        Statement::Dotfiles(name, o) => validate_extra_options(origin, "dotfiles", name, o),
         Statement::Repo { .. }
         | Statement::Use(_)
         | Statement::Exclude(_)
@@ -649,6 +660,10 @@ pub const SETTING_OPTION_KEYS: &[&str] = &["value", "scope"];
 /// inventing one would be LiNix claiming to undo something it cannot: without it, removing an
 /// `exec:` drops the record and nothing else, and `plan` says so in those words.
 pub const EXEC_OPTION_KEYS: &[&str] = &["runs", "undo"];
+/// `target` is where the tree is mirrored to; absent means the home directory, which is what a
+/// dotfiles tree mirrors by definition. There is deliberately no per-file option: the tree has
+/// no place to write one, which is why it never decrypts (U24).
+pub const DOTFILES_OPTION_KEYS: &[&str] = &["target"];
 
 fn keys_for(prefix: &str) -> &'static [&'static str] {
     match prefix {
@@ -657,6 +672,7 @@ fn keys_for(prefix: &str) -> &'static [&'static str] {
         "link" => LINK_OPTION_KEYS,
         "setting" => SETTING_OPTION_KEYS,
         "exec" => EXEC_OPTION_KEYS,
+        "dotfiles" => DOTFILES_OPTION_KEYS,
         _ => SCHEDULE_OPTION_KEYS,
     }
 }

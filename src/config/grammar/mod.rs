@@ -392,7 +392,8 @@ fn merge_options(stmt: &mut Statement, extra: Options, origin: &Origin) -> Resul
         | Statement::Service(_, o)
         | Statement::Link(_, o)
         | Statement::Setting(_, o)
-        | Statement::Exec(_, o) => o,
+        | Statement::Exec(_, o)
+        | Statement::Dotfiles(_, o) => o,
         Statement::Repo { .. }
         | Statement::Use(_)
         | Statement::Exclude(_)

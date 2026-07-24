@@ -377,6 +377,45 @@ line from the file counts, and deactivating a profile does not.
 sources another file, or curls one, changes behaviour without changing its hash, and LiNix cannot
 see that.
 
+## A folder of dotfiles
+
+If your dotfiles already sit in a tree that mirrors `$HOME`, say so once instead of writing
+forty `link:` lines:
+
+```
+dotfiles:./dotfiles
+```
+
+Every file under `./dotfiles` is linked to the matching place under your home directory —
+`./dotfiles/.config/nvim/init.lua` becomes `~/.config/nvim/init.lua`. `@target=` mirrors
+somewhere else.
+
+**Files, never directories.** Linking `~/.config/nvim` as a whole would take the directory
+hostage: every cache, session file and plugin lockfile the app later writes lands inside your
+git repo, and `bundle` would hand it to whoever gets the backup. So each file is linked
+individually, and the directory stays yours.
+
+**A destination that already holds your own file stops the run** — all of them at once, listed,
+before anything is written:
+
+```
+3 destination(s) already hold a file LiNix did not put there:
+    /home/me/.bashrc
+    ...
+Nothing has been written. Move or delete them, or re-run with `--replace-existing`.
+```
+
+On a fresh machine those are usually untouched distribution defaults, which is what
+`--replace-existing` is for. It is a per-run flag and deliberately not a config key: a machine
+that always bypasses the check is one where the check does not exist.
+
+**The tree never decrypts.** A `.age` file in it is linked as the ciphertext it is — deciding by
+file extension would be magic that silently writes plaintext. Secrets stay on explicit `link:`
+lines where `@decrypt=` is written down.
+
+**Several trees are fine** (`dotfiles:./work` under a `when`). Two trees that would place the
+same destination is an error naming both.
+
 ## Secrets
 
 **Your config repo can be public.** A secret is committed encrypted and decrypted onto the
