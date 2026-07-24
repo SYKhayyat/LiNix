@@ -1082,7 +1082,14 @@ impl App {
                 info!("[DRY-RUN] would run exec:{} ({})", script, origin);
                 continue;
             }
-            info!("running exec:{} ({})", script, origin);
+            // `@runs=always` is named in the line it produces: a script that runs every sync
+            // makes the sync non-idempotent, and the next person debugging a slow sync needs a
+            // thread to pull (U13). A counted or once script does not need the note.
+            if opts.one("runs") == Some("always") {
+                info!("running exec:{} (runs=always — every sync) ({})", script, origin);
+            } else {
+                info!("running exec:{} ({})", script, origin);
+            }
             self.run_exec_script(&path).await?;
             // Recorded only on success. A script that failed did not happen, and the next sync
             // must be free to try it again.

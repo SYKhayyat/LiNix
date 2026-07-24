@@ -174,13 +174,18 @@ impl BackendCore for GenericBackendCore {
 
     async fn check_health(&self) -> Result<HealthReport> {
         if !self.is_available() {
+            // "not found" rather than "not on PATH": a custom backend's binary may be an
+            // absolute path (U16), and telling someone their `/opt/vendor/thing` is "not on
+            // PATH" points them at the wrong thing to fix.
+            let b = self.binary();
+            let where_ = if b.contains(['/', '\\']) {
+                format!("`{}` does not exist or is not executable", b)
+            } else {
+                format!("`{}` is not on PATH", b)
+            };
             return Ok(HealthReport {
                 status: HealthStatus::Critical,
-                message: Some(format!(
-                    "`{}` is not on PATH, so the `{}` backend cannot run",
-                    self.binary(),
-                    self.name
-                )),
+                message: Some(format!("{}, so the `{}` backend cannot run", where_, self.name)),
             });
         }
         Ok(HealthReport {

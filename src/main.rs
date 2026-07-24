@@ -2896,7 +2896,7 @@ async fn handle_status(app: &App, json: bool) -> Result<()> {
         }
     }
     if !report.remove.is_empty() {
-        println!("- drift / `prune` would remove ({}):", report.remove.len());
+        println!("- drift — `sync` would remove ({}):", report.remove.len());
         for e in &report.remove {
             println!("    {}:{}", e.backend, e.name);
         }

@@ -315,16 +315,32 @@ struct CustomBackendsFile {
     backend: Vec<CustomBackendDef>,
 }
 
-/// True for a program name LiNix will run for a custom backend.
+/// True for a program LiNix will run for a custom backend: a plain command name found on
+/// `$PATH`, or a path to an executable.
 ///
-/// A path is refused rather than resolved: whether `binary = "/opt/vendor/thing"` is allowed
-/// is **U16**, still open, and a definition naming an absolute path is one that works on one
-/// machine — the exact property 7a moved this file to fix. Refusing keeps the question open;
-/// running it would answer it in code.
+/// **A path is allowed (U16, ruled 2026-07-24).** A prefix that runs `/opt/vendor/thing` is
+/// more useful than one confined to `$PATH`, and the cost — a definition that only works on the
+/// machine with that path — is caught where it lands: `check health` reports a custom backend
+/// whose binary is missing as a named diagnosis, not an unknown-backend error three layers
+/// away. Whitespace and emptiness are still refused, because those are a malformed value rather
+/// than a path.
 fn is_valid_binary(binary: &str) -> bool {
-    !binary.is_empty()
-        && !binary.chars().any(|c| c.is_whitespace())
-        && !binary.contains(['/', '\\'])
+    !binary.trim().is_empty() && !binary.chars().any(|c| c.is_whitespace())
+}
+
+/// Expand a leading `~` in a `binary` path to the user's home directory.
+///
+/// `which::which` — the availability check — does not expand `~`, so a `binary = "~/bin/tool"`
+/// would read as a literal `~` directory and never be found. Expanded here, once, at the seam
+/// where the definition becomes a runnable command. A `~` anywhere but the start is left alone:
+/// only a leading one is the home-directory shorthand.
+fn expand_binary(binary: &str) -> String {
+    if let Some(rest) = binary.strip_prefix("~/").or_else(|| binary.strip_prefix("~\\")) {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest).to_string_lossy().into_owned();
+        }
+    }
+    binary.to_string()
 }
 
 /// True for a syntactically valid backend id: non-empty, no whitespace or path
@@ -439,9 +455,8 @@ pub fn register_custom_backends(
         if let Some(binary) = &def.binary {
             if !is_valid_binary(binary) {
                 warn!(
-                    "Skipping custom backend '{}': `binary = \"{}\"` is not a plain command \
-                     name. A path is refused — a definition that names one only works on the \
-                     machine that has it there, and this file travels with the repo.",
+                    "Skipping custom backend '{}': `binary = \"{}\"` is empty or contains \
+                     whitespace, so it is not a command LiNix can run.",
                     def.name, binary
                 );
                 continue;
@@ -477,7 +492,7 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
 
     let config = ManagerConfig {
         name: def.name.clone(),
-        binary: def.binary,
+        binary: def.binary.as_deref().map(expand_binary),
         install_args: def.install_args,
         remove_args: def.remove_args,
         list_args: def.list_args,
@@ -751,25 +766,59 @@ mod tests {
         assert_eq!(caps.name(), "firewall");
     }
 
-    /// U16 stays open: a `binary` naming a path is refused rather than resolved, because a
-    /// definition that only works where `/opt/vendor/thing` exists is the machine-local
-    /// problem 7a moved this file to fix.
+    /// U16 (ruled 2026-07-24): a `binary` naming a path is ALLOWED — `/opt/vendor/thing` is a
+    /// more useful prefix than one confined to `$PATH`, and a missing one is caught by
+    /// `check health`, not refused at load.
     #[test]
-    fn a_binary_that_names_a_path_is_refused() {
+    fn a_binary_that_names_a_path_is_accepted() {
         let (_, exec) = mock_exec();
         let mut reg = BackendRegistry::new();
-        for path in ["/opt/vendor/ufw", "..\\ufw", "ufw x"] {
+        for path in ["/opt/vendor/ufw", "..\\ufw", "~/bin/ufw"] {
+            let mut r = BackendRegistry::new();
             let def = CustomBackendDef {
                 binary: Some(path.into()),
+                ..firewall_def()
+            };
+            assert_eq!(
+                register_custom_backends(&mut r, &exec, vec![def]),
+                1,
+                "`{}` should be accepted as a binary",
+                path
+            );
+            reg = r;
+        }
+        let _ = reg;
+    }
+
+    /// ...but an empty or whitespace-bearing `binary` is still a malformed value, not a path,
+    /// and is refused.
+    #[test]
+    fn an_empty_or_spaced_binary_is_still_refused() {
+        let (_, exec) = mock_exec();
+        for bad in ["", "   ", "ufw x"] {
+            let mut reg = BackendRegistry::new();
+            let def = CustomBackendDef {
+                binary: Some(bad.into()),
                 ..firewall_def()
             };
             assert_eq!(
                 register_custom_backends(&mut reg, &exec, vec![def]),
                 0,
                 "`{}` was accepted as a binary",
-                path
+                bad
             );
         }
+    }
+
+    /// `~/bin/tool` expands to the home directory, because the availability check does not.
+    #[test]
+    fn a_leading_tilde_expands_to_home() {
+        let expanded = expand_binary("~/bin/tool");
+        assert!(!expanded.starts_with('~'), "{}", expanded);
+        assert!(expanded.ends_with("bin/tool") || expanded.ends_with("bin\\tool"), "{}", expanded);
+        // A bare command and a `~` that is not a leading path segment are left untouched.
+        assert_eq!(expand_binary("ufw"), "ufw");
+        assert_eq!(expand_binary("/opt/x~y"), "/opt/x~y");
     }
 
     fn write_repo(dir: &Path, body: &str) -> std::path::PathBuf {

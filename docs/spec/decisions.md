@@ -920,13 +920,19 @@ value is the rehearsal existing at all.
 
 ## U13
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U13 — Does `@runs=always` exist?** It is the escape hatch inside the escape hatch, and every
 such key eventually becomes the default somebody copies. *Recommendation:* yes, but it prints
 what it is doing on every sync — a line that runs unconditionally must be visible in the run it
 made non-idempotent, or the next person debugging a slow sync has no thread to pull.
 
+
+**RULED (owner, 2026-07-24): yes.** `@runs=always` exists and prints a line naming itself on
+every sync (`runs=always — every sync`), so a non-idempotent line is visible in the run it made
+non-idempotent. Once is the default; `@runs=N` runs a set number of times (already built as the
+ceiling). A count may also be expressed by gating `@runs=always` with a `when` — the owner's
+preferred spelling — which the existing `when` machinery already supports.
 ---
 
 ## U15
@@ -959,7 +965,7 @@ so approving the shared policy never rubber-stamps the local file. Events are `a
 
 ## U16
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **Still open, and now reachable — 2026-07-23.** `binary` exists (7a), and a path in it is
 **refused** with a message saying why: this is the status quo preserved, not an answer. Allowing
@@ -971,6 +977,12 @@ it later is additive; allowing it now would decide the question in code.
 is missing — the failure should be a named diagnosis, not an unknown-backend error three layers
 away.
 
+
+**RULED (owner, 2026-07-24): yes.** A custom backend's `binary` may be an absolute path; a
+leading `~` is expanded. A definition naming a path that is not on this machine is not refused
+at load — it is a named diagnosis in `check health` ("`/opt/vendor/thing` does not exist or is
+not executable"), where the fix is obvious. Whitespace and emptiness are still refused, being a
+malformed value rather than a path.
 ---
 
 ## U17
