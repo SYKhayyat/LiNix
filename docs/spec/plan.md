@@ -1208,6 +1208,40 @@ declaration restores its backup, T1's fix is smaller than it looks.
   it; nothing proves it. A test that greps the source would pass on a rebuild that committed
   through some other route, so the honest one needs a backend that really removes and reinstalls.
 
+### S24 — what reading the code established, so it is not rediscovered
+
+Established 2026-07-23 by reading the tree, before any fix. **No code was changed.**
+
+- **The site is `src/app/sync/mod.rs:432`**, `let _ = handler.remove(…)` in the `is_install`
+  branch. **The comment above it at `:404-408` argues for the bug in the document's own voice** —
+  *"the remove-before-reinstall of the install path is not a removal of intent — the same package
+  is reinstalled next — so it is not guarded here."* It is wrong twice: the package is not
+  reinstalled next if the install fails, and *intent* was never the test. **That comment is
+  deleted with the line it defends**, or it will justify the next one.
+- **`watch` needs no separate fix.** Both `sync` and `watch` reach `heal()` through
+  `reconcile()` (`main.rs:474`), which is already one function — the comment there records that
+  `watch`'s copy used to drift and was merged for exactly this reason. One fix, both paths.
+- **The `let _ =`-around-a-removal family is seven sites, and six are not this bug.**
+  `appimage.rs:137` deletes a file LiNix downloaded a moment earlier that failed its checksum —
+  LiNix's own artifact, and the discard is deliberate so the verification error survives.
+  `datalock.rs:84` and `journal.rs:286` remove LiNix's own lock and journal. `scheduler/mod.rs`
+  `:187`, `:188` and `:333` remove generated timer, service and plist files — **not this class,
+  but they do swallow a failed removal silently**, which is the fail-loud rule and belongs in
+  its own entry rather than being fixed under cover of this one.
+- **A test pins the bug as correct behaviour, and it is green.**
+  `tests/critical_paths_tests.rs:186`, `test_journal_self_healing_logic`, is documented as
+  verifying that healing *"correctly uninstalls and re-attempts"* and primes the mock with
+  `brew uninstall stale-pkg`. **The suite was not silent about this path — it asserted it.**
+  That test changes with the fix, and the change is part of the fix, not cleanup after it.
+- **`MockExecutor::get_calls()` already exists** (`core/executor.rs:275`), so the honest test is
+  available without new infrastructure: heal an interrupted `Install` and assert **no** uninstall
+  command was issued. Extend to the sibling cases in the same test — an interrupted *removal*
+  still removes, and a protected package's interrupted removal is still refused by the guard —
+  so a fix cannot restore one branch by breaking another.
+- **The per-backend remove-before-install capability is not needed to land this.** No backend
+  declares it and none is known to need it; building an unused second path now would be a
+  capability with no caller and no test. It is written in II.10 as the rule for when one appears.
+
 **The build order, ruled 2026-07-23.** S24 and S25 first — VI.0 already says nothing else should
 be built before them, and they are one code path seen twice. Then S26/S27, because they are what
 stands between anyone and finding the next S24 on a real machine. Then the ruled work above, in

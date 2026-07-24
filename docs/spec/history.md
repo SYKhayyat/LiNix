@@ -62,6 +62,39 @@ now empty. Twelve were confirmed as built. Three were not:
   refused by a constant — the exact patch-one-line-leave-the-sibling failure `CLAUDE.md` names,
   which the first draft of this ruling had walked straight back into.
 
+### The five that blocked building, and a green test that asserted the worst bug
+
+The owner asked to stop deciding and start building, with the builder asking as it reaches
+questions rather than in advance. **Five decisions genuinely blocked the first commit** and were
+ruled; the rest can wait to be reached. The asking rule is now in `CLAUDE.md`: stop for a
+register ID, for user-visible behaviour, for removing a feature, and for Part II looking wrong —
+nothing else, and a ruling ships in the commit that answers it.
+
+**S24's ruling took the stronger of the two options offered.** The recommendation was to route
+`heal`'s pre-reinstall removal through the guard; the owner ruled that **it does not remove at
+all.** Recovery re-runs the install. Remove-before-install becomes a per-backend capability, off
+by default, and where a backend declares it the removal is ordinary — guard, count, plan,
+`--dry-run`, real error. The reasoning is in **V.64** and it is about paths rather than checks: a
+guard is a good defence against a removal you know about and no defence against one nobody
+remembers is there, which is what this was for thirteen sessions.
+
+**Then the code was read, and it produced the finding of the session.**
+`tests/critical_paths_tests.rs:186` is documented as verifying that healing *"correctly
+uninstalls and re-attempts"*, and primes the mock executor with `brew uninstall stale-pkg`.
+**The suite was not blind to this path. It asserted it.** VI.0 says the 970-test green run was
+aimed at paths nobody thought of; that is too kind. Somebody thought of this one, wrote a test
+for it, and wrote the wrong expectation — so every run since has been confirming the bug. **A
+test can do worse than miss a defect: it can vouch for it**, and a vouched-for defect is
+invisible in exactly the way a missing test is not, because the grep for coverage succeeds.
+
+Also established, so it is not rediscovered: the comment at `sync/mod.rs:404-408` argues for the
+bug in this document's voice and is deleted with the line it defends; `watch` needs no separate
+fix because `reconcile()` already unified it; and of the seven `let _ =`-around-a-removal sites,
+six are LiNix's own files rather than user software — though `scheduler/mod.rs` swallows a failed
+removal silently, which is a different rule and gets its own entry rather than a ride on this one.
+
+**No code was changed this session, on the owner's instruction.**
+
 ### The firewall, approved — and N1 turned out not to be a firewall question
 
 **N1, N2, N3 ruled; N4–N7 still open.** The useful part is N1. It was written as *"is a declared
