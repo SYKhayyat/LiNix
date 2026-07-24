@@ -572,6 +572,36 @@ async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declare
 
 /// Explain why a package is present: how it entered management, and what depends on it./// Explain why a package is present: how it entered management, and what depends on it.
 /// With `as_json`, emit the same provenance as a machine-readable array instead of text.
+/// The commit that first declared `name`, or `None` when git cannot say (XIII.19).
+///
+/// **Nothing is written to support this.** The config repo is a git repo, every sync commits,
+/// and the introducing commit is already recorded — so `why` asks git at the moment someone
+/// wants to know. A store filled in at sync time would be a second copy of git's answer, free
+/// to disagree with it, and a repo cloned or rebased would take the copy out of date silently.
+///
+/// Never an error: a config repo that is not under git, or a package declared only since the
+/// last commit, simply has no answer, and `why` is still worth reading without it.
+async fn introduced_in_git(
+    app: &App,
+    name: &str,
+) -> Option<crate::model::introduced::Introduced> {
+    use crate::model::introduced;
+
+    let root = app.config.config_root();
+    if !root.join(".git").exists() {
+        return None;
+    }
+    // Limited to the files that can hold a declaration, so a mention in a README or a commit
+    // message is never mistaken for the line that introduced the package.
+    let args = introduced::argv(name, &["modules", "profiles", "active"]);
+    let mut argv: Vec<String> = vec!["-C".into(), root.to_string_lossy().into_owned()];
+    argv.extend(args);
+    let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+
+    let out = app.executor.run_output("git", &refs, false).await.ok()?;
+    introduced::introduced_in(&out)
+}
+
 pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
     // Snapshot the state we need, then release the lock before doing async backend queries.
     #[allow(clippy::type_complexity)]
@@ -665,6 +695,11 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
             }
         }
 
+        // XIII.19: when this declaration first appeared, asked of git rather than of a store
+        // LiNix writes at sync time. The config repo is a git repo and every sync commits, so
+        // the fact already exists — and a copy of it could only ever disagree.
+        let introduced = introduced_in_git(app, &name).await;
+
         if as_json {
             json_matches.push(serde_json::json!({
                 "backend": backend,
@@ -676,11 +711,19 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
                 "formats": formats,
                 "lease_expires": lease,
                 "required_by": dependents,
+                "introduced": introduced.as_ref().map(|i| serde_json::json!({
+                    "commit": i.commit,
+                    "date": i.date,
+                    "subject": i.subject,
+                })),
             }));
         } else {
             let ver = version.map(|v| format!(" @ {}", v)).unwrap_or_default();
             println!("{}:{}{}", backend, name, ver);
             println!("  why:         {}", prov);
+            if let Some(i) = &introduced {
+                println!("  added:       {}", i.summary());
+            }
             for (i, d) in declarations.iter().enumerate() {
                 let label = if i == 0 { "declared:" } else { "" };
                 println!("  {:<12} {}", label, d);

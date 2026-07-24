@@ -1188,7 +1188,9 @@ does not fail the sync; and an undeclared event costs nothing.
 sources so two machines diff cleanly. **Exit:** the resolved desired state prints as versioned JSON, with every
 `when` decided and every bare name resolved, and the command takes no locks and changes nothing.
 
-**7l — `git blame` for a declaration (XIII.19).** **Exit:** asking about a declared package names
+**7l — `git blame` for a declaration (XIII.19). DONE 2026-07-24.** `why` names the commit that
+introduced the line, from git's pickaxe (`-S`), limited to the declaration files. Nothing is
+written to support it. **Exit:** asking about a declared package names
 the commit that introduced it, its date and its message, and the implementation reads git —
 `grep` finds no new store written at sync time to support it.
 
