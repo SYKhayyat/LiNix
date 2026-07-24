@@ -1197,16 +1197,23 @@ declaration restores its backup, T1's fix is smaller than it looks.
   **Exit:** a store with no compiled-in support is driven from a definition the user wrote, and
   `gsettings` goes through the same path — an adapter mechanism the built-ins bypass is one
   nobody has tested.
-- **Two tags for one version is an error (D1).** A GitHub repo carrying both `10.2.0` and
-  `v10.2.0` must fail naming both, rather than one winning silently. **Exit:** a release set with
-  both spellings errors; with either alone it resolves as today.
+- ~~**Two tags for one version is an error (D1).**~~ **ALREADY DONE — verified 2026-07-23, no
+  code changed.** `one_release` has raised an error naming both tags since `8a63c80`
+  (2026-07-20), with a test for each half of the exit condition. The register said it was
+  missing; the register was three days stale.
 - **Format recognition is checked against real releases (D2).** The rule is ruled; what was never
   done is the check the entry asked for. **Exit:** the classifier is run against the asset lists
   of real releases and every answer is verified by hand — particularly `binary`, which is the one
   outcome that fails quietly rather than loudly.
-- **A test that `rebuild` writes no git commit (K14).** The behaviour is ruled and the code does
-  it; nothing proves it. A test that greps the source would pass on a rebuild that committed
-  through some other route, so the honest one needs a backend that really removes and reinstalls.
+- ~~**A test that `rebuild` writes no git commit (K14).**~~ **WRITTEN, NEVER RUN — verified
+  2026-07-23.** It is section 12 of `docker/integration/run-in-container.sh`, and it is the
+  honest shape the entry asked for: a real apt package is really removed and reinstalled, and
+  **git is asked directly** (`git rev-list --count HEAD`) rather than through `linix git log`, so
+  a rebuild that committed by some other route would still be caught. It also guards the two ways
+  the check could pass vacuously — it requires a commit to exist first, and asserts the package
+  came back. **What is owed is not the test, it is a run**: no container runtime exists on the
+  development machine (Phase 6), and running it against the WSL install would install and remove
+  real packages on a machine that is not disposable.
 
 ### S24 — what reading the code established, so it is not rediscovered
 

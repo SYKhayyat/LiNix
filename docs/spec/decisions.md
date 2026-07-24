@@ -1175,6 +1175,13 @@ wherever snapshots are.
 committed through some other route, so the honest one needs a backend that really removes and
 reinstalls.
 
+**Checked 2026-07-23: the test exists and has never been run.** `docker/integration/run-in-container.sh`
+section 12 does exactly what this entry asks — a real package removed and reinstalled, and git
+asked directly for its commit count rather than `linix git log`. It cannot run here: there is no
+container runtime on the development machine, and the harness installs and removes real system
+packages, so pointing it at the WSL install would not be a test, it would be an incident. **Filed
+as Phase 6, not as owed work** — the code is written, the run is what is missing.
+
 ---
 
 ## K16
@@ -1237,6 +1244,15 @@ without a leading `v` and errors if both exist; no "track prereleases" option un
 GitHub's newest non-draft, non-prerelease; `@version=` matches the tag with and without a leading
 `v`. **Owed:** a repo carrying both `10.2.0` and `v10.2.0` as tags must be an error naming both.
 Today one wins silently, which is the quiet failure this whole entry existed to prevent.
+
+**ALREADY BUILT when the ruling was written — checked 2026-07-23, nothing to do.** `one_release`
+(`github.rs`) returns `Error::Validation` naming both tags when both spellings resolve, and
+`resolve_release` is its only caller, so there is no second path where one wins silently. Tests:
+`a_pin_that_answers_to_both_spellings_is_an_error_naming_both` and
+`either_spelling_alone_resolves_to_that_release`. It landed on **2026-07-20** in `8a63c80`, three
+days before the entry said it was missing. **This is the tree being better than the sentence
+again** — the same direction Part VII warns about, and the reason "In the tree today" lines are
+worth re-running rather than reading.
 
 ---
 
