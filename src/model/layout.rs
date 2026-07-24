@@ -117,12 +117,31 @@ impl Layout {
         self.config_root.join("vars")
     }
 
-    /// Package managers LiNix does not ship, taught from data (XIII.2). In the repo, because
-    /// a definition that cannot travel makes every line that uses it fail on every machine
-    /// but the one where somebody hand-wrote the file — including the fresh machine the repo
-    /// exists to set up.
-    pub fn custom_backends_file(&self) -> PathBuf {
-        self.config_root.join("custom_backends.toml")
+    /// What you have taught LiNix: managers it does not ship, settings stores it has no
+    /// adapter for, and how to obtain a manager that is missing (U10, ruled 2026-07-24).
+    ///
+    /// One folder, three files, **in the repo** — a definition that cannot travel makes every
+    /// line that uses it fail on every machine but the one where somebody hand-wrote it,
+    /// including the fresh machine the repo exists to set up. Three files rather than one
+    /// because they answer three questions: how to *drive* a manager, how to *drive* a
+    /// settings store, and how to *get* a manager.
+    pub fn adapters_dir(&self) -> PathBuf {
+        self.config_root.join("adapters")
+    }
+
+    /// `[[backend]]` — how to drive a package manager LiNix does not ship (XIII.2).
+    pub fn adapter_backends_file(&self) -> PathBuf {
+        self.adapters_dir().join("backends.toml")
+    }
+
+    /// `[[setting_store]]` — how to read and write a settings store (K17).
+    pub fn adapter_settings_file(&self) -> PathBuf {
+        self.adapters_dir().join("settings.toml")
+    }
+
+    /// `[[bootstrap]]` — how to obtain a manager this machine does not have (7c).
+    pub fn adapter_bootstrap_file(&self) -> PathBuf {
+        self.adapters_dir().join("bootstrap.toml")
     }
 
     /// What everything resolved to. Generated, in git, yours. One file per backend.

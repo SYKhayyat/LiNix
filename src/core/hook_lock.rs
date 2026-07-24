@@ -65,12 +65,13 @@ pub fn exec_id(script: &str) -> String {
     format!("exec:{}", script)
 }
 
-/// The ledger identity of the config repo's `custom_backends.toml` (7a/U1). A definition is
-/// argv LiNix will run, and it travels with the repo now, so it is the same supply-chain
-/// surface a hook is — one file, one identity, whatever number of backends it defines: a
-/// per-backend identity would let an edit that adds a definition go unnoticed.
-pub fn backends_id() -> String {
-    "backends:custom_backends.toml".to_string()
+/// The ledger identity of one file under `adapters/` (7a/U1, U10). A definition is argv LiNix
+/// will run, and it travels with the repo, so it is the same supply-chain surface a hook is.
+///
+/// **One identity per file, whatever number of definitions it holds.** A per-definition
+/// identity would let an edit that *adds* one go unnoticed, and adding one is the whole attack.
+pub fn adapter_id(filename: &str) -> String {
+    format!("adapters:{}", filename)
 }
 
 /// What the ledger says about a hook whose current hash we just computed.

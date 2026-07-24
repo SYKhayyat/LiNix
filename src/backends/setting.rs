@@ -141,21 +141,21 @@ pub fn adapters(user_rows: Vec<SettingAdapter>) -> Vec<SettingAdapter> {
     out
 }
 
-/// Read the user's `[[setting_store]]` rows out of the config repo's `custom_backends.toml`.
+/// Read the user's `[[setting_store]]` rows out of `adapters/settings.toml` (U10).
 ///
-/// The same file, because it is the same question — *what have you taught this LiNix?* — and
-/// so an adapter inherits the approval the definitions in that file already carry (7a/II.12)
-/// rather than needing a second ledger, a second loader and a second thing to forget.
+/// Its own file, beside the backend definitions and the bootstrap table — three questions,
+/// three files, one folder — but through the *same* approval reader, so an adapter cannot be
+/// the one kind of repo-supplied argv that skips II.12.
 pub fn user_adapters(cfg: &crate::config::Config) -> Vec<SettingAdapter> {
     let layout = cfg.layout();
     match crate::backends::onboarder::read_approved_definitions(
-        &layout.custom_backends_file(),
+        &layout.adapter_settings_file(),
         &layout.locks_dir(),
     ) {
         Some(body) => match toml::from_str::<SettingStoreFile>(&body) {
             Ok(f) => f.setting_store,
             Err(e) => {
-                warn!("ignoring the settings adapters in custom_backends.toml: {}", e);
+                warn!("ignoring the settings adapters in adapters/settings.toml: {}", e);
                 Vec::new()
             }
         },
@@ -208,7 +208,7 @@ impl SettingBackendCore {
         let known: Vec<&str> = self.adapters.iter().map(|a| a.name.as_str()).collect();
         Error::Validation(format!(
             "`setting:{}` — no settings adapter matches this machine. LiNix looked for {}, and \
-             found none of them. Add a `[[setting_store]]` row to `custom_backends.toml` \
+             found none of them. Add a `[[setting_store]]` row to `adapters/settings.toml` \
              naming the command your store is driven by; a key silently unapplied is worse \
              than an error.",
             name,

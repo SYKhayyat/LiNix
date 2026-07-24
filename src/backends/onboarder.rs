@@ -4,10 +4,11 @@
 // the argv come straight from TOML, and the parser is a declarative `ParserSpec` (JSON /
 // columns / regex / lines) interpreted at runtime by `ConfiguredParser`.
 //
-// Definitions live in `custom_backends.toml` in the CONFIG REPO, beside `priority` and
-// `schedules` (7a/U1) — never in the machine-local settings directory. A definition that
-// cannot travel is a repo that fails on every machine but the one where somebody once
-// hand-wrote the file, which contradicts the model's central claim.
+// Definitions live in `adapters/backends.toml` in the CONFIG REPO (7a/U1, U10) — never in the
+// machine-local settings directory. A definition that cannot travel is a repo that fails on
+// every machine but the one where somebody once hand-wrote the file, which contradicts the
+// model's central claim. Its siblings in that folder are `settings.toml` (how to drive a
+// settings store) and `bootstrap.toml` (how to obtain a manager).
 //
 //     [[backend]]
 //     name = "firewall"                   # the prefix a line is written with
@@ -278,7 +279,7 @@ impl From<VersionPinDef> for VersionPin {
     }
 }
 
-/// One `[[backend]]` entry in `custom_backends.toml`.
+/// One `[[backend]]` entry in `adapters/backends.toml`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CustomBackendDef {
     /// The prefix a line is written with — `firewall:22/tcp`.
@@ -348,7 +349,12 @@ pub fn load_default_custom_backends(
     cfg: &crate::config::Config,
 ) {
     let layout = cfg.layout();
-    load_custom_backends_from(reg, exec, &layout.custom_backends_file(), &layout.locks_dir());
+    load_custom_backends_from(
+        reg,
+        exec,
+        &layout.adapter_backends_file(),
+        &layout.locks_dir(),
+    );
 }
 
 /// Reads `path`, checks it against the hook ledger in `locks_dir`, parses it, and registers
@@ -370,17 +376,17 @@ pub fn load_custom_backends_from(
     let parsed: CustomBackendsFile = match toml::from_str(&content) {
         Ok(p) => p,
         Err(e) => {
-            warn!("Ignoring malformed custom_backends.toml: {}", e);
+            warn!("Ignoring malformed adapters/backends.toml: {}", e);
             return 0;
         }
     };
     register_custom_backends(reg, exec, parsed.backend)
 }
 
-/// The definitions file's contents, or `None` when there is none or it is not approved.
+/// An `adapters/` file's contents, or `None` when there is none or it is not approved.
 ///
-/// Every reader of this file goes through here — the backends below and the `setting:`
-/// adapters (K17) — so there is one approval, one refusal message, and no way to add a second
+/// Every reader of every adapter file goes through here — backends, `setting:` stores (K17),
+/// bootstrap (7c) — so there is one approval, one refusal message, and no way to add a fourth
 /// kind of definition that quietly skips the check.
 pub fn read_approved_definitions(path: &Path, locks_dir: &Path) -> Option<String> {
     let content = match std::fs::read_to_string(path) {
@@ -391,7 +397,7 @@ pub fn read_approved_definitions(path: &Path, locks_dir: &Path) -> Option<String
             return None;
         }
     };
-    if let Some(refusal) = unapproved(&content, locks_dir) {
+    if let Some(refusal) = unapproved(path, &content, locks_dir) {
         error!("{}", refusal);
         return None;
     }
@@ -399,18 +405,22 @@ pub fn read_approved_definitions(path: &Path, locks_dir: &Path) -> Option<String
 }
 
 /// The II.12 refusal for this file's current contents, or `None` when it is approved.
-fn unapproved(content: &str, locks_dir: &Path) -> Option<String> {
-    use crate::core::hook_lock::{backends_id, hash_script, refusal, HookLedger};
+fn unapproved(path: &Path, content: &str, locks_dir: &Path) -> Option<String> {
+    use crate::core::hook_lock::{adapter_id, hash_script, refusal, HookLedger};
     let ledger = match HookLedger::load(&HookLedger::path_in(locks_dir)) {
         Ok(l) => l,
         Err(e) => return Some(format!("could not read the approval ledger: {}", e)),
     };
-    let id = backends_id();
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("backends.toml");
+    let id = adapter_id(name);
     let verdict = ledger.verdict(&id, &hash_script(content));
     if verdict.is_approved() {
         return None;
     }
-    Some(refusal(&id, "custom backend definition", &verdict))
+    Some(refusal(&id, "adapter definition", &verdict))
 }
 
 /// Registers a set of already-parsed definitions. Invalid names and collisions with an
@@ -763,7 +773,7 @@ mod tests {
     }
 
     fn write_repo(dir: &Path, body: &str) -> std::path::PathBuf {
-        let file = dir.join("custom_backends.toml");
+        let file = dir.join("backends.toml");
         std::fs::write(&file, body).unwrap();
         file
     }
@@ -781,7 +791,7 @@ list_args = ["-Qm"]
     /// can run and that is II.12's question, not a new one.
     #[test]
     fn a_repo_definition_registers_once_it_is_approved() {
-        use crate::core::hook_lock::{backends_id, hash_script, HookLedger};
+        use crate::core::hook_lock::{adapter_id, hash_script, HookLedger};
         let tmp = tempfile::tempdir().unwrap();
         let (_, exec) = mock_exec();
         write_repo(tmp.path(), PARU_TOML);
@@ -792,7 +802,7 @@ list_args = ["-Qm"]
         let n = load_custom_backends_from(
             &mut reg,
             &exec,
-            &tmp.path().join("custom_backends.toml"),
+            &tmp.path().join("backends.toml"),
             &locks,
         );
         assert_eq!(n, 0, "an unapproved definition file registered a backend");
@@ -800,14 +810,14 @@ list_args = ["-Qm"]
 
         // What `linix lock` writes.
         let mut ledger = HookLedger::new();
-        ledger.approve(&backends_id(), &hash_script(PARU_TOML));
+        ledger.approve(&adapter_id("backends.toml"), &hash_script(PARU_TOML));
         ledger.save(&HookLedger::path_in(&locks)).unwrap();
 
         let mut reg = BackendRegistry::new();
         let n = load_custom_backends_from(
             &mut reg,
             &exec,
-            &tmp.path().join("custom_backends.toml"),
+            &tmp.path().join("backends.toml"),
             &locks,
         );
         assert_eq!(n, 1);
@@ -818,12 +828,12 @@ list_args = ["-Qm"]
     /// is a new command the repo can run, so one identity covers the whole file.
     #[test]
     fn an_edited_definition_file_stops_registering_until_it_is_re_approved() {
-        use crate::core::hook_lock::{backends_id, hash_script, HookLedger};
+        use crate::core::hook_lock::{adapter_id, hash_script, HookLedger};
         let tmp = tempfile::tempdir().unwrap();
         let (_, exec) = mock_exec();
         let locks = tmp.path().join("locks");
         let mut ledger = HookLedger::new();
-        ledger.approve(&backends_id(), &hash_script(PARU_TOML));
+        ledger.approve(&adapter_id("backends.toml"), &hash_script(PARU_TOML));
         ledger.save(&HookLedger::path_in(&locks)).unwrap();
 
         let edited = format!("{}\n[[backend]]\nname = \"yay\"\ninstall_args = [\"-S\"]\n", PARU_TOML);
@@ -833,7 +843,7 @@ list_args = ["-Qm"]
         let n = load_custom_backends_from(
             &mut reg,
             &exec,
-            &tmp.path().join("custom_backends.toml"),
+            &tmp.path().join("backends.toml"),
             &locks,
         );
         assert_eq!(n, 0, "an edited file kept running on the old approval");
@@ -851,10 +861,78 @@ list_args = ["-Qm"]
             load_custom_backends_from(
                 &mut reg,
                 &exec,
-                &tmp.path().join("custom_backends.toml"),
+                &tmp.path().join("backends.toml"),
                 &tmp.path().join("locks"),
             ),
             0
         );
+    }
+}
+
+/// U10: three files, one folder, each approved on its own.
+#[cfg(test)]
+mod adapter_folder_tests {
+    use super::*;
+    use crate::core::hook_lock::{adapter_id, hash_script, HookLedger};
+
+    const BACKENDS: &str = "[[backend]]\nname = \"paru\"\ninstall_args = [\"-S\"]\nlist_args = [\"-Qm\"]\n";
+    const SETTINGS: &str = "[[setting_store]]\nname = \"kde\"\ndetect = \"kwriteconfig6\"\nread = [\"kreadconfig6\"]\nwrite = [\"kwriteconfig6\"]\nreset = [\"kwriteconfig6\"]\n";
+
+    fn approve(locks: &Path, file: &str, body: &str) {
+        let path = HookLedger::path_in(locks);
+        let mut l = HookLedger::load(&path).unwrap();
+        l.approve(&adapter_id(file), &hash_script(body));
+        l.save(&path).unwrap();
+    }
+
+    /// Approving one adapter file must not approve its siblings. They carry different argv and
+    /// an edit to one is not a review of the other.
+    #[test]
+    fn each_adapter_file_is_approved_on_its_own() {
+        let tmp = tempfile::tempdir().unwrap();
+        let adapters = tmp.path().join("adapters");
+        std::fs::create_dir_all(&adapters).unwrap();
+        std::fs::write(adapters.join("backends.toml"), BACKENDS).unwrap();
+        std::fs::write(adapters.join("settings.toml"), SETTINGS).unwrap();
+        let locks = tmp.path().join("locks");
+
+        // Approve only the backends file.
+        approve(&locks, "backends.toml", BACKENDS);
+
+        assert!(
+            read_approved_definitions(&adapters.join("backends.toml"), &locks).is_some(),
+            "the approved file did not load"
+        );
+        assert!(
+            read_approved_definitions(&adapters.join("settings.toml"), &locks).is_none(),
+            "approving backends.toml also approved settings.toml"
+        );
+
+        // Approve the sibling too, and now both load.
+        approve(&locks, "settings.toml", SETTINGS);
+        assert!(read_approved_definitions(&adapters.join("settings.toml"), &locks).is_some());
+    }
+
+    /// The whole point of the folder move: the definition travels with the repo, so it is read
+    /// from the config root and nowhere machine-local.
+    #[test]
+    fn the_adapters_folder_is_inside_the_config_repo() {
+        let cfg = crate::config::Config {
+            config_root: std::path::PathBuf::from(if cfg!(windows) {
+                r"C:\repo"
+            } else {
+                "/repo"
+            }),
+            ..Default::default()
+        };
+        let layout = cfg.layout();
+        for f in [
+            layout.adapter_backends_file(),
+            layout.adapter_settings_file(),
+            layout.adapter_bootstrap_file(),
+        ] {
+            assert!(f.starts_with(cfg.config_root()), "{:?} escaped the repo", f);
+            assert!(f.parent().unwrap().ends_with("adapters"), "{:?}", f);
+        }
     }
 }

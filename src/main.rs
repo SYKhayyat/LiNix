@@ -3238,10 +3238,10 @@ async fn handle_lock(app: &App) -> Result<()> {
     if let Some(file) = approve_vars_provider(app)? {
         info!("Lock: approved the vars provider `{}` at its current hash.", file);
     }
-    // And the custom backend definitions (7a). They travel with the repo now, and a
-    // definition is argv LiNix will run, so it is approved here or it does not load.
-    if approve_custom_backends(app)? {
-        info!("Lock: approved `custom_backends.toml` at its current hash.");
+    // And every `adapters/` file (7a/U10). They travel with the repo, and a definition is
+    // argv LiNix will run, so each is approved here or it does not load.
+    for name in approve_adapters(app)? {
+        info!("Lock: approved `adapters/{}` at its current hash.", name);
     }
     // And every declared `exec:` script (XIII.3). II.12 admits no exceptions: a script the
     // configuration runs is approved by this command or it does not run.
@@ -3289,22 +3289,41 @@ async fn approve_exec_scripts(app: &App) -> Result<usize> {
     Ok(approved)
 }
 
-/// Record the config repo's `custom_backends.toml` hash in the hook ledger. `false` when the
-/// repo has no such file, which is the ordinary case and never an error.
-fn approve_custom_backends(app: &App) -> Result<bool> {
-    use linix::core::hook_lock::{backends_id, hash_script, HookLedger};
+/// Record each `adapters/` file's hash in the hook ledger, returning the names approved.
+///
+/// One entry per file, not per definition: an edit that *adds* a `[[backend]]` must invalidate
+/// the approval, and a per-definition identity would let exactly that slip through.
+/// A file the repo does not carry is the ordinary case, never an error.
+fn approve_adapters(app: &App) -> Result<Vec<String>> {
+    use linix::core::hook_lock::{adapter_id, hash_script, HookLedger};
 
     let layout = app.config.layout();
-    let body = match std::fs::read_to_string(layout.custom_backends_file()) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(e.into()),
-    };
-    let path = HookLedger::path_in(&layout.locks_dir());
-    let mut ledger = HookLedger::load(&path)?;
-    ledger.approve(&backends_id(), &hash_script(&body));
-    ledger.save(&path)?;
-    Ok(true)
+    let files = [
+        layout.adapter_backends_file(),
+        layout.adapter_settings_file(),
+        layout.adapter_bootstrap_file(),
+    ];
+    let ledger_path = HookLedger::path_in(&layout.locks_dir());
+    let mut ledger = HookLedger::load(&ledger_path)?;
+    let mut approved = Vec::new();
+    for file in files {
+        let body = match std::fs::read_to_string(&file) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
+        let name = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        ledger.approve(&adapter_id(&name), &hash_script(&body));
+        approved.push(name);
+    }
+    if !approved.is_empty() {
+        ledger.save(&ledger_path)?;
+    }
+    Ok(approved)
 }
 
 /// Record the active executing `vars` provider's current hash in the hook ledger. Returns the

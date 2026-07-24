@@ -695,12 +695,37 @@ everything.
 
 ## U10
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24, and neither option was taken.**
 
 **U10 — Where does a backend's bootstrap live?** In `priority`, beside the backend it obtains,
 or in `custom_backends.toml`, beside the definition. *Recommendation:* `priority` — it is the
 file that already decides which backends this machine uses, and a custom backend's definition is
 about *how to drive* a manager, not *how to get* one. The two files stay one-question-each.
+
+**RULED (owner, 2026-07-24): a third file — and the other two move to join it.** *"It should be
+a separate file, all 3 should be in the shareable config part, and all should be in the same
+folder."* The recommendation's own reasoning (one question per file) was right and was applied
+one step further than it had been: **how to get a manager** is a third question, so it is a third
+file, and the three sit together because they are one subject — what you have taught this LiNix.
+
+```
+adapters/backends.toml    how to drive a package manager LiNix does not ship   (XIII.2)
+adapters/settings.toml    how to read and write a settings store               (K17)
+adapters/bootstrap.toml   how to obtain a manager this machine does not have   (7c)
+```
+
+- **In the config repo**, so a definition travels with the configuration that needs it — the
+  point 7a/U1 established, now applying to all three.
+- **Each file is approved separately** through II.12's ledger (`adapters:<filename>`), because
+  they carry different argv: approving the backends you added is not a review of the settings
+  adapters. One identity per *file*, not per definition, so an edit that **adds** a definition
+  still invalidates the approval.
+- **The K17 arrangement is superseded**: settings adapters shared `custom_backends.toml` because
+  at the time that was where repo-supplied definitions lived. They have their own file now.
+- **The folder name is `adapters/`** — an implementing call, not a ruling: it is the word the
+  spec already uses for settings stores (K17), and a backend definition adapts a CLI the same
+  way. Bootstrap sits with them because it answers a question about the same subject.
+- **NO LEGACY:** the old `custom_backends.toml` path is deleted, not read as a fallback.
 
 ---
 

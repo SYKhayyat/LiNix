@@ -140,13 +140,15 @@ user = "true"
 # Onboarding your own package managers (the "onboarder")
 # ---------------------------------------------------------------------------
 # LiNix can learn any CLI-based package manager with no source changes. Define
-# backends declaratively in a SEPARATE file, `custom_backends.toml`, in this repo
-# beside `priority` and `schedules` — it travels with the config, or a line using
-# it fails on every machine but the one where you wrote the file.
+# backends declaratively in `adapters/backends.toml` in this repo — it travels
+# with the config, or a line using it fails on every machine but the one where
+# you wrote the file. Its siblings are `adapters/settings.toml` (how to drive a
+# settings store) and `adapters/bootstrap.toml` (how to obtain a manager).
 #
-# The file is argv this repo can run on any machine that clones it, so it goes
-# through the same approval a hook does: `linix lock` approves it, and an edit
-# stops it loading until you approve it again.
+# Each file is argv this repo can run on any machine that clones it, so each goes
+# through the same approval a hook does: `linix lock` approves them, and an edit
+# stops that file loading until you approve it again. Files are approved
+# separately — approving one is not a review of another.
 #
 # They are loaded last and can never override a built-in backend. Example:
 #

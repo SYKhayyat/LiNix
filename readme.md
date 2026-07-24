@@ -94,8 +94,8 @@ priority       which package managers this machine uses, in order
 vars           your own names for conditions, so `when` can ask about them
 schedules      when LiNix runs itself
 locks/         what everything resolved to, one file per backend
+adapters/      what you have taught LiNix — see below (optional)
 preferences.toml   refusals and behaviour (written by `linix config init`)
-custom_backends.toml   package managers LiNix does not ship, taught from data (optional)
 ```
 
 LiNix's own bookkeeping — what it currently owns, snapshot metadata — lives in
@@ -534,7 +534,7 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
 ## Teaching LiNix a package manager it has never heard of
 
 If a manager's CLI has plain install/remove/list verbs, LiNix can learn it from data — no
-Rust, no release. Write `custom_backends.toml` in your repo:
+Rust, no release. Write `adapters/backends.toml` in your repo:
 
 ```toml
 [[backend]]
@@ -552,14 +552,25 @@ name_col = 0
 are separate, the prefix does not have to be a package manager's name — it can be any noun
 that has a CLI behind it.
 
-**It lives in the repo, so it travels**, which is the point: a definition on one machine makes
-every other machine fail on a line it cannot resolve. And because it is a list of commands your
-repo can run on any machine that clones it, it is approved the way a hook is — `linix lock`
-approves the file, and any later edit stops it loading until you look at the change and approve
-it again. Custom definitions load last and can never take over a built-in name.
+**They live in the repo, so they travel**, which is the point: a definition on one machine
+makes every other machine fail on a line it cannot resolve. And because each is a list of
+commands your repo can run on any machine that clones it, each is approved the way a hook is —
+`linix lock` approves them, and any later edit stops that file loading until you look at the
+change and approve it again. **Each file is approved separately**: approving the backends you
+added is not a review of the settings adapters. Custom definitions load last and can never take
+over a built-in name.
 
-**The same file teaches LiNix a settings store.** `setting:` writes desktop configuration that
-does not live in a file — GNOME's store via `gsettings` is shipped, and any other is a row:
+Everything you teach LiNix lives in one folder, one file per question:
+
+```
+adapters/backends.toml    how to drive a package manager LiNix does not ship
+adapters/settings.toml    how to read and write a settings store
+adapters/bootstrap.toml   how to obtain a manager this machine does not have
+```
+
+**Its sibling teaches LiNix a settings store.** `setting:` writes desktop configuration that
+does not live in a file — GNOME's store via `gsettings` is shipped, and any other is a row in
+`adapters/settings.toml`:
 
 ```toml
 [[setting_store]]
