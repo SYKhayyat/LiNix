@@ -609,6 +609,8 @@ plane.
 
 
 **RULED (owner, 2026-07-24): resolve from the lock offline.** A pinned `github:` line resolves from `locks/github` with no API call; only `linix lock` and an unpinned line hit the network. `lock` is what freezes the resolved asset/version, so a later `sync` reproduces it without the 60/hour unauthenticated GitHub limit. This is what makes `sync` work offline and on a repo with many `github:` lines.
+
+**Already built (`answered_locally` in `github.rs`).** A pinned line with a lock and matching on-disk assets resolves with no API call; only unpinned lines and `linix lock` hit GitHub. The ruling described existing behaviour — no new code needed.
 ---
 
 ## D13
@@ -637,6 +639,8 @@ result. Decide before the resolver is written, not after.
 
 
 **RULED (owner, 2026-07-24): yes.** `linix why` explains WHICH rule selected the artifact — the line's `@formats=`, `priority`, or the built-in default. The resolver must keep the reason, not just the result; decided before the artifact resolver is finalised so the reason is retained rather than reconstructed.
+
+**BUILT, 2026-07-24.** The artifact lock records `selected_by` — which rule chose the file (`@asset=` pattern, `@formats=` line, or the built-in default). `linix why <pkg>` shows `selected: <asset> — chosen by <reason>`, read from the lock with no network re-selection.
 ---
 
 ## D17

@@ -20,4 +20,4 @@ pub use format::{Format, FormatOrder, UnknownFormat};
 pub use options::{default_formats, ArtifactOptions};
 pub use pattern::{AssetPattern, BadPattern};
 pub use platform::Platform;
-pub use select::{select, Asset, NoMatch, PassedOver, Pick, Request, Selection};
+pub use select::{select, selection_reason, Asset, NoMatch, PassedOver, Pick, Request, Selection};

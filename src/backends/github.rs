@@ -655,6 +655,14 @@ impl Installable for GithubInstallable {
                 resolved.push((pick, sha, discovered, bin_dest));
             }
 
+            // D14: the same rule chose every pick of this declaration (they share the line's
+            // formats and pattern), so the reason is computed once and recorded on each lock.
+            let reason = artifact::selection_reason(
+                wanted.asset.is_some(),
+                formats.is_user_specified(),
+            )
+            .to_string();
+
             let mut installed_artifacts: Vec<InstalledArtifact> = Vec::new();
             let mut locks: Vec<ArtifactLock> = Vec::new();
             for (pick, sha, discovered, bin_dest) in &resolved {
@@ -679,6 +687,7 @@ impl Installable for GithubInstallable {
                     asset: pick.asset.name.clone(),
                     url: pick.asset.url.clone(),
                     format: pick.format.to_string(),
+                    selected_by: Some(reason.clone()),
                     sha256: Some((*sha).clone()),
                 });
             }
@@ -873,6 +882,7 @@ mod tests {
             asset: asset.to_string(),
             url: format!("https://example.invalid/{}", asset),
             format: format.to_string(),
+            selected_by: None,
             sha256: Some("abc123".into()),
         }
     }

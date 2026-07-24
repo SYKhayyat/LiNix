@@ -313,9 +313,39 @@ fn has_extension(name: &str) -> bool {
     }
 }
 
+/// Which rule chose the artifact, in one phrase for `why` and the lock (D14).
+///
+/// The three places the answer can live, in the order they win: an explicit `@asset=` pattern
+/// on the line, then a `@formats=` the user wrote, then the built-in default order detected from
+/// the host. Naming which one won is the whole of D14 — when `github:x/y` installs a `.tar.gz`
+/// on a machine the user expected a `.deb`, this says whether their line or LiNix's default
+/// decided it.
+pub fn selection_reason(has_asset_pattern: bool, formats_user_specified: bool) -> &'static str {
+    if has_asset_pattern {
+        "your @asset= pattern"
+    } else if formats_user_specified {
+        "your @formats= line"
+    } else {
+        "the built-in default order for this machine"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D14: the reason names which of the three rules won, in the order they win — pattern,
+    /// then the user's formats, then the detected default.
+    #[test]
+    fn the_selection_reason_names_the_winning_rule() {
+        assert_eq!(selection_reason(true, true), "your @asset= pattern");
+        assert_eq!(selection_reason(true, false), "your @asset= pattern");
+        assert_eq!(selection_reason(false, true), "your @formats= line");
+        assert_eq!(
+            selection_reason(false, false),
+            "the built-in default order for this machine"
+        );
+    }
 
     fn linux64() -> Platform {
         Platform::new("linux", "x86_64")

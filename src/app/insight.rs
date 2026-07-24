@@ -572,6 +572,27 @@ async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declare
 
 /// Explain why a package is present: how it entered management, and what depends on it./// Explain why a package is present: how it entered management, and what depends on it.
 /// With `as_json`, emit the same provenance as a machine-readable array instead of text.
+/// The artifact `why` should explain (D14): the installed file for a download backend, and the
+/// rule that chose it, read from `locks/<backend>.toml`.
+///
+/// `None` for a backend that does not select artifacts, or a package with no lock yet. When a
+/// declaration installed several files (`@asset=all`), the first is shown — they were all
+/// chosen by the same rule, which is the thing being explained.
+fn artifact_selection(app: &App, backend: &str, name: &str) -> Option<(String, String)> {
+    if !crate::backends::artifact::capability::selects_artifacts(backend) {
+        return None;
+    }
+    let path = app
+        .config
+        .config_root()
+        .join("locks")
+        .join(format!("{}.toml", backend));
+    let ledger = crate::core::artifact_lock::ArtifactLedger::load(&path).ok()?;
+    let lock = ledger.locked(name).first()?;
+    let reason = lock.selected_by.clone()?;
+    Some((lock.asset.clone(), reason))
+}
+
 /// The commit that first declared `name`, or `None` when git cannot say (XIII.19).
 ///
 /// **Nothing is written to support this.** The config repo is a git repo, every sync commits,
@@ -700,6 +721,11 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
         // the fact already exists — and a copy of it could only ever disagree.
         let introduced = introduced_in_git(app, &name).await;
 
+        // D14: for an artifact backend, which rule chose the installed file — read from the
+        // lock, so `why` answers "why this `.tar.gz` and not the `.deb`" without a network
+        // re-selection. `(asset, reason)`.
+        let selected = artifact_selection(app, &backend, &name);
+
         if as_json {
             json_matches.push(serde_json::json!({
                 "backend": backend,
@@ -709,6 +735,10 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
                 "declared_in": declarations,
                 "gated_by": gating,
                 "formats": formats,
+                "selected": selected.as_ref().map(|(asset, reason)| serde_json::json!({
+                    "asset": asset,
+                    "by": reason,
+                })),
                 "lease_expires": lease,
                 "required_by": dependents,
                 "introduced": introduced.as_ref().map(|i| serde_json::json!({
@@ -734,6 +764,9 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
             }
             if let Some(f) = &formats {
                 println!("  formats:     {}", f);
+            }
+            if let Some((asset, reason)) = &selected {
+                println!("  selected:    {} — chosen by {}", asset, reason);
             }
             if let Some(l) = &lease {
                 println!("  lease:       temporary — expires {}", l);

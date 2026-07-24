@@ -31,6 +31,12 @@ pub struct ArtifactLock {
     pub url: String,
     /// The `formats` entry that matched, as VIII.2 spells it.
     pub format: String,
+    /// Which rule chose this format — the line's `@asset=`/`@formats=`, or the built-in default
+    /// (D14). Kept so `why` can answer "why this file and not the `.deb` I expected" without
+    /// re-running a network selection. `serde(default)` so a lock written before D14 still
+    /// parses; it simply has no reason to show.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_by: Option<String>,
     /// The hash of the bytes that were installed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
@@ -174,6 +180,7 @@ mod tests {
             asset: asset.into(),
             url: format!("https://example.invalid/{}", asset),
             format: "tarball".into(),
+            selected_by: None,
             sha256: sha.map(str::to_string),
         }
     }
