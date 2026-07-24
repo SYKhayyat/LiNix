@@ -945,30 +945,10 @@ pub const BARE: &str = "?";
 
 /// How a statement is named in set math: as written, `apt:jq` or bare `jq`.
 ///
-/// Not the resolved backend, because nothing has probed yet — set math happens while reading
-/// the files, and probing needs the network.
+/// The statement's own identity ([`Statement::key`]) — set math has no separate notion of what
+/// names a line, and when it kept one the two drifted apart every time a kind was added.
 fn set_key(stmt: &Statement) -> String {
-    match stmt {
-        Statement::Package(d) | Statement::Absent(d) => match &d.backend {
-            Some(b) => format!("{}:{}", b, d.selector.as_str()),
-            None => d.selector.as_str().to_string(),
-        },
-        Statement::Repo { backend, spec } => format!("repo:{}:{}", backend, spec),
-        Statement::Shim(n, _) => format!("shim:{}", n),
-        Statement::Schedule(n, _) => format!("schedule:{}", n),
-        Statement::Service(n, _) => format!("service:{}", n),
-        Statement::Link(n, _) => format!("link:{}", n),
-        Statement::Setting(n, _) => format!("setting:{}", n),
-        Statement::Exec(n, _) => format!("exec:{}", n),
-        Statement::Dotfiles(n, _) => format!("dotfiles:{}", n),
-        Statement::Firewall(n, _) => format!("firewall:{}", n),
-        Statement::Use(r) => format!("use {}", r.name()),
-        Statement::Exclude(r) => format!("exclude {}", r.name()),
-        Statement::Intersect(r) => format!("intersect {}", r.name()),
-        Statement::Subtract(p) => format!("-{}", p),
-        Statement::Var { name, .. } => format!("{} =", name),
-        Statement::Expr(e) => e.clone(),
-    }
+    stmt.key()
 }
 
 /// Whether two set-math keys name the same package.

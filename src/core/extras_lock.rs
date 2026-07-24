@@ -27,14 +27,12 @@ use std::path::{Path, PathBuf};
 /// set-math, `use`) — those are tracked elsewhere or not at all.
 pub fn extra_key(stmt: &Statement) -> Option<String> {
     match stmt {
-        Statement::Repo { backend, spec } => Some(format!("repo:{}:{}", backend, spec)),
-        Statement::Shim(name, _) => Some(format!("shim:{}", name)),
-        Statement::Service(name, _) => Some(format!("service:{}", name)),
-        // A link is keyed by its DESTINATION, not by its source. The undo has to remove what
-        // LiNix wrote, and by the time it runs the declaration is gone — so a key naming the
-        // source would hand the teardown the file in your repo and leave the deployed one in
-        // place. Keying the destination also makes an edited `@target=` a removal of the old
-        // destination and an install of the new, instead of leaving the old one forever.
+        // A link is keyed by its DESTINATION, not by its source — the one place this ledger
+        // departs from [`Statement::key`]. The undo has to remove what LiNix wrote, and by the
+        // time it runs the declaration is gone, so a key naming the source would hand the
+        // teardown the file in your repo and leave the deployed one in place. Keying the
+        // destination also makes an edited `@target=` a removal of the old destination and an
+        // install of the new, instead of leaving the old one forever.
         Statement::Link(name, opts) => Some(format!(
             "link:{}",
             opts.one("target")
@@ -42,21 +40,18 @@ pub fn extra_key(stmt: &Statement) -> Option<String> {
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| name.clone())
         )),
-        Statement::Setting(name, _) => Some(format!("setting:{}", name)),
         // `exec:` is deliberately NOT an extra. Extras are nouns whose teardown undoes what
         // they put in place; a verb has no such inverse, and a script that succeeds makes its
         // own `when` false — so wiring it into this ledger would re-run or "undo" it every
         // time the condition swung. Its lifecycle is `locks/exec.toml`, not here (XIII.3).
-        Statement::Exec(..) => None,
-        // A firewall rule is a noun: deleting the line closes the port (N5), so it belongs in
-        // the teardown ledger — the opposite of `exec:` directly above, and for the reason that
-        // distinguishes them: a rule has an inverse and a script does not.
-        Statement::Firewall(name, _) => Some(format!("firewall:{}", name)),
-        // A dotfiles tree's files are keyed individually by the tree applier, not here: one
-        // ledger row per placed file (U22), which this function has no way to enumerate.
-        Statement::Dotfiles(..) => None,
-        Statement::Schedule(name, _) => Some(format!("schedule:{}", name)),
-        _ => None,
+        //
+        // A dotfiles tree is excluded for the opposite reason: its files ARE keyed here, but
+        // individually by the tree applier — one ledger row per placed file (U22), which this
+        // function has no way to enumerate from the declaration alone.
+        Statement::Exec(..) | Statement::Dotfiles(..) => None,
+        // Everything else with a keyword is a noun with an inverse: deleting a `firewall:` line
+        // closes the port (N5), deleting a `service:` line disables the service.
+        _ => stmt.kind().map(|_| stmt.key()),
     }
 }
 

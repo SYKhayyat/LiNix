@@ -180,6 +180,7 @@ async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Snapshot(args) => handle_snapshot(app, &args.command).await,
         Commands::Rollback { reference } => handle_rollback(app, reference).await,
         Commands::Diff { from, to } => handle_diff(app, from, to.as_deref()).await,
+        Commands::Eval => handle_eval(app).await,
         Commands::Git(args) => handle_git(app, &args.command).await,
         Commands::Repo(args) => handle_repo(app, &args.command).await,
         Commands::Search {
@@ -367,7 +368,7 @@ fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::PathBuf> {
 const READ_ONLY_COMMANDS: &[&str] = &[
     "plan", "status", "check", "list", "search", "doctor", "diff", "unmanaged", "absent",
     "vars", "export", "sbom", "insight", "why", "info", "show", "audit", "outdated",
-    "history", "log", "completions", "help", "locate", "metrics", "verify",
+    "history", "log", "completions", "help", "locate", "metrics", "verify", "eval",
 ];
 
 /// Take the lock for a mutating command. The command is read from argv rather than matched
@@ -3827,6 +3828,22 @@ fn referenced_variable_names(config_root: &std::path::Path) -> std::collections:
 /// keeps OFF this machine, and where each rule is written. Read-only.
 /// `vars` (Part IX, W12): the variables resolved on this machine, so a `when $name` block that
 /// does not fire can be debugged by seeing the value the machine actually derived.
+/// `linix eval` — the resolved configuration, as JSON (U17).
+///
+/// Deliberately *only* a resolution: no lock is taken (it is in `READ_ONLY_COMMANDS`), no
+/// backend is asked what is installed, nothing is written. It answers what the configuration
+/// says, which is the half of `plan`'s question that does not depend on the machine — and the
+/// half a script can act on.
+async fn handle_eval(app: &App) -> Result<()> {
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let state = resolver.resolve_model().await?;
+    let doc = linix::app::eval::Evaluation::of(&state, &app.config.config_root());
+    print!("{}", doc.render()?);
+    Ok(())
+}
+
 async fn handle_vars(app: &App) -> Result<()> {
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)

@@ -542,28 +542,18 @@ pub(crate) enum Match {
     Other(String),
 }
 
-/// `service:nginx`, `shim:jq` — the identity of a non-package statement.
+/// `service:nginx`, `shim:jq` — the identity of a non-package statement, for matching a line
+/// `edit` was asked to add or remove.
+///
+/// The statement's own [`Statement::key`], narrowed: set math is an operation rather than a
+/// thing with a name to look up, and a variable is not something `edit` adds or removes —
+/// the `vars` file is hand-written. Packages are matched by [`Match::Package`], which knows
+/// that a bare name means "under whatever backend has it".
 fn other_key(stmt: &Statement) -> Option<String> {
     match stmt {
-        Statement::Repo { backend, spec } => Some(format!("repo:{}:{}", backend, spec)),
-        Statement::Shim(n, _) => Some(format!("shim:{}", n)),
-        Statement::Schedule(n, _) => Some(format!("schedule:{}", n)),
-        Statement::Service(n, _) => Some(format!("service:{}", n)),
-        Statement::Link(n, _) => Some(format!("link:{}", n)),
-        Statement::Setting(n, _) => Some(format!("setting:{}", n)),
-        Statement::Exec(n, _) => Some(format!("exec:{}", n)),
-        Statement::Dotfiles(n, _) => Some(format!("dotfiles:{}", n)),
-        Statement::Firewall(n, _) => Some(format!("firewall:{}", n)),
-        Statement::Use(r) => Some(format!("use {}", r.name())),
-        // Set math is an operation, not a thing with a name to look up.
-        Statement::Exclude(_)
-        | Statement::Intersect(_)
-        | Statement::Subtract(_)
-        | Statement::Expr(_)
-        | Statement::Package(_)
-        // A variable is not a thing `edit` adds or removes; the `vars` file is hand-written.
-        | Statement::Var { .. }
-        | Statement::Absent(_) => None,
+        Statement::Use(_) => Some(stmt.key()),
+        _ if stmt.kind().is_some() => Some(stmt.key()),
+        _ => None,
     }
 }
 

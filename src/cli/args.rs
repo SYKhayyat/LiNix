@@ -490,6 +490,15 @@ pub enum Commands {
         to: Option<String>,
     },
 
+    /// Print the resolved desired state as JSON: every `when` decided, every bare name given a
+    /// backend, every variable substituted.
+    ///
+    /// Answers "what did my configuration actually resolve to", which no other command does —
+    /// `plan` compares that answer against the machine, and mixes the two. Takes no locks,
+    /// touches no backend and changes nothing, so it is safe to run mid-sync and safe to put
+    /// in a pipeline. The output carries a top-level `schema` version.
+    Eval,
+
     /// Version-control your manifests/config directory with git: init, status, log, commit,
     /// and checkout (roll the *config* back to a past commit without touching packages).
     Git(GitArgs),

@@ -174,6 +174,80 @@ pub enum Statement {
     Var { name: String, value: String },
 }
 
+impl Statement {
+    /// How this statement is named: `service:nginx`, `apt:jq`, `use work`, `-vim`.
+    ///
+    /// **One spelling, because it had three.** Set math keyed statements one way, `edit`'s
+    /// line matcher a second, the teardown ledger a third — three lists of the same twelve
+    /// variants, each of which had to be extended whenever a statement kind was added, and
+    /// none of which the compiler could check against the others. A statement's identity is a
+    /// property of the statement, so it lives on the statement.
+    ///
+    /// Written form, not resolved form: a bare `jq` keys as `jq`, because set math runs while
+    /// the files are being read and nothing has probed a backend yet.
+    pub fn key(&self) -> String {
+        match self {
+            Statement::Package(d) | Statement::Absent(d) => match &d.backend {
+                Some(b) => format!("{}:{}", b, d.selector.as_str()),
+                None => d.selector.as_str().to_string(),
+            },
+            Statement::Repo { backend, spec } => format!("repo:{}:{}", backend, spec),
+            Statement::Shim(n, _) => format!("shim:{}", n),
+            Statement::Schedule(n, _) => format!("schedule:{}", n),
+            Statement::Service(n, _) => format!("service:{}", n),
+            Statement::Link(n, _) => format!("link:{}", n),
+            Statement::Setting(n, _) => format!("setting:{}", n),
+            Statement::Exec(n, _) => format!("exec:{}", n),
+            Statement::Dotfiles(n, _) => format!("dotfiles:{}", n),
+            Statement::Firewall(n, _) => format!("firewall:{}", n),
+            Statement::Use(r) => format!("use {}", r.name()),
+            Statement::Exclude(r) => format!("exclude {}", r.name()),
+            Statement::Intersect(r) => format!("intersect {}", r.name()),
+            Statement::Subtract(p) => format!("-{}", p),
+            Statement::Var { name, .. } => format!("{} =", name),
+            Statement::Expr(e) => e.clone(),
+        }
+    }
+
+    /// The keyword that introduces this statement — `service`, `link`, `firewall` — for the
+    /// kinds that have one.
+    ///
+    /// `None` for a package line (whose prefix is a *backend*, not a keyword) and for set math
+    /// (an operation, not a thing). A caller that wants to group or filter by kind asks here
+    /// rather than re-splitting [`key`](Self::key) on `:`, which would read `apt:jq` as the
+    /// kind `apt`.
+    pub fn kind(&self) -> Option<&'static str> {
+        Some(match self {
+            Statement::Repo { .. } => "repo",
+            Statement::Shim(..) => "shim",
+            Statement::Schedule(..) => "schedule",
+            Statement::Service(..) => "service",
+            Statement::Link(..) => "link",
+            Statement::Setting(..) => "setting",
+            Statement::Exec(..) => "exec",
+            Statement::Dotfiles(..) => "dotfiles",
+            Statement::Firewall(..) => "firewall",
+            Statement::Package(_)
+            | Statement::Absent(_)
+            | Statement::Use(_)
+            | Statement::Exclude(_)
+            | Statement::Intersect(_)
+            | Statement::Subtract(_)
+            | Statement::Expr(_)
+            | Statement::Var { .. } => return None,
+        })
+    }
+
+    /// What this statement names, without its keyword: `nginx` for `service:nginx`.
+    ///
+    /// The `key` minus the `kind`, so the two can never disagree about where the boundary is.
+    pub fn subject(&self) -> Option<String> {
+        let kind = self.kind()?;
+        let key = self.key();
+        Some(key.strip_prefix(kind)?.trim_start_matches(':').to_string())
+    }
+}
+
 /// Decides whether a `prefix:` names a real backend. Injected rather than hardcoded: the
 /// answer is host-dependent (there is no `winget` on Linux) and the onboarder can add
 /// backends at runtime, so a static list would be a second copy of a fact the registry
