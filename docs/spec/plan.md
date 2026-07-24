@@ -1223,10 +1223,21 @@ declaration restores its backup, T1's fix is smaller than it looks.
   code changed.** `one_release` has raised an error naming both tags since `8a63c80`
   (2026-07-20), with a test for each half of the exit condition. The register said it was
   missing; the register was three days stale.
-- **Format recognition is checked against real releases (D2).** The rule is ruled; what was never
-  done is the check the entry asked for. **Exit:** the classifier is run against the asset lists
-  of real releases and every answer is verified by hand — particularly `binary`, which is the one
-  outcome that fails quietly rather than loudly.
+- ~~**Format recognition is checked against real releases (D2).**~~ **DONE 2026-07-23, and it
+  found two live defects** — both exactly the quiet kind the entry predicted. `MD5SUMS` (in every
+  rclone release) was an executable candidate on every platform because the code read "matched
+  this machine" as "did not contradict it"; `jq-linux64` (in jq's release) named no OS because
+  the token matcher would not end a word on digits, so on Windows it too was an executable
+  candidate. Both are fixed and both are pinned by name in the fixture. Six real releases, three
+  platforms, every answer verified by hand and then **asserted** — `src/backends/artifact/real_releases.txt`
+  is a check that can fail, not an inspection that happened once.
+
+  **One finding is left as a question rather than a fix, and it is in the file's header.** On jq
+  (linux and macos) and rclone (macos) the selector picks the project's **source tarball** over a
+  binary that names the exact machine, because the tie-break puts format order above specificity
+  — and a *detected* default order is not something the user asked for. Related, and visible in
+  the same three rows: the macos default order has no `zip` in it, while gh, rclone and starship
+  all ship their macos build as one. Neither is a wrong classification, so neither is fixed here.
 - ~~**A test that `rebuild` writes no git commit (K14).**~~ **WRITTEN, NEVER RUN — verified
   2026-07-23.** It is section 12 of `docker/integration/run-in-container.sh`, and it is the
   honest shape the entry asked for: a real apt package is really removed and reinstalled, and

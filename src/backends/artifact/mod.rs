@@ -12,6 +12,9 @@ pub mod pattern;
 pub mod platform;
 pub mod select;
 
+#[cfg(test)]
+mod real_releases_test;
+
 pub use discover::{find_executable, DiscoveryError, Entry};
 pub use format::{Format, FormatOrder, UnknownFormat};
 pub use options::{default_formats, ArtifactOptions};

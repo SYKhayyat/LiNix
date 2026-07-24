@@ -1154,6 +1154,30 @@ nothing — the one place in this feature that fails quietly rather than loudly.
 needed checking against real releases before becoming a rule; that never happened, and it is now
 in the plan.
 
+**CHECKED 2026-07-23, and the check found two live defects.** The asset lists of six real
+releases (fd, jq, gh, neovim, rclone, helm) were fetched and every answer verified by hand, on
+three platforms. The fixture is `src/backends/artifact/real_releases.txt` and the answers are
+asserted, so this is a check that can fail rather than an inspection that happened once.
+
+- **`accepts` is not "matched".** The code read the rule as *does not contradict this machine*,
+  and the ruling says *matched*. Under the weak reading, `MD5SUMS` — a real asset of every
+  rclone release, no extension, naming nothing — was an executable candidate on every platform,
+  and so was anything else extension-less that a release happens to attach. **A `binary` now
+  requires the filename to name this machine's os or arch**, which is what the ruling says.
+  `@asset=` naming the file exactly overrides it, because naming it *is* the claim — otherwise
+  a project shipping one bare `mytool` would become uninstallable.
+- **`linux64` named no operating system.** The token matcher required a non-alphanumeric after
+  an alias, so `linux` inside `jq-linux64` — a real asset of jq's release — did not match, and
+  the file read as running anywhere. On Windows it was an executable candidate. A closing run of
+  digits is part of the boundary now (`linux64`, `win64`, `mac64`), while the leading boundary
+  is unchanged so `386` still does not match inside `i386`.
+
+**Recorded, not fixed, because it is a design decision rather than a defect (see the plan):**
+on jq and rclone the selector chooses the project's **source tarball** over a binary that names
+the exact machine, because the tie-break ranks format order above specificity and a *detected*
+default order is not something the user asked for. It fails loudly afterwards ("no executable
+found in the archive"), so it is wrong rather than dangerous.
+
 ---
 
 ## K5

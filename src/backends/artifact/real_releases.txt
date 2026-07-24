@@ -1,0 +1,221 @@
+# Real GitHub release asset lists, fetched 2026-07-23, verified by hand (D2).
+#
+# A block is `## owner/repo tag`, then one `-> platform = expected` line per platform LiNix
+# was checked on, then the release's assets exactly as the API returned them. The expectation
+# is the asset `select` must choose with that platform's default format order; `none` means
+# no asset is installable there and the error must say so.
+#
+# This file exists because `binary` is the one classification that fails quietly: a wrong
+# extension guess errors, a wrong `binary` guess installs the wrong file and says nothing.
+#
+# Two expectations below are RECORDED, NOT ENDORSED, and both are the same finding: jq on
+# linux and macos, and rclone on macos, choose the project's SOURCE tarball over a binary that
+# names the exact machine. It happens because the tie-break ranks format order above
+# specificity, and a detected default order is not something the user asked for. LiNix errors
+# afterwards ("no executable found in the archive"), so it is loud rather than silent — but it
+# is the wrong file. Changing the tie-break is a design decision and is not made here.
+#
+# rclone's macos case has a second cause worth keeping separate: the macos default order is
+# dmg, pkg, tarball, binary and does not include zip, while rclone (and gh, and starship) ship
+# their macos build as a .zip.
+
+## sharkdp/fd v10.4.2
+-> linux/x86_64 = fd_10.4.2_amd64.deb
+-> windows/x86_64 = fd-v10.4.2-x86_64-pc-windows-gnu.zip
+-> macos/aarch64 = fd-v10.4.2-aarch64-apple-darwin.tar.gz
+fd-musl_10.4.2_amd64.deb
+fd-musl_10.4.2_arm64.deb
+fd-musl_10.4.2_armhf.deb
+fd-musl_10.4.2_i686.deb
+fd-v10.4.2-aarch64-apple-darwin.tar.gz
+fd-v10.4.2-aarch64-pc-windows-msvc.zip
+fd-v10.4.2-aarch64-unknown-linux-gnu.tar.gz
+fd-v10.4.2-aarch64-unknown-linux-musl.tar.gz
+fd-v10.4.2-arm-unknown-linux-gnueabihf.tar.gz
+fd-v10.4.2-arm-unknown-linux-musleabihf.tar.gz
+fd-v10.4.2-i686-pc-windows-msvc.zip
+fd-v10.4.2-i686-unknown-linux-gnu.tar.gz
+fd-v10.4.2-i686-unknown-linux-musl.tar.gz
+fd-v10.4.2-x86_64-pc-windows-gnu.zip
+fd-v10.4.2-x86_64-pc-windows-msvc.zip
+fd-v10.4.2-x86_64-unknown-linux-gnu.tar.gz
+fd-v10.4.2-x86_64-unknown-linux-musl.tar.gz
+fd_10.4.2_amd64.deb
+fd_10.4.2_arm64.deb
+fd_10.4.2_armhf.deb
+fd_10.4.2_i686.deb
+
+## jqlang/jq jq-1.8.2
+-> linux/x86_64 = jq-1.8.2.tar.gz
+-> windows/x86_64 = jq-windows-amd64.exe
+-> macos/aarch64 = jq-1.8.2.tar.gz
+jq-1.8.2.tar.gz
+jq-1.8.2.zip
+jq-attestation.json
+jq-linux-amd64
+jq-linux-arm64
+jq-linux-armel
+jq-linux-armhf
+jq-linux-i386
+jq-linux-mips
+jq-linux-mips64
+jq-linux-mips64el
+jq-linux-mips64r6
+jq-linux-mips64r6el
+jq-linux-mipsel
+jq-linux-mipsr6
+jq-linux-mipsr6el
+jq-linux-powerpc
+jq-linux-ppc64el
+jq-linux-riscv64
+jq-linux-s390x
+jq-linux64
+jq-macos-amd64
+jq-macos-arm64
+jq-osx-amd64
+jq-win64.exe
+jq-windows-amd64.exe
+jq-windows-arm64.exe
+jq-windows-i386.exe
+sha256sum.txt
+
+## cli/cli v2.96.0
+-> linux/x86_64 = gh_2.96.0_linux_amd64.deb
+-> windows/x86_64 = gh_2.96.0_windows_amd64.msi
+-> macos/aarch64 = gh_2.96.0_macOS_universal.pkg
+gh_2.96.0_checksums.txt
+gh_2.96.0_linux_386.deb
+gh_2.96.0_linux_386.rpm
+gh_2.96.0_linux_386.tar.gz
+gh_2.96.0_linux_amd64.deb
+gh_2.96.0_linux_amd64.rpm
+gh_2.96.0_linux_amd64.tar.gz
+gh_2.96.0_linux_arm64.deb
+gh_2.96.0_linux_arm64.rpm
+gh_2.96.0_linux_arm64.tar.gz
+gh_2.96.0_linux_armv6.deb
+gh_2.96.0_linux_armv6.rpm
+gh_2.96.0_linux_armv6.tar.gz
+gh_2.96.0_macOS_amd64.zip
+gh_2.96.0_macOS_arm64.zip
+gh_2.96.0_macOS_universal.pkg
+gh_2.96.0_windows_386.msi
+gh_2.96.0_windows_386.zip
+gh_2.96.0_windows_amd64.msi
+gh_2.96.0_windows_amd64.zip
+gh_2.96.0_windows_arm64.msi
+gh_2.96.0_windows_arm64.zip
+
+## neovim/neovim v0.12.4
+-> linux/x86_64 = nvim-linux-x86_64.appimage
+-> windows/x86_64 = nvim-win64.msi
+-> macos/aarch64 = nvim-macos-arm64.tar.gz
+nvim-linux-arm64.appimage
+nvim-linux-arm64.appimage.zsync
+nvim-linux-arm64.tar.gz
+nvim-linux-x86_64.appimage
+nvim-linux-x86_64.appimage.zsync
+nvim-linux-x86_64.tar.gz
+nvim-macos-arm64.tar.gz
+nvim-macos-x86_64.tar.gz
+nvim-win-arm64.msi
+nvim-win-arm64.zip
+nvim-win64.msi
+nvim-win64.zip
+
+## rclone/rclone v1.74.4
+-> linux/x86_64 = rclone-v1.74.4-linux-amd64.deb
+-> windows/x86_64 = rclone-v1.74.4-windows-amd64.zip
+-> macos/aarch64 = rclone-v1.74.4.tar.gz
+MD5SUMS
+rclone-v1.74.4-aix-ppc64.zip
+rclone-v1.74.4-freebsd-386.zip
+rclone-v1.74.4-freebsd-amd64.zip
+rclone-v1.74.4-freebsd-arm-v6.zip
+rclone-v1.74.4-freebsd-arm-v7.zip
+rclone-v1.74.4-freebsd-arm.zip
+rclone-v1.74.4-linux-386.deb
+rclone-v1.74.4-linux-386.rpm
+rclone-v1.74.4-linux-386.zip
+rclone-v1.74.4-linux-amd64.deb
+rclone-v1.74.4-linux-amd64.rpm
+rclone-v1.74.4-linux-amd64.zip
+rclone-v1.74.4-linux-arm-v6.deb
+rclone-v1.74.4-linux-arm-v6.rpm
+rclone-v1.74.4-linux-arm-v6.zip
+rclone-v1.74.4-linux-arm-v7.deb
+rclone-v1.74.4-linux-arm-v7.rpm
+rclone-v1.74.4-linux-arm-v7.zip
+rclone-v1.74.4-linux-arm.deb
+rclone-v1.74.4-linux-arm.rpm
+rclone-v1.74.4-linux-arm.zip
+rclone-v1.74.4-linux-arm64.deb
+rclone-v1.74.4-linux-arm64.rpm
+rclone-v1.74.4-linux-arm64.zip
+rclone-v1.74.4-linux-mips.deb
+rclone-v1.74.4-linux-mips.rpm
+rclone-v1.74.4-linux-mips.zip
+rclone-v1.74.4-linux-mipsle.deb
+rclone-v1.74.4-linux-mipsle.rpm
+rclone-v1.74.4-linux-mipsle.zip
+rclone-v1.74.4-netbsd-386.zip
+rclone-v1.74.4-netbsd-amd64.zip
+rclone-v1.74.4-netbsd-arm-v6.zip
+rclone-v1.74.4-netbsd-arm-v7.zip
+rclone-v1.74.4-netbsd-arm.zip
+rclone-v1.74.4-openbsd-386.zip
+rclone-v1.74.4-openbsd-amd64.zip
+rclone-v1.74.4-osx-amd64.zip
+rclone-v1.74.4-osx-arm64.zip
+rclone-v1.74.4-plan9-386.zip
+rclone-v1.74.4-plan9-amd64.zip
+rclone-v1.74.4-solaris-amd64.zip
+rclone-v1.74.4-vendor.tar.gz
+rclone-v1.74.4-windows-386.zip
+rclone-v1.74.4-windows-amd64.zip
+rclone-v1.74.4-windows-arm64.zip
+rclone-v1.74.4.tar.gz
+SHA1SUMS
+SHA256SUMS
+version.txt
+
+## helm/helm v4.2.3
+-> linux/x86_64 = none
+-> windows/x86_64 = none
+-> macos/aarch64 = none
+helm-v4.2.3-darwin-amd64.tar.gz.asc
+helm-v4.2.3-darwin-amd64.tar.gz.sha256.asc
+helm-v4.2.3-darwin-amd64.tar.gz.sha256sum.asc
+helm-v4.2.3-darwin-arm64.tar.gz.asc
+helm-v4.2.3-darwin-arm64.tar.gz.sha256.asc
+helm-v4.2.3-darwin-arm64.tar.gz.sha256sum.asc
+helm-v4.2.3-linux-386.tar.gz.asc
+helm-v4.2.3-linux-386.tar.gz.sha256.asc
+helm-v4.2.3-linux-386.tar.gz.sha256sum.asc
+helm-v4.2.3-linux-amd64.tar.gz.asc
+helm-v4.2.3-linux-amd64.tar.gz.sha256.asc
+helm-v4.2.3-linux-amd64.tar.gz.sha256sum.asc
+helm-v4.2.3-linux-arm.tar.gz.asc
+helm-v4.2.3-linux-arm.tar.gz.sha256.asc
+helm-v4.2.3-linux-arm.tar.gz.sha256sum.asc
+helm-v4.2.3-linux-arm64.tar.gz.asc
+helm-v4.2.3-linux-arm64.tar.gz.sha256.asc
+helm-v4.2.3-linux-arm64.tar.gz.sha256sum.asc
+helm-v4.2.3-linux-loong64.tar.gz.asc
+helm-v4.2.3-linux-loong64.tar.gz.sha256.asc
+helm-v4.2.3-linux-loong64.tar.gz.sha256sum.asc
+helm-v4.2.3-linux-ppc64le.tar.gz.asc
+helm-v4.2.3-linux-ppc64le.tar.gz.sha256.asc
+helm-v4.2.3-linux-ppc64le.tar.gz.sha256sum.asc
+helm-v4.2.3-linux-riscv64.tar.gz.asc
+helm-v4.2.3-linux-riscv64.tar.gz.sha256.asc
+helm-v4.2.3-linux-riscv64.tar.gz.sha256sum.asc
+helm-v4.2.3-linux-s390x.tar.gz.asc
+helm-v4.2.3-linux-s390x.tar.gz.sha256.asc
+helm-v4.2.3-linux-s390x.tar.gz.sha256sum.asc
+helm-v4.2.3-windows-amd64.zip.asc
+helm-v4.2.3-windows-amd64.zip.sha256.asc
+helm-v4.2.3-windows-amd64.zip.sha256sum.asc
+helm-v4.2.3-windows-arm64.zip.asc
+helm-v4.2.3-windows-arm64.zip.sha256.asc
+helm-v4.2.3-windows-arm64.zip.sha256sum.asc

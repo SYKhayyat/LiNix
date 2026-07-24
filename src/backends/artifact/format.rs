@@ -116,15 +116,16 @@ impl Format {
         const METADATA_SUFFIXES: [&str; 8] = [
             ".sha256", ".sha512", ".sha1", ".md5", ".asc", ".sig", ".pem", ".sbom",
         ];
-        const METADATA_NAMES: [&str; 4] = [
-            "checksums.txt",
-            "checksums",
-            "sha256sums.txt",
-            "sha256sums",
-        ];
         let lower = name.to_lowercase();
-        METADATA_SUFFIXES.iter().any(|s| lower.ends_with(s))
-            || METADATA_NAMES.iter().any(|n| lower.ends_with(n))
+        if METADATA_SUFFIXES.iter().any(|s| lower.ends_with(s)) {
+            return true;
+        }
+        // A digest list, by any of the spellings releases actually use. rclone ships `MD5SUMS`,
+        // `SHA1SUMS` and `SHA256SUMS` in one release, and none of them carries an extension —
+        // which used to make each a candidate executable (D2). Matching the family rather than
+        // three literals is what stops the fourth spelling arriving unnoticed.
+        let stem = lower.strip_suffix(".txt").unwrap_or(&lower);
+        stem.ends_with("sums") || stem.ends_with("sum")
     }
 }
 
@@ -269,6 +270,19 @@ mod tests {
         assert!(Format::is_metadata_filename("checksums.txt"));
         assert!(Format::is_metadata_filename("release.asc"));
         assert!(!Format::is_metadata_filename("fd_10.2.0_amd64.deb"));
+        // The whole digest-list family, in the spellings real releases use — rclone ships the
+        // first three in one release, and none has an extension to be recognised by (D2).
+        for name in [
+            "MD5SUMS",
+            "SHA1SUMS",
+            "SHA256SUMS",
+            "sha512sums.txt",
+            "sha256sum.txt",
+        ] {
+            assert!(Format::is_metadata_filename(name), "{}", name);
+        }
+        // And a package that merely ends in those letters is not one.
+        assert!(!Format::is_metadata_filename("consums-1.0-linux-amd64.tar.gz"));
     }
 
     #[test]

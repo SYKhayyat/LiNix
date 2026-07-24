@@ -131,6 +131,13 @@ fn canonical_matches(canonical: &str, ours: &str) -> bool {
 
 /// Every offset where `needle` appears bounded by non-alphanumeric characters, so `arm` does
 /// not match inside `armv7`. The alias may itself contain `_` or `-`.
+///
+/// **A run of digits closing the word is part of the boundary** (D2, checked against real
+/// releases): `linux64`, `win64`, `mac64` and `darwin64` are all shipped spellings, and
+/// requiring a non-alphanumeric after `linux` made `jq-linux64` — which is in jq's actual
+/// release — read as naming no OS at all. On Windows that made it an executable candidate.
+/// The digits must *end* the word: `linux6x` is not a claim about Linux, and the leading
+/// boundary is unchanged, so `386` still does not match inside `i386`.
 fn token_positions(haystack: &str, needle: &str) -> Vec<usize> {
     let bytes = haystack.as_bytes();
     let mut found = Vec::new();
@@ -142,13 +149,28 @@ fn token_positions(haystack: &str, needle: &str) -> Vec<usize> {
         let start = from + offset;
         let end = start + needle.len();
         let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
-        let after_ok = end == bytes.len() || !bytes[end].is_ascii_alphanumeric();
-        if before_ok && after_ok {
+        if before_ok && ends_word(bytes, end, needle) {
             found.push(start);
         }
         from = start + 1;
     }
     found
+}
+
+/// Whether the alias ending at `end` closes a word — directly, or across trailing digits when
+/// the alias itself ends in a letter.
+fn ends_word(bytes: &[u8], end: usize, needle: &str) -> bool {
+    if end == bytes.len() || !bytes[end].is_ascii_alphanumeric() {
+        return true;
+    }
+    if !needle.ends_with(|c: char| c.is_ascii_alphabetic()) {
+        return false;
+    }
+    let mut i = end;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    i > end && (i == bytes.len() || !bytes[i].is_ascii_alphanumeric())
 }
 
 #[cfg(test)]

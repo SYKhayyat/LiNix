@@ -28,6 +28,19 @@ impl fmt::Display for BadPattern {
 impl std::error::Error for BadPattern {}
 
 impl AssetPattern {
+    /// Whether this pattern is the asset's literal name rather than a glob that happens to
+    /// match it. Naming a file exactly is a claim the user is making about it — which is what
+    /// lets `@asset=` install an extension-less binary whose name says nothing about the
+    /// platform (D2).
+    pub fn names_exactly(&self, name: &str) -> bool {
+        match self {
+            AssetPattern::All => false,
+            AssetPattern::Glob { source, .. } => {
+                source == name && !source.contains(['*', '?'])
+            }
+        }
+    }
+
     pub fn parse(value: &str) -> Result<Self, BadPattern> {
         let value = value.trim();
         if value.is_empty() {

@@ -147,7 +147,7 @@ pub fn select(request: &Request<'_>, assets: &[Asset]) -> Result<Selection, NoMa
             continue;
         }
         let runs_here = request.platform.accepts(&asset.name);
-        let format = classify_format(&asset.name, runs_here);
+        let format = classify_format(&asset.name, request.platform, request.pattern);
 
         if !runs_here {
             rejected.push(Rejected {
@@ -254,14 +254,33 @@ fn sort_by_preference(candidates: &mut [Candidate]) {
     });
 }
 
-/// An asset with no recognised extension is a `Binary` only if it runs here and its trailing
-/// dot-segment is not a file extension — otherwise `fd-v10.2.0-x86_64-linux` and `notes.txt`
-/// would both become executables.
-fn classify_format(name: &str, runs_here: bool) -> Option<Format> {
+/// An asset with no recognised extension is a `Binary` only if the filename **names this
+/// machine** and its trailing dot-segment is not a file extension.
+///
+/// D2's rule is *"matched this machine's os/arch and has no recognised extension"*, and
+/// "matched" is stronger than `accepts`, which only says the name does not contradict this
+/// machine. Checked against real releases, the weaker reading made `MD5SUMS` — an actual asset
+/// of every rclone release — an executable candidate on every platform, and `jq-linux64` one
+/// on Windows. This is the one place in artifact selection that fails quietly rather than
+/// loudly, so it takes the strict reading and a file that claims nothing is not an executable.
+///
+/// **`@asset=` overrides it**, because naming the file *is* the claim: a project shipping one
+/// bare `mytool` for one platform is installed by naming it, not by LiNix guessing.
+pub(super) fn classify_format(
+    name: &str,
+    platform: &Platform,
+    pattern: Option<&AssetPattern>,
+) -> Option<Format> {
     if let Some(format) = Format::of_filename(name) {
         return Some(format);
     }
-    if runs_here && !has_extension(name) {
+    if has_extension(name) {
+        return None;
+    }
+    if platform.specificity(name) > 0 {
+        return Some(Format::Binary);
+    }
+    if pattern.is_some_and(|p| p.names_exactly(name)) {
         return Some(Format::Binary);
     }
     None
@@ -510,3 +529,4 @@ mod tests {
         assert!(err.to_string().contains("no assets at all"));
     }
 }
+
