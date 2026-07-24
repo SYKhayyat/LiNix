@@ -53,22 +53,28 @@ pub fn no_runtime_refusal() -> String {
     )
 }
 
-/// What to say when the runtime is here but the image has not been built.
+/// What to say when the runtime could not produce the image.
+///
+/// It says *could not find*, not *does not have*: the same failure covers a daemon that is not
+/// running, and a message asserting the image is missing would send someone to build an image
+/// they already have. `try` cannot tell the two apart from one exit code, so it does not claim
+/// to — it names both and lets the reader look.
 pub fn missing_image_refusal(runtime: &str, image: &str) -> String {
     let known: Vec<String> = IMAGES
         .iter()
         .map(|(name, what)| format!("    {}   ({})", name, what))
         .collect();
     format!(
-        "refusing to rehearse: `{}` has no image named `{}`.\n  \
+        "refusing to rehearse: `{runtime}` could not find an image named `{image}`.\n  \
+         Either it has not been built, or `{runtime}` is installed but not running — \
+         `{runtime} info` says which.\n  \
          `try` reuses the integration images, which are built from `docker/integration/`:\n\n\
-         {}\n\n  \
-         Build one with:  {} build -f docker/integration/Dockerfile.ubuntu -t {} .",
-        runtime,
-        image,
-        known.join("\n"),
-        runtime,
-        DEFAULT_IMAGE
+         {images}\n\n  \
+         Build one with:  {runtime} build -f docker/integration/Dockerfile.ubuntu -t {default} .",
+        runtime = runtime,
+        image = image,
+        images = known.join("\n"),
+        default = DEFAULT_IMAGE
     )
 }
 
