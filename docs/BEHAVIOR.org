@@ -1,5 +1,5 @@
 #+TITLE: LiNix — Current Behavior Reference
-#+SUBTITLE: v6.0.0 — what the binary actually does today
+#+SUBTITLE: v7 — the parts of the binary's behaviour this document still describes
 #+AUTHOR: LiNix
 #+OPTIONS: toc:2 num:t
 #+STARTUP: showall
@@ -19,6 +19,13 @@ Two ways to drive it:
 
 This document records *current, observed behavior* — the contract the test sweeps
 in [[*Real-world test harness][Real-world test harness]] assert. It is descriptive, not aspirational.
+
+Its command-surface, declarative-lifecycle and config-surface sections were *deleted*
+rather than updated: they described ~prune~, ~orphans~, ~status~, ~migrate~,
+~prune_on_sync~ and ~prune_scope~, none of which exist — the v7 rewrite replaced that
+model, and a document that names deleted commands is worse than no document. The
+command surface lives in the readme and in ~linix --help~, which cannot go stale
+because clap generates it. ~docs/SPEC.md~ is the design.
 
 * Package spec syntax
 
@@ -42,155 +49,6 @@ remote URL in place), ~when <os|arch|host> == <v>~ … ~end~ host-conditional bl
 ~@health=port:N~ or ~@health=<command>~ to be probed after it is installed; a failure
 *restores the snapshot* taken before the change, and a health check declared where no snapshot
 provider exists is refused before the change rather than after it (XIII.5).
-
-* Global flags
-
-All are ~global = true~ (valid before or after the subcommand):
-
-| Flag              | Short | Effect                                                      |
-|-------------------+-------+-------------------------------------------------------------|
-| ~--dry-run~       | ~-n~  | preview only; never prompts, never mutates                  |
-| ~--yes~           | ~-y~  | skip confirmation prompts (required in non-interactive use) |
-| ~--backend NAME~  | ~-b~  | force/scope a single backend                                |
-| ~--config PATH~   | ~-c~  | use an alternate ~config.toml~                              |
-| ~--groups-dir DIR~| ~-g~  | read manifests from DIR (overrides the default location)    |
-| ~--verbose~       | ~-v~  | debug-level logging                                         |
-| ~--quiet~         | ~-q~  | suppress flight plan + transaction summary (errors still print) |
-| ~--progress~      |       | toggle progress indicators (default on)                     |
-
-User-defined command shorthands live in ~config.toml~ under ~[command_aliases]~ (e.g.
-~up = "upgrade --all"~); they are expanded before parsing and can never shadow a built-in
-subcommand.
-
-* Command surface
-
-** Imperative
-- ~search <query> [--json]~ — parallel search across searchable backends.
-- ~install <pkg…> [--json] [--temp <dur>]~ — install; tagged "imperative" so drift-prune won't
-  touch it. ~--json~ with ~--dry-run~ emits the plan instead of installing. ~--temp <dur>~ makes
-  it a *temporary install* (leases itself; auto-removed when the duration elapses; kept out of
-  the manifest so ~sync~ won't resurrect it).
-- ~remove <pkg…> [--json] [--temp[=<dur>]]~ — remove if installed under some managed backend;
-  if not found, *warns and exits 0* (a not-installed remove is not an error). ~--temp=<dur>~ is
-  a *temporary uninstall*: the package is restored after ~dur~; bare ~--temp~ inside a
-  ~linix shell~ restores it when that ephemeral session ends. Restore is reinstall-by-name;
-  an unavailable package warns and the suspension is dropped. See ~lease list~.
-- ~list [--backend B] [--json] [--outdated]~ — installed packages (live query per backend);
-  ~--outdated~ shows only those with a newer version available (installed vs latest).
-- ~search <query> [--json] [--installed]~ — parallel search; ~--installed~ filters to what you
-  already manage.
-- ~info <pkg>~ — metadata (version, description, install path, dependencies).
-- ~hold <pkg…>~ / ~unhold <pkg…>~ — freeze packages so ~upgrade~ never bumps them (bare ~hold~
-  lists current holds); honored by targeted upgrades and the planner.
-- ~export [--format brew|pip|npm|apt] [--out DIR] [--stdout]~ — emit native manifests
-  (Brewfile, requirements.txt, package.json, Aptfile) from the managed set.
-- ~conflicts [--json]~ — cross-backend conflict detection (same tool at different versions, or
-  provided by more than one backend).
-- ~self-upgrade [--git URL] [--check]~ — rebuild+install the latest LiNix from source via cargo.
-- ~run -p <pkg…> <command>~ — run a command in an ephemeral package environment.
-- ~shell -p <pkg…>~ — enter an ephemeral environment.
-
-** Declarative lifecycle
-- ~init [--force]~ — scaffold the on-disk layout and a starter ~local.txt~ manifest.
-- ~sync [--locked] [--json]~ — converge system to manifests. Installs/upgrades;
-  removes drift *only* if ~prune_on_sync = true~. Non-interactive callers must
-  pass ~--yes~ (or ~--json~) or ~sync~ refuses rather than hang or auto-apply.
-- ~status~ (alias ~diff~) ~[--json]~ — read-only: what ~sync~ would install, what
-  drift ~prune~ would remove, and what is installed-but-unmanaged. Changes nothing.
-- ~orphans~ — read-only report of packages an unscoped ~sync~/~clean~ would prune.
-- ~prune [--json]~ — remove drift (managed packages no longer in manifests).
-  Scope from ~prune_scope~: ~"managed"~ (default) or ~"system"~.
-- ~lock~ — pin each managed package's installed version into ~locks.json~ so
-  ~sync --locked~ reproduces those versions where the backend supports it. The lockfile is
-  *signed* with a machine-local key; ~sync --locked~ refuses a locally-edited lockfile
-  (fails closed). A fresh machine with no key (e.g. restoring a bundle) proceeds unverified.
-- ~watch [--interval N] [--on-change] [--pull] [--once]~ — continuously reconcile to manifests
-  (GitOps for one machine); ~--pull~ does ~git pull --ff-only~ first, then applies unattended.
-- ~upgrade [pkgs…] [--all] [--backend B] [--security] [--except P] [--profile|--module|--group]
-  [--canary --test CMD] [--json]~ — bare/~--all~ runs each backend's native whole-system upgrade;
-  named packages / ~--backend~ scope it; ~--security~ upgrades exactly what ~audit~ flags,
-  pinned to the highest fixed version; ~--except~ holds packages back; ~--canary~ snapshots,
-  upgrades, health-checks, and auto-rolls-back on failure.
-- ~plan [--out FILE]~ / ~apply <file>~ — freeze what ~sync~ would do to a reviewable file, then
-  apply exactly that; ~apply~ warns on drift and offers an interactive toggle-review.
-- ~service enable|disable|start|stop|restart|status|list~ — declarative services across systemd,
-  OpenRC, SysVinit, launchd, and Windows ~sc~; ~enable~/~disable~ persist to the manifest.
-- ~bundle [--out DIR] [--artifacts] [--archive]~ — portable offline bundle; ~--archive~ packs a
-  single ~.tar.gz~.
-- ~generation list|log [--oneline] [--json]|diff <from> [<to>] [--json]|rollback <id> [--package P]|
-  pin <id>|unpin <id>~ — manage/inspect generations; ~diff~ shows packages added/removed/
-  version-changed between two generations (omit ~<to>~ to diff against the live system).
-- ~rollback <id> [--package P]~ — shorthand for ~generation rollback~ (with interactive review).
-- ~clean~ / ~heal~ — deep cleanup / recover an interrupted transaction (WAL).
-
-** Profiles (identities)
-- ~activate <name…>~ — add profile(s) to the active set and converge the system to the
-  *union* of all active profiles. Several profiles can be active at once; live, no reboot.
-- ~deactivate <name…>~ — drop profile(s) from the active set and converge, removing packages
-  no longer required by any remaining active profile (imperative installs are always spared).
-- ~profile list~ — every defined profile (a ~★~ marks the active ones).
-- ~profile show <name>~ — the resolved package set the profile expands to.
-- ~profile create <name>~ — scaffold an empty ~<name>.profile~.
-- ~profile save <name>~ — snapshot the current desired state as a new standalone profile.
-- ~profile switch <name>~ — exclusively switch to one profile (deactivate all others).
-- ~profile active~ — just the currently-active profiles.
-
-A profile is ~<profiles_dir>/<name>.profile~ (a manifest with extra directives), or a legacy
-~<profiles_dir>/<name>/~ directory of ~.txt~ manifests. Directives compose profiles:
-
-| Directive         | Meaning                                                    |
-|-------------------+------------------------------------------------------------|
-| ~include <name>~  | union another profile's resolved set (the "plus")          |
-| ~exclude <name>~  | subtract another profile's resolved set                    |
-| ~-<pkg>~          | subtract a single package (the "minus")                    |
-| any other line    | a package spec (~ripgrep~, ~cargo:exa~, ~@module:dev~, …)  |
-
-Subtraction always wins (applied after all additions); ~include~/~exclude~ recursion is
-cycle-guarded. The active set lives in ~<profiles_dir>/active~; the union is rendered into the
-reserved manifest ~<groups_dir>/_active_profiles.txt~, so the ordinary declarative pipeline
-(resolve → plan → sync, which prunes managed drift) converges the system in both directions.
-So ~lean = base + rust − heavy~ is expressible, and ~work~ + ~gaming~ can be active together.
-
-** Management modes, hooks, git & cockpit (v7)
-- ~managed strict|linix-only|show~ — set drift scope (~strict~ = prune anything not in the
-  manifests; ~linix-only~ = prune only LiNix-installed packages), or show the current mode.
-- ~managed keep <pkg…>~ / ~managed unkeep <pkg…>~ — edit ~groups/keep.txt~, a keep-list whose
-  entries are folded into the protected set and never auto-removed.
-- ~hooks install|uninstall|status [managers…]~ — native package-manager hooks (pacman, apt,
-  dnf, zypper, apk, xbps, portage, eopkg) that record manual installs into LiNix.
-  ~hooks shell-init <shell>~ prints shell wrappers + an auto-learn helper (~linixlearn~).
-  Local-file installs (~.deb~/~.rpm~/AppImage/…) are recorded imperatively and protected.
-- ~git init|status|log|commit|checkout~ — version-control the config dir. After ~git init~,
-  manifests auto-commit on every command; each generation is stamped with its commit, so
-  ~rollback <gen> --with-config~ (or ~git checkout <commit>~) rolls config + system together.
-- ~cockpit~ (alias ~tui~) — a generation time-travel dashboard: timeline (left), the selected
-  generation's package set + git commit + diff (right), a shell line (bottom); roll back with
-  ~r~ / ~R~.
-
-  Profiles additionally support an ~intersect <name>~ directive and full set expressions with
-  ~|~ / ~&~ / ~\~ and function forms, grouped by parentheses (see ~app::profile_expr~).
-
-** Inspection & system
-- ~doctor [--fix] [--json]~ — deep health: per-backend readiness/severity, config/state
-  integrity, directory layout, and lockfile drift. ~--fix~ creates missing dirs, refreshes
-  metadata, and reconciles a drifted lockfile.
-- ~update~ — refresh repository metadata for all backends.
-- ~unmanaged~ — installed packages not managed by LiNix.
-- ~unmanage <pkg…> [--json]~ — stop managing a package *without uninstalling it*. Drops it
-  from managed state and removes its declaration from any manifest. Deleting a manifest
-  line by hand means "uninstall this"; this is the verb for "forget this, leave it alone".
-- ~protected [pkg…] [--json]~ — what the removal guard refuses to delete. With no argument
-  it prints the effective rules, the exemptions, ~max_removals~, and which commands are
-  guarded. With package names it answers per package and cites the deciding rule.
-- ~init [--force] [-i]~ — scaffold the layout; ~-i~ runs guided, interactive setup.
-- ~why <pkg> [--json]~ / ~audit [--json]~ / ~sbom~ — provenance, vulnerability audit, SBOM.
-- ~config edit~ — open the config in ~$EDITOR~/~$VISUAL~ and re-validate on save.
-- ~fleet [hosts…] [--sync] [--apply]~ — report drift across machines; ~--sync~ reconciles the
-  drifted ones, ~--apply~ pushes ~sync~ to every reachable host.
-- ~module add <github:user/repo|url>~ — fetch a shared module into the local modules dir.
-- ~status~/~config~/~repo~/~module~/~lease~/~schedule~/~snapshot~/
-  ~teleport~/~shim~/~migrate~/~undo~/~bisect~/~clone~/~policy~/
-  ~completions~ — see ~linix <cmd> --help~.
 
 * Removal guard
 
@@ -223,32 +81,25 @@ and removing it wrecks the machine. Hence the built-in list.
 The only override is ~--allow-mass-removal~ (global). ~--yes~ is deliberately *not* one:
 scripts and CI pass ~-y~ universally, and an unattended run is the case that cannot
 notice a system being dismantled. For the same reason ~allow_mass_removal~ cannot be set
-in config.toml — only per invocation.
+in preferences.toml — only per invocation.
 
 Refusal exits non-zero and names the deciding rule. ~linix protected~ shows the effective
 rules; ~linix unmanage~ is the way to stop managing something without deleting it.
 
-* Adoption (~migrate~)
-
-~migrate~ only adopts packages a backend can *prove* the user chose. Each backend
-declares one of three answers:
-
-| Answer                | Meaning                                            | Examples                        |
-|-----------------------+----------------------------------------------------+---------------------------------|
-| a command reports it  | ask it                                             | apt (~apt-mark showmanual~), pacman (~-Qe~), apk (~/etc/apk/world~), conda (~env export --from-history~), macports |
-| everything is chosen  | the manager installs no dependencies of its own    | winget, scoop, choco, mas, dotnet, bun, helm, mix, asdf, pixi, guix, slackpkg |
-| cannot tell           | it has dependencies and exposes no explicit record | pip, gem, zypper, pkgin, composer, opam, cabal, stack, luarocks, nimble, eopkg, emerge, custom backends |
-
-A backend in the third group *adopts nothing* and logs why. This is deliberate:
-everything adopted lands in the global state registry, and everything in that registry
-is a removal candidate later. Adopting nothing costs a manual manifest line; adopting a
-dependency graph costs the machine. The measured difference on stock images: apt 103
-user-chosen of 582 installed; conda 4 of 88.
-
 * Exit-code & failure contract
 
-This is the invariant the negative-path tests guard, and the one most recently
-hardened:
+The process exits with one of four codes, and they mean the same thing in every
+command that can produce them (U21):
+
+| 0 | converged — what you declared is what is there                  |
+| 1 | failed — something went wrong                                   |
+| 2 | differences — a read-only command looked and found work to do   |
+| 3 | refused — the guard said no, and there is no flag for it        |
+
+~2~ is what lets ~linix check~ report drift in CI without failing the job the way
+an error would, and ~3~ is separate from ~1~ because "I will not do this" is not
+"this broke". Below is the internal contract those codes rest on — the invariant
+the negative-path tests guard:
 
 - *Mutating commands enforce process exit status.* Any write path (~install~,
   ~remove~, ~sync~, ~prune~, upgrades — anything routed through the executor's
@@ -271,27 +122,6 @@ hardened:
   always a failure.
 - ~remove~ of a *not-installed* package is a warning and exits 0 — that is not a
   command failure, it is a no-op.
-
-* Config surface (config.toml)
-
-Written by ~linix config init~; every key is optional. Notable defaults:
-
-| Key                    | Default     | Effect                                             |
-|------------------------+-------------+----------------------------------------------------|
-| ~max_parallel~         | ~4~         | parallel install/remove/search fan-out             |
-| ~network_timeout_secs~ | ~15~        | HTTP search timeout (npm/PyPI/marketplace)         |
-| ~prune_on_sync~        | ~false~     | whether ~sync~ also removes drift                  |
-| ~prune_scope~          | ~"managed"~ | drift scope: managed-only vs any system package    |
-| ~protect_imperative~   | ~true~      | never prune packages installed via ~linix install~ |
-| ~confirm_destructive~  | ~false~     | extra prompt before removals                       |
-| ~protected_packages~   | —           | names that must never be removed (adds to built-ins) |
-| ~unprotected_packages~ | —           | names that are NOT protected, overriding everything |
-| ~max_removals~         | ~20~        | refuse any command removing more than this; ~0~ disables |
-| ~[guard.enforce_on]~   | all ~true~  | which commands the removal guard applies to        |
-| ~default_backend~      | auto        | force a single default backend                     |
-
-~linix config show~ prints the effective config and its source (file vs built-in
-defaults). ~linix config path~ prints the file location.
 
 * Real-world test harness
 
