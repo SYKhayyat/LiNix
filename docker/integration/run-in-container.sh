@@ -801,6 +801,8 @@ ok "path --explain says which source won" lx path --explain
 ok "config show prints the active configuration" lx config show
 ok "policy checks the desired state against [guard]" lx policy
 ok "check conflicts reports cross-backend conflicts" lx check conflicts
+# With no event hooks declared, approvals is clean and exits 0 (not 2).
+ok "check approvals is clean with no hooks" lx check approvals
 ok "sbom emits a bill of materials" lx sbom
 ok "completions bash generates a script" lx completions bash
 ok "profile list" lx profile list

@@ -3563,7 +3563,42 @@ async fn handle_check(app: &App, section: Option<&str>, json: bool) -> Result<()
         Section::Conflicts => handle_conflicts(app, json).await,
         Section::Health => check_health(app, json).await,
         Section::Security => handle_audit(app, json).await,
+        Section::Approvals => check_approvals(app, json).await,
     }
+}
+
+/// `check approvals` — the event hooks that will not run because they are unapproved (II.12).
+///
+/// Only event hooks: they warn-and-skip, so they are the one supply-chain item that fails
+/// silently. The others (`exec:`, adapters, the `vars` provider, package hooks) block a sync
+/// loudly, so a user meets those the moment they run `sync` — this is for the ones nobody meets
+/// until the machine drifts and the hook that should have told them does nothing.
+async fn check_approvals(app: &App, json: bool) -> Result<()> {
+    let hooks = linix::app::events::EventHooks::load(&app.config);
+    let unapproved = hooks.unapproved();
+
+    if json {
+        let rows: Vec<_> = unapproved
+            .iter()
+            .map(|h| serde_json::json!({ "event": h.event.as_str(), "origin": h.origin }))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!(rows))?);
+        return Ok(());
+    }
+
+    if unapproved.is_empty() {
+        println!("Every event hook is approved and will run.");
+        return Ok(());
+    }
+    println!(
+        "{} event hook(s) are unapproved and will NOT run until you `linix lock`:",
+        unapproved.len()
+    );
+    for h in &unapproved {
+        println!("  {} at {}", h.event, h.origin);
+    }
+    // A read-only command that found work exits 2 (U21), like every other `check` section.
+    Err(linix::core::Error::Differences(String::new()).into())
 }
 
 /// Every section's verdict, one line each. The summary is deliberately cheap to read: a reader
@@ -3710,6 +3745,20 @@ async fn check_summary(app: &App, json: bool) -> Result<()> {
             "linix check security",
         )),
     }
+
+    // approvals — event hooks that are unapproved and so will silently not run (II.12).
+    let unapproved = linix::app::events::EventHooks::load(&app.config)
+        .unapproved()
+        .len();
+    findings.push(if unapproved == 0 {
+        Finding::ok(Section::Approvals, "every event hook will run")
+    } else {
+        Finding::attention(
+            Section::Approvals,
+            format!("{} event hook(s) will not run until approved", unapproved),
+            "linix lock",
+        )
+    });
 
     if json {
         let rows: Vec<_> = findings

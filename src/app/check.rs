@@ -33,10 +33,12 @@ pub enum Section {
     Health,
     /// Does anything managed have a known vulnerability?
     Security,
+    /// Is any code the repo can run (an event hook) unapproved, and so silently dead? (II.12)
+    Approvals,
 }
 
 impl Section {
-    pub const ALL: [Section; 7] = [
+    pub const ALL: [Section; 8] = [
         Section::Config,
         Section::Drift,
         Section::Unmanaged,
@@ -44,6 +46,7 @@ impl Section {
         Section::Conflicts,
         Section::Health,
         Section::Security,
+        Section::Approvals,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -55,6 +58,7 @@ impl Section {
             Section::Conflicts => "conflicts",
             Section::Health => "health",
             Section::Security => "security",
+            Section::Approvals => "approvals",
         }
     }
 

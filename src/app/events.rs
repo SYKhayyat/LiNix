@@ -117,6 +117,24 @@ impl EventHooks {
         }
     }
 
+    /// The hooks that would NOT run because their current script is unapproved (II.12).
+    ///
+    /// Event hooks warn-and-skip rather than blocking a sync — which is right (a down webhook
+    /// is not a reason to fail a converged machine) but means they are the one supply-chain
+    /// item nothing surfaces until the moment it silently does nothing. `check` asks this so a
+    /// hook you wrote and forgot to `linix lock` is a line in "what needs you", not a surprise
+    /// the next time the machine drifts.
+    ///
+    /// A ledger that cannot be read counts everything as unapproved: unreadable is not
+    /// permission to run.
+    pub fn unapproved(&self) -> Vec<&EventHook> {
+        let ledger = HookLedger::load(&HookLedger::path_in(&self.locks_dir)).unwrap_or_default();
+        self.hooks
+            .iter()
+            .filter(|h| !ledger.verdict(&h.id, &hash_script(&h.script)).is_approved())
+            .collect()
+    }
+
     /// Approve every event hook at its current hash — what `linix lock` does. The only path
     /// that writes an approval, so approval stays a deliberate act.
     pub fn approve_all(&self) -> Result<usize> {
@@ -387,6 +405,37 @@ mod tests {
         hooks.fire(Event::OnDrift, json!({"removed": ["jq"]})).await;
         // No `locks/` was created, which is the observable proof the ledger was never opened.
         assert!(!tmp.path().join("locks").exists());
+    }
+
+    /// `check` surfaces the hooks that will silently not run. Before `lock`, every declared
+    /// hook is unapproved; after, none is.
+    #[test]
+    fn unapproved_lists_what_lock_would_fix() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_repo_hook(tmp.path(), Event::OnDrift, "#!/bin/sh\ntrue\n");
+        let hooks = EventHooks::load(&config_at(tmp.path()));
+
+        assert_eq!(hooks.unapproved().len(), 1, "an unlocked hook is unapproved");
+        hooks.approve_all().unwrap();
+        assert!(
+            EventHooks::load(&config_at(tmp.path())).unapproved().is_empty(),
+            "lock should approve it"
+        );
+    }
+
+    /// An edited hook is unapproved again — the same signal `check` should show after an edit.
+    #[test]
+    fn editing_a_hook_makes_it_unapproved_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_repo_hook(tmp.path(), Event::OnDrift, "#!/bin/sh\ntrue\n");
+        EventHooks::load(&config_at(tmp.path()))
+            .approve_all()
+            .unwrap();
+        write_repo_hook(tmp.path(), Event::OnDrift, "#!/bin/sh\nfalse\n");
+        assert_eq!(
+            EventHooks::load(&config_at(tmp.path())).unapproved().len(),
+            1
+        );
     }
 
     /// II.12 admits no exception for "it's only a notification": an unapproved hook does not
