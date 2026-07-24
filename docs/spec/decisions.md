@@ -263,12 +263,17 @@ fix — and the refusal says so rather than resolving the path.
 
 ## U3
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U3 — What does removing an `exec:` line mean?** Every other statement's removal undoes
 something. A script has no inverse. *Recommendation:* an optional `@undo=` command; without it,
 removing the line removes only the record, and `plan` says so in those words rather than
 implying a revert that will not happen.
+
+**RULED (owner, 2026-07-24): as recommended.** An optional `@undo=<command>`; without one,
+removing an `exec:` line drops the lock row and nothing else, and `plan` says so in those words
+rather than implying a revert that will not happen. A script has no inverse, and inventing one
+would be LiNix claiming to undo something it cannot.
 
 ---
 
@@ -395,7 +400,7 @@ said had to be settled before the first adapter was written.
 
 ## U22
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U22 — Does the dotfiles tree link files, or directories?** One symlink at `~/.config/nvim`
 is a single operation and takes the whole directory hostage: everything the application later
@@ -408,11 +413,17 @@ cannot express *"this directory is entirely mine"*, which is what a `nvim` confi
 control usually is — so if the answer is per-file, the directory case needs its own spelling
 later rather than being reachable by accident.
 
+**RULED (owner, 2026-07-24): per file, as recommended.** One symlink at `~/.config/nvim`
+takes the whole directory hostage: every cache, session file and plugin lockfile the application
+later writes lands inside the git-tracked repo, and `bundle` then hands it to whoever the backup
+goes to. Linking each file leaves the directory the user's and puts nothing in the repo that was
+not put there deliberately.
+
 ---
 
 ## U23
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U23 — What happens to a destination that already holds the user's own file?** `link:`
 answers this one file at a time with `backup_once`. A tree asks it forty times on the first
@@ -424,11 +435,22 @@ the user says which way; `--adopt-existing` (or whatever it ends up called) is t
 answer for "back them all up". This must be settled before the walker is written, because a
 tree that half-links is worse than one that does not run.
 
+**RULED (owner, 2026-07-24): as recommended, plus an explicit bypass.** The plan lists every
+colliding destination *before* anything is written and the run is refused until they have been
+seen — silently backing up forty files is not a preview, and refusing on the first collision
+leaves the sync half-applied.
+
+**And there is a flag to proceed anyway** (owner's addition): the common case on a fresh machine
+is that every colliding file is a distribution default nobody edited, and making the user
+acknowledge forty of those one at a time is a refusal that teaches people to bypass refusals. The
+flag is explicit and per-run; it is never a config key, because a machine that always bypasses
+this is a machine where the check does not exist.
+
 ---
 
 ## U24
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U24 — Is a `.age` file in the tree a secret?** XII's decrypt mode is an option on a `link:`
 line, and this statement has no per-file options by construction. Either the extension decides
@@ -436,6 +458,10 @@ line, and this statement has no per-file options by construction. Either the ext
 statement's job and stay on explicit `link:` lines. *Recommendation:* the second — **the tree
 never decrypts.** T2 is already an open finding about plaintext landing in the config repo, and
 a folder walker that decrypts by filename convention is the same failure with more surface.
+
+**RULED (owner, 2026-07-24): the tree never decrypts.** An `.age` file in the dotfiles tree
+is copied as the ciphertext it is. Deciding by file extension is magic, and magic that silently
+writes plaintext; secrets stay on explicit `link:` lines where `@decrypt=` is written down.
 
 ---
 
@@ -644,18 +670,25 @@ mechanism.
 
 ## N4
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **N4 — Is `default/incoming` a `firewall:` statement or a preference key?** As a statement it
 inherits `when` and the plan; as a key in `preferences.toml` it is machine-local and invisible
 to git. *Recommendation:* a statement — the default policy is the most important line in a
 firewall and belongs in the repo with the rest.
 
+**RULED (owner, 2026-07-24): both, and the statement wins.** The default policy may be
+written as a `firewall:` statement (in the repo, gated by `when`, visible in `plan`) or as a key
+in `preferences.toml` (machine-local). Where both say something, **the line wins** — the same
+precedence the owner set for N6, and for the same reason: the declaration is the thing you can
+read, review and share, and a machine-local key silently overriding it would be the invisible
+answer beating the visible one.
+
 ---
 
 ## N5
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **N5 — What does removal restore?** X.4 ruled that a removed `setting:` resets to the schema
 default rather than to the value the user had before LiNix. *Recommendation:* the same answer,
@@ -663,26 +696,47 @@ for the same reason — restoring a per-rule prior state means keeping a per-rul
 and "undeclared means the firewall's own default" is the shape every other statement's removal
 already has. The cost is the same one X.4 recorded and it must be documented, not hidden.
 
+**RULED (owner, 2026-07-24): the firewall's own default, as recommended.** The same answer
+X.4 gave for `setting:`, for the same reason — restoring a per-rule prior state means keeping a
+per-rule store of it, and "undeclared means the firewall's own default" is the shape every other
+removal already has. The cost is documented rather than hidden.
+
 ---
 
 ## N6
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **N6 — What happens when a config declares both `firewall:` lines and a `link:` to the
 ruleset file?** *Recommendation:* an error at resolve time naming both files and lines, in the
 class of II.7 rule 5. Two owners of one perimeter is the two-of-everything failure, and it
 should be caught before any command runs, not discovered at 2am.
 
+**RULED (owner, 2026-07-24): warn, apply both, and the `firewall:` line wins.** The
+recommendation was an error at resolve time; the owner's answer is softer and more useful — a
+config that declares rules *and* links a ruleset file is doing something legible (a base file
+plus specific overrides), so LiNix warns that two things own the perimeter and lets the explicit
+declaration take precedence where they disagree. **The warning is not optional**, because two
+owners of one perimeter is still the two-of-everything failure; what changed is that it is
+reported rather than refused.
+
 ---
 
 ## N7
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **N7 — Does `watch` revert firewall drift unattended, or only report it?** Everything else
 `watch` reconciles is software; this reconciles reachability. *Recommendation:* report by
 default, revert only under an explicit key, and never revert a rule that would trip N2.
+
+**RULED (owner, 2026-07-24): revert by default, and report instead only when the revert
+would close the port carrying the session.** The recommendation had it the other way round. The
+owner's answer is the more consistent one: drift is corrected everywhere else in this model, and
+a firewall rule nobody declared is drift. The single exception is the one that cannot be undone
+from the far end of an SSH connection — there LiNix reports and leaves it, because an
+un-reverted rule is a thing you fix tomorrow and a reverted one can be a machine you cannot
+reach.
 
 ---
 
@@ -744,12 +798,17 @@ P3's failure in prose form.
 
 ## U7
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U7 — Is a health check per-package or per-sync?** Per-package answers "did *this* upgrade
 break it" and is precise; per-sync catches the breakage a package cannot see (the boot, the
 network). *Recommendation:* both, and they are not alternatives — `@health=` on a line, plus a
 `health` list in `preferences.toml` for the machine-wide checks, with the same revert path.
+
+**RULED (owner, 2026-07-24): both, as recommended.** `@health=` on a line answers *did this
+upgrade break this*, and a machine-wide `health` list in `preferences.toml` catches what a
+package cannot see — the boot, the network, the thing two packages away. They are not
+alternatives and share one revert path.
 
 ---
 
@@ -840,13 +899,17 @@ version the lock recorded — which is the reproducibility claim the lock exists
 
 ## U12
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U12 — Does `try` reuse the Phase 6 images, or build from a base the config names?** Reusing
 them is nearly free and covers debian/alpine/arch today; a config-named base is what a user with
 an unusual host actually needs. *Recommendation:* start with the Phase 6 images, and treat a
 config-named base as the second step rather than the blocker — the value is in the rehearsal
 existing at all.
+
+**RULED (owner, 2026-07-24): reuse the Phase 6 images to start.** debian/alpine/arch are
+already built and cover most hosts; a config-named base is the second step, not the blocker. The
+value is the rehearsal existing at all.
 
 ---
 
@@ -863,13 +926,24 @@ made non-idempotent, or the next person debugging a slow sync has no thread to p
 
 ## U15
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U15 — Where do LiNix-level event hooks live, and are they per-machine?** `preferences.toml` is
 machine-local, so `after_sync` on the laptop is invisible to the desktop. That is right for a
 notification hook and wrong for a policy one. *Recommendation:* `preferences.toml` first —
 machine-local behaviour is the honest default for something that talks to *this* machine's
 Slack — and revisit only when a real case wants a fleet-wide event.
+
+**RULED (owner, 2026-07-24): both locations, not one.** A hook may live in
+`preferences.toml` (machine-local — the notification that talks to *this* machine's Slack) or in
+the config repo (the policy every machine should run). The recommendation offered only the first;
+the owner's answer is that the choice belongs to the user, because the two kinds of hook are
+genuinely different and forcing them into one file makes one of them wrong.
+
+**They are additive, not overriding.** A repo hook and a machine hook for the same event both
+run — the repo's because every machine should, this machine's because it is this machine. A
+precedence rule would mean adding a local notification silently disables the shared policy, which
+is the quiet failure this model exists to avoid.
 
 ---
 
@@ -891,11 +965,15 @@ away.
 
 ## U17
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U17 — Is `linix eval`'s output versioned from the first release?** *Recommendation:* yes, a
 top-level schema version, decided before anything consumes it. P2 says there is no legacy to
 carry, and this is the one output that will acquire consumers LiNix cannot see.
+
+**RULED (owner, 2026-07-24): yes.** `linix eval` carries a top-level schema version from its
+first release. It is the one output that will acquire consumers LiNix cannot see, and P2 leaves
+no legacy to carry — so the version is free now and impossible later.
 
 ---
 
@@ -927,7 +1005,7 @@ first within a release. If it cannot be thin, do not build it.
 
 ## U21
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **In the tree today:** No exit-code table; `main.rs:33` is the only `process::exit` and it is `0`.
 
@@ -937,17 +1015,29 @@ LiNix failed, 2 differences found, 3 refused by the guard — decided in one pla
 script can rely on, and the separation that matters is 3: a guard refusal is neither a failure
 nor a difference.
 
+**RULED (owner, 2026-07-24): yes — 0 converged, 1 LiNix failed, 2 differences found, 3 refused
+by the guard.** Decided in one place before the commands that use it. **BUILT the same day**
+(`core::exit`), and it exposed a real gap: the guard refused through `Error::Other`, so a refusal
+was indistinguishable from a crash and no script could avoid retrying one. It has its own
+`Error::Refused` now, `check` returns `Error::Differences`, and one mapping point in `main`
+turns both into codes. Verified on the binary: findings → 2, clean → 0, bad argument → 1.
+
 ---
 
 ## U25
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U25 — One tree or several?** Several (`dotfiles:./dotfiles-work` under a `when`) composes
 with the model already and costs nothing; one is simpler to explain. *Recommendation:* several,
 because the statement takes a path anyway and forbidding a second one would be a rule with no
 mechanism behind it — but two trees that would link the same destination is an error naming
 both, which is II.7 rule 5 reached by a new road rather than a new rule.
+
+**RULED (owner, 2026-07-24): several, as recommended.** The statement takes a path, so
+forbidding a second one would be a rule with no mechanism behind it. Two trees that would link
+the same destination is an error naming both — II.7 rule 5 reached by a new road, not a new
+rule.
 
 ---
 
