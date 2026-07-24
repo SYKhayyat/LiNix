@@ -88,7 +88,9 @@ async fn main() -> Result<()> {
 
     // 7. Command Dispatcher (Modular A+ Routing)
     match &cli.command {
-        Commands::Sync { locked, json } => handle_sync(&app, *locked, *json).await,
+        Commands::Sync { locked, upgrade, json } => {
+            handle_sync(&app, *locked, *upgrade, *json).await
+        }
         Commands::Watch {
             interval,
             on_change,
@@ -454,8 +456,11 @@ fn expand_command_aliases(
 /// `watch` — II.7's ordering phases, the guard, the same planner — and these are the only
 /// things that legitimately differ between an attended run and an unattended one.
 struct Reconcile {
-    /// Strict version matching against the lockfile.
+    /// Strict version matching against the lockfile: a package that is not in it is an error.
     locked: bool,
+    /// Take what the managers offer now instead of what the lock recorded. Off by default —
+    /// a sync converges to what was decided (owner ruling, 2026-07-24).
+    upgrade: bool,
     /// Emit the change report as JSON instead of a planned-changes list.
     json: bool,
     /// Which scope the guard reports refusals under.
@@ -478,13 +483,16 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         engine.heal().await?;
     }
 
-    let resolver = linix::app::sync::resolver::StateResolver::new(
+    let mut resolver = linix::app::sync::resolver::StateResolver::new(
         &app.config,
         app.registry.clone(),
         opts.locked,
     )
     .await
     .recording_locks();
+    if opts.upgrade {
+        resolver = resolver.upgrading();
+    }
     // The whole desired state, extras included — repos must be applied before packages
     // (II.7), so this needs more than the package map.
     let state = resolver.resolve_model().await?;
@@ -824,11 +832,12 @@ async fn handle_rebuild(
     Ok(())
 }
 
-async fn handle_sync(app: &App, locked: bool, json: bool) -> Result<()> {
+async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bool) -> Result<()> {
     let applied = reconcile(
         app,
         Reconcile {
             locked,
+            upgrade,
             json,
             scope: linix::app::sync::guard::GuardScope::Sync,
             confirm: true,
@@ -878,6 +887,10 @@ async fn watch_reconcile(app: &App) -> Result<usize> {
         app,
         Reconcile {
             locked: false,
+            // `watch` is `sync` with nobody watching, so it converges the same way: to the
+            // versions the lock recorded. Moving forward is a decision, and 3am is the worst
+            // time to make one nobody asked for (owner ruling, 2026-07-24).
+            upgrade: false,
             json: false,
             scope: linix::app::sync::guard::GuardScope::Watch,
             confirm: false,
@@ -1404,7 +1417,7 @@ async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<()> 
 
     // The line now names the new manager; sync installs it there and removes the old copy as
     // drift — the same convergence every other edit-then-sync command relies on.
-    handle_sync(app, false, false).await
+    handle_sync(app, false, false, false).await
 }
 
 async fn handle_install(
@@ -1469,7 +1482,7 @@ async fn handle_install(
 
     // And now the ordinary declarative pipeline makes it true — which is also what puts an
     // imperative install behind the guard for the first time (II.10).
-    let synced = handle_sync(app, false, json).await;
+    let synced = handle_sync(app, false, false, json).await;
 
     // A name no backend claims can never be satisfied by retrying, so leaving it in the file
     // wedges every later command that parses the model — one typo, and `status` is broken
@@ -1572,7 +1585,7 @@ async fn handle_uninstall(
 
     // And the ordinary pipeline removes it: the package is now drift, and removing drift is
     // what sync is (V.34).
-    handle_sync(app, false, json).await?;
+    handle_sync(app, false, false, json).await?;
 
     // The sync runs first: the names that *were* declared are still owed their removal.
     // But a removal that removed nothing is not a removal, and a warning is the one thing
@@ -2245,7 +2258,7 @@ async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<()> {
         }
     }
 
-    handle_sync(app, false, false).await
+    handle_sync(app, false, false, false).await
 }
 
 async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<()> {
@@ -2324,7 +2337,7 @@ async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
         reference
     );
     // The rollback is not complete until the machine matches the restored manifests.
-    handle_sync(app, false, false).await
+    handle_sync(app, false, false, false).await
 }
 
 /// `linix diff <from> [to]` — what changed between two commits, in packages (Phase 4). The

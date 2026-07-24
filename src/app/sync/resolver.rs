@@ -51,9 +51,16 @@ pub struct StateResolver<'a> {
     config: &'a Config,
     registry: Arc<BackendRegistry>,
     layout: Layout,
-    /// When true, a package with no entry in locks/versions.json is an error rather than a free
-    /// resolve — the whole point of a locked run is that nothing floats.
+    /// Strict mode (`sync --locked`): a package with no entry in locks/versions.json is an
+    /// error rather than a free resolve. For reproducing a machine exactly, where a package
+    /// nobody locked is a gap in the reproduction rather than a detail.
     locked: bool,
+    /// Whether a recorded version wins over whatever the manager offers today. **On by
+    /// default** (owner ruling, 2026-07-24): a sync converges to what was decided, not to what
+    /// was published since. `--upgrade` turns it off for the run that means to move forward.
+    /// Unlike `locked`, a package with no recorded version is not an error here — it simply
+    /// resolves, which is what a machine that has never run `linix lock` does for everything.
+    prefer_locks: bool,
     /// "backend:package" -> version.
     locks: HashMap<String, String>,
     /// Pre-resolved variables to use instead of running the provider (Part IX, IX.6). Set when
@@ -72,30 +79,25 @@ pub struct StateResolver<'a> {
 
 impl<'a> StateResolver<'a> {
     pub async fn new(config: &'a Config, registry: Arc<BackendRegistry>, locked: bool) -> Self {
+        // Read unconditionally: recorded versions are preferred on every ordinary run now, so
+        // this file is no longer only a strict-mode input. A missing file is the ordinary state
+        // of a machine that has not run `linix lock`, never an error.
         let mut locks = HashMap::new();
-
-        if locked {
-            let lock_path = config.config_root().join("locks").join("versions.json");
-            debug!(
-                "Locked mode active. Probing for locks at {:?}",
-                lock_path
-            );
-
-            if tokio::fs::try_exists(&lock_path).await.unwrap_or(false) {
-                if let Ok(data) = fs::read_to_string(&lock_path).await {
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
-                        if let Some(obj) = json.get("locks").and_then(|l| l.as_object()) {
-                            for (key, val) in obj {
-                                if let Some(v_str) = val.as_str() {
-                                    locks.insert(key.clone(), v_str.to_string());
-                                }
+        let lock_path = config.config_root().join("locks").join("versions.json");
+        if tokio::fs::try_exists(&lock_path).await.unwrap_or(false) {
+            if let Ok(data) = fs::read_to_string(&lock_path).await {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                    if let Some(obj) = json.get("locks").and_then(|l| l.as_object()) {
+                        for (key, val) in obj {
+                            if let Some(v_str) = val.as_str() {
+                                locks.insert(key.clone(), v_str.to_string());
                             }
                         }
                     }
                 }
-            } else {
-                warn!("Locked mode requested but locks/versions.json is missing.");
             }
+        } else if locked {
+            warn!("Locked mode requested but locks/versions.json is missing.");
         }
 
         Self {
@@ -103,10 +105,18 @@ impl<'a> StateResolver<'a> {
             registry,
             layout: config.layout(),
             locked,
+            prefer_locks: true,
             locks,
             vars_override: None,
             may_record_locks: false,
         }
+    }
+
+    /// `sync --upgrade`: ignore what was recorded and take what the managers offer now. Moving
+    /// a version forward is a decision, so it is asked for (owner ruling, 2026-07-24).
+    pub fn upgrading(mut self) -> Self {
+        self.prefer_locks = false;
+        self
     }
 
     /// Resolve the model against these already-resolved variables instead of running the
@@ -696,7 +706,8 @@ impl<'a> StateResolver<'a> {
     /// hand-written pin that disagrees with the lock is reported rather than quietly
     /// resolved one way.
     fn apply_locks(&self, state: &mut DesiredState) -> Result<()> {
-        if !self.locked {
+        // `--upgrade`: the run that means to move forward ignores what was recorded.
+        if !self.locked && !self.prefer_locks {
             return Ok(());
         }
         for (backend, specs) in state.packages.iter_mut() {
@@ -706,18 +717,34 @@ impl<'a> StateResolver<'a> {
                 }
                 let key = format!("{}:{}", backend, spec.name);
                 let Some(locked) = self.locks.get(&key) else {
-                    return Err(Error::Validation(format!(
-                        "Locked Mode Error: '{}' is missing from locks/versions.json.",
-                        key
-                    )));
+                    if self.locked {
+                        return Err(Error::Validation(format!(
+                            "Locked Mode Error: '{}' is missing from locks/versions.json.",
+                            key
+                        )));
+                    }
+                    // Nothing recorded for this one: it resolves freely, which is what every
+                    // package on a machine that has never run `linix lock` does.
+                    continue;
                 };
                 if let Some(pinned) = spec.options.get("version") {
                     if pinned != locked {
-                        return Err(Error::Validation(format!(
-                            "Integrity Failure: {} version mismatch. Manifest: {}, Lock: {}.",
+                        // A hand-written pin that disagrees with the lock is never quietly
+                        // resolved one way: under strict mode it is an error, and otherwise
+                        // the line wins, because a version you typed is a decision and the
+                        // lock is only a record of one.
+                        if self.locked {
+                            return Err(Error::Validation(format!(
+                                "Integrity Failure: {} version mismatch. Manifest: {}, Lock: {}.",
+                                key, pinned, locked
+                            )));
+                        }
+                        debug!(
+                            "{}: the line pins {} and the lock records {}; the line wins.",
                             key, pinned, locked
-                        )));
+                        );
                     }
+                    continue;
                 }
                 spec.options.insert("version".to_string(), locked.clone());
             }

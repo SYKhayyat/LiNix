@@ -69,9 +69,13 @@ pub struct Cli {
 pub enum Commands {
     /// Install, remove and update packages until the machine matches your files
     Sync {
-        /// Force strict version matching against locked state
+        /// Refuse to proceed unless every package is in the lock and agrees with it
         #[arg(long)]
         locked: bool,
+
+        /// Take the versions the managers offer now, instead of the ones the lock recorded
+        #[arg(long)]
+        upgrade: bool,
 
         /// Output the transition plan as JSON (requires --dry-run)
         #[arg(long)]

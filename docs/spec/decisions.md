@@ -706,12 +706,40 @@ about *how to drive* a manager, not *how to get* one. The two files stay one-que
 
 ## U11
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24, and generalised past the question that was asked.**
 
 **U11 — Does `watch` imply `--locked`?** An unattended reconcile that silently accepts a new
 upstream version is the least supervised place for a version to change. *Recommendation:* yes by
 default, overridable by a key — a machine reconciling itself at 3am should be converging to what
 was decided, not to what was published.
+
+**RULED (owner, 2026-07-24): it is not a `watch` question. `sync` itself defaults to the
+recorded version, with an explicit `--upgrade` to move forward — and `watch`, being `sync` with
+nobody watching, inherits that rather than being special-cased.** The owner's words: *"it should
+be the same as sync, which if sync does not do this, it needs fixing."*
+
+**It did need fixing, and this was a live defect.** `sync` defaulted to `locked: false` and
+`watch` hard-coded it, so `locks/versions.json` was read *only* under `sync --locked`. A machine
+rebuilt from a config therefore installed whatever upstream had published that morning, not the
+version the lock recorded — which is the reproducibility claim the lock exists to make.
+
+**Three modes now, and the middle one is new:**
+
+| | a recorded version | nothing recorded | a pin that disagrees |
+|---|---|---|---|
+| **default** | wins | resolves freely | **the line wins** |
+| `--upgrade` | ignored | resolves freely | the line wins |
+| `--locked` | wins | **error** | **error** |
+
+- **Nothing recorded is not an error by default.** That is the ordinary state of a machine that
+  has never run `linix lock`, and making it fatal would mean no config works until it is locked.
+  Strict `--locked` keeps that refusal, because there a missing entry is a gap in the
+  reproduction rather than a detail.
+- **A hand-written `@version=` beats the lock outside strict mode.** A version you typed is a
+  decision; the lock is a record of one. Under `--locked` the same disagreement is an error,
+  because a reproduction that silently picks one of two answers has reproduced neither.
+- **`linix lock` stays the deliberate act** that records versions, exactly as it is the
+  deliberate act that approves a hook or an `exec:` script.
 
 ---
 
