@@ -803,6 +803,13 @@ ok "policy checks the desired state against [guard]" lx policy
 ok "check conflicts reports cross-backend conflicts" lx check conflicts
 # With no event hooks declared, approvals is clean and exits 0 (not 2).
 ok "check approvals is clean with no hooks" lx check approvals
+# `add` vendors a source's modules. A local path with a module is the network-free case; it
+# copies the module in and reports it.
+mkdir -p /tmp/linix-share/modules
+printf 'apt:jq\n' > /tmp/linix-share/modules/shared.txt
+ok "add vendors a module from a local source" lx add /tmp/linix-share
+ok "add brought the module file in" test -f "$LINIX_CONFIG_DIR/modules/shared.txt"
+nok "add refuses a source that does not exist" lx add /no/such/source/here
 ok "sbom emits a bill of materials" lx sbom
 ok "completions bash generates a script" lx completions bash
 ok "profile list" lx profile list
