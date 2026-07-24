@@ -1090,6 +1090,32 @@ code.
 does not run on the next sync, runs again after one byte of it changes, and `plan` prints the
 hash, the count and the decision before any of it happens.
 
+**DONE 2026-07-24. Every clause of the exit was driven against the real binary**, not only the
+suite: `plan` printed `sha256:f7cba99726d4 — will run`; the sync ran it and wrote count 1; the
+next sync printed *"already run 1 time(s), ceiling 1; will not run"*; one byte changed the hash
+and it ran again, leaving two rows of count 1.
+
+**One rule the entry did not name, and it is not optional: `exec:` goes through II.12's approval
+ledger.** II.12 says *"hash everything, including your own scripts — one rule, no exceptions"*
+and *"the ledger is the only thing between a pulled config and a shell"*; an `exec:` line is
+literally a shell from a pulled config, so it is approved by `linix lock` or it does not run, and
+**`-y` cannot approve** (verified: `sync -y` on an unapproved script exits with the refusal).
+The two ledgers answer different questions and are keyed differently on purpose — `locks/hooks.toml`
+by declared path (*is this allowed to run?*), `locks/exec.toml` by content (*has this already
+run?*). A script edited after approval is therefore both unapproved and un-run, which is the pair
+you want.
+
+**Deliberately not built, and why:** `@undo=` and dropping the lock row when a line is deleted.
+Both are **U3**, still open. The row is *never* dropped, which is the safe direction — the
+expensive bug XIII.3 warns about is a dropped row making a flapping condition re-run the script,
+whereas a row left behind for a deleted line is an unused entry that does nothing. An orphan-row
+GC needs the resolver to report `when`-false exec hashes so it can tell "condition off" from
+"line deleted", and that distinction is exactly what U3 governs.
+
+**`exec:` is excluded from the extras teardown by name** (`extra_key` returns `None`), with a
+test asserting it: wiring a verb into a ledger built for nouns is how the un-enrol bug gets in
+through the back door.
+
 **7c — Backend bootstrap (XIII.9, U10).** The declared-and-missing manager is obtainable, by
 asking first and then doing it. **Exit:** on a machine with no Homebrew, a config declaring
 `brew:` explains what it would run, and — on yes — the next sync installs the package.

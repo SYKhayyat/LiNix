@@ -51,6 +51,20 @@ pub fn vars_id(filename: &str) -> String {
     format!("vars:{}", filename)
 }
 
+/// The ledger identity of an `exec:` script (XIII.3, II.12).
+///
+/// An `exec:` runs code the repo carries, which is II.12's question exactly — *"the ledger is
+/// the only thing between a pulled config and a shell"* — and II.12 admits no exceptions, so a
+/// script is approved before it runs, by `linix lock`, and `-y` cannot approve it.
+///
+/// Keyed by the declared path, while `locks/exec.toml` is keyed by content: the two ledgers
+/// answer different questions. *Is this allowed to run?* is about a script you reviewed at a
+/// place; *has this already run?* is about bytes. A path whose content changed is therefore
+/// both unapproved and un-run, which is the intended pair.
+pub fn exec_id(script: &str) -> String {
+    format!("exec:{}", script)
+}
+
 /// The ledger identity of the config repo's `custom_backends.toml` (7a/U1). A definition is
 /// argv LiNix will run, and it travels with the repo now, so it is the same supply-chain
 /// surface a hook is — one file, one identity, whatever number of backends it defines: a

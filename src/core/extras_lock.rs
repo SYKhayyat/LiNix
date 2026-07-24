@@ -43,6 +43,11 @@ pub fn extra_key(stmt: &Statement) -> Option<String> {
                 .unwrap_or_else(|| name.clone())
         )),
         Statement::Setting(name, _) => Some(format!("setting:{}", name)),
+        // `exec:` is deliberately NOT an extra. Extras are nouns whose teardown undoes what
+        // they put in place; a verb has no such inverse, and a script that succeeds makes its
+        // own `when` false — so wiring it into this ledger would re-run or "undo" it every
+        // time the condition swung. Its lifecycle is `locks/exec.toml`, not here (XIII.3).
+        Statement::Exec(..) => None,
         Statement::Schedule(name, _) => Some(format!("schedule:{}", name)),
         _ => None,
     }

@@ -526,6 +526,153 @@ impl App {
         Ok(())
     }
 
+    /// Resolve one `exec:` line to the script LiNix would run, its content hash, and what the
+    /// two ledgers say about it. Shared by the preview and the run so a plan cannot describe a
+    /// decision the sync then makes differently.
+    ///
+    /// The path is taken relative to the config repo when it is not absolute — the script
+    /// travels with the configuration that declares it, the way a `link:` source does.
+    fn exec_plan(
+        &self,
+        script: &str,
+        opts: &crate::config::grammar::Options,
+        hooks: &crate::core::hook_lock::HookLedger,
+        runs: &crate::core::ExecLedger,
+    ) -> Result<(std::path::PathBuf, String, crate::model::exec::Decision)> {
+        use crate::core::hook_lock::{exec_id, hash_script};
+
+        let declared = std::path::Path::new(script);
+        let path = if declared.is_absolute() {
+            declared.to_path_buf()
+        } else {
+            self.config.config_root().join(declared)
+        };
+        let body = std::fs::read_to_string(&path).map_err(|e| {
+            Error::Validation(format!(
+                "`exec:{}` — cannot read the script at {} ({}). An `exec:` names a file the \
+                 config carries; its contents are what LiNix hashes and runs.",
+                script,
+                path.display(),
+                e
+            ))
+        })?;
+        let hash = hash_script(&body);
+        let decision = crate::model::exec::Decision::of(
+            &hooks.verdict(&exec_id(script), &hash),
+            runs.count(&hash),
+            crate::core::Ceiling::read(opts.one("runs")),
+        );
+        Ok((path, hash, decision))
+    }
+
+    /// Print what each declared `exec:` will do, before anything happens (XIII.3's exit
+    /// condition): the content hash, how many times that content has run here, and the
+    /// decision that follows. Uses the same `exec_plan` the run uses, so the preview cannot
+    /// describe one thing and the sync do another.
+    ///
+    /// A script that cannot be read is reported here rather than propagated: this is the
+    /// preview, and the run raises the same problem as a real error a moment later.
+    pub fn print_exec_plan(&self, state: &crate::model::DesiredState) {
+        use crate::core::hook_lock::HookLedger;
+
+        if !state.has_execs() {
+            return;
+        }
+        let locks = self.config.layout().locks_dir();
+        let (Ok(hooks), Ok(runs)) = (
+            HookLedger::load(&HookLedger::path_in(&locks)),
+            crate::core::ExecLedger::load(&crate::core::ExecLedger::path_in(&locks)),
+        ) else {
+            return;
+        };
+        println!("Scripts:");
+        for (script, opts, origin) in state.execs() {
+            match self.exec_plan(script, opts, &hooks, &runs) {
+                Ok((_, hash, decision)) => {
+                    println!("  exec:{}  ({})", script, origin);
+                    println!("    {}", decision.describe(&hash));
+                }
+                Err(e) => println!("  exec:{}  ({}) — {}", script, origin, e),
+            }
+        }
+    }
+
+    /// Run the declared `exec:` scripts (XIII.3) — II.7's verb phase, after the packages and
+    /// dependents a script is likely to depend on.
+    ///
+    /// Three things this does that a naive "run the command" would not: it refuses a script
+    /// II.12 has not approved (a repo that can run code is the hook question with a different
+    /// file name, and `-y` cannot approve); it runs a given *content* only as many times as its
+    /// `@runs=` ceiling allows, so a settled sync executes nothing; and it records the run only
+    /// when the script actually succeeded — a failed script has not happened, so the next sync
+    /// must try it again.
+    pub async fn apply_execs(&self, state: &crate::model::DesiredState) -> Result<()> {
+        use crate::core::hook_lock::HookLedger;
+
+        if !state.has_execs() {
+            return Ok(());
+        }
+        let locks = self.config.layout().locks_dir();
+        let hooks = HookLedger::load(&HookLedger::path_in(&locks))?;
+        let runs_path = crate::core::ExecLedger::path_in(&locks);
+        let mut runs = crate::core::ExecLedger::load(&runs_path)?;
+
+        for (script, opts, origin) in state.execs() {
+            let (path, hash, decision) = self.exec_plan(script, opts, &hooks, &runs)?;
+            if let crate::model::exec::Decision::NeedsApproval(verdict) = &decision {
+                // A refusal, not a warning: this is code from the configuration, and II.12's
+                // whole point is that nothing runs it until a human has looked.
+                return Err(Error::Validation(format!(
+                    "{}: {}",
+                    origin,
+                    crate::core::hook_lock::refusal(
+                        &crate::core::hook_lock::exec_id(script),
+                        "exec script",
+                        verdict
+                    )
+                )));
+            }
+            if !decision.will_run() {
+                debug!("exec:{} — {}", script, decision.describe(&hash));
+                continue;
+            }
+            if self.config.dry_run {
+                info!("[DRY-RUN] would run exec:{} ({})", script, origin);
+                continue;
+            }
+            info!("running exec:{} ({})", script, origin);
+            self.run_exec_script(&path).await?;
+            // Recorded only on success. A script that failed did not happen, and the next sync
+            // must be free to try it again.
+            runs.record_run(&hash, chrono::Utc::now().to_rfc3339());
+            runs.save(&runs_path)?;
+        }
+        Ok(())
+    }
+
+    /// Execute one script through the platform's interpreter. `sh` on Unix and PowerShell on
+    /// Windows, because a repo that must ship two spellings of every script is a repo that
+    /// cannot be shared — which is the reason the file travels with the config at all.
+    async fn run_exec_script(&self, path: &std::path::Path) -> Result<()> {
+        let script = path.to_string_lossy().to_string();
+        #[cfg(windows)]
+        let (program, args) = (
+            "powershell",
+            vec![
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-File".to_string(),
+                script,
+            ],
+        );
+        #[cfg(not(windows))]
+        let (program, args) = ("sh", vec![script]);
+
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.executor.run(program, &refs, false).await.map(|_| ())
+    }
+
     /// Undo the extras that were applied but are no longer declared (S20). Extras had no
     /// record of what was put in place, so deleting a `service:`/`repo:`/`shim:`/`link:`/
     /// `schedule:` line left it in effect forever — `sync` could not even *detect* the

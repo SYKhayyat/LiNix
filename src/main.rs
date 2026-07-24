@@ -517,7 +517,11 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     // A config can be all dependents/schedules and no package changes (just a `service:` or a
     // `schedule:` line). That is still work, so the "nothing to do" exit has to account for
     // the dependent phase and the schedule phase too.
-    if changes.is_empty() && !state.has_dependents() && state.schedules().next().is_none() {
+    if changes.is_empty()
+        && !state.has_dependents()
+        && state.schedules().next().is_none()
+        && !state.has_execs()
+    {
         // Even with no packages/dependents/schedules to apply, an extra may have been
         // *removed* — deleting the last `service:` line is a real change (S20). Reconcile the
         // applied-extras ledger so that undo still happens; it is a cheap no-op otherwise.
@@ -537,6 +541,14 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         }
     }
 
+    // XIII.3: a script's decision is printed before anything happens — the hash, how many
+    // times that content has run, and what this run will therefore do. Outside the
+    // `!changes.is_empty()` block on purpose: a config whose only work is an `exec:` still has
+    // to show it.
+    if !opts.json {
+        app.print_exec_plan(&state);
+    }
+
     // Dry-run is preview-only: never prompt, never mutate. (JSON dry-run emits the report.)
     if app.config.dry_run {
         if opts.json {
@@ -549,6 +561,7 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         // after the packages, then the schedule phase, then the undo of removed extras.
         app.apply_dependents(&state).await?;
         app.apply_schedules(&state).await?;
+        app.apply_execs(&state).await?;
         app.reconcile_extras(&state).await?;
         return Ok(applied);
     }
@@ -580,6 +593,9 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     app.apply_dependents(&state).await?;
     // Ordering phase 4 (S21): provision the declared schedules onto the OS scheduler.
     app.apply_schedules(&state).await?;
+    // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and dependents a
+    // script is likely to lean on. A verb, so it has no teardown phase of its own.
+    app.apply_execs(&state).await?;
     // Phase 5 (S20): undo extras that were applied before but are no longer declared.
     app.reconcile_extras(&state).await?;
     perform_maintenance(app).await?;
@@ -2859,6 +2875,21 @@ async fn compute_full_changes(
 
 async fn handle_plan(app: &App, out: &str) -> Result<()> {
     let (changes, vars) = compute_full_changes(app, None).await?;
+    // XIII.3's exit condition names `plan`: a script's hash, its run count and the decision
+    // that follows are printed here, before anything happens. `plan` resolves the model a
+    // second time rather than threading it out of `compute_full_changes`, which is a cheap
+    // parse against the benefit of leaving that function's seam alone.
+    {
+        let resolver = linix::app::sync::resolver::StateResolver::new(
+            &app.config,
+            app.registry.clone(),
+            false,
+        )
+        .await;
+        if let Ok(state) = resolver.resolve_model().await {
+            app.print_exec_plan(&state);
+        }
+    }
     let created_at = chrono::Utc::now().timestamp();
     let mut plan = linix::app::sync::SavedPlan::from_changes(&changes, Some(created_at));
     // Freeze the resolved variables so `apply` reproduces this exact resolution (IX.6).
@@ -3199,7 +3230,50 @@ async fn handle_lock(app: &App) -> Result<()> {
     if approve_custom_backends(app)? {
         info!("Lock: approved `custom_backends.toml` at its current hash.");
     }
+    // And every declared `exec:` script (XIII.3). II.12 admits no exceptions: a script the
+    // configuration runs is approved by this command or it does not run.
+    let execs = approve_exec_scripts(app).await?;
+    if execs > 0 {
+        info!("Lock: approved {} exec script(s) at their current hash.", execs);
+    }
     Ok(())
+}
+
+/// Record every declared `exec:` script's current hash in the hook ledger, returning how many
+/// were approved.
+///
+/// Reads the model rather than the filesystem so it approves exactly what a sync would run —
+/// approving a script no active profile reaches would be approving something the user cannot
+/// see in `plan`.
+async fn approve_exec_scripts(app: &App) -> Result<usize> {
+    use linix::core::hook_lock::{exec_id, hash_script, HookLedger};
+
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let state = resolver.resolve_model().await?;
+    if !state.has_execs() {
+        return Ok(0);
+    }
+    let locks = app.config.layout().locks_dir();
+    let path = HookLedger::path_in(&locks);
+    let mut ledger = HookLedger::load(&path)?;
+    let mut approved = 0usize;
+    for (script, _opts, origin) in state.execs() {
+        let declared = std::path::Path::new(script);
+        let full = if declared.is_absolute() {
+            declared.to_path_buf()
+        } else {
+            app.config.config_root().join(declared)
+        };
+        let body = std::fs::read_to_string(&full).map_err(|e| {
+            anyhow::anyhow!("{}: cannot read `exec:{}` at {} ({})", origin, script, full.display(), e)
+        })?;
+        ledger.approve(&exec_id(script), &hash_script(&body));
+        approved += 1;
+    }
+    ledger.save(&path)?;
+    Ok(approved)
 }
 
 /// Record the config repo's `custom_backends.toml` hash in the hook ledger. `false` when the

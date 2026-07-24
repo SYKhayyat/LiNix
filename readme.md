@@ -311,6 +311,56 @@ with a digit, so `$1` in a value is left alone.
 Two `when` blocks that both match and set the same variable to different values is an error
 naming both lines — the same rule as two contradicting package declarations.
 
+## Running a script
+
+Some machine state is not a package or a file — enrolling a TPM, importing a keyring, running a
+one-off migration. `exec:` declares a script the config carries:
+
+```
+exec:./bin/enroll-tpm.sh
+```
+
+**It runs once per distinct content.** LiNix records the script's SHA-256 in `locks/exec.toml`
+with a count. The next sync sees the same content at its ceiling and does nothing; edit one byte
+and it is a different script, so it runs again. `@runs=3` raises the ceiling and
+`@runs=always` opts out entirely — being explicit is the point, so nothing becomes a per-sync
+command by accident.
+
+**The condition is `when`, and there is no second condition system.** "Run this unless X" is a
+variable your `vars` provider computes:
+
+```
+# vars.sh
+tpm_enrolled = $(tpm2_getcap properties-fixed >/dev/null 2>&1 && echo yes || echo no)
+```
+
+```
+when $tpm_enrolled == no {
+  exec:./bin/enroll-tpm.sh
+}
+```
+
+**A false `when` does not mean "undo".** This is the one place `exec:` differs from every other
+statement, and it is deliberate: a script that succeeds makes its own condition false, so
+treating false as removal would un-enrol the TPM on the very next sync and flap forever. A false
+`when` runs nothing, undoes nothing, and **keeps the count** — so a condition that comes and goes
+does not re-run the script each time it swings back.
+
+**It is approved like any other code your repo runs.** `linix lock` approves a script at its
+current hash; an unapproved or edited script stops the sync until you have looked at it, and
+`-y` cannot approve. `plan` prints the hash, the run count and the decision before anything
+happens:
+
+```
+Scripts:
+  exec:./bin/enroll-tpm.sh  (modules/tools.txt:4)
+    sha256:f7cba99726d4 — will run
+```
+
+**One limit, stated rather than implied:** the hash covers the file LiNix executes. A script that
+sources another file, or curls one, changes behaviour without changing its hash, and LiNix cannot
+see that.
+
 ## Secrets
 
 **Your config repo can be public.** A secret is committed encrypted and decrypted onto the

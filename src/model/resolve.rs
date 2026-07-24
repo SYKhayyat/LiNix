@@ -100,6 +100,23 @@ impl DesiredState {
             _ => None,
         })
     }
+
+    /// The `exec:` lines whose `when` is true right now (XIII.3).
+    ///
+    /// Reaching this list at all *is* the first of XIII.3's three states: a line whose `when`
+    /// is false was dropped during resolution, and the whole point of the three-state rule is
+    /// that its absence means "nothing runs and nothing is undone", not "remove it". They are
+    /// deliberately not `dependents()` — a verb has no teardown.
+    pub fn execs(&self) -> impl Iterator<Item = (&str, &Options, &Origin)> {
+        self.extras.iter().filter_map(|(s, o)| match s {
+            Statement::Exec(script, opts) => Some((script.as_str(), opts, o)),
+            _ => None,
+        })
+    }
+
+    pub fn has_execs(&self) -> bool {
+        self.execs().next().is_some()
+    }
 }
 
 /// What the active profiles reach: the statements, and which profile and module each file's
@@ -529,7 +546,8 @@ impl<'a> Resolver<'a> {
                 Statement::Shim(name, opts)
                 | Statement::Service(name, opts)
                 | Statement::Link(name, opts)
-                | Statement::Setting(name, opts) => {
+                | Statement::Setting(name, opts)
+                | Statement::Exec(name, opts) => {
                     *name = crate::model::vars::expand(name, vars, origin)?;
                     for value in opts.values_mut() {
                         *value = crate::model::vars::expand(value, vars, origin)?;
@@ -899,6 +917,7 @@ fn set_key(stmt: &Statement) -> String {
         Statement::Service(n, _) => format!("service:{}", n),
         Statement::Link(n, _) => format!("link:{}", n),
         Statement::Setting(n, _) => format!("setting:{}", n),
+        Statement::Exec(n, _) => format!("exec:{}", n),
         Statement::Use(r) => format!("use {}", r.name()),
         Statement::Exclude(r) => format!("exclude {}", r.name()),
         Statement::Intersect(r) => format!("intersect {}", r.name()),

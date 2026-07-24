@@ -13,6 +13,7 @@ pub mod modules;
 pub mod priority;
 pub mod profiles;
 pub mod resolve;
+pub mod exec;
 pub mod schedule;
 pub mod vars;
 pub mod vars_embedded;

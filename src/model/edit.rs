@@ -551,6 +551,7 @@ fn other_key(stmt: &Statement) -> Option<String> {
         Statement::Service(n, _) => Some(format!("service:{}", n)),
         Statement::Link(n, _) => Some(format!("link:{}", n)),
         Statement::Setting(n, _) => Some(format!("setting:{}", n)),
+        Statement::Exec(n, _) => Some(format!("exec:{}", n)),
         Statement::Use(r) => Some(format!("use {}", r.name())),
         // Set math is an operation, not a thing with a name to look up.
         Statement::Exclude(_)

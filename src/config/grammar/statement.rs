@@ -137,6 +137,14 @@ pub enum Statement {
     /// `link:` cannot reach it; the adapter is chosen by what is running, not by what was
     /// typed, which is why this is a statement and not a backend.
     Setting(String, Options),
+    /// `exec:PATH @runs=N` — run a script the config carries (XIII.3). A *verb*, not a noun:
+    /// its `when` decides whether the machine wants it, and `locks/exec.toml` (keyed by the
+    /// script's content hash) decides whether it already happened. Unlike every other
+    /// statement, a false `when` does not mean "undo" — a script that succeeds makes its own
+    /// condition false, so treating false as removal would flap. See the three-state table in
+    /// XIII.3. The script goes through II.12's approval ledger like any other code the repo
+    /// runs ("hash everything, no exceptions").
+    Exec(String, Options),
     Use(Reference),
     /// `exclude heavy` — subtract that module's or profile's packages (II.4).
     Exclude(Reference),
@@ -266,7 +274,8 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
                 format!("`repo:{}` does not name a backend", rest),
             )
             .with_hint(
-                "a repository belongs to one package manager, so name it:                  `repo:apt:ppa:deadsnakes/ppa`. A PPA is apt's, a COPR is dnf's.",
+                "a repository belongs to one package manager, so name it: \
+                 `repo:apt:ppa:deadsnakes/ppa`. A PPA is apt's, a COPR is dnf's.",
             ));
         };
         let (backend, spec) = (backend.trim(), spec.trim());
@@ -294,6 +303,7 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
         ("service:", Statement::Service),
         ("link:", Statement::Link),
         ("setting:", Statement::Setting),
+        ("exec:", Statement::Exec),
     ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             let (name, options) = split_options(origin, rest.trim())?;
@@ -341,7 +351,7 @@ fn parse_var(line: &str) -> Option<Statement> {
 /// statement and must not be mistaken for a set expression (II.4), whatever punctuation its
 /// payload carries — a `link:` target is a path, not a difference.
 fn starts_with_statement_prefix(line: &str) -> bool {
-    ["absent:", "repo:", "shim:", "schedule:", "service:", "link:"]
+    ["absent:", "repo:", "shim:", "schedule:", "service:", "link:", "exec:"]
         .iter()
         .any(|p| line.starts_with(p))
 }
@@ -606,6 +616,7 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
         Statement::Link(name, o) => validate_extra_options(origin, "link", name, o),
         Statement::Schedule(name, o) => validate_extra_options(origin, "schedule", name, o),
         Statement::Setting(name, o) => validate_setting(origin, name, o),
+        Statement::Exec(name, o) => validate_exec(origin, name, o),
         Statement::Repo { .. }
         | Statement::Use(_)
         | Statement::Exclude(_)
@@ -626,6 +637,10 @@ pub const SERVICE_OPTION_KEYS: &[&str] = &["enabled", "status"];
 pub const LINK_OPTION_KEYS: &[&str] = &["target", "content", "template", "decrypt", "identity"];
 pub const SCHEDULE_OPTION_KEYS: &[&str] = &["cron", "run", "notify"];
 pub const SETTING_OPTION_KEYS: &[&str] = &["value"];
+/// `runs` caps how many times a distinct script content may run — `1` (the default) is
+/// run-once-per-content; `always` opts out (see `model::exec`). `undo` is deliberately absent:
+/// what a removal means is U3, still open, so no key promises it.
+pub const EXEC_OPTION_KEYS: &[&str] = &["runs"];
 
 fn keys_for(prefix: &str) -> &'static [&'static str] {
     match prefix {
@@ -633,8 +648,39 @@ fn keys_for(prefix: &str) -> &'static [&'static str] {
         "service" => SERVICE_OPTION_KEYS,
         "link" => LINK_OPTION_KEYS,
         "setting" => SETTING_OPTION_KEYS,
+        "exec" => EXEC_OPTION_KEYS,
         _ => SCHEDULE_OPTION_KEYS,
     }
+}
+
+/// An `exec:` names a script and, optionally, how many times its content may run. The name
+/// must be non-empty; `runs`, if present, is a positive count or the word `always`.
+fn validate_exec(origin: &Origin, name: &str, options: &Options) -> Result<()> {
+    if name.trim().is_empty() {
+        return Err(GrammarError::new(origin.clone(), "`exec:` names no script")
+            .with_hint("write `exec:./bin/setup.sh` — a path to a script the config carries."));
+    }
+    for key in options.keys() {
+        if !EXEC_OPTION_KEYS.contains(&key) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`exec:{}` has an unknown option `{}`", name, key),
+            )
+            .with_hint("an exec takes `runs` (a positive number, or `always`)."));
+        }
+    }
+    if let Some(runs) = options.one("runs") {
+        let runs = runs.trim();
+        if runs != "always" && runs.parse::<u32>().map(|n| n == 0).unwrap_or(true) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`exec:{}` has an invalid `runs={}`", name, runs),
+            )
+            .with_hint("`runs` is a positive number (the ceiling on how many times this \
+                        content runs) or `always` to run every sync."));
+        }
+    }
+    Ok(())
 }
 
 /// Split `SCHEMA/KEY` into its halves. The one place the shape is decided, so the parser's
@@ -1528,5 +1574,86 @@ mod artifact_option_tests {
         // No prefix means `priority` decides the backend, so the grammar cannot know yet
         // whether `formats` is legal — refusing here would break every unprefixed line.
         assert!(p("fd@formats=deb").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod exec_tests {
+    use super::*;
+
+    fn o() -> Origin {
+        Origin::new("modules/dev.txt", 7)
+    }
+    fn known(name: &str) -> bool {
+        matches!(name, "apt" | "cargo")
+    }
+    fn p(line: &str) -> Result<Statement> {
+        parse(&o(), line, &known)
+    }
+    /// Parse and validate, the way a real file is read — `parse` alone does not check options.
+    fn pv(line: &str) -> Result<Statement> {
+        let s = p(line)?;
+        validate(&o(), &s)?;
+        Ok(s)
+    }
+
+    #[test]
+    fn an_exec_names_a_script() {
+        let Statement::Exec(script, opts) = pv("exec:./bin/enroll-tpm.sh").unwrap() else {
+            panic!("not an exec");
+        };
+        assert_eq!(script, "./bin/enroll-tpm.sh");
+        assert!(opts.one("runs").is_none(), "no ceiling means the default");
+    }
+
+    #[test]
+    fn an_exec_takes_a_runs_ceiling() {
+        let Statement::Exec(_, opts) = pv("exec:./setup.sh@runs=3").unwrap() else {
+            panic!("not an exec");
+        };
+        assert_eq!(opts.one("runs"), Some("3"));
+        let Statement::Exec(_, opts) = pv("exec:./tick.sh@runs=always").unwrap() else {
+            panic!("not an exec");
+        };
+        assert_eq!(opts.one("runs"), Some("always"));
+    }
+
+    /// A path with punctuation is a path, not set math — the same rule that keeps a Windows
+    /// `link:` target from being read as a difference.
+    #[test]
+    fn a_windows_path_is_a_script_not_an_expression() {
+        let Statement::Exec(script, _) = pv(r"exec:C:\Users\me\bin\setup.ps1").unwrap() else {
+            panic!("not an exec");
+        };
+        assert_eq!(script, r"C:\Users\me\bin\setup.ps1");
+    }
+
+    #[test]
+    fn an_exec_that_names_nothing_is_refused() {
+        assert!(p("exec:").is_err());
+    }
+
+    #[test]
+    fn an_unknown_exec_option_is_refused_and_names_the_real_one() {
+        let err = pv("exec:./s.sh@run=2").unwrap_err();
+        assert!(err.what.contains("unknown option `run`"), "{}", err);
+        assert!(err.to_string().contains("runs"), "{}", err);
+    }
+
+    /// `runs=0` would mean "never runs", which is what deleting the line means. A ceiling that
+    /// silently disables the statement is the kind of quiet no-op II.2 refuses.
+    #[test]
+    fn a_zero_or_garbage_ceiling_is_refused() {
+        for bad in ["exec:./s.sh@runs=0", "exec:./s.sh@runs=lots", "exec:./s.sh@runs=-1"] {
+            assert!(pv(bad).is_err(), "{} was accepted", bad);
+        }
+    }
+
+    /// `exec:` is a verb: it must never be keyed into the extras teardown ledger, or a script
+    /// whose `when` went false would be "undone" (XIII.3's flapping bug).
+    #[test]
+    fn an_exec_is_not_an_extra_with_a_teardown_key() {
+        let stmt = pv("exec:./bin/enroll-tpm.sh").unwrap();
+        assert_eq!(crate::core::extra_key(&stmt), None);
     }
 }
