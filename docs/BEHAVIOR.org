@@ -39,8 +39,9 @@ Manifest files also accept non-package directives: ~@module:<name>~ (splice a re
 ~group:<name>~ (splice a named group), ~include: <path|url>~ (splice another manifest file or a
 remote URL in place), ~when <os|arch|host> == <v>~ … ~end~ host-conditional blocks (also ~!=~,
 ~in [a, b]~, and inline ~when … then <line>~), and ~-<pkg>~ exclusions. A package may carry
-~@check=port:N~ or ~@check=cmd:…~ to be probed after install (a failure is reported, with the
-pre-sync snapshot available to revert).
+~@health=port:N~ or ~@health=<command>~ to be probed after it is installed; a failure
+*restores the snapshot* taken before the change, and a health check declared where no snapshot
+provider exists is refused before the change rather than after it (XIII.5).
 
 * Global flags
 

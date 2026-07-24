@@ -204,6 +204,32 @@ impl<'a> SyncEngine<'a> {
                 self.reconcile_all_shims(&final_state).await?;
             }
 
+            if self.config.quiet {
+                self.metrics.print_summary_quiet();
+            } else {
+                self.metrics.print_summary(narration_for(scope));
+            }
+
+            // XIII.1: the out-of-tree modules, before the health checks — a machine whose
+            // graphics driver did not rebuild is not healthy in any sense a `@health=` probe
+            // would notice, and both are still recoverable here, which is the property that
+            // ends at the reboot.
+            //
+            // Kept rather than logged and dropped: 7g says a module that will not build **fails
+            // loudly**, and a message on stderr under an exit code of 0 is not loud — a script
+            // that checks the exit code would carry on to the reboot that makes it permanent.
+            // The packages stay installed either way: the kernel IS on the machine, and
+            // reporting otherwise would be the lie.
+            kernel_outcome = self.rebuild_kernel_modules(&changes).await;
+
+            // XIII.5: and then whether the machine still works. A failure restores the snapshot
+            // taken above.
+            self.verify_health(&changes, restore_point.as_deref()).await;
+
+            // `after_sync` fires LAST, after the health check that can revert everything above
+            // it. Firing it earlier meant a hook could post "sync complete" and then have the
+            // machine rolled back underneath it — the notification would be the only surviving
+            // record of a change that no longer exists.
             let _ = self.hooks.run_after_sync().await;
             events
                 .fire(
@@ -214,25 +240,6 @@ impl<'a> SyncEngine<'a> {
                     }),
                 )
                 .await;
-            if self.config.quiet {
-                self.metrics.print_summary_quiet();
-            } else {
-                self.metrics.print_summary(narration_for(scope));
-            }
-
-            // Post-apply health probes: verify any freshly-installed package that declared
-            // `@check=…` actually works, so a green install that left a broken service is
-            // surfaced immediately (with the pre-sync snapshot available to revert).
-            // XIII.1: before the health checks, because a machine whose graphics driver did not
-            // rebuild is not healthy in any sense a `@health=` probe would notice — and both
-            // are still recoverable at this point, which is the property that ends at reboot.
-            // Kept, not logged and dropped: 7g says a module that will not build **fails
-            // loudly**, and a message on stderr under an exit code of 0 is not loud — a script
-            // that checks the exit code would carry on to the reboot that makes it permanent.
-            // The packages themselves are already installed and stay so: the kernel IS on the
-            // machine, and reporting otherwise would be the lie.
-            kernel_outcome = self.rebuild_kernel_modules(&changes).await;
-            self.verify_health(&changes, restore_point.as_deref()).await;
 
             // The manifest history is git now (the generation format was deleted): the commit
             // that records this change is made by `git_autocommit` in `perform_maintenance`,
