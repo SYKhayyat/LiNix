@@ -284,6 +284,13 @@ pub struct Config {
     #[serde(default = "default_appimage_dir")]
     pub appimage_dir: PathBuf,
 
+    /// Where shims are deployed. `~/.local/bin` on every platform, and **not a preference**:
+    /// it is skipped by serde so a repo cannot move LiNix's shims onto a machine's PATH by
+    /// declaration. It is a field rather than a constant so a sandbox can move it, which is
+    /// what stops a test writing an executable into the developer's real `~/.local/bin`.
+    #[serde(skip, default = "default_bin_dir")]
+    pub bin_dir: PathBuf,
+
     #[serde(default)]
     pub sandbox: SandboxSettings,
 
@@ -332,6 +339,15 @@ fn default_web_dir() -> PathBuf {
 }
 fn default_appimage_dir() -> PathBuf {
     safe_data_dir().join("appimages")
+}
+/// `~/.local/bin` — the directory a user's PATH already has, shared with every other tool,
+/// which is why a shim is never removed by name alone (S1/S4). Falls back to the data root
+/// when there is no home directory, so a shim never lands in the process's working directory.
+fn default_bin_dir() -> PathBuf {
+    match dirs::home_dir() {
+        Some(home) => home.join(".local").join("bin"),
+        None => safe_data_dir().join("bin"),
+    }
 }
 fn default_true() -> bool {
     true
@@ -466,6 +482,7 @@ impl Default for Config {
             github_dir: default_github_dir(),
             web_dir: default_web_dir(),
             appimage_dir: default_appimage_dir(),
+            bin_dir: default_bin_dir(),
             sandbox: SandboxSettings::default(),
             vars: VarsSettings::default(),
         }
@@ -557,6 +574,7 @@ impl Config {
             github_dir: sandbox.join("github"),
             web_dir: sandbox.join("web"),
             appimage_dir: sandbox.join("appimages"),
+            bin_dir: sandbox.join("bin"),
             ..Self::default()
         }
     }
@@ -744,6 +762,11 @@ mod tests {
             ("github_dir", cfg.github_dir.clone()),
             ("web_dir", cfg.web_dir.clone()),
             ("appimage_dir", cfg.appimage_dir.clone()),
+            // `bin_dir` was the seventh, and it escaped: shims went to the real
+            // `~/.local/bin` because the path was read from `dirs::home_dir()` at three call
+            // sites instead of from here. A test run deployed an executable named `rg` onto
+            // the developer's PATH.
+            ("bin_dir", cfg.bin_dir.clone()),
         ] {
             assert!(
                 path.starts_with(sandbox),

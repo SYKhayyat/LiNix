@@ -332,7 +332,7 @@ impl<'a> SyncEngine<'a> {
     }
 
     async fn reconcile_all_shims(&self, state: &StateRegistry) -> Result<()> {
-        let shim_mgr = Arc::new(ShimManager::new().await?);
+        let shim_mgr = Arc::new(ShimManager::with_bin_dir(self.config.bin_dir.clone()).await?);
         let mut worker_set = JoinSet::new();
 
         debug!(

@@ -45,7 +45,7 @@ impl AppServices {
     pub async fn new(app: &crate::App) -> Result<Self> {
         debug!("assembling services");
 
-        let shim_manager = ShimManager::new().await?;
+        let shim_manager = ShimManager::with_bin_dir(app.config.bin_dir.clone()).await?;
 
         Ok(Self {
             adopter: Adopter::new(app.registry.clone(), app.state.clone(), &app.config),

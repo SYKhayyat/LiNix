@@ -314,3 +314,67 @@ async fn test_locked_mode_version_conflict_enforcement() {
         );
     }
 }
+
+// ============================================================================
+// EXTRAS: the teardown ledger
+// ============================================================================
+
+/// An undo that fails must not be forgotten. `reconcile_extras` records what is declared now,
+/// so a key whose teardown failed used to vanish from `locks/extras.toml` after one warning —
+/// leaving a service or a timer in place that LiNix no longer knows it owns. It stays recorded
+/// until the undo succeeds.
+#[tokio::test]
+async fn a_failed_undo_stays_in_the_extras_ledger() {
+    let kernel = TestKernel::new().await;
+    let locks = kernel.app.config.config_root().join("locks");
+    let path = linix::core::ExtrasLedger::path_in(&locks);
+
+    // `no-such-backend` cannot be resolved, so its teardown fails for a reason no host can
+    // fix by luck. Nothing declares it, so it is drift the moment the ledger is read.
+    let mut ledger = linix::core::ExtrasLedger::new();
+    ledger.record(
+        ["repo:no-such-backend:ppa/example".to_string()]
+            .into_iter()
+            .collect(),
+    );
+    ledger.save(&path).unwrap();
+
+    let state = linix::model::DesiredState::default();
+    kernel
+        .app
+        .reconcile_extras(&state)
+        .await
+        .expect("a failed undo is reported, not fatal");
+
+    let after = linix::core::ExtrasLedger::load(&path).unwrap();
+    assert!(
+        after.applied().contains("repo:no-such-backend:ppa/example"),
+        "the failed teardown was dropped from the ledger: {:?}",
+        after.applied()
+    );
+}
+
+/// And the other half: a teardown that succeeds does leave the ledger, or every sync would
+/// retry an undo forever.
+#[tokio::test]
+async fn a_successful_undo_leaves_the_extras_ledger() {
+    let kernel = TestKernel::new().await;
+    let locks = kernel.app.config.config_root().join("locks");
+    let path = linix::core::ExtrasLedger::path_in(&locks);
+
+    // An unknown *kind* has no undo to fail: `undo_extra` warns and reports success, which is
+    // the success path this asserts without needing a real service manager on the host.
+    let mut ledger = linix::core::ExtrasLedger::new();
+    ledger.record(["nosuchkind:whatever".to_string()].into_iter().collect());
+    ledger.save(&path).unwrap();
+
+    let state = linix::model::DesiredState::default();
+    kernel.app.reconcile_extras(&state).await.unwrap();
+
+    let after = linix::core::ExtrasLedger::load(&path).unwrap();
+    assert!(
+        after.applied().is_empty(),
+        "a successful teardown was left recorded: {:?}",
+        after.applied()
+    );
+}

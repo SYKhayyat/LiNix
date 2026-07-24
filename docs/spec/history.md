@@ -46,6 +46,33 @@ entry still resolves; a dry run does none of it and leaves the journal wanting r
 declares it or is known to need it, and a capability with no caller is a second removal path
 with no test — which is the thing being removed here.
 
+### The fixture was load-bearing, and it was hiding two more bugs (S28, S29)
+
+Turning off `TestKernel`'s `config.dry_run` did not just enable a test. **It broke one, and the
+break was real** — `dependents_only_config_resolves_and_applies_the_dependent_phase` started
+failing because it was now writing a shim into the developer's actual `~/.local/bin`. A 35 MB
+copy of the test binary was sitting there named `rg.exe`, ahead of ripgrep on PATH. It was
+deleted, and so was the mechanism: **`ShimManager::new()` resolved `~/.local/bin` itself at
+three call sites**, so `Config::sandboxed` — the function written for exactly this after S11 —
+could not reach it. `bin_dir` is a `Config` field now (`serde(skip)`: a repo must not be able to
+move LiNix's shims onto a machine's PATH by declaration), the self-resolving constructor is
+deleted rather than left beside the injectable one, and the S11 test asserts seven paths.
+
+**Two sessions of tests could not have caught either S25 or S29, for the same reason.** A
+fixture that says "preview only" while every test on it asserts that commands ran is not a
+convenience — it is a whole class of defect that the suite is structurally blind to. This is the
+third thing in one session found by *running* rather than reading.
+
+**S28, the entry S24's reading asked for.** Three `remove_task` implementations swallowed every
+failure, so a schedule that could not be torn down was reported as removed and kept firing. Each
+now deletes through one `remove_generated` and then asserts the end state with the
+`is_task_active` probe the trait already had — necessary because on all three platforms the
+removal command exits non-zero for "already gone" as readily as for "refused", so **the exit
+code cannot answer the question and the probe can.** Fixing it surfaced the sibling one layer
+up: `reconcile_extras` dropped a failed teardown from `locks/extras.toml`, which turned one
+warning into a service LiNix permanently forgot it owned. A failed undo now stays recorded and
+the next sync retries it.
+
 ## Session 2026-07-23 (fifteenth session) — the refactor, and fifteen decisions that were answered in code
 
 **No behaviour changed. One file of 9,308 lines became a map plus thirteen parts, and the six

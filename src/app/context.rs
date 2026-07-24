@@ -182,7 +182,7 @@ impl App {
     }
 
     pub async fn shim_manager(&self) -> Result<ShimManager> {
-        ShimManager::new().await
+        ShimManager::with_bin_dir(self.config.bin_dir.clone()).await
     }
 
     pub async fn sync_engine(&self) -> SyncEngine<'_> {
@@ -560,6 +560,10 @@ impl App {
             return Ok(());
         }
 
+        // An undo that failed leaves the extra in place, so its key stays in the ledger and
+        // the next sync tries again. Dropping it would turn one warning into a service or
+        // timer LiNix has permanently forgotten it owns.
+        let mut still_applied = std::collections::BTreeSet::new();
         for key in &drift {
             let Some((kind, id)) = split_key(key) else {
                 continue;
@@ -570,7 +574,12 @@ impl App {
             }
             info!("`{}` is no longer declared — undoing it.", key);
             if let Err(e) = self.undo_extra(kind, id).await {
-                warn!("could not undo `{}` ({}); it may still be in place.", key, e);
+                warn!(
+                    "could not undo `{}` ({}); it is still in place and the next sync will \
+                     try again.",
+                    key, e
+                );
+                still_applied.insert(key.clone());
             }
         }
 
@@ -578,7 +587,9 @@ impl App {
         // the ledger must not move, or the next real run would miss the drift).
         if !self.config.dry_run {
             let mut ledger = ledger;
-            ledger.record(declared);
+            let mut recorded = declared;
+            recorded.append(&mut still_applied);
+            ledger.record(recorded);
             ledger.save(&path)?;
         }
         Ok(())

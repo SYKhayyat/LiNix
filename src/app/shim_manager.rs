@@ -11,14 +11,9 @@ pub struct ShimManager {
 }
 
 impl ShimManager {
-    pub async fn new() -> Result<Self> {
-        let bin_dir = dirs::home_dir()
-            .ok_or_else(|| Error::Other("Could not locate home directory".into()))?
-            .join(".local")
-            .join("bin");
-        Self::with_bin_dir(bin_dir).await
-    }
-
+    /// The directory comes from `Config::bin_dir` and from nowhere else. A constructor that
+    /// resolved `~/.local/bin` itself is a second answer to "where do shims go", and it is
+    /// the answer a sandbox cannot move.
     pub async fn with_bin_dir(bin_dir: PathBuf) -> Result<Self> {
         if !tokio::fs::try_exists(&bin_dir).await.unwrap_or(false) {
             debug!("Creating shim directory at {:?}", bin_dir);

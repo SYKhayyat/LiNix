@@ -7,6 +7,21 @@ use tracing::debug;
 
 pub mod notify;
 
+/// Delete a unit file LiNix generated. A file that is already gone is the wanted end state;
+/// any other failure leaves a schedule armed that LiNix is about to report as removed.
+fn remove_generated(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(Error::Io(format!(
+            "could not remove the generated file {} ({}). The schedule may still be armed; \
+             remove the file by hand and re-run `linix sync`.",
+            path.display(),
+            e
+        ))),
+    }
+}
+
 #[async_trait]
 pub trait TaskProvisioner: Send + Sync {
     async fn add_task(
@@ -184,8 +199,18 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
 
         if let Some(config_dir) = dirs::config_dir() {
             let systemd_dir = config_dir.join("systemd").join("user");
-            let _ = fs::remove_file(systemd_dir.join(&timer_name));
-            let _ = fs::remove_file(systemd_dir.join(&service_name));
+            remove_generated(&systemd_dir.join(&timer_name))?;
+            remove_generated(&systemd_dir.join(&service_name))?;
+        }
+        // `disable` is allowed to fail — a unit that was never enabled reports failure — so
+        // the end state is what gets asserted. A timer still running after this is a schedule
+        // LiNix would otherwise report as removed while it keeps firing.
+        if self.is_task_active(executor, name).await {
+            return Err(Error::Io(format!(
+                "the systemd timer for `{}` is still active after removal. Check \
+                 `systemctl --user status {}`.",
+                name, timer_name
+            )));
         }
         Ok(())
     }
@@ -330,7 +355,16 @@ impl TaskProvisioner for MacLaunchdProvisioner {
                     false,
                 )
                 .await;
-            let _ = fs::remove_file(plist_path);
+            remove_generated(&plist_path)?;
+        }
+        // `unload` is allowed to fail (an agent that was never loaded reports failure); a job
+        // still listed after this one is a schedule that keeps firing.
+        if self.is_task_active(executor, name).await {
+            return Err(Error::Io(format!(
+                "the launchd agent for `{}` is still loaded after removal. Check \
+                 `launchctl list {}`.",
+                name, label
+            )));
         }
         Ok(())
     }
@@ -408,9 +442,18 @@ impl TaskProvisioner for WindowsTaskProvisioner {
 
     async fn remove_task(&self, executor: &CommandExecutor, name: &str) -> Result<()> {
         let tn = format!("LiNix_{}", name);
+        // `/Delete` on a task that does not exist exits non-zero, so the exit code cannot
+        // tell "already gone" from "refused"; the end state can.
         let _ = executor
             .run("schtasks", &["/Delete", "/TN", &tn, "/F"], true)
             .await;
+        if self.is_task_active(executor, name).await {
+            return Err(Error::Io(format!(
+                "the scheduled task `{}` still exists after removal. Check \
+                 `schtasks /Query /TN {}`.",
+                name, tn
+            )));
+        }
         Ok(())
     }
 
@@ -427,7 +470,39 @@ impl TaskProvisioner for WindowsTaskProvisioner {
 }
 #[cfg(test)]
 mod tests {
-    use super::LinuxSystemdProvisioner;
+    use super::{remove_generated, LinuxSystemdProvisioner};
+
+    #[test]
+    fn a_generated_file_that_is_already_gone_is_the_wanted_end_state() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(remove_generated(&dir.path().join("linix-nightly.timer")).is_ok());
+    }
+
+    #[test]
+    fn a_generated_file_that_exists_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let unit = dir.path().join("linix-nightly.timer");
+        std::fs::write(&unit, "[Timer]\n").unwrap();
+        remove_generated(&unit).unwrap();
+        assert!(!unit.exists());
+    }
+
+    #[test]
+    fn a_removal_that_cannot_happen_is_an_error_naming_the_file() {
+        // A directory is not removable by `remove_file` on any platform, which stands in for
+        // the real case (a unit file the user cannot delete) without needing to drop
+        // privileges. The point is that the failure is reported at all: swallowing it left a
+        // timer armed under a schedule LiNix had just reported as removed.
+        let dir = tempfile::tempdir().unwrap();
+        let occupied = dir.path().join("linix-nightly.timer");
+        std::fs::create_dir(&occupied).unwrap();
+        let err = remove_generated(&occupied).unwrap_err().to_string();
+        assert!(
+            err.contains("linix-nightly.timer"),
+            "the error does not name the file: {}",
+            err
+        );
+    }
 
     #[test]
     fn systemd_oncalendar_mapping() {
