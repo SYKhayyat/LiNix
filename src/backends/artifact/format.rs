@@ -213,8 +213,21 @@ impl FormatOrder {
         &self.order
     }
 
+    /// The version of the built-in default order (D11).
+    ///
+    /// The default is *detected*, not configured, so a LiNix upgrade that changes it would
+    /// silently install a different artifact on a machine with no `@formats=` line — a `tarball`
+    /// today, a `deb` after the upgrade. This constant is the promise that such a move is
+    /// visible: **bump it whenever `detected_default` changes what it returns for any host**, and
+    /// the changelog says so. A lock protects an existing install; this protects the person
+    /// reading the changelog before a fresh one.
+    pub const DEFAULT_ORDER_VERSION: u32 = 1;
+
     /// Derived from detected facts rather than configured, so a fresh repo installs the right
     /// artifact with no `formats` line anywhere.
+    ///
+    /// Its output is versioned by [`DEFAULT_ORDER_VERSION`] — changing what this returns is a
+    /// visible event, not a silent one.
     pub fn detected_default(os: &str, family: Option<&str>) -> Self {
         let tail = [Format::AppImage, Format::Tarball, Format::Binary];
         let head: &[Format] = match (os, family) {
@@ -270,6 +283,29 @@ impl fmt::Display for FormatOrder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D11: the default order is versioned, and this test is the tripwire. It pins the exact
+    /// order for the three host shapes to `DEFAULT_ORDER_VERSION`. Changing what
+    /// `detected_default` returns fails this test until the constant is bumped — which is the
+    /// point: a change to the default is a deliberate, visible event, not a silent one an
+    /// upgrade slips in.
+    #[test]
+    fn the_default_order_is_pinned_to_its_version() {
+        assert_eq!(FormatOrder::DEFAULT_ORDER_VERSION, 1, "bump the version WITH the order");
+
+        let debian = FormatOrder::detected_default("linux", Some("debian"));
+        assert_eq!(
+            debian.as_slice(),
+            &[Format::Deb, Format::AppImage, Format::Tarball, Format::Binary]
+        );
+        let windows = FormatOrder::detected_default("windows", None);
+        assert_eq!(windows.as_slice(), &[Format::Exe, Format::Msi, Format::Zip]);
+        let macos = FormatOrder::detected_default("macos", None);
+        assert_eq!(
+            macos.as_slice(),
+            &[Format::Dmg, Format::Pkg, Format::Tarball, Format::Zip, Format::Binary]
+        );
+    }
 
     #[test]
     fn tar_gz_is_a_tarball_not_an_unknown_gz() {

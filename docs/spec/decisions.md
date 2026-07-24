@@ -166,7 +166,7 @@ implemented before anyone rules on it.
 
 ## D3b
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **In the tree today:** Nothing. No mode enum in `backends/artifact/`; `core/artifact_lock.rs:321` mentions download-only artifacts in a comment only.
 
@@ -182,6 +182,8 @@ The two modes are different declarations and must not be one key wearing two mea
 *Owed:* the option's spelling, and whether a download-only artifact appears in `check` as
 software (it is not software, so probably not). Recorded as **D3b, open**, not assumed.
 
+
+**RULED (owner, 2026-07-24): yes, a distinct download-only declaration — and it is the DEFAULT when a thing cannot be installed.** `web:`/`github:` may fetch an artifact without shimming it or putting it on PATH; it is still removed when the line goes. When LiNix has no way to install the fetched thing (no shim target, no archive binary), download-only is what it does by default rather than failing. A separate meaning, not one key wearing two.
 ---
 
 ## D5
@@ -218,7 +220,7 @@ scope; a bare `rebuild` errors and lists the forms.
 
 ## K4
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **In the tree today:** No `clean_cache_on_remove` key exists anywhere in `src/`.
 
@@ -228,6 +230,8 @@ or pacman it needs a new per-backend capability. *Recommendation:* download-back
 documented as such in the key's own description — a preference that silently does nothing on
 most backends is worse than a narrower one that is honest.
 
+
+**RULED (owner, 2026-07-24): download-backends only, plus a user cache pointer and common-location search.** `clean_cache_on_remove` acts only where LiNix knows the file (download backends: `github:`/`web:`/`appimage:`), documented as such in the key. ADDITIONALLY (owner): the user may point LiNix at a cache directory, and LiNix searches the common cache locations (`~/.cache`, `/var/cache`, XDG, each manager's own) so it can find and clean an artifact it did not download itself.
 ---
 
 ## U1
@@ -501,7 +505,7 @@ drives (`pkgin` is registered today).
 
 ## K18
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **In the tree today:** file writes are already atomic one file at a time — `write_atomic` stages
 a temp file and renames it into place, so a `link:` target is never half-written. **Package
@@ -532,11 +536,13 @@ The value is not speed; it is that **the one honest sentence about a rebuild's r
 backend**, and today LiNix prints the cautious one everywhere. **This is not urgent** and nothing
 is blocked on it — it is filed so that the answer stops being "no" when it is only "not yet".
 
+
+**RULED (owner, 2026-07-24): make it an option.** Where a backend has its own atomic swap, a config option lets LiNix use it; the default stays K3's pre-removal snapshot, because most package swaps cannot be atomic and a guarantee that only sometimes holds must be asked for, not assumed.
 ---
 
 ## T7
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **In the tree today:** nothing. `app/run.rs:138` is the only place LiNix is in a process's launch
 path at all.
@@ -558,11 +564,13 @@ the thing to argue with:
 
 *No recommendation.* The refusal was argued; what has not been heard is the case for it.
 
+
+**RULED (owner, 2026-07-24): keep it out — if it is hard, do not do it, and it is hard.** Runtime injection of secrets into process memory asks LiNix to become a process supervisor (it must stay in the launch path of every process that reads the secret), which is a different and far larger thing than a package manager. The reopening was deliberate; the ruling is to leave XII.2's refusal standing. A secret still reaches a process the ordinary way — decrypted to a file the process reads, or an env var — never via LiNix holding it in memory.
 ---
 
 ## D8
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **D8 — `when` inside an options body.** II.2 says a declaration's body is options, so
 `github { when family == debian { … } }` is not legal today, and VIII.2's example wraps the whole
@@ -570,11 +578,13 @@ the thing to argue with:
 *Recommendation:* keep it illegal. The wrap form is uglier and does not need a new grammar rule,
 and a new block kind here is how the grammar starts growing exceptions.
 
+
+**RULED (owner, 2026-07-24): keep it illegal.** `when` inside an options body stays disallowed. Wrapping the whole `github { … }` block in a `when` works and needs no new grammar rule; a new block kind here is how the grammar grows exceptions.
 ---
 
 ## D11
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **D11 — The default order is detected, so a LiNix upgrade can change it.** A machine with no
 `formats` line that installs a `tarball` today could install a `deb` after an upgrade. The lock
@@ -582,11 +592,13 @@ protects an existing install; a fresh `linix lock` or a new machine does not. *R
 treat the default order as versioned and say so in the changelog when it moves — or accept the
 churn explicitly. Not decided.
 
+
+**RULED (owner, 2026-07-24): yes, version the default order.** The detected default artifact order carries a version constant; when it moves, the changelog says so. A machine with no `@formats=` line is then told, rather than silently installing a `deb` after an upgrade where it installed a `tarball` before.
 ---
 
 ## D12
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **D12 — Network, rate limits, and offline.** Listing assets is a GitHub API call per repo.
 Unauthenticated is 60/hour, which a repo with thirty `github:` lines exhausts on the second
@@ -595,11 +607,13 @@ any API call when the lock is present and the version is pinned; only `linix loc
 unpinned line hit the network. Needs deciding because it determines whether `sync` works on a
 plane.
 
+
+**RULED (owner, 2026-07-24): resolve from the lock offline.** A pinned `github:` line resolves from `locks/github` with no API call; only `linix lock` and an unpinned line hit the network. `lock` is what freezes the resolved asset/version, so a later `sync` reproduces it without the 60/hour unauthenticated GitHub limit. This is what makes `sync` work offline and on a repo with many `github:` lines.
 ---
 
 ## D13
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **D13 — Changing a `channel` — refresh or reinstall?** `snap refresh --channel=edge` is not
 `snap remove && snap install`, and moving `edge → stable` is usually a downgrade. **A downgrade
@@ -607,11 +621,13 @@ is a removal-shaped event and the guard should see it.** *Recommendation:* refre
 backend supports it, and route the downgrade case through the plan and the guard like any other
 destructive change.
 
+
+**RULED (owner, 2026-07-24): refresh, and route a downgrade through the guard.** Changing a `channel` refreshes in place where the backend supports it (`snap refresh --channel=`), and the downgrade case (`edge → stable`) goes through the plan and the guard like any destructive change, because a downgrade is removal-shaped.
 ---
 
 ## D14
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **D14 — Does `why` explain the selection?** When `github:x/y` installs a `.tar.gz` on a machine
 the user expected a `.deb` on, the answer lives in three places (line, `priority`, built-in
@@ -619,6 +635,8 @@ default) and `linix why` is the command that should say which one won. *Recommen
 and it is a small amount of work only if the resolver keeps the reason rather than just the
 result. Decide before the resolver is written, not after.
 
+
+**RULED (owner, 2026-07-24): yes.** `linix why` explains WHICH rule selected the artifact — the line's `@formats=`, `priority`, or the built-in default. The resolver must keep the reason, not just the result; decided before the artifact resolver is finalised so the reason is retained rather than reconstructed.
 ---
 
 ## D17
@@ -645,13 +663,15 @@ two `when` arms.
 
 ## W10
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **W10 — Variables referencing variables.** `tier = $role-heavy`. Introduces ordering, cycles
 (the same walk as `use` loops and `@requires` loops, II.7), and interpolation-inside-a-value,
 which collides with W9. *Recommendation:* no, and the cycle machinery already existing is not a
 reason to invite the problem.
 
+
+**RULED (owner, 2026-07-24): no.** Variables do not reference variables (`tier = $role-heavy`). It introduces ordering, cycles and interpolation-inside-a-value (which collides with W9), for a convenience two `when` arms already cover.
 ---
 
 ## K6
@@ -671,7 +691,7 @@ for now; a `when family` block listing each distro's name is explicit, works tod
 
 ## K12
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **In the tree today:** No symlink handling in `app/locate.rs` or `config/settings.rs`.
 
@@ -680,6 +700,8 @@ settings file the symlink is no longer the only answer, but it costs nothing and
 reach for it first. *Recommendation:* yes, documented, with the settings file as the primary
 mechanism.
 
+
+**RULED (owner, 2026-07-24): yes, keep the symlink, documented.** A user whose LiNix files live in a dotfiles repo may symlink the config directory. The settings file (`linix path --set`) is the primary, first-class mechanism; the symlink costs nothing and some users reach for it first, so it stays supported and documented.
 ---
 
 ## N4
