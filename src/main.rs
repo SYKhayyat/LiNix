@@ -3165,7 +3165,7 @@ async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Result<()> {
 
 /// Build and write `locks/versions.json` from the current managed state (live installed versions
 /// preferred, falling back to recorded state). Returns the number of versions pinned. Shared
-/// by `linix lock` and `doctor --fix` (lockfile heal).
+/// by `linix lock` and by `linix heal` (which reconciles the lockfile).
 async fn build_and_write_locks(app: &App) -> Result<usize> {
     let mut locks = serde_json::Map::new();
     {
@@ -5329,7 +5329,7 @@ async fn check_health(app: &App, json: bool) -> Result<()> {
             system.push((
                 label.into(),
                 HealthStatus::Degraded,
-                Some(format!("missing: {} (run `doctor --fix`)", dir.display())),
+                Some(format!("missing: {} (run `linix heal`)", dir.display())),
             ));
         }
     }
@@ -5486,7 +5486,7 @@ async fn check_health(app: &App, json: bool) -> Result<()> {
 
     let sys_critical = system.iter().any(|(_, s, _)| *s == HealthStatus::Critical);
     if critical > 0 || sys_critical {
-        println!("\nSome checks are CRITICAL. Install the missing tools or re-run with --fix.");
+        println!("\nSome checks are CRITICAL. Install the missing tools, or run `linix heal`.");
     } else if degraded > 0 {
         println!("\nAll critical checks pass; some backends are degraded (see WARN above).");
     } else {
