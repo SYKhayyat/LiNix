@@ -187,6 +187,13 @@ pub struct Config {
     #[serde(default)]
     pub yes: bool,
 
+    /// This run is an unattended `watch` tick, so nobody is present to answer a prompt (T4).
+    /// CLI/runtime only (`serde(skip)`): it is a property of *how LiNix was invoked*, not a
+    /// preference. `watch` sets it; every other command leaves it false. A touch-required
+    /// `@decrypt` is skipped under it rather than hanging the whole reconcile.
+    #[serde(skip)]
+    pub unattended: bool,
+
     /// Carry out a removal the guard would refuse (over `max_removals`, or touching a
     /// protected/essential package). CLI-only by design — `serde(skip)` keeps it out of
     /// preferences.toml, because a permanently-on "yes, purge anything" switch is exactly the
@@ -511,6 +518,7 @@ impl Default for Config {
             aliases: HashMap::new(),
             command_aliases: HashMap::new(),
             dry_run: false,
+            unattended: false,
             yes: false,
             allow_mass_removal: false,
             replace_existing: false,

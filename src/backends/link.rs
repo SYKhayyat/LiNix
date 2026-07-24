@@ -125,23 +125,65 @@ impl LinkBackendCore {
     /// binary. LiNix stays true to its "manager of managers" model: it orchestrates the
     /// tool the user already trusts rather than embedding crypto. stdout is captured raw
     /// (never trimmed) so key material survives byte-for-byte.
+    /// Decrypt `source`, or return `Ok(None)` when an unattended run skips a touch-required
+    /// line (T4).
+    ///
+    /// `Ok(None)` is a deliberate skip, not a failure: T4 says a `watch` tick does not block the
+    /// whole reconcile waiting for a physical touch nobody will give. `Ok(Some)` is the
+    /// plaintext; an `Err` is a real failure — including a decrypt that hung past the timeout
+    /// (T3), which is the touch-required case reached at a terminal rather than under `watch`.
     async fn decrypt_secret(
         &self,
         tool: &str,
         source: &Path,
         spec: &PackageSpec,
-    ) -> Result<String> {
+    ) -> Result<Option<String>> {
         use tokio::process::Command;
         let identity = self.age_identity(spec);
+
+        // Is this a hardware/interactive identity? Read the identity file and look for an age
+        // plugin marker. A file we cannot read is treated as not-a-plugin: the decrypt below
+        // will fail with age's own error if the identity is genuinely bad, which is the honest
+        // report.
+        let plugin = identity
+            .as_deref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|c| crate::model::secret::plugin_of(&c));
+
+        // T4: an unattended `watch` tick does not attempt a touch-required line.
+        if self.config.unattended {
+            if let Some(plugin) = &plugin {
+                warn!("{}", crate::model::secret::watch_skip_message(source, plugin));
+                return Ok(None);
+            }
+        }
+
         let args = decrypt_argv(tool, source, identity.as_deref())?;
         let mut cmd = Command::new(tool);
         cmd.args(&args);
-        let output = cmd.output().await.map_err(|e| {
-            Error::Other(format!(
-                "could not launch '{}' to decrypt {:?}: {} — is it installed and on PATH?",
-                tool, source, e
-            ))
-        })?;
+        // T3: a decrypt that does not complete is waiting on a prompt nobody will answer. Bound
+        // it, and on timeout name the token and the identity rather than leaving the process
+        // (and this sync) hung forever.
+        let output = match tokio::time::timeout(
+            crate::model::secret::DECRYPT_TIMEOUT,
+            cmd.output(),
+        )
+        .await
+        {
+            Ok(result) => result.map_err(|e| {
+                Error::Other(format!(
+                    "could not launch '{}' to decrypt {:?}: {} — is it installed and on PATH?",
+                    tool, source, e
+                ))
+            })?,
+            Err(_) => {
+                return Err(Error::Other(crate::model::secret::token_timeout_message(
+                    source,
+                    identity.as_deref().unwrap_or(Path::new("(none)")),
+                    plugin.as_deref(),
+                )));
+            }
+        };
         if !output.status.success() {
             return Err(Error::Other(format!(
                 "{} failed to decrypt {:?}: {}",
@@ -150,7 +192,7 @@ impl LinkBackendCore {
                 String::from_utf8_lossy(&output.stderr).trim()
             )));
         }
-        String::from_utf8(output.stdout).map_err(|e| {
+        String::from_utf8(output.stdout).map(Some).map_err(|e| {
             Error::Other(format!(
                 "decrypted content of {:?} is not valid UTF-8: {}",
                 source, e
@@ -314,7 +356,11 @@ impl Installable for LinkInstallable {
                     );
                     continue;
                 }
-                let plaintext = self.core.decrypt_secret(tool, &source, spec).await?;
+                // `None` is T4's deliberate skip (an unattended tick met a touch-required key);
+                // decrypt_secret already said so. Move to the next line rather than failing.
+                let Some(plaintext) = self.core.decrypt_secret(tool, &source, spec).await? else {
+                    continue;
+                };
                 // T1: no backup. `backup_once` exists so a user is not silently robbed of a
                 // config file they hand-wrote; a secret LiNix decrypted a moment ago is not
                 // that, and the copy would sit beside the target under the ordinary umask,

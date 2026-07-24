@@ -67,7 +67,14 @@ async fn main() -> Result<()> {
             Cli::parse_from(expand_command_aliases(raw_argv, &aliases, &known))
         }
     };
-    let config = load_and_merge_config(&cli).await?;
+    let mut config = load_and_merge_config(&cli).await?;
+    // T4: `watch` runs unattended, so nobody is present to touch a hardware key. Set on the
+    // config BEFORE the registry is built, because the link backend takes an `Arc<Config>` at
+    // construction and a touch-required `@decrypt` is skipped under this flag rather than
+    // hanging the reconcile.
+    if matches!(cli.command, Commands::Watch { .. }) {
+        config.unattended = true;
+    }
     linix::backends::node_registry::set_http_timeout(config.network_timeout_secs);
 
     // 4. A reconcile fired by a manager that LiNix itself is driving has nothing to add —

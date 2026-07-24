@@ -641,24 +641,28 @@ result. Decide before the resolver is written, not after.
 
 ## D17
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **D17 — Regex lines.** What `github:re:…@formats=` means when one pattern spans repos with
 different asset sets is unspecified. *Probably:* the list applies to each match independently and
 a match with no legal asset is the VIII.2 error, named per repo. Not decided, and low urgency —
 `github:re:` is rare in practice.
 
+
+**RULED (owner, 2026-07-24): per-repo.** `github:re:…@formats=` applies the format list to each matched repo independently, and a repo with no matching asset is the ordinary VIII.2 error, named for that repo.
 ---
 
 ## W9
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **W9 — Interpolation outside `when`.** IX.5 says no. Record the boundary explicitly so the
 answer is a decision rather than an omission, because the first `link:` request will arrive
 quickly. *Recommendation:* stay narrow; reopen only with a use case that cannot be expressed as
 two `when` arms.
 
+
+**RULED (owner, 2026-07-24): no.** No variable interpolation outside `when`. `$role` is tested in a condition, not substituted into a value; the same intent is two `when` arms. Reopen only with a case that cannot be.
 ---
 
 ## W10
@@ -778,22 +782,26 @@ reach.
 
 ## T3
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **T3 — What does a missing hardware token look like?** The plugin may prompt on a terminal
 nobody is watching. *Recommendation:* a timeout, and a message naming the token and the
 identity file rather than passing the plugin's own text through.
 
+
+**RULED (owner, 2026-07-24): timeout, and a message LiNix owns.** A `@decrypt` whose hardware token is absent times out rather than hanging on the plugin's own prompt, and LiNix names the token and the identity file rather than passing the plugin's text through.
 ---
 
 ## T4
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **T4 — May an unattended `watch` tick decrypt?** A touch-required key turns a background
 reconcile into a silent block. *Recommendation:* `watch` skips `@decrypt` lines whose identity
 is a plugin stub and says so once, rather than hanging.
 
+
+**RULED (owner, 2026-07-24): skip and say so once.** An unattended `watch` tick skips a `@decrypt` line whose identity is a touch-required plugin stub, and says so a single time, rather than blocking the whole reconcile waiting for a human who is not there.
 ---
 
 ## U2

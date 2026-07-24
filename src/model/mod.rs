@@ -25,6 +25,7 @@ pub mod introduced;
 pub mod kernel;
 pub mod schedule;
 pub mod scope;
+pub mod secret;
 pub mod script;
 pub mod vars;
 pub mod vars_embedded;
