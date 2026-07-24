@@ -1210,10 +1210,15 @@ declaration restores its backup, T1's fix is smaller than it looks.
   All three exit clauses are asserted, plus two the wording implies: the refusal quotes the key
   *and its current contents*, and an empty list refuses nothing. The template and
   `examples/preferences.toml` both carry the key.
-- **`setting:` adapters become a table, and the built-ins become rows in it (K17).** Precedes 7e.
-  **Exit:** a store with no compiled-in support is driven from a definition the user wrote, and
-  `gsettings` goes through the same path — an adapter mechanism the built-ins bypass is one
-  nobody has tested.
+- ~~**`setting:` adapters become a table, and the built-ins become rows in it (K17).**~~ **DONE
+  2026-07-23.** Both exit clauses are tested: a `kwriteconfig6` store nobody shipped an enum arm
+  for is driven from a row, and `gsettings` is a row in `setting_stores.toml` parsed by that same
+  loader. User rows live in `custom_backends.toml`, so the adapter inherits 7a's approval instead
+  of getting a second ledger entry for the same question — one `read_approved_definitions`, two
+  readers. A row missing `read` or `reset` is refused rather than half-used: without a read it is
+  a command that runs every sync, and without a reset removing the line would silently do
+  nothing. **7e can now land one adapter at a time**, and the Windows registry is still gated on
+  U19 (`HKCU` or `HKLM`), which nothing here answers.
 - ~~**Two tags for one version is an error (D1).**~~ **ALREADY DONE — verified 2026-07-23, no
   code changed.** `one_release` has raised an error naming both tags since `8a63c80`
   (2026-07-20), with a test for each half of the exit condition. The register said it was

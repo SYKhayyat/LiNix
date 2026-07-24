@@ -501,6 +501,23 @@ repo can run on any machine that clones it, it is approved the way a hook is —
 approves the file, and any later edit stops it loading until you look at the change and approve
 it again. Custom definitions load last and can never take over a built-in name.
 
+**The same file teaches LiNix a settings store.** `setting:` writes desktop configuration that
+does not live in a file — GNOME's store via `gsettings` is shipped, and any other is a row:
+
+```toml
+[[setting_store]]
+name   = "kde"
+detect = "kwriteconfig6"            # its presence means this machine runs this store
+read   = ["kreadconfig6",  "--file", "{schema}", "--key", "{key}"]
+write  = ["kwriteconfig6", "--file", "{schema}", "--key", "{key}", "{value}"]
+reset  = ["kwriteconfig6", "--file", "{schema}", "--key", "{key}", "--delete"]
+```
+
+All three commands are required. LiNix reads before it writes — that is what makes a setting a
+declaration rather than a command that runs on every sync — and `reset` is what removing the
+line does. A machine whose store has no row gets an error naming what LiNix looked for, never a
+key that silently did nothing.
+
 ## Configuration
 
 `linix config init` writes a commented `preferences.toml` into your repo; `linix edit

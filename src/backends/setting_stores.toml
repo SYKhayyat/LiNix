@@ -1,0 +1,17 @@
+# The settings stores LiNix ships with (K17). These are ROWS IN THE SAME TABLE a user adds a
+# row to, parsed by the same loader — an adapter mechanism the built-ins bypass is one nobody
+# has tested.
+#
+# `detect` is the command whose presence on PATH means this machine runs this store. `read`,
+# `write` and `reset` are argv with `{schema}`, `{key}` and `{value}` substituted; `reset`
+# returns the key to the store's own default, which is what removing a declaration means.
+
+[[setting_store]]
+name = "gsettings"
+os = "linux"
+detect = "gsettings"
+# `gsettings` dispatches on argv[1] by hand, so it never gets a `--` terminator: it would be
+# read as the command name and the call would fail before it reached the schema.
+read = ["gsettings", "get", "{schema}", "{key}"]
+write = ["gsettings", "set", "{schema}", "{key}", "{value}"]
+reset = ["gsettings", "reset", "{schema}", "{key}"]

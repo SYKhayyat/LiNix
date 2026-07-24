@@ -359,23 +359,13 @@ pub fn load_custom_backends_from(
     path: &Path,
     locks_dir: &Path,
 ) -> usize {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
-        Err(e) => {
-            warn!("Could not read custom backends file {:?}: {}", path, e);
-            return 0;
-        }
-    };
-
     // II.12, before the definitions become runnable argv: a shared repo that can define a
     // backend can run commands on every machine that clones it, which is the hook question
-    // with a different file name. The check is here rather than at the sync gate because a
+    // with a different file name. The check is at load rather than at the sync gate because a
     // registered backend is reachable from `search` and `list` too, which no sync guards.
-    if let Some(refusal) = unapproved(&content, locks_dir) {
-        error!("{}", refusal);
+    let Some(content) = read_approved_definitions(path, locks_dir) else {
         return 0;
-    }
+    };
 
     let parsed: CustomBackendsFile = match toml::from_str(&content) {
         Ok(p) => p,
@@ -385,6 +375,27 @@ pub fn load_custom_backends_from(
         }
     };
     register_custom_backends(reg, exec, parsed.backend)
+}
+
+/// The definitions file's contents, or `None` when there is none or it is not approved.
+///
+/// Every reader of this file goes through here — the backends below and the `setting:`
+/// adapters (K17) — so there is one approval, one refusal message, and no way to add a second
+/// kind of definition that quietly skips the check.
+pub fn read_approved_definitions(path: &Path, locks_dir: &Path) -> Option<String> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            warn!("Could not read custom backends file {:?}: {}", path, e);
+            return None;
+        }
+    };
+    if let Some(refusal) = unapproved(&content, locks_dir) {
+        error!("{}", refusal);
+        return None;
+    }
+    Some(content)
 }
 
 /// The II.12 refusal for this file's current contents, or `None` when it is approved.

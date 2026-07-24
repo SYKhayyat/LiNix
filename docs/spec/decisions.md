@@ -1104,6 +1104,28 @@ declared slow one**, because an enum plus a table is two of everything with a ne
   shared config repo can execute, which is II.12's supply-chain surface — the same consequence
   U1 carries for custom backends, and it must be answered the same way rather than twice.
 
+**BUILT 2026-07-23, as ruled.** `enum SettingStore` is deleted. An adapter is a
+`[[setting_store]]` row — `name`, `detect` (the command whose presence means the machine runs
+this store), optional `os`, and the `read`/`write`/`reset` argv with `{schema}`, `{key}` and
+`{value}` substituted. `gsettings` is a row in `src/backends/setting_stores.toml`, **parsed by
+the same loader a user's row goes through**, so the shipped adapter cannot drift into a
+privileged path nobody has tested.
+
+**The trust answer is literally the same one, not the same shape.** User rows live in the config
+repo's `custom_backends.toml` — the file 7a moved and put under the hook ledger — and both
+readers go through one `read_approved_definitions`. One file, one approval, one refusal message,
+and no way to add a third kind of definition that quietly skips the check. The alternative
+(`setting_stores.toml` as its own file) would have been a second loader and a second ledger
+entry for the identical question.
+
+**A row that cannot be read is refused rather than half-used.** X.4's read-before-write is what
+makes `setting:` a declaration instead of a command that runs every sync, so an adapter with no
+`read` is not a slow adapter — it is not an adapter. Same for a missing `reset`: removing the
+declaration would silently do nothing.
+
+**The refusal now names what LiNix looked for**, so the machine running the unlisted store learns
+what to write a row about rather than only that it failed.
+
 ---
 
 ---
