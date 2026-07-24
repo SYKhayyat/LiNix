@@ -1027,7 +1027,7 @@ slashes so two machines' evaluations diff cleanly.
 
 ## U18
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U18 — Are grouped backends with per-group priority worth building at all?** The workaround —
 write the prefix — already works, and what it costs is the portability a bare name exists for.
@@ -1037,6 +1037,8 @@ error naming both, which is II.7 rule 5 reached by a new road rather than a new 
 that, this feature ships two `ripgrep` binaries fighting over `$PATH` — the failure
 `app/conflicts.rs` already exists to catch.
 
+
+**RULED (owner, 2026-07-24): build it — it is only a shortcut.** A group is a NAME for a backend chain, so instead of `apt,dnf,cargo:ripgrep` on every line you define `tools = apt, dnf, cargo` in a `groups` file and write `tools:ripgrep`. It expands to exactly that chain in the one parser (V), inheriting the chain's meaning and safety with nothing added — `priority` still exists, a bare name still resolves through it. **Groups nest** (owner): a member may be another group, flattened to terminal backends at load, and a cycle is refused like a `use` loop. This is NOT the per-module-priority design the recommendation feared — that footgun does not apply to a chain alias. BUILT the same day: `src/model/groups.rs`, `Vocab::with_groups`, grammar expansion, verified on the binary (`all = cargo, winmgrs` / `winmgrs = scoop, winget` → `all:rg` resolves).
 ---
 
 ## U20

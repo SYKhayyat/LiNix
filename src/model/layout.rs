@@ -107,6 +107,11 @@ impl Layout {
         self.config_root.join("priority")
     }
 
+    /// The `groups` file (U18): named backend chains, `tools = apt, dnf, cargo`.
+    pub fn groups_file(&self) -> PathBuf {
+        self.config_root.join("groups")
+    }
+
     /// When LiNix runs itself. Being in the file means it is on — no active-list (V.28).
     pub fn schedules_file(&self) -> PathBuf {
         self.config_root.join("schedules")

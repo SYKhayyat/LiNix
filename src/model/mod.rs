@@ -19,6 +19,7 @@ pub mod bootstrap;
 pub mod dotfiles;
 pub mod exec;
 pub mod firewall;
+pub mod groups;
 pub mod health;
 pub mod introduced;
 pub mod kernel;

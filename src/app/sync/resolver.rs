@@ -185,7 +185,7 @@ impl<'a> StateResolver<'a> {
         facts: &HostFacts,
     ) -> Result<(crate::model::vars::Vars, crate::model::vars::VarOrigins)> {
         let priority = self.vars_vocabulary().await?;
-        let known = Vocab::new(&self.registry, self.config, &priority);
+        let known = self.vocab(&priority);
         crate::model::Resolver::new(&self.layout, &known, &priority)
             .with_facts(facts.clone())
             .with_vars_source(self.config.vars.source.clone())
@@ -232,7 +232,7 @@ impl<'a> StateResolver<'a> {
         };
         let facts = HostFacts::current();
         let priority = self.vars_vocabulary().await?;
-        let known = Vocab::new(&self.registry, self.config, &priority);
+        let known = self.vocab(&priority);
         let (vars, _) = crate::model::Resolver::new(&self.layout, &known, &priority)
             .with_facts(facts)
             .with_vars_source(self.config.vars.source.clone())
@@ -253,6 +253,25 @@ impl<'a> StateResolver<'a> {
     /// IX.6: variables are resolved exactly once per invocation. Anything that reads a `when`
     /// without them sees `$role` as an unknown key and refuses a file that is correct — which
     /// is what `activate`, `deactivate` and `uninstall` all did before W8.
+    /// The parser's backend vocabulary, carrying the `groups` file (U18) so `tools:rg` expands
+    /// to its chain. One place, so every resolution path — the model, the vars pass, the
+    /// whole-repo parse — sees the same groups; a group that worked in `sync` and not in `check`
+    /// would be the "two of everything" this repo removes.
+    ///
+    /// A malformed or cyclic `groups` file is a warning and no groups, not a stopped
+    /// resolution: a broken groups file should not take down a config whose lines mostly do not
+    /// use one, and the lines that do will fail as "not a backend" — pointing at the real fix.
+    fn vocab(&self, priority: &Priority) -> Vocab {
+        let groups = match crate::model::groups::Groups::load(&self.layout.groups_file()) {
+            Ok(g) => g,
+            Err(e) => {
+                warn!("ignoring the `groups` file: {}", e);
+                crate::model::groups::Groups::default()
+            }
+        };
+        Vocab::new(&self.registry, self.config, priority).with_groups(groups)
+    }
+
     pub async fn facts_for_host(&self) -> Result<HostFacts> {
         let facts = HostFacts::current();
         let vars = match &self.vars_override {
@@ -270,7 +289,7 @@ impl<'a> StateResolver<'a> {
     pub async fn parse_everything(&self) -> Result<Vec<GrammarError>> {
         let facts = self.facts_for_host().await?;
         let priority = self.priority(&facts).await?;
-        let known = Vocab::new(&self.registry, self.config, &priority);
+        let known = self.vocab(&priority);
         Ok(crate::model::Resolver::new(&self.layout, &known, &priority)
             .with_facts(facts)
             .parse_everything())
@@ -289,7 +308,7 @@ impl<'a> StateResolver<'a> {
     pub async fn resolve_model(&self) -> Result<DesiredState> {
         let facts = self.facts_for_host().await?;
         let priority = self.priority(&facts).await?;
-        let known = Vocab::new(&self.registry, self.config, &priority);
+        let known = self.vocab(&priority);
 
         debug!("resolving desired state for host '{}'", facts.host);
 
@@ -764,7 +783,7 @@ impl<'a> StateResolver<'a> {
     pub async fn validate_line(&self, line: &str) -> Result<()> {
         let facts = self.facts_for_host().await?;
         let priority = self.priority(&facts).await?;
-        let known = Vocab::new(&self.registry, self.config, &priority);
+        let known = self.vocab(&priority);
 
         let origin = Origin::argument();
         let named = match statement::parse(&origin, line.trim(), &known)? {
@@ -783,7 +802,7 @@ impl<'a> StateResolver<'a> {
     pub async fn parse_and_probe_spec(&self, line: &str) -> Result<PackageSpec> {
         let facts = self.facts_for_host().await?;
         let priority = self.priority(&facts).await?;
-        let known = Vocab::new(&self.registry, self.config, &priority);
+        let known = self.vocab(&priority);
 
         let origin = Origin::argument();
         let stmt = statement::parse(&origin, line.trim(), &known)?;

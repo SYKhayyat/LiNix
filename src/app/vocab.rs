@@ -18,6 +18,7 @@ use std::collections::HashSet;
 #[derive(Debug, Clone, Default)]
 pub struct Vocab {
     names: HashSet<String>,
+    groups: crate::model::groups::Groups,
 }
 
 impl Vocab {
@@ -29,7 +30,16 @@ impl Vocab {
             .collect();
         names.extend(config.aliases.keys().cloned());
         names.extend(priority.order().iter().cloned());
-        Self { names }
+        Self {
+            names,
+            groups: crate::model::groups::Groups::default(),
+        }
+    }
+
+    /// Carry the backend groups (U18), so `tools:rg` expands to its chain during parsing.
+    pub fn with_groups(mut self, groups: crate::model::groups::Groups) -> Self {
+        self.groups = groups;
+        self
     }
 
     /// For paths with no `priority` to hand. Anything `priority` would have added is
@@ -42,6 +52,10 @@ impl Vocab {
 impl BackendNames for Vocab {
     fn is_backend(&self, name: &str) -> bool {
         self.names.contains(name)
+    }
+
+    fn expand_group(&self, name: &str) -> Option<Vec<String>> {
+        self.groups.expand(name).map(<[String]>::to_vec)
     }
 }
 

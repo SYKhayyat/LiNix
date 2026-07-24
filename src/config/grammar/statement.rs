@@ -254,6 +254,16 @@ impl Statement {
 /// already owns (P4).
 pub trait BackendNames {
     fn is_backend(&self, name: &str) -> bool;
+
+    /// The backends a group name expands to (U18), or `None` when it is not a group. A group is
+    /// a shorthand for a comma-chain, so expansion happens here, in the one parser, and the
+    /// expanded members go through the same backend check every chain part does.
+    ///
+    /// Default: nothing is a group. The paths with no `groups` file — and every test that only
+    /// cares about backends — keep working unchanged.
+    fn expand_group(&self, _name: &str) -> Option<Vec<String>> {
+        None
+    }
 }
 
 impl<F: Fn(&str) -> bool> BackendNames for F {
@@ -530,7 +540,19 @@ fn parse_prefix(
     prefix: &str,
     backends: &dyn BackendNames,
 ) -> Result<(Option<String>, Candidates)> {
-    let parts: Vec<&str> = prefix.split(',').map(str::trim).collect();
+    // A group is a shortcut for a comma-chain (U18), so expand it into that chain BEFORE any
+    // validation — every member then goes through the same backend check and `list`-only rules a
+    // hand-written chain does. `tools:rg` becomes `apt,dnf,cargo:rg`, and `tools,brew:rg` splices
+    // the group's members in front of `brew`. Nested groups are already flattened to terminal
+    // backends by `Groups` (a cycle was refused at load), so a single expansion here is complete.
+    let mut expanded: Vec<String> = Vec::new();
+    for raw in prefix.split(',').map(str::trim) {
+        match backends.expand_group(raw) {
+            Some(members) => expanded.extend(members),
+            None => expanded.push(raw.to_string()),
+        }
+    }
+    let parts: Vec<&str> = expanded.iter().map(String::as_str).collect();
 
     let unknown = |name: &str| {
         GrammarError::new(
@@ -1220,6 +1242,42 @@ mod tests {
 
     fn p(line: &str) -> Result<Statement> {
         parse(&o(), line, &known)
+    }
+
+    /// A `BackendNames` that also knows one group, `web = cargo, npm`, for the U18 tests.
+    struct WithGroup;
+    impl BackendNames for WithGroup {
+        fn is_backend(&self, name: &str) -> bool {
+            known(name)
+        }
+        fn expand_group(&self, name: &str) -> Option<Vec<String>> {
+            (name == "web").then(|| vec!["cargo".to_string(), "npm".to_string()])
+        }
+    }
+
+    /// U18: a group prefix expands to exactly the chain it names — `web:rg` is `cargo,npm:rg`.
+    #[test]
+    fn a_group_prefix_expands_to_its_chain() {
+        let Statement::Package(d) = parse(&o(), "web:ripgrep", &WithGroup).unwrap() else {
+            panic!("web:ripgrep did not parse as a package")
+        };
+        assert_eq!(d.backend, None, "a chain is not a pin");
+        assert_eq!(
+            d.candidates,
+            Candidates::Named(vec!["cargo".into(), "npm".into()])
+        );
+    }
+
+    /// A group composes with a backend in the chain, splicing its members in place.
+    #[test]
+    fn a_group_composes_with_a_backend_in_the_chain() {
+        let Statement::Package(d) = parse(&o(), "web,apt:ripgrep", &WithGroup).unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            d.candidates,
+            Candidates::Named(vec!["cargo".into(), "npm".into(), "apt".into()])
+        );
     }
 
     #[test]
