@@ -371,6 +371,27 @@ impl<'a> SyncEngine<'a> {
             return Ok(());
         }
 
+        // S25: recovery is a mutation, so a preview reports it and stops. The check is here
+        // rather than at the call sites because every caller of this function mutates, and
+        // the call site that was missed is how a `--dry-run` came to reinstall packages.
+        if self.config.dry_run {
+            info!(
+                "[DRY-RUN] would recover {} interrupted operation(s) from a previous run:",
+                incomplete_actions.len()
+            );
+            for entry in &incomplete_actions {
+                match &entry.action {
+                    crate::core::journal::JournalAction::Install(spec) => {
+                        info!("[DRY-RUN]   reinstall {}:{}", spec.backend, spec.name)
+                    }
+                    crate::core::journal::JournalAction::Remove { name, backend } => {
+                        info!("[DRY-RUN]   remove {}:{} (subject to the guard)", backend, name)
+                    }
+                }
+            }
+            return Ok(());
+        }
+
         // S6: healing is automatic (a half-finished transaction is drift, and removing drift
         // is sync's job — asking permission would ask permission to do sync's own job). But
         // automatic is not silent: a recovery nobody sees is exactly the class of bug this
@@ -399,13 +420,11 @@ impl<'a> SyncEngine<'a> {
                 if let Some(handler) = backend_cap.as_installable() {
                     let sudo = backend_cap.sudo_for_write();
 
-                    // Owner decision: completing an interrupted *removal* routes through the
-                    // guard, so a protected package is never removed even during recovery. On
-                    // refusal we KEEP the package and treat the entry as resolved — recovery
-                    // completes, protection holds, and heal never gets stuck retrying a removal
-                    // it will always refuse. (The remove-before-reinstall of the install path is
-                    // not a removal of intent — the same package is reinstalled next — so it is
-                    // not guarded here.)
+                    // Completing an interrupted *removal* routes through the guard, so a
+                    // protected package is never removed even during recovery. On refusal we
+                    // KEEP the package and treat the entry as resolved — recovery completes,
+                    // protection holds, and heal never gets stuck retrying a removal it will
+                    // always refuse.
                     if !is_install {
                         let removal = [(backend.clone(), package.clone())];
                         if let Err(objection) =
@@ -426,10 +445,11 @@ impl<'a> SyncEngine<'a> {
                         }
                     }
 
+                    // V.64: recovery reinstates what was wanted and does not delete to get
+                    // there. Re-running the install over a half-installed package is what
+                    // every manager LiNix drives can do; uninstalling first was a removal the
+                    // plan could not show and the guard never saw (S24).
                     let remediation_res = if is_install {
-                        // Remove before reinstalling: the interrupted install may have left a
-                        // half-written package that a plain install would refuse or skip.
-                        let _ = handler.remove(std::slice::from_ref(&package), sudo).await;
                         if let crate::core::journal::JournalAction::Install(spec) = &entry.action {
                             handler.install(std::slice::from_ref(spec), sudo).await
                         } else {

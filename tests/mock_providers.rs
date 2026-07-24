@@ -39,8 +39,11 @@ impl TestKernel {
 
         // S11: every path under the sandbox, in one call. Setting the roots by hand here is
         // what let the sibling fixture forget `data_root` and write to real user state.
-        let mut config = Config::sandboxed(tmp.path());
-        config.dry_run = true;
+        // Not a dry run: the executor below is a mock, so nothing reaches the machine, and a
+        // fixture that claims preview-only while asserting mutations happened is a fixture
+        // that cannot see a preview-only bug (S25). A test that wants the preview path clones
+        // this config and sets `dry_run`.
+        let config = Config::sandboxed(tmp.path());
 
         // The II.1 layout, because the resolver now reads a repo rather than a folder of
         // manifests. `priority` says which package managers this machine uses: without it

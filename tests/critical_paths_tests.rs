@@ -178,51 +178,160 @@ async fn test_transaction_rollback_fidelity() {
     );
 }
 
-/// Verifies that the Self-Healing (WAL) logic correctly uninstalls and
-/// re-attempts "InProgress" modifications found in the transaction journal.
-///
-/// Resolves A+ Grade logic: Confirms that healing updates the Journal status.
-#[tokio::test]
-async fn test_journal_self_healing_logic() {
-    let kernel = TestKernel::new().await;
+async fn record_interrupted(kernel: &TestKernel, action: JournalAction) {
+    let mut j = kernel.app.journal.lock().await;
+    j.record_start(action).expect("could not write the WAL");
+}
 
-    // 1. Manually simulate an interrupted session by recording a start in the WAL
-    {
-        // Resolve E0282: Explicit type hint for the lock guard
-        let mut j: tokio::sync::MutexGuard<'_, linix::core::Journal> =
-            kernel.app.journal.lock().await;
-        let spec = PackageSpec {
-            name: "stale-pkg".into(),
-            backend: "brew".into(),
-            options: HashMap::new(),
-            requires: vec![],
-            present: true,
-        };
-        let _ = j.record_start(JournalAction::Install(spec));
+fn spec(name: &str, backend: &str) -> PackageSpec {
+    PackageSpec {
+        name: name.into(),
+        backend: backend.into(),
+        options: HashMap::new(),
+        requires: vec![],
+        present: true,
     }
+}
 
-    // 2. Resolve E0599: Use the public kernel factory for SyncEngine
+/// S24/V.64 — a recovery path may not remove. Recovering an interrupted *install* re-runs the
+/// install; it never uninstalls first. The removal this asserts the absence of reached no
+/// guard, no count, no plan and no history, and it uninstalled Google Chrome on the owner's
+/// machine from `install nimble:nimjson`.
+#[tokio::test]
+async fn healing_an_interrupted_install_never_uninstalls() {
+    let kernel = TestKernel::new().await;
+    record_interrupted(&kernel, JournalAction::Install(spec("stale-pkg", "brew"))).await;
+
     let engine = kernel.app.sync_engine().await;
-
-    // Prime mocks for the healing sequence (Remove -> Install)
-    kernel.mock_executor.set_response(
-        "brew uninstall stale-pkg",
-        Ok(DryRunOutput::default().into()),
-    );
     kernel
         .mock_executor
         .set_response("brew install -- stale-pkg", Ok(DryRunOutput::default().into()));
 
-    // 3. Execute Heal
     engine.heal().await.expect("Healing cycle crashed.");
 
-    // 4. Verification: A+ Fix Logic Check
-    // The journal should now report that NO recovery is needed because the
-    // heal() method updated the status of the entries.
-    let j_after = kernel.app.journal.lock().await;
+    let calls = kernel.mock_executor.get_calls().await;
     assert!(
-        !j_after.needs_recovery(),
-        "A+ Fix Failure: Journal indicates recovery still needed after successful heal."
+        !calls.iter().any(|c| c.contains("uninstall")),
+        "recovery issued a removal: {:?}",
+        calls
+    );
+    assert!(
+        calls.iter().any(|c| c == "brew install -- stale-pkg"),
+        "recovery did not re-run the install: {:?}",
+        calls
+    );
+    assert!(
+        !kernel.app.journal.lock().await.needs_recovery(),
+        "the journal still wants recovery after a successful heal"
+    );
+}
+
+/// The sibling branch: an interrupted *removal* is a removal the user asked for, so recovery
+/// completes it. A fix that cured the install branch by disabling removal recovery would pass
+/// the test above and break this one.
+#[tokio::test]
+async fn healing_an_interrupted_removal_still_removes() {
+    let kernel = TestKernel::new().await;
+    record_interrupted(
+        &kernel,
+        JournalAction::Remove {
+            name: "doomed-pkg".into(),
+            backend: "brew".into(),
+        },
+    )
+    .await;
+
+    let engine = kernel.app.sync_engine().await;
+    kernel.mock_executor.set_response(
+        "brew uninstall doomed-pkg",
+        Ok(DryRunOutput::default().into()),
+    );
+
+    engine.heal().await.expect("Healing cycle crashed.");
+
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        calls.iter().any(|c| c.contains("uninstall") && c.contains("doomed-pkg")),
+        "recovery did not complete the interrupted removal: {:?}",
+        calls
+    );
+    assert!(
+        !kernel.app.journal.lock().await.needs_recovery(),
+        "the journal still wants recovery after a successful heal"
+    );
+}
+
+/// S25 — a preview recovers nothing. `--dry-run sync` reached recovery before the branch whose
+/// comment says "never prompt, never mutate", so the preview ran the removal S24 describes.
+#[tokio::test]
+async fn a_dry_run_reports_the_recovery_and_performs_none_of_it() {
+    let kernel = TestKernel::new().await;
+    record_interrupted(&kernel, JournalAction::Install(spec("stale-pkg", "brew"))).await;
+    record_interrupted(
+        &kernel,
+        JournalAction::Remove {
+            name: "doomed-pkg".into(),
+            backend: "brew".into(),
+        },
+    )
+    .await;
+
+    let mut previewing = (*kernel.app.config).clone();
+    previewing.dry_run = true;
+    let engine = linix::app::sync::SyncEngine::new(
+        &previewing,
+        kernel.app.registry.clone(),
+        kernel.app.executor.duplicate(),
+        kernel.app.metrics.clone(),
+        kernel.app.progress.clone(),
+        kernel.app.hooks.clone(),
+        kernel.app.snapshot_manager.clone(),
+        kernel.app.journal.clone(),
+        kernel.app.state.clone(),
+        kernel.app.diagnostics.clone(),
+    )
+    .await;
+
+    engine.heal().await.expect("Healing cycle crashed.");
+
+    assert!(
+        kernel.mock_executor.get_calls().await.is_empty(),
+        "a dry run ran commands: {:?}",
+        kernel.mock_executor.get_calls().await
+    );
+    assert!(
+        kernel.app.journal.lock().await.needs_recovery(),
+        "a dry run resolved the journal entries, so the real run has nothing left to recover"
+    );
+}
+
+/// And the protected case, which is why the removal branch consults the guard at all: `sudo`
+/// is protected by default, so its interrupted removal is refused and the package is kept —
+/// while the entry still resolves, or heal retries a refusal forever.
+#[tokio::test]
+async fn healing_a_protected_removal_is_refused_and_the_package_kept() {
+    let kernel = TestKernel::new().await;
+    record_interrupted(
+        &kernel,
+        JournalAction::Remove {
+            name: "sudo".into(),
+            backend: "brew".into(),
+        },
+    )
+    .await;
+
+    let engine = kernel.app.sync_engine().await;
+    engine.heal().await.expect("Healing cycle crashed.");
+
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        !calls.iter().any(|c| c.contains("uninstall")),
+        "the guard did not stop the removal of a protected package: {:?}",
+        calls
+    );
+    assert!(
+        !kernel.app.journal.lock().await.needs_recovery(),
+        "a refused recovery left the journal stuck retrying it"
     );
 }
 

@@ -6,6 +6,46 @@
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
+## Session 2026-07-23 (sixteenth session) — building, starting with VI.0
+
+**S24 and S25 are fixed.** They are one code path seen from the execute side and the preview
+side, so they landed in one commit with four tests. `cargo test` is green and `cargo clippy
+--all-targets` is silent; run them rather than reading this.
+
+**The fix is a deletion**, per V.64: `heal()`'s pre-reinstall `let _ = handler.remove(…)` is
+gone, along with the comment above it that argued for it in this document's voice. Recovery of
+an interrupted install re-runs the install. Nothing was added to the guard, because the guard
+was never the thing that failed — the path was.
+
+**Two decisions I made while building, both recorded here rather than asked, because neither is
+visible from outside the program.**
+
+1. **S25's dry-run check went inside `heal()`, not at the call site the ruling named.** The
+   ruling said to move `heal()` below `reconcile`'s dry-run branch. That fixes `sync --dry-run`
+   and leaves `linix heal --dry-run` — a second caller, four thousand lines away, reaching the
+   same mutation. Fixing the branch and not its sibling is the failure `CLAUDE.md` opens with,
+   so the refusal lives in the function every caller must pass through. The ruling's effect is
+   met and its mechanism is stronger.
+2. **`TestKernel` no longer sets `config.dry_run = true`.** The fixture claimed preview-only
+   while every test using it asserted that commands ran; the executor is a mock, so nothing
+   reached the machine either way. It meant **no test built on that fixture could have caught a
+   preview-only defect**, which is exactly the defect S25 turned out to be. It is now an
+   ordinary run against a mock, and the one test that wants the preview path clones the config
+   and sets the flag itself. All 972 tests pass under the change.
+
+**The test that vouched for the bug is deleted, and so is its duplicate.**
+`test_journal_self_healing_logic` was documented as verifying that healing *"correctly
+uninstalls and re-attempts"* and primed the mock with `brew uninstall stale-pkg`. There was a
+**second copy of it** in `tests/security_and_resiliency_tests.rs` — same fixture, same primed
+uninstall, weaker assertions — and nothing in fifteen sessions had noticed the pair. Neither
+was ported. The replacements assert the shape rather than the symptom: no uninstall **and** the
+install re-run; the removal branch still removes; a protected removal is still refused and its
+entry still resolves; a dry run does none of it and leaves the journal wanting recovery.
+
+**Not built, deliberately:** II.10's per-backend remove-before-install capability. No backend
+declares it or is known to need it, and a capability with no caller is a second removal path
+with no test — which is the thing being removed here.
+
 ## Session 2026-07-23 (fifteenth session) — the refactor, and fifteen decisions that were answered in code
 
 **No behaviour changed. One file of 9,308 lines became a map plus thirteen parts, and the six

@@ -818,17 +818,14 @@ All in `[guard]` in `preferences.toml`. One decision function. **Every removal p
 it** — sync, `absent:`, expiry, `purge-unmanaged`, `remove-orphans`, shell exit, `uninstall`.
 The last three also gate *installs* and *changes*, so the install paths call it too.
 
-> **THIS SENTENCE IS CURRENTLY FALSE, AND HAS BEEN SINCE THE JOURNAL WAS WRITTEN.** There is an
-> eighth removal path and it calls nothing: `heal()` recovers an interrupted *install* by
-> uninstalling the package first (`sync/mod.rs:432`, `let _ = handler.remove(…)`). It runs
-> before the plan, before the counts, before `-y` is even consulted, and it removes a package
-> that every file in the config declares. On 2026-07-23 it ran `winget uninstall --silent
-> Google.Chrome.EXE` on the owner's machine, from a command whose argv was `install
-> nimble:nimjson`. **`protected_packages`, OS-essential and `max_removals` do not apply to it,
-> because it never asks.** The sibling branch ten lines above — completing an interrupted
-> *removal* — does consult the guard, which is why the gap survived review: the mechanism looked
-> guarded from every angle except the one that mattered. See **S24**. Until S24 lands, the row
-> above reading "**nothing overrides**" is a promise this document cannot keep.
+> **This sentence was false from the day the journal was written until 2026-07-23, and the
+> eighth path is why the rule below exists.** `heal()` recovered an interrupted *install* by
+> uninstalling the package first, before the plan, before the counts, before `-y` was
+> consulted — and it ran `winget uninstall --silent Google.Chrome.EXE` on the owner's machine
+> from a command whose argv was `install nimble:nimjson`. **The line is deleted, not guarded**
+> (S24, V.64): the sentence is true again because the path is gone, which is the only repair
+> that also covers the ninth path nobody has found yet. The enumeration above is still a list,
+> and a list is still an assertion about what is absent — count the paths from the code.
 
 **A recovery path may not remove** (owner ruling, 2026-07-23, S24). Anything that repairs,
 retries, rolls back, or completes an interrupted operation reinstates what was wanted; it does

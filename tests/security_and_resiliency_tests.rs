@@ -181,35 +181,6 @@ async fn test_transaction_atomic_rollback_fidelity() {
     );
 }
 
-#[tokio::test]
-async fn test_journal_wal_healing_logic() {
-    let kernel = TestKernel::new().await;
-
-    {
-        let mut j = kernel.app.journal.lock().await;
-        let spec = create_dummy_spec("stuck-component", "brew", None);
-        let _ = j.record_start(linix::core::journal::JournalAction::Install(spec));
-    }
-
-    kernel.mock_executor.set_response(
-        "brew uninstall -- stuck-component",
-        Ok(DryRunOutput::default().into()),
-    );
-    kernel.mock_executor.set_response(
-        "brew install -- stuck-component",
-        Ok(DryRunOutput::default().into()),
-    );
-
-    let sync_engine = kernel.app.sync_engine().await;
-    sync_engine.heal().await.expect("Healing procedure failed");
-
-    let j_after = kernel.app.journal.lock().await;
-    assert!(
-        !j_after.needs_recovery(),
-        "Journal indicates recovery still needed after successful heal reconciliation"
-    );
-}
-
 // ============================================================================
 // PARSER & RESOLVER ROBUSTNESS
 // ============================================================================

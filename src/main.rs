@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
 
     // 5. One writer at a time. Held for the whole run, released when `main` returns — a
     //    lock dropped before the last write is a lock over part of a set that must agree.
-    let _data_lock = acquire_data_lock(&cli)?;
+    let _data_lock = acquire_data_lock()?;
 
     // 6. Kernel Initialization
     let app = App::new(config).await?;
@@ -322,14 +322,14 @@ fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::PathBuf> {
         .map(|r| r.path.join(linix::config::PREFERENCES_FILE_NAME))
 }
 
-/// The set of built-in subcommand names (and their clap aliases), so a user command-alias can
-/// never shadow a real command.
 /// Commands that only read. Everything else takes the data-directory lock, because the
 /// default has to be the safe one: locking a reader costs a wait, and not locking a writer
 /// costs an entry out of `registry.json`, which is a removal.
 ///
 /// `plan` and `status` are here and `plan --save` is not a counter-example: it writes a plan
-/// file, not state.
+/// file, not state. **`--dry-run` is not on this list and never exempts anything** (S25): a
+/// preview of a writer reads the same state a concurrent writer is rewriting, and the run
+/// that proved it mattered was a `--dry-run sync` that entered recovery.
 const READ_ONLY_COMMANDS: &[&str] = &[
     "plan", "status", "check", "list", "search", "doctor", "diff", "unmanaged", "absent",
     "vars", "export", "sbom", "insight", "why", "info", "show", "audit", "outdated",
@@ -339,10 +339,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
 /// Take the lock for a mutating command. The command is read from argv rather than matched
 /// out of `Commands`, so a subcommand added later is locked by default instead of being
 /// forgotten by a match arm nobody updated.
-fn acquire_data_lock(cli: &Cli) -> Result<Option<linix::core::datalock::DataLock>> {
-    if cli.dry_run {
-        return Ok(None);
-    }
+fn acquire_data_lock() -> Result<Option<linix::core::datalock::DataLock>> {
     let argv: Vec<String> = std::env::args().collect();
     let name = find_subcommand_index(&argv)
         .map(|i| argv[i].clone())
