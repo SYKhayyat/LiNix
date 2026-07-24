@@ -145,9 +145,9 @@ a guess about where the value ended. In a block, everything after the first `=` 
 verbatim and trimmed — no escaping exists because none is needed.
 
 Common keys: `version`, `hold` (never upgrade), `expires` / `until` (absolute datetimes),
-`requires`, the `*_install` hooks, and per-directive keys like `cron`/`run` on `schedule:` or
-`target`/`content`/`template`/`decrypt`/`identity` on `link:` — the last two are
-[Secrets](#secrets).
+`requires`, `health` (see [Safety](#safety)), the `*_install` hooks, and per-directive keys like
+`cron`/`run` on `schedule:` or `target`/`content`/`template`/`decrypt`/`identity` on `link:` —
+the last two are [Secrets](#secrets).
 
 **A `link:` line puts your file back when you delete it.** If the destination already held a
 file, LiNix keeps it as `<target>.linix-backup` before taking the path over; removing the
@@ -588,6 +588,8 @@ a number typed into a README does.
 | | |
 |---|---|
 | `plan` / `apply` | Freeze what `sync` would do to a file, review it, then apply exactly that |
+| `eval` | Print the resolved config as versioned JSON — every `when` decided, every bare name given a backend. Takes no locks |
+| `try` | Rehearse this config on a clean machine in a container. Answers what `plan` cannot: would it work somewhere that is not here? |
 | `lock` | Record every managed package's version so `sync --locked` reproduces it elsewhere |
 | `export` | Emit native manifests (Brewfile, requirements.txt, package.json, Aptfile) |
 | `bundle` | An offline/air-gapped bundle of config, lockfile and resolved package list |
@@ -642,6 +644,31 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
   unconfirmed changes in a pipe, cron job or CI run without `--yes`.
 - **Hooks are locked.** `after_install` and friends are hashed; a changed hook must be
   re-approved with `linix lock`, so a pulled config cannot quietly start running new code.
+- **Hooks on LiNix's own events.** Put a script at `hooks/after_sync`, `hooks/on_drift` or
+  `hooks/on_guard_refusal` and it runs with the details on stdin as JSON — notify a channel,
+  push the repo, open a ticket, without any of that having to become a LiNix feature. The same
+  three may live in `preferences.toml` for hooks that are this machine's business rather than
+  the repo's; **both run**, so adding a local one never silently disables the shared one. They
+  are locked like any other script, and one that fails warns without failing the sync.
+- **Health checks revert.** `apt:nginx@health=port:80` on a line, or a machine-wide
+  `health = [...]` in `preferences.toml`. A failing check restores the snapshot the sync took
+  before it started — and a health check declared on a machine with no snapshot provider is
+  refused *before* the change, because telling you the machine broke without being able to put
+  it back is worse than not checking.
+
+### Exit codes
+
+The same four everywhere, so a script can branch on them:
+
+| code | meaning |
+|---|---|
+| `0` | converged — what you declared is what is there |
+| `1` | failed — something went wrong |
+| `2` | differences — a read-only command looked and found work to do |
+| `3` | refused — the guard said no, and there is no flag for it |
+
+`2` is why `linix check` in CI tells you a machine has drifted without failing the job the way
+an error would, and `3` is distinct from `1` because "I will not do this" is not "this broke".
 
 ## Teaching LiNix a package manager it has never heard of
 
