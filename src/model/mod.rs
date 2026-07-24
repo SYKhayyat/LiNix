@@ -13,6 +13,7 @@ pub mod modules;
 pub mod priority;
 pub mod profiles;
 pub mod resolve;
+pub mod bootstrap;
 pub mod exec;
 pub mod schedule;
 pub mod scope;

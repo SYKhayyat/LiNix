@@ -4,6 +4,18 @@ use thiserror::Error;
 /// `Clone + Send`: a parallel transaction fans one failure out to several waiting tasks.
 #[derive(Debug, Error, Clone)]
 pub enum Error {
+    /// The guard said no. Its own variant, not `Other`, because U21 gives a refusal exit code
+    /// 3: a script that retries on failure must not retry a refusal, and it cannot tell them
+    /// apart if both arrive as the same error.
+    #[error("{0}")]
+    Refused(String),
+
+    /// A read-only command looked and found work to do (U21, exit code 2). Not an error in the
+    /// ordinary sense — it is the answer — but it travels the error channel so that every
+    /// command's result stays one type.
+    #[error("{0}")]
+    Differences(String),
+
     #[error("Backend '{0}' not found or unsupported on this platform")]
     BackendNotFound(String),
 

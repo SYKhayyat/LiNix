@@ -307,7 +307,7 @@ pub async fn enforce(
     if report.is_empty() {
         return Ok(());
     }
-    Err(Error::Other(report.message(scope)))
+    Err(Error::Refused(report.message(scope)))
 }
 
 /// Inspect the *desired* state against the `[guard]` install rules (II.10) that do not need
@@ -421,7 +421,7 @@ pub async fn enforce_deliberate(
     if report.is_empty() {
         return Ok(());
     }
-    Err(Error::Other(report.message(scope)))
+    Err(Error::Refused(report.message(scope)))
 }
 
 /// Pull the `(backend, name)` removal pairs out of a planned change set.

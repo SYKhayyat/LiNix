@@ -87,16 +87,52 @@ async fn main() -> Result<()> {
     let app = App::new(config).await?;
 
     // 7. Command Dispatcher (Modular A+ Routing)
+    //
+    // U21: the result is mapped to the exit-code table rather than returned straight, so a
+    // guard refusal (3) and a read-only command that found work (2) are distinguishable from
+    // a failure (1). `anyhow`'s default would collapse all three into 1.
+    let outcome = dispatch(&app, &cli).await;
+    finish(outcome)
+}
+
+/// Turn a command's result into this process's exit code (U21, `core::Exit`).
+///
+/// A refusal and a difference are printed as themselves — plainly, with no `Error:` prefix —
+/// because neither is a malfunction. Only a real failure is reported as one.
+fn finish(outcome: Result<()>) -> Result<()> {
+    use linix::core::Exit;
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let code = match e.downcast_ref::<linix::core::Error>() {
+                Some(linix::core::Error::Refused(msg)) => {
+                    eprintln!("{}", msg);
+                    Exit::Refused
+                }
+                Some(linix::core::Error::Differences(msg)) => {
+                    if !msg.is_empty() {
+                        eprintln!("{}", msg);
+                    }
+                    Exit::Differences
+                }
+                _ => return Err(e),
+            };
+            std::process::exit(code.code());
+        }
+    }
+}
+
+async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
     match &cli.command {
         Commands::Sync { locked, upgrade, json } => {
-            handle_sync(&app, *locked, *upgrade, *json).await
+            handle_sync(app, *locked, *upgrade, *json).await
         }
         Commands::Watch {
             interval,
             on_change,
             pull,
             once,
-        } => handle_watch(&app, *interval, *on_change, *pull, *once).await,
+        } => handle_watch(app, *interval, *on_change, *pull, *once).await,
         Commands::Upgrade {
             packages,
             backend,
@@ -110,7 +146,7 @@ async fn main() -> Result<()> {
             test,
         } => {
             handle_upgrade(
-                &app,
+                app,
                 UpgradeRequest {
                     packages,
                     backend: backend.as_deref(),
@@ -131,103 +167,103 @@ async fn main() -> Result<()> {
             json,
             temp,
             into,
-        } => handle_install(&app, packages, *json, temp.as_deref(), into.as_deref()).await,
+        } => handle_install(app, packages, *json, temp.as_deref(), into.as_deref()).await,
         Commands::Uninstall {
             packages,
             json,
             temp,
             purge: _,
-        } => handle_uninstall(&app, packages, *json, temp.as_ref()).await,
-        Commands::Shell { packages } => handle_shell(&app, packages).await,
-        Commands::Module(args) => handle_module(&app, &args.command).await,
-        Commands::Schedule(args) => handle_schedule(&app, &args.command).await,
-        Commands::Snapshot(args) => handle_snapshot(&app, &args.command).await,
-        Commands::Rollback { reference } => handle_rollback(&app, reference).await,
-        Commands::Diff { from, to } => handle_diff(&app, from, to.as_deref()).await,
-        Commands::Git(args) => handle_git(&app, &args.command).await,
-        Commands::Repo(args) => handle_repo(&app, &args.command).await,
+        } => handle_uninstall(app, packages, *json, temp.as_ref()).await,
+        Commands::Shell { packages } => handle_shell(app, packages).await,
+        Commands::Module(args) => handle_module(app, &args.command).await,
+        Commands::Schedule(args) => handle_schedule(app, &args.command).await,
+        Commands::Snapshot(args) => handle_snapshot(app, &args.command).await,
+        Commands::Rollback { reference } => handle_rollback(app, reference).await,
+        Commands::Diff { from, to } => handle_diff(app, from, to.as_deref()).await,
+        Commands::Git(args) => handle_git(app, &args.command).await,
+        Commands::Repo(args) => handle_repo(app, &args.command).await,
         Commands::Search {
             query,
             json,
             installed,
-        } => handle_search(&app, query, *json, *installed).await,
-        Commands::Teleport { package, backend } => handle_teleport(&app, package, backend).await,
+        } => handle_search(app, query, *json, *installed).await,
+        Commands::Teleport { package, backend } => handle_teleport(app, package, backend).await,
         Commands::List {
             backend,
             json,
             outdated,
-        } => handle_list(&app, backend.as_deref(), *json, *outdated).await,
-        Commands::Info { package } => handle_info(&app, package).await,
-        Commands::RemoveOrphans => handle_remove_orphans(&app).await,
-        Commands::CleanCache { all } => handle_clean_cache(&app, *all).await,
-        Commands::Heal => handle_heal(&app).await,
-        Commands::Adopt => handle_adopt(&app).await,
-        Commands::Undo => handle_undo(&app).await,
-        Commands::History => handle_history(&app).await,
-        Commands::Activate { profiles, add } => handle_activate(&app, profiles, *add).await,
-        Commands::Deactivate { profiles } => handle_deactivate(&app, profiles).await,
-        Commands::Profile(args) => handle_profile(&app, &args.command).await,
-        Commands::Run { packages, command } => handle_run(&app, packages, command).await,
-        Commands::Lock => handle_lock(&app).await,
-        Commands::Unlock { names, list } => handle_unlock(&app, names, *list).await,
-        Commands::Plan { out } => handle_plan(&app, out).await,
-        Commands::Apply { plan, yes } => handle_apply(&app, plan, *yes).await,
-        Commands::Update => handle_update(&app).await,
-        Commands::Reset { force } => handle_reset(&app, *force).await,
+        } => handle_list(app, backend.as_deref(), *json, *outdated).await,
+        Commands::Info { package } => handle_info(app, package).await,
+        Commands::RemoveOrphans => handle_remove_orphans(app).await,
+        Commands::CleanCache { all } => handle_clean_cache(app, *all).await,
+        Commands::Heal => handle_heal(app).await,
+        Commands::Adopt => handle_adopt(app).await,
+        Commands::Undo => handle_undo(app).await,
+        Commands::History => handle_history(app).await,
+        Commands::Activate { profiles, add } => handle_activate(app, profiles, *add).await,
+        Commands::Deactivate { profiles } => handle_deactivate(app, profiles).await,
+        Commands::Profile(args) => handle_profile(app, &args.command).await,
+        Commands::Run { packages, command } => handle_run(app, packages, command).await,
+        Commands::Lock => handle_lock(app).await,
+        Commands::Unlock { names, list } => handle_unlock(app, names, *list).await,
+        Commands::Plan { out } => handle_plan(app, out).await,
+        Commands::Apply { plan, yes } => handle_apply(app, plan, *yes).await,
+        Commands::Update => handle_update(app).await,
+        Commands::Reset { force } => handle_reset(app, *force).await,
         Commands::Check { section, json } => {
-            handle_check(&app, section.as_deref(), *json).await
+            handle_check(app, section.as_deref(), *json).await
         }
-        Commands::Vars => handle_vars(&app).await,
+        Commands::Vars => handle_vars(app).await,
         Commands::PurgeUnmanaged { allow_mass_purge } => {
-            handle_purge_unmanaged(&app, *allow_mass_purge).await
+            handle_purge_unmanaged(app, *allow_mass_purge).await
         }
-        Commands::Protected { packages, json } => handle_protected(&app, packages, *json).await,
-        Commands::Unmanage { packages, json } => handle_unmanage(&app, packages, *json).await,
+        Commands::Protected { packages, json } => handle_protected(app, packages, *json).await,
+        Commands::Unmanage { packages, json } => handle_unmanage(app, packages, *json).await,
         Commands::Rebuild {
             packages,
             backend,
             all,
-        } => handle_rebuild(&app, packages, backend.as_deref(), *all).await,
-        Commands::Config(args) => handle_config(&app, &args.command).await,
-        Commands::Path { explain, set } => handle_path(&cli, *explain, set.as_deref()).await,
-        Commands::Edit { file } => handle_edit(&cli, file.as_deref()).await,
-        Commands::Init { force, interactive } => handle_init(&app, *force, *interactive).await,
-        Commands::Sbom => handle_sbom(&app).await,
+        } => handle_rebuild(app, packages, backend.as_deref(), *all).await,
+        Commands::Config(args) => handle_config(app, &args.command).await,
+        Commands::Path { explain, set } => handle_path(cli, *explain, set.as_deref()).await,
+        Commands::Edit { file } => handle_edit(cli, file.as_deref()).await,
+        Commands::Init { force, interactive } => handle_init(app, *force, *interactive).await,
+        Commands::Sbom => handle_sbom(app).await,
         Commands::Export {
             format,
             out,
             stdout,
             force,
-        } => handle_export(&app, format.as_deref(), out, *stdout, *force).await,
+        } => handle_export(app, format.as_deref(), out, *stdout, *force).await,
         Commands::Bundle {
             out,
             artifacts,
             archive,
-        } => handle_bundle(&app, out, *artifacts, *archive).await,
-        Commands::Restore { dir, force } => handle_restore(&app, dir, *force).await,
-        Commands::Why { package, json } => handle_why(&app, package, *json).await,
-        Commands::Service(args) => handle_service(&app, &args.command).await,
-        Commands::Bisect { test, yes } => linix::app::bisect::bisect(&app, test, *yes)
+        } => handle_bundle(app, out, *artifacts, *archive).await,
+        Commands::Restore { dir, force } => handle_restore(app, dir, *force).await,
+        Commands::Why { package, json } => handle_why(app, package, *json).await,
+        Commands::Service(args) => handle_service(app, &args.command).await,
+        Commands::Bisect { test, yes } => linix::app::bisect::bisect(app, test, *yes)
             .await
             .map_err(|e| e.into()),
-        Commands::Fleet(args) => linix::app::fleet::fleet(&app, &args.hosts, args.sync, args.apply)
+        Commands::Fleet(args) => linix::app::fleet::fleet(app, &args.hosts, args.sync, args.apply)
             .await
             .map_err(|e| e.into()),
-        Commands::Hooks(args) => handle_hooks(&app, &args.command).await,
+        Commands::Hooks(args) => handle_hooks(app, &args.command).await,
         Commands::HookRecord {
             manager,
             op,
             targets,
-        } => handle_hook_record(&app, manager, op, targets).await,
-        Commands::HookReconcile { manager } => handle_hook_reconcile(&app, manager).await,
+        } => handle_hook_record(app, manager, op, targets).await,
+        Commands::HookReconcile { manager } => handle_hook_reconcile(app, manager).await,
         Commands::HookObserve {
             manager,
             learn,
             argv,
-        } => handle_hook_observe(&app, manager.as_deref(), *learn, argv).await,
-        Commands::Hold { packages } => handle_hold(&app, packages).await,
-        Commands::Unhold { packages } => handle_unhold(&app, packages).await,
-        Commands::Policy => handle_policy(&app).await,
+        } => handle_hook_observe(app, manager.as_deref(), *learn, argv).await,
+        Commands::Hold { packages } => handle_hold(app, packages).await,
+        Commands::Unhold { packages } => handle_unhold(app, packages).await,
+        Commands::Policy => handle_policy(app).await,
         Commands::Completions { shell } => {
             let mut cmd = <Cli as clap::CommandFactory>::command();
             linix::cli::generate_completions(*shell, &mut cmd);
@@ -499,6 +535,11 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     // whose `@target` lands outside the home directory is asked about once. A confirmation
     // offered after the file is placed is a notification.
     app.confirm_outside_home_links(&state)?;
+
+    // Ordering phase 0 (7c): a manager the configuration declares and this machine lacks is
+    // offered before anything is planned — a package cannot install through a manager that is
+    // not there, and finding that out per-package is a pile of identical failures.
+    app.offer_bootstrap(&state).await?;
 
     // Ordering phase 1: repos → refresh indexes. A package from a PPA cannot install until
     // the PPA is added, so this runs before the package plan (not inside it).
@@ -3636,8 +3677,12 @@ async fn check_summary(app: &App, json: bool) -> Result<()> {
     if findings.iter().all(|f| f.ok) {
         println!("
 Nothing needs you.");
+        return Ok(());
     }
-    Ok(())
+    // U21: a read-only command that looked and found work exits 2, not 0 — a script asking
+    // "is this machine converged?" needs an answer it can branch on. The message is empty
+    // because the findings are already on stdout; `finish` prints nothing further.
+    Err(linix::core::Error::Differences(String::new()).into())
 }
 
 /// The `config` section: does every file the active profiles reach parse and resolve?
