@@ -89,6 +89,21 @@ impl<'a> SyncEngine<'a> {
         }
     }
 
+    /// The scripts attached to LiNix's own events (XIII.13).
+    ///
+    /// Read at the moment of firing rather than held: the three files are tiny, and re-reading
+    /// means the hash the approval ledger checks is the hash of what is on disk *now* — a hook
+    /// edited during a long sync cannot run on an approval given to its previous contents.
+    ///
+    /// **Events fire on a real run, never on a preview.** Every fire site is inside `sync`,
+    /// which `--dry-run` returns before reaching. That is the intended asymmetry: a hook has
+    /// side effects out in the world — it pages someone, it opens a ticket — and a preview that
+    /// sent the notification would be a preview that changed something. `plan` and `check` are
+    /// the commands for looking.
+    fn events(&self) -> crate::app::events::EventHooks {
+        crate::app::events::EventHooks::load(self.config)
+    }
+
     /// `scope` names the command that asked, so the removal guard can be enforced here —
     /// at the one point every drift-removal path funnels through — rather than at each
     /// caller, where it only takes one forgotten site to purge a system.
@@ -108,20 +123,41 @@ impl<'a> SyncEngine<'a> {
             return Ok(());
         }
 
+        // The machine and the configuration disagree — which is what `on_drift` is for. Fired
+        // before anything is applied, so a hook that wants to veto by other means (page someone,
+        // open a ticket) is told while the drift is still the truth.
+        let events = self.events();
+        events
+            .fire(
+                crate::model::event::Event::OnDrift,
+                serde_json::to_value(changes.generate_report()).unwrap_or_default(),
+            )
+            .await;
+
         // Before the snapshot and before any package is touched: refuse a removal set
         // that is oversized or takes something the system needs.
-        guard::enforce(
+        //
+        // A refusal is an event too (`on_guard_refusal`): it is the one outcome nobody is
+        // watching for, because the run that hits it is usually the unattended one.
+        if let Err(e) = guard::enforce(
             self.config,
             &self.registry,
             &guard::removal_pairs(&changes),
             scope,
         )
-        .await?;
+        .await
+        {
+            events.fire_refusal(&e, scope).await;
+            return Err(e);
+        }
 
         // The install-side ceiling (II.10): a mis-globbed manifest schedules a flood of
         // installs, and the count is the fact that explains it. Off by default; when set,
         // only `--allow-mass-install` clears it.
-        guard::enforce_installs(self.config, changes.total_install(), scope).await?;
+        if let Err(e) = guard::enforce_installs(self.config, changes.total_install(), scope).await {
+            events.fire_refusal(&e, scope).await;
+            return Err(e);
+        }
 
         // The pre-sync snapshot is a safety NET, not a precondition: a Windows System
         // Restore checkpoint needs admin (and System Restore enabled), and btrfs/timeshift
@@ -160,6 +196,15 @@ impl<'a> SyncEngine<'a> {
             }
 
             let _ = self.hooks.run_after_sync().await;
+            events
+                .fire(
+                    crate::model::event::Event::AfterSync,
+                    serde_json::json!({
+                        "installed": changes.total_install(),
+                        "removed": changes.total_remove(),
+                    }),
+                )
+                .await;
             if self.config.quiet {
                 self.metrics.print_summary_quiet();
             } else {

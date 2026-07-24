@@ -1225,21 +1225,7 @@ impl App {
     /// Windows, because a repo that must ship two spellings of every script is a repo that
     /// cannot be shared — which is the reason the file travels with the config at all.
     async fn run_exec_script(&self, path: &std::path::Path) -> Result<()> {
-        let script = path.to_string_lossy().to_string();
-        #[cfg(windows)]
-        let (program, args) = (
-            "powershell",
-            vec![
-                "-NoProfile".to_string(),
-                "-ExecutionPolicy".to_string(),
-                "Bypass".to_string(),
-                "-File".to_string(),
-                script,
-            ],
-        );
-        #[cfg(not(windows))]
-        let (program, args) = ("sh", vec![script]);
-
+        let (program, args) = crate::model::script::interpreter_for(path);
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.executor.run(program, &refs, false).await.map(|_| ())
     }

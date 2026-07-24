@@ -65,6 +65,16 @@ pub fn exec_id(script: &str) -> String {
     format!("exec:{}", script)
 }
 
+/// The ledger identity of a hook on one of LiNix's own events (XIII.13, U15).
+///
+/// **Keyed by event AND location**, because U15 put the same event's hook in two places: the
+/// config repo's `hooks/<event>` and this machine's `preferences.toml`. They are separately
+/// approved — approving the shared policy must not silently rubber-stamp whatever the local
+/// file happens to hold, which is exactly the substitution the ledger exists to catch.
+pub fn event_id(event: &str, origin: &str) -> String {
+    format!("event:{}@{}", event, origin)
+}
+
 /// The ledger identity of one file under `adapters/` (7a/U1, U10). A definition is argv LiNix
 /// will run, and it travels with the repo, so it is the same supply-chain surface a hook is.
 ///

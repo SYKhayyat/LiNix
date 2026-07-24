@@ -3295,6 +3295,23 @@ async fn handle_lock(app: &App) -> Result<()> {
             .display()
         );
     }
+    // A hook on one of LiNix's own events (XIII.13) is the same surface: a script the repo
+    // carries, run without anyone watching. Both of U15's locations are approved here, and
+    // separately — the shared policy's approval must not cover this machine's local file.
+    let events = linix::app::events::EventHooks::load(&app.config);
+    let approved_events = events.approve_all()?;
+    if approved_events > 0 {
+        info!(
+            "Lock: approved {} event hook(s) — {}.",
+            approved_events,
+            events
+                .all()
+                .iter()
+                .map(|h| format!("{} at {}", h.event, h.origin))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
     // A `vars` provider that executes is a script on the same ledger (V.55). Approving it
     // here is the one deliberate act that lets it run — a changed provider stops resolution,
     // which is `status` and `plan`, not just `sync`.

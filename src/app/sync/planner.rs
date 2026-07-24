@@ -251,6 +251,53 @@ impl<'a> ChangePlanner<'a> {
         self.enabled.is_empty() || self.enabled.iter().any(|b| b == backend)
     }
 
+    /// What each named backend reports as installed, asked **once per backend**.
+    ///
+    /// Removal planning needs to know whether a package is actually there, for as many
+    /// packages as the manifest and the registry hold between them. Asking per package would
+    /// be one subprocess each; asking per backend is one, and the answer is a set.
+    ///
+    /// A backend that cannot be queried, or that fails, is absent from the map — and
+    /// [`is_installed`](Self::is_installed) treats that as "assume it is there", preserving
+    /// exactly the behaviour that existed before this check: schedule the removal and let it
+    /// report its own failure. Not knowing must never turn into "so skip it", or a backend
+    /// having a bad day silently stops LiNix removing anything through it.
+    async fn installed_sets(
+        &self,
+        backends: &std::collections::BTreeSet<String>,
+    ) -> HashMap<String, HashSet<String>> {
+        use futures::stream::{self, StreamExt};
+
+        stream::iter(backends.iter().cloned())
+            .map(|backend| {
+                let registry = self.registry.clone();
+                async move {
+                    let b_cap = registry.get(&backend)?;
+                    let installed = b_cap.as_queryable()?.list_installed().await.ok()?;
+                    Some((
+                        backend,
+                        installed.into_iter().map(|p| p.name).collect::<HashSet<_>>(),
+                    ))
+                }
+            })
+            .buffer_unordered(8)
+            .filter_map(|r| async move { r })
+            .collect()
+            .await
+    }
+
+    /// Whether this package is actually on the machine, per the sets gathered above.
+    ///
+    /// **Unknown means yes.** A backend that could not answer must not have its removals
+    /// silently dropped — see [`installed_sets`](Self::installed_sets).
+    fn is_installed(
+        sets: &HashMap<String, HashSet<String>>,
+        backend: &str,
+        name: &str,
+    ) -> bool {
+        sets.get(backend).is_none_or(|set| set.contains(name))
+    }
+
     #[instrument(skip(self, desired))]
     pub async fn plan(
         &self,
@@ -280,13 +327,29 @@ impl<'a> ChangePlanner<'a> {
         // running removal here would delete every package OUTSIDE the scope. A targeted
         // upgrade must be non-destructive — skip all removal planning when scoped.
         if scope.is_none() {
+            // Removing something that is not there is not a change — it is a command that
+            // fails every time it runs. `absent:jq` on a machine that has never had jq made
+            // every sync fail, permanently, with an error from the package manager about a
+            // package it does not have.
+            let consulted: std::collections::BTreeSet<String> = unwanted
+                .iter()
+                .filter(|(_, specs)| !specs.is_empty())
+                .map(|(backend, _)| backend.clone())
+                .collect();
+            let installed = self.installed_sets(&consulted).await;
+
             // `absent:` — the one thing LiNix removes that it does not manage, because
-            // you named it (V.7). Scheduled whether or not LiNix installed it; the guard
-            // decides whether it may actually go (Phase 3).
+            // you named it (V.7). Scheduled whether or not LiNix *installed* it, which is
+            // the point of the rule; not scheduled when it is not there, which is not a
+            // removal at all. The guard still decides whether it may actually go (Phase 3).
             for (backend, specs) in &unwanted {
                 for spec in specs {
                     let key = format!("{}:{}", backend, spec.name);
                     if changes.removal_tracker.contains(&key) {
+                        continue;
+                    }
+                    if !Self::is_installed(&installed, backend, &spec.name) {
+                        debug!("'{}' is declared absent and is already absent.", key);
                         continue;
                     }
                     changes.removal_tracker.insert(key);
@@ -324,6 +387,13 @@ impl<'a> ChangePlanner<'a> {
                     );
                     continue;
                 }
+
+                // NOT gated on "is it still installed", deliberately — unlike the `absent:`
+                // loop above. A managed package that has vanished from the machine still has a
+                // registry entry, and the removal is what *drops* that entry: skipping it here
+                // would leave LiNix permanently claiming to manage something that is gone,
+                // which is a quieter wrong state than the failed removal it would avoid.
+                // Reconciling a stale entry is `heal`'s job, not the planner's.
 
                 // Check for expired lease
                 let is_expired = pkg.expires_at.is_some_and(|exp| Self::now() >= exp);
@@ -776,6 +846,114 @@ mod tests {
         assert!(changes
             .removal_tracker
             .contains("generic-test:libreoffice"));
+    }
+
+    /// A backend that reports exactly what it was told is installed. Enough to answer the one
+    /// question removal planning asks — *is it actually on the machine?* — which an empty
+    /// registry cannot, and which is why this bug survived the tests above it.
+    struct FakeInstalled {
+        name: String,
+        installed: Vec<String>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::core::manager::BackendCore for FakeInstalled {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn needs_root(&self) -> bool {
+            false
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::core::manager::Queryable for FakeInstalled {
+        async fn list_installed(&self) -> Result<Vec<crate::core::Package>> {
+            Ok(self
+                .installed
+                .iter()
+                .map(|n| crate::core::Package {
+                    name: n.clone(),
+                    backend: self.name.clone(),
+                    version: None,
+                    properties: HashMap::new(),
+                })
+                .collect())
+        }
+        async fn list_manual(&self) -> Result<Vec<crate::core::Package>> {
+            self.list_installed().await
+        }
+        async fn info(&self, name: &str) -> Result<Option<crate::core::Package>> {
+            Ok(self
+                .list_installed()
+                .await?
+                .into_iter()
+                .find(|p| p.name == name))
+        }
+    }
+
+    fn registry_reporting(backend: &str, installed: &[&str]) -> Arc<BackendRegistry> {
+        let fake = Arc::new(FakeInstalled {
+            name: backend.to_string(),
+            installed: installed.iter().map(|s| s.to_string()).collect(),
+        });
+        let mut registry = BackendRegistry::new();
+        registry.register(Arc::new(
+            crate::core::manager::BackendCapabilities::builder(fake.clone())
+                .with_queryable(fake)
+                .build(),
+        ));
+        Arc::new(registry)
+    }
+
+    async fn absent_removals(registry: Arc<BackendRegistry>, name: &str) -> usize {
+        let config = Config::default();
+        let state = StateRegistry::new(PathBuf::from("test-state.json"));
+        let desired: HashMap<String, Vec<PackageSpec>> = [(
+            "generic-test".to_string(),
+            vec![absent_spec(name, "generic-test")],
+        )]
+        .into_iter()
+        .collect();
+        ChangePlanner::new(registry, &state, &config)
+            .plan(&desired, None)
+            .await
+            .unwrap()
+            .total_remove()
+    }
+
+    /// **The bug:** `absent:` scheduled a removal whether or not the package was there, so a
+    /// machine that had never had it failed every single sync — the package manager refusing
+    /// to remove something it does not have, forever, with no way to converge.
+    #[tokio::test]
+    async fn an_absent_declaration_for_something_not_installed_is_not_a_removal() {
+        let registry = registry_reporting("generic-test", &["something-else"]);
+        assert_eq!(
+            absent_removals(registry, "libreoffice").await,
+            0,
+            "removing what is not there is not a change, it is a command that always fails"
+        );
+    }
+
+    /// The other half of the same rule: when it IS there, `absent:` still removes it. A fix
+    /// that made `absent:` a no-op would pass the test above and destroy the feature.
+    #[tokio::test]
+    async fn an_absent_declaration_for_something_installed_is_still_a_removal() {
+        let registry = registry_reporting("generic-test", &["libreoffice"]);
+        assert_eq!(absent_removals(registry, "libreoffice").await, 1);
+    }
+
+    /// A backend that cannot answer must not have its removals silently dropped. Unknown
+    /// means "assume it is there" — the behaviour that existed before the check — so a
+    /// backend having a bad day cannot quietly disable `absent:`.
+    #[tokio::test]
+    async fn a_backend_that_cannot_be_queried_still_plans_the_removal() {
+        // An empty registry: no backend, so no installed set, so no answer.
+        let changes = absent_removals(Arc::new(BackendRegistry::new()), "libreoffice").await;
+        assert_eq!(changes, 1, "not knowing must never mean not removing");
     }
 
     /// A scoped run is non-destructive, and that must hold for `absent:` too.

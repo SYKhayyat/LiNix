@@ -90,6 +90,24 @@ ok() {
     fi
 }
 
+# answers "desc" cmd...  — passes when cmd gives an ANSWER: 0 (converged) or 2
+# (differences). Fails on 1 (failed) and 3 (refused).
+#
+# U21's exit table makes "it ran" and "it found nothing to do" two different results.
+# A read-only command that looked and found work exits 2 on purpose, so an assertion
+# that the model *parses* must not also demand the machine be converged — in a fresh
+# container it never is.
+answers() {
+    desc="$1"; shift
+    "$@" >/tmp/it.out 2>&1; rc=$?
+    if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  $desc (rc=$rc)"; return 0
+    else
+        FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc)"
+        echo "  FAIL  $desc (rc=$rc)"; sed 's/^/        | /' /tmp/it.out | tail -6; return 1
+    fi
+}
+
 # nok "desc" cmd...  — passes when cmd exits NON-zero (a refusal/negative path).
 nok() {
     desc="$1"; shift
@@ -154,7 +172,7 @@ echo "[2] Discovery / read-only verbs"
 ok "check health" lx check health
 ok "check drift" lx check drift
 ok "plan (no changes yet)" lx plan --dry-run
-ok "check parses the model" lx check
+answers "check parses the model" lx check
 ok "check absent lists nothing" lx check absent
 ok "protected lists guarded packages" lx protected
 grep_ok "protected includes a system essential" "linix\|libc\|systemd\|kernel\|bash" lx protected
@@ -730,20 +748,20 @@ for be in $ALL_BACKENDS; do
             # A dependent statement: it is declared in a module and applied by
             # sync, and `install` correctly answers "not a package".
             printf 'service:cron\n' > "$SMOKE_CFG/modules/base.txt"
-            ok "service: a service statement parses" smoke_lx check
+            answers "service: a service statement parses" smoke_lx check
             ok "service: and reaches a plan" smoke_lx --dry-run sync
             : > "$SMOKE_CFG/modules/base.txt"
             echo "$be" >> "$LEDGER/be-smoke"; continue ;;
         link)
             printf 'link:/etc/hostname @target=/tmp/linix-it-hostname\n' > "$SMOKE_CFG/modules/base.txt"
-            ok "link: a link statement parses" smoke_lx check
+            answers "link: a link statement parses" smoke_lx check
             ok "link: and reaches a plan" smoke_lx --dry-run sync
             : > "$SMOKE_CFG/modules/base.txt"
             echo "$be" >> "$LEDGER/be-smoke"; continue ;;
         setting)
             printf 'setting:org.gnome.desktop.interface/color-scheme @value=prefer-dark\n' \
                 > "$SMOKE_CFG/modules/base.txt"
-            ok "setting: a setting statement parses" smoke_lx check
+            answers "setting: a setting statement parses" smoke_lx check
             ok "setting: and reaches a plan" smoke_lx --dry-run sync
             : > "$SMOKE_CFG/modules/base.txt"
             echo "$be" >> "$LEDGER/be-smoke"; continue ;;
@@ -864,7 +882,7 @@ ok "restore into a clean config directory" \
     env LINIX_CONFIG_DIR=/tmp/linix-it-restored LINIX_DATA_DIR=/tmp/linix-it-restored-state \
         $TO "$LINIX" restore /tmp/linix-it-bundle
 record_argv restore /tmp/linix-it-bundle
-ok "the restored model parses" \
+answers "the restored model parses" \
     env LINIX_CONFIG_DIR=/tmp/linix-it-restored LINIX_DATA_DIR=/tmp/linix-it-restored-state \
         $TO "$LINIX" check
 nok "restore refuses a config directory that is not empty" \

@@ -5,6 +5,7 @@ pub mod conflicts;
 pub mod context;
 pub mod diagnostics;
 pub mod eval;
+pub mod events;
 pub mod export;
 pub mod fleet;
 pub mod hooks;
