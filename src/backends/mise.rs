@@ -124,6 +124,13 @@ impl Queryable for MiseQueryable {
             for (name, versions) in tools {
                 if let Some(v_list) = versions.as_array() {
                     for v_obj in v_list {
+                        // mise keeps reporting a tool after `mise uninstall` — the entry stays,
+                        // with `installed: false`, because the *declaration* in its config is
+                        // still there. Reporting those as installed told LiNix a package was
+                        // present when it was not, which is drift detection reading backwards.
+                        if v_obj.get("installed").and_then(|i| i.as_bool()) == Some(false) {
+                            continue;
+                        }
                         let version = v_obj
                             .get("version")
                             .and_then(|v| v.as_str())
@@ -158,27 +165,17 @@ impl Queryable for MiseQueryable {
             .collect())
     }
 
+    /// Is this tool installed **here**?
+    ///
+    /// It used to ask `mise plugins ls --all`, which lists every plugin mise has ever heard
+    /// of — so `info` answered `Some` for anything in the catalogue, the planner read that as
+    /// "already installed", and `linix install mise:jq` reported *already up to date* while
+    /// installing nothing. Found by the `tools` container image, which is the only place a
+    /// real mise runs (2026-07-24).
+    ///
+    /// The catalogue answers a different question — *could this be installed?* — and nothing
+    /// asks that here. `info` consults the installed set and nothing else.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
-        let output = self
-            .core
-            .executor
-            .run_output("mise", &["plugins", "ls", "--all", "--urls"], false)
-            .await?;
-        for line in output.lines() {
-            if let Some((plugin_name, url)) = line.split_once(' ') {
-                if plugin_name.trim() == name {
-                    let mut p = Package::new(name, "mise");
-                    p.properties
-                        .insert("repository_url".into(), url.trim().to_string());
-                    let install_path = self.core.mise_data_dir()?.join("installs").join(name);
-                    p.properties.insert(
-                        "install_path".into(),
-                        install_path.to_string_lossy().to_string(),
-                    );
-                    return Ok(Some(p));
-                }
-            }
-        }
         let all = self.list_installed().await?;
         if let Some(mut p) = all.into_iter().find(|p| p.name == name) {
             let version = p.version.as_deref().unwrap_or("unknown").to_string();
@@ -321,6 +318,101 @@ mod tests {
             mock.get_calls().await,
             vec!["mise use -g -- node@latest", "mise uninstall -- node"]
         );
+    }
+
+    /// Real `mise list --json` output, captured from the `tools` container on 2026-07-24.
+    /// Both states in one document: `jq` uninstalled (the entry mise keeps after
+    /// `mise uninstall`) and `node` installed.
+    const REAL_LIST_JSON: &str = r#"{
+      "jq": [
+        {
+          "version": "1.8.2",
+          "requested_version": "latest",
+          "install_path": "/root/.local/share/mise/installs/jq/1.8.2",
+          "source": { "type": "mise.toml", "path": "/root/.config/mise/config.toml" },
+          "installed": false,
+          "active": false
+        }
+      ],
+      "node": [
+        {
+          "version": "22.1.0",
+          "requested_version": "latest",
+          "install_path": "/root/.local/share/mise/installs/node/22.1.0",
+          "source": { "type": "mise.toml", "path": "/root/.config/mise/config.toml" },
+          "installed": true,
+          "active": true
+        }
+      ]
+    }"#;
+
+    fn mise_with(list_json: &str) -> (Arc<MiseBackendCore>, Arc<crate::core::executor::MockExecutor>) {
+        let vfs = Arc::new(dashmap::DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "mise list --json",
+            Ok(crate::core::executor::DryRunOutput {
+                stdout: list_json.as_bytes().to_vec(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let exec = CommandExecutor::with_layer(
+            false,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(dashmap::DashMap::new()),
+        );
+        (Arc::new(MiseBackendCore::new(exec)), mock)
+    }
+
+    /// mise keeps a tool in `list --json` after `mise uninstall`, flagged `installed: false`,
+    /// because the declaration in its config survives. Reporting those as installed told LiNix
+    /// a package was present when it was not.
+    #[tokio::test]
+    async fn a_tool_mise_says_is_not_installed_is_not_listed() {
+        let (core, _) = mise_with(REAL_LIST_JSON);
+        let listed = MiseQueryable { core }.list_installed().await.unwrap();
+        let names: Vec<&str> = listed.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["node"], "an uninstalled tool was reported as installed");
+    }
+
+    /// The fail-silent bug the `tools` image caught: `info` asked mise's plugin CATALOGUE, so
+    /// it answered "yes" for anything mise had heard of. The planner read that as "already
+    /// installed" and `linix install mise:jq` reported *already up to date* while installing
+    /// nothing at all.
+    #[tokio::test]
+    async fn info_answers_installed_here_not_known_to_mise() {
+        let (core, mock) = mise_with(REAL_LIST_JSON);
+        let q = MiseQueryable { core };
+
+        // `jq` is a tool mise knows and could install, but it is NOT installed.
+        assert!(
+            q.info("jq").await.unwrap().is_none(),
+            "info claimed an uninstalled tool was present — the planner would skip its install"
+        );
+        // A tool mise has never heard of is likewise absent.
+        assert!(q.info("nosuchtool").await.unwrap().is_none());
+        // And one that really is installed is found, with its version.
+        let found = q.info("node").await.unwrap().expect("node is installed");
+        assert_eq!(found.version.as_deref(), Some("22.1.0"));
+
+        // The catalogue is never consulted: it answers "could this be installed?", which is a
+        // different question and the one that caused the bug.
+        let calls = mock.get_calls().await;
+        assert!(
+            !calls.iter().any(|c| c.contains("plugins")),
+            "info consulted the plugin catalogue: {:?}",
+            calls
+        );
+    }
+
+    /// An empty mise reports `{}`, which must be no packages rather than a parse error.
+    #[tokio::test]
+    async fn an_empty_mise_lists_nothing() {
+        let (core, _) = mise_with("{}");
+        assert!(MiseQueryable { core }.list_installed().await.unwrap().is_empty());
     }
 
     #[test]

@@ -488,7 +488,14 @@ canary() {
         dotnet)   echo "dotnetsay|dotnetsay|full|" ;;
         pub)      echo "sass|sass|full|" ;;
         # mise appends the version itself; `jq@latest` here would be read as an option.
-        mise)     echo "jq|jq|full|" ;;
+        #
+        # No PATH check, for two independent reasons — either alone would make one vacuous
+        # (IV.1: grep for something only the right answer contains). `jq` is also this image's
+        # apt canary, so `command -v jq` answers about apt's copy whatever mise did; and a
+        # mise tool only reaches PATH through `mise activate`, a shell integration this image
+        # does not set up. The backend-scoped `list --backend mise` check below is the real
+        # presence assertion, and it is the one that caught the `info` bug on 2026-07-24.
+        mise)     echo "jq||full|" ;;
         asdf)     echo "nodejs||full|" ;;
         github)   echo "sharkdp/fd|fd|full|fd" ;;
         emacs)    echo "hydra||full|" ;;
