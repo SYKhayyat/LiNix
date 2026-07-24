@@ -524,7 +524,8 @@ because a fresh repo signs nothing.
 ### One command looks, one command acts
 
 `linix check` answers every "what is going on" question — drift, unmanaged software, `absent:`
-lines in force, conflicting declarations, backend health, known advisories. With no argument it
+lines in force, conflicting declarations, backend health, known advisories, and whether any hook
+you wrote is unapproved and so will silently never run. With no argument it
 prints a line per section and names the command that acts on each:
 
 ```
@@ -536,8 +537,8 @@ ok  config      42 package(s) declared
 ok  health      26 backend(s) ready
 ```
 
-`linix check health` (or `drift`, `unmanaged`, `absent`, `conflicts`, `config`, `security`)
-prints that section in full.
+`linix check health` (or `drift`, `unmanaged`, `absent`, `conflicts`, `config`, `security`,
+`approvals`) prints that section in full.
 
 **`check` never changes anything.** What used to be `doctor --fix` — creating missing
 directories, reconciling the lockfile, refreshing a stale backend index — is `linix heal`, along
