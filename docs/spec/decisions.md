@@ -184,6 +184,8 @@ software (it is not software, so probably not). Recorded as **D3b, open**, not a
 
 
 **RULED (owner, 2026-07-24): yes, a distinct download-only declaration — and it is the DEFAULT when a thing cannot be installed.** `web:`/`github:` may fetch an artifact without shimming it or putting it on PATH; it is still removed when the line goes. When LiNix has no way to install the fetched thing (no shim target, no archive binary), download-only is what it does by default rather than failing. A separate meaning, not one key wearing two.
+
+**RULED, NOT YET BUILT (2026-07-24).** A distinct download-only declaration, and the default when a fetched thing cannot be installed. Queued: it changes how `web:`/`github:` behave (a new mode in the install path), which is a semantic change to a core backend rather than an additive one. The ruling — a separate meaning, still removed when the line goes, download-only by default when uninstallable — is settled for when it is built.
 ---
 
 ## D5
@@ -232,6 +234,8 @@ most backends is worse than a narrower one that is honest.
 
 
 **RULED (owner, 2026-07-24): download-backends only, plus a user cache pointer and common-location search.** `clean_cache_on_remove` acts only where LiNix knows the file (download backends: `github:`/`web:`/`appimage:`), documented as such in the key. ADDITIONALLY (owner): the user may point LiNix at a cache directory, and LiNix searches the common cache locations (`~/.cache`, `/var/cache`, XDG, each manager's own) so it can find and clean an artifact it did not download itself.
+
+**RULED, NOT YET BUILT (2026-07-24).** `clean_cache_on_remove` (download backends only) + a user cache pointer + search of common cache locations. Queued: `clean_cache_on_remove` does not exist yet, so this is a new option plus a cache-search capability, not an additive tweak. The ruling — download-backends only, honest about doing nothing elsewhere; user may point at a cache; LiNix searches `~/.cache`/`/var/cache`/XDG — is settled for when it is built.
 ---
 
 ## U1
@@ -538,6 +542,8 @@ is blocked on it — it is filed so that the answer stops being "no" when it is 
 
 
 **RULED (owner, 2026-07-24): make it an option.** Where a backend has its own atomic swap, a config option lets LiNix use it; the default stays K3's pre-removal snapshot, because most package swaps cannot be atomic and a guarantee that only sometimes holds must be asked for, not assumed.
+
+**RULED (2026-07-24): an option, added when a backend needs it.** Where a backend has its own atomic swap, a config option uses it; the default stays K3's pre-removal snapshot. NOT added as a dead key now: no backend currently exposes atomic swap, and this project holds that a preference that silently does nothing is worse than none (K4's own reasoning). The option lands with the first backend that can honour it — the ruling is what that backend's option will implement.
 ---
 
 ## T7
@@ -625,6 +631,8 @@ destructive change.
 
 
 **RULED (owner, 2026-07-24): refresh, and route a downgrade through the guard.** Changing a `channel` refreshes in place where the backend supports it (`snap refresh --channel=`), and the downgrade case (`edge → stable`) goes through the plan and the guard like any destructive change, because a downgrade is removal-shaped.
+
+**RULED, NOT YET BUILT (2026-07-24).** Refresh where the backend supports it; route a channel downgrade through the plan and guard. Queued rather than built: it needs the planner to detect a *channel change* (query the installed channel, compare to the declared one — the planner currently checks version, not channel) AND a notion of channel ordering to tell a downgrade from an upgrade, both of which touch the change-detection core. Deferred to avoid a risky half-change there; the ruling is settled for when it is built.
 ---
 
 ## D14
