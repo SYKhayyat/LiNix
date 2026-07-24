@@ -13,6 +13,7 @@ pub mod layout;
 pub mod modules;
 pub mod priority;
 pub mod profiles;
+pub mod rehearsal;
 pub mod resolve;
 pub mod bootstrap;
 pub mod dotfiles;

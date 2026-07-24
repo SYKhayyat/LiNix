@@ -490,6 +490,20 @@ pub enum Commands {
         to: Option<String>,
     },
 
+    /// Rehearse this config on a clean machine in a container, and touch nothing on this one.
+    ///
+    /// Answers what `plan` cannot: would this config work somewhere that is not your laptop?
+    /// A plan is computed against what you already have installed, so a config that only works
+    /// because of something already here looks fine until it reaches the second machine.
+    ///
+    /// Reuses the integration images built from `docker/integration/`. Needs docker or podman;
+    /// with neither it refuses rather than rehearsing on this machine.
+    Try {
+        /// The image to rehearse on. Defaults to the ubuntu/apt one.
+        #[arg(long)]
+        image: Option<String>,
+    },
+
     /// Print the resolved desired state as JSON: every `when` decided, every bare name given a
     /// backend, every variable substituted.
     ///

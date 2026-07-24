@@ -181,6 +181,7 @@ async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Rollback { reference } => handle_rollback(app, reference).await,
         Commands::Diff { from, to } => handle_diff(app, from, to.as_deref()).await,
         Commands::Eval => handle_eval(app).await,
+        Commands::Try { image } => handle_try(app, image.as_deref()).await,
         Commands::Git(args) => handle_git(app, &args.command).await,
         Commands::Repo(args) => handle_repo(app, &args.command).await,
         Commands::Search {
@@ -368,7 +369,7 @@ fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::PathBuf> {
 const READ_ONLY_COMMANDS: &[&str] = &[
     "plan", "status", "check", "list", "search", "doctor", "diff", "unmanaged", "absent",
     "vars", "export", "sbom", "insight", "why", "info", "show", "audit", "outdated",
-    "history", "log", "completions", "help", "locate", "metrics", "verify", "eval",
+    "history", "log", "completions", "help", "locate", "metrics", "verify", "eval", "try",
 ];
 
 /// Take the lock for a mutating command. The command is read from argv rather than matched
@@ -3845,6 +3846,68 @@ fn referenced_variable_names(config_root: &std::path::Path) -> std::collections:
 /// keeps OFF this machine, and where each rule is written. Read-only.
 /// `vars` (Part IX, W12): the variables resolved on this machine, so a `when $name` block that
 /// does not fire can be debugged by seeing the value the machine actually derived.
+/// `linix try` — rehearse this config on a clean machine (7h/U12).
+///
+/// Read-only on the host by construction: the config is mounted `:ro`, the container's LiNix
+/// data lives in the container, and nothing here is consulted except the config's path. It is
+/// therefore in `READ_ONLY_COMMANDS` and takes no data lock — a rehearsal has no business
+/// blocking a real sync.
+async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
+    use linix::model::rehearsal::{self, Verdict};
+
+    let present = |cmd: &str| app.executor.command_exists_sync(cmd);
+    let Some(runtime) = rehearsal::pick_runtime(&present) else {
+        return Err(linix::core::Error::Refused(rehearsal::no_runtime_refusal()).into());
+    };
+
+    let image = image.unwrap_or(rehearsal::DEFAULT_IMAGE);
+
+    // Asked BEFORE the run: an image that is not there is the ordinary first-run case, and
+    // `docker run` reports it as a pull failure — which reads as "your config is broken" when
+    // the config has not been looked at yet.
+    if !image_exists(app, runtime, image).await {
+        return Err(
+            linix::core::Error::Refused(rehearsal::missing_image_refusal(runtime, image)).into(),
+        );
+    }
+
+    let root = app.config.config_root();
+    let config_path = root.to_string_lossy().to_string();
+
+    info!("rehearsing on `{}` via {}...", image, runtime);
+    let argv = rehearsal::argv(runtime, image, &config_path);
+    let (program, args) = argv.split_first().expect("an argv is never empty");
+
+    let status = tokio::process::Command::new(program)
+        .args(args)
+        .status()
+        .await
+        .map_err(|e| linix::core::Error::Other(format!("could not run `{}`: {}", runtime, e)))?;
+
+    match rehearsal::verdict(status.code()) {
+        Verdict::Valid => {
+            info!("the config resolves on a clean {} machine.", image);
+            Ok(())
+        }
+        // The container already printed why on its own stderr; repeating it here would be
+        // two accounts of one failure.
+        Verdict::Rejected(_) => Err(linix::core::Error::Refused(format!(
+            "this config did not survive a clean {} machine — the rehearsal's output above says \
+             why. Nothing on this machine was touched.",
+            image
+        ))
+        .into()),
+    }
+}
+
+/// Whether the runtime has this image locally.
+async fn image_exists(app: &App, runtime: &str, image: &str) -> bool {
+    app.executor
+        .run_output(runtime, &["image", "inspect", image], false)
+        .await
+        .is_ok()
+}
+
 /// `linix eval` — the resolved configuration, as JSON (U17).
 ///
 /// Deliberately *only* a resolution: no lock is taken (it is in `READ_ONLY_COMMANDS`), no
