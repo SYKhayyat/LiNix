@@ -716,16 +716,28 @@ impl App {
     /// did refresh went unmentioned. Each failure is named and the command still reports
     /// one, because a refresh that half-happened is not a refresh that worked.
     pub async fn update(&self) -> Result<()> {
+        use futures::stream::{self, StreamExt};
         info!("refreshing package metadata");
-        let mut failed: Vec<String> = Vec::new();
-        for backend in self.registry.available() {
-            if let Some(upgradable) = backend.as_upgradable() {
-                if let Err(e) = upgradable.update(backend.sudo_for_write()).await {
-                    warn!("{}: could not refresh — {}", backend.name(), e);
-                    failed.push(format!("{} ({})", backend.name(), e));
+        // Each backend's refresh is an independent network fetch (`apt update`, `brew update`,
+        // …) — seconds of waiting with nothing shared between them. Overlap the waits, capped
+        // at `max_parallel`. Unlike `upgrade`, this changes no package, so concurrent runs
+        // cannot contend on a package database.
+        let cap = self.config.max_parallel.max(1);
+        let failed: Vec<String> = stream::iter(self.registry.available())
+            .map(|backend| async move {
+                let upgradable = backend.as_upgradable()?;
+                match upgradable.update(backend.sudo_for_write()).await {
+                    Ok(()) => None,
+                    Err(e) => {
+                        warn!("{}: could not refresh — {}", backend.name(), e);
+                        Some(format!("{} ({})", backend.name(), e))
+                    }
                 }
-            }
-        }
+            })
+            .buffer_unordered(cap)
+            .filter_map(|x| async move { x })
+            .collect()
+            .await;
         if failed.is_empty() {
             return Ok(());
         }
