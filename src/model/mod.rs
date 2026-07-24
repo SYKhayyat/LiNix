@@ -18,6 +18,7 @@ pub mod bootstrap;
 pub mod dotfiles;
 pub mod exec;
 pub mod firewall;
+pub mod health;
 pub mod schedule;
 pub mod scope;
 pub mod script;

@@ -810,6 +810,11 @@ upgrade break this*, and a machine-wide `health` list in `preferences.toml` catc
 package cannot see — the boot, the network, the thing two packages away. They are not
 alternatives and share one revert path.
 
+**BUILT, 2026-07-24 (7f).** `@health=` is a package option key and a `health = [...]` list is a
+`preferences.toml` key. Both are collected in one place and share one revert path. A declared
+check with no snapshot provider refuses **before** the change (V.65). `@check=`, an unreachable
+branch reading an option key the grammar never accepted, was deleted in the same commit.
+
 ---
 
 ## U8
@@ -945,6 +950,11 @@ run — the repo's because every machine should, this machine's because it is th
 precedence rule would mean adding a local notification silently disables the shared policy, which
 is the quiet failure this model exists to avoid.
 
+**BUILT, 2026-07-24 (7j).** Both locations: `hooks/<event>` in the config repo and
+`[hooks.<event>]` in `preferences.toml`. Both fire, repo first, with separate ledger identities
+so approving the shared policy never rubber-stamps the local file. Events are `after_sync`,
+`on_drift`, `on_guard_refusal`; a failing hook warns and does not fail the sync.
+
 ---
 
 ## U16
@@ -974,6 +984,10 @@ carry, and this is the one output that will acquire consumers LiNix cannot see.
 **RULED (owner, 2026-07-24): yes.** `linix eval` carries a top-level schema version from its
 first release. It is the one output that will acquire consumers LiNix cannot see, and P2 leaves
 no legacy to carry — so the version is free now and impossible later.
+
+**BUILT, 2026-07-24 (7k).** `linix eval` prints the resolved state as JSON with a top-level
+`schema`. It takes no lock and touches no backend. Sources are repo-relative with forward
+slashes so two machines' evaluations diff cleanly.
 
 ---
 

@@ -159,17 +159,34 @@ impl<'a> SyncEngine<'a> {
             return Err(e);
         }
 
+        // 7f: a declared health check with no way to revert is refused here, before the first
+        // package is touched — the only moment the answer is still actionable.
+        if let Err(e) = self.require_revert_path(&changes) {
+            events.fire_refusal(&e, scope).await;
+            return Err(e);
+        }
+
         // The pre-sync snapshot is a safety NET, not a precondition: a Windows System
         // Restore checkpoint needs admin (and System Restore enabled), and btrfs/timeshift
         // may be unavailable — none of which should abort a package sync. Policies that
         // TRULY require a snapshot gate on `has_provider()` upstream; here we warn and
         // proceed so a missing restore point never blocks the actual work.
-        if let Err(e) = self.snapshot_manager.auto_snapshot(crate::core::snapshot::SnapshotLabel::PreSync).await {
-            warn!(
-                "pre-sync safety snapshot unavailable ({}); proceeding without a restore point.",
-                e
-            );
-        }
+        // Kept: a failing health check restores exactly this snapshot (7f), so the id has to
+        // outlive the call that took it.
+        let restore_point = match self
+            .snapshot_manager
+            .auto_snapshot(crate::core::snapshot::SnapshotLabel::PreSync)
+            .await
+        {
+            Ok(snap) => snap.map(|s| s.id),
+            Err(e) => {
+                warn!(
+                    "pre-sync safety snapshot unavailable ({}); proceeding without a restore point.",
+                    e
+                );
+                None
+            }
+        };
 
         let result = {
             let mut state_guard = self.state.lock().await;
@@ -214,7 +231,7 @@ impl<'a> SyncEngine<'a> {
             // Post-apply health probes: verify any freshly-installed package that declared
             // `@check=…` actually works, so a green install that left a broken service is
             // surfaced immediately (with the pre-sync snapshot available to revert).
-            self.run_health_probes(&changes).await;
+            self.verify_health(&changes, restore_point.as_deref()).await;
 
             // The manifest history is git now (the generation format was deleted): the commit
             // that records this change is made by `git_autocommit` in `perform_maintenance`,
@@ -228,60 +245,116 @@ impl<'a> SyncEngine<'a> {
         result
     }
 
-    /// Run the `@check=…` post-install probe for every freshly-installed package that declared
-    /// one. Probes are advisory: a failure is reported loudly (and points at the snapshot for
-    /// recovery) but does not itself undo the commit — the safety snapshot already exists, and
-    /// `--canary`/`rollback` are the explicit auto-revert paths.
-    async fn run_health_probes(&self, changes: &SyncChanges) {
-        let mut probes: Vec<(String, String)> = Vec::new();
+    /// Every health check this change is subject to (XIII.5, U7): the `@health=` on each line
+    /// being installed, **and** the machine-wide list in `preferences.toml`.
+    ///
+    /// **Both, from one place.** U7 ruled they are not alternatives, so the code that decides
+    /// whether the machine is healthy must never be able to consult one and forget the other —
+    /// which is what two collection sites would eventually mean.
+    fn declared_health_checks(&self, changes: &SyncChanges) -> Vec<crate::model::health::Check> {
+        use crate::model::health::{Check, Probe};
+
+        let mut checks = Vec::new();
         for w in changes.graph.node_weights() {
             if let GraphAction::Install(spec) = w {
-                if let Some(check) = spec.options.get("check") {
-                    probes.push((format!("{}:{}", spec.backend, spec.name), check.clone()));
+                if let Some(probe) = spec.options.get("health").and_then(|s| Probe::parse(s)) {
+                    checks.push(Check {
+                        subject: format!("{}:{}", spec.backend, spec.name),
+                        probe,
+                    });
                 }
             }
         }
-        if probes.is_empty() {
-            return;
-        }
-        info!(
-            "running {} post-install health probe(s)...",
-            probes.len()
-        );
-        let mut failed = Vec::new();
-        for (pkg, check) in &probes {
-            if Self::probe_ok(check).await {
-                info!("  probe OK   {} ({})", pkg, check);
-            } else {
-                warn!("  probe FAIL {} ({})", pkg, check);
-                failed.push(pkg.clone());
+        // The machine-wide half: the boot, the network, the thing two packages away. Declared
+        // once and checked after every change, because that is what "is the machine still
+        // working" means.
+        for written in &self.config.health {
+            if let Some(probe) = Probe::parse(written) {
+                checks.push(Check {
+                    subject: "preferences.toml".to_string(),
+                    probe,
+                });
             }
         }
-        if !failed.is_empty() {
-            warn!(
-                "{} package(s) failed their @check probe: {}.",
-                failed.len(),
-                failed.join(", ")
-            );
-            if self.snapshot_manager.has_provider() {
-                warn!("A pre-sync snapshot exists — `linix undo` / `linix rollback` can revert if needed.");
+        checks
+    }
+
+    /// Refuse, **before anything is installed**, when health checks are declared and nothing
+    /// could revert them (7f).
+    ///
+    /// A health check that cannot revert reports the breakage and leaves it in place — strictly
+    /// worse than not checking, because you are told the machine is broken and given no way
+    /// back. The only moment that fact is actionable is before the change.
+    fn require_revert_path(&self, changes: &SyncChanges) -> Result<()> {
+        match crate::model::health::refusal_if_unrevertable(
+            &self.declared_health_checks(changes),
+            self.snapshot_manager.has_provider(),
+            self.config.dry_run,
+        ) {
+            Some(refusal) => Err(Error::Refused(refusal)),
+            None => Ok(()),
+        }
+    }
+
+    /// Run the declared checks and act on the result: healthy, or restore the snapshot this
+    /// sync took before it started.
+    ///
+    /// One revert path for both kinds of check (U7). The machine does not care whether it was
+    /// a package's own probe or the machine-wide one that noticed — a broken nginx and a broken
+    /// boot both mean go back.
+    async fn verify_health(&self, changes: &SyncChanges, snapshot: Option<&str>) {
+        use crate::model::health::{self, Outcome};
+
+        let checks = self.declared_health_checks(changes);
+        if checks.is_empty() {
+            return;
+        }
+        info!("running {} health check(s)...", checks.len());
+
+        let mut failed = Vec::new();
+        for check in &checks {
+            if Self::probe_ok(&check.probe).await {
+                info!("  OK   {} ({})", check.subject, check.probe);
+            } else {
+                warn!("  FAIL {} ({})", check.subject, check.probe);
+                failed.push(format!("{} ({})", check.subject, check.probe));
+            }
+        }
+
+        match Outcome::of(failed, snapshot) {
+            Outcome::Healthy => debug!("every health check passed."),
+            Outcome::Revert { failed, snapshot } => {
+                warn!("{}", health::reverted_message(&failed, &snapshot));
+                if let Err(e) = self.snapshot_manager.restore(&snapshot).await {
+                    // The revert itself failing is the worst outcome here, so it is reported
+                    // as exactly that rather than folded into the health failure above.
+                    error!(
+                        "restoring {} FAILED: {}. The machine is in the state the change left \
+                         it, and the health check that failed is still failing.",
+                        snapshot, e
+                    );
+                } else {
+                    info!("restored {}.", snapshot);
+                }
+            }
+            // Only reachable on a dry run, or if the provider vanished between the pre-flight
+            // check and here — `require_revert_path` refuses this case before anything runs.
+            Outcome::FailedWithoutRevert { failed } => {
+                warn!("{}", health::not_reverted_message(&failed))
             }
         }
     }
 
-    /// Evaluate one probe spec. `port:<n>` succeeds if a TCP connection to localhost:n opens;
-    /// `cmd:<shell>` (or a bare string) succeeds if the shell command exits 0.
-    async fn probe_ok(check: &str) -> bool {
-        if let Some(port) = check.strip_prefix("port:") {
-            return match port.trim().parse::<u16>() {
-                Ok(p) => tokio::net::TcpStream::connect(("127.0.0.1", p))
-                    .await
-                    .is_ok(),
-                Err(_) => false,
-            };
+    /// Evaluate one probe. `Port` succeeds if a TCP connection to localhost opens; `Command`
+    /// succeeds if the shell command exits 0.
+    async fn probe_ok(probe: &crate::model::health::Probe) -> bool {
+        use crate::model::health::Probe;
+        match probe {
+            Probe::Port(p) => tokio::net::TcpStream::connect(("127.0.0.1", *p))
+                .await
+                .is_ok(),
+            Probe::Command(cmd) => crate::app::bisect::run_test(cmd).await,
         }
-        let cmd = check.strip_prefix("cmd:").unwrap_or(check);
-        crate::app::bisect::run_test(cmd).await
     }
 
     /// Apply snapshot retention after a successful sync. (The manifest history is git now —

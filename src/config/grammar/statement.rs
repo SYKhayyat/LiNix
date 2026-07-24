@@ -925,7 +925,7 @@ fn validate_extra_options(
 /// `absent:` only, and "not an option" would be the wrong error for a key that exists.
 const PACKAGE_OPTION_KEYS: &[&str] = &[
     "version", "hold", "expires", "until", "requires", "sha256", "formats", "asset", "bin",
-    "channel", "allow_http", "unverified",
+    "channel", "allow_http", "unverified", "health",
 ];
 
 /// Options that are only meaningful on a backend that resolves one name to several
@@ -1104,6 +1104,22 @@ fn validate_options(origin: &Origin, decl: &PackageDecl, absent: bool) -> Result
         return Err(err);
     }
 
+    // A health check decides whether the machine is rolled back (XIII.5), so a line whose
+    // check cannot be understood must not parse. `@health=port:donkey` that read as a shell
+    // command would be a probe that fails every time and reverts every sync.
+    if let Some(written) = o.one("health") {
+        if crate::model::health::Probe::parse(written).is_none() {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`@health={}` is not a check", written),
+            )
+            .with_hint(
+                "a health check is `port:8080` — something must be listening — or a command \
+                 that exits 0, written plainly or as `cmd:systemctl is-active nginx`.",
+            ));
+        }
+    }
+
     // `@hold` says "never upgrade this"; `@version=` says "this exact version". Together
     // they are a contradiction, not a refinement: hold means whatever is installed, and
     // version means something specific that may not be it.
@@ -1213,6 +1229,27 @@ mod tests {
         };
         assert_eq!(d.backend, None);
         assert_eq!(d.selector, Selector::Name("ripgrep".into()));
+    }
+
+    /// A health check decides whether the machine is rolled back, so a line whose check
+    /// cannot be understood must not parse (XIII.5). `@health=port:donkey` reading as a shell
+    /// command would be a probe that fails every time — and therefore reverts every sync.
+    #[test]
+    fn a_health_check_that_is_not_a_check_is_refused() {
+        let err = p("apt:nginx@health=port:donkey").unwrap_err();
+        assert!(err.to_string().contains("is not a check"), "{}", err);
+        assert!(p("apt:nginx@health=").is_err());
+    }
+
+    #[test]
+    fn both_shapes_of_health_check_parse() {
+        for line in [
+            "apt:nginx@health=port:80",
+            "apt:nginx@health=systemctl is-active nginx",
+            "apt:nginx@health=cmd:true",
+        ] {
+            assert!(p(line).is_ok(), "`{}` should parse", line);
+        }
     }
 
     /// The `Candidates` of a line that parses, for the chain tests.

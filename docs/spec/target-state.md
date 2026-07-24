@@ -153,6 +153,23 @@ stands in for the other: `apt` is a `family == debian` fact, not a `linux` one.
 | `sha256` | checksum the resolved artifact must match. Not with `@asset=all` — one hash cannot verify several files |
 | `allow_http` | bare flag: this URL may be `http://`. Downloading backends only (SEC2) |
 | `unverified` | bare flag: no `@sha256` required on this line. Downloading backends only. **Never implied by `allow_http`** — over HTTP the checksum is the only thing left (SEC2) |
+| `health` | `port:N`, or a command that must exit 0. A failure **restores the pre-change snapshot** (XIII.5) |
+
+### Health checks (XIII.5, U7)
+
+**Two scopes, one revert path.** `@health=` on a line answers *did this upgrade break this*.
+A `health = [...]` list in `preferences.toml` answers *is the machine still working* — the
+boot, the network, the thing two packages away, which no package can see. **They are not
+alternatives**: both run after a change, and a failure of either restores the snapshot the
+sync took before it started.
+
+**Declared health checks with no snapshot provider are refused before the change starts** —
+not after, when the upgrade has already happened and the check can only confirm the damage.
+
+```
+apt:nginx@health=port:80          the port must answer after this installs
+apt:nginx@health=systemctl is-active nginx
+```
 
 ### Artifact selection (V.48)
 

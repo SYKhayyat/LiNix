@@ -229,6 +229,15 @@ pub struct Config {
     #[serde(default)]
     pub hooks: HashMap<String, HashMap<String, String>>,
 
+    /// Machine-wide health checks (XIII.5, U7): `health = ["port:22", "systemctl is-system-running"]`.
+    ///
+    /// The half a package cannot see — the boot, the network, the thing two packages away.
+    /// `@health=` on a line answers *did this upgrade break this*; these answer *is the machine
+    /// still working*. Not alternatives: both run after a change, and both revert through the
+    /// same path.
+    #[serde(default)]
+    pub health: Vec<String>,
+
     /// How long to retain each of LiNix's histories —
     /// generations, and filesystem snapshots — each configured independently. See
     /// [`crate::core::RetentionConfig`]. Empty/zero policies keep everything (default).
@@ -498,6 +507,7 @@ impl Default for Config {
             data_root: default_data_root(),
             preferences_file: default_config_root().join(PREFERENCES_FILE_NAME),
             hooks: HashMap::new(),
+            health: Vec::new(),
             retention: crate::core::RetentionConfig::default(),
             fleet_hosts: Vec::new(),
             show_progress: true,

@@ -904,3 +904,26 @@ line and a real error on failure. The point is not that a recovery may never del
 
 ---
 
+**V.65 — Why a health check that cannot revert is refused, rather than run.** *(Owner ruling
+2026-07-24, U7.)*
+
+A health check exists to answer one question: *did this change break the machine?* The answer
+is only worth having because of what follows it — going back. A check that runs on a machine
+with no snapshot provider still answers the question, and then does nothing: it reports that
+the machine is broken and leaves it broken.
+
+That is **strictly worse than not checking at all.** Not checking leaves you with a machine in
+an unknown state. Checking-without-reverting leaves you with a machine in a known-bad state,
+having spent the one moment when the situation was still recoverable on producing a message.
+
+So the absence of a revert path is decided **before the first package is touched**, where it is
+still actionable, and not afterwards, where it is only a description of the damage. The refusal
+names the checks and the missing provider, because the two fixes — set up snapshots, or drop
+the checks — are both the reader's to make and neither is guessable from "health check failed".
+
+**The same argument makes the two scopes one path.** `@health=` on a line and the machine-wide
+`health` list answer different questions, but a broken nginx and a broken boot mean the same
+thing to the machine: go back. Giving them separate revert paths would mean maintaining two
+answers to a question that has one.
+
+---
