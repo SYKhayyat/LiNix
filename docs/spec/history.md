@@ -24,14 +24,35 @@ permitted ("a convenience verb must route through `handle_sync`, never its own t
 the code is right and only the R2 entry's "deleted / grep silent" line is stale. No second
 transaction engine exists; `core/transaction.rs` is the only one.
 
-**Read-path fan-out is concurrent now (performance).** `App::list`, `get_info` and
-`installed_but_unmanaged` queried every backend one after another — each a separate process
-(`apt list`, `cargo install --list`, …) with nothing to share — so `linix list` on a machine
-with a dozen managers paid a dozen sequential spawns. They now fan out through one
-`query_backends_concurrently` helper, bounded by `max_parallel`, results kept in registry order.
-`get_info` no longer waits on every backend that lacks the package before reaching the one that
-has it. One helper, so the three cannot drift in how they bound concurrency or handle a
-backend's failure (dropped, as before). Covered by `list_aggregates_every_backend_that_answers`.
+**Performance: the hot paths fan out now, and they were validated on real package managers.**
+
+- **Read fan-out.** `App::list`, `get_info` and `installed_but_unmanaged` queried every backend
+  one after another — each a separate process (`apt list`, `cargo install --list`, …). They now
+  go through one `query_backends_concurrently` helper, bounded by `max_parallel`, results in
+  registry order. `get_info` no longer waits on every backend that lacks the package.
+- **The planner.** `identify_needed_actions` checked "is this installed?" one declared package
+  at a time — the dominant cost of `sync`/`status`/`plan` on a large config. It overlaps those
+  waits with `buffer_unordered` now; the per-spec decision is extracted unchanged into
+  `spec_is_missing`. Plan OUTPUT is sorted now, so the same change set prints identically each
+  run (it was HashMap-ordered, i.e. non-deterministic, before).
+- **`update`.** Metadata refresh fans out too. `upgrade` is deliberately left serial: it changes
+  packages, so concurrent sudo operations would interleave, and it is dominated by real work.
+
+`buffer_unordered` borrows `&self`, so the fan-out stays on one task — no spawn, no `'static` —
+which is all that is needed because the time is spent waiting on child processes. Covered by
+`list_aggregates_every_backend_that_answers` and `the_report_is_sorted_for_a_stable_plan`.
+
+**Real-world, run for real via Docker in WSL (memory: [[docker-in-wsl]]):** ubuntu (apt) **PASS**
+— 271 hard checks, 0 fail; fedora (dnf) **PASS** — 279 hard checks, 0 fail, 9 real backend
+lifecycles; arch (pacman) and alpine (apk) running. These are the fast half of IV.2's matrix, the
+set CI runs on every push, and the concurrency changes above are built into the binary they test
+— so they are exercised against real `apt`/`dnf`/`pacman`/`apk`, not only mocks.
+
+**Reliability audit.** The resolver, config parser, edit path and the untrusted-URL download
+backends (`web`/`appimage`/`github`) carry **zero `.unwrap()`/`panic!`/`unreachable!` in
+non-test code** — a malformed config or a hostile release is a clean error, never a crash. Three
+user-facing messages that printed a run of spaces mid-sentence (collapsed line continuations, one
+from this session's own T5 work) were fixed.
 
 ## Session 2026-07-23 (sixteenth session) — building, starting with VI.0
 
