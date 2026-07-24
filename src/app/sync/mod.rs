@@ -181,6 +181,9 @@ impl<'a> SyncEngine<'a> {
             let mut state_guard = self.state.lock().await;
             self.execute_transaction(&changes, &mut state_guard).await
         };
+        // Set below, once the transaction has succeeded and the out-of-tree modules have been
+        // rebuilt. Declared here so it survives the block.
+        let mut kernel_outcome: Result<()> = Ok(());
 
         if result.is_ok() {
             debug!("Finalizing transaction state and persistence.");
@@ -220,6 +223,15 @@ impl<'a> SyncEngine<'a> {
             // Post-apply health probes: verify any freshly-installed package that declared
             // `@check=…` actually works, so a green install that left a broken service is
             // surfaced immediately (with the pre-sync snapshot available to revert).
+            // XIII.1: before the health checks, because a machine whose graphics driver did not
+            // rebuild is not healthy in any sense a `@health=` probe would notice — and both
+            // are still recoverable at this point, which is the property that ends at reboot.
+            // Kept, not logged and dropped: 7g says a module that will not build **fails
+            // loudly**, and a message on stderr under an exit code of 0 is not loud — a script
+            // that checks the exit code would carry on to the reboot that makes it permanent.
+            // The packages themselves are already installed and stay so: the kernel IS on the
+            // machine, and reporting otherwise would be the lie.
+            kernel_outcome = self.rebuild_kernel_modules(&changes).await;
             self.verify_health(&changes, restore_point.as_deref()).await;
 
             // The manifest history is git now (the generation format was deleted): the commit
@@ -231,7 +243,85 @@ impl<'a> SyncEngine<'a> {
             let _ = j.cleanup();
         }
 
-        result
+        // The transaction's own failure comes first: it is the more fundamental one, and a
+        // kernel-module failure is only reachable when the transaction succeeded anyway.
+        result.and(kernel_outcome)
+    }
+
+    /// Rebuild the out-of-tree kernel modules, when this sync changed a kernel (XIII.1).
+    ///
+    /// **LiNix builds nothing.** DKMS is already on the machine and already knows how to build
+    /// a module; what LiNix contributes is the fact DKMS cannot know — that the kernel just
+    /// changed, under a manager whose hook does not cover it. The distribution's own DKMS hook
+    /// fires for the distribution's own package manager, and LiNix's premise is several at once.
+    ///
+    /// **It runs before the reboot and fails loudly**, because that is the whole value: a
+    /// module that will not build is recoverable while the running kernel still has it, and
+    /// after a reboot it is a machine with no graphics driver or no network.
+    async fn rebuild_kernel_modules(&self, changes: &SyncChanges) -> Result<()> {
+        use crate::model::kernel;
+
+        // Linux only, and only when a kernel actually changed. Both are cheap enough to check
+        // that this costs nothing on the runs — nearly all of them — where neither holds.
+        if !cfg!(target_os = "linux") || self.config.dry_run {
+            return Ok(());
+        }
+        let names: Vec<String> = changes
+            .graph
+            .node_weights()
+            .map(|w| match w {
+                GraphAction::Install(spec) => spec.name.clone(),
+                GraphAction::Remove { name, .. } => name.clone(),
+            })
+            .collect();
+        let kernels = kernel::kernels_in(names.iter().map(String::as_str));
+        if kernels.is_empty() {
+            return Ok(());
+        }
+        if !self.executor.command_exists_sync("dkms") {
+            debug!("a kernel changed and this machine has no dkms — nothing to rebuild.");
+            return Ok(());
+        }
+
+        info!(
+            "a kernel package changed ({}) — rebuilding out-of-tree modules.",
+            kernels.join(", ")
+        );
+        // `autoinstall` is DKMS's own "build whatever needs building for the kernels that are
+        // installed". Driving it beats enumerating modules and calling `dkms install` per
+        // module: DKMS knows which kernels are present and which modules target them, and a
+        // second implementation of that would be wrong the first time a distribution changed.
+        let built = self.executor.run("dkms", &["autoinstall"], true).await;
+
+        // Read either way. `autoinstall`'s exit code says something went wrong; `status` says
+        // which module, which is what a reader can act on — and a zero exit with a module left
+        // at `built` is a case the exit code alone would call success.
+        let status = self
+            .executor
+            .run_output("dkms", &["status"], false)
+            .await
+            .unwrap_or_default();
+        let stuck = kernel::not_installed(&status);
+
+        if stuck.is_empty() {
+            match built {
+                Ok(_) => {
+                    debug!("every out-of-tree module is installed.");
+                    Ok(())
+                }
+                // Nothing is stuck, so whatever autoinstall complained about did not leave a
+                // module unbuilt. Worth saying, not worth failing a converged sync over.
+                Err(e) => {
+                    warn!("`dkms autoinstall` reported an error ({}), but every module it holds is installed.", e);
+                    Ok(())
+                }
+            }
+        } else {
+            Err(Error::Other(kernel::failed_to_build(
+                &stuck,
+                &kernels.join(", "),
+            )))
+        }
     }
 
     /// Every health check this change is subject to (XIII.5, U7): the `@health=` on each line

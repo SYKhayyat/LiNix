@@ -1157,7 +1157,10 @@ refuses before the change (V.65). The dead `@check=` branch was deleted with it.
 fails restores the snapshot, and says so in those words; with no snapshot provider it fails
 loudly and says it cannot revert, before it starts.
 
-**7g — The kernel/DKMS rebuild (XIII.1).** **Exit:** a sync that changes a kernel package
+**7g — The kernel/DKMS rebuild (XIII.1). BUILT 2026-07-24, pending verification on a machine
+with real DKMS modules.** A sync that changes a kernel-shaped package runs `dkms autoinstall`
+and fails when a module is left short of `installed`. LiNix builds nothing — it drives DKMS,
+which the distribution's own hook only fires for the distribution's own manager. **Exit:** a sync that changes a kernel package
 rebuilds the declared out-of-tree modules and fails loudly on a module that will not build —
 before the reboot.
 
