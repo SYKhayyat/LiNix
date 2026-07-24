@@ -186,7 +186,7 @@ software (it is not software, so probably not). Recorded as **D3b, open**, not a
 
 ## D5
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **In the tree today:** Not reachable: `github.rs:225` says a `.deb` *"would have to be handed to `dpkg`"* — the backend does not install one today, which is why this is still askable.
 
@@ -198,11 +198,13 @@ call. **This is the "two of everything" failure at the package level**, and `pur
 that backend owns removal; `check` must not double-count. Needs a real test against a real apt
 box, not a mock.
 
+
+**RULED (owner, 2026-07-24): the installing backend owns it.** When `github:`/`web:` installs a file (a `.deb` handed to `dpkg`, etc.), the lock records which backend installed it, and that backend owns removal, upgrade and dedup — `check` does not report it twice, and `purge-unmanaged` defers to the recorded installer. This is the existing per-backend ownership (every managed package carries its backend); the `github:`-installs-a-`.deb` capability itself is separate and unbuilt, but the ownership rule is settled for when it lands.
 ---
 
 ## K2
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **In the tree today:** Nothing in `app/rebuild.rs` requires a scope.
 
@@ -210,6 +212,8 @@ box, not a mock.
 default for a command whose failure mode is an unbootable machine. *Recommendation:* require a
 scope; a bare `rebuild` errors and lists the forms.
 
+
+**RULED (owner, 2026-07-24): warns, then rebuilds all.** A bare `linix rebuild` does NOT refuse — it rebuilds every declared package, but WARNS loudly first, because the failure mode is software missing from a machine and `--all` is a large thing to reach by pressing enter. The warning is the safeguard the built-to-recommendation used a refusal for; the owner chose warn-and-proceed. The old `bail` is replaced.
 ---
 
 ## K4
@@ -347,7 +351,7 @@ and the safety story afterwards is how supply-chain incidents are written.**
 
 ## U19
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U19 — Is LiNix acting for a user or for the machine?** Today: implicitly, whoever ran the
 command — which the Linux backends mostly agree with by accident, and which the Windows registry
@@ -400,6 +404,8 @@ that looks like a decision and behaves as if nobody made one.
 `@scope=system`, and macOS `defaults` inherits the same convention — which is what the entry
 said had to be settled before the first adapter was written.
 
+
+**RULED (owner, 2026-07-24): explicit per-line scope, default user.** Option (c): `@scope=user|system` on the statements where it can vary (`setting:`, `link:`, `shim:`), which is already built. The owner asked for a concrete default, and it is **user** — `Scope::resolve(written, Scope::User)`: an unspecified scope is per-user (HKCU, gsettings, `~/.local/bin`), and machine-wide (HKLM, `/etc`) requires writing `@scope=system`. Least privilege: changing every account's state is the deliberate case.
 ---
 
 ## U22
@@ -650,7 +656,7 @@ reason to invite the problem.
 
 ## K6
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **In the tree today:** No group syntax anywhere in `src/`.
 
@@ -659,6 +665,8 @@ would make one line install a desktop. It also means `backend:name` has a third 
 backends and not others, which is the kind of unification VIII.1 refused. *Recommendation:* no
 for now; a `when family` block listing each distro's name is explicit, works today, and reads.
 
+
+**RULED (owner, 2026-07-24): no.** LiNix does not learn per-backend group syntax (`@kde-desktop`, `pacman -S plasma`). It would give `backend:name` a third meaning on some backends and not others — the unification VIII.1 refused. A `when family` block naming each distro's package is explicit, works today, and reads. Not building.
 ---
 
 ## K12
@@ -782,7 +790,7 @@ must not be read as "the answer is none".
 
 ## U4
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U4 — Is `exec:` a licence to put a shell script where a backend belongs?** The onboarder is
 the better answer for anything that installs software, and `exec:` should not become the way
@@ -790,6 +798,8 @@ people avoid writing eight lines of TOML. *Recommendation:* document the boundar
 readme, and treat repeated `exec:` lines that install things as a sign the onboarder needs a
 missing field (U2), not as usage to encourage.
 
+
+**RULED (owner, 2026-07-24): document the boundary.** `exec:` is for actions with no inverse, not for installing software — an `exec:` that installs is a one-way door (deleting the line does not undo it). The onboarder is the answer for anything installable: it gives a noun, which removes/lists/locks. The README's `exec:` section now says so and links the onboarder.
 ---
 
 ## U6
@@ -829,12 +839,14 @@ branch reading an option key the grammar never accepted, was deleted in the same
 
 ## U8
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U8 — Is the removal preview a flag or a verb?** *Recommendation:* a flag on the commands that
 already compute it. A new verb for an existing computation is how this repo got two of
 everything.
 
+
+**RULED (owner, 2026-07-24): a flag, not a verb.** The removal preview already exists as `check drift` and `--dry-run`; the decision is not to add back an `orphans`/`prune` verb. The stale "prune would remove" message was corrected to name `sync`.
 ---
 
 ## U10

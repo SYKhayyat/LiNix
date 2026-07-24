@@ -320,6 +320,15 @@ one-off migration. `exec:` declares a script the config carries:
 exec:./bin/enroll-tpm.sh
 ```
 
+**`exec:` is for actions with no inverse, not for installing software.** If you find yourself
+writing `exec:` lines that install a package — shelling out to some manager LiNix doesn't know —
+that is the sign to teach LiNix that manager instead: [a backend is six lines of
+TOML](#teaching-linix-a-package-manager-it-has-never-heard-of), and then LiNix can install,
+*remove*, list and lock it like any other. An `exec:` that installs something is a one-way door:
+deleting the line does not undo it, because a verb has no teardown. The onboarder gives you the
+noun, which does. Reach for `exec:` when there is genuinely nothing to declare — a side effect,
+not a resource.
+
 **It runs once per distinct content.** LiNix records the script's SHA-256 in `locks/exec.toml`
 with a count. The next sync sees the same content at its ceiling and does nothing; edit one byte
 and it is a different script, so it runs again. `@runs=3` raises the ceiling and

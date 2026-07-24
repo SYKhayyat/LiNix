@@ -702,8 +702,10 @@ async fn handle_rebuild(
     use linix::app::sync::guard::{self, GuardScope};
     use linix::core::transaction::GraphAction;
 
-    // K2: no default scope. The failure mode is declared software missing from a machine, and
-    // `--all` is not something to arrive at by pressing enter.
+    // K2 (ruled 2026-07-24): a bare `rebuild` WARNS and rebuilds everything, rather than
+    // refusing. The default is `--all`, but because the failure mode is software missing from a
+    // machine, arriving there by pressing enter is announced loudly first — the warning is the
+    // safeguard, not a refusal.
     let scope = match (packages.is_empty(), backend, all) {
         (_, Some(b), _) => Scope::Backend(b.to_string()),
         (_, None, true) => Scope::All,
@@ -716,12 +718,15 @@ async fn handle_rebuild(
                     .collect(),
             )
         }
-        (true, None, false) => anyhow::bail!(
-            "rebuild needs a scope — it removes software in order to put it back:\n\n\
-             \x20   linix rebuild fd ripgrep       one or more packages (`cargo:fd` picks a backend)\n\
-             \x20   linix rebuild --backend cargo  everything that backend declares\n\
-             \x20   linix rebuild --all            every declared package on this machine"
-        ),
+        (true, None, false) => {
+            warn!(
+                "rebuild with no scope rebuilds EVERY declared package on this machine — it \
+                 removes software in order to put it back. Proceeding with `--all`.\n  \
+                 Narrow it with `linix rebuild <pkg>` or `linix rebuild --backend <name>` if \
+                 that is not what you meant."
+            );
+            Scope::All
+        }
     };
 
     let resolver =

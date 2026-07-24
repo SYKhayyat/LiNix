@@ -11,9 +11,10 @@
 
 use crate::core::PackageSpec;
 
-/// What to rebuild. There is no default — K2: `--all` is a very large default for a command
-/// whose failure mode is software missing from a machine, so a bare `rebuild` names the forms
-/// instead of guessing one.
+/// What to rebuild. A bare `rebuild` defaults to `All` (K2, ruled 2026-07-24) — but the CLI
+/// warns loudly before it does, because the failure mode is software missing from a machine and
+/// `--all` is a large thing to reach by pressing enter. The warning is the safeguard the old
+/// "refuse and list the forms" design used a refusal for; the owner chose warn-and-proceed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
     Packages(Vec<Target>),
