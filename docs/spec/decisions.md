@@ -1019,7 +1019,7 @@ that, this feature ships two `ripgrep` binaries fighting over `$PATH` — the fa
 
 ## U20
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24 (build only if thin AND easy; deferred).**
 
 **U20 — Is a language server wanted, and is it allowed to be a second implementation?** *This is
 the whole question, not the feature.* *Recommendation:* wanted, but only as a thin front end
@@ -1027,6 +1027,8 @@ over the same parser and resolver the binary uses — the moment it re-implement
 becomes the second implementation this rewrite exists to end, and it will disagree with the
 first within a release. If it cannot be thin, do not build it.
 
+
+**RULED (owner, 2026-07-24): yes, but only if very easy — and it is not, yet.** A language server is a stdio JSON-RPC protocol server (document sync, diagnostic ranges, the LSP handshake); even diagnostics-only is a few hundred lines and a protocol, which is not "very easy" and not worth a half-implementation. **Deferred.** The editor-diagnostic hook it would provide already exists in a thinner form: `linix check config` prints `file:line: message` from the same parser the binary uses, which efm-langserver / null-ls / ALE consume directly. Its one limit is that it stops at the first error rather than collecting all — the natural first step if this is ever picked up, and cheaper than an LSP.
 ---
 
 ## U21
