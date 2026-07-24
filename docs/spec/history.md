@@ -46,6 +46,50 @@ entry still resolves; a dry run does none of it and leaves the journal wanting r
 declares it or is known to need it, and a capability with no caller is a second removal path
 with no test — which is the thing being removed here.
 
+### The ruled work, in the order the plan listed it
+
+**K13 — the unattended-refusal set is a `[guard]` list.** `NEVER_UNATTENDED` is deleted; the
+same two names ship as `never_unattended`'s default and a machine permits one by taking it out.
+The list is threaded into `schedule_config` rather than read inside the model, so it has one
+home and the check needs no config on disk to test.
+
+**D1 and K14 were already done, three days before the register said they were owed.** D1's
+"errors if both tag spellings exist" landed in `8a63c80` on 2026-07-20 with tests for both
+halves; K14's test is section 12 of the container harness, in the honest shape the entry asked
+for — a real package really removed and reinstalled, git asked directly for its commit count.
+**What K14 owes is a run, not a test**, and there is no container runtime here.
+
+**7a — a backend definition travels with the repo.** `custom_backends.toml` moved into the
+config repo and the machine-local path is deleted, not kept as a fallback. It inherits II.12
+rather than getting a trust model of its own: the file's hash is in `locks/hooks.toml`, `linix
+lock` approves it, and an unapproved or edited file registers nothing. Two choices worth naming:
+the check is at **load**, not at the sync gate, because a registered backend is reachable from
+`search` and `list` which no sync guards; and **one identity for the whole file**, because a
+per-definition identity would let an edit that *adds* a `[[backend]]` pass unnoticed, and adding
+one is the whole attack. XIII.12's `name`/`binary` split went through `ManagerConfig`, so every
+built-in is the `binary: None` case of one rule rather than a second rule.
+
+**K17 — a `setting:` adapter is a row, and `gsettings` is a row in it.** The enum is gone.
+User rows live in the same `custom_backends.toml`, so the adapter inherits 7a's approval instead
+of needing a second ledger entry for an identical question — one reader, one refusal message.
+
+**D2 — the classifier was checked against real releases, and the check found two live defects.**
+Both were the quiet kind the entry predicted. The code asked *does not contradict this machine*
+where the rule says *matched this machine*, so `MD5SUMS` — an actual asset of every rclone
+release — was an executable candidate on every platform. And the token matcher would not end a
+word on digits, so `jq-linux64` — an actual asset of jq's release — named no OS and was an
+executable candidate on Windows. The fixture is real filenames with hand-verified answers, so it
+is a check that can fail rather than an inspection that happened once.
+
+**T1, T2, T5 and T6's ruled half — and the defect none of them named.** The extras ledger keyed
+a `link:` by its **source**, so undoing a declaration deleted the file in the user's own dotfiles
+repo and left the deployed copy in place. **Found by reading the removal path, not by a test: no
+test called the undo at all.** Links key on their destination now. On top of that: removal
+restores the backup and deletes it, decrypt mode cannot reach a backup, a decrypted target inside
+the config repo is refused before the tool is launched, and the plaintext is restricted before it
+lands — on Windows by stripping inherited ACEs with `icacls`, which is the platform the ruling
+was written about and the one the test ran on.
+
 ### S26 and S27 — the two that stood between anyone and finding S24
 
 **The rate limit is capped, retried once, and settable** (`rate_limit_max_wait_secs`, default
