@@ -830,6 +830,23 @@ The last three also gate *installs* and *changes*, so the install paths call it 
 > guarded from every angle except the one that mattered. See **S24**. Until S24 lands, the row
 > above reading "**nothing overrides**" is a promise this document cannot keep.
 
+**A recovery path may not remove** (owner ruling, 2026-07-23, S24). Anything that repairs,
+retries, rolls back, or completes an interrupted operation reinstates what was wanted; it does
+not delete to get there. `heal()` recovering an interrupted *install* re-runs the install — every
+manager LiNix drives can install over a half-installed state — and **never uninstalls first.**
+
+**Remove-before-install is a per-backend capability, off by default.** A manager that genuinely
+cannot recover without it declares so, and when it is used **the removal is an ordinary removal**:
+it reaches the guard, it is counted, it appears in the plan and in `--dry-run`, and its failure
+is an error rather than a discarded result. There is no removal in this system that the plan
+cannot show.
+
+**The reason it is a default and not a guard call is that the guard already failed here.** S24
+was a removal on a recovery path that reached no guard for thirteen sessions while a sentence in
+this file said it did. Routing it through the guard would leave a delete on the path nobody
+watches and trust the check to catch it — which is exactly the arrangement that broke. Removing
+the delete removes the class.
+
 **A removal LiNix cannot show you is a removal LiNix may not make.** The guard, the plan and the
 counts are one mechanism, not three, and a path that skips the first skips all of them —
 whatever it removes is invisible in `plan`, invisible in `--dry-run`, and absent from the
@@ -841,6 +858,13 @@ bulk-removal verb — `apt autoremove`, `dnf autoremove`, and every verb like it
 set those verbs delete is chosen at execution time, *after* the guard has judged and after the
 user has read the plan. There is nothing for the guard to hold and nothing for the plan to
 show. **A backend that cannot say what it would remove does not remove.**
+
+**A rate-limited host is named, not waited for** (owner ruling, 2026-07-23, S26).
+`rate_limit_max_wait_secs` in `preferences.toml` caps how long LiNix will wait out a rate limit —
+**30 seconds by default**, one retry after it, then an error naming the host and the time the
+limit resets. It is settable because the right answer differs between a laptop and a CI job; the
+default is short because the old behaviour was to sleep up to an hour holding the data lock, and
+a command that appears hung is the one people kill, which is what arms S24.
 
 **`[guard]` holds three keys that are not among the ten: `confine_bin`** (default on), which
 refuses a downloaded file a destination outside the backend's bin directory (SEC1),

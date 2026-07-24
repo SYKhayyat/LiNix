@@ -1208,6 +1208,11 @@ declaration restores its backup, T1's fix is smaller than it looks.
   it; nothing proves it. A test that greps the source would pass on a rebuild that committed
   through some other route, so the honest one needs a backend that really removes and reinstalls.
 
+**The build order, ruled 2026-07-23.** S24 and S25 first — VI.0 already says nothing else should
+be built before them, and they are one code path seen twice. Then S26/S27, because they are what
+stands between anyone and finding the next S24 on a real machine. Then the ruled work above, in
+the order it appears. **K17's adapter table precedes 7e, and 7e precedes 7o.**
+
 **Four found on 2026-07-23 that gate real-machine testing (VI.2):** **S24** (recovering an
 interrupted install uninstalls the package first, past the guard) is the one that removed
 something on a live host and belongs in Phase 3 with the rest of the guard work; **S25**

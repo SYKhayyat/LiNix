@@ -10,6 +10,23 @@ prevent; **do not change a target-state rule without reading its why entry first
 code. A decision the register calls open is the owner's to make; a decision it marks *built,
 never ruled* is code that ran ahead of a ruling and is still theirs to reverse.
 
+## Asking while building (owner ruling, 2026-07-23)
+
+Build without stopping for permission. **Stop and ask only for these four:**
+
+1. Anything with an ID in the register — `D*`, `W*`, `K*`, `N*`, `T*`, `U*`.
+2. Anything that changes behaviour a user would notice.
+3. Anything that would remove a feature.
+4. Anything where Part II looks wrong. **Do not fix Part II yourself.**
+
+**Do not stop for** implementation detail, naming, file layout, test structure, or a choice
+between two options that is invisible from outside the program. Make the call and put the
+reasoning in the commit message.
+
+**When a question is answered, the ruling ships in that same commit** — rewritten into
+`decisions.md`, and into `target-state.md` plus `why.md` if it is a rule rather than a detail. A
+ruling that lives only in a chat log is exactly the drift that made 84 decisions unanswerable.
+
 ## Comments (P6)
 
 **A comment states a constraint the code can't show. Nothing else.**

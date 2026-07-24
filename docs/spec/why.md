@@ -877,5 +877,30 @@ failure at the level of a promise rather than a function.
 So: **a backend does not decide its own exclusivity.** If a new backend seems to need an
 exclusive mode, the thing it needs is `purge-unmanaged` to learn about its resources.
 
+**V.64 — Why a recovery path may not remove.** *(Owner ruling 2026-07-23, S24; the bug removed
+software on the owner's machine.)*
+
+`heal()` recovered an interrupted install by uninstalling the package and reinstalling it. The
+package was declared, wanted, present and protected, and the command that triggered it was
+`install nimble:nimjson`. It reached no guard, was counted nowhere, appeared in no plan, left no
+history entry, and `--dry-run` performed it.
+
+**The obvious fix is to send that removal through the guard, and it is the wrong one.** II.10
+claimed "every removal path calls it" for thirteen sessions, through an audit whose entire
+purpose was finding false claims, while this path called nothing. Adding the call would leave a
+delete sitting on the path nobody watches, protected by a check whose absence nobody noticed for
+months. **A guard is a good defence against a removal you know about. It is no defence at all
+against one nobody remembers is there.**
+
+So the rule is about the path, not the check: **anything that repairs, retries, rolls back or
+completes an interrupted operation reinstates what was wanted, and does not delete to get
+there.** These paths need it more than ordinary ones, not less, precisely because they run
+outside the plan the user read and usually when nobody is watching.
+
+**Where a manager genuinely cannot recover without removing first, that is a capability it
+declares** — and then the removal is an ordinary removal, with the guard, the count, the plan
+line and a real error on failure. The point is not that a recovery may never delete. It is that
+**a deletion is never a hidden step inside something else.**
+
 ---
 

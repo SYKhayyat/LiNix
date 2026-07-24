@@ -1,4 +1,4 @@
-# The decision register — all 91, and which are answered
+# The decision register — all 92, and which are answered
 
 **One file, six features.** Every decision this design forces lives here, with its status. The
 registers used to sit at the tail of six proposal parts and **none of them recorded whether they
@@ -42,7 +42,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-### Open, and blocking — 14
+### Open, and blocking — 13
 
 | | question | feature |
 |---|---|---|
@@ -59,12 +59,12 @@ status loses that, so it is kept here:
 | **U23** | What happens when a dotfile destination already holds the user's own file? | next |
 | **U24** | Is a `.age` file inside the dotfiles tree a secret to decrypt? | next |
 | **U26** | Is BSD supported, and what does `when family` answer there? | next |
-| **T6** | Must there be a way to opt out of `backup_once`, or bound how many pile up? | secrets |
 
-### Open, not blocking — 33
+### Open, not blocking — 34
 
 | | question | feature |
 |---|---|---|
+| **K18** | Should LiNix use a backend's own atomic swap where one exists (nix, rpm-ostree)? | rebuild |
 | **T7** | Runtime injection of secrets into process memory — reopened. | secrets |
 | **D8** | May a `when` block appear inside an options body? | artifacts |
 | **D11** | The default format order is detected, so a LiNix upgrade can silently change it. | artifacts |
@@ -105,10 +105,11 @@ status loses that, so it is kept here:
 because the category refills on its own: it is what happens whenever a recommendation gets
 implemented before anyone rules on it.
 
-### Answered — 42
+### Answered — 43
 
 | | question | feature |
 |---|---|---|
+| **T6** | Must there be a way to opt out of `backup_once`, or bound how many pile up? | secrets |
 | **N1** | Is a declared perimeter exclusive (undeclared rules are drift) or additive? | firewall |
 | **N2** | What happens when the change would close the SSH session running it? | firewall |
 | **N3** | Which adapters ship — and is one adapter enough to justify the backend at all? | firewall |
@@ -371,42 +372,42 @@ drives (`pkgin` is registered today).
 
 ---
 
-## T6
+# Open, not blocking
 
-**Status: OPEN — blocking.**
+## K18
 
-**In the tree today:** `backup_once` (`link.rs:172`) has **no opt-out and no bound of any kind
-beyond one-per-target.** It never clobbers an existing backup, so a target accumulates exactly
-one — and `remove` (`link.rs:369`) does not delete or restore it, so that one is permanent.
+**Status: OPEN.**
 
-**T6 — There must be a way to opt out of the backup, or to limit how many accumulate (owner
-request, 2026-07-23).** Raised while ruling T1, and **it is not a secrets question** — every
-`link:` managed-content write calls `backup_once`, so this governs ordinary config files too.
-Four things need answering and they are not the same question:
+**In the tree today:** file writes are already atomic one file at a time — `write_atomic` stages
+a temp file and renames it into place, so a `link:` target is never half-written. **Package
+swaps are not atomic and mostly cannot be**, and the existing answer is K3's snapshot: one taken
+before the first removal, reverted if the reinstall fails.
 
-1. **The opt-out's shape.** A per-line `@backup=no` says it where the exception is, at the cost
-   of an option key on every `link:` line. A `preferences.toml` key says it once for the machine
-   and cannot express *"this one file, not the others"*. Both is two mechanisms for one question.
-2. **What "limit amounts" means, given it is already one per target.** The accumulation is across
-   *targets*, not within one — forty linked files means up to forty orphaned backups. So the
-   candidates are an age (delete a backup older than N days), a command that lists and clears
-   them, or a rule tying the backup's life to the declaration's.
-3. **Does removing the `link:` line remove the backup, restore it, or leave it?** Today: leave
-   it, and that is almost certainly wrong. **Restoring it is the shape every other extra
-   already has** — `extras_lock` undoes what a declaration did — and it is the answer that makes
-   the backup a rollback rather than a leak.
-4. **Is there a command to see them at all?** They are invisible to `check` because they are not
-   managed, which means the one thing standing between a user and forty stale plaintexts is
-   remembering the file-naming convention.
+**K18 — Should LiNix use a backend's own atomic mechanism where one exists (owner question,
+2026-07-23)?** Asked as *"is there any way to make each swap atomic?"* The honest answer is that
+it splits three ways and only the third is a decision:
 
-*Recommendation:* per-line `@backup=no` **and** removal restoring the backup (3), which together
-answer 1 and 2 without a retention policy: a backup that is put back when the declaration goes
-does not accumulate, and the line that wants no backup says so. A `linix` command to list orphaned
-backups then covers the case where the user deleted the line before this existed.
+- **Files: already atomic per file**, and not atomic across a set. A `link:` that writes forty
+  files can be staged and renamed at the end to narrow the window, but no operating system
+  offers a multi-file rename, so *narrower* is the whole of what is available.
+- **Packages, on ordinary managers: no, and not by any effort of LiNix's.** `apt`, `dnf`,
+  `winget` and the rest expose no transaction to join. **What LiNix already has is
+  all-or-nothing in the outcome rather than in the instant** — K3's one snapshot before the
+  first removal, reverted on a failed reinstall, with stop-and-name-what-is-missing where no
+  snapshot provider exists. The window is real and visible; the end state is not half-done.
+- **Packages, on managers that are genuinely transactional: yes, and this is the question.**
+  `nix` is already a registered backend and its profile switch is a symlink flip — atomic, and
+  rollback is another flip. `rpm-ostree` and `transactional-update` are the same shape. **LiNix
+  drives all of them today as if they were `apt`**, taking the snapshot-and-revert path over a
+  mechanism that needs neither.
+
+*Recommendation:* a backend may declare that it swaps atomically, and where it does, LiNix uses
+that instead of the snapshot path and says so in the plan — *"nix: atomic, no snapshot needed"*.
+The value is not speed; it is that **the one honest sentence about a rebuild's risk changes per
+backend**, and today LiNix prints the cautious one everywhere. **This is not urgent** and nothing
+is blocked on it — it is filed so that the answer stops being "no" when it is only "not yet".
 
 ---
-
-# Open, not blocking
 
 ## T7
 
@@ -807,6 +808,57 @@ both, which is II.7 rule 5 reached by a new road rather than a new rule.
 ---
 
 # Answered
+
+## T6
+
+**Status: ANSWERED — ruled 2026-07-23 (the blocking half; two sub-questions remain open below).**
+
+**In the tree today:** `backup_once` (`link.rs:172`) has **no opt-out and no bound of any kind
+beyond one-per-target.** It never clobbers an existing backup, so a target accumulates exactly
+one — and `remove` (`link.rs:369`) does not delete or restore it, so that one is permanent.
+
+**T6 — There must be a way to opt out of the backup, or to limit how many accumulate (owner
+request, 2026-07-23).** Raised while ruling T1, and **it is not a secrets question** — every
+`link:` managed-content write calls `backup_once`, so this governs ordinary config files too.
+Four things need answering and they are not the same question:
+
+1. **The opt-out's shape.** A per-line `@backup=no` says it where the exception is, at the cost
+   of an option key on every `link:` line. A `preferences.toml` key says it once for the machine
+   and cannot express *"this one file, not the others"*. Both is two mechanisms for one question.
+2. **What "limit amounts" means, given it is already one per target.** The accumulation is across
+   *targets*, not within one — forty linked files means up to forty orphaned backups. So the
+   candidates are an age (delete a backup older than N days), a command that lists and clears
+   them, or a rule tying the backup's life to the declaration's.
+3. **Does removing the `link:` line remove the backup, restore it, or leave it?** Today: leave
+   it, and that is almost certainly wrong. **Restoring it is the shape every other extra
+   already has** — `extras_lock` undoes what a declaration did — and it is the answer that makes
+   the backup a rollback rather than a leak.
+4. **Is there a command to see them at all?** They are invisible to `check` because they are not
+   managed, which means the one thing standing between a user and forty stale plaintexts is
+   remembering the file-naming convention.
+
+*Recommendation:* per-line `@backup=no` **and** removal restoring the backup (3), which together
+answer 1 and 2 without a retention policy: a backup that is put back when the declaration goes
+does not accumulate, and the line that wants no backup says so. A `linix` command to list orphaned
+backups then covers the case where the user deleted the line before this existed.
+
+**RULED (owner, 2026-07-23): removing the declaration restores the backup.** Sub-question 3 is
+answered, and it answers 2 with it: a backup that is **put back** when the line goes cannot
+accumulate, so no retention policy, no age, and no cleanup command are needed for the ordinary
+case. `remove` (`link.rs:369`) currently drops the target and orphans `<target>.linix-backup`
+forever; it will instead restore the original and delete the backup, which is the shape
+`extras_lock` already has for every other extra — **a declaration undoes what it did.**
+
+**This shrinks T1.** Decrypt mode still never backs up, but the reason is now narrower and the
+fix smaller: without restore-on-removal a suppressed backup would have been a special case, and
+with it the general path is already safe.
+
+**Still owed, and deliberately not ruled here:** sub-question 1, the opt-out's spelling
+(`@backup=no` on the line, a machine-wide key, or both), and sub-question 4, whether any command
+lists backups orphaned by the versions of LiNix that shipped before this ruling. Both are
+smaller once restore-on-removal exists, and neither blocks it.
+
+---
 
 ## N1
 
