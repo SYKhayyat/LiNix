@@ -154,8 +154,17 @@ impl fmt::Display for UnknownFormat {
 impl std::error::Error for UnknownFormat {}
 
 /// An ordered preference. First match wins; a later entry is a fallback, never an addition.
+///
+/// `user_specified` records whether this order came from a `@formats=` the user wrote or was
+/// detected from the machine. It changes the tie-break, and only the tie-break (D2): a written
+/// order is an instruction and wins outright, while a detected one yields to an asset that
+/// names the exact machine — because a detected default is LiNix's guess about file *type*, and
+/// a file naming your os and arch is a better-evidenced guess than one naming neither.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct FormatOrder(Vec<Format>);
+pub struct FormatOrder {
+    order: Vec<Format>,
+    user_specified: bool,
+}
 
 impl FormatOrder {
     pub fn new(formats: Vec<Format>) -> Self {
@@ -165,7 +174,23 @@ impl FormatOrder {
                 seen.push(f);
             }
         }
-        FormatOrder(seen)
+        FormatOrder {
+            order: seen,
+            user_specified: false,
+        }
+    }
+
+    /// The same order, marked as something the user asked for by name. Called where a
+    /// `@formats=` value is read.
+    pub fn as_user_specified(mut self) -> Self {
+        self.user_specified = true;
+        self
+    }
+
+    /// Whether this order was written by the user rather than detected. The tie-break reads
+    /// this and nothing else reads it.
+    pub fn is_user_specified(&self) -> bool {
+        self.user_specified
     }
 
     pub fn parse_all<I, S>(names: I) -> Result<Self, UnknownFormat>
@@ -181,11 +206,11 @@ impl FormatOrder {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.order.is_empty()
     }
 
     pub fn as_slice(&self) -> &[Format] {
-        &self.0
+        &self.order
     }
 
     /// Derived from detected facts rather than configured, so a fresh repo installs the right
@@ -194,7 +219,18 @@ impl FormatOrder {
         let tail = [Format::AppImage, Format::Tarball, Format::Binary];
         let head: &[Format] = match (os, family) {
             ("windows", _) => return FormatOrder::new(vec![Format::Exe, Format::Msi, Format::Zip]),
-            ("macos", _) => return FormatOrder::new(vec![Format::Dmg, Format::Pkg, Format::Tarball, Format::Binary]),
+            // `zip` is in the macOS order because gh, rclone and starship — checked against
+            // their real releases — ship their macOS build as one, and without it those
+            // packages resolved to nothing on a Mac (D2).
+            ("macos", _) => {
+                return FormatOrder::new(vec![
+                    Format::Dmg,
+                    Format::Pkg,
+                    Format::Tarball,
+                    Format::Zip,
+                    Format::Binary,
+                ])
+            }
             (_, Some("debian")) => &[Format::Deb],
             (_, Some("fedora")) | (_, Some("rhel")) | (_, Some("suse")) => &[Format::Rpm],
             _ => &[],
@@ -205,25 +241,28 @@ impl FormatOrder {
     /// Rank of `format` in this order; `None` means the user did not ask for it, which is a
     /// rejection rather than a low score.
     pub fn rank(&self, format: Format) -> Option<usize> {
-        self.0.iter().position(|f| *f == format)
+        self.order.iter().position(|f| *f == format)
     }
 
     /// Narrow the order to what a backend can actually install, keeping the order intact.
     /// A default order that names a format the backend cannot handle should fall through to
     /// the next entry, which is what "a later entry is a fallback" already means.
     pub fn retaining(&self, keep: impl Fn(Format) -> bool) -> Self {
-        FormatOrder(self.0.iter().copied().filter(|f| keep(*f)).collect())
+        FormatOrder {
+            order: self.order.iter().copied().filter(|f| keep(*f)).collect(),
+            user_specified: self.user_specified,
+        }
     }
 
     /// What was dropped by `retaining`, so an empty result can say why.
     pub fn rejected_by(&self, keep: impl Fn(Format) -> bool) -> Vec<Format> {
-        self.0.iter().copied().filter(|f| !keep(*f)).collect()
+        self.order.iter().copied().filter(|f| !keep(*f)).collect()
     }
 }
 
 impl fmt::Display for FormatOrder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let names: Vec<_> = self.0.iter().map(|f| f.as_str()).collect();
+        let names: Vec<_> = self.order.iter().map(|f| f.as_str()).collect();
         f.write_str(&names.join(", "))
     }
 }
@@ -313,6 +352,22 @@ mod tests {
         let order = FormatOrder::detected_default("windows", None);
         assert!(!order.as_slice().contains(&Format::AppImage));
         assert!(!order.as_slice().contains(&Format::Deb));
+    }
+
+    #[test]
+    fn the_macos_default_includes_zip() {
+        // gh, rclone and starship all ship their macOS build as a .zip; without it those
+        // packages resolve to nothing on a Mac (D2).
+        let order = FormatOrder::detected_default("macos", None);
+        assert!(order.as_slice().contains(&Format::Zip), "{:?}", order.as_slice());
+        // dmg and pkg still lead — a native installer beats an archive to unpack.
+        assert_eq!(order.as_slice().first(), Some(&Format::Dmg));
+    }
+
+    #[test]
+    fn a_detected_order_is_not_user_specified_but_a_marked_one_is() {
+        assert!(!FormatOrder::detected_default("linux", Some("debian")).is_user_specified());
+        assert!(FormatOrder::new(vec![Format::Deb]).as_user_specified().is_user_specified());
     }
 
     #[test]

@@ -180,9 +180,10 @@ with no `formats` line anywhere.
 Your architecture is not a preference. Assets that cannot run on this machine are filtered out
 before `formats` is consulted, so there is no `@arch=` to get wrong.
 
-When a release ships two files that both fit — `fd_10.2.0_amd64.deb` and
-`fd-musl_10.2.0_amd64.deb` — LiNix picks the more specific one, then the shorter name, and
-**tells you what it chose and what it skipped**. To decide yourself, `@asset=` takes a filename
+When a release ships two files that both fit, LiNix picks the one that names your machine
+most precisely — `fd-…-x86_64-unknown-linux-gnu.tar.gz` over a bare `amd64` build — then the
+shorter name, and **tells you what it chose and what it skipped**. If you write `@formats=`
+yourself, that order wins instead: you asked for it. To decide yourself, `@asset=` takes a filename
 or a glob that survives version bumps:
 
 ```

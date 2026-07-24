@@ -204,7 +204,7 @@ pub fn select(request: &Request<'_>, assets: &[Asset]) -> Result<Selection, NoMa
         });
     }
 
-    sort_by_preference(&mut candidates);
+    sort_by_preference(&mut candidates, request.formats.is_user_specified());
 
     if request
         .pattern
@@ -240,15 +240,29 @@ pub fn select(request: &Request<'_>, assets: &[Asset]) -> Result<Selection, NoMa
     })
 }
 
-/// The tie-break, in one place so there is exactly one answer to "two assets, both legal":
-/// the format you asked for first, then the asset that names this machine most explicitly,
-/// then the shortest filename, then alphabetical so the result never depends on the order
-/// GitHub happened to return.
-fn sort_by_preference(candidates: &mut [Candidate]) {
+/// The tie-break, in one place so there is exactly one answer to "two assets, both legal".
+///
+/// Format order and specificity trade places depending on where the order came from (D2):
+///
+/// - **A `@formats=` the user wrote wins outright.** They named a preference; the asset highest
+///   in it is the answer, and specificity only breaks a tie *within* one format.
+/// - **A detected order yields to the machine.** The default order is LiNix's guess about file
+///   *type*, and an asset naming your exact os and arch is a stronger guess than one naming
+///   neither — so specificity leads, and format order breaks ties within one specificity. This
+///   is what stops jq's source `jq-1.8.2.tar.gz` beating `jq-linux-amd64` on a Linux box.
+///
+/// After that: the shortest filename, then alphabetical, so the result never depends on the
+/// order GitHub happened to return.
+fn sort_by_preference(candidates: &mut [Candidate], user_specified: bool) {
     candidates.sort_by(|a, b| {
-        a.rank
-            .cmp(&b.rank)
-            .then(b.specificity.cmp(&a.specificity))
+        let rank = a.rank.cmp(&b.rank);
+        let spec = b.specificity.cmp(&a.specificity);
+        let primary = if user_specified {
+            rank.then(spec)
+        } else {
+            spec.then(rank)
+        };
+        primary
             .then(a.asset.name.len().cmp(&b.asset.name.len()))
             .then(a.asset.name.cmp(&b.asset.name))
     });
@@ -329,8 +343,10 @@ mod tests {
     }
 
     #[test]
-    fn the_first_format_in_the_order_wins_over_a_later_one() {
-        let formats = FormatOrder::new(vec![Format::Deb, Format::Tarball]);
+    fn a_user_written_format_order_wins_over_a_more_specific_asset() {
+        // `@formats=deb;tarball` is an instruction, so the deb wins even though the tarball
+        // names the machine more precisely (D2). This is the half where format order leads.
+        let formats = FormatOrder::new(vec![Format::Deb, Format::Tarball]).as_user_specified();
         let platform = linux64();
         let found = select(
             &request(&formats, &platform, None),
@@ -339,6 +355,21 @@ mod tests {
         .unwrap();
         assert_eq!(found.picks[0].format, Format::Deb);
         assert_eq!(found.picks[0].asset.name, "fd_10.2.0_amd64.deb");
+    }
+
+    #[test]
+    fn a_detected_order_yields_to_the_asset_that_names_the_machine() {
+        // Same two assets, but the order was DETECTED, not written. Now the tarball wins
+        // because it names `linux-x86_64` while the deb names only `amd64` — the jq case.
+        let formats = FormatOrder::new(vec![Format::Deb, Format::Tarball]);
+        assert!(!formats.is_user_specified());
+        let platform = linux64();
+        let found = select(
+            &request(&formats, &platform, None),
+            &assets(&["fd-linux-x86_64.tar.gz", "fd_10.2.0_amd64.deb"]),
+        )
+        .unwrap();
+        assert_eq!(found.picks[0].asset.name, "fd-linux-x86_64.tar.gz");
     }
 
     #[test]

@@ -191,3 +191,4 @@ fn naming_an_asset_exactly_installs_it_even_when_the_name_says_nothing() {
     )
     .is_err());
 }
+

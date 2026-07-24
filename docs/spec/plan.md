@@ -1244,12 +1244,13 @@ declaration restores its backup, T1's fix is smaller than it looks.
   platforms, every answer verified by hand and then **asserted** — `src/backends/artifact/real_releases.txt`
   is a check that can fail, not an inspection that happened once.
 
-  **One finding is left as a question rather than a fix, and it is in the file's header.** On jq
-  (linux and macos) and rclone (macos) the selector picks the project's **source tarball** over a
-  binary that names the exact machine, because the tie-break puts format order above specificity
-  — and a *detected* default order is not something the user asked for. Related, and visible in
-  the same three rows: the macos default order has no `zip` in it, while gh, rclone and starship
-  all ship their macos build as one. Neither is a wrong classification, so neither is fixed here.
+  **The finding it surfaced was ruled and fixed 2026-07-24.** The selector chose jq's and
+  rclone's **source tarball** over a binary naming the exact machine, because the tie-break
+  ranked format order above specificity even for a *detected* order. Ruled: a detected order
+  yields to the machine (specificity leads), a `@formats=` the user wrote still wins outright
+  (rank leads). `zip` was added to the macOS default order in the same change. The fixture's
+  expectations are now the file a human would pick on every row, and both halves have unit
+  tests naming the case.
 - ~~**A test that `rebuild` writes no git commit (K14).**~~ **WRITTEN, NEVER RUN — verified
   2026-07-23.** It is section 12 of `docker/integration/run-in-container.sh`, and it is the
   honest shape the entry asked for: a real apt package is really removed and reinstalled, and

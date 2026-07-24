@@ -1172,11 +1172,16 @@ asserted, so this is a check that can fail rather than an inspection that happen
   digits is part of the boundary now (`linux64`, `win64`, `mac64`), while the leading boundary
   is unchanged so `386` still does not match inside `i386`.
 
-**Recorded, not fixed, because it is a design decision rather than a defect (see the plan):**
-on jq and rclone the selector chooses the project's **source tarball** over a binary that names
-the exact machine, because the tie-break ranks format order above specificity and a *detected*
-default order is not something the user asked for. It fails loudly afterwards ("no executable
-found in the archive"), so it is wrong rather than dangerous.
+**The one thing left as a question was ruled 2026-07-24 and is now fixed.** On jq and rclone the
+selector chose the project's **source tarball** over a binary naming the exact machine, because
+the tie-break ranked format order above specificity even when that order was *detected* rather
+than asked for. **Owner ruled: a detected order yields to the machine; a `@formats=` the user
+wrote still wins outright.** The tie-break now leads with specificity when
+`FormatOrder::is_user_specified()` is false and with format rank when it is true; jq resolves to
+`jq-linux-amd64`, and a user who writes `@formats=tarball` still gets the tarball. The macOS
+default order also gained `zip` in the same change — gh, rclone and starship ship their macOS
+build as one and resolved to nothing without it. Both are covered by the real-release fixture,
+whose expectations are now the file a human would pick on every row.
 
 ---
 
