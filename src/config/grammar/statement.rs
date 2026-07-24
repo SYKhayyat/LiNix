@@ -811,7 +811,8 @@ pub fn validate_artifact_options(
                 format!("`@{}` is not an option on `{}`", key, backend),
             )
             .with_hint(format!(
-                "it relaxes a rule about downloading and running a file, which only {} do.                  Everywhere else the package manager's own index answers for the bytes.",
+                "it relaxes a rule about downloading and running a file, which only {} do. \
+                 Everywhere else the package manager's own index answers for the bytes.",
                 capability::download_backends()
             )));
         }

@@ -2591,7 +2591,8 @@ async fn handle_remove_orphans(app: &App) -> Result<()> {
     // from a removal report reads as a manager with nothing to remove.
     if !cannot_say.is_empty() {
         println!(
-            "No orphan removal for: {}. These managers cannot say what they would delete, so              LiNix does not let them delete it.",
+            "No orphan removal for: {}. These managers cannot say what they would delete, so \
+             LiNix does not let them delete it.",
             cannot_say.join(", ")
         );
     }
