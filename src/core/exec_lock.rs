@@ -28,6 +28,16 @@ pub struct ExecRecord {
     /// it, because a decision that reads the clock is a decision that changes without an edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run: Option<String>,
+    /// The `@undo=` this content declared when it ran (U3).
+    ///
+    /// Recorded here because by the time it is needed **the declaration is gone** — that is
+    /// what removal means. A teardown that read the current files would find nothing and do
+    /// nothing, which is the `link:` source-deletion mistake in another costume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo: Option<String>,
+    /// What the line was, for a message a human can act on once the line no longer exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
 }
 
 /// `locks/exec.toml`. A `BTreeMap` so the file is ordered and diffs cleanly in git.
@@ -116,10 +126,47 @@ impl ExecLedger {
 
     /// Record one completed run. `at` is passed in rather than read from the clock here so the
     /// ledger stays pure and a test can pin the stamp.
-    pub fn record_run(&mut self, hash: &str, at: String) {
+    ///
+    /// `undo` and `script` are captured **now**, while the declaration still exists, because
+    /// the run that needs them is the one where it does not.
+    pub fn record_run(&mut self, hash: &str, at: String, script: &str, undo: Option<&str>) {
         let entry = self.runs.entry(hash.to_string()).or_default();
         entry.count += 1;
         entry.last_run = Some(at);
+        entry.script = Some(script.to_string());
+        entry.undo = undo.map(str::to_string);
+    }
+
+    /// The rows whose `exec:` line has gone away (U3), given every script **path** the model
+    /// still declares.
+    ///
+    /// **By path, not by content hash** — and that distinction is the whole correctness of
+    /// this function. Editing a script changes its hash, so a hash-keyed comparison reads an
+    /// edit as *this content departed* and runs the undo of a line that is still there: the
+    /// enrol script would un-enrol itself the moment you fixed a typo in it. The path is what
+    /// the user deleted or did not.
+    ///
+    /// A row recorded before paths were kept has no `script` and is left alone rather than
+    /// guessed at: undoing something on the strength of a missing field is worse than
+    /// remembering it forever.
+    pub fn departed(
+        &self,
+        declared_paths: &std::collections::BTreeSet<String>,
+    ) -> Vec<(String, ExecRecord)> {
+        self.runs
+            .iter()
+            .filter(|(_, rec)| match rec.script.as_deref() {
+                Some(path) => !declared_paths.contains(path),
+                None => false,
+            })
+            .map(|(hash, rec)| (hash.clone(), rec.clone()))
+            .collect()
+    }
+
+    /// Forget one content entirely. Called after its `@undo=` has run — or, where it declared
+    /// none, once the line is gone and there is nothing left to remember.
+    pub fn forget(&mut self, hash: &str) {
+        self.runs.remove(hash);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -139,9 +186,9 @@ mod tests {
     #[test]
     fn a_run_is_counted_and_stamped() {
         let mut l = ExecLedger::new();
-        l.record_run("abc", "2026-07-24T00:00:00Z".into());
+        l.record_run("abc", "2026-07-24T00:00:00Z".into(), "./s.sh", None);
         assert_eq!(l.count("abc"), 1);
-        l.record_run("abc", "2026-07-24T01:00:00Z".into());
+        l.record_run("abc", "2026-07-24T01:00:00Z".into(), "./s.sh", None);
         assert_eq!(l.count("abc"), 2);
         // A second content is its own count — the hash is the identity.
         assert_eq!(l.count("xyz"), 0);
@@ -173,9 +220,43 @@ mod tests {
     #[test]
     fn an_edited_script_is_a_different_content_and_runs_again() {
         let mut l = ExecLedger::new();
-        l.record_run("hash-of-v1", "t".into());
+        l.record_run("hash-of-v1", "t".into(), "./s.sh", None);
         assert!(!Ceiling::read(None).permits(l.count("hash-of-v1")));
         assert!(Ceiling::read(None).permits(l.count("hash-of-v2")));
+    }
+
+    /// The distinction the whole teardown rests on: an edited script is not a departed one.
+    /// Keyed by hash, an edit reads as a removal and runs the undo of a line that is still
+    /// declared — the enrol script un-enrolling itself because a typo was fixed.
+    #[test]
+    fn an_edited_script_has_not_departed_but_a_deleted_one_has() {
+        use std::collections::BTreeSet;
+        let mut l = ExecLedger::new();
+        l.record_run("hash-v1", "t".into(), "./enrol.sh", Some("echo undo"));
+        l.record_run("hash-v2", "t".into(), "./enrol.sh", Some("echo undo"));
+        l.record_run("hash-x", "t".into(), "./gone.sh", None);
+
+        // `./enrol.sh` is still declared (its content changed); `./gone.sh` is not.
+        let declared: BTreeSet<String> = ["./enrol.sh".to_string()].into_iter().collect();
+        let departed = l.departed(&declared);
+        assert_eq!(departed.len(), 1, "{:?}", departed);
+        assert_eq!(departed[0].1.script.as_deref(), Some("./gone.sh"));
+
+        // With nothing declared at all, every row has departed — deleting the last line is
+        // still a removal.
+        assert_eq!(l.departed(&BTreeSet::new()).len(), 3);
+    }
+
+    #[test]
+    fn a_row_with_no_recorded_path_is_never_read_as_departed() {
+        use std::collections::BTreeSet;
+        let mut l = ExecLedger::new();
+        l.record_run("h", "t".into(), "./s.sh", None);
+        // Simulate a row written before paths were kept.
+        l.forget("h");
+        let mut bare = ExecLedger::new();
+        bare.runs.insert("h".into(), ExecRecord { count: 1, ..Default::default() });
+        assert!(bare.departed(&BTreeSet::new()).is_empty());
     }
 
     #[test]
@@ -190,7 +271,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = ExecLedger::path_in(dir.path());
         let mut l = ExecLedger::new();
-        l.record_run("abc", "2026-07-24T00:00:00Z".into());
+        l.record_run("abc", "2026-07-24T00:00:00Z".into(), "./s.sh", None);
         l.save(&path).unwrap();
         let back = ExecLedger::load(&path).unwrap();
         assert_eq!(back, l);

@@ -727,9 +727,9 @@ impl App {
     pub async fn apply_execs(&self, state: &crate::model::DesiredState) -> Result<()> {
         use crate::core::hook_lock::HookLedger;
 
-        if !state.has_execs() {
-            return Ok(());
-        }
+        // No early return when nothing is declared: deleting the LAST `exec:` line is a real
+        // change, and a teardown that only runs when something is still declared can never
+        // undo the last one (S20 taught this for extras; it is the same shape here).
         let locks = self.config.layout().locks_dir();
         let hooks = HookLedger::load(&HookLedger::path_in(&locks))?;
         let runs_path = crate::core::ExecLedger::path_in(&locks);
@@ -762,10 +762,139 @@ impl App {
             self.run_exec_script(&path).await?;
             // Recorded only on success. A script that failed did not happen, and the next sync
             // must be free to try it again.
-            runs.record_run(&hash, chrono::Utc::now().to_rfc3339());
+            runs.record_run(
+                &hash,
+                chrono::Utc::now().to_rfc3339(),
+                script,
+                opts.one("undo"),
+            );
             runs.save(&runs_path)?;
         }
+
+        self.undo_departed_execs(state, &mut runs, &runs_path).await?;
         Ok(())
+    }
+
+    /// Run the `@undo=` of every `exec:` whose line has gone away, then forget it (U3).
+    ///
+    /// **The undo is read from the ledger, not from the files**, because by the time it is
+    /// needed the declaration has been deleted — that is what removal means. Reading the
+    /// current config would find nothing and do nothing, which is the `link:` source-deletion
+    /// mistake wearing a different hat.
+    ///
+    /// A script that declared no `@undo=` is simply forgotten: LiNix cannot invent an inverse,
+    /// and pretending to would be worse than saying nothing. `plan` says so in those words.
+    async fn undo_departed_execs(
+        &self,
+        state: &crate::model::DesiredState,
+        runs: &mut crate::core::ExecLedger,
+        runs_path: &std::path::Path,
+    ) -> Result<()> {
+        let declared = self.declared_exec_paths()?;
+        // An unreadable configuration yields an empty set, which must never be read as "every
+        // script departed" — that would run every undo on the machine because of a stray brace.
+        if declared.is_empty() && state.has_execs() {
+            return Ok(());
+        }
+        let departed = runs.departed(&declared);
+        if departed.is_empty() {
+            return Ok(());
+        }
+        for (hash, record) in departed {
+            let name = record.script.as_deref().unwrap_or(&hash);
+            let Some(undo) = record.undo.as_deref().filter(|u| !u.trim().is_empty()) else {
+                debug!("`exec:{}` is no longer declared; it had no `undo`.", name);
+                if !self.config.dry_run {
+                    runs.forget(&hash);
+                }
+                continue;
+            };
+            if self.config.dry_run {
+                info!("[DRY-RUN] would undo `exec:{}` with: {}", name, undo);
+                continue;
+            }
+            info!("`exec:{}` is no longer declared — running its undo.", name);
+            match self.run_shell_command(undo).await {
+                Ok(()) => runs.forget(&hash),
+                // Kept in the ledger on failure, so the next sync tries again rather than
+                // forgetting an undo that never happened.
+                Err(e) => warn!(
+                    "could not undo `exec:{}` ({}); it stays recorded and the next sync will \
+                     try again.",
+                    name, e
+                ),
+            }
+        }
+        runs.save(runs_path)
+    }
+
+    /// Every `exec:` script path the configuration contains — read from the FILES, ignoring
+    /// `when` and ignoring which profiles are active.
+    ///
+    /// **This is deliberately not `state.execs()`.** That answers *does this machine want it
+    /// right now*, which is a different question with a dangerous difference: a `when` that
+    /// went false would read as a deleted line and run its `@undo=` — the enrol script
+    /// un-enrolling itself on the sync after it succeeded, which is the flapping failure
+    /// XIII.3 spends a section warning about. Deactivating a profile is likewise not a
+    /// deletion. Only removing the line from the file is, and only the file can say so.
+    ///
+    /// A file that cannot be parsed contributes nothing rather than being treated as empty:
+    /// concluding "every exec: has departed" from a syntax error would run every undo on the
+    /// machine because of a stray brace.
+    fn declared_exec_paths(&self) -> Result<std::collections::BTreeSet<String>> {
+        use crate::config::grammar::Statement;
+
+        let mut out = std::collections::BTreeSet::new();
+        let modules = self.config.layout().modules_dir();
+        let Ok(entries) = std::fs::read_dir(&modules) else {
+            return Ok(out);
+        };
+        let known = |name: &str| self.registry.get(name).is_some();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("txt") {
+                continue;
+            }
+            let Ok(body) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(doc) = crate::config::grammar::parse_document(&path, &body, &known) else {
+                // Unparseable: the resolver reports it properly elsewhere. Here it must not be
+                // read as "this file declares nothing".
+                warn!(
+                    "{}: could not be parsed while looking for `exec:` lines; leaving its \
+                     scripts recorded.",
+                    path.display()
+                );
+                return Ok(std::collections::BTreeSet::new());
+            };
+            for (stmt, _, _) in doc.every_statement() {
+                if let Statement::Exec(script, _) = stmt {
+                    out.insert(script.clone());
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Run a command line through the platform's shell. Used only for `@undo=`, which is
+    /// written as a command rather than a script path.
+    async fn run_shell_command(&self, command: &str) -> Result<()> {
+        #[cfg(windows)]
+        let (program, args) = (
+            "powershell",
+            vec![
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-Command".to_string(),
+                command.to_string(),
+            ],
+        );
+        #[cfg(not(windows))]
+        let (program, args) = ("sh", vec!["-c".to_string(), command.to_string()]);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.executor.run(program, &refs, false).await.map(|_| ())
     }
 
     /// Execute one script through the platform's interpreter. `sh` on Unix and PowerShell on

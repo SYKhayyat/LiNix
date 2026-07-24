@@ -645,7 +645,10 @@ pub const SETTING_OPTION_KEYS: &[&str] = &["value", "scope"];
 /// `runs` caps how many times a distinct script content may run — `1` (the default) is
 /// run-once-per-content; `always` opts out (see `model::exec`). `undo` is deliberately absent:
 /// what a removal means is U3, still open, so no key promises it.
-pub const EXEC_OPTION_KEYS: &[&str] = &["runs"];
+/// `undo` is what removing the line runs (U3). Optional, because a script has no inverse and
+/// inventing one would be LiNix claiming to undo something it cannot: without it, removing an
+/// `exec:` drops the record and nothing else, and `plan` says so in those words.
+pub const EXEC_OPTION_KEYS: &[&str] = &["runs", "undo"];
 
 fn keys_for(prefix: &str) -> &'static [&'static str] {
     match prefix {
@@ -690,7 +693,10 @@ fn validate_exec(origin: &Origin, name: &str, options: &Options) -> Result<()> {
                 origin.clone(),
                 format!("`exec:{}` has an unknown option `{}`", name, key),
             )
-            .with_hint("an exec takes `runs` (a positive number, or `always`)."));
+            .with_hint(
+                "an exec takes `runs` (a positive number, or `always`) and `undo` (a command \
+                 to run when the line is removed).",
+            ));
         }
     }
     if let Some(runs) = options.one("runs") {

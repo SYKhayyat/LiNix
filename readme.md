@@ -357,6 +357,22 @@ Scripts:
     sha256:f7cba99726d4 — will run
 ```
 
+**Removing the line runs `@undo=`, if you gave one:**
+
+```
+exec:./bin/enroll-tpm.sh {
+  undo = tpm2_clear
+}
+```
+
+Delete the line and LiNix runs `tpm2_clear`, then forgets the script. Without an `@undo=`,
+removing the line just drops the record — LiNix cannot invent an inverse for a script, and
+`plan` says so in those words rather than implying a revert that will not happen.
+
+**A `when` going false is not a removal.** The line is still in your file, so nothing is undone;
+that is what stops the enrol script un-enrolling itself on the very next sync. Only deleting the
+line from the file counts, and deactivating a profile does not.
+
 **One limit, stated rather than implied:** the hash covers the file LiNix executes. A script that
 sources another file, or curls one, changes behaviour without changing its hash, and LiNix cannot
 see that.

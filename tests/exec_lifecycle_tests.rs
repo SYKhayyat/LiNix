@@ -213,3 +213,110 @@ async fn a_failed_script_is_not_recorded_and_runs_again() {
         "a script that failed was recorded as having run, so it will never be retried"
     );
 }
+
+// ---------------------------------------------------------------------------
+// U3 — what removing an `exec:` line means.
+// ---------------------------------------------------------------------------
+
+/// A line that declared `@undo=` has it run when the line goes away, and is then forgotten.
+/// The undo is read from the LEDGER, not from the config — by the time it is needed the
+/// declaration has been deleted, so reading the files would find nothing and do nothing.
+#[tokio::test]
+async fn removing_an_exec_runs_the_undo_it_declared() {
+    let kernel = TestKernel::new().await;
+    let body = "echo enrol\n";
+    declare_exec(
+        &kernel,
+        "exec:./enrol.sh@undo=echo unenrol",
+        "./enrol.sh",
+        body,
+    )
+    .await;
+    approve(&kernel, "./enrol.sh", body);
+
+    let state = resolve(&kernel).await;
+    kernel.app.apply_execs(&state).await.unwrap();
+    assert_eq!(runs_of(&kernel, body), 1);
+
+    // The line is deleted — the declaration no longer exists anywhere.
+    let root = kernel.app.config.config_root();
+    std::fs::write(root.join("modules/tools.txt"), "# gone\n").unwrap();
+    let state = resolve(&kernel).await;
+    assert!(!state.has_execs());
+
+    kernel.app.apply_execs(&state).await.unwrap();
+
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        calls.iter().any(|c| c.contains("unenrol")),
+        "the undo did not run: {:?}",
+        calls
+    );
+    // Forgotten, so it does not run again on the next sync.
+    assert_eq!(runs_of(&kernel, body), 0, "the row survived a completed undo");
+}
+
+/// A script that declared no `@undo=` is forgotten and nothing is run. LiNix cannot invent an
+/// inverse for a script, and pretending to would be worse than saying nothing.
+#[tokio::test]
+async fn removing_an_exec_without_an_undo_runs_nothing() {
+    let kernel = TestKernel::new().await;
+    let body = "echo once\n";
+    declare_exec(&kernel, "exec:./once.sh", "./once.sh", body).await;
+    approve(&kernel, "./once.sh", body);
+
+    let state = resolve(&kernel).await;
+    kernel.app.apply_execs(&state).await.unwrap();
+    let before = kernel.mock_executor.get_calls().await.len();
+
+    std::fs::write(
+        kernel.app.config.config_root().join("modules/tools.txt"),
+        "# gone\n",
+    )
+    .unwrap();
+    let state = resolve(&kernel).await;
+    kernel.app.apply_execs(&state).await.unwrap();
+
+    assert_eq!(
+        kernel.mock_executor.get_calls().await.len(),
+        before,
+        "something ran for a line that declared no undo"
+    );
+    assert_eq!(runs_of(&kernel, body), 0, "the row was not dropped");
+}
+
+/// A `when` that went false is NOT a removal — the line is still declared, so its undo must
+/// not run. This is XIII.3's three-state rule meeting U3: getting it wrong un-enrols the TPM
+/// on the sync after the one that enrolled it.
+#[tokio::test]
+async fn a_false_when_does_not_run_the_undo() {
+    let kernel = TestKernel::new().await;
+    let body = "echo enrol\n";
+    let root = kernel.app.config.config_root();
+    std::fs::write(root.join("./enrol.sh"), body).unwrap();
+    approve(&kernel, "./enrol.sh", body);
+    std::fs::write(root.join("vars"), "enrolled = no\n").unwrap();
+    std::fs::write(
+        root.join("modules/tools.txt"),
+        "when $enrolled == no {\n  exec:./enrol.sh@undo=echo unenrol\n}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
+
+    let state = resolve(&kernel).await;
+    kernel.app.apply_execs(&state).await.unwrap();
+    assert_eq!(runs_of(&kernel, body), 1);
+
+    // The script succeeded, so its own condition is now false — but the LINE is still there.
+    std::fs::write(root.join("vars"), "enrolled = yes\n").unwrap();
+    let state = resolve(&kernel).await;
+    kernel.app.apply_execs(&state).await.unwrap();
+
+    let calls = kernel.mock_executor.get_calls().await;
+    assert!(
+        !calls.iter().any(|c| c.contains("unenrol")),
+        "a false `when` ran the undo — the script would un-do itself every sync: {:?}",
+        calls
+    );
+    assert_eq!(runs_of(&kernel, body), 1, "the count was lost");
+}
