@@ -1,3 +1,4 @@
+pub mod check;
 pub mod bisect;
 pub mod bundle;
 pub mod conflicts;

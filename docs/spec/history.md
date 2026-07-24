@@ -42,6 +42,14 @@ transaction engine exists; `core/transaction.rs` is the only one.
 which is all that is needed because the time is spent waiting on child processes. Covered by
 `list_aggregates_every_backend_that_answers` and `the_report_is_sorted_for_a_stable_plan`.
 
+**The `tools` image is green too, and it earned its keep on the first run.** 316 hard checks, 0
+fail, **18 real backend lifecycles** (against 7–9 on the fast images) — the ecosystem managers
+getting the real install → list → remove that IV.1 said the image existed for and had never
+delivered. That first run found **S31**, a fail-silent bug no unit test could reach: `mise`'s
+`info` asked the plugin *catalogue* rather than the installed set, so the planner thought every
+mise tool was already installed and `linix install mise:X` printed *already up to date* while
+installing nothing. Every `mise:` line in every config was inert. Fixed, re-run, 0 fail, twice.
+
 **Real-world, run for real via Docker in WSL (memory: [[docker-in-wsl]]) — the whole fast matrix
 is green:** ubuntu (apt) 271/0, fedora (dnf) 279/0, arch (pacman) 271/0, alpine (apk) 266/0. Zero
 hard failures on any image; each built `linix` from the session's final source, so the
