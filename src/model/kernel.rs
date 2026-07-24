@@ -19,24 +19,35 @@
 /// Whether a package being installed or removed is a kernel.
 ///
 /// Matched on the name across the distributions LiNix drives, because there is no cross-manager
-/// "is this a kernel" flag to ask for. Deliberately generous on the `linux-image` /
-/// `kernel-core` families and deliberately silent on everything else: a false positive costs a
-/// `dkms autoinstall` that finds nothing to do, and a false negative costs a driver.
+/// "is this a kernel" flag to ask for. The tension is real in both directions: a false negative
+/// costs a driver after the reboot, but a false positive is not free either — it runs
+/// `dkms autoinstall` (harmless) *and then fails the sync if any DKMS module is stuck*, even a
+/// module broken for reasons that have nothing to do with this install. So the matcher is
+/// generous where the names are version-suffixed and precise where they are a fixed set.
 pub fn is_kernel_package(name: &str) -> bool {
     let n = name.trim().to_ascii_lowercase();
-    // Arch: `linux`, `linux-lts`, `linux-zen`, `linux-hardened` (+ `-headers`).
-    // Debian/Ubuntu: `linux-image-*`, `linux-headers-*`, `linux-generic`.
-    // Fedora/RHEL: `kernel`, `kernel-core`, `kernel-modules`, `kernel-devel`.
-    // openSUSE: `kernel-default`, `kernel-default-devel`.
-    const EXACT: [&str; 6] = ["linux", "kernel", "linux-lts", "linux-zen", "linux-hardened", "linux-generic"];
-    const PREFIXES: [&str; 4] = ["linux-image", "linux-headers", "kernel-", "linux-lts"];
 
-    if EXACT.contains(&n.as_str()) {
+    // The version-suffixed families: Debian/Ubuntu carry the release in the name, so only a
+    // prefix match works — `linux-image-6.8.0-31-generic`, `linux-headers-amd64`.
+    const VERSIONED: [&str; 4] = ["linux-image", "linux-headers", "linux-modules", "linux-lts"];
+    if VERSIONED.iter().any(|p| n.starts_with(p)) {
         return true;
     }
-    // `kernel-` would also match `kernel-tools`, which is harmless — see the doc comment: a
-    // false positive costs a no-op rebuild, a false negative costs a driver.
-    PREFIXES.iter().any(|p| n.starts_with(p))
+
+    // The fixed names, matched exactly so `kernel-tools`, `kernel-rpm-macros`, `kernelshark`
+    // and `linux-libc-dev` (userspace headers) do NOT trip it:
+    //   Arch:        linux, linux-lts, linux-zen, linux-hardened, linux-rt (+ their -headers)
+    //   Debian:      linux-generic, linux-image-generic
+    //   Fedora/RHEL: kernel, kernel-core, kernel-modules(-extra), kernel-devel, kernel-headers
+    //   openSUSE:    kernel-default(-devel|-base), kernel-preempt
+    const EXACT: [&str; 20] = [
+        "linux", "linux-lts", "linux-zen", "linux-hardened", "linux-rt",
+        "linux-zen-headers", "linux-lts-headers", "linux-hardened-headers", "linux-headers",
+        "linux-generic", "linux-image-generic",
+        "kernel", "kernel-core", "kernel-modules", "kernel-modules-extra", "kernel-devel",
+        "kernel-headers", "kernel-default", "kernel-default-devel", "kernel-preempt",
+    ];
+    EXACT.contains(&n.as_str())
 }
 
 /// The kernel packages a change set touches, sorted and deduplicated.
@@ -192,11 +203,25 @@ mod tests {
         }
     }
 
-    /// A false negative costs a driver, so the matcher is generous — but not so generous that
-    /// ordinary software trips it.
+    /// A false negative costs a driver, so the matcher is generous — but a false positive can
+    /// fail an unrelated sync on a pre-existing stuck module, so these near-misses must NOT
+    /// trip it. Every one is a real package that looks kernel-shaped and is not.
     #[test]
     fn ordinary_packages_are_not_kernels() {
-        for name in ["jq", "ripgrep", "linuxbrew", "vlinux", "nginx", "python3"] {
+        for name in [
+            "jq",
+            "ripgrep",
+            "linuxbrew",
+            "vlinux",
+            "nginx",
+            "python3",
+            "linux-libc-dev",   // userspace C headers, not a kernel
+            "linux-tools-common",
+            "kernel-tools",     // the one the bare `kernel-` prefix used to catch
+            "kernel-rpm-macros",
+            "kernelshark",
+            "liblinux",
+        ] {
             assert!(!is_kernel_package(name), "`{}` is not a kernel", name);
         }
     }
