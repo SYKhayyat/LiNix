@@ -228,9 +228,10 @@ most backends is worse than a narrower one that is honest.
 
 ## U1
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — by 7a's approval, and BUILT 2026-07-23.**
 
-**In the tree today:** **Still machine-local.** `backends/onboarder.rs:323` reads `safe_config_dir().join("custom_backends.toml")`, never the repo.
+**In the tree today:** `Layout::custom_backends_file()` — the config repo, and the only path any
+loader reads.
 
 **U1 — Where does a custom backend definition live?** Today `~/.config/linix/custom_backends.
 toml`, machine-local, never in git — so a repo that uses `paru:` breaks on every machine but
@@ -241,6 +242,22 @@ same change rather than left as a second place to look. **The consequence that m
 decision and not an obvious fix:** a definition in the repo is argv that a shared repo can
 execute, which is II.12's supply-chain surface. It must inherit the hook trust model, not a
 new one.
+
+**BUILT 2026-07-23, both halves.** The file is `<config_root>/custom_backends.toml`, read
+through `Layout` like every other repo file; the machine-local path is deleted rather than kept
+as a fallback, so `grep -rn "custom_backends" src/` finds one loader. **And it inherits the hook
+model rather than getting one of its own**: the file's sha256 lives in `locks/hooks.toml` under
+`backends:custom_backends.toml`, `linix lock` approves it, and an unapproved or edited file
+registers **nothing** and says why. The check is at load rather than at the sync gate on purpose
+— a registered backend is reachable from `search` and `list`, which no sync guards.
+
+**One identity for the whole file, not one per definition.** A per-backend identity would let an
+edit that *adds* a `[[backend]]` pass unnoticed, and adding one is the whole attack.
+
+**Not decided here:** U2 (is a custom backend a full peer) and U16 (may `binary` be a path). U16
+became reachable the moment `binary` existed, so it is refused for now — a definition naming
+`/opt/vendor/thing` works on one machine, which is the property this entry moved the file to
+fix — and the refusal says so rather than resolving the path.
 
 ---
 
@@ -736,6 +753,10 @@ Slack — and revisit only when a real case wants a fleet-wide event.
 ## U16
 
 **Status: OPEN.**
+
+**Still open, and now reachable — 2026-07-23.** `binary` exists (7a), and a path in it is
+**refused** with a message saying why: this is the status quo preserved, not an answer. Allowing
+it later is additive; allowing it now would decide the question in code.
 
 **U16 — Does the field split (XIII.12) allow an absolute path as `binary`?** A prefix that runs
 `/opt/vendor/thing` is more useful and is also a definition that only works on one machine.

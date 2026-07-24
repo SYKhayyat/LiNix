@@ -95,6 +95,9 @@ pub struct OrphanDryRun {
 #[derive(Debug, Clone)]
 pub struct ManagerConfig {
     pub name: String,
+    /// The program to run, when it is not the backend's own name (XIII.12). `None` — every
+    /// built-in — means the name is the command.
+    pub binary: Option<String>,
     pub install_args: Vec<String>,
     pub remove_args: Vec<String>,
     /// Args that also destroy the package's configuration (Debian's `purge`). `None` means
@@ -144,6 +147,17 @@ pub struct GenericBackendCore {
     pub parser: Arc<dyn OutputParser>,
 }
 
+impl GenericBackendCore {
+    /// The program this backend runs. `name` is the prefix a line is written with, and for
+    /// every built-in the two are the same word — but a user-defined noun (`firewall:`) runs
+    /// something else (`ufw`), so a command position must ask for this and never for `name`
+    /// (XIII.12). `list_binary`/`search_binary`/`enumerate_binary` are narrower overrides and
+    /// fall back to this, not to the name.
+    pub fn binary(&self) -> &str {
+        self.config.binary.as_deref().unwrap_or(&self.name)
+    }
+}
+
 #[async_trait]
 impl BackendCore for GenericBackendCore {
     fn name(&self) -> &str {
@@ -151,7 +165,7 @@ impl BackendCore for GenericBackendCore {
     }
 
     fn is_available(&self) -> bool {
-        self.executor.command_exists_sync(&self.name)
+        self.executor.command_exists_sync(self.binary())
     }
 
     fn needs_root(&self) -> bool {
@@ -163,7 +177,8 @@ impl BackendCore for GenericBackendCore {
             return Ok(HealthReport {
                 status: HealthStatus::Critical,
                 message: Some(format!(
-                    "Binary for generic manager '{}' not found in PATH",
+                    "`{}` is not on PATH, so the `{}` backend cannot run",
+                    self.binary(),
                     self.name
                 )),
             });
@@ -192,7 +207,7 @@ impl MetadataProvider for GenericBackendCore {
         // Dependency resolution is a read-only query — never escalate with sudo.
         let output = self
             .executor
-            .run_output(&self.name, &arg_refs, false)
+            .run_output(self.binary(), &arg_refs, false)
             .await?;
 
         // Extract clean package names. apt/zypper print labelled lines
@@ -242,7 +257,7 @@ impl Installable for GenericInstallable {
         if trailing_flags {
             final_args.extend(names);
         } else {
-            crate::core::argv::push_names(&mut final_args, &self.core.name, names);
+            crate::core::argv::push_names(&mut final_args, self.core.binary(), names);
         }
 
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
@@ -250,12 +265,12 @@ impl Installable for GenericInstallable {
         if self.core.config.is_exclusive {
             self.core
                 .executor
-                .run_exclusive(&self.core.name, &self.core.name, &arg_refs, sudo)
+                .run_exclusive(self.core.binary(), self.core.binary(), &arg_refs, sudo)
                 .await?;
         } else {
             self.core
                 .executor
-                .run(&self.core.name, &arg_refs, sudo)
+                .run(self.core.binary(), &arg_refs, sudo)
                 .await?;
         }
         Ok(())
@@ -279,7 +294,8 @@ impl Installable for GenericInstallable {
     async fn purge(&self, names: &[String], sudo: bool) -> Result<()> {
         let Some(args) = self.core.config.purge_args.clone() else {
             return Err(crate::core::Error::Unsupported(format!(
-                "{} has no purge — it does not keep a package's configuration apart from the                  package",
+                "{} has no purge — it does not keep a package's configuration apart from the \
+                 package",
                 self.core.name
             )));
         };
@@ -297,18 +313,18 @@ impl GenericInstallable {
         if names.is_empty() {
             return Ok(());
         }
-        crate::core::argv::push_names(&mut args, &self.core.name, names);
+        crate::core::argv::push_names(&mut args, self.core.binary(), names);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         if self.core.config.is_exclusive {
             self.core
                 .executor
-                .run_exclusive(&self.core.name, &self.core.name, &arg_refs, sudo)
+                .run_exclusive(self.core.binary(), self.core.binary(), &arg_refs, sudo)
                 .await?;
         } else {
             self.core
                 .executor
-                .run(&self.core.name, &arg_refs, sudo)
+                .run(self.core.binary(), &arg_refs, sudo)
                 .await?;
         }
         Ok(())
@@ -336,7 +352,7 @@ impl Queryable for GenericQueryable {
             .config
             .list_binary
             .as_deref()
-            .unwrap_or(&self.core.name);
+            .unwrap_or(self.core.binary());
         let output = self.core.executor.run_output(bin, &args, false).await?;
         Ok(self.core.parser.parse_installed(&output))
     }
@@ -353,7 +369,7 @@ impl Queryable for GenericQueryable {
                 let bin = binary
                     .as_deref()
                     .or(self.core.config.list_binary.as_deref())
-                    .unwrap_or(&self.core.name);
+                    .unwrap_or(self.core.binary());
                 let output = self.core.executor.run_output(bin, &args, false).await?;
                 Ok(match format {
                     ManualFormat::BareNames => {
@@ -382,7 +398,7 @@ impl Queryable for GenericQueryable {
                 let bin = binary
                     .as_deref()
                     .or(self.core.config.list_binary.as_deref())
-                    .unwrap_or(&self.core.name);
+                    .unwrap_or(self.core.binary());
                 format!("{} {}", bin, args.join(" "))
             }
             ManualListing::Unsupported => {
@@ -404,7 +420,7 @@ impl Queryable for GenericQueryable {
             .config
             .list_binary
             .as_deref()
-            .unwrap_or(&self.core.name);
+            .unwrap_or(self.core.binary());
         let output = self.core.executor.run_output(bin, &args, false).await?;
         Ok(self.core.parser.parse_essential(&output))
     }
@@ -446,7 +462,7 @@ impl Searchable for GenericSearchable {
             .config
             .search_binary
             .as_deref()
-            .unwrap_or(&self.core.name);
+            .unwrap_or(self.core.binary());
         let mut owned: Vec<String> = self.core.config.search_args.clone();
         crate::core::argv::push_names(&mut owned, bin, [query]);
         let args: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
@@ -474,7 +490,7 @@ impl Enumerable for GenericEnumerable {
             .config
             .enumerate_binary
             .as_deref()
-            .unwrap_or(&self.core.name);
+            .unwrap_or(self.core.binary());
         let output = self.core.executor.run_output(bin, &args, false).await?;
         Ok(output
             .lines()
@@ -494,7 +510,7 @@ impl Upgradable for GenericUpgradable {
     async fn update(&self, sudo: bool) -> Result<()> {
         if let Some(ref update_args) = self.core.config.update_args {
             let args: Vec<&str> = update_args.iter().map(|s| s.as_str()).collect();
-            self.core.executor.run(&self.core.name, &args, sudo).await?;
+            self.core.executor.run(self.core.binary(), &args, sudo).await?;
         }
         Ok(())
     }
@@ -510,10 +526,10 @@ impl Upgradable for GenericUpgradable {
         if self.core.config.is_exclusive {
             self.core
                 .executor
-                .run_exclusive(&self.core.name, &self.core.name, &args, sudo)
+                .run_exclusive(self.core.binary(), self.core.binary(), &args, sudo)
                 .await?;
         } else {
-            self.core.executor.run(&self.core.name, &args, sudo).await?;
+            self.core.executor.run(self.core.binary(), &args, sudo).await?;
         }
         Ok(())
     }
@@ -523,7 +539,7 @@ impl Upgradable for GenericUpgradable {
             return Err(crate::core::Error::Unsupported(self.core.name.clone()));
         };
         let args: Vec<&str> = dry.args.iter().map(String::as_str).collect();
-        let binary = dry.binary.as_deref().unwrap_or(&self.core.name);
+        let binary = dry.binary.as_deref().unwrap_or(self.core.binary());
         let out = self.core.executor.run_output(binary, &args, false).await?;
         Ok(out
             .lines()
@@ -574,7 +590,7 @@ impl RepoManager for GenericRepoManager {
         info!("Repo: Adding {} to {}...", name, self.core.name);
         self.core
             .executor
-            .run(&self.core.name, &arg_refs, sudo)
+            .run(self.core.binary(), &arg_refs, sudo)
             .await?;
         Ok(())
     }
@@ -593,7 +609,7 @@ impl RepoManager for GenericRepoManager {
 
         self.core
             .executor
-            .run(&self.core.name, &arg_refs, sudo)
+            .run(self.core.binary(), &arg_refs, sudo)
             .await?;
         Ok(())
     }
@@ -606,7 +622,7 @@ impl RepoManager for GenericRepoManager {
         let output = self
             .core
             .executor
-            .run_output(&self.core.name, &arg_refs, false)
+            .run_output(self.core.binary(), &arg_refs, false)
             .await?;
 
         let mut repos = Vec::new();
@@ -659,6 +675,7 @@ mod tests {
             executor: exec,
             config: ManagerConfig {
                 name: "apt".into(),
+                binary: None,
                 install_args: vec![],
                 remove_args: vec![],
                 list_args: vec![],

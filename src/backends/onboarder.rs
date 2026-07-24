@@ -4,13 +4,17 @@
 // the argv come straight from TOML, and the parser is a declarative `ParserSpec` (JSON /
 // columns / regex / lines) interpreted at runtime by `ConfiguredParser`.
 //
-// Definitions live in `~/.config/linix/custom_backends.toml`:
+// Definitions live in `custom_backends.toml` in the CONFIG REPO, beside `priority` and
+// `schedules` (7a/U1) — never in the machine-local settings directory. A definition that
+// cannot travel is a repo that fails on every machine but the one where somebody once
+// hand-wrote the file, which contradicts the model's central claim.
 //
 //     [[backend]]
-//     name = "paru"                       # also the invoked binary
-//     install_args = ["-S", "--noconfirm"]
-//     remove_args  = ["-R", "--noconfirm"]
-//     list_args    = ["-Qm"]
+//     name = "firewall"                   # the prefix a line is written with
+//     binary = "ufw"                      # the program actually run (defaults to `name`)
+//     install_args = ["allow"]
+//     remove_args  = ["delete", "allow"]
+//     list_args    = ["status", "numbered"]
 //     search_args  = ["-Ss"]
 //     needs_root   = false
 //     [backend.parser]
@@ -20,6 +24,10 @@
 //
 // Custom backends are registered LAST and never override a built-in (collisions are
 // skipped with a warning), so a stray config can't hijack `apt` or `brew`.
+//
+// **The file is argv a shared repo can execute, so it is II.12's supply-chain surface and
+// goes through the hook ledger** — the same approval a hook needs, not a second mechanism.
+// An unapproved or changed file registers nothing and says so; `linix lock` approves it.
 
 use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericSearchable, GenericUpgradable,
@@ -35,7 +43,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{error, warn};
 
 
 fn default_name_key() -> String {
@@ -273,8 +281,11 @@ impl From<VersionPinDef> for VersionPin {
 /// One `[[backend]]` entry in `custom_backends.toml`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CustomBackendDef {
-    /// Backend id AND the binary invoked (they must match for custom backends).
+    /// The prefix a line is written with — `firewall:22/tcp`.
     pub name: String,
+    /// The program actually run. Absent means the name is the command, which is what every
+    /// definition said before XIII.12 split the two.
+    pub binary: Option<String>,
     #[serde(default)]
     pub install_args: Vec<String>,
     #[serde(default)]
@@ -303,6 +314,18 @@ struct CustomBackendsFile {
     backend: Vec<CustomBackendDef>,
 }
 
+/// True for a program name LiNix will run for a custom backend.
+///
+/// A path is refused rather than resolved: whether `binary = "/opt/vendor/thing"` is allowed
+/// is **U16**, still open, and a definition naming an absolute path is one that works on one
+/// machine — the exact property 7a moved this file to fix. Refusing keeps the question open;
+/// running it would answer it in code.
+fn is_valid_binary(binary: &str) -> bool {
+    !binary.is_empty()
+        && !binary.chars().any(|c| c.is_whitespace())
+        && !binary.contains(['/', '\\'])
+}
+
 /// True for a syntactically valid backend id: non-empty, no whitespace or path
 /// separators (it becomes both a HashMap key and an executed command name).
 fn is_valid_backend_name(name: &str) -> bool {
@@ -316,20 +339,25 @@ fn is_valid_backend_name(name: &str) -> bool {
 }
 
 
-/// Loads and registers custom backends from the default config path, if the file
-/// exists. Never fails the program: a missing file is normal, and a malformed one is
-/// logged and skipped so the built-in backends still come up.
-pub fn load_default_custom_backends(reg: &mut BackendRegistry, exec: &CommandExecutor) {
-    let path = crate::utils::safe_config_dir().join("custom_backends.toml");
-    load_custom_backends_from(reg, exec, &path);
+/// Loads and registers the config repo's custom backends. Never fails the program: a missing
+/// file is normal, and a malformed or unapproved one is reported and skipped so the built-in
+/// backends still come up — including `linix lock`, which is how an unapproved file is fixed.
+pub fn load_default_custom_backends(
+    reg: &mut BackendRegistry,
+    exec: &CommandExecutor,
+    cfg: &crate::config::Config,
+) {
+    let layout = cfg.layout();
+    load_custom_backends_from(reg, exec, &layout.custom_backends_file(), &layout.locks_dir());
 }
 
-/// Reads `path`, parses it, and registers each valid backend. Returns the number of
-/// backends registered (useful for tests/telemetry).
+/// Reads `path`, checks it against the hook ledger in `locks_dir`, parses it, and registers
+/// each valid backend. Returns the number of backends registered.
 pub fn load_custom_backends_from(
     reg: &mut BackendRegistry,
     exec: &CommandExecutor,
     path: &Path,
+    locks_dir: &Path,
 ) -> usize {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
@@ -339,6 +367,16 @@ pub fn load_custom_backends_from(
             return 0;
         }
     };
+
+    // II.12, before the definitions become runnable argv: a shared repo that can define a
+    // backend can run commands on every machine that clones it, which is the hook question
+    // with a different file name. The check is here rather than at the sync gate because a
+    // registered backend is reachable from `search` and `list` too, which no sync guards.
+    if let Some(refusal) = unapproved(&content, locks_dir) {
+        error!("{}", refusal);
+        return 0;
+    }
+
     let parsed: CustomBackendsFile = match toml::from_str(&content) {
         Ok(p) => p,
         Err(e) => {
@@ -347,6 +385,21 @@ pub fn load_custom_backends_from(
         }
     };
     register_custom_backends(reg, exec, parsed.backend)
+}
+
+/// The II.12 refusal for this file's current contents, or `None` when it is approved.
+fn unapproved(content: &str, locks_dir: &Path) -> Option<String> {
+    use crate::core::hook_lock::{backends_id, hash_script, refusal, HookLedger};
+    let ledger = match HookLedger::load(&HookLedger::path_in(locks_dir)) {
+        Ok(l) => l,
+        Err(e) => return Some(format!("could not read the approval ledger: {}", e)),
+    };
+    let id = backends_id();
+    let verdict = ledger.verdict(&id, &hash_script(content));
+    if verdict.is_approved() {
+        return None;
+    }
+    Some(refusal(&id, "custom backend definition", &verdict))
 }
 
 /// Registers a set of already-parsed definitions. Invalid names and collisions with an
@@ -361,6 +414,17 @@ pub fn register_custom_backends(
         if !is_valid_backend_name(&def.name) {
             warn!("Skipping custom backend with invalid name: '{}'", def.name);
             continue;
+        }
+        if let Some(binary) = &def.binary {
+            if !is_valid_binary(binary) {
+                warn!(
+                    "Skipping custom backend '{}': `binary = \"{}\"` is not a plain command \
+                     name. A path is refused — a definition that names one only works on the \
+                     machine that has it there, and this file travels with the repo.",
+                    def.name, binary
+                );
+                continue;
+            }
         }
         if reg.get(&def.name).is_some() {
             warn!(
@@ -392,6 +456,7 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
 
     let config = ManagerConfig {
         name: def.name.clone(),
+        binary: def.binary,
         install_args: def.install_args,
         remove_args: def.remove_args,
         list_args: def.list_args,
@@ -555,6 +620,7 @@ mod tests {
 
         let good = CustomBackendDef {
             name: "paru".into(),
+            binary: None,
             install_args: vec!["-S".into()],
             remove_args: vec!["-R".into()],
             list_args: vec!["-Qm".into()],
@@ -589,5 +655,195 @@ mod tests {
         assert!(!caps.is_searchable());
         assert!(!caps.is_upgradable());
         assert!(caps.is_metadata_provider());
+    }
+
+    fn firewall_def() -> CustomBackendDef {
+        CustomBackendDef {
+            name: "firewall".into(),
+            binary: Some("ufw".into()),
+            install_args: vec!["allow".into()],
+            remove_args: vec!["delete".into(), "allow".into()],
+            list_args: vec!["status".into()],
+            search_args: vec![],
+            upgrade_args: vec![],
+            update_args: None,
+            needs_root: false,
+            is_exclusive: false,
+            version_pin: None,
+            parser: None,
+            search_parser: None,
+        }
+    }
+
+    fn mock_exec() -> (Arc<crate::core::executor::MockExecutor>, CommandExecutor) {
+        use dashmap::DashMap;
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+        let exec = CommandExecutor::with_layer(
+            true,
+            false,
+            mock.clone(),
+            vfs,
+            Arc::new(DashMap::new()),
+        );
+        (mock, exec)
+    }
+
+    /// XIII.12: the prefix a line is written with and the program that runs are two facts.
+    /// `firewall:22/tcp` runs `ufw`, and every verb has to agree about that — an install that
+    /// ran `ufw` while the removal ran `firewall` would leave a rule nothing can take back.
+    #[tokio::test]
+    async fn a_name_that_differs_from_its_binary_runs_the_binary_on_every_verb() {
+        let (mock, exec) = mock_exec();
+        let mut reg = BackendRegistry::new();
+        assert_eq!(register_custom_backends(&mut reg, &exec, vec![firewall_def()]), 1);
+        let caps = reg.get("firewall").expect("firewall registered");
+
+        caps.as_installable()
+            .unwrap()
+            .install(
+                &[crate::core::PackageSpec {
+                    name: "22/tcp".into(),
+                    backend: "firewall".into(),
+                    options: HashMap::new(),
+                    requires: vec![],
+                    present: true,
+                }],
+                false,
+            )
+            .await
+            .unwrap();
+        caps.as_queryable().unwrap().list_installed().await.unwrap();
+        caps.as_installable()
+            .unwrap()
+            .remove(&["22/tcp".to_string()], false)
+            .await
+            .unwrap();
+
+        let calls = mock.get_calls().await;
+        assert_eq!(calls.len(), 3, "{:?}", calls);
+        assert!(calls.iter().all(|c| c.starts_with("ufw ")), "{:?}", calls);
+        assert!(calls.iter().any(|c| c.contains("allow 22/tcp")), "{:?}", calls);
+        assert!(calls.iter().any(|c| c.contains("status")), "{:?}", calls);
+        assert!(calls.iter().any(|c| c.contains("delete allow 22/tcp")), "{:?}", calls);
+        // And the backend still answers to the name a line is written with.
+        assert_eq!(caps.name(), "firewall");
+    }
+
+    /// U16 stays open: a `binary` naming a path is refused rather than resolved, because a
+    /// definition that only works where `/opt/vendor/thing` exists is the machine-local
+    /// problem 7a moved this file to fix.
+    #[test]
+    fn a_binary_that_names_a_path_is_refused() {
+        let (_, exec) = mock_exec();
+        let mut reg = BackendRegistry::new();
+        for path in ["/opt/vendor/ufw", "..\\ufw", "ufw x"] {
+            let def = CustomBackendDef {
+                binary: Some(path.into()),
+                ..firewall_def()
+            };
+            assert_eq!(
+                register_custom_backends(&mut reg, &exec, vec![def]),
+                0,
+                "`{}` was accepted as a binary",
+                path
+            );
+        }
+    }
+
+    fn write_repo(dir: &Path, body: &str) -> std::path::PathBuf {
+        let file = dir.join("custom_backends.toml");
+        std::fs::write(&file, body).unwrap();
+        file
+    }
+
+    const PARU_TOML: &str = r#"
+[[backend]]
+name = "paru"
+install_args = ["-S"]
+remove_args = ["-R"]
+list_args = ["-Qm"]
+"#;
+
+    /// 7a: the definition travels with the repo. A machine that has never seen this file
+    /// registers the backend from it — after `linix lock`, because the file is argv the repo
+    /// can run and that is II.12's question, not a new one.
+    #[test]
+    fn a_repo_definition_registers_once_it_is_approved() {
+        use crate::core::hook_lock::{backends_id, hash_script, HookLedger};
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, exec) = mock_exec();
+        write_repo(tmp.path(), PARU_TOML);
+        let locks = tmp.path().join("locks");
+
+        // Unapproved: nothing registers, however valid the definition is.
+        let mut reg = BackendRegistry::new();
+        let n = load_custom_backends_from(
+            &mut reg,
+            &exec,
+            &tmp.path().join("custom_backends.toml"),
+            &locks,
+        );
+        assert_eq!(n, 0, "an unapproved definition file registered a backend");
+        assert!(reg.get("paru").is_none());
+
+        // What `linix lock` writes.
+        let mut ledger = HookLedger::new();
+        ledger.approve(&backends_id(), &hash_script(PARU_TOML));
+        ledger.save(&HookLedger::path_in(&locks)).unwrap();
+
+        let mut reg = BackendRegistry::new();
+        let n = load_custom_backends_from(
+            &mut reg,
+            &exec,
+            &tmp.path().join("custom_backends.toml"),
+            &locks,
+        );
+        assert_eq!(n, 1);
+        assert!(reg.get("paru").is_some());
+    }
+
+    /// And the case the ledger exists for: approved once, then edited. An added `[[backend]]`
+    /// is a new command the repo can run, so one identity covers the whole file.
+    #[test]
+    fn an_edited_definition_file_stops_registering_until_it_is_re_approved() {
+        use crate::core::hook_lock::{backends_id, hash_script, HookLedger};
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, exec) = mock_exec();
+        let locks = tmp.path().join("locks");
+        let mut ledger = HookLedger::new();
+        ledger.approve(&backends_id(), &hash_script(PARU_TOML));
+        ledger.save(&HookLedger::path_in(&locks)).unwrap();
+
+        let edited = format!("{}\n[[backend]]\nname = \"yay\"\ninstall_args = [\"-S\"]\n", PARU_TOML);
+        write_repo(tmp.path(), &edited);
+
+        let mut reg = BackendRegistry::new();
+        let n = load_custom_backends_from(
+            &mut reg,
+            &exec,
+            &tmp.path().join("custom_backends.toml"),
+            &locks,
+        );
+        assert_eq!(n, 0, "an edited file kept running on the old approval");
+        assert!(reg.get("paru").is_none(), "the unchanged half kept running too");
+    }
+
+    /// A missing file is the ordinary case, not a refusal: nothing is approved and nothing
+    /// needs to be.
+    #[test]
+    fn no_definition_file_is_not_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (_, exec) = mock_exec();
+        let mut reg = BackendRegistry::new();
+        assert_eq!(
+            load_custom_backends_from(
+                &mut reg,
+                &exec,
+                &tmp.path().join("custom_backends.toml"),
+                &tmp.path().join("locks"),
+            ),
+            0
+        );
     }
 }

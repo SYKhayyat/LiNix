@@ -3193,7 +3193,30 @@ async fn handle_lock(app: &App) -> Result<()> {
     if let Some(file) = approve_vars_provider(app)? {
         info!("Lock: approved the vars provider `{}` at its current hash.", file);
     }
+    // And the custom backend definitions (7a). They travel with the repo now, and a
+    // definition is argv LiNix will run, so it is approved here or it does not load.
+    if approve_custom_backends(app)? {
+        info!("Lock: approved `custom_backends.toml` at its current hash.");
+    }
     Ok(())
+}
+
+/// Record the config repo's `custom_backends.toml` hash in the hook ledger. `false` when the
+/// repo has no such file, which is the ordinary case and never an error.
+fn approve_custom_backends(app: &App) -> Result<bool> {
+    use linix::core::hook_lock::{backends_id, hash_script, HookLedger};
+
+    let layout = app.config.layout();
+    let body = match std::fs::read_to_string(layout.custom_backends_file()) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
+    let path = HookLedger::path_in(&layout.locks_dir());
+    let mut ledger = HookLedger::load(&path)?;
+    ledger.approve(&backends_id(), &hash_script(&body));
+    ledger.save(&path)?;
+    Ok(true)
 }
 
 /// Record the active executing `vars` provider's current hash in the hook ledger. Returns the

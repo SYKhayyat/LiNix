@@ -1060,6 +1060,23 @@ package **on a machine that has never seen the file**; a definition whose `name`
 differ (`firewall` → `ufw`) installs, lists and removes; and the machine-local path is gone from
 the tree (`grep -rn "custom_backends" src/` finds one loader, not two).
 
+**DONE 2026-07-23.** All three exit clauses are asserted by unit tests, and the grep finds one
+loader. **What the exit does not say and the work required:** the definition is approved through
+the hook ledger before it registers, so "a machine that has never seen the file" means clone →
+`linix lock` → `sync`, exactly as a repo carrying hooks does. **One ledger identity for the whole
+file**, because a per-definition identity would let an added `[[backend]]` — the whole attack —
+pass unnoticed. The check is at load rather than at the sync gate: a registered backend is
+reachable from `search` and `list`, which no sync guards.
+
+**The `name`/`binary` split went through `ManagerConfig`, not just the onboarder**, so there is
+one answer to "what program does this backend run" and the built-ins are the `binary: None` case
+of it rather than a second rule. Every command position in `generic.rs` asks
+`GenericBackendCore::binary()` now; the label positions (the `backend` field on a parsed package,
+the choco/scoop/winget identity check) still ask `name`, which is the distinction the split
+exists to make. **U16 is refused, not decided**: a `binary` naming a path is skipped with a
+message, because allowing it later is additive and allowing it now answers an open question in
+code.
+
 **7b — `exec:`, conditioned by `when`, locked by content hash (XIII.3).** No `@unless=`, no
 `@creates=` — the condition is a `when` over a provider variable, and the state is
 `locks/exec.toml` keyed by the hash of the script with a run count. **Exit:** a script runs once,

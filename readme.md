@@ -95,6 +95,7 @@ vars           your own names for conditions, so `when` can ask about them
 schedules      when LiNix runs itself
 locks/         what everything resolved to, one file per backend
 preferences.toml   refusals and behaviour (written by `linix config init`)
+custom_backends.toml   package managers LiNix does not ship, taught from data (optional)
 ```
 
 LiNix's own bookkeeping — what it currently owns, snapshot metadata — lives in
@@ -472,6 +473,33 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
   unconfirmed changes in a pipe, cron job or CI run without `--yes`.
 - **Hooks are locked.** `after_install` and friends are hashed; a changed hook must be
   re-approved with `linix lock`, so a pulled config cannot quietly start running new code.
+
+## Teaching LiNix a package manager it has never heard of
+
+If a manager's CLI has plain install/remove/list verbs, LiNix can learn it from data — no
+Rust, no release. Write `custom_backends.toml` in your repo:
+
+```toml
+[[backend]]
+name   = "firewall"        # the prefix a line is written with
+binary = "ufw"             # the program actually run; defaults to `name`
+install_args = ["allow"]
+remove_args  = ["delete", "allow"]
+list_args    = ["status", "numbered"]
+[backend.parser]           # how to read `list` output
+format = "columns"
+name_col = 0
+```
+
+`firewall:22/tcp` then works everywhere a built-in prefix works. Because `name` and `binary`
+are separate, the prefix does not have to be a package manager's name — it can be any noun
+that has a CLI behind it.
+
+**It lives in the repo, so it travels**, which is the point: a definition on one machine makes
+every other machine fail on a line it cannot resolve. And because it is a list of commands your
+repo can run on any machine that clones it, it is approved the way a hook is — `linix lock`
+approves the file, and any later edit stops it loading until you look at the change and approve
+it again. Custom definitions load last and can never take over a built-in name.
 
 ## Configuration
 

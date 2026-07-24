@@ -186,7 +186,7 @@ pub async fn create_default_registry(
 
     // --- User-defined backends (the onboarder). Loaded last so a custom definition
     // can never silently shadow a built-in; collisions are skipped with a warning. ---
-    crate::backends::onboarder::load_default_custom_backends(&mut reg, &executor);
+    crate::backends::onboarder::load_default_custom_backends(&mut reg, &executor, config);
 
     reg
 }
@@ -202,6 +202,7 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "apt".into(),
+            binary: None,
             version_pin: Some(VersionPin::Inline("{name}={version}".into())),
             install_args: vec!["install".into(), "-y".into()],
             remove_args: vec!["remove".into(), "-y".into()],
@@ -297,6 +298,7 @@ fn register_aur_helper(
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: name.into(),
+            binary: None,
             // AUR + Arch are rolling: no exact-version pin (mirrors pacman).
             version_pin: None,
             install_args: vec!["-S".into(), "--noconfirm".into(), "--needed".into()],
@@ -353,6 +355,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "apk".into(),
+            binary: None,
             version_pin: Some(VersionPin::Inline("{name}={version}".into())),
             install_args: vec!["add".into()],
             remove_args: vec!["del".into()],
@@ -432,6 +435,7 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "zypper".into(),
+            binary: None,
             version_pin: Some(VersionPin::Inline("{name}={version}".into())),
             install_args: vec!["install".into(), "-y".into()],
             remove_args: vec!["remove".into(), "-y".into()],
@@ -483,6 +487,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "winget".into(),
+            binary: None,
             version_pin: Some(VersionPin::Flag(vec![
                 "--version".into(),
                 "{version}".into(),
@@ -550,6 +555,7 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "scoop".into(),
+            binary: None,
             version_pin: None, // scoop pins via versioned manifests; not a simple flag
 
             install_args: vec!["install".into()],
@@ -603,6 +609,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "choco".into(),
+            binary: None,
             version_pin: Some(VersionPin::Flag(vec![
                 "--version".into(),
                 "{version}".into(),
@@ -669,6 +676,7 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "mas".into(),
+            binary: None,
             version_pin: None, // Mac App Store installs the current published version only
 
             install_args: vec!["install".into()],
@@ -718,6 +726,7 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "pip".into(),
+            binary: None,
             version_pin: Some(VersionPin::Inline("{name}=={version}".into())),
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into(), "-y".into()],
@@ -765,6 +774,7 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "gem".into(),
+            binary: None,
             version_pin: Some(VersionPin::Flag(vec!["-v".into(), "{version}".into()])),
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
@@ -812,6 +822,7 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "bun".into(),
+            binary: None,
             version_pin: Some(VersionPin::Inline("{name}@{version}".into())),
             install_args: vec!["add".into(), "-g".into()],
             remove_args: vec!["remove".into(), "-g".into()],
@@ -858,6 +869,7 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "macports".into(),
+            binary: None,
             // MacPorts pins via `install name @version`, but versions are entangled with
             // variants/revisions; skip automatic pinning rather than risk a wrong ref.
             version_pin: None,
@@ -912,6 +924,7 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "pkgin".into(),
+            binary: None,
             version_pin: None,
             install_args: vec!["-y".into(), "install".into()],
             remove_args: vec!["-y".into(), "remove".into()],
@@ -962,6 +975,7 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "dotnet".into(),
+            binary: None,
             version_pin: Some(VersionPin::Flag(vec![
                 "--version".into(),
                 "{version}".into(),
@@ -1022,6 +1036,7 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 fn base_config(name: &str) -> ManagerConfig {
     ManagerConfig {
         name: name.into(),
+        binary: None,
         install_args: vec![],
         remove_args: vec![],
         purge_args: None,

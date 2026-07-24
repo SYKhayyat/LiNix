@@ -980,6 +980,7 @@ mod tests {
         fn manager(name: &str, exec: CommandExecutor) -> Arc<BackendCapabilities> {
             let config = ManagerConfig {
                 name: name.into(),
+                binary: None,
                 install_args: vec![],
                 remove_args: vec![],
                 list_args: vec![],

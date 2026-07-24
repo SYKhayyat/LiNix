@@ -51,6 +51,14 @@ pub fn vars_id(filename: &str) -> String {
     format!("vars:{}", filename)
 }
 
+/// The ledger identity of the config repo's `custom_backends.toml` (7a/U1). A definition is
+/// argv LiNix will run, and it travels with the repo now, so it is the same supply-chain
+/// surface a hook is — one file, one identity, whatever number of backends it defines: a
+/// per-backend identity would let an edit that adds a definition go unnoticed.
+pub fn backends_id() -> String {
+    "backends:custom_backends.toml".to_string()
+}
+
 /// What the ledger says about a hook whose current hash we just computed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
@@ -146,13 +154,13 @@ pub fn refusal(id: &str, source: &str, verdict: &Verdict) -> String {
     match verdict {
         Verdict::Approved => String::new(),
         Verdict::New => format!(
-            "hook `{}` ({}) has never been approved.\n  \
-             It runs code on this machine, and LiNix will not run a hook it has not seen.\n  \
+            "`{}` ({}) has never been approved.\n  \
+             It runs code on this machine, and LiNix will not run what it has not seen.\n  \
              Review it, then run `linix lock` to approve it.",
             id, source
         ),
         Verdict::Changed { was, now } => format!(
-            "hook `{}` ({}) changed its script since you approved it.\n  \
+            "`{}` ({}) changed since you approved it.\n  \
              was: sha256:{}\n  now: sha256:{}\n  \
              Review the change, then run `linix lock` to approve it.",
             id,

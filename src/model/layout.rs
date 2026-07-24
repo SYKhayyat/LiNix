@@ -117,6 +117,14 @@ impl Layout {
         self.config_root.join("vars")
     }
 
+    /// Package managers LiNix does not ship, taught from data (XIII.2). In the repo, because
+    /// a definition that cannot travel makes every line that uses it fail on every machine
+    /// but the one where somebody hand-wrote the file — including the fresh machine the repo
+    /// exists to set up.
+    pub fn custom_backends_file(&self) -> PathBuf {
+        self.config_root.join("custom_backends.toml")
+    }
+
     /// What everything resolved to. Generated, in git, yours. One file per backend.
     pub fn locks_dir(&self) -> PathBuf {
         self.config_root.join("locks")

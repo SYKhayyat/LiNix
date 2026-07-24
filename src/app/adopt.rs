@@ -371,6 +371,7 @@ mod tests {
             CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
         let mut config = ManagerConfig {
             name: "apt".into(),
+            binary: None,
             install_args: vec![],
             remove_args: vec![],
             list_args: vec!["-W".into()],
