@@ -422,7 +422,21 @@ impl App {
 
         for (stmt, origin) in state.dependents() {
             match stmt {
-                Statement::Shim(name, _opts) => {
+                Statement::Shim(name, opts) => {
+                    // U19: a shim lands in `~/.local/bin`, which is this account's PATH and
+                    // nobody else's. LiNix has no machine-wide shim directory yet, so a line
+                    // asking for one is refused by name rather than quietly deploying a
+                    // per-user shim under a declaration that says every account (P7).
+                    if crate::model::scope::Scope::resolve(
+                        opts.one("scope"),
+                        crate::model::scope::Scope::User,
+                    ) == crate::model::scope::Scope::System
+                    {
+                        return Err(Error::Validation(format!(
+                            "{}: `shim:{}` asks for scope=system, and LiNix deploys shims only                              into this account's `~/.local/bin`. A per-user shim under a line                              that says every account would be the wrong answer quietly, so                              this is refused. Drop `@scope=system`.",
+                            origin, name
+                        )));
+                    }
                     if self.config.dry_run {
                         info!("[DRY-RUN] would deploy shim `{}`", name);
                         continue;

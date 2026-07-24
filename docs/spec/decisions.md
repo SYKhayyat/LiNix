@@ -321,6 +321,37 @@ does anyway (`gsettings` → user, registry → `HKCU`, `apt` → system). **Ans
 written**, because whatever the registry adapter picks becomes the convention by precedent and
 then spreads to macOS `defaults`.
 
+**RULED (owner, 2026-07-24): option 2 — and writing the default is not an error.** `@scope=user`
+on a store whose default is already user is accepted and means exactly what it says. A
+configuration is allowed to state a thing it also gets for free: saying it out loud is how a
+reader learns the answer without going to look it up, and refusing it would punish the person
+being explicit.
+
+**BUILT 2026-07-24, on the rule that nothing may silently ignore it (P7).** The key is accepted
+on `setting:`, `link:` and `shim:` and refused on statements where the question does not arise
+(`service:` is the init system's business, `schedule:` the timer's) — a key that means nothing
+where it is written is a key that gets written there and quietly does nothing. A misspelling is
+refused with both legal values named, because a typo that read as "the default" would be a line
+that looks like a decision and behaves as if nobody made one.
+
+**Where it is honoured, and where it is refused:**
+
+- **`setting:`** — a `[[setting_store]]` row may carry `system_read`/`system_write`/
+  `system_reset` beside the per-user three. A store that has them runs *different commands* per
+  scope; a store that does not (`gsettings`) **refuses `@scope=system` by name** rather than
+  writing the per-user value under a line that says every account. The read-before-write check
+  reads in the same scope it will write, or it would compare two different settings and call
+  them equal.
+- **`shim:`** — refused for `system` today: LiNix deploys shims only into this account's
+  `~/.local/bin`, and a per-user shim under a line saying every account is the wrong answer
+  quietly.
+- **`link:`** — accepted and carried; the destination is already explicit in `@target=`, so
+  there is nothing for it to change until ownership/permission handling exists.
+
+**This unblocks 7e.** The registry adapter writes `HKCU` by default and `HKLM` under
+`@scope=system`, and macOS `defaults` inherits the same convention — which is what the entry
+said had to be settled before the first adapter was written.
+
 ---
 
 ## U22

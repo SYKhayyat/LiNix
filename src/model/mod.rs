@@ -15,6 +15,7 @@ pub mod profiles;
 pub mod resolve;
 pub mod exec;
 pub mod schedule;
+pub mod scope;
 pub mod vars;
 pub mod vars_embedded;
 pub mod vars_provider;

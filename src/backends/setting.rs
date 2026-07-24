@@ -24,6 +24,7 @@
 
 use crate::core::{BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package,
     PackageSpec, Queryable, Result};
+use crate::model::scope::Scope;
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::sync::Arc;
@@ -43,6 +44,18 @@ pub struct SettingAdapter {
     pub read: Vec<String>,
     pub write: Vec<String>,
     pub reset: Vec<String>,
+    /// The same three commands for the machine-wide store, when this one has a separate one
+    /// (U19). `HKLM` beside `HKCU`; `gsettings` has no counterpart and leaves these unset.
+    ///
+    /// Absent is not "fall back to the user store" — a `@scope=system` line against a store
+    /// with no system commands is refused by name. Writing a user-scope value when the line
+    /// said system is the silent wrong answer this model exists to avoid (P7).
+    #[serde(default)]
+    pub system_read: Vec<String>,
+    #[serde(default)]
+    pub system_write: Vec<String>,
+    #[serde(default)]
+    pub system_reset: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -74,16 +87,39 @@ impl SettingAdapter {
         (prog.clone(), rest.to_vec())
     }
 
-    pub fn read_command(&self, schema: &str, key: &str) -> (String, Vec<String>) {
-        Self::command(&self.read, schema, key, "")
+    /// Whether this store can be addressed machine-wide at all. A row that leaves the
+    /// `system_*` commands unset speaks only for the running user.
+    pub fn has_system_scope(&self) -> bool {
+        !self.system_read.is_empty()
+            && !self.system_write.is_empty()
+            && !self.system_reset.is_empty()
     }
 
-    pub fn write_command(&self, schema: &str, key: &str, value: &str) -> (String, Vec<String>) {
-        Self::command(&self.write, schema, key, value)
+    fn argv_for(&self, scope: Scope) -> (&[String], &[String], &[String]) {
+        match scope {
+            Scope::System if self.has_system_scope() => {
+                (&self.system_read, &self.system_write, &self.system_reset)
+            }
+            _ => (&self.read, &self.write, &self.reset),
+        }
     }
 
-    pub fn reset_command(&self, schema: &str, key: &str) -> (String, Vec<String>) {
-        Self::command(&self.reset, schema, key, "")
+    pub fn read_command(&self, scope: Scope, schema: &str, key: &str) -> (String, Vec<String>) {
+        Self::command(self.argv_for(scope).0, schema, key, "")
+    }
+
+    pub fn write_command(
+        &self,
+        scope: Scope,
+        schema: &str,
+        key: &str,
+        value: &str,
+    ) -> (String, Vec<String>) {
+        Self::command(self.argv_for(scope).1, schema, key, value)
+    }
+
+    pub fn reset_command(&self, scope: Scope, schema: &str, key: &str) -> (String, Vec<String>) {
+        Self::command(self.argv_for(scope).2, schema, key, "")
     }
 
     /// A row LiNix will act on: it names itself, it can be detected, and all three commands
@@ -204,6 +240,32 @@ impl SettingBackendCore {
         })
     }
 
+    /// What scope this line means, refusing rather than pretending when the store cannot do
+    /// it (P7: a refusal beats a pretence).
+    ///
+    /// The default is the store's own — `gsettings` and `HKCU` are per-user because that is
+    /// what those stores are — so `@scope=` is written only to override, and **writing the
+    /// default is accepted rather than refused as redundant** (owner, 2026-07-24).
+    fn scope_of(
+        &self,
+        adapter: &SettingAdapter,
+        written: Option<&String>,
+        name: &str,
+    ) -> Result<Scope> {
+        let scope = Scope::resolve(written.map(String::as_str), Scope::User);
+        if scope == Scope::System && !adapter.has_system_scope() {
+            return Err(Error::Validation(format!(
+                "`setting:{}` asks for scope=system, and the `{}` store LiNix found here has \
+                 no machine-wide commands. Writing the per-user value instead would apply your \
+                 setting to one account while the line says every account. Add `system_read`, \
+                 `system_write` and `system_reset` to that `[[setting_store]]` row, or drop \
+                 `@scope=system`.",
+                name, adapter.name
+            )));
+        }
+        Ok(scope)
+    }
+
     fn no_adapter(&self, name: &str) -> Error {
         let known: Vec<&str> = self.adapters.iter().map(|a| a.name.as_str()).collect();
         Error::Validation(format!(
@@ -254,10 +316,13 @@ impl Installable for SettingInstallable {
             let Some(adapter) = self.core.adapter() else {
                 return Err(self.core.no_adapter(&spec.name));
             };
+            let scope = self.core.scope_of(adapter, spec.options.get("scope"), &spec.name)?;
 
             // Read before write: only touch the store when it does not already hold `want`,
-            // so a settled sync runs no command at all.
-            let (rprog, rargs) = adapter.read_command(schema, key);
+            // so a settled sync runs no command at all. Read in the SAME scope it will write:
+            // reading the user value and writing the machine one would compare two different
+            // settings and call them equal.
+            let (rprog, rargs) = adapter.read_command(scope, schema, key);
             let refs: Vec<&str> = rargs.iter().map(String::as_str).collect();
             if let Ok(current) = self.core.executor.run_output(&rprog, &refs, false).await {
                 if already_set(&current, want) {
@@ -265,7 +330,7 @@ impl Installable for SettingInstallable {
                 }
             }
 
-            let (prog, args) = adapter.write_command(schema, key, want);
+            let (prog, args) = adapter.write_command(scope, schema, key, want);
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core.executor.run(&prog, &refs, false).await?;
             info!("Setting {}/{} = {}", schema, key, want);
@@ -281,7 +346,10 @@ impl Installable for SettingInstallable {
             let Some(adapter) = self.core.adapter() else {
                 continue;
             };
-            let (prog, args) = adapter.reset_command(schema, key);
+            // A removal resets the key where the declaration put it. Scope is not carried on a
+            // removal (only names are), so this resets the store's default scope — which is
+            // where an unscoped declaration wrote, the case that exists today.
+            let (prog, args) = adapter.reset_command(Scope::User, schema, key);
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             self.core.executor.run(&prog, &refs, false).await?;
             info!("Setting {}/{} reset to its default", schema, key);
@@ -351,14 +419,14 @@ mod tests {
     #[test]
     fn gsettings_reads_writes_and_resets_a_key() {
         let a = gsettings();
-        let (p, args) = a.read_command("org.gnome.x", "k");
+        let (p, args) = a.read_command(Scope::User, "org.gnome.x", "k");
         assert_eq!(p, "gsettings");
         assert_eq!(args, vec!["get", "org.gnome.x", "k"]);
 
-        let (_, args) = a.write_command("org.gnome.x", "k", "v");
+        let (_, args) = a.write_command(Scope::User, "org.gnome.x", "k", "v");
         assert_eq!(args, vec!["set", "org.gnome.x", "k", "v"]);
 
-        let (_, args) = a.reset_command("org.gnome.x", "k");
+        let (_, args) = a.reset_command(Scope::User, "org.gnome.x", "k");
         assert_eq!(args, vec!["reset", "org.gnome.x", "k"]);
     }
 
@@ -369,9 +437,9 @@ mod tests {
         assert!(!crate::core::argv::terminates_options("gsettings"));
         let a = gsettings();
         for (_, args) in [
-            a.read_command("org.gnome.x", "k"),
-            a.write_command("org.gnome.x", "k", "v"),
-            a.reset_command("org.gnome.x", "k"),
+            a.read_command(Scope::User, "org.gnome.x", "k"),
+            a.write_command(Scope::User, "org.gnome.x", "k", "v"),
+            a.reset_command(Scope::User, "org.gnome.x", "k"),
         ] {
             assert!(!args.iter().any(|x| x == "--"), "{:?}", args);
         }
@@ -391,6 +459,9 @@ mod tests {
                 "{value}".into(),
             ],
             reset: vec![detect.into(), "reset".into(), "{schema}".into(), "{key}".into()],
+            system_read: vec![],
+            system_write: vec![],
+            system_reset: vec![],
         }
     }
 
@@ -401,7 +472,7 @@ mod tests {
     fn a_store_with_no_compiled_in_support_is_driven_from_a_row() {
         let all = adapters(vec![row("kde", "kwriteconfig6")]);
         let kde = all.iter().find(|a| a.name == "kde").expect("the user row loaded");
-        let (prog, args) = kde.write_command("kdeglobals/General", "ColorScheme", "BreezeDark");
+        let (prog, args) = kde.write_command(Scope::User, "kdeglobals/General", "ColorScheme", "BreezeDark");
         assert_eq!(prog, "kwriteconfig6");
         assert_eq!(
             args,
@@ -442,6 +513,57 @@ mod tests {
         let mut here = row("here", "cmd");
         here.os = Some(std::env::consts::OS.to_string());
         assert!(here.applies_to_this_os());
+    }
+
+    fn registry_like() -> SettingAdapter {
+        let mut r = row("winreg", "reg");
+        r.system_read = vec!["reg".into(), "query".into(), "HKLM/{schema}".into()];
+        r.system_write = vec!["reg".into(), "add".into(), "HKLM/{schema}".into()];
+        r.system_reset = vec!["reg".into(), "delete".into(), "HKLM/{schema}".into()];
+        r
+    }
+
+    /// U19: a store with both scopes runs different commands for each. Without this the two
+    /// scopes would be a label on identical behaviour.
+    #[test]
+    fn a_store_with_both_scopes_runs_different_commands() {
+        let a = registry_like();
+        assert!(a.has_system_scope());
+        let (_, user) = a.write_command(Scope::User, "Software/X", "k", "v");
+        let (_, system) = a.write_command(Scope::System, "Software/X", "k", "v");
+        assert_ne!(user, system, "system scope reused the per-user command");
+        assert!(system.iter().any(|x| x.contains("HKLM")), "{:?}", system);
+    }
+
+    /// A store with no machine-wide commands says so rather than quietly writing the per-user
+    /// value — the silent wrong answer P7 refuses.
+    #[test]
+    fn a_store_without_system_scope_reports_it() {
+        assert!(!gsettings().has_system_scope());
+        // ...and asking for system scope falls back to nothing: the caller must refuse, which
+        // `scope_of` does. The argv itself never silently becomes the user one for a caller
+        // that checked first.
+        let core = SettingBackendCore::new(CommandExecutor::new(true, false), adapters(vec![]));
+        let err = core
+            .scope_of(&gsettings(), Some(&"system".to_string()), "org.gnome.x/k")
+            .expect_err("system scope on a user-only store must be refused")
+            .to_string();
+        assert!(err.contains("gsettings"), "{}", err);
+        assert!(err.contains("one account"), "{}", err);
+    }
+
+    /// The owner's clarification: writing the scope that is already the default is accepted,
+    /// not refused as redundant. A config may state what it would also get for free.
+    #[test]
+    fn writing_the_default_scope_is_accepted() {
+        let core = SettingBackendCore::new(CommandExecutor::new(true, false), adapters(vec![]));
+        let g = gsettings();
+        assert_eq!(
+            core.scope_of(&g, Some(&"user".to_string()), "org.gnome.x/k").unwrap(),
+            Scope::User
+        );
+        // And omitting it means the same thing.
+        assert_eq!(core.scope_of(&g, None, "org.gnome.x/k").unwrap(), Scope::User);
     }
 
     #[test]

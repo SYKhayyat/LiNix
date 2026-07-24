@@ -581,6 +581,13 @@ write  = ["kwriteconfig6", "--file", "{schema}", "--key", "{key}", "{value}"]
 reset  = ["kwriteconfig6", "--file", "{schema}", "--key", "{key}", "--delete"]
 ```
 
+`@scope=user` (the default) or `@scope=system` chooses which store a setting goes to — `HKCU`
+or `HKLM` on Windows, and the same word on every other store. Writing the default is fine; it
+just says out loud what you would have got anyway. **A store with no machine-wide commands
+refuses `@scope=system` by name** rather than quietly writing the per-user value, so a line
+that says "every account" never silently applies to one. The same key works on `link:` and
+`shim:`.
+
 All three commands are required. LiNix reads before it writes — that is what makes a setting a
 declaration rather than a command that runs on every sync — and `reset` is what removing the
 line does. A machine whose store has no row gets an error naming what LiNix looked for, never a

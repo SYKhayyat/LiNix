@@ -632,11 +632,16 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
 /// A `schedule:` also needs `cron` and `run` to be *present*, which `model::schedule` checks
 /// when it builds the job — that is a question about one line's meaning, not about which
 /// words are legal, and it has an error that can name what is missing.
-pub const SHIM_OPTION_KEYS: &[&str] = &["source"];
+/// `scope` is on exactly the three statements where "for me" and "for the machine" can differ
+/// (U19). A `service:` is the init system's business and a `repo:` is the manager's, so
+/// neither takes it — a key that means nothing on a statement is a key that will be written
+/// there and silently ignored.
+pub const SHIM_OPTION_KEYS: &[&str] = &["source", "scope"];
 pub const SERVICE_OPTION_KEYS: &[&str] = &["enabled", "status"];
-pub const LINK_OPTION_KEYS: &[&str] = &["target", "content", "template", "decrypt", "identity"];
+pub const LINK_OPTION_KEYS: &[&str] =
+    &["target", "content", "template", "decrypt", "identity", "scope"];
 pub const SCHEDULE_OPTION_KEYS: &[&str] = &["cron", "run", "notify"];
-pub const SETTING_OPTION_KEYS: &[&str] = &["value"];
+pub const SETTING_OPTION_KEYS: &[&str] = &["value", "scope"];
 /// `runs` caps how many times a distinct script content may run — `1` (the default) is
 /// run-once-per-content; `always` opts out (see `model::exec`). `undo` is deliberately absent:
 /// what a removal means is U3, still open, so no key promises it.
@@ -655,6 +660,25 @@ fn keys_for(prefix: &str) -> &'static [&'static str] {
 
 /// An `exec:` names a script and, optionally, how many times its content may run. The name
 /// must be non-empty; `runs`, if present, is a positive count or the word `always`.
+/// `@scope=` must name one of the two things it can mean. A misspelling that parsed as
+/// "default" would be a line that reads as a decision and behaves as if nobody made one.
+fn validate_scope(origin: &Origin, prefix: &str, name: &str, options: &Options) -> Result<()> {
+    let Some(written) = options.one("scope") else {
+        return Ok(());
+    };
+    if crate::model::scope::Scope::parse(written).is_none() {
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`{}:{}` has an invalid `scope={}`", prefix, name, written),
+        )
+        .with_hint(format!(
+            "scope is {}. Omitting it means whatever this store does by default.",
+            crate::model::scope::Scope::vocabulary()
+        )));
+    }
+    Ok(())
+}
+
 fn validate_exec(origin: &Origin, name: &str, options: &Options) -> Result<()> {
     if name.trim().is_empty() {
         return Err(GrammarError::new(origin.clone(), "`exec:` names no script")
@@ -751,7 +775,7 @@ fn validate_extra_options(
             legal.join(", ")
         )));
     }
-    Ok(())
+    validate_scope(origin, prefix, name, options)
 }
 
 /// Every option a package line may carry (II.2's table). Hooks are `*_install`
@@ -1655,5 +1679,65 @@ mod exec_tests {
     fn an_exec_is_not_an_extra_with_a_teardown_key() {
         let stmt = pv("exec:./bin/enroll-tpm.sh").unwrap();
         assert_eq!(crate::core::extra_key(&stmt), None);
+    }
+}
+
+/// U19: `@scope=user|system` on the three statements where it can differ.
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    fn o() -> Origin {
+        Origin::new("modules/dev.txt", 3)
+    }
+    fn known(name: &str) -> bool {
+        matches!(name, "apt" | "cargo")
+    }
+    fn pv(line: &str) -> Result<Statement> {
+        let s = parse(&o(), line, &known)?;
+        validate(&o(), &s)?;
+        Ok(s)
+    }
+
+    #[test]
+    fn scope_is_accepted_on_the_three_statements_that_can_vary() {
+        for line in [
+            "setting:org.gnome.desktop.interface/color-scheme@value=dark,scope=user",
+            "link:./dotfiles/gitconfig@target=~/.gitconfig,scope=user",
+            "shim:rg@scope=user",
+        ] {
+            assert!(pv(line).is_ok(), "{} was refused", line);
+        }
+    }
+
+    /// Owner ruling: writing the scope that is already the default is accepted, not refused as
+    /// redundant. A configuration may state a thing it would also get for free — saying it out
+    /// loud is how a reader learns the answer without going to look it up.
+    #[test]
+    fn writing_the_default_scope_is_not_an_error() {
+        assert!(pv("shim:rg@scope=user").is_ok());
+        assert!(pv("link:./f@target=~/.f,scope=user").is_ok());
+    }
+
+    /// A statement where the question does not arise does not take the key: a key that means
+    /// nothing where it is written is a key that gets written there and silently ignored.
+    #[test]
+    fn scope_is_refused_where_it_means_nothing() {
+        for line in ["service:nginx@scope=system", "schedule:nightly@cron=@daily,run=sync,scope=user"] {
+            let err = pv(line).unwrap_err();
+            assert!(err.what.contains("not an option"), "{}: {}", line, err);
+        }
+    }
+
+    /// A misspelling must not read as "the default" — that would be a line that looks like a
+    /// decision and behaves as if nobody made one.
+    #[test]
+    fn a_misspelled_scope_is_refused_and_lists_the_legal_ones() {
+        for bad in ["shim:rg@scope=machine", "shim:rg@scope=global", "shim:rg@scope=User"] {
+            let err = pv(bad).unwrap_err();
+            assert!(err.what.contains("invalid `scope="), "{}: {}", bad, err);
+            let full = err.to_string();
+            assert!(full.contains("user") && full.contains("system"), "{}", full);
+        }
     }
 }
