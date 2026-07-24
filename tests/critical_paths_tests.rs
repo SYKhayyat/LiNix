@@ -387,3 +387,39 @@ async fn test_dry_run_vfs_simulation() {
         "VFS diff tracker is empty after dry-run modification."
     );
 }
+
+/// Performance-shape regression: `App::list` fans out across backends concurrently instead of
+/// querying them one at a time, and still returns every backend's packages. The mock executor
+/// answers `brew` and `cargo` list commands; both sets must come back.
+#[tokio::test]
+async fn list_aggregates_every_backend_that_answers() {
+    let kernel = TestKernel::new().await;
+    // brew's lister: `brew list --versions` → "name version" per line.
+    kernel.mock_executor.set_response(
+        "brew list --versions",
+        Ok(DryRunOutput {
+            stdout: b"ripgrep 14.1.0\nfd 10.2.0\n".to_vec(),
+            stderr: vec![],
+        }
+        .into()),
+    );
+    // cargo's lister: `cargo install --list` → "name vX.Y.Z:" headers.
+    kernel.mock_executor.set_response(
+        "cargo install --list",
+        Ok(DryRunOutput {
+            stdout: b"bat v0.24.0:\n    bat\n".to_vec(),
+            stderr: vec![],
+        }
+        .into()),
+    );
+
+    let all = kernel.app.list(None).await.expect("list runs");
+    let names: std::collections::HashSet<&str> = all.iter().map(|p| p.name.as_str()).collect();
+    assert!(names.contains("ripgrep"), "brew packages missing: {:?}", names);
+    assert!(names.contains("bat"), "cargo packages missing: {:?}", names);
+
+    // A backend filter still narrows to one.
+    let brew_only = kernel.app.list(Some("brew")).await.unwrap();
+    assert!(brew_only.iter().all(|p| p.backend == "brew"), "{:?}", brew_only);
+    assert!(brew_only.iter().any(|p| p.name == "fd"));
+}

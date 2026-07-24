@@ -6,6 +6,33 @@
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
+## Session 2026-07-24 — real-world validation, and making the read paths fast
+
+**The Ubuntu container integration harness passed, run for real** (`DISTROS=ubuntu
+./docker/integration/run.sh`, via Docker in WSL — recorded in memory). 271 hard checks, 0 fail, 5
+soft; the coverage audit is green (7 backends got a real install→list→remove, 45 plan-smoked,
+every registered backend and every non-exempt subcommand exercised). This is the first time
+Part VII can cite a container run rather than a WSL-by-hand one. The remaining images
+(fedora/arch/alpine/tools) are the same harness on other bases and are the next runs.
+
+**One thing the harness surfaced: `teleport` is alive, and correctly so.** R2 deleted the
+imperative `Teleporter` engine that built its own transaction and bypassed the guard, and the
+history recorded "grep is silent". It is not silent: a later session re-added `teleport` as a
+**declarative** command — `handle_teleport` calls `App::retarget` to rewrite the declaration's
+line, then `handle_sync`, which runs the guard. That is exactly the shape R2's own ruling
+permitted ("a convenience verb must route through `handle_sync`, never its own transaction"), so
+the code is right and only the R2 entry's "deleted / grep silent" line is stale. No second
+transaction engine exists; `core/transaction.rs` is the only one.
+
+**Read-path fan-out is concurrent now (performance).** `App::list`, `get_info` and
+`installed_but_unmanaged` queried every backend one after another — each a separate process
+(`apt list`, `cargo install --list`, …) with nothing to share — so `linix list` on a machine
+with a dozen managers paid a dozen sequential spawns. They now fan out through one
+`query_backends_concurrently` helper, bounded by `max_parallel`, results kept in registry order.
+`get_info` no longer waits on every backend that lacks the package before reaching the one that
+has it. One helper, so the three cannot drift in how they bound concurrency or handle a
+backend's failure (dropped, as before). Covered by `list_aggregates_every_backend_that_answers`.
+
 ## Session 2026-07-23 (sixteenth session) — building, starting with VI.0
 
 **S24 and S25 are fixed.** They are one code path seen from the execute side and the preview

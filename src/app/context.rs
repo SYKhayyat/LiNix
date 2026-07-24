@@ -763,36 +763,36 @@ impl App {
     }
 
     pub async fn list(&self, backend_filter: Option<&str>) -> Result<Vec<Package>> {
-        let mut all_packages = Vec::new();
-        for backend in self.registry.available() {
-            if let Some(filter) = backend_filter {
-                if backend.name() != filter {
-                    continue;
-                }
-            }
-            if let Some(queryable) = backend.as_queryable() {
-                match queryable.list_installed().await {
-                    Ok(pkgs) => all_packages.extend(pkgs),
-                    Err(e) => debug!(
-                        "Query failed for backend '{}': {}",
-                        backend.name(),
-                        e
-                    ),
-                }
-            }
-        }
-        Ok(all_packages)
+        let backends: Vec<_> = self
+            .registry
+            .available()
+            .into_iter()
+            .filter(|b| backend_filter.is_none_or(|f| b.name() == f))
+            .collect();
+        // Every backend's lister is a separate process (`apt list`, `cargo install --list`,
+        // …) with nothing to share, so querying them one after another is latency the machine
+        // is not spending — it is waiting. Fan out, bounded by `max_parallel`.
+        let results = self
+            .query_backends_concurrently(backends, |q| async move {
+                q.list_installed().await.unwrap_or_default()
+            })
+            .await;
+        Ok(results.into_iter().flatten().collect())
     }
 
     pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
-        for backend in self.registry.available() {
-            if let Some(queryable) = backend.as_queryable() {
-                if let Ok(Some(pkg)) = queryable.info(package_name).await {
-                    return Ok(Some(pkg));
-                }
-            }
-        }
-        Ok(None)
+        let backends = self.registry.available();
+        let name = package_name.to_string();
+        // A package lives in one backend, but which one is not known until asked, so all are
+        // asked at once and the first answer wins. Serial, this waited on every backend that
+        // did not have it before reaching the one that did.
+        let found = self
+            .query_backends_concurrently(backends, move |q| {
+                let name = name.clone();
+                async move { q.info(&name).await.ok().flatten() }
+            })
+            .await;
+        Ok(found.into_iter().flatten().next())
     }
 
     /// Everything installed that LiNix does not manage — the dependency closure included.
@@ -802,20 +802,60 @@ impl App {
     /// `adopt` is ~103. Only `purge-unmanaged` wants this one, and its whole job is deleting
     /// all of it (II.11) — which is why the ratio check exists.
     pub async fn installed_but_unmanaged(&self) -> Result<Vec<Package>> {
-        let mut unmanaged = Vec::new();
+        let backends = self.registry.available();
+        let listed = self
+            .query_backends_concurrently(backends, |q| async move {
+                q.list_installed().await.unwrap_or_default()
+            })
+            .await;
+        // The managed check touches the state lock once, after the process work is done,
+        // rather than holding it across every backend's query.
         let state = self.state.lock().await;
-        for backend in self.registry.available() {
-            if let Some(queryable) = backend.as_queryable() {
-                if let Ok(installed) = queryable.list_installed().await {
-                    for pkg in installed {
-                        if !state.is_managed(&pkg.backend, &pkg.name) {
-                            unmanaged.push(pkg);
-                        }
-                    }
-                }
+        Ok(listed
+            .into_iter()
+            .flatten()
+            .filter(|pkg| !state.is_managed(&pkg.backend, &pkg.name))
+            .collect())
+    }
+
+    /// Run one read-only query against every queryable backend concurrently, capped at
+    /// `max_parallel`, returning each backend's result in registry order (a failed or absent
+    /// query contributes nothing). One place for the fan-out so `list`, `info` and the
+    /// unmanaged crawl cannot drift in how they bound concurrency or swallow errors.
+    async fn query_backends_concurrently<T, F, Fut>(
+        &self,
+        backends: Vec<Arc<crate::core::BackendCapabilities>>,
+        query: F,
+    ) -> Vec<T>
+    where
+        T: Send + 'static,
+        F: Fn(Arc<dyn crate::core::Queryable>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = T> + Send,
+    {
+        use futures::stream::{FuturesOrdered, StreamExt};
+        let cap = self.config.max_parallel.max(1);
+        let query = Arc::new(query);
+        let mut ordered = FuturesOrdered::new();
+        let mut queued = backends.into_iter().filter_map(|b| {
+            b.as_queryable().cloned().map(|q| {
+                let query = query.clone();
+                async move { query(q).await }
+            })
+        });
+
+        let mut out = Vec::new();
+        for _ in 0..cap {
+            if let Some(fut) = queued.next() {
+                ordered.push_back(fut);
             }
         }
-        Ok(unmanaged)
+        while let Some(res) = ordered.next().await {
+            out.push(res);
+            if let Some(fut) = queued.next() {
+                ordered.push_back(fut);
+            }
+        }
+        out
     }
 
     /// Remove any managed packages whose `@expires` datetime has passed, across their

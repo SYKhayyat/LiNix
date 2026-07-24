@@ -417,6 +417,13 @@ implementing agent's call; that it goes is not.**
   (`test_e2e_cross_backend_teleport`, `test_teleport_api_consistency_on_missing_package`) were
   deleted with it, not ported. `grep -rni teleport src/ tests/` is silent.
 
+  **Re-verified 2026-07-24: teleport is BACK, and R2's own ruling is why it is allowed.** The
+  imperative `Teleporter` (its own transaction, guard-bypassing) is still gone; what exists now
+  is a *declarative* `teleport` — `handle_teleport` → `App::retarget` (rewrite the line) →
+  `handle_sync` (the guard). R2 said a convenience verb is fine "if it routes through
+  `handle_sync`, guard included, never its own transaction", which is exactly this. The stale
+  half is this entry's "grep is silent"; the safe half (one transaction engine) holds.
+
 - **R3 — Delete the imperative `shim` command; shims are declarative only.** A shim is a small
   PATH stand-in that forwards to a managed tool. It is already produced declaratively: `@shim=true`
   on a package line, and `sync`'s `reconcile_all_shims` (`sync/mod.rs:148`,`:360`) creates it — and
