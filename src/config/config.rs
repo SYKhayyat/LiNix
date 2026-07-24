@@ -229,6 +229,17 @@ pub struct Config {
     #[serde(default)]
     pub hooks: HashMap<String, HashMap<String, String>>,
 
+    /// This machine's hooks on LiNix's own events (XIII.13, U15): `[events] on_drift = "..."`.
+    ///
+    /// **A separate table from `[hooks]` on purpose.** `[hooks]` is the package-lifecycle table
+    /// (`before_install`, `after_install`, …), run by the embedded Lua/Rhai interpreter. These
+    /// are LiNix's own events (`after_sync`, `on_drift`, `on_guard_refusal`), run as scripts
+    /// with the event on stdin as JSON. They overlapped on `after_sync` when both read
+    /// `[hooks]` — a hook there fired twice, once each way — so the event table has its own
+    /// name and the two can never collide. The repo half lives in the `hooks/` directory.
+    #[serde(default)]
+    pub events: HashMap<String, String>,
+
     /// Machine-wide health checks (XIII.5, U7): `health = ["port:22", "systemctl is-system-running"]`.
     ///
     /// The half a package cannot see — the boot, the network, the thing two packages away.
@@ -507,6 +518,7 @@ impl Default for Config {
             data_root: default_data_root(),
             preferences_file: default_config_root().join(PREFERENCES_FILE_NAME),
             hooks: HashMap::new(),
+            events: HashMap::new(),
             health: Vec::new(),
             retention: crate::core::RetentionConfig::default(),
             fleet_hosts: Vec::new(),

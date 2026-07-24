@@ -647,7 +647,7 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
 - **Hooks on LiNix's own events.** Put a script at `hooks/after_sync`, `hooks/on_drift` or
   `hooks/on_guard_refusal` and it runs with the details on stdin as JSON — notify a channel,
   push the repo, open a ticket, without any of that having to become a LiNix feature. The same
-  three may live in `preferences.toml` for hooks that are this machine's business rather than
+  three may live in `preferences.toml`'s `[events]` table for hooks that are this machine's business rather than
   the repo's; **both run**, so adding a local one never silently disables the shared one. They
   are locked like any other script, and one that fails warns without failing the sync.
 - **Health checks revert.** `apt:nginx@health=port:80` on a line, or a machine-wide

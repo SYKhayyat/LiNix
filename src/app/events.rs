@@ -153,13 +153,14 @@ fn repo_hook(root: &Path, event: Event) -> Option<EventHook> {
     })
 }
 
-/// `preferences.toml`'s `[hooks.<event>]` — this machine's own.
+/// `preferences.toml`'s `[events]` table — this machine's own.
 ///
-/// Keyed `*` inside the event table, matching the package-hook shape already in that file:
-/// LiNix's own events have no package, and inventing a second spelling for the same table
-/// would mean two parsers for one file.
+/// A table apart from `[hooks]`, which is the package-lifecycle hooks (`before_install`, …) the
+/// embedded Lua/Rhai interpreter runs. Both once read `[hooks]`, so a `preferences.toml`
+/// `after_sync` fired twice — once as Lua, once as a script here. LiNix's own events are their
+/// own table now, and the two can never name the same key.
 fn preference_hook(config: &Config, event: Event) -> Option<EventHook> {
-    let script = config.hooks.get(event.as_str())?.get("*")?;
+    let script = config.events.get(event.as_str())?;
     if script.trim().is_empty() {
         return None;
     }
@@ -296,12 +297,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         write_repo_hook(tmp.path(), Event::OnDrift, "#!/bin/sh\necho repo\n");
         let mut config = config_at(tmp.path());
-        config.hooks.insert(
-            "on_drift".into(),
-            [("*".to_string(), "#!/bin/sh\necho machine\n".to_string())]
-                .into_iter()
-                .collect(),
-        );
+        config
+            .events
+            .insert("on_drift".into(), "#!/bin/sh\necho machine\n".to_string());
 
         let hooks = EventHooks::load(&config);
         let drift: Vec<&EventHook> = hooks
@@ -325,14 +323,30 @@ mod tests {
         let body = "#!/bin/sh\ntrue\n";
         write_repo_hook(tmp.path(), Event::AfterSync, body);
         let mut config = config_at(tmp.path());
-        config.hooks.insert(
-            "after_sync".into(),
-            [("*".to_string(), body.to_string())].into_iter().collect(),
-        );
+        config.events.insert("after_sync".into(), body.to_string());
 
         let hooks = EventHooks::load(&config);
         assert_eq!(hooks.all().len(), 2);
         assert_ne!(hooks.all()[0].id, hooks.all()[1].id);
+    }
+
+    /// The `[hooks]` table belongs to the package-lifecycle hooks; event hooks read `[events]`.
+    /// When both read `[hooks]`, a `preferences.toml` `after_sync` fired twice — once as Lua,
+    /// once as a script — so an `after_sync` under `[hooks]` must not be seen here at all.
+    #[test]
+    fn an_after_sync_under_hooks_is_not_an_event_hook() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = config_at(tmp.path());
+        config.hooks.insert(
+            "after_sync".into(),
+            [("*".to_string(), "print('lua')".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        assert!(
+            EventHooks::load(&config).is_empty(),
+            "an [events] hook must not be read out of the [hooks] table"
+        );
     }
 
     #[test]
