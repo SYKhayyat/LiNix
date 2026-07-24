@@ -643,6 +643,14 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
   command honours it.
 - **Non-interactive refusals.** `sync`, `rollback` and `remove-orphans` refuse to apply
   unconfirmed changes in a pipe, cron job or CI run without `--yes`.
+
+> **Filesystem-level rollback is Linux-first.** The pre-sync snapshot, `rebuild`'s revert and
+> `rollback`'s safety net all depend on a snapshot provider — btrfs, ZFS or Timeshift on Linux,
+> Windows System Restore on Windows. **macOS has no adapted provider yet**, so on macOS those
+> commands run without a filesystem restore point: the git history still records every change
+> and `linix rollback <commit>` still re-syncs packages, but there is no block-level undo. A
+> health check that would revert (`@health=`) is *refused before the change* on a machine with
+> no provider rather than run without a way back (see above), so this never fails silently.
 - **Hooks are locked.** `after_install` and friends are hashed; a changed hook must be
   re-approved with `linix lock`, so a pulled config cannot quietly start running new code.
 - **Hooks on LiNix's own events.** Put a script at `hooks/after_sync`, `hooks/on_drift` or
@@ -690,7 +698,33 @@ name_col = 0
 
 `firewall:22/tcp` then works everywhere a built-in prefix works. Because `name` and `binary`
 are separate, the prefix does not have to be a package manager's name — it can be any noun
-that has a CLI behind it.
+that has a CLI behind it. And `binary` may be an absolute path (`/opt/vendor/tool`, `~/bin/x`),
+not just a `$PATH` name — a missing one is a named diagnosis in `check health`, not a refusal.
+
+**A custom backend is a full peer of a built-in** — the same optional keys the shipped
+backends use are available to yours, and an absent key means *this backend cannot answer that*,
+never *the answer is none* (so `re:` against a backend with no `enumerate_args` is refused, not
+expanded to nothing):
+
+```toml
+[[backend]]
+name = "mymgr"
+install_args = ["add"]
+remove_args  = ["rm"]
+list_args    = ["list"]
+# first-class extras, each optional:
+essential_args   = ["essential"]         # what the removal guard must never take
+enumerate_args   = ["list", "--all"]     # the catalogue `re:` expands against
+depends_args     = ["deps"]              # a package's dependencies
+repo_add_args    = ["repo", "add"]       # `repo:` lines
+repo_remove_args = ["repo", "rm"]
+repo_list_args   = ["repo", "list"]
+purge_args       = ["rm", "--purge"]     # config-destroying removal
+manual = "all_installed"                 # so `adopt` takes what you chose, not deps
+[backend.orphan_dry_run]                 # what its autoremove WOULD remove
+args = ["autoremove", "--dry-run"]
+removes_line_prefix = "Remv"
+```
 
 **They live in the repo, so they travel**, which is the point: a definition on one machine
 makes every other machine fail on a line it cannot resolve. And because each is a list of

@@ -31,7 +31,8 @@
 // An unapproved or changed file registers nothing and says so; `linix lock` approves it.
 
 use crate::backends::generic::{
-    GenericBackendCore, GenericInstallable, GenericQueryable, GenericSearchable, GenericUpgradable,
+    GenericBackendCore, GenericEnumerable, GenericInstallable, GenericQueryable, GenericRepoManager,
+    GenericSearchable, GenericUpgradable,
     ManagerConfig, ManualListing, VersionPin,
 };
 use crate::backends::BackendRegistry;
@@ -280,7 +281,7 @@ impl From<VersionPinDef> for VersionPin {
 }
 
 /// One `[[backend]]` entry in `adapters/backends.toml`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct CustomBackendDef {
     /// The prefix a line is written with — `firewall:22/tcp`.
     pub name: String,
@@ -307,6 +308,109 @@ pub struct CustomBackendDef {
     pub parser: Option<ParserSpec>,
     /// How to parse `search` output (defaults to the same as `parser`).
     pub search_parser: Option<ParserSpec>,
+
+    // --- U2: the fields that make a custom backend a first-class peer of a built-in. ---
+    // Every one is optional, and absent means *this backend cannot answer that* — never *the
+    // answer is none*. A backend that cannot list its catalogue is not one whose catalogue is
+    // empty; a `re:` against it is refused, not expanded to nothing. That distinction is the
+    // whole point: "not configured" and "none" are different answers, and conflating them is
+    // how a custom backend silently under-reports.
+    /// Config-destroying removal (Debian's `purge`). Absent ⇒ `--purge` on this backend is
+    /// refused rather than quietly doing an ordinary removal.
+    pub purge_args: Option<Vec<String>>,
+    /// Args that report the packages the OS treats as essential, for the removal guard.
+    pub essential_args: Option<Vec<String>>,
+    /// Args that print every installable name, one per line — what `re:` expands against.
+    pub enumerate_args: Option<Vec<String>>,
+    /// Binary for `enumerate_args`, when the catalogue lives in a separate program.
+    pub enumerate_binary: Option<String>,
+    /// Binary for the LIST commands, when the query tool is a separate program.
+    pub list_binary: Option<String>,
+    /// Binary for `search_args`, when search runs a different program.
+    pub search_binary: Option<String>,
+    /// Adding, removing and listing repositories (`repo:` lines).
+    pub repo_add_args: Option<Vec<String>>,
+    pub repo_remove_args: Option<Vec<String>>,
+    pub repo_list_args: Option<Vec<String>>,
+    /// Querying a package's dependencies (reverse-dependency reports, `why`).
+    pub depends_args: Option<Vec<String>>,
+    /// A dry run of the manager's own orphan verb, so `sync` can remove what it *would*
+    /// remove. Absent ⇒ this backend cannot say, and a removal it cannot enumerate it does
+    /// not make.
+    pub orphan_dry_run: Option<OrphanDryRunDef>,
+    /// How this backend reports the *manually* installed set, so `adopt` takes what the user
+    /// chose and not the dependency graph. Absent ⇒ adoption skips this backend (the safe
+    /// default that every custom backend had before U2).
+    pub manual: Option<ManualListingDef>,
+}
+
+/// TOML mirror of [`crate::backends::generic::OrphanDryRun`].
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrphanDryRunDef {
+    pub binary: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// The line prefix that marks a would-be-removed package in the dry-run output
+    /// (`apt-get autoremove --dry-run` prints `Remv libfoo …`).
+    pub removes_line_prefix: String,
+}
+
+impl From<OrphanDryRunDef> for crate::backends::generic::OrphanDryRun {
+    fn from(d: OrphanDryRunDef) -> Self {
+        crate::backends::generic::OrphanDryRun {
+            binary: d.binary,
+            args: d.args,
+            removes_line_prefix: d.removes_line_prefix,
+        }
+    }
+}
+
+/// TOML mirror of [`crate::backends::generic::ManualListing`], in the two shapes a user can
+/// actually describe: "everything installed was user-requested", or "a command reports it".
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ManualListingDef {
+    /// Every installed package was user-requested (this manager installs no dependencies of
+    /// its own): the installed set *is* the manual set.
+    AllInstalled,
+    /// A command reports the explicit set.
+    Command {
+        binary: Option<String>,
+        #[serde(default)]
+        args: Vec<String>,
+        /// `same_as_installed` (reuse the list parser) or `bare_names` (one name per line).
+        #[serde(default)]
+        format: ManualFormatDef,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ManualFormatDef {
+    #[default]
+    SameAsInstalled,
+    BareNames,
+}
+
+impl From<ManualListingDef> for crate::backends::generic::ManualListing {
+    fn from(d: ManualListingDef) -> Self {
+        use crate::backends::generic::{ManualFormat, ManualListing};
+        match d {
+            ManualListingDef::AllInstalled => ManualListing::AllInstalled,
+            ManualListingDef::Command {
+                binary,
+                args,
+                format,
+            } => ManualListing::Command {
+                binary,
+                args,
+                format: match format {
+                    ManualFormatDef::SameAsInstalled => ManualFormat::SameAsInstalled,
+                    ManualFormatDef::BareNames => ManualFormat::BareNames,
+                },
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -496,28 +600,24 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         install_args: def.install_args,
         remove_args: def.remove_args,
         list_args: def.list_args,
-        // A user-defined backend describes an install/remove/list command set; nothing in
-        // that definition says whether its lister reports dependencies too. Don't assume —
-        // `adopt` skips custom backends rather than risk adopting a dependency graph.
-        manual: ManualListing::Unsupported,
-        essential_args: None,
+        // U2: a definition may now say how it reports its manual set. Absent stays
+        // `Unsupported` — the safe default — so `adopt` skips a backend that has not opted in,
+        // rather than risk adopting its dependency graph.
+        manual: def.manual.map(Into::into).unwrap_or(ManualListing::Unsupported),
+        essential_args: def.essential_args,
         search_args: def.search_args,
-        search_binary: None,
-        // A custom backend describes one CLI; nothing in that description can promise a
-        // complete catalogue, so `re:` does not apply to one.
-        enumerate_args: None,
-        enumerate_binary: None,
-        list_binary: None,
+        search_binary: def.search_binary,
+        enumerate_args: def.enumerate_args,
+        enumerate_binary: def.enumerate_binary,
+        list_binary: def.list_binary,
         upgrade_args: def.upgrade_args,
         update_args: def.update_args,
-        purge_args: None,
-        // A definition that names an `autoremove` verb cannot say what that verb would
-        // delete, and a removal LiNix cannot enumerate is one it does not make.
-        orphan_dry_run: None,
-        repo_add_args: None,
-        repo_remove_args: None,
-        repo_list_args: None,
-        depends_args: None,
+        purge_args: def.purge_args,
+        orphan_dry_run: def.orphan_dry_run.map(Into::into),
+        repo_add_args: def.repo_add_args,
+        repo_remove_args: def.repo_remove_args,
+        repo_list_args: def.repo_list_args,
+        depends_args: def.depends_args,
         version_pin: def.version_pin.map(Into::into),
         needs_root: def.needs_root,
         is_exclusive: def.is_exclusive,
@@ -544,6 +644,16 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
     }
     if has_upgrade {
         builder = builder.with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }));
+    }
+    // U2: the capabilities a built-in gets, now reachable from a definition. A backend is a
+    // repo manager only if it said how to add a repo, and enumerable only if it said how to
+    // list its catalogue — so `repo:` and `re:` against a backend that did not opt in are
+    // still refused, not silently no-ops.
+    if core.config.repo_add_args.is_some() {
+        builder = builder.with_repo_manager(Arc::new(GenericRepoManager { core: core.clone() }));
+    }
+    if core.config.enumerate_args.is_some() {
+        builder = builder.with_enumerable(Arc::new(GenericEnumerable { core: core.clone() }));
     }
     builder.build()
 }
@@ -656,18 +766,10 @@ mod tests {
 
         let good = CustomBackendDef {
             name: "paru".into(),
-            binary: None,
             install_args: vec!["-S".into()],
             remove_args: vec!["-R".into()],
             list_args: vec!["-Qm".into()],
-            search_args: vec![],
-            upgrade_args: vec![],
-            update_args: None,
-            needs_root: false,
-            is_exclusive: false,
-            version_pin: None,
-            parser: None,
-            search_parser: None,
+            ..Default::default()
         };
         let bad_name = CustomBackendDef {
             name: "bad name/x".into(),
@@ -693,6 +795,38 @@ mod tests {
         assert!(caps.is_metadata_provider());
     }
 
+    /// U2: a custom backend gains a capability only when its definition provides the fields
+    /// for it — and gains it when it does. Absent stays absent (the safe default), present
+    /// makes it a first-class peer.
+    #[test]
+    fn a_custom_backend_is_a_first_class_peer_when_it_says_so() {
+        let (_, exec) = mock_exec();
+
+        // A bare definition: install/remove/list only, so no repo manager, not enumerable,
+        // adoption skips it.
+        let mut plain = BackendRegistry::new();
+        register_custom_backends(&mut plain, &exec, vec![firewall_def()]);
+        let caps = plain.get("firewall").unwrap();
+        assert!(!caps.is_repo_manager(), "a bare def is not a repo manager");
+        assert!(caps.as_enumerable().is_none(), "a bare def cannot list a catalogue");
+
+        // The same backend, now told how to manage repos and list its catalogue.
+        let mut full = BackendRegistry::new();
+        let def = CustomBackendDef {
+            repo_add_args: Some(vec!["repo".into(), "add".into()]),
+            repo_remove_args: Some(vec!["repo".into(), "rm".into()]),
+            repo_list_args: Some(vec!["repo".into(), "list".into()]),
+            enumerate_args: Some(vec!["list".into(), "--all".into()]),
+            depends_args: Some(vec!["deps".into()]),
+            manual: Some(ManualListingDef::AllInstalled),
+            ..firewall_def()
+        };
+        register_custom_backends(&mut full, &exec, vec![def]);
+        let caps = full.get("firewall").unwrap();
+        assert!(caps.is_repo_manager(), "a def with repo args IS a repo manager");
+        assert!(caps.as_enumerable().is_some(), "a def with enumerate args CAN list its catalogue");
+    }
+
     fn firewall_def() -> CustomBackendDef {
         CustomBackendDef {
             name: "firewall".into(),
@@ -700,14 +834,7 @@ mod tests {
             install_args: vec!["allow".into()],
             remove_args: vec!["delete".into(), "allow".into()],
             list_args: vec!["status".into()],
-            search_args: vec![],
-            upgrade_args: vec![],
-            update_args: None,
-            needs_root: false,
-            is_exclusive: false,
-            version_pin: None,
-            parser: None,
-            search_parser: None,
+            ..Default::default()
         }
     }
 

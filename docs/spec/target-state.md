@@ -127,10 +127,17 @@ packages; in a profile they're imports; in `priority` they're backends; in `acti
 profile names. To gate a whole file, wrap it. Keys: `os`, `arch`, `host`, `hostname`, `family`. Operators: `==`, `!=`,
 `in [a, b]`.
 
-**`os` is the kernel** (`linux`, `windows`, `macos`); **`family` is the distribution**
-(`debian`, `fedora`, `arch`, `suse`, `alpine`), read from `/etc/os-release` and falling back to
-the OS name where there are no distributions to tell apart. They are two questions and neither
-stands in for the other: `apt` is a `family == debian` fact, not a `linux` one.
+**`os` is the kernel** (`linux`, `windows`, `macos`, `freebsd`, …); **`family` is the
+distribution** (`debian`, `fedora`, `arch`, `suse`, `alpine`), read from `/etc/os-release` and
+falling back to the OS name where there are no distributions to tell apart. They are two
+questions and neither stands in for the other: `apt` is a `family == debian` fact, not a
+`linux` one.
+
+**A family that cannot be shown to be X makes `family == X` false — not an error** (U26). On a
+BSD or any host without `/etc/os-release`, `family` is the OS name (`freebsd`), so `== debian`
+is correctly false and `== freebsd` is true. The fallback is load-bearing: `family` is **never
+empty**, because an empty family is exactly what would make every `when family ==` silently
+take the else branch — the silent-wrongness this rule closes.
 
 ### Option keys
 

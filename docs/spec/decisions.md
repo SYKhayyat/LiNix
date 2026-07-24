@@ -328,7 +328,7 @@ Conflicts\|Insight\|Metrics\|Audit\)" src/` is silent, and `heal` survives.
 
 ## U14
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24; safety story below.**
 
 **U14 — Is sharing wanted, and what makes a vendored module safe to run?** Vendoring puts
 someone else's files in your repo, and once `exec:` exists those files can contain a verb. The
@@ -339,6 +339,8 @@ without an explicit per-module opt-in; or vendor modules but never backend defin
 `exec:`; or do not build it. **This is blocking because building the convenient version first
 and the safety story afterwards is how supply-chain incidents are written.**
 
+
+**RULED (owner, 2026-07-24): build it.** Sharing is wanted, and a module may be referenced by a GitHub or other URL. A vendored module that carries code the repo can run (an `exec:` verb, a backend definition) needs an **opt-in to run**, and a flag or key must be able to force it. The precedent is the II.12 approval ledger and its siblings (`--allow-mass-removal`, `--replace-existing`, `@allow_http`, `@unverified`): refuse the dangerous thing by default, require one deliberate act to permit it. A vendored `exec:` is therefore approved the way every other script the repo runs is — `linix lock`, which means a human looked — and until then it does not run. **Still to design before building: how a URL reference is written (this changes `use takes a name, never a URL`, V.x), and whether a URL-vendored backend definition is allowed at all or only modules.**
 ---
 
 ## U19
@@ -467,7 +469,7 @@ writes plaintext; secrets stay on explicit `link:` lines where `@decrypt=` is wr
 
 ## U26
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U26 — Is BSD a supported platform, and if so what does `when family` answer there?** (XIII.22.)
 Two questions, and only the second is blocking: registering `pkg`/`pkg_add` is ordinary backend
@@ -483,6 +485,8 @@ a slogan. A legitimate answer is *"listed, dated, not scheduled"* — what is no
 leaving `family` returning a wrong answer on a platform whose package manager LiNix already
 drives (`pkgin` is registered today).
 
+
+**RULED (owner, 2026-07-24): a family that cannot be shown to be X makes `family == X` false, not an error.** The owner rejected the hard-error option: an unidentifiable or non-matching family simply fails the positive comparison, because it cannot be demonstrated to be that family. This is already the behaviour — `HostFacts::current` falls back to `std::env::consts::OS`, which is `freebsd`/`openbsd`/`netbsd` on the BSDs, so `family` answers the OS name there and `== debian` is correctly false. The build is a test locking that in and a why note; BSD backend registration (`pkg`/`pkg_add`) is ordinary work for whenever.
 ---
 
 # Open, not blocking
@@ -762,7 +766,7 @@ is a plugin stub and says so once, rather than hanging.
 
 ## U2
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U2 — Is a custom backend a full peer of a built-in?** Repos, orphans, dependency queries and
 `is_essential` are `ManagerConfig` fields `CustomBackendDef` does not expose.
@@ -770,6 +774,8 @@ is a plugin stub and says so once, rather than hanging.
 that* — the `ManualListing` distinction already made for exactly this reason: "not configured"
 must not be read as "the answer is none".
 
+
+**RULED (owner, 2026-07-24): first-class.** A custom backend is a full peer of a built-in. The fields a built-in has and `CustomBackendDef` did not — repositories, orphan listing, dependency queries, OS-essential — are exposed as optional keys, absent meaning *this backend cannot answer that*, never *the answer is none* (the `ManualListing` distinction, generalised). This is the onboarder becoming a true equal, which is the whole 'it can drive anything' thesis.
 ---
 
 ## U4
@@ -786,7 +792,7 @@ missing field (U2), not as usage to encourage.
 
 ## U6
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-24.**
 
 **U6 — Does this document mark its Linux-only guarantees?** The pre-sync snapshot, `rebuild`'s
 revert and `rollback`'s safety net all assume a provider that exists only on Linux
@@ -794,6 +800,8 @@ filesystems. *Recommendation:* yes, immediately and independently of whether VSS
 ever adapted — an unqualified promise that silently does not hold on two of three platforms is
 P3's failure in prose form.
 
+
+**RULED (owner, 2026-07-24): yes.** The Linux-only guarantees — the pre-sync snapshot, `rebuild`'s revert, `rollback`'s safety net — are marked as such in the docs, independently of whether VSS or APFS is ever adapted. An unqualified promise that silently does not hold on two of three platforms is P3's silent-wrongness in prose.
 ---
 
 ## U7

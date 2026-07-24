@@ -251,6 +251,32 @@ mod conditional_tests {
         facts().with_vars(vars)
     }
 
+    /// U26: a family that cannot be shown to be X makes `family == X` false, not an error.
+    /// On a BSD, `HostFacts::current` falls back to the OS name (`freebsd`), so `family`
+    /// answers something real and `== debian` is correctly false — no silent else-branch from
+    /// an empty family, and no hard error the owner ruled against.
+    #[test]
+    fn a_family_that_is_not_debian_makes_the_comparison_false() {
+        let bsd = HostFacts {
+            os: "freebsd".into(),
+            family: "freebsd".into(),
+            ..facts()
+        };
+        assert!(!eval_when("family == debian", &bsd).unwrap(), "freebsd is not debian");
+        assert!(eval_when("family == freebsd", &bsd).unwrap(), "but it IS freebsd");
+        assert!(eval_when("family != debian", &bsd).unwrap());
+    }
+
+    /// The OS-name fallback is what guarantees `family` is never empty — an empty family is
+    /// what would make every `when family ==` silently false, which is the failure U26 exists
+    /// to close. `current()` uses `distro_family().unwrap_or(OS)`, so a host with no
+    /// `/etc/os-release` still answers the OS name rather than "".
+    #[test]
+    fn family_is_never_empty() {
+        let f = HostFacts::current();
+        assert!(!f.family.is_empty(), "family must always answer something");
+    }
+
     #[test]
     fn a_variable_is_reached_with_the_sigil() {
         let f = with_role("travel");
