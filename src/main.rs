@@ -3901,9 +3901,13 @@ async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
 }
 
 /// Whether the runtime has this image locally.
+///
+/// `run`, not `run_output`: the latter tolerates a non-zero exit on purpose (an empty result
+/// is an answer for the reads it was built for), so it reports success for an image that does
+/// not exist — and `try` then blamed the config for what was a missing image.
 async fn image_exists(app: &App, runtime: &str, image: &str) -> bool {
     app.executor
-        .run_output(runtime, &["image", "inspect", image], false)
+        .run(runtime, &["image", "inspect", image], false)
         .await
         .is_ok()
 }

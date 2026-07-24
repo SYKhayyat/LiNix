@@ -299,19 +299,18 @@ fn file_name_of(origin: &Origin) -> String {
 mod tests {
     use super::*;
 
-    fn tmp() -> PathBuf {
-        // A per-test directory, named by a counter that does not need a clock or randomness.
-        // `env::temp_dir()`, not TMP-or-TMPDIR-or-".": neither variable is set in a plain
-        // Linux shell, so the fallback was the repo the test was run from.
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        static N: AtomicUsize = AtomicUsize::new(0);
-        let dir = std::env::temp_dir().join(format!(
-            "linix-vars-test-{}-{}",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// A per-test directory that deletes itself.
+    ///
+    /// It used to be `temp_dir()/linix-vars-test-<pid>-<n>`, created and never removed. PIDs
+    /// are recycled, so a later run could land on a previous run's directory and find its
+    /// files — and these tests are about *which provider files are present*, so inheriting two
+    /// of them made "more than one variable provider is present" a failure that appeared and
+    /// vanished depending on what the OS handed out as a process id.
+    ///
+    /// The caller binds the returned `TempDir`: dropping it deletes the directory, which is
+    /// what stops the next run inheriting anything.
+    fn tmp() -> tempfile::TempDir {
+        tempfile::tempdir().expect("a temp dir")
     }
 
     fn facts() -> HostFacts {
@@ -326,50 +325,56 @@ mod tests {
 
     #[test]
     fn no_provider_file_is_no_variables() {
-        let dir = tmp();
-        assert!(select(&dir, &None).unwrap().is_none());
+        let tmp = tmp();
+        let dir = tmp.path();
+        assert!(select(dir, &None).unwrap().is_none());
     }
 
     #[test]
     fn a_sole_provider_is_selected_without_a_source_key() {
-        let dir = tmp();
+        let tmp = tmp();
+        let dir = tmp.path();
         std::fs::write(dir.join("vars"), "role = desktop\n").unwrap();
-        let s = select(&dir, &None).unwrap().unwrap();
+        let s = select(dir, &None).unwrap().unwrap();
         assert_eq!(s.kind, Kind::LineFile);
     }
 
     #[test]
     fn two_providers_and_no_choice_is_a_loud_error() {
-        let dir = tmp();
+        let tmp = tmp();
+        let dir = tmp.path();
         std::fs::write(dir.join("vars"), "role = desktop\n").unwrap();
         std::fs::write(dir.join("vars.py"), "print()\n").unwrap();
-        let err = select(&dir, &None).unwrap_err();
+        let err = select(dir, &None).unwrap_err();
         assert!(err.what.contains("more than one"), "{}", err);
         assert!(err.what.contains("vars.py"), "{}", err);
     }
 
     #[test]
     fn a_named_source_picks_that_one_and_names_its_kind() {
-        let dir = tmp();
+        let tmp = tmp();
+        let dir = tmp.path();
         std::fs::write(dir.join("vars"), "role = desktop\n").unwrap();
         std::fs::write(dir.join("vars.py"), "print()\n").unwrap();
-        let s = select(&dir, &Some("vars.py".into())).unwrap().unwrap();
+        let s = select(dir, &Some("vars.py".into())).unwrap().unwrap();
         assert_eq!(s.kind, Kind::External);
         assert_eq!(s.path, dir.join("vars.py"));
     }
 
     #[test]
     fn a_named_source_that_is_absent_is_an_error() {
-        let dir = tmp();
+        let tmp = tmp();
+        let dir = tmp.path();
         std::fs::write(dir.join("vars"), "role = desktop\n").unwrap();
-        let err = select(&dir, &Some("vars.py".into())).unwrap_err();
+        let err = select(dir, &Some("vars.py".into())).unwrap_err();
         assert!(err.what.contains("not in the repo"), "{}", err);
     }
 
     #[test]
     fn a_named_source_with_a_nonsense_name_is_an_error() {
-        let dir = tmp();
-        let err = select(&dir, &Some("something".into())).unwrap_err();
+        let tmp = tmp();
+        let dir = tmp.path();
+        let err = select(dir, &Some("something".into())).unwrap_err();
         assert!(err.what.contains("not a variable provider name"), "{}", err);
     }
 
@@ -427,7 +432,8 @@ mod tests {
     fn an_external_provider_runs_and_its_output_is_parsed() {
         // A provider written in whatever runs here without extra installs: a `.cmd` on Windows,
         // a `.sh` everywhere else. Both are guaranteed present (cmd / sh).
-        let dir = tmp();
+        let tmp = tmp();
+        let dir = tmp.path();
         let (name, body) = if cfg!(windows) {
             ("vars.cmd", "@echo off\r\necho role=%LINIX_OS%\r\necho cores=8\r\n")
         } else {
@@ -442,7 +448,8 @@ mod tests {
 
     #[test]
     fn a_provider_that_exits_nonzero_is_an_error_with_its_stderr() {
-        let dir = tmp();
+        let tmp = tmp();
+        let dir = tmp.path();
         let (name, body) = if cfg!(windows) {
             ("vars.cmd", "@echo off\r\necho boom 1>&2\r\nexit /b 3\r\n")
         } else {

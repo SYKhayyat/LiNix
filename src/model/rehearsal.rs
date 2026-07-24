@@ -92,21 +92,28 @@ pub fn argv(runtime: &str, image: &str, config_host_path: &str) -> Vec<String> {
         "--entrypoint",
         "linix",
         image,
-        "check",
+        // `eval`, not `check`. `check` compares the config against the machine, and on a bare
+        // container it always finds differences — which U21 makes exit 2, indistinguishable
+        // from the exit 2 it uses for a config that does not parse. A rehearsal built on that
+        // can never reject anything, and this one did not until a container proved it.
+        // `eval` asks only whether the config RESOLVES, which is exactly what `try` wants to
+        // know: it exits 0 when it does and non-zero when it does not.
+        "eval",
     ]
     .into_iter()
     .map(String::from)
     .collect()
 }
 
-/// What the rehearsal's exit code meant, in U21's vocabulary.
+/// What the rehearsal's exit code meant.
 ///
-/// 0 and 2 are both answers — the config resolved, and either the container matches it or it
-/// does not, which on a bare container it never will. Anything else means the config did not
-/// survive contact with a machine that is not this one, which is what `try` exists to find.
+/// `eval` resolves and prints, or it fails — so 0 is the only success, and there is no
+/// "differences" case to swallow. This was `check` with 0-or-2 accepted, which made `try`
+/// unable to reject anything at all: `check` exits 2 both for "nothing is installed here"
+/// (always true in a container) and for "this config does not parse".
 pub fn verdict(code: Option<i32>) -> Verdict {
     match code {
-        Some(0) | Some(2) => Verdict::Valid,
+        Some(0) => Verdict::Valid,
         Some(c) => Verdict::Rejected(c),
         // Killed by a signal: no exit code, and no evidence the config is fine.
         None => Verdict::Rejected(1),
@@ -180,19 +187,23 @@ mod tests {
         assert!(cmd.contains(&"linix-it-alpine".to_string()));
     }
 
-    /// U21 again: a read-only command that found differences exits 2, and on a bare container
-    /// it always will — nothing is installed there. Reading that as "your config is broken"
-    /// would make `try` reject every config that is completely fine.
+    /// The rehearsal asks whether the config RESOLVES, so it runs `eval` — not `check`, which
+    /// also exits 2 for "nothing is installed here" and made `try` unable to reject anything.
     #[test]
-    fn differences_on_a_bare_container_are_not_a_rejection() {
-        assert_eq!(verdict(Some(0)), Verdict::Valid);
-        assert_eq!(verdict(Some(2)), Verdict::Valid);
+    fn the_rehearsal_asks_whether_the_config_resolves() {
+        let cmd = argv("docker", "i", "/cfg");
+        assert_eq!(cmd.last().map(String::as_str), Some("eval"));
+        assert!(!cmd.iter().any(|a| a == "check"), "{:?}", cmd);
     }
 
+    /// Only 0 is a pass. A rehearsal that accepted a second code would be accepting whatever
+    /// that code happens to mean next time the exit table is touched.
     #[test]
-    fn a_config_that_does_not_resolve_is_rejected() {
-        assert_eq!(verdict(Some(1)), Verdict::Rejected(1));
-        assert_eq!(verdict(Some(3)), Verdict::Rejected(3));
+    fn only_a_clean_resolution_passes() {
+        assert_eq!(verdict(Some(0)), Verdict::Valid);
+        for code in [1, 2, 3, 101] {
+            assert_eq!(verdict(Some(code)), Verdict::Rejected(code), "code {}", code);
+        }
         // Killed by a signal: no code, and no evidence the config is fine.
         assert_eq!(verdict(None), Verdict::Rejected(1));
     }

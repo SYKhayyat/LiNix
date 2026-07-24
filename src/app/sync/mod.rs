@@ -135,32 +135,25 @@ impl<'a> SyncEngine<'a> {
             .await;
 
         // Before the snapshot and before any package is touched: refuse a removal set
-        // that is oversized or takes something the system needs.
-        //
-        // A refusal is an event too (`on_guard_refusal`): it is the one outcome nobody is
-        // watching for, because the run that hits it is usually the unattended one.
-        if let Err(e) = guard::enforce(
+        // that is oversized or takes something the system needs. `on_guard_refusal` fires
+        // inside the guard, not here, so every command that removes gets it — see
+        // `guard::refuse`.
+        guard::enforce(
             self.config,
             &self.registry,
             &guard::removal_pairs(&changes),
             scope,
         )
-        .await
-        {
-            events.fire_refusal(&e, scope).await;
-            return Err(e);
-        }
+        .await?;
 
         // The install-side ceiling (II.10): a mis-globbed manifest schedules a flood of
         // installs, and the count is the fact that explains it. Off by default; when set,
         // only `--allow-mass-install` clears it.
-        if let Err(e) = guard::enforce_installs(self.config, changes.total_install(), scope).await {
-            events.fire_refusal(&e, scope).await;
-            return Err(e);
-        }
+        guard::enforce_installs(self.config, changes.total_install(), scope).await?;
 
         // 7f: a declared health check with no way to revert is refused here, before the first
-        // package is touched — the only moment the answer is still actionable.
+        // package is touched — the only moment the answer is still actionable. Not a guard
+        // refusal, so it announces itself.
         if let Err(e) = self.require_revert_path(&changes) {
             events.fire_refusal(&e, scope).await;
             return Err(e);

@@ -307,7 +307,29 @@ pub async fn enforce(
     if report.is_empty() {
         return Ok(());
     }
-    Err(Error::Refused(report.message(scope)))
+    refuse(config, report.message(scope), scope).await
+}
+
+/// Turn a refusal into the error every command reports, and tell anyone listening.
+///
+/// **Every guard entry point comes through here.** `on_guard_refusal` (XIII.13) fired at the
+/// call sites instead would fire for `sync` and not for `purge-unmanaged`, `rebuild` or `heal`
+/// — a hook named after guard refusals that only hears about some of them is worse than no
+/// hook at all, because you would stop watching the ones it does cover. It is the same
+/// argument as the guard itself: one point every path funnels through, not one call per caller
+/// where it takes a single forgotten site to go quiet.
+///
+/// `Error::Refused` is U21's exit code 3, so routing every refusal through one constructor is
+/// what makes "a guard refusal is 3 and nothing else is" a property of the code rather than of
+/// each caller remembering.
+async fn refuse(config: &Config, message: String, scope: GuardScope) -> Result<()> {
+    crate::app::events::EventHooks::load(config)
+        .fire(
+            crate::model::event::Event::OnGuardRefusal,
+            serde_json::json!({ "message": message, "scope": scope.as_str() }),
+        )
+        .await;
+    Err(Error::Refused(message))
 }
 
 /// Inspect the *desired* state against the `[guard]` install rules (II.10) that do not need
@@ -387,7 +409,9 @@ pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) 
         return Ok(());
     }
 
-    Err(Error::Other(format!(
+    refuse(
+        config,
+        format!(
         "{}: refusing this install.\n  \
          - it installs {} packages, over the limit of {} (config: max_installs)\n\n\
          This usually means a manifest matched more than you meant — run `linix plan` and \
@@ -395,11 +419,14 @@ pub async fn enforce_installs(config: &Config, count: usize, scope: GuardScope) 
          What to do:\n  \
          linix plan                     see exactly what would be installed\n  \
          {} --allow-mass-install carry out this install anyway",
-        scope.as_str(),
-        count,
-        config.guard.max_installs,
-        scope.as_str(),
-    )))
+            scope.as_str(),
+            count,
+            config.guard.max_installs,
+            scope.as_str(),
+        ),
+        scope,
+    )
+    .await
 }
 
 /// Enforce for `purge-unmanaged`, where the count is not the question (II.11).
@@ -421,7 +448,7 @@ pub async fn enforce_deliberate(
     if report.is_empty() {
         return Ok(());
     }
-    Err(Error::Refused(report.message(scope)))
+    refuse(config, report.message(scope), scope).await
 }
 
 /// Pull the `(backend, name)` removal pairs out of a planned change set.

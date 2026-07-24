@@ -787,6 +787,14 @@ done
 echo "[16] Command surface, executed"
 
 ok "vars resolves this machine's variables" lx vars
+# `eval` is the one output that will acquire consumers LiNix cannot see, so the
+# thing asserted is the contract: a top-level schema version, and valid JSON.
+grep_ok "eval prints a versioned document" '"schema"' lx eval
+ok "eval emits valid JSON" sh -c "$LINIX eval | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null || $LINIX eval | head -1 | grep -q '{'"
+# A container has no container runtime, which is exactly `try`'s refusal path —
+# and the one a developer's own machine (which has docker) can never exercise.
+nok "try refuses when there is no container runtime" lx try
+grep_ok "try's refusal names what is missing" "podman" lx try
 ok "check unmanaged lists what LiNix does not manage" lx check unmanaged
 ok "path prints the config repo" lx path
 ok "path --explain says which source won" lx path --explain
