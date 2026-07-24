@@ -42,11 +42,14 @@ transaction engine exists; `core/transaction.rs` is the only one.
 which is all that is needed because the time is spent waiting on child processes. Covered by
 `list_aggregates_every_backend_that_answers` and `the_report_is_sorted_for_a_stable_plan`.
 
-**Real-world, run for real via Docker in WSL (memory: [[docker-in-wsl]]):** ubuntu (apt) **PASS**
-— 271 hard checks, 0 fail; fedora (dnf) **PASS** — 279 hard checks, 0 fail, 9 real backend
-lifecycles; arch (pacman) and alpine (apk) running. These are the fast half of IV.2's matrix, the
-set CI runs on every push, and the concurrency changes above are built into the binary they test
-— so they are exercised against real `apt`/`dnf`/`pacman`/`apk`, not only mocks.
+**Real-world, run for real via Docker in WSL (memory: [[docker-in-wsl]]) — the whole fast matrix
+is green:** ubuntu (apt) 271/0, fedora (dnf) 279/0, arch (pacman) 271/0, alpine (apk) 266/0. Zero
+hard failures on any image; each built `linix` from the session's final source, so the
+concurrency changes above are exercised against real `apt`/`dnf`/`pacman`/`apk`, not only mocks.
+This is the fast half of IV.2's matrix, the set CI runs on every push. **This is the first time
+Part VII can cite the container matrix rather than a WSL-by-hand run** — the gap IV.2 named
+("verification that only ever ran by hand on one machine is a claim, not a gate") is closed for
+these four. The slow `tools` image (the ecosystem managers' real lifecycle) is the next run.
 
 **Reliability audit.** The resolver, config parser, edit path and the untrusted-URL download
 backends (`web`/`appimage`/`github`) carry **zero `.unwrap()`/`panic!`/`unreachable!` in
