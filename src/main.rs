@@ -161,7 +161,6 @@ async fn main() -> Result<()> {
         Commands::RemoveOrphans => handle_remove_orphans(&app).await,
         Commands::CleanCache { all } => handle_clean_cache(&app, *all).await,
         Commands::Heal => handle_heal(&app).await,
-        Commands::Doctor { fix, json } => handle_doctor(&app, *fix, *json).await,
         Commands::Adopt => handle_adopt(&app).await,
         Commands::Undo => handle_undo(&app).await,
         Commands::History => handle_history(&app).await,
@@ -169,16 +168,15 @@ async fn main() -> Result<()> {
         Commands::Deactivate { profiles } => handle_deactivate(&app, profiles).await,
         Commands::Profile(args) => handle_profile(&app, &args.command).await,
         Commands::Run { packages, command } => handle_run(&app, packages, command).await,
-        Commands::Status { json } => handle_status(&app, *json).await,
         Commands::Lock => handle_lock(&app).await,
         Commands::Unlock { names, list } => handle_unlock(&app, names, *list).await,
         Commands::Plan { out } => handle_plan(&app, out).await,
         Commands::Apply { plan, yes } => handle_apply(&app, plan, *yes).await,
         Commands::Update => handle_update(&app).await,
         Commands::Reset { force } => handle_reset(&app, *force).await,
-        Commands::Unmanaged => handle_unmanaged(&app).await,
-        Commands::Check => handle_check(&app).await,
-        Commands::Absent => handle_absent(&app).await,
+        Commands::Check { section, json } => {
+            handle_check(&app, section.as_deref(), *json).await
+        }
         Commands::Vars => handle_vars(&app).await,
         Commands::PurgeUnmanaged { allow_mass_purge } => {
             handle_purge_unmanaged(&app, *allow_mass_purge).await
@@ -194,7 +192,6 @@ async fn main() -> Result<()> {
         Commands::Path { explain, set } => handle_path(&cli, *explain, set.as_deref()).await,
         Commands::Edit { file } => handle_edit(&cli, file.as_deref()).await,
         Commands::Init { force, interactive } => handle_init(&app, *force, *interactive).await,
-        Commands::Audit { json } => handle_audit(&app, *json).await,
         Commands::Sbom => handle_sbom(&app).await,
         Commands::Export {
             format,
@@ -230,7 +227,6 @@ async fn main() -> Result<()> {
         } => handle_hook_observe(&app, manager.as_deref(), *learn, argv).await,
         Commands::Hold { packages } => handle_hold(&app, packages).await,
         Commands::Unhold { packages } => handle_unhold(&app, packages).await,
-        Commands::Conflicts { json } => handle_conflicts(&app, *json).await,
         Commands::Policy => handle_policy(&app).await,
         Commands::Completions { shell } => {
             let mut cmd = <Cli as clap::CommandFactory>::command();
@@ -3444,7 +3440,208 @@ async fn handle_unmanaged(app: &App) -> Result<()> {
 /// nothing. Resolution is where every parse/validation error surfaces — a bad line, an
 /// unknown option, a `use` cycle — so a clean resolve IS a clean parse; this just says so,
 /// and prints the counts a reader wants before running `sync`.
-async fn handle_check(app: &App) -> Result<()> {
+/// `linix check` — the one command that looks (U9, 7i).
+///
+/// With no section it runs every question and prints a line each: the verdict, and the command
+/// that acts on it. With a section it prints that section's detail. It never changes anything;
+/// `linix heal` is what repairs.
+async fn handle_check(app: &App, section: Option<&str>, json: bool) -> Result<()> {
+    use linix::app::check::Section;
+
+    let Some(name) = section else {
+        return check_summary(app, json).await;
+    };
+    let Some(section) = Section::parse(name) else {
+        anyhow::bail!(
+            "`{}` is not a section of `check`. Sections: {}.",
+            name,
+            Section::vocabulary()
+        );
+    };
+    match section {
+        Section::Config => check_config(app).await,
+        Section::Drift => handle_status(app, json).await,
+        Section::Unmanaged => handle_unmanaged(app).await,
+        Section::Absent => handle_absent(app).await,
+        Section::Conflicts => handle_conflicts(app, json).await,
+        Section::Health => check_health(app, json).await,
+        Section::Security => handle_audit(app, json).await,
+    }
+}
+
+/// Every section's verdict, one line each. The summary is deliberately cheap to read: a reader
+/// wants to know whether anything needs them, and if so which command to run.
+async fn check_summary(app: &App, json: bool) -> Result<()> {
+    use linix::app::check::{Finding, Section};
+
+    let mut findings: Vec<Finding> = Vec::new();
+
+    // config — does everything the active profiles reach resolve?
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let state = match resolver.resolve_model().await {
+        Ok(state) => {
+            findings.push(Finding::ok(
+                Section::Config,
+                format!("{} package(s) declared", state.total_present()),
+            ));
+            Some(state)
+        }
+        Err(e) => {
+            // A config that does not resolve makes every section below it meaningless, so say
+            // so plainly and stop rather than reporting "0 drift" from a model that failed.
+            findings.push(Finding::attention(
+                Section::Config,
+                format!("does not resolve — {}", e),
+                "linix check config",
+            ));
+            None
+        }
+    };
+
+    if let Some(state) = state.as_ref() {
+        // drift — what a sync would change.
+        let enabled = app.priority_backends().await;
+        let changes = {
+            let guard = app.state.lock().await;
+            linix::app::sync::planner::ChangePlanner::new(
+                app.registry.clone(),
+                &guard,
+                &app.config,
+            )
+            .with_enabled(enabled)
+            .plan(&state.packages, None)
+            .await
+        };
+        match changes {
+            Ok(c) if c.is_empty() => {
+                findings.push(Finding::ok(Section::Drift, "the machine matches your files"))
+            }
+            Ok(c) => findings.push(Finding::attention(
+                Section::Drift,
+                format!("{} to install, {} to remove", c.total_install(), c.total_remove()),
+                "linix sync",
+            )),
+            Err(e) => findings.push(Finding::attention(
+                Section::Drift,
+                format!("could not be planned — {}", e),
+                "linix check drift",
+            )),
+        }
+
+        // absent — declarations that are in force.
+        let absent = state.absent().count();
+        findings.push(if absent == 0 {
+            Finding::ok(Section::Absent, "nothing is declared absent")
+        } else {
+            Finding::ok(Section::Absent, format!("{} line(s) in force", absent))
+        });
+
+        // conflicts — the same package declared two ways.
+        let specs: Vec<linix::core::PackageSpec> =
+            state.packages.values().flatten().cloned().collect();
+        let conflicts = linix::app::conflicts::detect_conflicts(&specs);
+        findings.push(if conflicts.is_empty() {
+            Finding::ok(Section::Conflicts, "none")
+        } else {
+            Finding::attention(
+                Section::Conflicts,
+                format!("{} package(s) declared two ways", conflicts.len()),
+                "linix check conflicts",
+            )
+        });
+    }
+
+    // unmanaged — what adopt would take.
+    match app.adopter().discover().await {
+        Ok(found) if found.adopt.is_empty() => {
+            findings.push(Finding::ok(Section::Unmanaged, "everything you chose is managed"))
+        }
+        Ok(found) => findings.push(Finding::attention(
+            Section::Unmanaged,
+            format!("{} package(s) LiNix does not manage", found.adopt.len()),
+            "linix adopt",
+        )),
+        Err(e) => findings.push(Finding::attention(
+            Section::Unmanaged,
+            format!("could not be crawled — {}", e),
+            "linix check unmanaged",
+        )),
+    }
+
+    // health — can each backend run?
+    // `critical` is deliberately not counted here: on any real machine most backends are
+    // critical because that manager simply is not installed, which is the ordinary state and
+    // not something a summary should report as wrong. `check health` lists them.
+    let mut ok = 0usize;
+    let mut degraded = 0usize;
+    for b in app.registry.all() {
+        if let Ok(r) = b.core().check_health().await {
+            match r.status {
+                linix::core::HealthStatus::Ok => ok += 1,
+                linix::core::HealthStatus::Degraded => degraded += 1,
+                linix::core::HealthStatus::Critical => {}
+            }
+        }
+    }
+    findings.push(if degraded == 0 {
+        Finding::ok(Section::Health, format!("{} backend(s) ready", ok))
+    } else {
+        Finding::attention(
+            Section::Health,
+            format!("{} ready, {} degraded", ok, degraded),
+            "linix check health",
+        )
+    });
+
+    // security — anything managed with a known advisory.
+    match linix::app::insight::audit(app).await {
+        Ok(report) if report.findings.is_empty() => {
+            findings.push(Finding::ok(Section::Security, "no known advisories"))
+        }
+        Ok(report) => findings.push(Finding::attention(
+            Section::Security,
+            format!("{} package(s) with advisories", report.findings.len()),
+            "linix check security",
+        )),
+        // The advisory database is a network call: not reaching it is a gap in the report,
+        // never a clean bill of health.
+        Err(e) => findings.push(Finding::attention(
+            Section::Security,
+            format!("could not be checked — {}", e),
+            "linix check security",
+        )),
+    }
+
+    if json {
+        let rows: Vec<_> = findings
+            .iter()
+            .map(|f| {
+                serde_json::json!({
+                    "section": f.section.as_str(),
+                    "ok": f.ok,
+                    "summary": f.summary,
+                    "next": f.next,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!(rows))?);
+        return Ok(());
+    }
+
+    for f in &findings {
+        println!("{}", f.line());
+    }
+    if findings.iter().all(|f| f.ok) {
+        println!("
+Nothing needs you.");
+    }
+    Ok(())
+}
+
+/// The `config` section: does every file the active profiles reach parse and resolve?
+async fn check_config(app: &App) -> Result<()> {
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
@@ -4250,7 +4447,47 @@ async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> {
     Ok(())
 }
 async fn handle_heal(app: &App) -> Result<()> {
-    app.sync_engine().await.heal().await.map_err(|e| e.into())
+    app.sync_engine().await.heal().await?;
+    // U9: `check` looks, `heal` acts. These three repairs used to be `doctor --fix`, which
+    // made one command both the diagnosis and the treatment — and a command that changes
+    // things is one you cannot run to find out whether you want things changed.
+    for fixed in repair_environment(app).await {
+        info!("repaired: {}", fixed);
+    }
+    Ok(())
+}
+
+/// Put right what `check` can only report: the II.1 directories, the version lockfile, and a
+/// stale backend index. Each is best-effort and reported by name — a repair that failed must
+/// not stop the ones after it, and a repair nobody sees is the class of silence P3 forbids.
+async fn repair_environment(app: &App) -> Vec<String> {
+    let mut fixed = Vec::new();
+
+    for dir in [
+        app.config.config_root(),
+        app.config.config_root().join("modules"),
+        app.config.config_root().join("profiles"),
+    ] {
+        if !dir.exists() {
+            match tokio::fs::create_dir_all(&dir).await {
+                Ok(()) => fixed.push(format!("created {}", dir.display())),
+                Err(e) => warn!("could not create {}: {}", dir.display(), e),
+            }
+        }
+    }
+
+    match build_and_write_locks(app).await {
+        Ok(n) => fixed.push(format!("reconciled locks/versions.json ({} entries)", n)),
+        Err(e) => warn!("could not reconcile the lockfile: {}", e),
+    }
+
+    // A backend reading as "degraded, stale index" recovers from a refresh.
+    match app.update().await {
+        Ok(()) => fixed.push("refreshed backend metadata".into()),
+        Err(e) => warn!("could not refresh backend metadata: {}", e),
+    }
+
+    fixed
 }
 
 /// Health-gated upgrade: snapshot, upgrade, run the test, roll back automatically on
@@ -5059,7 +5296,10 @@ fn doctor_tally(reports: &[(String, linix::core::HealthReport)]) -> (usize, usiz
     (ok, degraded, critical)
 }
 
-async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
+/// The `health` section of `check`: can each backend actually run, and is the repo intact?
+///
+/// Reports only. What it used to repair under `--fix` is `heal`'s now (U9).
+async fn check_health(app: &App, json: bool) -> Result<()> {
     use linix::core::{HealthReport, HealthStatus};
 
     // ---- Per-backend health, via each backend's own probe (not a shallow is_available). ----
@@ -5075,9 +5315,8 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
         reports.push((b.name().to_string(), report));
     }
 
-    // ---- System-level checks + optional repair. ----
+    // ---- System-level checks. Reported, never repaired: that is `heal`'s job (U9). ----
     let mut system: Vec<(String, HealthStatus, Option<String>)> = Vec::new();
-    let mut fixes: Vec<String> = Vec::new();
 
     for (label, dir) in [
         ("config root", app.config.config_root()),
@@ -5086,18 +5325,6 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
     ] {
         if dir.exists() {
             system.push((label.into(), HealthStatus::Ok, None));
-        } else if fix {
-            match tokio::fs::create_dir_all(&dir).await {
-                Ok(_) => {
-                    fixes.push(format!("created {}", dir.display()));
-                    system.push((label.into(), HealthStatus::Ok, Some("created".into())));
-                }
-                Err(e) => system.push((
-                    label.into(),
-                    HealthStatus::Critical,
-                    Some(format!("missing; create failed: {}", e)),
-                )),
-            }
         } else {
             system.push((
                 label.into(),
@@ -5141,28 +5368,12 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
             let stale = locked_keys.difference(&managed).count();
             if missing == 0 && stale == 0 {
                 system.push(("lockfile".into(), HealthStatus::Ok, None));
-            } else if fix {
-                match build_and_write_locks(app).await {
-                    Ok(n) => {
-                        fixes.push(format!("reconciled locks/versions.json ({} entries)", n));
-                        system.push((
-                            "lockfile".into(),
-                            HealthStatus::Ok,
-                            Some("reconciled".into()),
-                        ));
-                    }
-                    Err(e) => system.push((
-                        "lockfile".into(),
-                        HealthStatus::Degraded,
-                        Some(format!("drifted; heal failed: {}", e)),
-                    )),
-                }
             } else {
                 system.push((
                     "lockfile".into(),
                     HealthStatus::Degraded,
                     Some(format!(
-                        "drifted: {} unpinned / {} stale (run `doctor --fix` or `linix lock`)",
+                        "drifted: {} unpinned / {} stale (run `linix lock`, or `linix heal`)",
                         missing, stale
                     )),
                 ));
@@ -5209,13 +5420,6 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
         ));
     }
 
-    if fix {
-        // Best-effort metadata refresh so a "degraded, stale index" backend recovers.
-        if app.update().await.is_ok() {
-            fixes.push("refreshed backend metadata".into());
-        }
-    }
-
     // ---- Output ----
     if json {
         let backends: Vec<_> = reports
@@ -5232,7 +5436,6 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
                 "backends": backends,
                 "system": sys,
                 "summary": { "ok": ok, "degraded": degraded, "critical": critical },
-                "fixes_applied": fixes,
             }))?
         );
         return Ok(());
@@ -5279,13 +5482,6 @@ async fn handle_doctor(app: &App, fix: bool, json: bool) -> Result<()> {
                 .map(|m| format!(" — {}", m))
                 .unwrap_or_default()
         );
-    }
-
-    if !fixes.is_empty() {
-        println!("\nRepairs applied:");
-        for f in &fixes {
-            println!("  + {}", f);
-        }
     }
 
     let sys_critical = system.iter().any(|(_, s, _)| *s == HealthStatus::Critical);

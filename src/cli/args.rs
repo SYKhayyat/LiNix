@@ -167,16 +167,18 @@ pub enum Commands {
         force: bool,
     },
 
-    /// Identify all packages installed on the OS but not managed by LiNix
-    Unmanaged,
+    /// Look at the machine: drift, unmanaged software, conflicts, backend health and more
+    ///
+    /// One section per question. With no section it prints a line for each and names the
+    /// command that acts on it. `check` only ever looks — `linix heal` is what repairs.
+    Check {
+        /// One of: config, drift, unmanaged, absent, conflicts, health, security
+        section: Option<String>,
 
-    /// Parse everything the active profiles reach and report any errors — without planning
-    /// or changing anything (II.8). A clean parse says how many packages resolved.
-    Check,
-
-    /// Show every `absent:` line in force and the module it comes from (II.8) — what LiNix
-    /// is keeping OFF this machine, and where each rule is written.
-    Absent,
+        /// Machine-readable output
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Print the variables (Part IX) resolved on this machine — each name, its typed value,
     /// and the provider that set it. The first thing to reach for when a `when $name` block
@@ -221,12 +223,6 @@ pub enum Commands {
         json: bool,
     },
 
-    /// Show what `sync` would change (to install / drift to remove / unmanaged) — read-only
-    Status {
-        /// Output the report as JSON
-        #[arg(long)]
-        json: bool,
-    },
 
     /// Compute what `sync` would do and freeze it to a reviewable file, so the exact plan you
     /// inspect is the one you later `apply` (Terraform-style plan/apply for packages).
@@ -411,18 +407,6 @@ pub enum Commands {
     /// Manage source repositories (PPA, Taps, Buckets, etc.)
     Repo(RepoArgs),
 
-    /// Deep system health check: per-backend readiness/severity (via each backend's own
-    /// health probe), config/state integrity, and directory layout. `--fix` repairs what it
-    /// safely can (missing directories, stale metadata).
-    Doctor {
-        /// Attempt to auto-repair fixable problems (create missing dirs, refresh metadata)
-        #[arg(long)]
-        fix: bool,
-
-        /// Emit the full report as JSON
-        #[arg(long)]
-        json: bool,
-    },
 
     /// Take over the machine: write the packages you installed by hand into a module
     Adopt,
@@ -540,13 +524,6 @@ pub enum Commands {
         interactive: bool,
     },
 
-    /// Scan every managed package across all backends for known security
-    /// vulnerabilities (via the OSV.dev database)
-    Audit {
-        /// Output the findings as JSON
-        #[arg(long)]
-        json: bool,
-    },
 
     /// Emit a CycloneDX software bill of materials (SBOM) spanning every backend
     Sbom,
@@ -693,14 +670,6 @@ pub enum Commands {
         packages: Vec<String>,
     },
 
-    /// Detect cross-backend conflicts in your desired state: the same tool pinned to different
-    /// versions by different backends, or provided by more than one (a PATH shadowing risk).
-    /// Something no single-backend resolver can see. Read-only.
-    Conflicts {
-        /// Emit the findings as JSON
-        #[arg(long)]
-        json: bool,
-    },
 
     /// Check the desired system state against your [guard] install/change rules
     Policy,

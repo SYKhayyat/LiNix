@@ -75,8 +75,10 @@ impl Section {
 }
 
 impl fmt::Display for Section {
+    /// `f.pad`, not `f.write_str`: the summary aligns sections in a column, and `write_str`
+    /// silently ignores the width in `{:<11}` — the padding is requested and does not happen.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.pad(self.as_str())
     }
 }
 
@@ -168,6 +170,14 @@ mod tests {
         assert!(line.contains("drift"), "{}", line);
         assert!(line.contains("3 to install"), "{}", line);
         assert!(line.contains("linix sync"), "{}", line);
+    }
+
+    /// The summary is a column, and `Display` must honour the width it is given — `write_str`
+    /// ignores it, so the alignment silently does not happen.
+    #[test]
+    fn a_section_pads_to_the_width_it_is_given() {
+        assert_eq!(format!("[{:<11}]", Section::Drift), "[drift      ]");
+        assert_eq!(format!("[{:<11}]", Section::Unmanaged), "[unmanaged  ]");
     }
 
     #[test]

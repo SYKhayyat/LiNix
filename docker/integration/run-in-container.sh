@@ -151,11 +151,11 @@ ok "active file exists" test -f "$LINIX_CONFIG_DIR/active"
 
 # --- 2. Discovery (read-only) ---------------------------------------------
 echo "[2] Discovery / read-only verbs"
-ok "doctor" lx doctor
-ok "status" lx status
+ok "check health" lx check health
+ok "check drift" lx check drift
 ok "plan (no changes yet)" lx plan --dry-run
 ok "check parses the model" lx check
-ok "absent lists nothing" lx absent
+ok "check absent lists nothing" lx check absent
 ok "protected lists guarded packages" lx protected
 grep_ok "protected includes a system essential" "linix\|libc\|systemd\|kernel\|bash" lx protected
 
@@ -199,7 +199,7 @@ echo "[7] Negative path"
 nok "installing a nonexistent package fails" lx -y install "linix-no-such-pkg-zzz"
 # The failure must not be left in the manifest. Every later command parses the
 # model, so one unresolvable line wedges the config until someone hand-edits it.
-ok "a failed install leaves the model parseable" lx status
+ok "a failed install leaves the model parseable" lx check drift
 # Whatever the verdict above, the rest of the run needs a model it can read.
 sed -i '/linix-no-such-pkg-zzz/d' "$LINIX_CONFIG_DIR/modules/imperative.txt" 2>/dev/null || true
 
@@ -561,7 +561,7 @@ assert_binary_gone() {
     return 1
 }
 
-READY_LIST=$(lx doctor 2>/dev/null | grep '^\[READY\]' | awk '{print $2}' | sort)
+READY_LIST=$(lx check health 2>/dev/null | grep '^\[READY\]' | awk '{print $2}' | sort)
 echo "        READY backends: $(echo $READY_LIST | tr '\n' ' ')"
 
 # A manager whose `list` answers a different question than its `install`. Named, because
@@ -687,10 +687,10 @@ fi
 # lists every one.
 echo "[15] Plan-smoke, every backend this image cannot run"
 
-ALL_BACKENDS=$(lx doctor --json 2>/dev/null \
+ALL_BACKENDS=$(lx check health --json 2>/dev/null \
     | sed -n 's/.*"backend"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sort -u)
 echo "        registered backends: $(echo $ALL_BACKENDS | wc -w)"
-ok "doctor --json enumerates the registry" test -n "$ALL_BACKENDS"
+ok "check health --json enumerates the registry" test -n "$ALL_BACKENDS"
 
 SMOKE_CFG=/tmp/linix-it-smoke
 rm -rf "$SMOKE_CFG"; mkdir -p "$SMOKE_CFG/modules" "$SMOKE_CFG/profiles"
@@ -769,12 +769,12 @@ done
 echo "[16] Command surface, executed"
 
 ok "vars resolves this machine's variables" lx vars
-ok "unmanaged lists what LiNix does not manage" lx unmanaged
+ok "check unmanaged lists what LiNix does not manage" lx check unmanaged
 ok "path prints the config repo" lx path
 ok "path --explain says which source won" lx path --explain
 ok "config show prints the active configuration" lx config show
 ok "policy checks the desired state against [guard]" lx policy
-ok "conflicts reports cross-backend conflicts" lx conflicts
+ok "check conflicts reports cross-backend conflicts" lx check conflicts
 ok "sbom emits a bill of materials" lx sbom
 ok "completions bash generates a script" lx completions bash
 ok "profile list" lx profile list
@@ -822,10 +822,10 @@ else
 fi
 # The command runs either way; only reaching OSV.dev is optional, so a network
 # failure is soft — and `ok` is not used, because it would count the failure too.
-if lx audit >/tmp/it.out 2>&1; then
-    PASS=$((PASS + 1)); echo "  PASS  audit scans for vulnerabilities"
+if lx check security >/tmp/it.out 2>&1; then
+    PASS=$((PASS + 1)); echo "  PASS  check security scans for vulnerabilities"
 else
-    soft "audit ran but could not reach the OSV.dev database"
+    soft "check security ran but could not reach the OSV.dev database"
 fi
 ok "export writes native manifests" lx export --out /tmp/linix-it-export
 # The package is PINNED to this image's native manager. An unpinned `jq` resolved to

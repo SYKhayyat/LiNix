@@ -1163,7 +1163,12 @@ before the reboot.
 `try` on a clean container, having touched nothing on the host; with no container runtime, `try`
 refuses and names what is missing rather than running anywhere.
 
-**7i — The ten status commands become one (XIII.8, U9).** Last, because it breaks invocations
+**7i — The ten status commands become one (XIII.8, U9). DONE 2026-07-24.** Six commands folded
+into `linix check` with seven sections; the exit grep is silent and `heal` survives. `doctor
+--fix`'s three repairs moved to `heal` on the owner's ruling — that is the dividing line the
+whole collapse rests on: **check looks, heal acts**.
+
+Originally scheduled last, because it breaks invocations
 and because everything above adds to what it must report. **Exit:** `linix check` covers drift,
 unmanaged, absent, conflicts, health and policy, and `grep -rn "Commands::\(Status\|Doctor\|
 Unmanaged\|Absent\|Conflicts\|Insight\|Metrics\|Audit\)" src/` is silent. **`heal` survives —

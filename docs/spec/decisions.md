@@ -274,11 +274,50 @@ implying a revert that will not happen.
 
 ## U9
 
-**Status: OPEN — blocking.**
+**Status: ANSWERED — ruled 2026-07-24, and BUILT.**
 
 **U9 — Do the ten status commands collapse into one?** *Recommendation:* yes, one `linix check`
 with sections and narrowing flags; `heal` stays separate because it acts. Old names deleted in
 the same change (P2), not aliased.
+
+**RULED (owner, 2026-07-24): yes — "make it intuitive and easy" — and the repairs move to
+`heal`.** Six commands are gone: `status`, `doctor`, `unmanaged`, `absent`, `conflicts`,
+`audit`, folded into `linix check` with seven sections (`config`, `drift`, `unmanaged`,
+`absent`, `conflicts`, `health`, `security`). Deleted, not aliased: an alias is the second way
+to do one thing, kept alive.
+
+**A section is a positional argument, not seven flags.** `linix check health` reads as a
+question and `linix check --health` reads as a modifier; the ruling asked for intuitive, and
+that is the difference. An unknown section is refused with the legal list printed, from the same
+table the parser reads — so the error cannot drift from what is accepted.
+
+**The default output is a verdict per section, each naming the command that acts on it** — P8:
+a report whose next step is the reader working out what to run has done the easy half.
+
+```
+ok  config      42 package(s) declared
+->  drift       3 to install, 1 to remove
+                   run `linix sync`
+->  unmanaged   103 package(s) LiNix does not manage
+                   run `linix adopt`
+```
+
+**`doctor --fix` is gone, and its three repairs are `heal`'s** (owner, asked and answered
+2026-07-24): creating the II.1 directories, reconciling `locks/versions.json`, refreshing a
+stale backend index. That is the whole dividing line the ruling rests on — **`check` looks,
+`heal` acts** — and it is why `heal` survives the collapse. A command that both diagnoses and
+repairs is one you cannot run to find out whether you want a repair.
+
+**Two things the entry did not say, decided while building:**
+
+- **A `config` section that fails stops the sections that depend on it.** Drift, absent and
+  conflicts are all read off a resolved model; reporting "0 drift" from a model that failed to
+  resolve would be a clean bill of health computed from nothing.
+- **A `security` section that cannot reach the advisory database reports that, not "clean".**
+  The network being down is a gap in the report, never an absence of advisories.
+
+**7i's exit condition is met:** `grep -rn "Commands::\(Status\|Doctor\|Unmanaged\|Absent\|
+Conflicts\|Insight\|Metrics\|Audit\)" src/` is silent, and `heal` survives.
 
 ---
 

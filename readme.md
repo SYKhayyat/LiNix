@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/SYKhayyat/LiNix/HEAD/scripts/instal
 irm https://raw.githubusercontent.com/SYKhayyat/LiNix/HEAD/scripts/install.ps1 | iex
 ```
 
-Either script installs the binary, runs `linix doctor`, and offers to `adopt` the packages
+Either script installs the binary, runs `linix check`, and offers to `adopt` the packages
 already on the machine. From a checkout, LiNix is written in Rust:
 
 ```bash
@@ -52,7 +52,7 @@ cp target/release/linix ~/.local/bin/
 ```bash
 linix init          # scaffold ~/.config/linix, with one profile (Main) already active
 linix install jq    # writes a line you own, then syncs
-linix status        # what sync would change, read-only
+linix check         # what needs you: drift, unmanaged, health — read-only
 linix sync          # make the machine match the files
 ```
 
@@ -65,7 +65,7 @@ it:
 ```bash
 echo 'cargo:ripgrep' > ~/.config/linix/modules/tools.txt
 echo 'use tools'    >> ~/.config/linix/profiles/Main
-linix check                # parses everything the active profiles reach
+linix check                # every question at once; `linix check drift` for one
 linix --dry-run sync       # preview
 linix sync
 ```
@@ -432,7 +432,30 @@ because a fresh repo signs nothing.
 
 ## Commands
 
-Run `linix --help` for the full list with current wording, and `linix doctor` for what this
+### One command looks, one command acts
+
+`linix check` answers every "what is going on" question — drift, unmanaged software, `absent:`
+lines in force, conflicting declarations, backend health, known advisories. With no argument it
+prints a line per section and names the command that acts on each:
+
+```
+ok  config      42 package(s) declared
+->  drift       3 to install, 1 to remove
+                   run `linix sync`
+->  unmanaged   103 package(s) LiNix does not manage
+                   run `linix adopt`
+ok  health      26 backend(s) ready
+```
+
+`linix check health` (or `drift`, `unmanaged`, `absent`, `conflicts`, `config`, `security`)
+prints that section in full.
+
+**`check` never changes anything.** What used to be `doctor --fix` — creating missing
+directories, reconciling the lockfile, refreshing a stale backend index — is `linix heal`, along
+with recovering an interrupted run. A command that both diagnoses and repairs is one you cannot
+run to find out whether you want a repair.
+
+Run `linix --help` for the full list with current wording, and `linix check health` for what this
 machine actually supports — that is generated from the registry, so it cannot go stale the way
 a number typed into a README does.
 
