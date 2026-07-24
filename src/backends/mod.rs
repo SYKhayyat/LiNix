@@ -12,6 +12,7 @@ pub mod dnf;
 pub mod emacs;
 pub mod flatpak;
 pub mod github;
+pub mod firewall;
 pub mod link;
 
 #[cfg(test)]

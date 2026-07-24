@@ -123,6 +123,18 @@ impl DesiredState {
         })
     }
 
+    /// The `firewall:` lines this machine wants (Part XI).
+    pub fn firewall_rules(&self) -> impl Iterator<Item = (&str, &Options, &Origin)> {
+        self.extras.iter().filter_map(|(s, o)| match s {
+            Statement::Firewall(name, opts) => Some((name.as_str(), opts, o)),
+            _ => None,
+        })
+    }
+
+    pub fn has_firewall_rules(&self) -> bool {
+        self.firewall_rules().next().is_some()
+    }
+
     pub fn has_dotfile_trees(&self) -> bool {
         self.dotfile_trees().next().is_some()
     }
@@ -143,6 +155,7 @@ impl DesiredState {
             || self.schedules().next().is_some()
             || self.has_execs()
             || self.has_dotfile_trees()
+            || self.has_firewall_rules()
     }
 }
 
@@ -575,7 +588,8 @@ impl<'a> Resolver<'a> {
                 | Statement::Link(name, opts)
                 | Statement::Setting(name, opts)
                 | Statement::Exec(name, opts)
-                | Statement::Dotfiles(name, opts) => {
+                | Statement::Dotfiles(name, opts)
+                | Statement::Firewall(name, opts) => {
                     *name = crate::model::vars::expand(name, vars, origin)?;
                     for value in opts.values_mut() {
                         *value = crate::model::vars::expand(value, vars, origin)?;
@@ -947,6 +961,7 @@ fn set_key(stmt: &Statement) -> String {
         Statement::Setting(n, _) => format!("setting:{}", n),
         Statement::Exec(n, _) => format!("exec:{}", n),
         Statement::Dotfiles(n, _) => format!("dotfiles:{}", n),
+        Statement::Firewall(n, _) => format!("firewall:{}", n),
         Statement::Use(r) => format!("use {}", r.name()),
         Statement::Exclude(r) => format!("exclude {}", r.name()),
         Statement::Intersect(r) => format!("intersect {}", r.name()),

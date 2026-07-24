@@ -1,0 +1,53 @@
+# The firewalls LiNix ships with (Part XI, riding K17's adapter table).
+#
+# Rows, not Rust — the same decision K17 made for settings stores, and for the same reason: a
+# machine running a firewall nobody wrote an arm for should not have to wait for a release. A
+# user adds one in `adapters/firewall.toml`.
+#
+# `{port}` and `{proto}` are substituted. `allow`/`deny` open and close a port; `default_in`
+# and `default_out` set the policy for traffic no rule mentions; `list` reports what is in
+# force, parsed by `list_pattern` (a regex whose first two groups are port and protocol).
+
+[[firewall]]
+name = "ufw"
+os = "linux"
+detect = "ufw"
+allow = ["ufw", "allow", "{port}/{proto}"]
+deny = ["ufw", "delete", "allow", "{port}/{proto}"]
+default_in = ["ufw", "default", "{policy}", "incoming"]
+default_out = ["ufw", "default", "{policy}", "outgoing"]
+list = ["ufw", "status", "numbered"]
+# `22/tcp   ALLOW IN  Anywhere` — the leading port/proto is what identifies the rule.
+list_pattern = '^\[?\s*\d*\]?\s*(\d+)/(tcp|udp)\s+ALLOW'
+
+[[firewall]]
+name = "firewalld"
+os = "linux"
+detect = "firewall-cmd"
+allow = ["firewall-cmd", "--permanent", "--add-port={port}/{proto}"]
+deny = ["firewall-cmd", "--permanent", "--remove-port={port}/{proto}"]
+default_in = ["firewall-cmd", "--permanent", "--set-target={policy}"]
+default_out = []
+list = ["firewall-cmd", "--permanent", "--list-ports"]
+list_pattern = '(\d+)/(tcp|udp)'
+
+# Windows Defender Firewall. P7: Windows is not a later phase — a config that opens a port
+# means the same thing on the Debian laptop and the Windows workstation, and that is the whole
+# argument for a built-in backend rather than a per-machine `[[backend]]` definition.
+[[firewall]]
+name = "windows-defender"
+os = "windows"
+detect = "netsh"
+allow = [
+  "netsh", "advfirewall", "firewall", "add", "rule",
+  "name=LiNix {port}/{proto}", "dir=in", "action=allow",
+  "protocol={proto}", "localport={port}",
+]
+deny = [
+  "netsh", "advfirewall", "firewall", "delete", "rule",
+  "name=LiNix {port}/{proto}",
+]
+default_in = ["netsh", "advfirewall", "set", "allprofiles", "firewallpolicy", "{policy}"]
+default_out = []
+list = ["netsh", "advfirewall", "firewall", "show", "rule", "name=all"]
+list_pattern = 'LiNix (\d+)/(tcp|udp)'

@@ -152,6 +152,10 @@ pub enum Statement {
     /// directory takes everything the application later writes there into the git-tracked
     /// repo, and `bundle` then hands it to whoever the backup goes to.
     Dotfiles(String, Options),
+    /// `firewall:22/tcp`, `firewall:default/incoming @value=deny` — a declared perimeter
+    /// (Part XI). One spelling across ufw, firewalld and Windows Defender, which is the whole
+    /// argument for a built-in backend rather than a per-machine `[[backend]]` naming `ufw`.
+    Firewall(String, Options),
     Use(Reference),
     /// `exclude heavy` — subtract that module's or profile's packages (II.4).
     Exclude(Reference),
@@ -312,6 +316,7 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
         ("setting:", Statement::Setting),
         ("exec:", Statement::Exec),
         ("dotfiles:", Statement::Dotfiles),
+        ("firewall:", Statement::Firewall),
     ] {
         if let Some(rest) = line.strip_prefix(prefix) {
             let (name, options) = split_options(origin, rest.trim())?;
@@ -361,6 +366,7 @@ fn parse_var(line: &str) -> Option<Statement> {
 fn starts_with_statement_prefix(line: &str) -> bool {
     [
         "absent:", "repo:", "shim:", "schedule:", "service:", "link:", "exec:", "dotfiles:",
+        "firewall:",
     ]
         .iter()
         .any(|p| line.starts_with(p))
@@ -628,6 +634,7 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
         Statement::Setting(name, o) => validate_setting(origin, name, o),
         Statement::Exec(name, o) => validate_exec(origin, name, o),
         Statement::Dotfiles(name, o) => validate_extra_options(origin, "dotfiles", name, o),
+        Statement::Firewall(name, o) => validate_firewall(origin, name, o),
         Statement::Repo { .. }
         | Statement::Use(_)
         | Statement::Exclude(_)
@@ -664,6 +671,42 @@ pub const EXEC_OPTION_KEYS: &[&str] = &["runs", "undo"];
 /// dotfiles tree mirrors by definition. There is deliberately no per-file option: the tree has
 /// no place to write one, which is why it never decrypts (U24).
 pub const DOTFILES_OPTION_KEYS: &[&str] = &["target"];
+/// `value` is the policy a `default/...` rule sets (`allow` or `deny`). A port rule takes no
+/// options: `firewall:22/tcp` is the whole declaration.
+pub const FIREWALL_OPTION_KEYS: &[&str] = &["value"];
+
+/// A firewall line names a rule the grammar can read, and a default policy says which one.
+fn validate_firewall(origin: &Origin, name: &str, options: &Options) -> Result<()> {
+    validate_extra_options(origin, "firewall", name, options)?;
+    let rule = crate::model::firewall::Rule::parse(name)
+        .map_err(|e| GrammarError::new(origin.clone(), e))?;
+    match rule {
+        crate::model::firewall::Rule::Default { .. } => {
+            match options.one("value").map(str::trim) {
+                Some("allow") | Some("deny") => Ok(()),
+                _ => Err(GrammarError::new(
+                    origin.clone(),
+                    format!("`firewall:{}` needs a policy", name),
+                )
+                .with_hint(
+                    "say which way it goes: `@value=deny` or `@value=allow`. A default policy                      with no value declares nothing, and it is the most consequential line in                      a firewall.",
+                )),
+            }
+        }
+        // A port rule is its own declaration; `@value=` on one would be a second way to say
+        // the same thing, and a confusing one (`firewall:22/tcp @value=deny` reads as both).
+        crate::model::firewall::Rule::Port { .. } => match options.one("value") {
+            None => Ok(()),
+            Some(_) => Err(GrammarError::new(
+                origin.clone(),
+                format!("`firewall:{}` takes no `value`", name),
+            )
+            .with_hint(
+                "a declared port is open — that is what declaring it means. To close one,                  delete the line; `@value=` belongs on `default/incoming` only.",
+            )),
+        },
+    }
+}
 
 fn keys_for(prefix: &str) -> &'static [&'static str] {
     match prefix {
@@ -673,6 +716,7 @@ fn keys_for(prefix: &str) -> &'static [&'static str] {
         "setting" => SETTING_OPTION_KEYS,
         "exec" => EXEC_OPTION_KEYS,
         "dotfiles" => DOTFILES_OPTION_KEYS,
+        "firewall" => FIREWALL_OPTION_KEYS,
         _ => SCHEDULE_OPTION_KEYS,
     }
 }
@@ -1761,5 +1805,73 @@ mod scope_tests {
             let full = err.to_string();
             assert!(full.contains("user") && full.contains("system"), "{}", full);
         }
+    }
+}
+
+/// Part XI: `firewall:` lines, and the one option only a default policy takes.
+#[cfg(test)]
+mod firewall_tests {
+    use super::*;
+
+    fn o() -> Origin {
+        Origin::new("modules/net.txt", 2)
+    }
+    fn known(name: &str) -> bool {
+        matches!(name, "apt")
+    }
+    fn pv(line: &str) -> Result<Statement> {
+        let s = parse(&o(), line, &known)?;
+        validate(&o(), &s)?;
+        Ok(s)
+    }
+
+    #[test]
+    fn a_port_rule_is_its_own_whole_declaration() {
+        let Statement::Firewall(name, opts) = pv("firewall:22/tcp").unwrap() else {
+            panic!("not a firewall rule");
+        };
+        assert_eq!(name, "22/tcp");
+        assert!(opts.one("value").is_none());
+    }
+
+    /// N4: the default policy is declarable, and it must say which way it goes — it is the most
+    /// consequential line in a firewall, so a silent one is the worst case.
+    #[test]
+    fn a_default_policy_needs_a_direction_and_a_value() {
+        assert!(pv("firewall:default/incoming@value=deny").is_ok());
+        assert!(pv("firewall:default/outgoing@value=allow").is_ok());
+
+        let err = pv("firewall:default/incoming").unwrap_err();
+        assert!(err.what.contains("needs a policy"), "{}", err);
+
+        assert!(pv("firewall:default/sideways@value=deny").is_err());
+        assert!(pv("firewall:default/incoming@value=maybe").is_err());
+    }
+
+    /// A declared port is open — that is what declaring it means. `@value=` on one would be a
+    /// second way to say the same thing, and `firewall:22/tcp @value=deny` reads as both.
+    #[test]
+    fn a_port_rule_refuses_a_value() {
+        let err = pv("firewall:22/tcp@value=deny").unwrap_err();
+        assert!(err.what.contains("takes no `value`"), "{}", err);
+        assert!(err.to_string().contains("delete the line"), "{}", err);
+    }
+
+    #[test]
+    fn a_rule_the_grammar_cannot_read_is_refused_at_parse_time() {
+        for bad in ["firewall:22", "firewall:http/tcp", "firewall:22/sctp", "firewall:0/tcp"] {
+            assert!(pv(bad).is_err(), "{} was accepted", bad);
+        }
+    }
+
+    /// A firewall rule is a noun with a teardown — unlike `exec:`, it belongs in the extras
+    /// ledger so that deleting the line closes the port (N5).
+    #[test]
+    fn a_firewall_rule_is_an_extra_with_a_teardown_key() {
+        let stmt = pv("firewall:22/tcp").unwrap();
+        assert_eq!(
+            crate::core::extra_key(&stmt).as_deref(),
+            Some("firewall:22/tcp")
+        );
     }
 }

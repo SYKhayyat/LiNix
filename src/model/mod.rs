@@ -16,6 +16,7 @@ pub mod resolve;
 pub mod bootstrap;
 pub mod dotfiles;
 pub mod exec;
+pub mod firewall;
 pub mod schedule;
 pub mod scope;
 pub mod vars;

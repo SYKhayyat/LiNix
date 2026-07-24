@@ -377,6 +377,40 @@ line from the file counts, and deactivating a profile does not.
 sources another file, or curls one, changes behaviour without changing its hash, and LiNix cannot
 see that.
 
+## The firewall
+
+One line opens a port, and means the same thing on every machine:
+
+```
+firewall:22/tcp
+firewall:default/incoming @value=deny
+```
+
+LiNix drives whichever firewall the machine runs — `ufw`, `firewalld` or Windows Defender —
+so the same config opens port 22 on a Debian laptop and a Windows workstation. A firewall LiNix
+does not know is a `[[firewall]]` row in `adapters/firewall.toml`, not a new release.
+
+**A declared port is open; deleting the line closes it.** That is what declaring means, so
+`firewall:22/tcp` takes no `@value=`. Only `default/incoming` and `default/outgoing` do.
+
+**LiNix will not close the port you are connected over.** Before any command runs, it checks
+whether the change would cut the session it is being typed into — including the subtle case
+where tightening `default/incoming` closes your port without ever naming it:
+
+```
+refusing to apply the firewall change: it would close port 22, which is carrying this session.
+  LiNix is being run over that port, so applying this would end the connection and leave no way
+  back in.
+  Declare `firewall:22/tcp` to keep it open, or make this change from the machine's own console.
+```
+
+That check runs on every path that can close a port — including an unattended `watch` tick,
+which is the dangerous one, because nobody is there to read a refusal.
+
+**Drift is corrected.** A rule someone added by hand is removed on the next sync, like any other
+drift — with the one exception above. If your firewall is also configured by a `link:`ed ruleset
+file, LiNix warns that two things own the perimeter and lets your declared rules win.
+
 ## A folder of dotfiles
 
 If your dotfiles already sit in a tree that mirrors `$HOME`, say so once instead of writing

@@ -48,6 +48,13 @@ pub fn extra_key(stmt: &Statement) -> Option<String> {
         // own `when` false — so wiring it into this ledger would re-run or "undo" it every
         // time the condition swung. Its lifecycle is `locks/exec.toml`, not here (XIII.3).
         Statement::Exec(..) => None,
+        // A firewall rule is a noun: deleting the line closes the port (N5), so it belongs in
+        // the teardown ledger — the opposite of `exec:` directly above, and for the reason that
+        // distinguishes them: a rule has an inverse and a script does not.
+        Statement::Firewall(name, _) => Some(format!("firewall:{}", name)),
+        // A dotfiles tree's files are keyed individually by the tree applier, not here: one
+        // ledger row per placed file (U22), which this function has no way to enumerate.
+        Statement::Dotfiles(..) => None,
         Statement::Schedule(name, _) => Some(format!("schedule:{}", name)),
         _ => None,
     }

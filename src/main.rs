@@ -502,6 +502,15 @@ struct Reconcile {
     confirm: bool,
 }
 
+/// What to call this run in a refusal a user reads — the difference that matters is whether
+/// anybody was there, because an unattended tick is the dangerous one (N7).
+fn scope_label(scope: linix::app::sync::guard::GuardScope) -> &'static str {
+    match scope {
+        linix::app::sync::guard::GuardScope::Watch => "an unattended watch tick",
+        _ => "sync",
+    }
+}
+
 /// One reconcile pass: resolve the model, apply repos, plan, apply, then dependents,
 /// schedules and extras — II.7's ordering, in order.
 ///
@@ -598,12 +607,9 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
                 serde_json::to_string_pretty(&changes.generate_report())?
             );
         }
-        // Ordering phase 3, previewed: the dependent extras that a real run would apply
-        // after the packages, then the schedule phase, then the undo of removed extras.
-        app.apply_dependents(&state).await?;
-        app.apply_schedules(&state).await?;
-        app.apply_execs(&state).await?;
-        app.reconcile_extras(&state).await?;
+        // The same phases a real run would perform, in the same order, from the same list —
+        // each honours `dry_run` itself and previews instead of acting.
+        apply_non_package_phases(app, &state, opts.scope).await?;
         return Ok(applied);
     }
 
@@ -630,20 +636,40 @@ async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         engine.sync(changes, opts.scope).await?;
     }
 
-    // Ordering phase 3: the dependent extras, now that every package they lean on is in.
-    app.apply_dependents(&state).await?;
-    // Ordering phase 4 (S21): provision the declared schedules onto the OS scheduler.
-    app.apply_schedules(&state).await?;
-    // Phase 3b (7n): the dotfiles trees, with the dependents — a tree is a pile of `link:`
-    // lines and belongs where they do.
-    app.apply_dotfile_trees(&state).await?;
-    // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and dependents a
-    // script is likely to lean on. A verb, so it has no teardown phase of its own.
-    app.apply_execs(&state).await?;
-    // Phase 5 (S20): undo extras that were applied before but are no longer declared.
-    app.reconcile_extras(&state).await?;
+    apply_non_package_phases(app, &state, opts.scope).await?;
     perform_maintenance(app).await?;
     Ok(applied)
+}
+
+/// Everything a sync does after the package plan, in II.7's order.
+///
+/// **One list, called by the preview and by the real run.** It used to be two — the dry-run
+/// branch kept its own copy — and every statement kind added since was missed by one of them:
+/// extras (S20), then `exec:`, then `dotfiles:`, then `firewall:`. Four times is not four
+/// mistakes, it is one duplicated list. Each phase honours `dry_run` internally and previews
+/// rather than acting, which is what makes a single list correct for both callers.
+async fn apply_non_package_phases(
+    app: &App,
+    state: &linix::model::DesiredState,
+    scope: linix::app::sync::guard::GuardScope,
+) -> Result<()> {
+    // Phase 3: the dependent extras, now that every package they lean on is in.
+    app.apply_dependents(state).await?;
+    // Phase 3b (7n): the dotfiles trees — a tree is a pile of `link:` lines and belongs where
+    // they do.
+    app.apply_dotfile_trees(state).await?;
+    // Phase 3c (Part XI): the perimeter. After the packages, because a rule usually exists to
+    // let something in that was just installed — and its lockout check runs before any command
+    // it would issue, on this path and on the unattended one alike.
+    app.apply_firewall(state, scope_label(scope)).await?;
+    // Phase 4 (S21): provision the declared schedules onto the OS scheduler.
+    app.apply_schedules(state).await?;
+    // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and dependents a
+    // script is likely to lean on. A verb, so it has no teardown phase of its own.
+    app.apply_execs(state).await?;
+    // Phase 5 (S20): undo extras that were applied before but are no longer declared.
+    app.reconcile_extras(state).await?;
+    Ok(())
 }
 
 /// `linix rebuild` — remove and reinstall what is declared, one backend at a time (X.1, K1).
