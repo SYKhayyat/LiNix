@@ -42,7 +42,7 @@ underlying evidence: the measurements and the `file:line` citations behind each 
 
 ## PROMPT — read this first, then follow it
 
-You are implementing LiNix v7 on branch `v6` at `C:\Users\Administrator\Videos\Nexus\linix`.
+You are implementing LiNix v7 on `main` — the sole branch — at `C:\Users\Administrator\Videos\Nexus\linix`.
 This document is your specification. It was produced by a long design conversation with the
 owner; **every rule in it was argued for and chosen, and Part V records why.**
 

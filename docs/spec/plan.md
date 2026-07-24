@@ -2,7 +2,7 @@
 
 *[LiNix v7](../SPEC.md) — the map is there; this is one part of it.*
 
-## What already exists on branch `v6`
+## What already exists (written against branch `v6`, which is now `main` — the sole branch)
 
 Four stages of the old plan are committed. **Read this before deleting anything.**
 
