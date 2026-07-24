@@ -1151,7 +1151,9 @@ these land one at a time.
 a second sync is a no-op, and removing the line restores the default — the same three proofs the
 gsettings adapter passed, on a store nobody shipped an enum arm for.
 
-**7f — Health-checked upgrades (XIII.5, U7).** **Exit:** an upgrade whose `@health=` command
+**7f — Health-checked upgrades (XIII.5, U7). DONE 2026-07-24.** `@health=` on a line and a
+`health` list in `preferences.toml`, one revert path; a declared check with no snapshot provider
+refuses before the change (V.65). The dead `@check=` branch was deleted with it. **Exit:** an upgrade whose `@health=` command
 fails restores the snapshot, and says so in those words; with no snapshot provider it fails
 loudly and says it cannot revert, before it starts.
 
@@ -1159,7 +1161,9 @@ loudly and says it cannot revert, before it starts.
 rebuilds the declared out-of-tree modules and fails loudly on a module that will not build —
 before the reboot.
 
-**7h — `linix try` (XIII.11, U12).** **Exit:** a config with a deliberate error is rejected by
+**7h — `linix try` (XIII.11, U12). DONE 2026-07-24.** Reuses the Phase 6 images; the config is
+mounted read-only and the container is `--rm`. No runtime is a refusal naming both, verified on
+the real binary at exit 3. **Exit:** a config with a deliberate error is rejected by
 `try` on a clean container, having touched nothing on the host; with no container runtime, `try`
 refuses and names what is missing rather than running anywhere.
 
@@ -1174,12 +1178,14 @@ unmanaged, absent, conflicts, health and policy, and `grep -rn "Commands::\(Stat
 Unmanaged\|Absent\|Conflicts\|Insight\|Metrics\|Audit\)" src/` is silent. **`heal` survives —
 it acts, the rest only look.**
 
-**7j — LiNix-level event hooks (XIII.13, U15).** **Exit:** a sync that finds drift runs the
+**7j — LiNix-level event hooks (XIII.13, U15). DONE 2026-07-24.** `after_sync`, `on_drift`,
+`on_guard_refusal`, from `hooks/<event>` **and** `preferences.toml`, additively, each approved
+separately through II.12's ledger. **Exit:** a sync that finds drift runs the
 declared `on_drift` hook with the drift on stdin as JSON; a hook that exits non-zero warns and
 does not fail the sync; and an undeclared event costs nothing.
 
-**7k — `linix eval` (XIII.15, U17).** Cheap, and it makes several later questions answerable
-without new commands. **Exit:** the resolved desired state prints as versioned JSON, with every
+**7k — `linix eval` (XIII.15, U17). DONE 2026-07-24.** Versioned JSON, no locks, repo-relative
+sources so two machines diff cleanly. **Exit:** the resolved desired state prints as versioned JSON, with every
 `when` decided and every bare name resolved, and the command takes no locks and changes nothing.
 
 **7l — `git blame` for a declaration (XIII.19).** **Exit:** asking about a declared package names
