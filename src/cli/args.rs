@@ -420,6 +420,28 @@ pub enum Commands {
     /// Take over the machine: write the packages you installed by hand into a module
     Adopt,
 
+    /// Vendor someone else's modules into your repo (XIII.14).
+    ///
+    /// Fetches a source — `github:owner/repo`, a git URL, a raw file URL, or a local path —
+    /// and copies its shareable files (`modules/`, `adapters/`, `scripts/`) into your config
+    /// repo as a reviewable diff. Their `profiles/`, `active` and `priority` are left behind:
+    /// those are the other machine's choices. `use` the vendored module by name afterward.
+    ///
+    /// Anything the source can execute (an `exec:` verb, a backend definition) arrives
+    /// UNAPPROVED and does not run until `linix lock` — pass `--trust` to lock in the same
+    /// step, for a source you already trust.
+    Add {
+        /// `github:owner/repo`, a git/https URL, a raw file URL, or a local path.
+        source: String,
+        /// Approve the vendored code (`exec:`, adapters) in the same step. Only for a source
+        /// you have decided to trust — it skips the review the unapproved default forces.
+        #[arg(long)]
+        trust: bool,
+        /// Overwrite a module you already have, instead of refusing on the name collision.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Enter an ephemeral shell with specific packages loaded
     Shell {
         /// Packages to load into the ephemeral shell

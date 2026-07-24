@@ -194,6 +194,11 @@ async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Diff { from, to } => handle_diff(app, from, to.as_deref()).await,
         Commands::Eval => handle_eval(app).await,
         Commands::Try { image } => handle_try(app, image.as_deref()).await,
+        Commands::Add {
+            source,
+            trust,
+            force,
+        } => handle_add(app, source, *trust, *force).await,
         Commands::Git(args) => handle_git(app, &args.command).await,
         Commands::Repo(args) => handle_repo(app, &args.command).await,
         Commands::Search {
@@ -3907,6 +3912,202 @@ fn referenced_variable_names(config_root: &std::path::Path) -> std::collections:
 /// keeps OFF this machine, and where each rule is written. Read-only.
 /// `vars` (Part IX, W12): the variables resolved on this machine, so a `when $name` block that
 /// does not fire can be debugged by seeing the value the machine actually derived.
+/// `linix add` — vendor someone else's modules into this repo (7/U14, XIII.14).
+///
+/// Fetch → plan → refuse-or-copy → optionally approve. The safety story is not the fetch; it is
+/// that anything executable lands unapproved and II.12 holds it until `linix lock`. `--trust`
+/// runs that lock in the same step; without it, the vendored code sits inert and reviewable.
+async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Result<()> {
+    use linix::model::vendor::{self, Source, Vendored};
+
+    let Some(src) = Source::classify(source) else {
+        return Err(linix::core::Error::Validation(format!(
+            "`{}` is not a source `add` understands. Use `github:owner/repo`, a git or https \
+             URL, a raw file URL, or a path to a module file or repo on this machine.",
+            source
+        ))
+        .into());
+    };
+
+    // Fetch into a throwaway directory. A git source is cloned shallow; a raw file is
+    // downloaded; a local source is read in place. The temp dir is dropped (and deleted) when
+    // this function returns, so nothing a fetch brought outlives the command except what was
+    // deliberately copied into the repo.
+    let scratch = tempfile::tempdir().map_err(linix::core::Error::from)?;
+    let fetched: std::path::PathBuf = match &src {
+        Source::Github { .. } | Source::Git(_) => {
+            let url = src.clone_url().expect("a git source has a clone url");
+            let dest = scratch.path().join("repo");
+            info!("cloning {}...", src.label());
+            app.executor
+                .run(
+                    "git",
+                    &[
+                        "clone",
+                        "--depth",
+                        "1",
+                        &url,
+                        &dest.to_string_lossy(),
+                    ],
+                    false,
+                )
+                .await
+                .map_err(|e| {
+                    linix::core::Error::Other(format!("could not clone {}: {}", src.label(), e))
+                })?;
+            dest
+        }
+        Source::File(url) => {
+            // A single raw module file. It lands under a synthetic `modules/` so the vendor
+            // planner treats it as a module — a bare file URL is a module by intent.
+            let name = url
+                .rsplit('/')
+                .next()
+                .filter(|n| !n.is_empty())
+                .unwrap_or("vendored.txt");
+            let name = if name.ends_with(".txt") {
+                name.to_string()
+            } else {
+                format!("{}.txt", name)
+            };
+            let dir = scratch.path().join("modules");
+            std::fs::create_dir_all(&dir).map_err(linix::core::Error::from)?;
+            info!("downloading {}...", url);
+            let body = reqwest::get(url)
+                .await
+                .and_then(|r| r.error_for_status())
+                .map_err(|e| linix::core::Error::Other(format!("could not fetch {}: {}", url, e)))?
+                .text()
+                .await
+                .map_err(|e| linix::core::Error::Other(format!("reading {}: {}", url, e)))?;
+            std::fs::write(dir.join(name), body).map_err(linix::core::Error::from)?;
+            scratch.path().to_path_buf()
+        }
+        Source::Local(p) => {
+            if !p.exists() {
+                return Err(linix::core::Error::Validation(format!(
+                    "`{}` does not exist on this machine.",
+                    p.display()
+                ))
+                .into());
+            }
+            p.clone()
+        }
+    };
+
+    // Every file in the fetched tree, relative to its root.
+    let files = collect_relative_files(&fetched);
+    let root = app.config.config_root();
+    let plan = vendor::plan(&files, &|rel| root.join(rel).exists());
+
+    if plan.placements.is_empty() {
+        println!(
+            "{} has nothing to vendor — no `modules/`, `adapters/` or `scripts/` files found.",
+            src.label()
+        );
+        return Ok(());
+    }
+
+    // U14: refuse a collision and name it, unless --force. Overwriting your own module with a
+    // stranger's silently is the case this exists to prevent.
+    if !plan.collisions.is_empty() && !force {
+        let names: Vec<String> = plan
+            .collisions
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        return Err(linix::core::Error::Refused(format!(
+            "refusing to overwrite {} file(s) you already have: {}.\n  \
+             Rename yours, or pass `--force` to replace them with {}'s.",
+            names.len(),
+            names.join(", "),
+            src.label()
+        ))
+        .into());
+    }
+
+    // Copy. Each destination's parent is created; a placement is repo-relative and already
+    // path-safe (the planner dropped any that escaped).
+    let mut modules = 0usize;
+    let mut code = 0usize;
+    for pl in &plan.placements {
+        let to = root.join(&pl.to);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent).map_err(linix::core::Error::from)?;
+        }
+        std::fs::copy(fetched.join(&pl.from), &to).map_err(|e| {
+            linix::core::Error::Io(format!("copying {}: {}", pl.to.display(), e))
+        })?;
+        if pl.kind == Vendored::Module {
+            modules += 1;
+        } else {
+            code += 1;
+        }
+    }
+
+    println!(
+        "Vendored {} module(s) and {} code file(s) from {} into your repo.",
+        modules,
+        code,
+        src.label()
+    );
+    println!("  Review the diff (`linix git status`), then `use` the module(s) by name.");
+
+    // The supply-chain gate. Vendored code is unapproved by default and will not run until
+    // `linix lock` — the review the default forces. `--trust` runs that lock now, for a source
+    // the user has decided to trust.
+    if code > 0 {
+        if trust {
+            let events = linix::app::events::EventHooks::load(&app.config);
+            let _ = events.approve_all();
+            let approved = app.hooks.approve_all_hooks().unwrap_or(0);
+            approve_adapters(app).ok();
+            approve_exec_scripts(app).await.ok();
+            info!(
+                "--trust: approved the vendored code ({} hook set(s) + adapters/exec).",
+                approved
+            );
+        } else {
+            println!(
+                "  {} file(s) it brought can run code and are UNAPPROVED — they will not run \
+                 until you review them and `linix lock`.",
+                code
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Every file under `root`, as paths relative to `root`. Symlinks are not followed — a
+/// stranger's symlink is a path-traversal vector, and `safe_relative` would reject its target
+/// anyway, so not following it is the honest version of the same refusal.
+fn collect_relative_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Skip the repo's own git directory and any nested VCS metadata.
+            if path.file_name().is_some_and(|n| n == ".git") {
+                continue;
+            }
+            match entry.file_type() {
+                Ok(t) if t.is_dir() => stack.push(path),
+                Ok(t) if t.is_file() => {
+                    if let Ok(rel) = path.strip_prefix(root) {
+                        out.push(rel.to_path_buf());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// `linix try` — rehearse this config on a clean machine (7h/U12).
 ///
 /// Read-only on the host by construction: the config is mounted `:ro`, the container's LiNix

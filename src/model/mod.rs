@@ -28,6 +28,7 @@ pub mod script;
 pub mod vars;
 pub mod vars_embedded;
 pub mod vars_provider;
+pub mod vendor;
 
 pub use conflict::Declared;
 pub use edit::{active_module_files, inactive_declarations, Edit, Editor, Landing, Target};

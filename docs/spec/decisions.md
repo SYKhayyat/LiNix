@@ -341,6 +341,8 @@ and the safety story afterwards is how supply-chain incidents are written.**
 
 
 **RULED (owner, 2026-07-24): build it.** Sharing is wanted, and a module may be referenced by a GitHub or other URL. A vendored module that carries code the repo can run (an `exec:` verb, a backend definition) needs an **opt-in to run**, and a flag or key must be able to force it. The precedent is the II.12 approval ledger and its siblings (`--allow-mass-removal`, `--replace-existing`, `@allow_http`, `@unverified`): refuse the dangerous thing by default, require one deliberate act to permit it. A vendored `exec:` is therefore approved the way every other script the repo runs is — `linix lock`, which means a human looked — and until then it does not run. **Still to design before building: how a URL reference is written (this changes `use takes a name, never a URL`, V.x), and whether a URL-vendored backend definition is allowed at all or only modules.**
+
+**BUILT, 2026-07-24 (`linix add`).** `add <source>` vendors a source's shareable files (`modules/`, `adapters/`, `scripts/`) into the repo as a reviewable diff; `profiles/`, `active` and `priority` are left behind (the other machine's choices). Sources: `github:owner/repo`, any git URL, a raw file URL, a local path. A name collision is refused and named (`--force` overwrites). Vendored code (`exec:`, adapters) arrives UNAPPROVED and II.12 holds it until `linix lock` — `--trust` locks in the same step. A stranger's path that escapes the repo (`../../.bashrc`) is dropped by `safe_relative`; symlinks are not followed. Verified end to end: a vendored `exec:` refuses to run until approved.
 ---
 
 ## U19

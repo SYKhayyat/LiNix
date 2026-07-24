@@ -579,6 +579,7 @@ a number typed into a README does.
 | | |
 |---|---|
 | `adopt` | Write the packages you installed by hand into a module |
+| `add` | Vendor someone else's modules into your repo from `github:owner/repo`, a git/file URL, or a path. Their code arrives unapproved until `linix lock` |
 | `unmanage` | Stop managing a package **without** uninstalling it |
 | `remove-orphans` | Remove what each manager considers orphaned — shows the list and asks first |
 | `clean-cache` | Delete downloaded archives and caches; removes no installed package |
