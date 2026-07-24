@@ -91,6 +91,7 @@ modules/       your lists of packages       lowercase names, *.txt
 profiles/      named sets you turn on and off       Capitalized names
 active         which profiles are on right now
 priority       which package managers this machine uses, in order
+groups         named backend chains, so `tools:rg` means `apt,cargo:rg` (optional)
 vars           your own names for conditions, so `when` can ask about them
 schedules      when LiNix runs itself
 locks/         what everything resolved to, one file per backend
@@ -124,6 +125,19 @@ use editors               # pull in another module
 ```
 
 `use` takes **a name, never a path or a URL.**
+
+A prefix can be a chain — `apt,cargo:ripgrep` means "apt if it has it, else cargo." If you write
+the same chain often, name it once in a `groups` file and use the name:
+
+```
+# groups
+tools   = apt, dnf, cargo
+windows = scoop, winget
+all     = tools, windows      # groups can contain groups
+```
+
+Then `tools:ripgrep` expands to `apt,dnf,cargo:ripgrep`. It is only a shortcut — it resolves
+exactly as the chain would, `priority` is unchanged, and a group that reaches itself is refused.
 
 ### Options
 
