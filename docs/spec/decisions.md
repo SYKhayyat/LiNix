@@ -734,7 +734,7 @@ The exact schema is implementation, not a further ruling.
 
 ## U32
 
-**Status: OPEN — not blocking.**
+**Status: ANSWERED — ruled 2026-07-26.**
 
 **U32 — Do modules take parameters (the macro LiNix doesn't have), and is a parameter's type
 checked? (XIII.29.)** A module is a named set of declarations that cannot take an argument, so two
@@ -749,6 +749,20 @@ A typed parameter is a second closed vocabulary the user defines: it names its l
 error (VIII.2's virtue) but is also a second place a name can be misspelled. *Recommendation:*
 build parameters; make types opt-in (free text with a loud "missing" is the floor, a named set is
 sugar on top), so the feature is useful before the type system is finished.
+
+**RULED (owner, 2026-07-26): build it, and the user decides per parameter whether it is typed.**
+Modules take parameters — `param user`, `param gpu = none` in the module, `use workstation(user=
+shaul, gpu=nvidia)` at the call site, substituted through `vars`' existing interpolation, expanding
+to ordinary declarations visible in `linix eval` and the removal preview before anything runs. Two
+things are fixed:
+
+- **A missing required parameter is a loud error naming the module and the parameter** — never an
+  empty string that makes a `when` silently false (P3, the failure `vars` was hardened against).
+- **Types are the user's choice, per parameter.** Free text is the floor; a user may declare a
+  parameter typed (a named set of legal values, whose error lists them — VIII.2's virtue) where
+  they want that check, and leave it free text where they do not. The same principle as the rest of
+  this round — the user can shape it — applied to the parameter's own vocabulary. Opt-in, so the
+  feature is useful before any type system is finished, and never forced where free text is fine.
 
 ---
 
