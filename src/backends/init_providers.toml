@@ -1,0 +1,77 @@
+# The init/service systems LiNix ships (U36).
+#
+# Rows, not Rust — the same ruling that turned firewalls and settings stores into data. Each
+# init is a name, a way to tell it is here (`detect` + optional `os`), and the argv for each
+# action. A machine running s6, dinit, runit or GNU Shepherd adds a row to `adapters/init.toml`
+# instead of waiting for a release; the shipped five go through the same loader so the built-ins
+# exercise the path a user's row does.
+#
+# `{name}` is the service. Argv is a list, so a service name is one argument and never a place a
+# shell could reach. systemd takes the unit as a trailing positional, so its rows carry `--`
+# before `{name}`; every other init here puts the name between two positionals, where there is
+# nowhere a terminator could go and each would read `--` as the service name.
+
+[[init]]
+name = "systemd"
+os = "linux"
+detect = "systemctl"
+enable  = [["systemctl", "enable", "--", "{name}"]]
+disable = [["systemctl", "disable", "--", "{name}"]]
+start   = [["systemctl", "start", "--", "{name}"]]
+stop    = [["systemctl", "stop", "--", "{name}"]]
+restart = [["systemctl", "restart", "--", "{name}"]]
+list = ["systemctl", "list-units", "--type=service", "--state=running", "--no-legend"]
+list_pattern = '^(\S+)'
+list_strip_suffix = ".service"
+status = ["systemctl", "status", "--", "{name}"]
+
+[[init]]
+name = "openrc"
+os = "linux"
+detect = "rc-service"
+enable  = [["rc-update", "add", "{name}", "default"]]
+disable = [["rc-update", "del", "{name}", "default"]]
+start   = [["rc-service", "{name}", "start"]]
+stop    = [["rc-service", "{name}", "stop"]]
+restart = [["rc-service", "{name}", "restart"]]
+list = ["rc-status", "--servicelist"]
+list_pattern = '^\s*(\S+)'
+status = ["rc-service", "{name}", "status"]
+
+[[init]]
+name = "sysvinit"
+os = "linux"
+detect = "service"
+enable  = [["update-rc.d", "{name}", "enable"]]
+disable = [["update-rc.d", "{name}", "disable"]]
+start   = [["service", "{name}", "start"]]
+stop    = [["service", "{name}", "stop"]]
+restart = [["service", "{name}", "restart"]]
+status = ["service", "{name}", "status"]
+
+[[init]]
+name = "launchd"
+os = "macos"
+detect = "launchctl"
+enable  = [["launchctl", "load", "-w", "{name}"]]
+disable = [["launchctl", "unload", "-w", "{name}"]]
+start   = [["launchctl", "start", "{name}"]]
+stop    = [["launchctl", "stop", "{name}"]]
+# No native restart verb — stop then start, in order.
+restart = [["launchctl", "stop", "{name}"], ["launchctl", "start", "{name}"]]
+list = ["launchctl", "list"]
+list_pattern = '^\S+\s+\S+\s+(\S+)'
+list_skip_lines = 1
+
+[[init]]
+name = "windows-sc"
+os = "windows"
+detect = "sc"
+enable  = [["sc", "config", "{name}", "start=", "auto"]]
+disable = [["sc", "config", "{name}", "start=", "disabled"]]
+start   = [["sc", "start", "{name}"]]
+stop    = [["sc", "stop", "{name}"]]
+restart = [["sc", "stop", "{name}"], ["sc", "start", "{name}"]]
+list = ["sc", "query", "type=", "service", "state=", "active"]
+list_pattern = 'SERVICE_NAME:\s+(\S+)'
+status = ["sc", "qc", "{name}"]
