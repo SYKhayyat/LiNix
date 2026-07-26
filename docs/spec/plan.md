@@ -72,9 +72,14 @@ what blocks the next one. The reasoning and the measurements are the first entry
     `macos-latest`, nightly — the first execution `release-check.sh`'s Darwin branch will ever
     have had. Nightly rather than per-push on purpose: it has never run, and a never-run job on
     the push gate gets disabled rather than fixed. Promote it once it has been green a few
-    nights. **Still unproven:** mas, macports, the create-only APFS provider, launchd. "Builds on
-    macOS in CI" still reads as support and still is not — but the macOS column has now caught a
-    real bug (S34), which is more than it had done before.
+    nights. **Also done, and it needs no Mac:** the OS-native registrars were
+    `#[cfg(target_os = …)]`, so `mas`/`macports` argv only existed on a Mac; they compile
+    everywhere now (registration still gated, at runtime) and a test asserts the program and the
+    verbs for 26 backends on every host. It found **S35** immediately — `macports` invoked a
+    `macports` binary no Mac ships. **Still unproven:** mas, macports' live lifecycle, the
+    create-only APFS provider, launchd. "Builds on macOS in CI" still reads as support and still
+    is not — but the macOS column has now caught two real bugs (S34, S35), which is two more than
+    it had.
 
 ### Tier 1 — small ruled fixes (additive, low-risk, clears the register backlog)
 

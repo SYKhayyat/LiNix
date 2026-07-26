@@ -1,21 +1,15 @@
 // src/backends/registry.rs
 
 use crate::app::LuaHooks;
+use crate::backends::generic::ManualFormat;
 use crate::backends::generic::{
     GenericBackendCore, GenericInstallable, GenericQueryable, GenericRepoManager,
     GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing, VersionPin,
 };
-// Only the distro/macOS backends have a manual-list command to describe.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::backends::generic::ManualFormat;
-// Only apt enumerates, and only apt describes an orphan dry run; both imports are gated
-// with the backend that uses them.
-#[cfg(target_os = "linux")]
 use crate::backends::generic::{GenericEnumerable, OrphanDryRun};
 use crate::backends::pip_search::PipSearchable;
 use crate::config::Config;
 use crate::core::{BackendCapabilities, CommandExecutor};
-#[cfg(target_os = "windows")]
 use crate::parsers::windows;
 use crate::parsers::LambdaParser;
 use std::collections::HashMap;
@@ -83,8 +77,7 @@ pub async fn create_default_registry(
     let mut reg = BackendRegistry::new();
 
     // --- Linux native system managers ---
-    #[cfg(target_os = "linux")]
-    {
+    if cfg!(target_os = "linux") {
         register_apt(&mut reg, &executor);
         register_apk(&mut reg, &executor);
         register_zypper(&mut reg, &executor);
@@ -111,16 +104,14 @@ pub async fn create_default_registry(
     }
 
     // --- Windows native system managers ---
-    #[cfg(target_os = "windows")]
-    {
+    if cfg!(target_os = "windows") {
         register_winget(&mut reg, &executor);
         register_scoop(&mut reg, &executor);
         register_choco(&mut reg, &executor);
     }
 
     // --- macOS native system managers ---
-    #[cfg(target_os = "macos")]
-    {
+    if cfg!(target_os = "macos") {
         register_mas(&mut reg, &executor);
         register_macports(&mut reg, &executor);
     }
@@ -179,8 +170,7 @@ pub async fn create_default_registry(
     crate::backends::krew::register(&mut reg, &executor, config);
 
     // --- Linux-distro ecosystem backends (Gentoo, Guix, Solus, Slackware) ---
-    #[cfg(target_os = "linux")]
-    {
+    if cfg!(target_os = "linux") {
         register_guix(&mut reg, &executor);
         register_emerge(&mut reg, &executor);
         register_eopkg(&mut reg, &executor);
@@ -198,7 +188,6 @@ pub async fn create_default_registry(
 // Generic (CLI-config-driven) backend registrations
 // ============================================================================
 
-#[cfg(target_os = "linux")]
 fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "apt".into(),
@@ -290,7 +279,6 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 /// helper's own name stamped on results so state tracking stays per-backend correct.
 /// Crucially `needs_root = false`: AUR helpers must run as an unprivileged user and
 /// escalate internally; running them as root is unsupported and unsafe.
-#[cfg(target_os = "linux")]
 fn register_aur_helper(
     reg: &mut BackendRegistry,
     executor: &CommandExecutor,
@@ -355,7 +343,6 @@ fn register_aur_helper(
     ));
 }
 
-#[cfg(target_os = "linux")]
 fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "apk".into(),
@@ -437,7 +424,6 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     ));
 }
 
-#[cfg(target_os = "linux")]
 fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "zypper".into(),
@@ -491,7 +477,6 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     ));
 }
 
-#[cfg(target_os = "windows")]
 fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "winget".into(),
@@ -561,7 +546,6 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     ));
 }
 
-#[cfg(target_os = "windows")]
 fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "scoop".into(),
@@ -617,7 +601,6 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     ));
 }
 
-#[cfg(target_os = "windows")]
 fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "choco".into(),
@@ -686,7 +669,6 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     ));
 }
 
-#[cfg(target_os = "macos")]
 fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "mas".into(),
@@ -887,14 +869,16 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     ));
 }
 
-#[cfg(target_os = "macos")]
 fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "macports".into(),
         executor: executor.duplicate(),
         config: ManagerConfig {
             name: "macports".into(),
-            binary: None,
+            // The port collection is `macports`; the program it ships is `port`. Without this
+            // the backend probed for a `macports` binary that exists on no Mac, so it never
+            // came up READY and every command it would have run was `macports install …`.
+            binary: Some("port".into()),
             remove_binary: None,
             // MacPorts pins via `install name @version`, but versions are entangled with
             // variants/revisions; skip automatic pinning rather than risk a wrong ref.
@@ -1508,7 +1492,6 @@ fn register_asdf(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 }
 
 /// GNU Guix (`guix`). Linux-only; gated by the `guix` binary. Per-user, no root needed.
-#[cfg(target_os = "linux")]
 fn register_guix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("guix");
     // `guix package -I` lists the profile's manifest — what was explicitly installed —
@@ -1534,7 +1517,6 @@ fn register_guix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 
 /// Gentoo Portage (`emerge`). Linux-only; gated by the `emerge` binary. Installed packages
 /// are listed via `qlist -I` (portage-utils). Needs root and serializes (Portage locks).
-#[cfg(target_os = "linux")]
 fn register_emerge(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("emerge");
     // Portage's @world file (/var/lib/portage/world) is the explicit set; `emerge -I`
@@ -1568,7 +1550,6 @@ fn register_emerge(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 }
 
 /// Solus eopkg (`eopkg`). Linux-only; gated by the `eopkg` binary. Needs root, serializes.
-#[cfg(target_os = "linux")]
 fn register_eopkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("eopkg");
     // eopkg installs dependencies and `list-installed` reports them all.
@@ -1594,7 +1575,6 @@ fn register_eopkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 
 /// Slackware slackpkg (`slackpkg`). Linux-only; gated by the `slackpkg` binary. Installed
 /// packages are read from `/var/log/packages`. Needs root, serializes.
-#[cfg(target_os = "linux")]
 fn register_slackpkg(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("slackpkg");
     // Slackware does no dependency resolution: every installed package was chosen.
@@ -1928,6 +1908,167 @@ mod tests {
                 ],
             );
             assert_caps(&reg, "macports", FULL);
+        }
+    }
+
+    /// Every OS-native backend's install and remove argv, checked on whatever host runs the
+    /// suite.
+    ///
+    /// These registrars were `#[cfg(target_os = …)]` until 2026-07-26, so `mas`'s verbs were
+    /// only ever compiled on a Mac and `apt`'s only on Linux — a typo in either was invisible
+    /// to every other platform's CI, and there is no Mac in this project at all. They are
+    /// compiled everywhere now and still *registered* only on their own OS, which is the part
+    /// that has to stay true: `create_default_registry` keeps its `cfg!` gate, and
+    /// `registry_capability_matrix` asserts what this host actually offers.
+    #[tokio::test]
+    async fn every_os_native_backend_sends_the_argv_its_manager_expects() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+
+        type Registrar = fn(&mut BackendRegistry, &CommandExecutor);
+        // backend, registrar, the install argv, the remove argv.
+        let cases: &[(&str, Registrar, &str, &str)] = &[
+            // OS-native system managers — each invisible to every platform's CI but its own.
+            (
+                "apt",
+                register_apt,
+                "apt install -y -- jq",
+                "apt remove -y -- jq",
+            ),
+            ("apk", register_apk, "apk add -- jq", "apk del -- jq"),
+            (
+                "zypper",
+                register_zypper,
+                "zypper install -y",
+                "zypper remove -y",
+            ),
+            (
+                "winget",
+                register_winget,
+                "winget install",
+                "winget uninstall",
+            ),
+            ("scoop", register_scoop, "scoop install", "scoop uninstall"),
+            ("choco", register_choco, "choco install", "choco uninstall"),
+            ("mas", register_mas, "mas install", "mas uninstall"),
+            (
+                "macports",
+                register_macports,
+                "port install",
+                "port uninstall",
+            ),
+            ("guix", register_guix, "guix install", "guix remove"),
+            ("emerge", register_emerge, "emerge", "--unmerge"),
+            (
+                "eopkg",
+                register_eopkg,
+                "eopkg install -y",
+                "eopkg remove -y",
+            ),
+            (
+                "slackpkg",
+                register_slackpkg,
+                "slackpkg -batch=on",
+                "remove",
+            ),
+            // The BSD tools, where removal is a different program.
+            (
+                "pkgin",
+                register_pkgin,
+                "pkgin -y install",
+                "pkgin -y remove",
+            ),
+            (
+                "pkg",
+                register_pkg_freebsd,
+                "pkg install -y",
+                "pkg delete -y",
+            ),
+            ("pkg_add", register_pkg_add_openbsd, "pkg_add", "pkg_delete"),
+            // Language and ecosystem managers: the verbs are where a mock sees nothing.
+            ("pip", register_pip, "pip install", "pip uninstall"),
+            ("gem", register_gem, "gem install", "gem uninstall"),
+            ("bun", register_bun, "bun add", "bun remove"),
+            (
+                "dotnet",
+                register_dotnet,
+                "dotnet tool install",
+                "dotnet tool uninstall",
+            ),
+            (
+                "composer",
+                register_composer,
+                "composer global require",
+                "global remove",
+            ),
+            ("opam", register_opam, "opam install", "opam remove"),
+            (
+                "luarocks",
+                register_luarocks,
+                "luarocks install",
+                "luarocks remove",
+            ),
+            (
+                "nimble",
+                register_nimble,
+                "nimble install",
+                "nimble uninstall",
+            ),
+            (
+                "pixi",
+                register_pixi,
+                "pixi global install",
+                "pixi global uninstall",
+            ),
+            ("spack", register_spack, "spack install", "spack uninstall"),
+            (
+                "mix",
+                register_mix,
+                "mix archive.install",
+                "mix archive.uninstall",
+            ),
+            // `helm` is deliberately absent: it installs from an option this table cannot
+            // carry, so its install call never happens and the row would pass on the remove
+            // alone — a check that tests nothing (IV.1). It has its own tests and a live run.
+        ];
+
+        for (name, register, want_install, want_remove) in cases {
+            let vfs = Arc::new(DashMap::new());
+            let mock = Arc::new(MockExecutor::new(vfs.clone()));
+            let exec = CommandExecutor::with_layer(
+                true,
+                false,
+                mock.clone(),
+                vfs,
+                Arc::new(DashMap::new()),
+            );
+            let mut reg = BackendRegistry::new();
+            register(&mut reg, &exec);
+
+            let b = reg
+                .get(name)
+                .unwrap_or_else(|| panic!("{} did not register", name));
+            let inst = b
+                .as_installable()
+                .unwrap_or_else(|| panic!("{} cannot install", name));
+            let spec = crate::core::PackageSpec {
+                name: "jq".into(),
+                backend: (*name).into(),
+                ..Default::default()
+            };
+            let _ = inst.install(&[spec], false).await;
+            let _ = inst.remove(&["jq".to_string()], false).await;
+
+            let calls = mock.get_calls().await;
+            for want in [want_install, want_remove] {
+                assert!(
+                    calls.iter().any(|c| c.contains(want)),
+                    "{}: no call contained `{}`\n  calls: {:?}",
+                    name,
+                    want,
+                    calls
+                );
+            }
         }
     }
 

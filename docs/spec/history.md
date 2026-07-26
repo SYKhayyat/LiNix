@@ -71,6 +71,16 @@ first green Linux run this repo has.
   constraint). Restatement: 64 flagged by identifier-overlap, 10 real and deleted. **What is
   not claimed is written down as not claimed:** a comment that narrates its block without
   echoing an identifier is a judgement over 9,593 lines and one pass cannot finish it.
+- **Finding 3, answered where it can be without a Mac: compile every platform's backend rows
+  on every platform.** The OS-native registrars were `#[cfg(target_os = …)]`, so `mas`'s and
+  `macports`' argv only ever *existed* on a Mac and apt's only on Linux. They are compiled
+  everywhere now and still registered only on their own OS (`create_default_registry` keeps
+  the gate, at runtime), and a new test asserts the **program name and the verbs** for 26
+  generic backends on whatever host runs the suite. **It found a live bug on its first run —
+  S35:** `macports` had `binary: None`, so LiNix probed for a `macports` executable, which no
+  Mac has. The program is `port`. The backend could never have come up READY on a real Mac,
+  `doctor` would have called it absent, and a `macports:` line would have been refused — and
+  Linux and Windows CI could not have seen any of it. Found on Windows.
 - **Findings 2 and 3, in the only place they can be closed — the gates.** `fedora`/`dnf` joins
   the per-push container matrix, which had been running only ubuntu/alpine/arch while the local
   runner swept five. `tools` and `gentoo` move from dispatch-only to nightly, turning the widest
@@ -137,6 +147,11 @@ not run that binary at all; `--all-targets`, which this file cited, does, and pa
    `fedora`/`dnf` joined the per-push matrix, which had been running three images while the local
    runner swept five. The count of backends that have ever run for real is unchanged; what
    changed is that the widest run of them happens without anyone remembering to press a button.
+   **A second, weaker but real widening:** every OS-native backend's argv is now compiled and
+   asserted on every host, not only on the platform that can run it — 26 backends, program name
+   and verbs. That is not a live run and does not move the count of 22; it is the difference
+   between a typo being caught by whoever has the hardware and being caught by anyone. It found
+   S35 the first time it ran.
    The remainder are proven against mocks, **"which is where format drift is invisible by
    construction"** — this file's own words, written before S22, S23 and S31 each proved it by
    being found only when a real manager was run. **This is the single largest gap between "the
@@ -146,9 +161,11 @@ not run that binary at all; `--all-targets`, which this file cited, does, and pa
    branch does, nightly — the first time that branch will ever have executed. It is deliberately
    not on the per-push gate: it has never run, and a job whose first execution gates other
    people's commits is a job that gets disabled rather than fixed. **Still unproven until it goes
-   green:** mas, macports, the create-only APFS provider, and launchd scheduling. There is no
-   macOS hardware in this project, so a runner is the whole of what is available. The macOS
-   column did earn its keep already — it is where S34 was caught.
+   green:** mas, macports, the create-only APFS provider, and launchd scheduling — though
+   macports is now at least *possible*, which it was not: S35 had it invoking a program no Mac
+   ships. There is no macOS hardware in this project, so a runner is the whole of what is
+   available. The macOS column has already earned its keep twice — S34 was caught by its unit
+   tests, and S35 by the test written because it had never run anything else.
 4. **The hardware-deferred list is exactly the high-blast-radius set.** btrfs / zfs / lvm
    *restore*, D5's live `dpkg -i` / `rpm -U` handoff, `U30` storage-object removal (which
    destroys filesystems), and the `U38` secret providers. Each is argv-tested and pure-logic
