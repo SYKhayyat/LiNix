@@ -415,7 +415,10 @@ impl<'a> Resolver<'a> {
         // 2. Resolve profiles -> the module set. Profiles may reference profiles; modules
         //    may not.
         let profiles = ProfileLoader::new(self.layout, self.backends);
-        let mut wanted_modules: Vec<(String, Gates, Vec<(String, String)>)> = Vec::new();
+        // A reached module: its name, the gates that admitted it, and the `use` arguments bound
+        // to its params (U32) — aliased because the bare tuple is a mouthful the reader trips on.
+        type WantedModule = (String, Gates, Vec<(String, String)>);
+        let mut wanted_modules: Vec<WantedModule> = Vec::new();
         // Which profiles want each module. A module two profiles both reach belongs to
         // both, and `upgrade --profile` for either must find it.
         let mut wanted_by: HashMap<String, Vec<String>> = HashMap::new();

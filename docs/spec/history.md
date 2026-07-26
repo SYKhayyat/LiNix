@@ -14,13 +14,19 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
-## Session 2026-07-27 — the provider-mechanism tier and the two safe language affordances
+## Session 2026-07-27 — the whole ruled backlog, built and green
 
-**Six ruled items built plus one latent-bug fix, each committed on its own; the full verify
-chain green at the end — `cargo build --all-targets` clean, `cargo test --lib` 1166 passed / 0
-failed, `cargo clippy --all-targets` clean.** The order was the plan's: the safe provider work
-and the additive command-surface features first; the deep grammar change and the dangerous
-cluster deliberately left rather than rushed under a test-only-at-the-end constraint.
+**Every ruled U-item that was outstanding is now built — U27, U28, U29, U30, U32, U33, U34, U35,
+U36, U38 — plus one latent-bug fix, each committed on its own; the full verify chain green at the
+end: `cargo build --all-targets` clean, `cargo test --lib` 1195 passed / 0 failed, `cargo clippy
+--all-targets` clean.** The order was safest-first: the provider mechanism and the additive
+command-surface features, then the deep grammar change (U32), then the riskiest capability (U33),
+then the two data-destroying/secret-handling surfaces (U30, U38) last. The session paused before
+U32/U33/U30/U38 to put the risk to the owner — U32 is deep and interwoven, U33 is the spec's own
+"maybe never", and U30/U38 cannot be *validated* on this Windows host — and the owner reaffirmed
+all four ("finish it off"), so they were built with the safety discipline the register demands and
+their pure logic and safety rules unit-tested, with the live OS operations (zfs/lvm destroy, a
+real secret decrypt) noted as unexercisable here rather than claimed as verified.
 
 **The adapter-approval family fix (prerequisite).** `linix lock`'s `approve_adapters` approved a
 *hardcoded three* — backends/settings/bootstrap — and silently omitted `firewall.toml`. A repo
@@ -63,18 +69,38 @@ half of U35's ruling waits on U33's key.
 own methods (the U20 rule — a thin front end, never a second implementation). Read-only, no
 locks.
 
-**Not built, and why.** **U32** (module parameters) is the highest-value language feature and
-recommended yes, but it threads call-site arguments through four data-flow points — a profile's
-`use m(args)` → `reach` → set-math → `expand`, and module→module — each a place a *mis-resolution*
-could hide, the exact class VI.0 is about, with no way to de-risk incrementally under
-test-at-the-end. Left for a session that can build it against a running suite step by step.
-**U33** (generated declarations / `exec:`-anything) is the riskiest capability and the spec's own
-recommendation is *not yet*; it is owner-approved behind an off-by-default key and belongs after
-U32. **U30** (zfs/lvm storage objects whose `remove` runs `zfs destroy`) and **U38** (secret
-providers handling plaintext) are the two most dangerous items on the list and cannot be
-validated on this host — no zfs/lvm box, and testing secret handling means handling a real
-secret. Building either blind is the one thing "we cannot afford bugs here" forbids; they are the
-owner's call on how to validate.
+**U32 — module parameters.** `param user` / `param gpu = none`, bound by `use workstation(
+user=shaul, gpu=nvidia)`. The substitution reuses the `$name`/`vars` machinery one scope wider —
+params bind *before* `when` is evaluated (so a `when $gpu` inside the module sees the parameter),
+an unknown `$ref` is left for the global pass so the scopes compose, and a missing required param
+is a loud error, never a silent empty string (V.78). Args thread the four data-flow points —
+profile `use m(args)` → `reach` → set-math → `expand`, and module→module — each covered by tests.
+
+**U33 — generated declarations, off by default.** `generate:PATH` runs a command and treats its
+stdout as declarations, spliced into the stream before probing and collection so it gets the same
+guard, conflict check and removal preview as a typed line. Four rules keep it on the safe side of
+XIII.32 (V.79): off by default (`allow_generators`), ledger-approved (scanned first in `lock`,
+because resolving now runs generators), a failure is a failed resolution (never an empty set,
+VI.0), and the output is shown not trusted. The `exec:`-may-do-anything half is the U4
+documentation amendment: exec already runs arbitrary code gated per-script by the ledger, so no
+new blanket gate was added (it would break every existing `exec:` line).
+
+**U30 — storage objects.** ZFS datasets and LVM volumes join btrfs as one family; being ordinary
+backends is what routes their filesystem-destroying `remove` through the normal guard, protectable
+and counted like a package (V.80). Pure argv builders unit-tested; the live zfs/lvm operations
+cannot run on this Windows host and are marked so, not claimed.
+
+**U38 — declared secret providers.** Vault/1Password/KMS/GPG as `[[secret]]` rows plugging into
+the existing decrypt path, inheriting the T-series plaintext rules unchanged. A provider that does
+not promise `stdout_only = true` is refused, not trusted (V.81). The pure gate/command logic is
+tested; a real decrypt is not exercisable here.
+
+**What could not be exercised on this host, and is recorded as such rather than claimed:** the
+live zfs/lvm create/destroy, a real secret-provider decrypt, and U27's "built-ins become rows"
+half (btrfs/zfs restore, Windows System Restore) still need a Linux box with those filesystems /
+a real secret manager. The argv construction, the config gates, the ledger approval, the
+fail-loud paths and the safe-default refusals are all unit-tested; the OS-level effects are the
+container/hardware job, the same boundary btrfs/zfs restore has always sat behind.
 
 ## Session 2026-07-26 (later the same day) — building the ruled backlog, safest-first
 

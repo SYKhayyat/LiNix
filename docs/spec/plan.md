@@ -21,7 +21,10 @@ section below; this list is the sequence, not the spec.
 **Where the frontier is.** Phases 0–6 are built and the container matrix
 (ubuntu/fedora/arch/alpine/tools) is green, run for real. **The flagship VI.0 bug (S24/S25 —
 interrupted-install recovery removed a package past the guard) is FIXED** (session 2026-07-23,
-sixteenth). **Phase 7 is built except 7e (half) and 7p (not started)** — see the phase section.
+sixteenth). **Phase 7 and the whole U-series backlog are built (session 2026-07-27):** Tiers 2–4
+are DONE, and the only ruled items still open are **D5** (Tier 1, needs a real apt box) and
+**U27's "built-ins become snapshot rows" half** (needs zfs/lvm/btrfs hardware; the additive
+config-driven half shipped). Nothing else in the register is unbuilt.
 
 **Order is by dependency and blast radius, not size** — the safe, additive, foundational work
 first; the two things that can destroy data or leak a secret (storage removal, secret providers)
@@ -81,12 +84,15 @@ last, after the mechanism they ride is proven.
 - ~~**7o** — `firewall:` (N1–N7).~~ **BUILT** (`ca9466b`; `backends/firewall.rs`,
   `firewall_adapters.toml` with `ufw`/`firewalld`/`windows-defender` as rows, `model/firewall.rs`).
 
-### Tier 3 — declared providers (Phase 7p): the two dangerous items remain
+### Tier 3 — declared providers (Phase 7p): DONE
 
-**The provider *mechanism* is now built (session 2026-07-27): the snapshot layer is data, init
-systems are data, priority chooses among them, and APFS is the second-platform net. What remains
-is the two items that destroy data or leak a secret — U30 and U38 — which cannot be validated on
-this host and are the owner's call on how to prove them.**
+**The whole tier is built (session 2026-07-27). The snapshot layer is data (U27), priority
+chooses among providers (U28), APFS is the macOS net (U29), init systems are data (U36), storage
+objects are a guarded family (U30), and secret decryption opens to declared providers (U38). The
+one part deliberately left is U27's "built-ins become rows too" half — btrfs/zfs restore and
+Windows System Restore — because it cannot be *validated* on this host (no zfs/lvm/btrfs box, and
+Windows System Restore is typed-PowerShell that cannot become argv-data without reintroducing
+SEC5); rewriting a tested safety net blind is the one thing "we cannot afford bugs here" forbids.**
 
 6. ~~**U27 — the provider mechanism.**~~ **BUILT (additive half)** (session 2026-07-27). A
    `ConfigSnapshotProvider` reads `adapters/snapshot.toml` through the one II.12 ledger and
@@ -115,31 +121,32 @@ this host and are the owner's call on how to prove them.**
 12. ~~**U29 — macOS APFS provider**, declared create-only~~ **BUILT** (session 2026-07-27;
     `core/snapshot.rs::ApfsProvider` via `tmutil localsnapshot`, `NotFromRunningSystem` — a
     restore needs a recovery reboot, so claiming Live would be V.60).
-13. **U30 — storage objects** (zfs datasets, lvm volumes) as one family — **the `remove` path
-    destroys a filesystem, so it goes through the guard (normal gate), and a volume is
-    protectable like a package.** zfs/lvm have no implementation today; this is real new work.
-14. **U38 — secret-decryption providers** (sops/Vault/1Password/KMS/GPG) — **last, and the most
-    dangerous**: bound by the T-series plaintext rules; a provider that can't promise them is
-    refused, not trusted.
+13. ~~**U30 — storage objects** (zfs datasets, lvm volumes) as one family.~~ **BUILT** (session
+    2026-07-27; `backends/storage.rs`, registered alongside btrfs). Being ordinary backends routes
+    their filesystem-destroying `remove` through the normal guard — protectable, counted, previewed
+    (V.80). Pure argv builders tested; the live zfs/lvm ops cannot run on this Windows host.
+14. ~~**U38 — secret-decryption providers** (Vault/1Password/KMS/GPG).~~ **BUILT** (session
+    2026-07-27; `[[secret]]` in `adapters/secret.toml`, `model::secret::SecretProvider`, wired into
+    the existing decrypt path so the T-series rules are inherited). A provider that does not promise
+    `stdout_only = true` is refused (V.81). age/sops stay built in. The gate/command logic is
+    tested; a real decrypt is not exercisable here.
 
-### Tier 4 — the language-power features (the "emacs-lisp power", all ruled 2026-07-26)
+### Tier 4 — the language-power features (the "emacs-lisp power"): DONE
 
-**The two safe affordances are built (session 2026-07-27): `repl` and user verbs. The deep
-grammar change (U32) and the riskiest capability (U33) remain.**
+**All four are built (session 2026-07-27): `repl` (U34), user verbs (U35), module parameters
+(U32), and generated declarations + the `exec:` amendment (U33).**
 
-15. **U32 — module parameters** (`param`, `use mod(x=y)`); types opt-in, the user's choice per
-    parameter; a missing required parameter is a loud error. *Not built: it threads call-site
-    arguments through four data-flow points — a profile's `use m(args)` → `reach` → set-math →
-    `expand`, and module→module — each a place a mis-resolution (the VI.0 class) could hide, with
-    no way to de-risk incrementally under test-at-the-end. Substitution reuses the `$name`/`vars`
-    machinery (the spec's `{user}` is illustrative; the real syntax is `$user`).*
+15. ~~**U32 — module parameters** (`param`, `use mod(x=y)`).~~ **BUILT** (session 2026-07-27;
+    `Statement::Param`, `Use` gains args, `modules::expand_args` binds params before `when` and
+    substitutes via the `$name` machinery; a missing required param is a loud error, V.78).
 16. ~~**U35 — user-defined verbs**: safe composition of built-in verbs, ungated~~ **BUILT**
     (session 2026-07-27; a `[verbs]` table, `main::plan_user_verb`/`run_user_verb`,
-    composition-only enforced). The arbitrary-command half still rides U33's key + ledger.
-17. **U33 — generated declarations AND `exec:`-can-do-anything**, each behind its own config key
-    (off by default). Output still passes the guard, the removal preview and the ledger; a failed
-    generator is a failed sync. **The riskiest capability — build it after U32 is proven; the
-    spec's own recommendation is "not yet".**
+    composition-only enforced). The arbitrary-command half rides U33's key + ledger.
+17. ~~**U33 — generated declarations AND `exec:`-can-do-anything.**~~ **BUILT** (session
+    2026-07-27). `generate:` off by default (`allow_generators`), ledger-approved, output through
+    the guard/preview, a failed generator is a failed sync (V.79). The `exec:` half is the U4
+    documentation amendment — exec's per-script ledger approval is already its gate, so no blanket
+    key was added (it would break existing `exec:` lines).
 18. ~~**U34 — `linix repl`**~~ **BUILT** (session 2026-07-27; `app/repl.rs` over the one resolver
     — `resolve_spec`, `eval_when`, `resolve_vars`/`resolve_model`; read-only, no locks).
 

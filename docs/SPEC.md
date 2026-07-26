@@ -28,12 +28,15 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | XII | [secrets](spec/proposals/secrets.md) | T1–T7 |
 | XIII | [the next round](spec/proposals/next-round.md) | U1–U38 |
 
-**Where the work stands (re-derived from `src/`, 2026-07-26).** Phases 0–6 are built and the
-container matrix (ubuntu/fedora/arch/alpine/tools) is green, run for real. Phase 7 is built except
-`7e` (half — the adapter table exists, only the `gsettings` row ships) and `7p` (not started).
-**VI.0 — the bug that removed software with no guard, no plan and no count, and that `--dry-run`
-performed — is FIXED** (S24/S25, 2026-07-23, verified 2026-07-24); it is no longer a blocker and
-no longer "build nothing before it."
+**Where the work stands (updated 2026-07-27).** Phases 0–6 are built and the container matrix
+(ubuntu/fedora/arch/alpine/tools) is green, run for real. **Phase 7 and the entire U-series
+backlog are built** — the provider mechanism (snapshots U27/U28/U29, init U36, storage U30,
+secrets U38), and the language-power features (module parameters U32, generated declarations U33,
+user verbs U35, `repl` U34). The only ruled items still open are `D5` (needs a real apt box) and
+U27's "built-ins become snapshot rows" half (needs zfs/lvm/btrfs hardware). The suite is green:
+`cargo build --all-targets`, `cargo test --lib` (1195 passed / 0 failed), `cargo clippy
+--all-targets` all clean. **VI.0 — the bug that removed software with no guard, no plan and no
+count, and that `--dry-run` performed — is FIXED** (S24/S25, 2026-07-23, verified 2026-07-24).
 
 **For what remains to build and in what order, read the ordered list at the top of
 [`spec/plan.md`](spec/plan.md). It is the only list of build state** — the register says whether
