@@ -622,7 +622,7 @@ rather than jammed into package `priority` — one-question-per-file (U10) — b
 
 ## U29
 
-**Status: OPEN — not blocking.**
+**Status: ANSWERED — ruled 2026-07-26.**
 
 **U29 — Is APFS local-snapshot the macOS safety net, and does an APFS restore count as `Live` or
 `NotFromRunningSystem`? (XIII.24.)** U6 is ruled — the Linux-only snapshot promise is documented
@@ -634,6 +634,20 @@ snapshot that can only be restored by rebooting into the recovery environment is
 `NotFromRunningSystem`, not `Live` (V.60). Whether macOS parity is *scheduled* or merely *listed*
 (XIII.4) is the owner's call; the *capability* question must be answered before the provider
 ships, whenever that is.
+
+**RULED (owner, 2026-07-26): yes — macOS gets APFS as its snapshot provider, and it is built.**
+APFS local snapshots (`tmutil localsnapshot`, `diskutil apfs`) become the macOS safety net, as a
+provider row on U27's mechanism — the natural first customer of the plugin door. Its restore
+capability is declared honestly: an APFS snapshot restored only by rebooting into the recovery
+environment is **create-only, not live** (V.60), so it saves state and offers recovery-mode
+restore rather than pretending to be a running-machine undo. This closes the platform gap U6
+documented: macOS is no longer without a net, it has a create-only one, marked as such.
+
+**Governance (owner, 2026-07-26): there is no "listed but not scheduled" — everything ruled to
+build gets built.** The recommendation offered scheduling as the owner's call; the owner removed
+the option. **The XIII.4 listed-vs-scheduled distinction is retired.** A decision that says "build
+it" is scheduled work, not an acknowledgement filed for later, and this applies to every "open it
+/ build it" ruling in this register.
 
 ---
 

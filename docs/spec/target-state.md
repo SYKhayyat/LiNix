@@ -1092,6 +1092,10 @@ promises about it, and the pre-change notice states which kind of snapshot this 
 a create-only provider chosen first is a visible choice, not a silent weaker net. One active
 provider; "snapshot with all, restore from the best" is a later question.
 
+**macOS gets APFS as its provider (U29)** — `tmutil localsnapshot` / `diskutil apfs`, declared
+**create-only** because an APFS restore needs a reboot into recovery (not a live undo, V.60). So
+macOS is no longer without a net; it has a create-only one, marked as such (U6).
+
 **A restore that cannot restore says so, before it is needed (V.60).** Taking a snapshot and
 restoring one are different capabilities and a provider may have the first without the second:
 `btrfs subvolume snapshot SRC /` does not roll back a mounted root, whatever its exit code says.
