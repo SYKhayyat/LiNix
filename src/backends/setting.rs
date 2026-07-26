@@ -206,7 +206,20 @@ pub fn user_adapters(cfg: &crate::config::Config) -> Vec<SettingAdapter> {
 /// either bare or quoted — the difference is the store's presentation, not a real one.
 pub fn already_set(current: &str, want: &str) -> bool {
     let cur = current.trim();
-    cur == want || cur.trim_matches(['\'', '"']) == want
+    if cur == want || cur.trim_matches(['\'', '"']) == want {
+        return true;
+    }
+    // Windows `reg query PATH /v NAME` prints a verbose block whose value line reads
+    // `    NAME    REG_SZ    VALUE`. Extract the value after the `REG_*` type token so a
+    // registry read-before-write is idempotent — otherwise the value would look unread every
+    // sync and be re-written each time (and shown as a pending change). The value may contain
+    // spaces (a path), so everything after the type word is kept.
+    current.lines().any(|line| {
+        line.trim()
+            .split_once("REG_")
+            .and_then(|(_, after)| after.split_once(char::is_whitespace))
+            .is_some_and(|(_, value)| value.trim() == want)
+    })
 }
 
 pub struct SettingBackendCore {
@@ -580,6 +593,18 @@ mod tests {
     fn a_different_value_is_not_already_set() {
         assert!(!already_set("'prefer-light'", "prefer-dark"));
         assert!(!already_set("false", "true"));
+    }
+
+    #[test]
+    fn a_reg_query_block_is_read_as_its_value() {
+        // 7e: `reg query PATH /v NAME` prints a verbose block. The value after the REG_* type
+        // token is what LiNix compares, so a matching value is not re-written every sync.
+        let out = "\r\nHKEY_CURRENT_USER\\Software\\App\r\n    Theme    REG_SZ    Dark\r\n\r\n";
+        assert!(already_set(out, "Dark"));
+        assert!(!already_set(out, "Light"));
+        // A value with spaces (a path) survives — everything after the type word is the value.
+        let path = "    Wallpaper    REG_SZ    C:\\Users\\me\\a b.jpg\r\n";
+        assert!(already_set(path, "C:\\Users\\me\\a b.jpg"));
     }
 
     /// The refusal names what LiNix looked for, so a machine running an unlisted store learns

@@ -15,3 +15,36 @@ detect = "gsettings"
 read = ["gsettings", "get", "{schema}", "{key}"]
 write = ["gsettings", "set", "{schema}", "{key}", "{value}"]
 reset = ["gsettings", "reset", "{schema}", "{key}"]
+
+# Windows registry (7e/U19). The line is `setting:<subkey path>/<value name>@value=<data>` — the
+# path uses `\`, the single `/` separates the value name. LiNix folds the HIVE into the argv, so
+# @scope decides HKCU (default, per-user, U19) vs HKLM (system): a `@scope=system` line writes
+# HKLM, a plain one writes HKCU, and neither can silently land in the other. Values are written
+# REG_SZ (strings/enums — what desktop settings are); `reg query`'s verbose read is understood by
+# `already_set`, so a set value is not re-written every sync.
+[[setting_store]]
+name = "windows-registry"
+os = "windows"
+detect = "reg"
+read = ["reg", "query", "HKCU\\{schema}", "/v", "{key}"]
+write = ["reg", "add", "HKCU\\{schema}", "/v", "{key}", "/d", "{value}", "/f"]
+reset = ["reg", "delete", "HKCU\\{schema}", "/v", "{key}", "/f"]
+system_read = ["reg", "query", "HKLM\\{schema}", "/v", "{key}"]
+system_write = ["reg", "add", "HKLM\\{schema}", "/v", "{key}", "/d", "{value}", "/f"]
+system_reset = ["reg", "delete", "HKLM\\{schema}", "/v", "{key}", "/f"]
+
+# Deliberately NOT rows yet (7e), each for a reason the adapter model would have to grow to hold:
+#
+#   KDE (kreadconfig5/kwriteconfig5) addresses a key by FILE + GROUP + KEY — three parts — while
+#   `setting:` is two-part (SCHEMA/KEY). kwriteconfig fits `--file F --group G --key K V`, but one
+#   `{schema}` cannot fill both the file and the group positions. A KDE row needs the address model
+#   to carry a third component; that is model work, not a row.
+#
+#   COSMIC is a file TREE under ~/.config/cosmic/, one RON file per key — a file store, not a
+#   command store. It has no read/write/reset argv to name; it needs a file-tree adapter kind,
+#   which is a different mechanism from this command table.
+#
+#   Hyprland is NOT a `setting:` at all (7e decision): its truth is a text config file, and
+#   `hyprctl getoption` reports a runtime value that can disagree with it. Owning individual lines
+#   inside a file LiNix did not write is what `link:` already does at whole-file granularity —
+#   which is the right tool here — so a Hyprland `setting:` adapter is deliberately not built.
