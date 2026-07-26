@@ -686,6 +686,22 @@ The line that was genuinely open — *does a filesystem-destroying removal earn 
 gate* — is answered **no**. It earns exactly the guard every removal earns, and the danger is met
 by the guard firing, not by a second heavier gate.
 
+**And a storage object is protectable exactly like a package (owner, 2026-07-26).** The guard's
+existing protection — the `keep.txt` / "never remove" mark a user puts on a package the guard then
+refuses to remove — applies to storage objects too: a user may protect a volume, and a protected
+volume the guard **refuses to destroy** at all, the same way it refuses a protected package. This
+is not a new mechanism; it is the one protection vocabulary reaching a new noun, which is the
+right shape (no two of everything). So the danger has two answers together: the guard fires on
+every storage removal (the normal gate), and a volume a user cares about can be marked so the
+guard will not destroy it even then.
+
+**Build note (owner, 2026-07-26): the providers do not exist yet and must actually be built.**
+Only `backends/btrfs.rs` declares storage objects today; **zfs datasets and lvm volumes have no
+implementation at all.** This ruling is the contract for code that is still owed — the shared
+family trait, the zfs (`zfs create`/`destroy`/list) and lvm backends, the guard wiring and the
+protection mark — all of it is work to do, not work done. Do not read this entry as "storage
+objects are finished."
+
 ---
 
 ## U31
