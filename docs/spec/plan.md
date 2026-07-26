@@ -81,27 +81,25 @@ last, after the mechanism they ride is proven.
 - ~~**7o** — `firewall:` (N1–N7).~~ **BUILT** (`ca9466b`; `backends/firewall.rs`,
   `firewall_adapters.toml` with `ufw`/`firewalld`/`windows-defender` as rows, `model/firewall.rs`).
 
-### Tier 3 — declared providers (Phase 7p): the snapshot-provider cluster remains
+### Tier 3 — declared providers (Phase 7p): the two dangerous items remain
 
-**The three items independent of the snapshot mechanism are built (session 2026-07-26); the
-snapshot-provider cluster (U27 and everything that rides it) remains.** `core/snapshot.rs:528`
-still hardcodes the four providers into a `Vec` in `SnapshotManager::new`.
+**The provider *mechanism* is now built (session 2026-07-27): the snapshot layer is data, init
+systems are data, priority chooses among them, and APFS is the second-platform net. What remains
+is the two items that destroy data or leak a secret — U30 and U38 — which cannot be validated on
+this host and are the owner's call on how to prove them.**
 
-6. **U27 — the provider mechanism.** A snapshot-provider registry + config-driven providers read
-   through 7a's one approval ledger; built-in providers become rows in it. **Restore-capability
-   is a required declared field, never inferred.** *Everything below in this tier rides this.*
-   **Session 2026-07-26 note — the safe plan, not yet built:** the *additive* half (a
-   `ConfigSnapshotProvider` from a TOML row, restore-capability declared, ledger-approved,
-   registered LAST so it never shadows a built-in) is safe and is what delivers the user value —
-   new providers as data. **The ruling's "built-ins become rows too" half was deliberately NOT
-   done blind:** btrfs/zfs restore and Windows System Restore cannot be validated on this host (no
-   btrfs/zfs box; testing Windows System Restore mutates the live machine), and Windows System
-   Restore is typed-PowerShell that cannot become safe argv-data without reintroducing SEC5. Both
-   need real hardware / an owner ruling on the SEC5 tension. Rewriting the tested safety net blind
-   is the one thing "we cannot afford bugs here" forbids.
-7. **U36 — init systems** as `[[init]]` rows (lowest risk: start/stop/enable, no data destroyed).
-   *Not built this session — its `plan_service` argv tests make the enum→table conversion safe to
-   do here, so it is the cleanest of the remaining refactors; deferred for time, not risk.*
+6. ~~**U27 — the provider mechanism.**~~ **BUILT (additive half)** (session 2026-07-27). A
+   `ConfigSnapshotProvider` reads `adapters/snapshot.toml` through the one II.12 ledger and
+   registers LAST so it never shadows a built-in; **restore-capability is a required declared
+   field with the safe default** — `restores_running_system` omitted ⇒ create-only, and a
+   "restore" that could roll nothing back never runs (V.60). `core/snapshot.rs::ConfigSnapshotProvider`,
+   `SnapshotProviderDef`, `config_snapshot_defs`. **The ruling's "built-ins become rows too" half
+   is still deliberately NOT done blind:** btrfs/zfs restore and Windows System Restore cannot be
+   validated on this host, and Windows System Restore is typed-PowerShell that cannot become safe
+   argv-data without reintroducing SEC5 — real hardware / an owner ruling on the SEC5 tension.
+7. ~~**U36 — init systems** as `[[init]]` rows.~~ **BUILT** (session 2026-07-27;
+   `backends/service.rs` is now a table over `init_providers.toml` + `adapters/init.toml`; the
+   closed `enum InitSystem` is gone, a row register last, a row missing start/stop is refused).
 8. ~~**U31 — the ledger half of user-declared health checks.**~~ **BUILT** (session 2026-07-26).
    A `Probe::Command` rides the II.12 ledger: `linix lock` approves every declared health command,
    and `sync` refuses before the change if any is unapproved (a check that cannot run is a failed
@@ -112,9 +110,11 @@ still hardcodes the four providers into a `Vec` in `SnapshotManager::new`.
 10. ~~**U26 — BSD backends** (FreeBSD `pkg`, OpenBSD `pkg_add`).~~ **BUILT** (session 2026-07-26;
     `register_pkg_freebsd`/`register_pkg_add_openbsd`, `parsers/bsd.rs`; needed `ManagerConfig.remove_binary`
     for OpenBSD's separate `pkg_delete`, which also opens separate-remove-binary to custom backends).
-11. **U28 — snapshot-provider priority list** (choose the active provider by a declared order,
-    like package `priority`).
-12. **U29 — macOS APFS provider**, declared create-only (restore needs recovery-mode reboot).
+11. ~~**U28 — snapshot-provider priority list**~~ **BUILT** (session 2026-07-27; `config.snapshot_priority`,
+    `SnapshotManager::choose` — first available in the declared order wins, empty keeps registration order).
+12. ~~**U29 — macOS APFS provider**, declared create-only~~ **BUILT** (session 2026-07-27;
+    `core/snapshot.rs::ApfsProvider` via `tmutil localsnapshot`, `NotFromRunningSystem` — a
+    restore needs a recovery reboot, so claiming Live would be V.60).
 13. **U30 — storage objects** (zfs datasets, lvm volumes) as one family — **the `remove` path
     destroys a filesystem, so it goes through the guard (normal gate), and a volume is
     protectable like a package.** zfs/lvm have no implementation today; this is real new work.
@@ -124,19 +124,24 @@ still hardcodes the four providers into a `Vec` in `SnapshotManager::new`.
 
 ### Tier 4 — the language-power features (the "emacs-lisp power", all ruled 2026-07-26)
 
-**Nothing in this tier is built.** No `param` keyword in the grammar, no user-verb registry, no
-generated-declaration key, no `repl` subcommand.
+**The two safe affordances are built (session 2026-07-27): `repl` and user verbs. The deep
+grammar change (U32) and the riskiest capability (U33) remain.**
 
 15. **U32 — module parameters** (`param`, `use mod(x=y)`); types opt-in, the user's choice per
-    parameter; a missing required parameter is a loud error.
-16. **U35 — user-defined verbs**: safe composition of built-in verbs, ungated; arbitrary-command
-    verbs ride U33's key + ledger.
+    parameter; a missing required parameter is a loud error. *Not built: it threads call-site
+    arguments through four data-flow points — a profile's `use m(args)` → `reach` → set-math →
+    `expand`, and module→module — each a place a mis-resolution (the VI.0 class) could hide, with
+    no way to de-risk incrementally under test-at-the-end. Substitution reuses the `$name`/`vars`
+    machinery (the spec's `{user}` is illustrative; the real syntax is `$user`).*
+16. ~~**U35 — user-defined verbs**: safe composition of built-in verbs, ungated~~ **BUILT**
+    (session 2026-07-27; a `[verbs]` table, `main::plan_user_verb`/`run_user_verb`,
+    composition-only enforced). The arbitrary-command half still rides U33's key + ledger.
 17. **U33 — generated declarations AND `exec:`-can-do-anything**, each behind its own config key
     (off by default). Output still passes the guard, the removal preview and the ledger; a failed
-    generator is a failed sync. **The riskiest capability — build it after the mechanism above is
-    proven.**
-18. **U34 — `linix repl`** (build if easy; must share the one parser/resolver, never a second
-    implementation).
+    generator is a failed sync. **The riskiest capability — build it after U32 is proven; the
+    spec's own recommendation is "not yet".**
+18. ~~**U34 — `linix repl`**~~ **BUILT** (session 2026-07-27; `app/repl.rs` over the one resolver
+    — `resolve_spec`, `eval_when`, `resolve_vars`/`resolve_model`; read-only, no locks).
 
 ### Deferred by ruling (build later, on a trigger — not now)
 

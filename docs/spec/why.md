@@ -1075,4 +1075,72 @@ command is a mutation reachable from something a user believes is read-only — 
 shape as `--dry-run` performing a removal (S25). The line is drawn at the verb, not at the flag,
 because a flag is one keystroke from a routine command.
 
+**V.72 — Why `linix lock` approves the whole `adapters/` folder, not a named list.** The
+approval step listed three files by name — backends, settings, bootstrap — and every adapter
+file not on that list was unapprovable, so its rows were refused on every sync while the file sat
+in the repo doing nothing. `firewall.toml` had been in exactly this state: a live guard-on-one-
+command-is-a-guard-on-nothing, in the folder whose entire job is to gate argv a shared repo can
+run. A hardcoded list is the same "a list is an assertion about what is absent" trap II.10's
+paragraph warns about (S24): it is checked by reading the three it names and always passes,
+because the file it forgets is never on it. Reading the directory means the assertion is made
+against the code, and a new adapter kind is approvable the day it lands with no second place to
+edit. The approval predicate itself is now one shared function (`hook_lock::adapter_refusal`), so
+the onboarder and the snapshot loader cannot come to disagree about what an approved file is —
+two copies of an approval rule is how one path starts trusting a file the other refuses.
+
+**V.73 — Why init systems are rows and the `enum InitSystem` is gone.** A closed enum behind a
+hardcoded command match covered systemd/OpenRC/SysVinit/launchd/`sc` and gave every other init
+*no branch to take* — a `service:` line on an s6 or dinit box did nothing and said nothing, the
+P3 silent-wrong failure. It is the snapshot vec's problem (V.60's neighbourhood) in a different
+file: interchangeable "run these commands" providers frozen into Rust. The shipped five are now
+rows in `init_providers.toml` going through the loader a user's `adapters/init.toml` row goes
+through, because an adapter mechanism the built-ins bypass is one nobody has tested. A row that
+cannot both start and stop is refused rather than half-loaded: a provider that starts a service
+it cannot stop is a teardown that silently leaves it running. systemd's `--` terminator is kept
+in the row data (the unit is a trailing positional); the other inits put the name between
+positionals, where a `--` would be read as the service name — the tested argv behaviour, now
+expressed as data rather than a match arm.
+
+**V.74 — Why a config-driven snapshot provider is create-only unless it says otherwise.** This
+is V.60 restated for data: `restore` that exits 0 and rolls nothing back (`btrfs subvolume
+snapshot SRC /`) is the bug the whole `RestoreCapability` split exists to prevent, and a
+config-declared provider is a new mouth for it. So `restores_running_system` defaults to `false`
+and, even when true, a provider with no `restore` command is still create-only — the capability
+must be *named in the file and backed by a command*, and naming it is the line a reviewer sees in
+the diff. The unsafe reading is never the default: a row that omits the field can snapshot and
+can refuse a rollback; it can never run a "restore" and hope. A provider registers LAST and never
+shadows a built-in (the `custom_backends.toml` rule applied to the safety layer), so a stray file
+cannot replace the tested btrfs/zfs/timeshift path with an untested one.
+
+**V.75 — Why the active snapshot provider is chosen by a declared priority, not by capability.**
+A machine can have more than one provider available (btrfs *and* a config-declared lvm), and
+which one is the safety net must be the user's decision, stated, not LiNix's guess. Choosing "the
+one that claims live restore" would let a newly-added, less-trusted provider silently displace a
+proven one the moment it declared a capability; choosing by registration order would make the
+answer depend on an implementation detail nobody wrote down. `snapshot_priority` is the
+`priority`-file shape reused (V.15's reasoning): the first *available* provider in the declared
+list wins, an empty list keeps the historical registration order, and a name that matches nothing
+present falls back rather than leaving the machine with no net it could have had.
+
+**V.76 — Why APFS is declared create-only.** macOS ships APFS on every machine and `tmutil
+localsnapshot` takes one with no configuration, so the second platform LiNix supports finally has
+a safety net — but an APFS *restore* needs a reboot into the recovery environment, which LiNix
+cannot drive on a running system. Claiming `Live` would be V.60 exactly: an undo offered where it
+cannot be kept. So APFS snapshots and refuses the rollback with the manual steps. And because
+`tmutil` does not record which snapshots LiNix made, retention never reaps an APFS snapshot
+(`is_linix_owned` is false for them) — the safe direction: LiNix never deletes a restore point it
+cannot prove it created (S3).
+
+**V.77 — Why a user verb may only compose built-in verbs.** A `[verbs]` entry is `defun` over
+the command surface — `refresh = sync, then upgrade` — and it is safe precisely because it
+sequences operations LiNix has already audited, producing nothing the guard, the plan and the
+ledger did not already see. The moment a verb can run arbitrary argv it is `exec:` wearing a
+command's clothes (U4's settled question), so a step that names anything but a built-in is refused
+and pointed at U33's off-by-default key. A verb also takes no arguments of its own: threading
+`linix refresh --dry-run` into some steps and not others is the surprise a closed vocabulary
+exists to avoid, and a verb never shadows a built-in, so a shorthand can never mask a real
+command. `linix repl` sits under the same principle from the read side (the U20 rule): it is a
+thin front end over the one parser and resolver, never a second implementation, because this
+repo's history is that a second implementation of anything eventually disagrees with the first.
+
 ---

@@ -14,6 +14,68 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-27 — the provider-mechanism tier and the two safe language affordances
+
+**Six ruled items built plus one latent-bug fix, each committed on its own; the full verify
+chain green at the end — `cargo build --all-targets` clean, `cargo test --lib` 1166 passed / 0
+failed, `cargo clippy --all-targets` clean.** The order was the plan's: the safe provider work
+and the additive command-surface features first; the deep grammar change and the dangerous
+cluster deliberately left rather than rushed under a test-only-at-the-end constraint.
+
+**The adapter-approval family fix (prerequisite).** `linix lock`'s `approve_adapters` approved a
+*hardcoded three* — backends/settings/bootstrap — and silently omitted `firewall.toml`. A repo
+carrying a firewall adapter could therefore never approve it, so its rows were refused on every
+sync: a live sibling of "a guard on one command is a guard on nothing", in the very folder the
+approval mechanism exists to protect. It now scans every `*.toml` in `adapters/`, so firewall is
+fixed and each new kind (`init.toml`, `snapshot.toml`) is approvable the day it lands. The one
+approval check was hoisted to `core::hook_lock::adapter_refusal` so the onboarder and the new
+snapshot loader share it rather than each re-deriving the hash/verdict dance.
+
+**U36 — init systems are declared provider rows.** `backends/service.rs` was a closed
+`enum InitSystem` behind a hardcoded command match; it is now a table. The shipped five live in
+`init_providers.toml` and a user's `adapters/init.toml` adds more through the same approved
+loader, so s6/dinit/runit/Shepherd are six lines of TOML instead of a release. A row register
+last and never shadows a built-in; a row that cannot both start and stop is refused, not
+half-loaded; restart with no native verb derives stop-then-start. systemd keeps its `--`
+terminator; the tested behaviour is now data.
+
+**U27/U28/U29 — the snapshot layer becomes data.** A `ConfigSnapshotProvider` reads
+`adapters/snapshot.toml` through the one ledger and registers LAST, so a row never shadows a
+built-in. The safety rule that keeps it from being the V.60 footgun: a capability the row does
+not declare, it does not have — `restores_running_system` defaults false, so a provider is
+create-only unless the file names live restore *and* gives a restore command; a "restore" that
+could roll nothing back never runs, it refuses and names the snapshot. **U28**: the active
+provider is chosen by a declared `snapshot_priority` list (the `priority` shape) — first
+available in the list wins, not registration order, not capability-guessing; empty keeps the old
+behaviour. **U29**: APFS on macOS, declared create-only (a restore needs a recovery reboot, so
+claiming Live would be exactly V.60); the second platform gains a safety net, and the ownership
+rules mean LiNix never reaps an APFS snapshot it cannot prove it made.
+
+**U35 — user-defined verbs.** A `[verbs]` table names a sequence of built-in verbs
+(`refresh = ["sync", "upgrade --all"]`), riding the existing pre-clap alias substrate. A verb
+never shadows a built-in; each step inherits the leading global flags; **composition only** is
+enforced — a step that names anything but a built-in is refused with a pointer at `exec:`/U33.
+One data lock covers the whole verb, taken as a writer (the safe default). The arbitrary-argv
+half of U35's ruling waits on U33's key.
+
+**U34 — `linix repl`.** A prompt over the *one* resolver: a name delegates to
+`resolve_spec`, `when <expr>` to `config::parser::eval_when`, `:vars`/`:eval` to the resolver's
+own methods (the U20 rule — a thin front end, never a second implementation). Read-only, no
+locks.
+
+**Not built, and why.** **U32** (module parameters) is the highest-value language feature and
+recommended yes, but it threads call-site arguments through four data-flow points — a profile's
+`use m(args)` → `reach` → set-math → `expand`, and module→module — each a place a *mis-resolution*
+could hide, the exact class VI.0 is about, with no way to de-risk incrementally under
+test-at-the-end. Left for a session that can build it against a running suite step by step.
+**U33** (generated declarations / `exec:`-anything) is the riskiest capability and the spec's own
+recommendation is *not yet*; it is owner-approved behind an off-by-default key and belongs after
+U32. **U30** (zfs/lvm storage objects whose `remove` runs `zfs destroy`) and **U38** (secret
+providers handling plaintext) are the two most dangerous items on the list and cannot be
+validated on this host — no zfs/lvm box, and testing secret handling means handling a real
+secret. Building either blind is the one thing "we cannot afford bugs here" forbids; they are the
+owner's call on how to validate.
+
 ## Session 2026-07-26 (later the same day) — building the ruled backlog, safest-first
 
 **Eight ruled items built, each committed on its own, `cargo test` 0 failed and `cargo clippy`

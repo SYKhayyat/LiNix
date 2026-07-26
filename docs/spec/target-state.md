@@ -17,16 +17,22 @@ adapters/           how to drive things LiNix does not ship
   backends.toml       a package manager (XIII.2)
   settings.toml       a settings store (K17)
   bootstrap.toml      how to obtain a manager this machine lacks (7c)
+  init.toml           an init system (U36)
+  snapshot.toml       a snapshot/rollback provider (U27)
+  firewall.toml       a firewall (7o)
 hooks/              a script per LiNix event — on_drift, after_sync, … (7j)
 locks/              what everything resolved to    one file per backend
 preferences.toml    refusals and behaviour
 ```
 
-**`adapters/` is three files rather than one because they answer three questions** — how to
-*drive* a manager, how to *drive* a settings store, and how to *get* a manager. All three are
-code the repo carries, so all three go through II.12's approval ledger: they arrive with a pulled
-config, and a config that can run a command on first sync without being read is the whole reason
-that ledger exists.
+**`adapters/` is one file per kind of thing LiNix does not ship** — how to *drive* a manager, a
+settings store, an init system, a firewall, a snapshot provider; and how to *get* a manager. All
+of them are code the repo carries, so all of them go through II.12's approval ledger: they arrive
+with a pulled config, and a config that can run a command on first sync without being read is the
+whole reason that ledger exists. **`linix lock` approves every `*.toml` in `adapters/`, by
+reading the folder, never a list named in the source** — a named list forgot `firewall.toml`
+once, leaving it unapprovable and its rows refused on every sync (V.72), which is why the
+assertion "every adapter file is approvable" is made against the directory rather than a sentence.
 
 **LiNix's data** — `$LINIX_DATA_DIR` or the platform data dir. **Never in git. Never in a
 folder LiNix scans.**
@@ -796,6 +802,7 @@ else, ever.**
 | `add SOURCE` | vendor someone else's module into your repo (U14) — it lands as a file you can read, never as a live reference |
 | `try` | rehearse this config on a clean machine in a container (U12) |
 | `eval` | print the resolved desired state as versioned JSON (U17). Takes no locks, changes nothing |
+| `repl` | interactive prompt over the one resolver (U34): resolve a name here, evaluate `when`, `:vars`/`:eval`. Read-only |
 | `vars` | print each resolved variable, its typed value, its type, and the active provider (II.6b) |
 | `why PKG` | why this is declared: the gate chain, the variables behind it, and the commit that introduced the line (7l) |
 | `diff COMMIT COMMIT` | the change in **packages**, not text |
@@ -807,6 +814,14 @@ else, ever.**
 | `activate NAME… [-a]` | write `active` — the list, or `-a` to add to it (II.6), sync |
 | `deactivate NAME…` | take away from `active` (II.6), sync |
 | `upgrade`, `list`, `profile`, `service`, `repo`, `hold` | as today, all reduced to file edits |
+
+**A user may name a verb (U35).** A `[verbs]` table maps a name to a *sequence* of built-in
+verbs — `refresh = ["sync", "upgrade --all"]` — the `defun` over the command surface, sibling to
+`command_aliases` (which renames one command). It is **composition only**: every step must be a
+built-in, a step that names anything else is refused and pointed at `exec:`/U33 (off by default),
+a verb takes no arguments of its own, and a verb never shadows a built-in (V.77). One data lock
+covers the whole verb, taken as a writer — the safe default for a sequence that may install or
+remove.
 
 **`status`, `doctor`, `unmanaged`, `absent`, `conflicts`, `insight`, `metrics` and `audit` are
 gone, and they are gone rather than aliased** (U9, ruled 2026-07-24; built 7i). They were ten
@@ -1203,6 +1218,13 @@ provider; "snapshot with all, restore from the best" is a later question.
 **macOS gets APFS as its provider (U29)** — `tmutil localsnapshot` / `diskutil apfs`, declared
 **create-only** because an APFS restore needs a reboot into recovery (not a live undo, V.60). So
 macOS is no longer without a net; it has a create-only one, marked as such (U6).
+
+**Init systems are declarable the same way (U36).** `service:` speaks systemd, OpenRC, SysVinit,
+launchd and Windows `sc` as rows in `init_providers.toml`, and a machine running s6/dinit/runit/
+Shepherd adds a row to `adapters/init.toml` — through the same loader and ledger, registered
+last, never shadowing a built-in. A row that cannot both start and stop is refused, not
+half-used (V.73). This is XIII.33's one mechanism — a name, some argv, a way to read the result —
+applied to the init surface rather than a new plugin system.
 
 **A restore that cannot restore says so, before it is needed (V.60).** Taking a snapshot and
 restoring one are different capabilities and a provider may have the first without the second:
