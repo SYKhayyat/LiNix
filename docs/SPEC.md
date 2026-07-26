@@ -13,7 +13,7 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | [`spec/why.md`](spec/why.md) | V | The reason behind every Part II rule — each one the scar of a real bug. | **Before changing any Part II rule.** |
 | [`spec/plan.md`](spec/plan.md) | III + IV | The work in dependency order, each phase with its exit condition; then the proofs. | When picking up work. |
 | [`spec/bugs.md`](spec/bugs.md) | VI | Bugs killed by this design, and bugs carried forward. **Read VI.0 first.** | Before building anything. |
-| [`spec/decisions.md`](spec/decisions.md) | — | **All 88 decisions, with a status on each.** | Before proposing anything. |
+| [`spec/decisions.md`](spec/decisions.md) | — | **All 104 decisions, with a status on each.** | Before proposing anything. |
 | [`spec/history.md`](spec/history.md) | VII | How far the work got, session by session. **The living truth** — every frozen status line drifts behind the tree. | After Part II, before touching anything. |
 | [`spec/proposals/`](spec/proposals/) | VIII–XIII | Six features that are designed but not decided. | Only with the register open beside you. |
 
@@ -26,10 +26,13 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | X | [rebuild, caches, desktops, backup](spec/proposals/rebuild.md) | K1–K16 |
 | XI | [`firewall:`](spec/proposals/firewall.md) | N1–N7 |
 | XII | [secrets](spec/proposals/secrets.md) | T1–T5 |
-| XIII | [the next round](spec/proposals/next-round.md) | U1–U26 |
+| XIII | [the next round](spec/proposals/next-round.md) | U1–U38 |
 
-**VI.0 first, always.** One open bug removes software with no guard, no plan, no count and no
-history entry, and `--dry-run` performs it. Nothing else here should be built before it is fixed.
+**VI.0 — FIXED (S24/S25, session 2026-07-23, sixteenth; verified 2026-07-24).** The bug that
+removed software with no guard, no plan and no count — and that `--dry-run` performed — is closed.
+It is no longer the blocker this line once made it, and it is no longer "build nothing before it."
+**For what remains to build and in what order, see the ordered list at the top of
+[`spec/plan.md`](spec/plan.md)** (`decisions.md` is now at zero-open).
 
 Facts marked **(measured)** were verified against real containers or real code with a citation.
 Everything else is design.

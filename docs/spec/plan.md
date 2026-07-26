@@ -2,6 +2,91 @@
 
 *[LiNix v7](../SPEC.md) — the map is there; this is one part of it.*
 
+## What is left to build — the ordered list (2026-07-26)
+
+**This is the single view of remaining work, in the order to build it.** Every decision it
+depends on is now ruled — `decisions.md` is at zero-open. Detail for each item is in its Phase
+section below; this list is the sequence, not the spec.
+
+**Where the frontier is (verified against `history.md`, session 2026-07-24):** Phases 0–6 are
+built and the container matrix (ubuntu/fedora/arch/alpine/tools) is green, run for real. **The
+flagship VI.0 bug (S24/S25 — interrupted-install recovery removed a package past the guard) is
+FIXED** (session 2026-07-23, sixteenth) — so the "VI.0 first" warning at the top of `SPEC.md` is
+now stale; it is no longer the blocker. Phase 7a–7m are built (7c/7d/7e/7n/7o excepted). What
+remains is below, and nothing in it is blocked on a decision any more.
+
+**Order is by dependency and blast radius, not size** — the safe, additive, foundational work
+first; the two things that can destroy data or leak a secret (storage removal, secret providers)
+last, after the mechanism they ride is proven.
+
+### Tier 1 — small ruled fixes (additive, low-risk, clears the register backlog)
+
+1. **K2** — a bare `linix rebuild` warns loudly, then rebuilds all (replace the old refusal/`bail`).
+2. **D3b** — download-only artifacts: `web:`/`github:` may fetch without installing, and this is
+   the default when a fetched thing cannot be installed. Removed when the line goes.
+3. **D5** — `github:`/`web:` may install a file (a `.deb` to `dpkg`); the lock records the
+   installing backend, and that backend owns removal, upgrade and dedup (`check` never double-counts).
+4. **K4** — `clean_cache_on_remove` on download backends, plus a user cache pointer and a search
+   of the common cache locations.
+5. **D13** — a `channel` change refreshes in place; a channel *downgrade* routes through the plan
+   and the guard.
+6. **T6** — the per-line `@backup=no` opt-out.
+
+### Tier 2 — the remaining Phase-7 parity features
+
+7. **7c** — backend bootstrap: obtain a declared-but-missing manager (ask first, then install).
+8. **7d** — `sync --locked` / default-to-recorded-version (U11). *Verify first: the U11 entry
+   reads as already built; if so, close it and skip.*
+9. **7e** — `setting:` everywhere, not just GNOME (U5/K7/K17/U19 all ruled): Windows registry
+   first (`@scope` default user, U19), then KDE, COSMIC, and a decision on Hyprland.
+10. **7n** — the dotfiles directory (U22–U25): a tree whose layout is the declaration; per-file
+    links, collisions previewed, never decrypts.
+11. **7o** — `firewall:` (N1–N7): Windows Defender + one Linux adapter, on K17's adapter table;
+    the session-port refusal is its precondition, on every path that can close a port.
+
+### Tier 3 — declared providers (Phase 7p): build the mechanism, then rows, safest-first
+
+12. **U27 — the provider mechanism.** A snapshot-provider registry + config-driven providers read
+    through 7a's one approval ledger; built-in providers become rows in it. **Restore-capability
+    is a required declared field, never inferred** (a provider that can't restore a running
+    machine is create-only and refuses the rollback). *Everything below in this tier rides this.*
+13. **U36 — init systems** as `[[init]]` rows (lowest risk: start/stop/enable, no data destroyed).
+14. **U31 — user-declared health checks** (argv, exit 0 = healthy; a check that can't run is a
+    failed check).
+15. **U37 — notifications**: documentation only — route Slack/webhooks through the existing 7j
+    event hook; no new mechanism.
+16. **U26 — BSD backends** (FreeBSD `pkg`, OpenBSD `pkg_add`) — ordinary backends, independent of
+    the mechanism.
+17. **U28 — snapshot-provider priority list** (choose the active provider by a declared order,
+    like package `priority`).
+18. **U29 — macOS APFS provider**, declared create-only (restore needs recovery-mode reboot).
+19. **U30 — storage objects** (zfs datasets, lvm volumes) as one family — **the `remove` path
+    destroys a filesystem, so it goes through the guard (normal gate), and a volume is
+    protectable like a package.** zfs/lvm have no implementation today; this is real new work.
+20. **U38 — secret-decryption providers** (sops/Vault/1Password/KMS/GPG) — **last, and the most
+    dangerous**: bound by the T-series plaintext rules; a provider that can't promise them is
+    refused, not trusted.
+
+### Tier 4 — the language-power features (the "emacs-lisp power", all ruled 2026-07-26)
+
+21. **U32 — module parameters** (`param`, `use mod(x=y)`); types opt-in, the user's choice per
+    parameter; a missing required parameter is a loud error.
+22. **U35 — user-defined verbs**: safe composition of built-in verbs, ungated; arbitrary-command
+    verbs ride U33's key + ledger.
+23. **U33 — generated declarations AND `exec:`-can-do-anything**, each behind its own config key
+    (off by default). Output still passes the guard, the removal preview and the ledger; a failed
+    generator is a failed sync. **The riskiest capability — build it after the mechanism above is
+    proven.**
+24. **U34 — `linix repl`** (build if easy; must share the one parser/resolver, never a second
+    implementation).
+
+### Deferred by ruling (build later, on a trigger — not now)
+
+- **K18 — atomic-swap option**: lands with the first backend that actually exposes atomic swap;
+  not added as a dead key now.
+
+---
+
 ## What already exists (written against branch `v6`, which is now `main` — the sole branch)
 
 Four stages of the old plan are committed. **Read this before deleting anything.**
@@ -1230,6 +1315,79 @@ carrying the session is refused naming the port and the rule, from `sync`, from
 tree appears at its mirrored destination after one `sync` with no line written anywhere, a file
 deleted from the tree has its link removed by the same `extras_lock` teardown every other extra
 uses, and a destination LiNix did not create is refused by name rather than replaced.
+
+**7p — Declared providers: open the closed provider-lists (XIII.33; direction ruled 2026-07-25).**
+The owner ruled the *outcome*: every closed provider-list becomes reachable without a source
+change (XIII.33). This item builds that. **Read the boundary before starting.** The *whether* is
+ruled for the surfaces under BUILD; the *how*-questions under STOP AND ASK are still the owner's
+and **must not be answered in code** — a decision the register calls open is not yours to settle
+(rules of engagement 1, 5). The three groups below are not ordered by letter; they are ordered by
+what is allowed.
+
+*BUILD — the whether is ruled; the mechanism first, then one surface proves it, then the rest are
+schema rows:*
+
+1. **The mechanism (U27 — build).** A `SnapshotProviderRegistry` beside `BackendRegistry`, and a
+   config-driven provider read from `providers.toml` (machine-local, II.1), registered last, never
+   shadowing a built-in — reuse 7a's `read_approved_definitions` and one ledger, exactly as K17's
+   `setting:` adapter table did; **do not add a second approval path.** **The invariant that makes
+   it safe: a capability a provider does not declare, it does not have.** `restores_running_system`
+   defaults to false; a provider that does not prove live restore is `NotFromRunningSystem`, never
+   `Live` (V.60). The ownership marker (S3) is a declared field, or retention is disabled for that
+   provider so it never reaps a user's snapshot. **Exit:** a `providers.toml` `[[snapshot]]` for a
+   filesystem LiNix has no compiled-in support for (e.g. lvm) is created, listed, deleted, and — if
+   it declares the capability — restored; one that omits `restores_running_system` is refused a
+   live restore *by message*, not by silently doing nothing.
+2. **Init systems (U36 — build).** `[[init]]` on the same mechanism; the built-in `enum
+   InitSystem` becomes rows the same loader reads (the K17 move again) — the five built-ins are
+   rows, a user's s6/dinit/runit is a row too. A row missing `start`/`stop` is refused, not
+   half-used. **Exit:** a `service:` line drives an init LiNix shipped no arm for, from a row; and
+   systemd still works, driven from a row.
+3. **Health checks (U31 — build).** 7f shipped built-in `@health=`; this opens it to a
+   user-declared check command — argv, exit 0 = healthy, on II.12's ledger. A check that cannot
+   run is a failed check, loudly, never a passed one. **Exit:** an `@health=` naming a
+   user-declared check rolls the upgrade back when the check exits non-zero, and a missing check
+   binary fails the sync rather than passing it.
+4. **Notifications (U37 — no new mechanism unless ruled).** The outcome is already met by 7j's
+   event hooks: a channel beyond `desktop`/`email` is a hook that shells out to `curl`. Build
+   nothing new here unless U37 rules a first-class `[[channel]]` is needed; the default is to
+   document the hook path. **Exit:** the docs show sending to Slack/ntfy/a webhook via an event
+   hook, from one worked example.
+5. **BSD backends (U26, ruled — independent of the mechanism).** FreeBSD `pkg` and OpenBSD
+   `pkg_add` are ordinary backends (XIII.27); `pkg query '%n %v'` gives installed, `pkg query
+   '%a'` gives the manual set. **Exit:** on a FreeBSD host `pkg:curl` installs, lists and removes,
+   and `adopt` separates user-chosen packages from dependencies via `%a`.
+
+*RULED 2026-07-26 — these four were "STOP AND ASK" until the owner ruled them; they are now BUILD,
+in the ordered list at the top (items 17–20). Detail in `decisions.md`:*
+
+- **Storage objects that destroy data (U30) — RULED.** One family (zfs/lvm/btrfs); the `remove`
+  path that runs `zfs destroy` / `lvremove` goes through `app/sync/guard.rs` at the **normal** gate
+  (no special escalation), and a volume is **protectable like a package**. zfs/lvm have no
+  implementation yet — real new work. Build order: item 19, after the mechanism.
+- **Secret providers (U38) — RULED, gate now clear.** The T-series that blocked this is settled
+  (T1/T2/T5/T7), so `[[secret]]` is built — **bound by the T-series plaintext rules, and a provider
+  that cannot promise them is refused, not trusted.** Build order: item 20, last and most dangerous.
+- **APFS live-or-not (U29) — RULED.** macOS gets APFS, declared **create-only** (an APFS restore
+  needs a recovery-mode reboot, so never `Live`, V.60). Build order: item 18.
+- **Provider preference (U28) — RULED.** The active provider is chosen by a **declared priority
+  list**, like package `priority` (first available in the list wins), not by capability-guessing or
+  registration order. Build order: item 17.
+
+*RULED 2026-07-26 — the "as open as Lisp" set is no longer NOT-GREENLIT; the owner ruled all four
+(and widened two past their recommendations). They are Tier 4 in the ordered list (items 21–24):*
+
+- **Parameterized modules (U32) — build; types opt-in, the user's choice per parameter.**
+- **User-defined verbs (U35) — build; safe composition ungated, arbitrary-command verbs ride U33.**
+- **Generated declarations (U33) — build, overriding XIII.32's refusal; AND `exec:` may do
+  anything — each behind its own config key (off by default), guard/removal-preview/ledger/fail-loud
+  never waived.** This amended U3 and U4.
+- **`linix repl` (U34) — build if easy; single parser/resolver, never a second implementation.**
+
+A literal embedded Lisp / scripting language was considered and **declined** (owner, 2026-07-26):
+the capabilities above deliver the extensibility without a second engine or losing readable-by-
+default; the one Lisp-only property (unknowable-by-reading) is exactly what U33's key opts into
+when a user wants it.
 
 **The three decrypt-mode defects — ALL FIXED 2026-07-23, with T6's ruled half, and the fix
 found a data-loss defect none of them named.**
