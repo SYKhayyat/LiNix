@@ -70,6 +70,9 @@ pub struct GithubBackendCore {
     pub rate_limiter: RateLimiter,
     /// `[guard] confine_bin`: whether the deployed name may reach outside `~/.local/bin` (SEC1).
     pub confine_bin: bool,
+    /// K4: also clean each fetched asset from the cache locations on removal.
+    pub clean_cache_on_remove: bool,
+    pub cache_dirs: Vec<PathBuf>,
     pub github_token: Option<String>,
     /// `rate_limit_max_wait_secs`: the ceiling on waiting out a 403 (S26).
     pub rate_limit_max_wait: Duration,
@@ -122,11 +125,14 @@ fn rate_limit_of(res: &reqwest::Response, cap: u64) -> RateLimit {
 }
 
 impl GithubBackendCore {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         executor: CommandExecutor,
         install_dir: PathBuf,
         locks_file: PathBuf,
         confine_bin: bool,
+        clean_cache_on_remove: bool,
+        cache_dirs: Vec<PathBuf>,
         github_token: Option<String>,
         rate_limit_max_wait: Duration,
     ) -> Self {
@@ -150,6 +156,8 @@ impl GithubBackendCore {
             locks_file,
             rate_limiter,
             confine_bin,
+            clean_cache_on_remove,
+            cache_dirs,
             github_token,
             rate_limit_max_wait,
             internal_lock: Mutex::new(()),
@@ -795,6 +803,11 @@ impl Installable for GithubInstallable {
                     // gone.
                     ledger.forget(name);
                     info!("removed {}", name);
+                    if self.core.clean_cache_on_remove {
+                        for asset in pkg.artifacts.iter().map(|a| a.asset.as_str()) {
+                            crate::model::cache::clean_cached(asset, &self.core.cache_dirs).await;
+                        }
+                    }
                 } else {
                     // The binary is still on disk and still on PATH. Dropping it from state
                     // anyway would make it drift no `sync` can see, so put the record back.
@@ -850,6 +863,8 @@ pub fn register(
         cfg.github_dir.clone(),
         cfg.layout().lock_file("github"),
         cfg.guard.confine_bin,
+        cfg.clean_cache_on_remove,
+        cfg.cache_dirs.clone(),
         // A secret is the environment only, never a file (II.1) — `preferences.toml` is
         // committed to the repo it lives in, so a token key there is a token in git.
         std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty()),

@@ -20,17 +20,28 @@ pub struct AppImageBackendCore {
     pub executor: CommandExecutor,
     /// `[guard] confine_bin`: whether a link name may reach outside `~/.local/bin` (SEC1).
     pub confine_bin: bool,
+    /// K4: also clean the fetched AppImage from the cache locations on removal.
+    pub clean_cache_on_remove: bool,
+    pub cache_dirs: Vec<PathBuf>,
     pub install_dir: PathBuf,
     pub state_file: PathBuf,
 }
 
 impl AppImageBackendCore {
-    pub fn new(executor: CommandExecutor, install_dir: PathBuf, confine_bin: bool) -> Self {
+    pub fn new(
+        executor: CommandExecutor,
+        install_dir: PathBuf,
+        confine_bin: bool,
+        clean_cache_on_remove: bool,
+        cache_dirs: Vec<PathBuf>,
+    ) -> Self {
         let state = install_dir.join("state.json");
 
         Self {
             executor,
             confine_bin,
+            clean_cache_on_remove,
+            cache_dirs,
             install_dir,
             state_file: state,
         }
@@ -215,6 +226,10 @@ impl Installable for AppImageInstallable {
                 }
                 if errors.is_empty() {
                     info!("AppImage: Removed {}", name);
+                    if self.core.clean_cache_on_remove {
+                        let basename = info.url.split('/').next_back().unwrap_or("");
+                        crate::model::cache::clean_cached(basename, &self.core.cache_dirs).await;
+                    }
                 } else {
                     state.insert(name.clone(), info);
                     failures.push(format!("{}: {}", name, errors.join("; ")));
@@ -272,6 +287,8 @@ pub fn register(
         exec.duplicate(),
         cfg.appimage_dir.clone(),
         cfg.guard.confine_bin,
+        cfg.clean_cache_on_remove,
+        cfg.cache_dirs.clone(),
     ));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())

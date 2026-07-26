@@ -16,6 +16,7 @@ pub mod profiles;
 pub mod rehearsal;
 pub mod resolve;
 pub mod bootstrap;
+pub mod cache;
 pub mod dotfiles;
 pub mod exec;
 pub mod firewall;

@@ -26,18 +26,29 @@ pub struct WebBackendCore {
     /// `[guard] confine_bin`: whether an `@bin=` value may name a file outside `bin_dir`
     /// (SEC1). Carried here because the backend is where the value becomes a path.
     pub confine_bin: bool,
+    /// K4: also clean the fetched file from the cache locations on removal.
+    pub clean_cache_on_remove: bool,
+    pub cache_dirs: Vec<PathBuf>,
     pub install_dir: PathBuf,
     pub state_file: PathBuf,
     pub internal_lock: Mutex<()>,
 }
 
 impl WebBackendCore {
-    pub fn new(executor: CommandExecutor, install_dir: PathBuf, confine_bin: bool) -> Self {
+    pub fn new(
+        executor: CommandExecutor,
+        install_dir: PathBuf,
+        confine_bin: bool,
+        clean_cache_on_remove: bool,
+        cache_dirs: Vec<PathBuf>,
+    ) -> Self {
         let state_file = install_dir.join("installed.json");
         Self {
             executor,
             name: "web".to_string(),
             confine_bin,
+            clean_cache_on_remove,
+            cache_dirs,
             install_dir,
             state_file,
             internal_lock: Mutex::new(()),
@@ -257,6 +268,10 @@ impl Installable for WebInstallable {
                 }
                 if errors.is_empty() {
                     info!("Web: Removed resource: {}", url);
+                    if self.core.clean_cache_on_remove {
+                        let basename = url.split('/').next_back().unwrap_or("");
+                        crate::model::cache::clean_cached(basename, &self.core.cache_dirs).await;
+                    }
                 } else {
                     // The file is still on disk and still on PATH. Dropping it from state
                     // anyway would make it drift no `sync` can see, so put the record back.
@@ -307,6 +322,8 @@ pub fn register(
         exec.duplicate(),
         cfg.web_dir.clone(),
         cfg.guard.confine_bin,
+        cfg.clean_cache_on_remove,
+        cfg.cache_dirs.clone(),
     ));
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())

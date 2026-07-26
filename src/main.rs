@@ -4727,6 +4727,14 @@ rate_limit_max_wait_secs = 30
 # Retention window for `nix-collect-garbage --delete-older-than` during cleanup.
 nix_gc_age = "30d"
 
+# When a package installed by a DOWNLOAD backend (github:/web:/appimage:) is removed, also
+# delete any cached copy of the fetched file. Download-backends only: on apt/dnf/pacman the
+# manager owns its own cache and this does nothing.
+# clean_cache_on_remove = false
+# Extra directories to search when clean_cache_on_remove cleans up. $XDG_CACHE_HOME, ~/.cache
+# and /var/cache are always searched; add anywhere else this machine keeps downloads.
+# cache_dirs = ["/opt/downloads"]
+
 # Default SSH destinations for `linix fleet` when none are given on the command line.
 # fleet_hosts = ["user@web-01", "user@web-02"]
 

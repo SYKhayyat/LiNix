@@ -295,6 +295,21 @@ pub struct Config {
     #[serde(default = "default_nix_gc_age")]
     pub nix_gc_age: String,
 
+    /// K4: when a package installed by a *download* backend (`github:`/`web:`/`appimage:`) is
+    /// removed, also delete any cached copy of the fetched file from the cache locations LiNix
+    /// knows. Off by default. **Download-backends only, and the key says so:** LiNix knows the
+    /// file only where it fetched it itself — on apt/dnf/pacman the manager owns its own cache
+    /// and this setting does nothing, which is why it is scoped rather than pretending to be
+    /// universal.
+    #[serde(default)]
+    pub clean_cache_on_remove: bool,
+
+    /// K4: extra directories to search when `clean_cache_on_remove` cleans up — anywhere else a
+    /// machine keeps downloads. LiNix already searches the standard locations
+    /// (`$XDG_CACHE_HOME`, `~/.cache`, `/var/cache`); this points it at the rest.
+    #[serde(default)]
+    pub cache_dirs: Vec<std::path::PathBuf>,
+
     #[serde(default)]
     pub backend_settings: HashMap<String, HashMap<String, String>>,
 
@@ -537,6 +552,8 @@ impl Default for Config {
             network_timeout_secs: default_network_timeout_secs(),
             rate_limit_max_wait_secs: default_rate_limit_max_wait_secs(),
             nix_gc_age: default_nix_gc_age(),
+            clean_cache_on_remove: false,
+            cache_dirs: Vec::new(),
             backend_settings: HashMap::new(),
             allow_mass_install: false,
             guard: GuardSettings::default(),

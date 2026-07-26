@@ -32,6 +32,11 @@ rate_limit_max_wait_secs = 30
 # Nix orphans (e.g. "30d", "2w"). Replaces the previously hardcoded 30 days.
 nix_gc_age = "30d"
 
+# K4: when a github:/web:/appimage: package is removed, also delete any cached copy of the
+# fetched file. Download-backends only — apt/dnf/pacman manage their own caches.
+# clean_cache_on_remove = false
+# cache_dirs = ["/opt/downloads"]
+
 # Default SSH destinations for `linix fleet` when none are passed on the command line.
 # fleet_hosts = ["user@web-01", "user@web-02"]
 
