@@ -10,9 +10,9 @@ pub mod btrfs;
 pub mod conda;
 pub mod dnf;
 pub mod emacs;
+pub mod firewall;
 pub mod flatpak;
 pub mod github;
-pub mod firewall;
 pub mod link;
 
 #[cfg(test)]

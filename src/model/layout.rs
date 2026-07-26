@@ -177,8 +177,7 @@ impl Layout {
 
     /// Refusals and behaviour. Nothing writes to it but you (II.6).
     pub fn preferences_file(&self) -> PathBuf {
-        self.config_root
-            .join(crate::config::PREFERENCES_FILE_NAME)
+        self.config_root.join(crate::config::PREFERENCES_FILE_NAME)
     }
 
     /// What LiNix currently owns. **Never in git. Never in a folder LiNix scans.**

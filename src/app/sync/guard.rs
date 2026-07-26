@@ -61,7 +61,6 @@ impl GuardScope {
             Self::Rebuild => "rebuild",
         }
     }
-
 }
 
 /// Why a single package may not be removed.
@@ -91,7 +90,6 @@ impl Protection {
         }
     }
 }
-
 
 /// The single decision function: may `name` be removed from `backend`?
 ///
@@ -135,16 +133,29 @@ pub fn protection_of(
 /// A removal the guard objects to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Objection {
-    Protected { key: String, reason: String },
-    TooMany { count: usize, limit: usize },
+    Protected {
+        key: String,
+        reason: String,
+    },
+    TooMany {
+        count: usize,
+        limit: usize,
+    },
     /// The plan installs more packages at once than `max_installs` allows (II.10). The
     /// install-side twin of `TooMany`: a mis-globbed manifest schedules a flood of
     /// installs, and the count is the fact that explains it.
-    TooManyInstalls { count: usize, limit: usize },
+    TooManyInstalls {
+        count: usize,
+        limit: usize,
+    },
     /// A desired package is on the `deny_packages` list (II.10) — never install this.
-    Denied { key: String },
+    Denied {
+        key: String,
+    },
     /// `pinned_only` is set and a desired package has no explicit `@version=` (II.10).
-    Unpinned { key: String },
+    Unpinned {
+        key: String,
+    },
 }
 
 /// The guard's verdict over a removal set.
@@ -649,7 +660,9 @@ mod tests {
             GuardScope::Rebuild,
         ] {
             assert!(
-                enforce(&cfg, &reg, &pairs(&["python3"]), scope).await.is_err(),
+                enforce(&cfg, &reg, &pairs(&["python3"]), scope)
+                    .await
+                    .is_err(),
                 "{:?} must be guarded, and nothing may turn that off",
                 scope
             );
@@ -665,9 +678,14 @@ mod tests {
         let cfg = config_with(2);
 
         assert!(
-            enforce_deliberate(&cfg, &reg, &pairs(&["a", "b", "c", "d"]), GuardScope::PurgeUnmanaged)
-                .await
-                .is_ok(),
+            enforce_deliberate(
+                &cfg,
+                &reg,
+                &pairs(&["a", "b", "c", "d"]),
+                GuardScope::PurgeUnmanaged
+            )
+            .await
+            .is_ok(),
             "the count is not the question here"
         );
         assert!(
@@ -683,7 +701,9 @@ mod tests {
         // max_installs defaults to 0 (unset). Installs are additive and far less dangerous
         // than removals, so the ceiling stays off until a user asks for it.
         let cfg = config_with(20); // max_installs is 0 here
-        assert!(enforce_installs(&cfg, 10_000, GuardScope::Sync).await.is_ok());
+        assert!(enforce_installs(&cfg, 10_000, GuardScope::Sync)
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -713,7 +733,9 @@ mod tests {
         let mut cfg = config_with(20);
         cfg.guard.max_installs = 50;
         cfg.allow_mass_install = true;
-        assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync).await.is_ok());
+        assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync)
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -722,10 +744,14 @@ mod tests {
         let mut cfg = config_with(20);
         cfg.guard.max_installs = 50;
         cfg.yes = true;
-        assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync).await.is_err());
+        assert!(enforce_installs(&cfg, 5_000, GuardScope::Sync)
+            .await
+            .is_err());
     }
 
-    fn desired(specs: &[(&str, &str, Option<&str>)]) -> std::collections::HashMap<String, Vec<crate::core::PackageSpec>> {
+    fn desired(
+        specs: &[(&str, &str, Option<&str>)],
+    ) -> std::collections::HashMap<String, Vec<crate::core::PackageSpec>> {
         let mut m: std::collections::HashMap<String, Vec<crate::core::PackageSpec>> =
             std::collections::HashMap::new();
         for (backend, name, version) in specs {
@@ -733,13 +759,15 @@ mod tests {
             if let Some(v) = version {
                 options.insert("version".to_string(), v.to_string());
             }
-            m.entry(backend.to_string()).or_default().push(crate::core::PackageSpec {
-                name: name.to_string(),
-                backend: backend.to_string(),
-                options,
-                requires: vec![],
-                present: true,
-            });
+            m.entry(backend.to_string())
+                .or_default()
+                .push(crate::core::PackageSpec {
+                    name: name.to_string(),
+                    backend: backend.to_string(),
+                    options,
+                    requires: vec![],
+                    present: true,
+                });
         }
         m
     }
@@ -751,7 +779,11 @@ mod tests {
             ..Default::default()
         };
         let os = inspect_desired(&guard, &desired(&[("npm", "leftpad", None)]));
-        assert!(matches!(os.as_slice(), [Objection::Denied { .. }]), "{:?}", os);
+        assert!(
+            matches!(os.as_slice(), [Objection::Denied { .. }]),
+            "{:?}",
+            os
+        );
     }
 
     #[test]

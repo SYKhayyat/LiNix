@@ -1,6 +1,5 @@
-use crate::config::grammar::Origin;
-use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::adopt::Adopter;
+use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::profile::ProfileManager;
 use crate::app::run::Runner;
 use crate::app::scheduler::notify::NotificationManager;
@@ -11,6 +10,7 @@ use crate::app::sync::resolver::StateResolver;
 use crate::app::sync::SyncEngine;
 use crate::app::undo::UndoManager;
 use crate::backends::{create_default_registry, BackendRegistry};
+use crate::config::grammar::Origin;
 use crate::config::Config;
 use crate::core::{
     CommandExecutor, Error, Journal, Package, PackageCache, PackageSpec, Result, SnapshotManager,
@@ -30,7 +30,11 @@ use tracing::{debug, info, instrument, warn};
 /// simply ignored, which is why the grammar — not this conversion — is where an unknown
 /// key is refused. Options are single-valued here (a service is enabled or not), so the
 /// first value of each key is taken.
-fn spec_from_extra(backend: &str, name: &str, opts: &crate::config::grammar::Options) -> PackageSpec {
+fn spec_from_extra(
+    backend: &str,
+    name: &str,
+    opts: &crate::config::grammar::Options,
+) -> PackageSpec {
     let mut options = std::collections::HashMap::new();
     for (key, values) in opts.iter() {
         if let Some(first) = values.first() {
@@ -273,10 +277,7 @@ impl App {
     /// interleave. Each repo names its backend (V.47), so there is no guessing which tool
     /// adds it. Idempotent: adding a repo that already exists is a no-op every backend
     /// tolerates, which is what lets a repo live in a file that syncs on every run.
-    pub async fn apply_repositories(
-        &self,
-        state: &crate::model::DesiredState,
-    ) -> Result<()> {
+    pub async fn apply_repositories(&self, state: &crate::model::DesiredState) -> Result<()> {
         use crate::config::grammar::Statement;
 
         let mut touched: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -285,7 +286,10 @@ impl App {
                 continue;
             };
             let Some(b) = self.registry.get(backend) else {
-                warn!("{}: backend `{}` is not available here — skipping repo `{}`.", origin, backend, spec);
+                warn!(
+                    "{}: backend `{}` is not available here — skipping repo `{}`.",
+                    origin, backend, spec
+                );
                 continue;
             };
             let Some(repos) = b.as_repo_manager() else {
@@ -414,10 +418,7 @@ impl App {
     /// lines live in a file that syncs on every run. This is the forward (declared →
     /// applied) direction only; reconciling away a *removed* dependent line is drift the
     /// package planner does not yet track for extras.
-    pub async fn apply_dependents(
-        &self,
-        state: &crate::model::DesiredState,
-    ) -> Result<()> {
+    pub async fn apply_dependents(&self, state: &crate::model::DesiredState) -> Result<()> {
         use crate::config::grammar::Statement;
 
         for (stmt, origin) in state.dependents() {
@@ -665,8 +666,12 @@ impl App {
             .map(|(r, _)| r.clone())
             .collect();
         let default_denies_incoming = declared.iter().any(|(r, o)| {
-            matches!(r, Rule::Default { direction: Direction::Incoming })
-                && o.one("value").map(str::trim) == Some("deny")
+            matches!(
+                r,
+                Rule::Default {
+                    direction: Direction::Incoming
+                }
+            ) && o.one("value").map(str::trim) == Some("deny")
         });
 
         // What is in force now, so the difference can be computed rather than reapplied.
@@ -739,7 +744,10 @@ impl App {
                 match adapter.default_command(*direction, policy) {
                     Some(argv) => {
                         self.run_firewall(&argv).await?;
-                        info!("default {} policy set to {} ({})", direction, policy, adapter.name);
+                        info!(
+                            "default {} policy set to {} ({})",
+                            direction, policy, adapter.name
+                        );
                     }
                     // P7's rule: a refusal beats a pretence. Reporting success for a policy the
                     // firewall cannot express would be the worst outcome here.
@@ -815,7 +823,9 @@ impl App {
     }
 
     async fn run_firewall(&self, argv: &[String]) -> Result<()> {
-        let (program, args) = argv.split_first().expect("an adapter command is never empty");
+        let (program, args) = argv
+            .split_first()
+            .expect("an adapter command is never empty");
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         // A firewall is root's business on every platform LiNix drives.
         self.executor.run(program, &refs, true).await.map(|_| ())
@@ -852,8 +862,13 @@ impl App {
                     .ok_or_else(|| Error::Other("could not find the home directory".into()))?,
             };
             let owned = |p: &std::path::Path| p.is_symlink();
-            let plan = crate::model::dotfiles::plan(&root, &target, &|p| p.exists() || p.is_symlink(), &owned)
-                .map_err(|e| Error::Io(format!("walking {}: {}", root.display(), e)))?;
+            let plan = crate::model::dotfiles::plan(
+                &root,
+                &target,
+                &|p| p.exists() || p.is_symlink(),
+                &owned,
+            )
+            .map_err(|e| Error::Io(format!("walking {}: {}", root.display(), e)))?;
             out.push((tree.to_string(), plan));
         }
 
@@ -885,8 +900,10 @@ impl App {
             return Ok(());
         }
 
-        let colliding: Vec<&std::path::PathBuf> =
-            plans.iter().flat_map(|(_, p)| p.collisions.iter()).collect();
+        let colliding: Vec<&std::path::PathBuf> = plans
+            .iter()
+            .flat_map(|(_, p)| p.collisions.iter())
+            .collect();
         if !colliding.is_empty() && !self.config.replace_existing {
             let mut msg = format!(
                 "{} destination(s) already hold a file LiNix did not put there:\n",
@@ -913,7 +930,9 @@ impl App {
             }
             for placement in &plan.placements {
                 if let Some(parent) = placement.destination.parent() {
-                    tokio::fs::create_dir_all(parent).await.map_err(Error::from)?;
+                    tokio::fs::create_dir_all(parent)
+                        .await
+                        .map_err(Error::from)?;
                 }
                 // An existing destination is replaced only once the collision check above has
                 // passed or been waived, so this cannot silently overwrite anything.
@@ -1086,7 +1105,10 @@ impl App {
             // makes the sync non-idempotent, and the next person debugging a slow sync needs a
             // thread to pull (U13). A counted or once script does not need the note.
             if opts.one("runs") == Some("always") {
-                info!("running exec:{} (runs=always — every sync) ({})", script, origin);
+                info!(
+                    "running exec:{} (runs=always — every sync) ({})",
+                    script, origin
+                );
             } else {
                 info!("running exec:{} ({})", script, origin);
             }
@@ -1102,7 +1124,8 @@ impl App {
             runs.save(&runs_path)?;
         }
 
-        self.undo_departed_execs(state, &mut runs, &runs_path).await?;
+        self.undo_departed_execs(state, &mut runs, &runs_path)
+            .await?;
         Ok(())
     }
 
@@ -1250,10 +1273,7 @@ impl App {
     /// The extras a sync would undo: applied last time, declared nowhere now. `status` and
     /// `reconcile_extras` ask the same question, so they ask it in the same place — a preview
     /// computed a second way is a preview free to disagree with the run.
-    pub async fn extras_drift(
-        &self,
-        state: &crate::model::DesiredState,
-    ) -> Result<Vec<String>> {
+    pub async fn extras_drift(&self, state: &crate::model::DesiredState) -> Result<Vec<String>> {
         use crate::core::extras_lock::ExtrasLedger;
 
         let path = ExtrasLedger::path_in(&self.config.config_root().join("locks"));
@@ -1460,7 +1480,10 @@ impl App {
     }
 
     pub async fn upgrade(&self) -> Result<()> {
-        let _ = self.snapshot_manager.auto_snapshot(crate::core::snapshot::SnapshotLabel::PreUpgrade).await?;
+        let _ = self
+            .snapshot_manager
+            .auto_snapshot(crate::core::snapshot::SnapshotLabel::PreUpgrade)
+            .await?;
         info!("upgrading all packages");
         // The same rule as `update`, and for the same reason: one manager that cannot
         // upgrade must not silently cancel every manager after it in the list.
@@ -1553,8 +1576,8 @@ impl App {
     /// neither double-counted nor purged out from under the declaration that owns them.
     pub async fn owned_system_package_names(&self) -> std::collections::HashSet<String> {
         let backends = self.registry.available();
-        let owned = self
-            .query_backends_concurrently(backends, |q| async move {
+        let owned =
+            self.query_backends_concurrently(backends, |q| async move {
                 q.owned_system_packages().await
             })
             .await;
@@ -1671,10 +1694,7 @@ impl App {
                         .remove(std::slice::from_ref(&name), b.sudo_for_write())
                         .await
                     {
-                        warn!(
-                            "failed to remove expired {}:{}: {}",
-                            backend, name, e
-                        );
+                        warn!("failed to remove expired {}:{}: {}", backend, name, e);
                         continue;
                     }
                     self.state.lock().await.remove(&backend, &name);
@@ -1845,7 +1865,6 @@ impl App {
         let searcher = UniversalSearch::new(&self.registry, &self.config, enabled);
         searcher.search(query).await
     }
-
 }
 
 /// Every declared extra key: the dependents (repo/shim/service/link/setting) and the schedules.
@@ -1861,7 +1880,6 @@ fn declared_extras(state: &crate::model::DesiredState) -> std::collections::BTre
 mod tests {
     use super::*;
     use crate::config::grammar::{Options, Statement};
-
 
     fn link(name: &str, target: &str) -> (Statement, Origin) {
         let mut opts = Options::default();

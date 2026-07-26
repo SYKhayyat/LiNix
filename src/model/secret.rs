@@ -72,7 +72,11 @@ impl SecretProvider {
 
     /// The `(program, args)` to run, with `{ref}` and `{identity}` filled in. Returns `None` when
     /// the block has no program (already rejected by `is_usable`, but never unwrapped).
-    pub fn command(&self, reference: &str, identity: Option<&str>) -> Option<(String, Vec<String>)> {
+    pub fn command(
+        &self,
+        reference: &str,
+        identity: Option<&str>,
+    ) -> Option<(String, Vec<String>)> {
         let fill = |a: &String| {
             a.replace("{ref}", reference)
                 .replace("{identity}", identity.unwrap_or(""))
@@ -168,20 +172,14 @@ mod tests {
             Some("yubikey")
         );
         // A different plugin.
-        assert_eq!(
-            plugin_of("age-plugin-tpm-1xyz").as_deref(),
-            Some("tpm")
-        );
+        assert_eq!(plugin_of("age-plugin-tpm-1xyz").as_deref(), Some("tpm"));
     }
 
     /// A software key has no plugin and no touch, so it decrypts the ordinary way — the timeout
     /// and the watch-skip are only for hardware.
     #[test]
     fn a_software_identity_has_no_plugin() {
-        assert_eq!(
-            plugin_of("AGE-SECRET-KEY-1QVX9…"),
-            None
-        );
+        assert_eq!(plugin_of("AGE-SECRET-KEY-1QVX9…"), None);
         assert_eq!(plugin_of(""), None);
         assert_eq!(plugin_of("# just a comment\n"), None);
     }
@@ -253,7 +251,11 @@ mod tests {
         assert_eq!(prog, "vault");
         assert_eq!(args, vec!["read", "-field=v", "secret/api"]);
 
-        let gpg = provider("gpg", &["gpg", "--decrypt", "--recipient", "{identity}", "{ref}"], true);
+        let gpg = provider(
+            "gpg",
+            &["gpg", "--decrypt", "--recipient", "{identity}", "{ref}"],
+            true,
+        );
         let (_, args) = gpg.command("api.gpg", Some("me@example.com")).unwrap();
         assert!(args.contains(&"me@example.com".to_string()), "{:?}", args);
         assert!(args.contains(&"api.gpg".to_string()), "{:?}", args);

@@ -408,13 +408,15 @@ impl<'a> SyncEngine<'a> {
         if commands.is_empty() {
             return Ok(());
         }
-        let ledger =
-            HookLedger::load(&HookLedger::path_in(&self.config.layout().locks_dir()))
-                .unwrap_or_default();
+        let ledger = HookLedger::load(&HookLedger::path_in(&self.config.layout().locks_dir()))
+            .unwrap_or_default();
         let mut unapproved = Vec::new();
         for check in &commands {
             if let Probe::Command(cmd) = &check.probe {
-                if !ledger.verdict(&health_id(cmd), &hash_script(cmd)).is_approved() {
+                if !ledger
+                    .verdict(&health_id(cmd), &hash_script(cmd))
+                    .is_approved()
+                {
                     unapproved.push(format!("{} ({})", check.subject, cmd));
                 }
             }
@@ -589,10 +591,7 @@ impl<'a> SyncEngine<'a> {
         let shim_mgr = Arc::new(ShimManager::with_bin_dir(self.config.bin_dir.clone()).await?);
         let mut worker_set = JoinSet::new();
 
-        debug!(
-            "auditing shims for {} packages",
-            state.packages.len()
-        );
+        debug!("auditing shims for {} packages", state.packages.len());
 
         for pkg in &state.packages {
             let mgr = shim_mgr.clone();
@@ -639,7 +638,10 @@ impl<'a> SyncEngine<'a> {
                         info!("[DRY-RUN]   reinstall {}:{}", spec.backend, spec.name)
                     }
                     crate::core::journal::JournalAction::Remove { name, backend } => {
-                        info!("[DRY-RUN]   remove {}:{} (subject to the guard)", backend, name)
+                        info!(
+                            "[DRY-RUN]   remove {}:{} (subject to the guard)",
+                            backend, name
+                        )
                     }
                 }
             }
@@ -681,9 +683,13 @@ impl<'a> SyncEngine<'a> {
                     // always refuse.
                     if !is_install {
                         let removal = [(backend.clone(), package.clone())];
-                        if let Err(objection) =
-                            guard::enforce(self.config, &self.registry, &removal, guard::GuardScope::Heal)
-                                .await
+                        if let Err(objection) = guard::enforce(
+                            self.config,
+                            &self.registry,
+                            &removal,
+                            guard::GuardScope::Heal,
+                        )
+                        .await
                         {
                             let reason = objection
                                 .to_string()
@@ -691,7 +697,10 @@ impl<'a> SyncEngine<'a> {
                                 .find(|l| l.trim_start().starts_with("- "))
                                 .map(|l| l.trim().trim_start_matches("- ").to_string())
                                 .unwrap_or_else(|| "protected".to_string());
-                            info!("keeping {} — its interrupted removal is refused ({}).", key, reason);
+                            info!(
+                                "keeping {} — its interrupted removal is refused ({}).",
+                                key, reason
+                            );
                             let mut j = self.journal.lock().await;
                             let _ = j.record_success(&entry.id, std::collections::HashMap::new());
                             kept.push(key.clone());
@@ -717,8 +726,12 @@ impl<'a> SyncEngine<'a> {
                     if remediation_res.is_ok() {
                         let mut j = self.journal.lock().await;
                         let _ = j.record_success(&entry.id, std::collections::HashMap::new());
-                        info!("{} {} (completing an interrupted {}).", verb, key,
-                            if is_install { "install" } else { "removal" });
+                        info!(
+                            "{} {} (completing an interrupted {}).",
+                            verb,
+                            key,
+                            if is_install { "install" } else { "removal" }
+                        );
                         recovered.push(format!("{} {}", verb, key));
                     } else {
                         error!(
@@ -736,7 +749,11 @@ impl<'a> SyncEngine<'a> {
         // The summary a reader sees whether or not they had `--verbose` on: what actually
         // changed, in one line.
         if !recovered.is_empty() {
-            info!("recovered {} operation(s): {}.", recovered.len(), recovered.join(", "));
+            info!(
+                "recovered {} operation(s): {}.",
+                recovered.len(),
+                recovered.join(", ")
+            );
         }
         if !kept.is_empty() {
             info!(
@@ -758,4 +775,3 @@ impl<'a> SyncEngine<'a> {
         Ok(())
     }
 }
-

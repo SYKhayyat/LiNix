@@ -14,8 +14,8 @@
 //! It is read-only and takes no locks (it is in `READ_ONLY_COMMANDS`): it resolves and prints,
 //! it never touches the machine.
 
-use crate::app::App;
 use crate::app::sync::resolver::StateResolver;
+use crate::app::App;
 use crate::core::Result;
 use std::io::{BufRead, Write};
 
@@ -32,8 +32,7 @@ linix repl — resolve names, evaluate `when`, and inspect the model against THI
 /// Run the interactive loop. Blocking stdin/stdout is deliberate — a prompt is a person at a
 /// keyboard, not a pipeline (that is what `linix eval` is for).
 pub async fn run(app: &App) -> Result<()> {
-    let resolver =
-        StateResolver::new(&app.config, app.registry.clone(), false).await;
+    let resolver = StateResolver::new(&app.config, app.registry.clone(), false).await;
 
     let stdin = std::io::stdin();
     let mut lines = stdin.lock().lines();

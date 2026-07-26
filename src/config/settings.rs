@@ -80,9 +80,8 @@ impl Settings {
     }
 
     fn parse(text: &str, path: &Path) -> Result<Self> {
-        let table: toml::Table = toml::from_str(text).map_err(|e| {
-            Error::Config(format!("{} is not valid TOML: {}", path.display(), e))
-        })?;
+        let table: toml::Table = toml::from_str(text)
+            .map_err(|e| Error::Config(format!("{} is not valid TOML: {}", path.display(), e)))?;
 
         for key in table.keys() {
             if key != ONLY_KEY {
@@ -208,18 +207,18 @@ mod tests {
     #[test]
     fn the_one_key_is_read() {
         let root = absolute("srv/linix");
-        let s = Settings::parse(
-            &format!("config_root = \"{}\"", root),
-            &at("settings.toml"),
-        )
-        .unwrap();
+        let s =
+            Settings::parse(&format!("config_root = \"{}\"", root), &at("settings.toml")).unwrap();
         assert_eq!(s.config_root, Some(PathBuf::from(root)));
     }
 
     #[test]
     fn a_second_key_is_refused_and_names_where_it_belongs() {
         let err = Settings::parse(
-            &format!("config_root = \"{}\"\nverbose = true", absolute("srv/linix")),
+            &format!(
+                "config_root = \"{}\"\nverbose = true",
+                absolute("srv/linix")
+            ),
             &at("settings.toml"),
         )
         .unwrap_err();
@@ -233,8 +232,7 @@ mod tests {
 
     #[test]
     fn a_relative_root_is_refused() {
-        let err =
-            Settings::parse("config_root = \"../linix\"", &at("settings.toml")).unwrap_err();
+        let err = Settings::parse("config_root = \"../linix\"", &at("settings.toml")).unwrap_err();
         assert!(err.to_string().contains("absolute"));
     }
 

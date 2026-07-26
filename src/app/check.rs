@@ -190,6 +190,10 @@ mod tests {
         assert!(f.ok);
         let line = f.line();
         assert!(line.contains("conflicts"), "{}", line);
-        assert!(!line.contains("run `"), "a clean section suggested work: {}", line);
+        assert!(
+            !line.contains("run `"),
+            "a clean section suggested work: {}",
+            line
+        );
     }
 }

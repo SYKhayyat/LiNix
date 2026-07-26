@@ -48,7 +48,12 @@ pub struct Vocabulary<'a> {
 /// Read the body into its names, keeping every one — gated or not — so the caller can tell
 /// "not listed" from "listed but not for this host". The caller applies whatever rule makes
 /// a name legal in its file; this owns the block structure and nothing else.
-pub fn read(file: &Path, body: &str, facts: &HostFacts, vocab: &Vocabulary) -> Result<Vec<GatedLine>> {
+pub fn read(
+    file: &Path,
+    body: &str,
+    facts: &HostFacts,
+    vocab: &Vocabulary,
+) -> Result<Vec<GatedLine>> {
     read_inner(file, body, Some(facts), vocab)
 }
 
@@ -143,10 +148,11 @@ fn read_inner(
         if let Some(header) = line.strip_suffix('{') {
             let header = header.trim();
             let Some(pred) = header.strip_prefix("when ") else {
-                return Err(
-                    GrammarError::new(origin, format!("`{}` is not a `when` block", header))
-                        .with_hint(vocab.holds.to_string()),
-                );
+                return Err(GrammarError::new(
+                    origin,
+                    format!("`{}` is not a `when` block", header),
+                )
+                .with_hint(vocab.holds.to_string()));
             };
             if gate.is_some() {
                 return Err(

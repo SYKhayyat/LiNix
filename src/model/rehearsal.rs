@@ -208,7 +208,12 @@ mod tests {
     fn only_a_clean_resolution_passes() {
         assert_eq!(verdict(Some(0)), Verdict::Valid);
         for code in [1, 2, 3, 101] {
-            assert_eq!(verdict(Some(code)), Verdict::Rejected(code), "code {}", code);
+            assert_eq!(
+                verdict(Some(code)),
+                Verdict::Rejected(code),
+                "code {}",
+                code
+            );
         }
         // Killed by a signal: no code, and no evidence the config is fine.
         assert_eq!(verdict(None), Verdict::Rejected(1));
@@ -218,7 +223,11 @@ mod tests {
     fn the_missing_image_refusal_says_how_to_build_one() {
         let msg = missing_image_refusal("docker", "linix-it-ubuntu");
         assert!(msg.contains("docker build"), "{}", msg);
-        assert!(msg.contains("docker/integration/Dockerfile.ubuntu"), "{}", msg);
+        assert!(
+            msg.contains("docker/integration/Dockerfile.ubuntu"),
+            "{}",
+            msg
+        );
         for (name, _) in IMAGES {
             assert!(msg.contains(name), "{} missing from {}", name, msg);
         }

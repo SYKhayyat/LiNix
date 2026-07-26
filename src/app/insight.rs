@@ -146,7 +146,6 @@ pub async fn sbom(app: &App) -> Result<String> {
     serde_json::to_string_pretty(&doc).map_err(|e| Error::Json(e.to_string()))
 }
 
-
 const OSV_BATCH_URL: &str = "https://api.osv.dev/v1/querybatch";
 const OSV_VULN_URL: &str = "https://api.osv.dev/v1/vulns";
 /// Cap on per-vulnerability detail lookups, to bound network work on very drifty systems.
@@ -390,7 +389,6 @@ pub fn print_audit(report: &AuditReport, as_json: bool) -> Result<()> {
     Ok(())
 }
 
-
 /// Where a package is declared, straight from the resolver (II.7).
 ///
 /// **Asks the model rather than re-reading the files.** `why` answers the one question the
@@ -499,31 +497,33 @@ fn gating_of(
         return Vec::new();
     };
     tag.split(';')
-        .map(|entry| match entry.parse::<crate::config::grammar::Gate>() {
-            Ok(gate) => Gating {
-                variables: crate::model::vars::referenced_names(&gate.predicate)
-                    .into_iter()
-                    .map(|n| {
-                        let value = vars
-                            .get(&n)
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "undefined".into());
-                        let at = origins
-                            .get(&n)
-                            .map(|o| o.to_string())
-                            .unwrap_or_else(|| "an unknown file".into());
-                        (n, value, at)
-                    })
-                    .collect(),
-                predicate: gate.predicate,
-                at: gate.origin.to_string(),
+        .map(
+            |entry| match entry.parse::<crate::config::grammar::Gate>() {
+                Ok(gate) => Gating {
+                    variables: crate::model::vars::referenced_names(&gate.predicate)
+                        .into_iter()
+                        .map(|n| {
+                            let value = vars
+                                .get(&n)
+                                .map(|v| v.to_string())
+                                .unwrap_or_else(|| "undefined".into());
+                            let at = origins
+                                .get(&n)
+                                .map(|o| o.to_string())
+                                .unwrap_or_else(|| "an unknown file".into());
+                            (n, value, at)
+                        })
+                        .collect(),
+                    predicate: gate.predicate,
+                    at: gate.origin.to_string(),
+                },
+                Err(()) => Gating {
+                    predicate: entry.to_string(),
+                    at: "an unreadable origin".to_string(),
+                    variables: Vec::new(),
+                },
             },
-            Err(()) => Gating {
-                predicate: entry.to_string(),
-                at: "an unreadable origin".to_string(),
-                variables: Vec::new(),
-            },
-        })
+        )
         .collect()
 }
 
@@ -602,10 +602,7 @@ fn artifact_selection(app: &App, backend: &str, name: &str) -> Option<(String, S
 ///
 /// Never an error: a config repo that is not under git, or a package declared only since the
 /// last commit, simply has no answer, and `why` is still worth reading without it.
-async fn introduced_in_git(
-    app: &App,
-    name: &str,
-) -> Option<crate::model::introduced::Introduced> {
+async fn introduced_in_git(app: &App, name: &str) -> Option<crate::model::introduced::Introduced> {
     use crate::model::introduced;
 
     let root = app.config.config_root();
@@ -668,8 +665,7 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
         // Where your files declare it, from the resolver — the same answer `sync` acts on.
         let found = declarations_of(app, &backend, &name).await?;
         let formats = found.formats.clone();
-        let declarations: Vec<String> =
-            found.declarations.iter().map(|d| d.describe()).collect();
+        let declarations: Vec<String> = found.declarations.iter().map(|d| d.describe()).collect();
         let gating: Vec<String> = found.gating.iter().map(|g| g.describe()).collect();
 
         // How it got into the registry, which is a different question: `adopt` took it, a

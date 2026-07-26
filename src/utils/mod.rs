@@ -24,9 +24,7 @@ pub fn safe_data_dir() -> PathBuf {
         return PathBuf::from(dir);
     }
     dirs::data_dir()
-        .unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        })
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
         .join("linix")
 }
 

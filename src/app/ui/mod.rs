@@ -3,4 +3,4 @@ pub mod preview;
 
 pub use self::preview::TuiPreview;
 
-pub use self::history::{HistoryBrowser, HistoryAction, CommitView};
+pub use self::history::{CommitView, HistoryAction, HistoryBrowser};

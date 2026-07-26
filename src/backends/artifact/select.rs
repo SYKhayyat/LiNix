@@ -118,7 +118,14 @@ impl fmt::Display for NoMatch {
                 .unwrap_or(0);
             for (name, format, why) in &self.rejected {
                 let shape = format.map(|f| f.to_string()).unwrap_or_else(|| "-".into());
-                writeln!(f, "    {:width$}  {:<9} ({})", name, shape, why, width = width)?;
+                writeln!(
+                    f,
+                    "    {:width$}  {:<9} ({})",
+                    name,
+                    shape,
+                    why,
+                    width = width
+                )?;
             }
         }
         write!(
@@ -590,4 +597,3 @@ mod tests {
         assert!(err.to_string().contains("no assets at all"));
     }
 }
-

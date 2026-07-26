@@ -74,7 +74,10 @@ mod tests {
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "wget");
         assert_eq!(res[0].version.as_deref(), Some("1.21.4"));
-        assert_eq!(res[0].backend, "pkg_add", "an OpenBSD package is a pkg_add package");
+        assert_eq!(
+            res[0].backend, "pkg_add",
+            "an OpenBSD package is a pkg_add package"
+        );
     }
 
     #[test]

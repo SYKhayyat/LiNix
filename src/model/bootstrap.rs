@@ -86,7 +86,11 @@ mod tests {
         BootstrapDef {
             manager: manager.into(),
             os: os.map(str::to_string),
-            run: vec!["/bin/sh".into(), "-c".into(), format!("install {}", manager)],
+            run: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                format!("install {}", manager),
+            ],
         }
     }
 

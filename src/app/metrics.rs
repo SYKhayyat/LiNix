@@ -153,7 +153,11 @@ impl MetricsCollector {
         );
         println!("Time:         {:.2}s", total_duration);
         let (installs, removals) = summary_labels(narration);
-        println!("{:<14}{}", format!("{}:", installs), inner.packages_installed);
+        println!(
+            "{:<14}{}",
+            format!("{}:", installs),
+            inner.packages_installed
+        );
         println!("{:<14}{}", format!("{}:", removals), inner.packages_removed);
 
         if inner.total_bytes_downloaded > 0 {

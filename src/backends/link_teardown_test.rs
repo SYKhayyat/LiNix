@@ -38,7 +38,9 @@ fn inline_spec(target: &Path, content: &str) -> PackageSpec {
 async fn removing_a_declaration_restores_what_was_there_before() {
     let dir = tempdir().unwrap();
     let target = dir.path().join("app.conf");
-    tokio::fs::write(&target, "THE USER'S OWN FILE").await.unwrap();
+    tokio::fs::write(&target, "THE USER'S OWN FILE")
+        .await
+        .unwrap();
 
     let inst = installer();
     inst.install(&[inline_spec(&target, "MANAGED")], false)

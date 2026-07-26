@@ -207,7 +207,6 @@ impl Upgradable for CondaUpgradable {
             .await?;
         Ok(())
     }
-
 }
 
 /// Reads the target Conda environment from `backend_settings.conda.env`, defaulting to

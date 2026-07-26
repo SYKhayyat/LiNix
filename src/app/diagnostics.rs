@@ -31,11 +31,7 @@ impl DiagnosticDb {
             match tokio::fs::read_to_string(&db_path).await {
                 Ok(content) => {
                     if let Ok(db) = serde_json::from_str::<Self>(&content) {
-                        debug!(
-                            "Loaded {} patterns from {:?}",
-                            db.rules.len(),
-                            db_path
-                        );
+                        debug!("Loaded {} patterns from {:?}", db.rules.len(), db_path);
                         return db;
                     }
                 }
@@ -174,10 +170,7 @@ impl FailureDiagnosticEngine {
         let resolver = StateResolver::new(config, registry.clone(), false).await;
 
         for suggestion in suggestions {
-            info!(
-                "installing {} to fix the failure",
-                suggestion
-            );
+            info!("installing {} to fix the failure", suggestion);
             let spec = resolver.parse_and_probe_spec(suggestion).await?;
 
             if let Some(b_cap) = registry.get(&spec.backend) {

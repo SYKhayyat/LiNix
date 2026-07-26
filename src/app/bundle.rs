@@ -131,10 +131,7 @@ pub async fn create_bundle(
     // so the far side can `rollback` to any past state, not only restore what's current. It is
     // honest about the miss — if the config is not a git repo (or has no commits) the bundle
     // simply reports history was not included, rather than pretending.
-    if let Ok(true) = app
-        .git_manager()
-        .bundle(&out.join("config.bundle"))
-    {
+    if let Ok(true) = app.git_manager().bundle(&out.join("config.bundle")) {
         report.git_history_included = true;
         report.files_copied += 1;
     }

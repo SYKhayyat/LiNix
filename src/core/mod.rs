@@ -1,21 +1,21 @@
 pub mod argv;
 pub mod artifact_lock;
+pub mod bare_lock;
 pub mod cache;
 pub mod datalock;
-pub mod error;
-pub mod executor;
-pub mod bare_lock;
 pub mod download;
-pub mod regex_lock;
+pub mod error;
 pub mod exec_lock;
+pub mod executor;
 pub mod exit;
 pub mod extras_lock;
-pub mod hook_lock;
 pub mod git;
+pub mod hook_lock;
 pub mod journal;
 pub mod manager;
 pub mod package;
 pub mod ratelimiter;
+pub mod regex_lock;
 pub mod retention;
 pub mod security;
 pub mod snapshot;
@@ -48,12 +48,12 @@ pub use security::verify_checksum;
 
 pub use hook_lock::{hook_id, HookLedger, Verdict};
 
+pub use artifact_lock::{verify_set, ArtifactLedger, ArtifactLock};
 pub use bare_lock::BareLock;
-pub use regex_lock::RegexLock;
 pub use exec_lock::{Ceiling, ExecLedger};
 pub use exit::Exit;
 pub use extras_lock::{extra_key, ExtrasLedger};
-pub use artifact_lock::{verify_set, ArtifactLedger, ArtifactLock};
+pub use regex_lock::RegexLock;
 
 pub use state::{GhostMetadata, ManagedPackage, StateRegistry};
 

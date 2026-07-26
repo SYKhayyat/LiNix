@@ -168,7 +168,11 @@ impl ProfileManager {
         tokio::fs::write(&file, body).await.map_err(Error::from)?;
 
         let now = self.active_profiles().await?;
-        info!("Added {}. active is now {}.", added.join(", "), now.join(", "));
+        info!(
+            "Added {}. active is now {}.",
+            added.join(", "),
+            now.join(", ")
+        );
         self.sync_now().await
     }
 

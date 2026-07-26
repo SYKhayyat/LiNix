@@ -152,7 +152,10 @@ pub enum Outcome {
     Wrote(PathBuf),
     /// The natural filename was taken by a file LiNix did not write, so the export landed
     /// beside it under `renamed`.
-    WroteBeside { taken: PathBuf, renamed: PathBuf },
+    WroteBeside {
+        taken: PathBuf,
+        renamed: PathBuf,
+    },
     /// `--dry-run`: this is where the bytes would have gone.
     WouldWrite(PathBuf),
 }
@@ -330,10 +333,15 @@ mod tests {
         let d = dir.path();
 
         // Nothing taken: the plain `.linix` name.
-        assert_eq!(free_path(d, "package.json").await, d.join("package.linix.json"));
+        assert_eq!(
+            free_path(d, "package.json").await,
+            d.join("package.linix.json")
+        );
 
         // The fallback itself exists, so a second export must not clobber the first one's.
-        tokio::fs::write(d.join("package.linix.json"), "first").await.unwrap();
+        tokio::fs::write(d.join("package.linix.json"), "first")
+            .await
+            .unwrap();
         assert_eq!(
             free_path(d, "package.json").await,
             d.join("package.linix.json.2")

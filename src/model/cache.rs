@@ -95,7 +95,10 @@ mod tests {
         // A near miss (prefix, different suffix) must not match — exact name only.
         std::fs::write(nested.join("fd-v10.2.0.tar.gz.part"), b"x").unwrap();
 
-        let hits = find_cached("fd-v10.2.0.tar.gz", std::slice::from_ref(&dir.path().to_path_buf()));
+        let hits = find_cached(
+            "fd-v10.2.0.tar.gz",
+            std::slice::from_ref(&dir.path().to_path_buf()),
+        );
         assert_eq!(hits.len(), 1);
         assert!(hits[0].ends_with("fd-v10.2.0.tar.gz"));
     }
@@ -104,8 +107,14 @@ mod tests {
     fn a_directory_named_like_the_artifact_is_never_deleted() {
         let dir = tempdir().unwrap();
         std::fs::create_dir(dir.path().join("payload.bin")).unwrap();
-        let hits = find_cached("payload.bin", std::slice::from_ref(&dir.path().to_path_buf()));
-        assert!(hits.is_empty(), "a directory must never be a cache-clean target");
+        let hits = find_cached(
+            "payload.bin",
+            std::slice::from_ref(&dir.path().to_path_buf()),
+        );
+        assert!(
+            hits.is_empty(),
+            "a directory must never be a cache-clean target"
+        );
     }
 
     #[test]

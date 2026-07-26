@@ -36,7 +36,10 @@ impl std::str::FromStr for Origin {
     /// is from the right.
     fn from_str(s: &str) -> std::result::Result<Self, ()> {
         // No line number is the `argument()` shape, not a malformed one.
-        match s.rsplit_once(':').and_then(|(f, l)| Some((f, l.parse::<usize>().ok()?))) {
+        match s
+            .rsplit_once(':')
+            .and_then(|(f, l)| Some((f, l.parse::<usize>().ok()?)))
+        {
             Some((file, line)) => Ok(Origin::new(file, line)),
             None => Ok(Origin::new(s, 0)),
         }

@@ -1,8 +1,8 @@
 // src/app/sync/planner.rs
 
 use crate::backends::BackendRegistry;
-use crate::config::Config;
 use crate::config::grammar::Origin;
+use crate::config::Config;
 use crate::core::{Error, GraphAction, PackageSpec, Result, StateRegistry};
 use crate::model::cycle::{self, Hop};
 use petgraph::algo::{is_cyclic_directed, tarjan_scc};
@@ -60,7 +60,10 @@ fn partition_by_presence(
             } else {
                 &mut unwanted
             };
-            bucket.entry(backend.clone()).or_default().push(spec.clone());
+            bucket
+                .entry(backend.clone())
+                .or_default()
+                .push(spec.clone());
         }
     }
     (wanted, unwanted)
@@ -276,7 +279,10 @@ impl<'a> ChangePlanner<'a> {
                     let installed = b_cap.as_queryable()?.list_installed().await.ok()?;
                     Some((
                         backend,
-                        installed.into_iter().map(|p| p.name).collect::<HashSet<_>>(),
+                        installed
+                            .into_iter()
+                            .map(|p| p.name)
+                            .collect::<HashSet<_>>(),
                     ))
                 }
             })
@@ -290,11 +296,7 @@ impl<'a> ChangePlanner<'a> {
     ///
     /// **Unknown means yes.** A backend that could not answer must not have its removals
     /// silently dropped — see [`installed_sets`](Self::installed_sets).
-    fn is_installed(
-        sets: &HashMap<String, HashSet<String>>,
-        backend: &str,
-        name: &str,
-    ) -> bool {
+    fn is_installed(sets: &HashMap<String, HashSet<String>>, backend: &str, name: &str) -> bool {
         sets.get(backend).is_none_or(|set| set.contains(name))
     }
 
@@ -381,10 +383,7 @@ impl<'a> ChangePlanner<'a> {
                 // the input — not a licence to remove it. Checked once here rather than
                 // per-branch, which is how the lease and bloatware paths came to skip it.
                 if self.config.is_protected(&pkg.name) {
-                    debug!(
-                        "'{}' is protected — never scheduling removal.",
-                        key
-                    );
+                    debug!("'{}' is protected — never scheduling removal.", key);
                     continue;
                 }
 
@@ -426,7 +425,6 @@ impl<'a> ChangePlanner<'a> {
                     });
                 }
             }
-
         } else {
             debug!(
                 "Scoped plan ({:?}) — skipping all removal planning (non-destructive).",
@@ -853,9 +851,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(changes
-            .removal_tracker
-            .contains("generic-test:libreoffice"));
+        assert!(changes.removal_tracker.contains("generic-test:libreoffice"));
     }
 
     /// A backend that reports exactly what it was told is installed. Enough to answer the one
@@ -1102,16 +1098,34 @@ mod tests {
         graph.add_node(ins("zsh", "apt"));
         graph.add_node(ins("bat", "cargo"));
         graph.add_node(ins("acl", "apt"));
-        graph.add_node(GraphAction::Remove { name: "nano".into(), backend: "apt".into() });
-        graph.add_node(GraphAction::Remove { name: "amp".into(), backend: "cargo".into() });
-        let changes = SyncChanges { graph, ..Default::default() };
+        graph.add_node(GraphAction::Remove {
+            name: "nano".into(),
+            backend: "apt".into(),
+        });
+        graph.add_node(GraphAction::Remove {
+            name: "amp".into(),
+            backend: "cargo".into(),
+        });
+        let changes = SyncChanges {
+            graph,
+            ..Default::default()
+        };
 
         let report = changes.generate_report();
-        let installs: Vec<(&str, &str)> =
-            report.install.iter().map(|e| (e.backend.as_str(), e.name.as_str())).collect();
-        assert_eq!(installs, vec![("apt", "acl"), ("apt", "zsh"), ("cargo", "bat")]);
-        let removes: Vec<(&str, &str)> =
-            report.remove.iter().map(|e| (e.backend.as_str(), e.name.as_str())).collect();
+        let installs: Vec<(&str, &str)> = report
+            .install
+            .iter()
+            .map(|e| (e.backend.as_str(), e.name.as_str()))
+            .collect();
+        assert_eq!(
+            installs,
+            vec![("apt", "acl"), ("apt", "zsh"), ("cargo", "bat")]
+        );
+        let removes: Vec<(&str, &str)> = report
+            .remove
+            .iter()
+            .map(|e| (e.backend.as_str(), e.name.as_str()))
+            .collect();
         assert_eq!(removes, vec![("apt", "nano"), ("cargo", "amp")]);
     }
 }

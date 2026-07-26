@@ -137,10 +137,7 @@ impl Transaction {
 
         match tokio::time::timeout(total_timeout, self.execute_internal()).await {
             Ok(res) => {
-                debug!(
-                    "DAG closure reached in {:?}",
-                    start_time.elapsed()
-                );
+                debug!("DAG closure reached in {:?}", start_time.elapsed());
                 res
             }
             Err(_) => {
@@ -542,7 +539,10 @@ impl Transaction {
                                      run installed — it remains on the system: {}",
                                     spec.backend, spec.name, e
                                 );
-                                failures.push(format!("{}:{} (left installed)", spec.backend, spec.name));
+                                failures.push(format!(
+                                    "{}:{} (left installed)",
+                                    spec.backend, spec.name
+                                ));
                             }
                         }
                     }

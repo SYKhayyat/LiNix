@@ -239,10 +239,7 @@ impl Upgradable for BrewUpgradable {
     }
 
     async fn clean_cache(&self, _sudo: bool) -> Result<()> {
-        self.core
-            .executor
-            .run("brew", &["cleanup"], false)
-            .await?;
+        self.core.executor.run("brew", &["cleanup"], false).await?;
         Ok(())
     }
 }

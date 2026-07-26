@@ -180,7 +180,10 @@ impl Reached {
     }
 
     fn record(&mut self, file: &Path, scope: String) {
-        self.scopes.entry(file.to_path_buf()).or_default().insert(scope);
+        self.scopes
+            .entry(file.to_path_buf())
+            .or_default()
+            .insert(scope);
     }
 }
 
@@ -294,9 +297,15 @@ impl<'a> Resolver<'a> {
             0,
         );
         let body = std::fs::read_to_string(path).map_err(|e| {
-            GrammarError::new(origin.clone(), format!("could not read the vars provider: {}", e))
+            GrammarError::new(
+                origin.clone(),
+                format!("could not read the vars provider: {}", e),
+            )
         })?;
-        let filename = path.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        let filename = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
         let id = vars_id(filename);
         let locks = self.layout.config_root().join("locks");
         let ledger = HookLedger::load(&HookLedger::path_in(&locks))
@@ -374,7 +383,10 @@ impl<'a> Resolver<'a> {
                 other => {
                     return Err(GrammarError::new(
                         origin,
-                        format!("the `vars` file takes `NAME = VALUE` lines, not `{}`", set_key(&other)),
+                        format!(
+                            "the `vars` file takes `NAME = VALUE` lines, not `{}`",
+                            set_key(&other)
+                        ),
                     )
                     .with_hint("declarations live in `modules/`; this file only names values."));
                 }
@@ -487,8 +499,10 @@ impl<'a> Resolver<'a> {
         // `collect` refuses a `schedule:` from anywhere else, so this is its only legal source.
         let schedules_file = self.layout.schedules_file();
         if let Ok(body) = std::fs::read_to_string(&schedules_file) {
-            let doc = crate::config::grammar::parse_document(&schedules_file, &body, self.backends)?;
-            out.statements.extend(doc.statements_with_gating(&self.facts)?);
+            let doc =
+                crate::config::grammar::parse_document(&schedules_file, &body, self.backends)?;
+            out.statements
+                .extend(doc.statements_with_gating(&self.facts)?);
         }
 
         self.expand_vars(&mut out.statements)?;
@@ -535,13 +549,9 @@ impl<'a> Resolver<'a> {
         let profiles = ProfileLoader::new(self.layout, self.backends);
         let asked = Origin::new(self.layout.profiles_dir(), 0);
         for name in profiles.available() {
-            if let Err(e) = profiles.resolve(
-                &name,
-                &asked,
-                &self.facts,
-                &mut Vec::new(),
-                &Vec::new(),
-            ) {
+            if let Err(e) =
+                profiles.resolve(&name, &asked, &self.facts, &mut Vec::new(), &Vec::new())
+            {
                 errors.push(e);
             }
         }
@@ -706,28 +716,31 @@ impl<'a> Resolver<'a> {
         let mut table: HashMap<String, (Statement, Origin, Gates)> = HashMap::new();
         let mut failure: Option<GrammarError> = None;
 
-        let keys = crate::app::profile_expr::evaluate(expr, &mut |atom| {
-            match self.atom(profiles, loader, atom, origin) {
-                Ok(stmts) => stmts
-                    .into_iter()
-                    .map(|(s, o, g)| {
-                        let k = set_key(&s);
-                        table.entry(k.clone()).or_insert((s, o, g));
-                        k
-                    })
-                    .collect(),
-                Err(e) => {
-                    failure.get_or_insert(e);
-                    Vec::new()
-                }
+        let keys = crate::app::profile_expr::evaluate(expr, &mut |atom| match self
+            .atom(profiles, loader, atom, origin)
+        {
+            Ok(stmts) => stmts
+                .into_iter()
+                .map(|(s, o, g)| {
+                    let k = set_key(&s);
+                    table.entry(k.clone()).or_insert((s, o, g));
+                    k
+                })
+                .collect(),
+            Err(e) => {
+                failure.get_or_insert(e);
+                Vec::new()
             }
         })
         .map_err(|e| {
-            GrammarError::new(origin.clone(), format!("`{}` is not a set expression: {}", expr, e))
-                .with_hint(
-                    "set math is `|` union, `&` intersect, `\\` difference, and parentheses \
+            GrammarError::new(
+                origin.clone(),
+                format!("`{}` is not a set expression: {}", expr, e),
+            )
+            .with_hint(
+                "set math is `|` union, `&` intersect, `\\` difference, and parentheses \
                      — for example `(Work | gaming) & security`.",
-                )
+            )
         })?;
 
         if let Some(e) = failure {
@@ -960,7 +973,10 @@ impl<'a> Resolver<'a> {
                 if self.priority.is_empty() {
                     return Err(GrammarError::new(
                         origin.clone(),
-                        format!("`{}` does not say which backend, and `priority` is empty", decl.selector.as_str()),
+                        format!(
+                            "`{}` does not say which backend, and `priority` is empty",
+                            decl.selector.as_str()
+                        ),
                     )
                     .with_hint(
                         "list your package managers in `priority`, or write the backend on the \
@@ -1167,7 +1183,10 @@ mod tests {
         );
         let err = resolve(&f).unwrap_err();
         assert!(err.what.contains("is not enabled"), "{}", err);
-        assert!(err.hint.unwrap().contains("allow_generators"), "names the key");
+        assert!(
+            err.hint.unwrap().contains("allow_generators"),
+            "names the key"
+        );
     }
 
     fn names(d: &DesiredState, backend: &str) -> Vec<String> {
@@ -1404,35 +1423,62 @@ mod tests {
 
     #[test]
     fn no_vars_file_is_no_variables_and_not_an_error() {
-        let f = fx("Work
-", &[("Work", "apt:curl
-")], &[]);
+        let f = fx(
+            "Work
+",
+            &[(
+                "Work",
+                "apt:curl
+",
+            )],
+            &[],
+        );
         assert!(load_vars(&f).unwrap().is_empty());
     }
 
     #[test]
     fn a_matching_block_overrides_the_default() {
-        let f = fx("Work
-", &[("Work", "apt:curl
-")], &[]);
-        with_vars(&f, "role = desktop
+        let f = fx(
+            "Work
+",
+            &[(
+                "Work",
+                "apt:curl
+",
+            )],
+            &[],
+        );
+        with_vars(
+            &f,
+            "role = desktop
 when os == linux {
   role = travel
 }
-");
+",
+        );
         assert_eq!(load_vars(&f).unwrap()["role"].to_string(), "travel");
     }
 
     #[test]
     fn a_block_that_does_not_match_leaves_the_default() {
-        let f = fx("Work
-", &[("Work", "apt:curl
-")], &[]);
-        with_vars(&f, "role = desktop
+        let f = fx(
+            "Work
+",
+            &[(
+                "Work",
+                "apt:curl
+",
+            )],
+            &[],
+        );
+        with_vars(
+            &f,
+            "role = desktop
 when os == plan9 {
   role = travel
 }
-");
+",
+        );
         assert_eq!(load_vars(&f).unwrap()["role"].to_string(), "desktop");
     }
 
@@ -1441,28 +1487,54 @@ when os == plan9 {
         // IX.3 is a property of the FILE. If this were checked only against the blocks that
         // matched, the same repo would be valid on the laptop and broken on the desktop —
         // and the error would appear on whichever machine happened not to define it.
-        let f = fx("Work
-", &[("Work", "apt:curl
-")], &[]);
-        with_vars(&f, "when os == plan9 {
+        let f = fx(
+            "Work
+",
+            &[(
+                "Work",
+                "apt:curl
+",
+            )],
+            &[],
+        );
+        with_vars(
+            &f,
+            "when os == plan9 {
   role = travel
 }
-");
+",
+        );
         let err = load_vars(&f).unwrap_err();
-        assert!(err.what.contains("only defined inside a `when` block"), "{}", err);
+        assert!(
+            err.what.contains("only defined inside a `when` block"),
+            "{}",
+            err
+        );
     }
 
     #[test]
     fn a_gated_line_can_use_a_variable() {
-        let f = fx("Work
-", &[("Work", "use m
-")], &[("m.txt", "apt:curl
+        let f = fx(
+            "Work
+",
+            &[(
+                "Work", "use m
+",
+            )],
+            &[(
+                "m.txt",
+                "apt:curl
 when $role == travel {
   apt:mosh
 }
-")]);
-        with_vars(&f, "role = travel
-");
+",
+            )],
+        );
+        with_vars(
+            &f,
+            "role = travel
+",
+        );
         let vars = load_vars(&f).unwrap();
         let d = Resolver::new(&f.layout, &known, &f.priority)
             .with_facts(facts().with_vars(vars))
@@ -1493,7 +1565,11 @@ when $role == travel {
             .parse_everything();
         let found: Vec<String> = errors.iter().map(|e| e.origin.to_string()).collect();
         assert_eq!(errors.len(), 2, "{:?}", found);
-        assert!(found.iter().any(|o| o.contains("orphan.txt")), "{:?}", found);
+        assert!(
+            found.iter().any(|o| o.contains("orphan.txt")),
+            "{:?}",
+            found
+        );
         assert!(found.iter().any(|o| o.contains("other.txt")), "{:?}", found);
     }
 
@@ -1518,7 +1594,11 @@ when $role == travel {
         let mosh = d.present().find(|p| p.name == "mosh").unwrap();
         let chain: Vec<&str> = mosh.options["__gated_by"].split(';').collect();
         assert_eq!(chain.len(), 3, "{:?}", chain);
-        assert!(chain[0].starts_with("when $role == travel @ "), "{:?}", chain);
+        assert!(
+            chain[0].starts_with("when $role == travel @ "),
+            "{:?}",
+            chain
+        );
         assert!(chain[1].starts_with("when $tier == full @ "), "{:?}", chain);
         assert!(chain[2].starts_with("when $gpu == true @ "), "{:?}", chain);
 
@@ -1545,18 +1625,31 @@ when $role == travel {
     fn the_resolved_state_carries_its_variables_for_the_plan_to_freeze() {
         // IX.6: a saved plan freezes these so `apply` reuses them instead of re-running a
         // provider that might read the clock and disagree with what the plan previewed.
-        let f = fx("Work
-", &[("Work", "apt:curl
-")], &[]);
-        with_vars(&f, "role = travel
-");
+        let f = fx(
+            "Work
+",
+            &[(
+                "Work",
+                "apt:curl
+",
+            )],
+            &[],
+        );
+        with_vars(
+            &f,
+            "role = travel
+",
+        );
         let vars = load_vars(&f).unwrap();
         let d = Resolver::new(&f.layout, &known, &f.priority)
             .with_facts(facts().with_vars(vars))
             .at(parse_absolute("2026-07-16T12:00").unwrap())
             .resolve()
             .unwrap();
-        assert_eq!(d.vars["role"], crate::model::vars::Value::Str("travel".into()));
+        assert_eq!(
+            d.vars["role"],
+            crate::model::vars::Value::Str("travel".into())
+        );
     }
 
     #[test]
@@ -1564,13 +1657,21 @@ when $role == travel {
         let f = fx(
             "Work
 ",
-            &[("Work", "use m
-")],
-            &[("m.txt", "link:~/.config/${role}/init.lua
-")],
+            &[(
+                "Work", "use m
+",
+            )],
+            &[(
+                "m.txt",
+                "link:~/.config/${role}/init.lua
+",
+            )],
         );
-        with_vars(&f, "role = travel
-");
+        with_vars(
+            &f,
+            "role = travel
+",
+        );
         let vars = load_vars(&f).unwrap();
         let d = Resolver::new(&f.layout, &known, &f.priority)
             .with_facts(facts().with_vars(vars))
@@ -1612,13 +1713,21 @@ when $role == travel {
         let f = fx(
             "Work
 ",
-            &[("Work", "use m
-")],
-            &[("m.txt", "apt:nginx@version=$pinned
-")],
+            &[(
+                "Work", "use m
+",
+            )],
+            &[(
+                "m.txt",
+                "apt:nginx@version=$pinned
+",
+            )],
         );
-        with_vars(&f, "pinned = 1.24.0
-");
+        with_vars(
+            &f,
+            "pinned = 1.24.0
+",
+        );
         let vars = load_vars(&f).unwrap();
         let d = Resolver::new(&f.layout, &known, &f.priority)
             .with_facts(facts().with_vars(vars))
@@ -1626,17 +1735,30 @@ when $role == travel {
             .resolve()
             .unwrap();
         let spec = d.present().find(|p| p.name == "nginx").unwrap();
-        assert_eq!(spec.options.get("version").map(String::as_str), Some("1.24.0"));
+        assert_eq!(
+            spec.options.get("version").map(String::as_str),
+            Some("1.24.0")
+        );
     }
 
     #[test]
     fn a_schedules_run_command_keeps_its_dollars_for_the_shell() {
         // `run` is a command line; `$` there belongs to the shell that will execute it.
-        let f = fx("Work
-", &[("Work", "apt:curl
-")], &[]);
-        with_vars(&f, "role = travel
-");
+        let f = fx(
+            "Work
+",
+            &[(
+                "Work",
+                "apt:curl
+",
+            )],
+            &[],
+        );
+        with_vars(
+            &f,
+            "role = travel
+",
+        );
         std::fs::write(
             f.layout.schedules_file(),
             "schedule:t@cron=0 2 * * *,run=sh -c 'echo $HOME'
@@ -1655,23 +1777,42 @@ when $role == travel {
 
     #[test]
     fn a_variable_line_outside_the_vars_file_is_refused() {
-        let f = fx("Work
-", &[("Work", "use m
-")], &[("m.txt", "role = travel
+        let f = fx(
+            "Work
+",
+            &[(
+                "Work", "use m
+",
+            )],
+            &[(
+                "m.txt",
+                "role = travel
 apt:curl
-")]);
+",
+            )],
+        );
         let err = resolve(&f).unwrap_err();
         assert!(err.what.contains("is not in the `vars` file"), "{}", err);
     }
 
     #[test]
     fn a_package_line_in_the_vars_file_is_refused() {
-        let f = fx("Work
-", &[("Work", "apt:curl
-")], &[]);
-        with_vars(&f, "role = desktop
+        let f = fx(
+            "Work
+",
+            &[(
+                "Work",
+                "apt:curl
+",
+            )],
+            &[],
+        );
+        with_vars(
+            &f,
+            "role = desktop
 apt:nginx
-");
+",
+        );
         let err = load_vars(&f).unwrap_err();
         assert!(err.what.contains("NAME = VALUE"), "{}", err);
     }
@@ -1942,7 +2083,11 @@ apt:nginx
     fn an_unapproved_executing_vars_provider_is_refused_until_the_ledger_approves_it() {
         use crate::core::hook_lock::{hash_script, vars_id, HookLedger};
 
-        let f = fx("Work\n", &[("Work", "use base\n")], &[("base.txt", "apt:curl\n")]);
+        let f = fx(
+            "Work\n",
+            &[("Work", "use base\n")],
+            &[("base.txt", "apt:curl\n")],
+        );
         // An embedded provider is a script that runs at step 0 — it must be approved first.
         let provider = f.layout.config_root().join("vars.linix");
         std::fs::write(&provider, "#{ role: \"work\" }").unwrap();
@@ -1973,6 +2118,10 @@ apt:nginx
         // A changed provider stops again — the case the ledger exists for.
         std::fs::write(&provider, "#{ role: \"travel\" }").unwrap();
         let err = run().unwrap_err().to_string();
-        assert!(err.contains("changed") || err.contains("approve"), "{}", err);
+        assert!(
+            err.contains("changed") || err.contains("approve"),
+            "{}",
+            err
+        );
     }
 }

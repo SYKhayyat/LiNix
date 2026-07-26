@@ -127,7 +127,10 @@ pub enum Statement {
     Absent(PackageDecl),
     /// `repo:BACKEND:SPEC` — a repository, for a named backend (V.47). A PPA is apt's, a
     /// COPR dnf's; guessing the backend runs the wrong system command, so it is named.
-    Repo { backend: String, spec: String },
+    Repo {
+        backend: String,
+        spec: String,
+    },
     Shim(String, Options),
     Schedule(String, Options),
     Service(String, Options),
@@ -173,7 +176,10 @@ pub enum Statement {
     /// default is required: a `use` that omits it is a loud error naming the module and the
     /// parameter, never an empty string that makes a `when` silently false (V.78). Legal only in
     /// a module; parsed here so there is one parser, and rejected by file context like `schedule:`.
-    Param { name: String, default: Option<String> },
+    Param {
+        name: String,
+        default: Option<String>,
+    },
     /// `exclude heavy` — subtract that module's or profile's packages (II.4).
     Exclude(Reference),
     /// `intersect security` — keep only packages that are also in it (II.4).
@@ -188,7 +194,10 @@ pub enum Statement {
     Expr(String),
     /// `NAME = VALUE` — a variable (IX.2). Legal only in the `vars` file; parsed here so
     /// there is one parser, and rejected by file context the way `schedule:` is.
-    Var { name: String, value: String },
+    Var {
+        name: String,
+        value: String,
+    },
 }
 
 impl Statement {
@@ -358,8 +367,7 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
     // `link:C:\Users\me\.vimrc` is full of `\`: without this guard II.4's set math eats
     // II.2's statements, and `link:` silently parses as `Statement::Expr`. A line that opens
     // with a known statement prefix is that statement, never an expression.
-    if !starts_with_statement_prefix(line)
-        && crate::app::profile_expr::looks_like_expression(line)
+    if !starts_with_statement_prefix(line) && crate::app::profile_expr::looks_like_expression(line)
     {
         return Ok(Statement::Expr(line.to_string()));
     }
@@ -380,7 +388,10 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
         if decl.backend.is_none() {
             return Err(GrammarError::new(
                 origin.clone(),
-                format!("`absent:{}` does not name a backend", decl.selector.as_str()),
+                format!(
+                    "`absent:{}` does not name a backend",
+                    decl.selector.as_str()
+                ),
             )
             .with_hint(
                 "an `absent:` line reaches outside what LiNix manages, so it must say which \
@@ -405,8 +416,10 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
         };
         let (backend, spec) = (backend.trim(), spec.trim());
         if backend.is_empty() || spec.is_empty() {
-            return Err(GrammarError::new(origin.clone(), "`repo:` needs `backend:spec`")
-                .with_hint("for example `repo:apt:ppa:deadsnakes/ppa`."));
+            return Err(
+                GrammarError::new(origin.clone(), "`repo:` needs `backend:spec`")
+                    .with_hint("for example `repo:apt:ppa:deadsnakes/ppa`."),
+            );
         }
         if !backends.is_backend(backend) {
             return Err(GrammarError::new(
@@ -480,11 +493,18 @@ fn parse_var(line: &str) -> Option<Statement> {
 /// payload carries — a `link:` target is a path, not a difference.
 fn starts_with_statement_prefix(line: &str) -> bool {
     [
-        "absent:", "repo:", "shim:", "schedule:", "service:", "link:", "exec:", "dotfiles:",
+        "absent:",
+        "repo:",
+        "shim:",
+        "schedule:",
+        "service:",
+        "link:",
+        "exec:",
+        "dotfiles:",
         "firewall:",
     ]
-        .iter()
-        .any(|p| line.starts_with(p))
+    .iter()
+    .any(|p| line.starts_with(p))
 }
 
 fn parse_use(origin: &Origin, target: &str) -> Result<Statement> {
@@ -594,7 +614,9 @@ fn parse_param(origin: &Origin, rest: &str) -> Result<Statement> {
             origin.clone(),
             format!("`{}` is not a parameter name", name),
         )
-        .with_hint("parameter names start with a letter or `_` and hold letters, digits and `_`."));
+        .with_hint(
+            "parameter names start with a letter or `_` and hold letters, digits and `_`.",
+        ));
     }
     Ok(Statement::Param {
         name: name.to_string(),
@@ -606,11 +628,14 @@ fn parse_param(origin: &Origin, rest: &str) -> Result<Statement> {
 /// says which, exactly as `use` does.
 fn parse_set_directive(origin: &Origin, word: &str, target: &str) -> Result<Statement> {
     if target.is_empty() {
-        return Err(GrammarError::new(
-            origin.clone(),
-            format!("`{}` names nothing", word),
-        )
-        .with_hint(format!("write `{} heavy` (a module) or `{} Work` (a profile).", word, word)));
+        return Err(
+            GrammarError::new(origin.clone(), format!("`{}` names nothing", word)).with_hint(
+                format!(
+                    "write `{} heavy` (a module) or `{} Work` (a profile).",
+                    word, word
+                ),
+            ),
+        );
     }
     if target.split_whitespace().count() > 1 {
         return Err(GrammarError::new(
@@ -740,7 +765,10 @@ fn reject_leading_dash(origin: &Origin, name: &str) -> Result<()> {
     if name.starts_with('-') {
         return Err(GrammarError::new(
             origin.clone(),
-            format!("`{}` starts with `-`, so it is an option and not a package name", name),
+            format!(
+                "`{}` starts with `-`, so it is an option and not a package name",
+                name
+            ),
         )
         .with_hint(
             "package names reach the manager's command line. If you meant to take a package \
@@ -765,7 +793,10 @@ fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Re
     if let Some(pattern) = head.strip_prefix("re:") {
         return Err(GrammarError::new(
             origin.clone(),
-            format!("`re:{}` does not say which backend to match in", pattern.trim()),
+            format!(
+                "`re:{}` does not say which backend to match in",
+                pattern.trim()
+            ),
         )
         .with_hint("write `apt:re:^fonts-`. A pattern has to be matched somewhere."));
     }
@@ -801,7 +832,10 @@ fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Re
         }
         None => {
             if rest.is_empty() {
-                return Err(GrammarError::new(origin.clone(), "no package name after the backend"));
+                return Err(GrammarError::new(
+                    origin.clone(),
+                    "no package name after the backend",
+                ));
             }
             // A package name is one word. Without this, any unrecognised prose becomes a
             // package literally named after itself — VI.1's "any typo becomes a package
@@ -867,8 +901,9 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
 /// there and silently ignored.
 pub const SHIM_OPTION_KEYS: &[&str] = &["source", "scope"];
 pub const SERVICE_OPTION_KEYS: &[&str] = &["enabled", "status"];
-pub const LINK_OPTION_KEYS: &[&str] =
-    &["target", "content", "template", "decrypt", "identity", "scope", "backup"];
+pub const LINK_OPTION_KEYS: &[&str] = &[
+    "target", "content", "template", "decrypt", "identity", "scope", "backup",
+];
 pub const SCHEDULE_OPTION_KEYS: &[&str] = &["cron", "run", "notify"];
 pub const SETTING_OPTION_KEYS: &[&str] = &["value", "scope"];
 /// `runs` caps how many times a distinct script content may run — `1` (the default) is
@@ -959,13 +994,19 @@ fn validate_scope(origin: &Origin, prefix: &str, name: &str, options: &Options) 
 /// (off by default), enforced where the command is actually run, not in the grammar.
 fn validate_generate(origin: &Origin, name: &str, options: &Options) -> Result<()> {
     if name.trim().is_empty() {
-        return Err(GrammarError::new(origin.clone(), "`generate:` names no command")
-            .with_hint("write `generate:./bin/pick.sh` — a command whose stdout is declarations."));
+        return Err(
+            GrammarError::new(origin.clone(), "`generate:` names no command").with_hint(
+                "write `generate:./bin/pick.sh` — a command whose stdout is declarations.",
+            ),
+        );
     }
     if let Some(key) = options.keys().next() {
         return Err(GrammarError::new(
             origin.clone(),
-            format!("`generate:{}` has an option `{}`, but generate takes none", name, key),
+            format!(
+                "`generate:{}` has an option `{}`, but generate takes none",
+                name, key
+            ),
         )
         .with_hint(
             "a generator runs every resolution to compute the current set, so there is no \
@@ -999,8 +1040,10 @@ fn validate_exec(origin: &Origin, name: &str, options: &Options) -> Result<()> {
                 origin.clone(),
                 format!("`exec:{}` has an invalid `runs={}`", name, runs),
             )
-            .with_hint("`runs` is a positive number (the ceiling on how many times this \
-                        content runs) or `always` to run every sync."));
+            .with_hint(
+                "`runs` is a positive number (the ceiling on how many times this \
+                        content runs) or `always` to run every sync.",
+            ));
         }
     }
     Ok(())
@@ -1024,14 +1067,12 @@ fn validate_setting(origin: &Origin, name: &str, options: &Options) -> Result<()
     validate_extra_options(origin, "setting", name, options)?;
 
     if split_setting(name).is_none() {
-        return Err(GrammarError::new(
-            origin.clone(),
-            format!("`{}` is not `SCHEMA/KEY`", name),
-        )
-        .with_hint(
-            "a setting names the schema and the key inside it, separated by one `/`: \
+        return Err(
+            GrammarError::new(origin.clone(), format!("`{}` is not `SCHEMA/KEY`", name)).with_hint(
+                "a setting names the schema and the key inside it, separated by one `/`: \
              `setting:org.gnome.desktop.interface/color-scheme @value=prefer-dark`.",
-        ));
+            ),
+        );
     }
 
     if options.one("value").is_none_or(str::is_empty) {
@@ -1044,10 +1085,11 @@ fn validate_setting(origin: &Origin, name: &str, options: &Options) -> Result<()
         );
     }
     if options.all("value").len() > 1 {
-        return Err(
-            GrammarError::new(origin.clone(), format!("`setting:{}` has two values", name))
-                .with_hint("a key holds one value. Name the one you want."),
-        );
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`setting:{}` has two values", name),
+        )
+        .with_hint("a key holds one value. Name the one you want."));
     }
     Ok(())
 }
@@ -1083,8 +1125,20 @@ fn validate_extra_options(
 /// `until` is here and refused below unless the line is `absent:` — II.2 puts it on
 /// `absent:` only, and "not an option" would be the wrong error for a key that exists.
 const PACKAGE_OPTION_KEYS: &[&str] = &[
-    "version", "hold", "expires", "until", "requires", "sha256", "formats", "asset", "bin",
-    "channel", "allow_http", "unverified", "health", "download_only",
+    "version",
+    "hold",
+    "expires",
+    "until",
+    "requires",
+    "sha256",
+    "formats",
+    "asset",
+    "bin",
+    "channel",
+    "allow_http",
+    "unverified",
+    "health",
+    "download_only",
 ];
 
 /// Options that are only meaningful on a backend that resolves one name to several
@@ -1136,14 +1190,12 @@ pub fn validate_artifact_options(
             }
         }
         if o.all("channel").len() > 1 {
-            return Err(GrammarError::new(
-                origin.clone(),
-                "`@channel` takes one value",
-            )
-            .with_hint(
-                "there is no fallback across version streams — trying `edge` and settling for \
+            return Err(
+                GrammarError::new(origin.clone(), "`@channel` takes one value").with_hint(
+                    "there is no fallback across version streams — trying `edge` and settling for \
                  `stable` would silently downgrade the machine. Name the one you want.",
-            ));
+                ),
+            );
         }
     }
 
@@ -1157,14 +1209,12 @@ pub fn validate_artifact_options(
             .map_err(|e| GrammarError::new(origin.clone(), e.to_string()))?;
     }
     if o.all("asset").len() > 1 {
-        return Err(GrammarError::new(
-            origin.clone(),
-            "`@asset` takes one pattern",
-        )
-        .with_hint(
-            "one pattern, which may be a glob: `@asset=*musl*`. For every matching file, \
+        return Err(
+            GrammarError::new(origin.clone(), "`@asset` takes one pattern").with_hint(
+                "one pattern, which may be a glob: `@asset=*musl*`. For every matching file, \
              `@asset=all`.",
-        ));
+            ),
+        );
     }
 
     // `@download_only` (D3b) means "fetch but do not install" — a distinction only a backend
@@ -1209,7 +1259,10 @@ pub fn validate_artifact_options(
     // Checked before the pinned-format rule below: both objections are true of
     // `@asset=all,sha256=…`, and this one names the reason the line cannot be fixed by
     // pinning a format.
-    if o.one("asset").is_some_and(|a| a.eq_ignore_ascii_case("all")) && o.contains("sha256") {
+    if o.one("asset")
+        .is_some_and(|a| a.eq_ignore_ascii_case("all"))
+        && o.contains("sha256")
+    {
         return Err(GrammarError::new(
             origin.clone(),
             "`@asset=all` and `@sha256=` cannot both be set",
@@ -1346,14 +1399,12 @@ fn validate_options(origin: &Origin, decl: &PackageDecl, absent: bool) -> Result
     // grammar has no way to act on — so it is refused there, naming the file and line,
     // rather than parsed and quietly ignored.
     if !absent && o.contains("until") {
-        return Err(GrammarError::new(
-            origin.clone(),
-            "`@until` is only for `absent:` lines",
-        )
-        .with_hint(
-            "`@until` lifts an `absent:` line on a date (absent now, present after). To make \
+        return Err(
+            GrammarError::new(origin.clone(), "`@until` is only for `absent:` lines").with_hint(
+                "`@until` lifts an `absent:` line on a date (absent now, present after). To make \
              a present line lapse on a date, use `@expires`.",
-        ));
+            ),
+        );
     }
 
     validate_artifact_options(origin, decl.backend.as_deref(), &decl.options)?;
@@ -1478,7 +1529,10 @@ mod tests {
         // The distinction the whole design rests on: `apt:rg` is apt or nothing, so it is
         // still apt on a machine that also has cargo. Anything with a comma is a preference,
         // not a pin, and the machine gets to answer.
-        assert_eq!(cands("apt:curl"), (Some("apt".into()), Candidates::Priority));
+        assert_eq!(
+            cands("apt:curl"),
+            (Some("apt".into()), Candidates::Priority)
+        );
         assert_eq!(
             cands("apt,cargo:ripgrep"),
             (None, Candidates::Named(vec!["apt".into(), "cargo".into()]))
@@ -1537,7 +1591,10 @@ mod tests {
 
     #[test]
     fn the_order_asked_is_the_order_written_then_priority() {
-        let priority: Vec<String> = ["apt", "snap", "cargo"].iter().map(|s| s.to_string()).collect();
+        let priority: Vec<String> = ["apt", "snap", "cargo"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(Candidates::Priority.order(&priority), priority);
         assert_eq!(
             Candidates::Named(vec!["cargo".into()]).order(&priority),
@@ -1598,7 +1655,11 @@ mod tests {
     #[test]
     fn a_regex_must_say_which_backend() {
         let err = p("re:^fonts-").unwrap_err();
-        assert!(err.what.contains("does not say which backend"), "{}", err.what);
+        assert!(
+            err.what.contains("does not say which backend"),
+            "{}",
+            err.what
+        );
     }
 
     #[test]
@@ -1704,7 +1765,11 @@ mod tests {
     #[test]
     fn a_profile_cannot_take_arguments() {
         let err = p("use Work(user=shaul)").unwrap_err();
-        assert!(err.what.contains("passes arguments to a profile"), "{}", err);
+        assert!(
+            err.what.contains("passes arguments to a profile"),
+            "{}",
+            err
+        );
     }
 
     #[test]
@@ -1871,7 +1936,10 @@ mod option_key_tests {
         // guard does not see (C3).
         let err = parse_line("apt:jq@lease=2h").unwrap_err();
         assert!(err.what.contains("`@lease` is not an option"), "{}", err);
-        assert!(err.hint.unwrap().contains("@expires="), "must teach the replacement");
+        assert!(
+            err.hint.unwrap().contains("@expires="),
+            "must teach the replacement"
+        );
     }
 
     #[test]
@@ -1907,7 +1975,10 @@ mod option_key_tests {
         // it means "install this later", which nothing can act on. It used to parse clean.
         let err = parse_line("apt:steam@until=2026-07-20T00:00").unwrap_err();
         assert!(err.what.contains("only for `absent:`"), "{}", err);
-        assert!(err.hint.unwrap().contains("@expires"), "must point at the present-line form");
+        assert!(
+            err.hint.unwrap().contains("@expires"),
+            "must point at the present-line form"
+        );
     }
 
     #[test]
@@ -1960,7 +2031,10 @@ mod artifact_option_tests {
         let err = p("github:sharkdp/fd@formats=snapcraft").unwrap_err();
         let msg = format!("{}", err);
         assert!(msg.contains("snapcraft"));
-        assert!(msg.contains("appimage"), "the error must list the vocabulary");
+        assert!(
+            msg.contains("appimage"),
+            "the error must list the vocabulary"
+        );
     }
 
     #[test]
@@ -1968,7 +2042,10 @@ mod artifact_option_tests {
         let err = p("apt:curl@formats=deb").unwrap_err();
         let msg = format!("{}", err);
         assert!(msg.contains("not an option on `apt`"));
-        assert!(msg.contains("github"), "the error must name where it is legal");
+        assert!(
+            msg.contains("github"),
+            "the error must name where it is legal"
+        );
     }
 
     #[test]
@@ -1993,7 +2070,10 @@ mod artifact_option_tests {
 
     #[test]
     fn channel_is_read_on_snap_and_flatpak() {
-        assert_eq!(options_of("snap:code@channel=stable").one("channel"), Some("stable"));
+        assert_eq!(
+            options_of("snap:code@channel=stable").one("channel"),
+            Some("stable")
+        );
         assert_eq!(
             options_of("flatpak:org.gimp.GIMP@channel=stable").one("channel"),
             Some("stable")
@@ -2105,7 +2185,10 @@ mod exec_tests {
             panic!("not a generate");
         };
         assert_eq!(cmd, "./bin/pick.sh");
-        assert_eq!(pv("generate:./bin/pick.sh").unwrap().kind(), Some("generate"));
+        assert_eq!(
+            pv("generate:./bin/pick.sh").unwrap().kind(),
+            Some("generate")
+        );
     }
 
     #[test]
@@ -2158,7 +2241,11 @@ mod exec_tests {
     /// silently disables the statement is the kind of quiet no-op II.2 refuses.
     #[test]
     fn a_zero_or_garbage_ceiling_is_refused() {
-        for bad in ["exec:./s.sh@runs=0", "exec:./s.sh@runs=lots", "exec:./s.sh@runs=-1"] {
+        for bad in [
+            "exec:./s.sh@runs=0",
+            "exec:./s.sh@runs=lots",
+            "exec:./s.sh@runs=-1",
+        ] {
             assert!(pv(bad).is_err(), "{} was accepted", bad);
         }
     }
@@ -2213,7 +2300,10 @@ mod scope_tests {
     /// nothing where it is written is a key that gets written there and silently ignored.
     #[test]
     fn scope_is_refused_where_it_means_nothing() {
-        for line in ["service:nginx@scope=system", "schedule:nightly@cron=@daily,run=sync,scope=user"] {
+        for line in [
+            "service:nginx@scope=system",
+            "schedule:nightly@cron=@daily,run=sync,scope=user",
+        ] {
             let err = pv(line).unwrap_err();
             assert!(err.what.contains("not an option"), "{}: {}", line, err);
         }
@@ -2223,7 +2313,11 @@ mod scope_tests {
     /// decision and behaves as if nobody made one.
     #[test]
     fn a_misspelled_scope_is_refused_and_lists_the_legal_ones() {
-        for bad in ["shim:rg@scope=machine", "shim:rg@scope=global", "shim:rg@scope=User"] {
+        for bad in [
+            "shim:rg@scope=machine",
+            "shim:rg@scope=global",
+            "shim:rg@scope=User",
+        ] {
             let err = pv(bad).unwrap_err();
             assert!(err.what.contains("invalid `scope="), "{}: {}", bad, err);
             let full = err.to_string();
@@ -2283,7 +2377,12 @@ mod firewall_tests {
 
     #[test]
     fn a_rule_the_grammar_cannot_read_is_refused_at_parse_time() {
-        for bad in ["firewall:22", "firewall:http/tcp", "firewall:22/sctp", "firewall:0/tcp"] {
+        for bad in [
+            "firewall:22",
+            "firewall:http/tcp",
+            "firewall:22/sctp",
+            "firewall:0/tcp",
+        ] {
             assert!(pv(bad).is_err(), "{} was accepted", bad);
         }
     }

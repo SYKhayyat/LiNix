@@ -212,7 +212,10 @@ pub fn resolve(defs: &[Definition]) -> Result<Vars> {
 /// value came from (W11/W12); the value path uses [`resolve`] and never pays for this.
 pub fn resolve_with_origins(defs: &[Definition]) -> Result<(Vars, VarOrigins)> {
     let raw = winning_defs(defs)?;
-    let origins: VarOrigins = raw.iter().map(|(k, d)| (k.clone(), d.origin.clone())).collect();
+    let origins: VarOrigins = raw
+        .iter()
+        .map(|(k, d)| (k.clone(), d.origin.clone()))
+        .collect();
     let values = interpolate_all(&raw)?;
     Ok((values, origins))
 }
@@ -310,7 +313,11 @@ fn resolve_one(
         loop_names.push(name.to_string());
         return Err(GrammarError::new(
             def.origin.clone(),
-            format!("`{}` is defined in terms of itself: {}", name, loop_names.join(" -> ")),
+            format!(
+                "`{}` is defined in terms of itself: {}",
+                name,
+                loop_names.join(" -> ")
+            ),
         )
         .with_hint("break the loop — a variable cannot be its own input."));
     }
@@ -339,10 +346,21 @@ fn resolve_value(
     if let Some(referenced) = sole_reference(text) {
         require_defined(referenced, raw, &def.origin, None)?;
         resolve_one(referenced, raw, done, visiting, seen)?;
-        return Ok(done.get(referenced).cloned().unwrap_or(Value::Str(String::new())));
+        return Ok(done
+            .get(referenced)
+            .cloned()
+            .unwrap_or(Value::Str(String::new())));
     }
     if text.contains('$') {
-        let s = interpolate_string(&def.value, Some(&def.name), &def.origin, raw, done, visiting, seen)?;
+        let s = interpolate_string(
+            &def.value,
+            Some(&def.name),
+            &def.origin,
+            raw,
+            done,
+            visiting,
+            seen,
+        )?;
         return Ok(Value::Str(s));
     }
     Ok(Value::parse_literal(&def.value))
@@ -369,7 +387,10 @@ fn require_defined(
     }
     let what = match referrer {
         Some(name) if name != VALUE_PLACEHOLDER => {
-            format!("`{}` refers to `${}`, which is not defined", name, referenced)
+            format!(
+                "`{}` refers to `${}`, which is not defined",
+                name, referenced
+            )
         }
         _ => format!("`${}` is not defined", referenced),
     };
@@ -410,7 +431,10 @@ fn interpolate_string(
             Some(referenced) => {
                 require_defined(referenced, raw, origin, referrer)?;
                 resolve_one(referenced, raw, done, visiting, seen)?;
-                let value = done.get(referenced).cloned().unwrap_or(Value::Str(String::new()));
+                let value = done
+                    .get(referenced)
+                    .cloned()
+                    .unwrap_or(Value::Str(String::new()));
                 match value.as_interpolated() {
                     Ok(s) => out.push_str(&s),
                     Err(_) => {
@@ -608,7 +632,10 @@ mod tests {
         .unwrap();
         assert_eq!(v["role"], str_val("travel"));
         assert_eq!(o["role"].line, 5, "the override line, not the default");
-        assert_eq!(o["gpu"].line, 2, "an unoverridden default names its own line");
+        assert_eq!(
+            o["gpu"].line, 2,
+            "an unoverridden default names its own line"
+        );
     }
 
     #[test]
@@ -616,7 +643,11 @@ mod tests {
         // IX.3: otherwise `role` is undefined on every machine that is not the laptop, and
         // `when $role == travel` there has no answer.
         let err = resolve(&[when("role", "travel", 5)]).unwrap_err();
-        assert!(err.what.contains("only defined inside a `when` block"), "{}", err);
+        assert!(
+            err.what.contains("only defined inside a `when` block"),
+            "{}",
+            err
+        );
         assert!(err.to_string().contains("vars:5"), "{}", err);
     }
 
@@ -665,7 +696,10 @@ mod tests {
     #[test]
     fn braces_are_what_let_a_reference_touch_a_name_character() {
         let v = resolve(&[top("role", "render", 1), top("tier", "$role_x", 2)]);
-        assert!(v.is_err(), "`$role_x` must not silently resolve to `render_x`");
+        assert!(
+            v.is_err(),
+            "`$role_x` must not silently resolve to `render_x`"
+        );
     }
 
     #[test]
@@ -687,7 +721,11 @@ mod tests {
             when("role", "travel", 5),
         ])
         .unwrap();
-        assert_eq!(v["tier"], str_val("travel-tier"), "derived values must see the override");
+        assert_eq!(
+            v["tier"],
+            str_val("travel-tier"),
+            "derived values must see the override"
+        );
     }
 
     #[test]
@@ -699,7 +737,11 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.what.contains("->"), "{}", err);
-        assert!(err.what.contains('a') && err.what.contains('b') && err.what.contains('c'), "{}", err);
+        assert!(
+            err.what.contains('a') && err.what.contains('b') && err.what.contains('c'),
+            "{}",
+            err
+        );
     }
 
     #[test]
@@ -737,8 +779,12 @@ mod tests {
 
     #[test]
     fn a_plain_number_is_a_number_and_a_version_is_not() {
-        let v = resolve(&[top("count", "3", 1), top("ver", "1.6.0", 2), top("ratio", "1.5", 3)])
-            .unwrap();
+        let v = resolve(&[
+            top("count", "3", 1),
+            top("ver", "1.6.0", 2),
+            top("ratio", "1.5", 3),
+        ])
+        .unwrap();
         assert_eq!(v["count"], Value::Num(3.0));
         assert_eq!(v["ver"], str_val("1.6.0"));
         assert_eq!(v["ratio"], Value::Num(1.5));
@@ -753,9 +799,19 @@ mod tests {
 
     #[test]
     fn a_bracketed_value_is_a_list_of_typed_elements() {
-        let v = resolve(&[top("tags", "[travel, work]", 1), top("ports", "[22, 80]", 2)]).unwrap();
-        assert_eq!(v["tags"], Value::List(vec![str_val("travel"), str_val("work")]));
-        assert_eq!(v["ports"], Value::List(vec![Value::Num(22.0), Value::Num(80.0)]));
+        let v = resolve(&[
+            top("tags", "[travel, work]", 1),
+            top("ports", "[22, 80]", 2),
+        ])
+        .unwrap();
+        assert_eq!(
+            v["tags"],
+            Value::List(vec![str_val("travel"), str_val("work")])
+        );
+        assert_eq!(
+            v["ports"],
+            Value::List(vec![Value::Num(22.0), Value::Num(80.0)])
+        );
     }
 
     #[test]
@@ -768,7 +824,11 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(v["alias"], Value::List(vec![str_val("a"), str_val("b")]));
-        assert_eq!(v["n"], Value::Num(3.0), "a sole reference keeps the number type");
+        assert_eq!(
+            v["n"],
+            Value::Num(3.0),
+            "a sole reference keeps the number type"
+        );
     }
 
     #[test]
@@ -788,7 +848,10 @@ mod tests {
     #[test]
     fn ordering_is_defined_only_between_numbers() {
         use std::cmp::Ordering;
-        assert_eq!(Value::Num(9.0).order(&Value::Num(10.0)), Some(Ordering::Less));
+        assert_eq!(
+            Value::Num(9.0).order(&Value::Num(10.0)),
+            Some(Ordering::Less)
+        );
         assert_eq!(Value::Str("9".into()).order(&Value::Str("10".into())), None);
         assert_eq!(Value::Num(1.0).order(&Value::Str("1".into())), None);
     }
@@ -834,7 +897,10 @@ mod tests {
     #[test]
     fn expand_leaves_a_value_with_no_references_alone() {
         let vars = Vars::new();
-        assert_eq!(expand("plain/path", &vars, &origin(1)).unwrap(), "plain/path");
+        assert_eq!(
+            expand("plain/path", &vars, &origin(1)).unwrap(),
+            "plain/path"
+        );
     }
 
     #[test]
@@ -847,14 +913,23 @@ mod tests {
         after.insert("role".into(), str_val("desktop")); // changed
         after.insert("os".into(), str_val("linux")); // case only — not a change
         after.insert("cores".into(), Value::Num(8.0)); // added
-        // gpu is gone
+                                                       // gpu is gone
         let d = diff(&before, &after);
-        assert_eq!(d.len(), 3, "role changed, cores added, gpu gone — os is case-only: {:?}", d);
+        assert_eq!(
+            d.len(),
+            3,
+            "role changed, cores added, gpu gone — os is case-only: {:?}",
+            d
+        );
         assert!(d.iter().any(|(n, a, b)| n == "role"
             && a.as_ref().unwrap().equals(&str_val("travel"))
             && b.as_ref().unwrap().equals(&str_val("desktop"))));
-        assert!(d.iter().any(|(n, a, b)| n == "cores" && a.is_none() && b.is_some()));
-        assert!(d.iter().any(|(n, a, b)| n == "gpu" && a.is_some() && b.is_none()));
+        assert!(d
+            .iter()
+            .any(|(n, a, b)| n == "cores" && a.is_none() && b.is_some()));
+        assert!(d
+            .iter()
+            .any(|(n, a, b)| n == "gpu" && a.is_some() && b.is_none()));
     }
 
     #[test]

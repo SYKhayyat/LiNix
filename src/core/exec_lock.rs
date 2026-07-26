@@ -66,7 +66,10 @@ impl Ceiling {
         match value.map(str::trim) {
             None => Ceiling::Times(1),
             Some("always") => Ceiling::Always,
-            Some(n) => n.parse::<u32>().map(Ceiling::Times).unwrap_or(Ceiling::Times(1)),
+            Some(n) => n
+                .parse::<u32>()
+                .map(Ceiling::Times)
+                .unwrap_or(Ceiling::Times(1)),
         }
     }
 
@@ -255,7 +258,13 @@ mod tests {
         // Simulate a row written before paths were kept.
         l.forget("h");
         let mut bare = ExecLedger::new();
-        bare.runs.insert("h".into(), ExecRecord { count: 1, ..Default::default() });
+        bare.runs.insert(
+            "h".into(),
+            ExecRecord {
+                count: 1,
+                ..Default::default()
+            },
+        );
         assert!(bare.departed(&BTreeSet::new()).is_empty());
     }
 

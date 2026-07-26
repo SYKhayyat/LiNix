@@ -91,7 +91,6 @@ impl SchedulerManager {
             ))
         })
     }
-
 }
 
 struct LinuxSystemdProvisioner;

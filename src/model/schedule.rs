@@ -51,7 +51,9 @@ pub fn schedule_config(
             origin.clone(),
             format!("`schedule:{}` has an invalid cron: {}", name, e),
         )
-        .with_hint("five fields (min hour dom month dow), e.g. `0 2 * * *`, or a macro like `@daily`.")
+        .with_hint(
+            "five fields (min hour dom month dow), e.g. `0 2 * * *`, or a macro like `@daily`.",
+        )
     })?;
     let command = required(name, options, "run", origin)?;
     refuse_unattended(name, &command, origin, never_unattended)?;
@@ -286,7 +288,11 @@ mod tests {
 
     #[test]
     fn a_complete_line_maps_to_a_schedule_config() {
-        let o = opts(&[("cron", "0 2 * * *"), ("run", "clean"), ("notify", "desktop")]);
+        let o = opts(&[
+            ("cron", "0 2 * * *"),
+            ("run", "clean"),
+            ("notify", "desktop"),
+        ]);
         let cfg = schedule_config("nightly-tidy", &o, &origin(), &shipped()).unwrap();
         assert_eq!(cfg.name, "nightly-tidy");
         assert_eq!(cfg.cron, "0 2 * * *");

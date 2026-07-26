@@ -89,8 +89,12 @@ impl Rule {
 
         if head.eq_ignore_ascii_case("default") {
             return match tail.to_lowercase().as_str() {
-                "incoming" => Ok(Rule::Default { direction: Direction::Incoming }),
-                "outgoing" => Ok(Rule::Default { direction: Direction::Outgoing }),
+                "incoming" => Ok(Rule::Default {
+                    direction: Direction::Incoming,
+                }),
+                "outgoing" => Ok(Rule::Default {
+                    direction: Direction::Outgoing,
+                }),
                 _ => Err(format!(
                     "`default/{}` names no direction. It is `default/incoming` or \
                      `default/outgoing`.",
@@ -177,7 +181,10 @@ mod tests {
     use super::*;
 
     fn port(p: u16) -> Rule {
-        Rule::Port { port: p, proto: Proto::Tcp }
+        Rule::Port {
+            port: p,
+            proto: Proto::Tcp,
+        }
     }
 
     #[test]
@@ -185,7 +192,10 @@ mod tests {
         assert_eq!(Rule::parse("22/tcp"), Ok(port(22)));
         assert_eq!(
             Rule::parse("53/udp"),
-            Ok(Rule::Port { port: 53, proto: Proto::Udp })
+            Ok(Rule::Port {
+                port: 53,
+                proto: Proto::Udp
+            })
         );
         assert_eq!(Rule::parse(" 8080 / TCP "), Ok(port(8080)));
     }
@@ -194,11 +204,15 @@ mod tests {
     fn a_default_policy_parses_in_both_directions() {
         assert_eq!(
             Rule::parse("default/incoming"),
-            Ok(Rule::Default { direction: Direction::Incoming })
+            Ok(Rule::Default {
+                direction: Direction::Incoming
+            })
         );
         assert_eq!(
             Rule::parse("default/outgoing"),
-            Ok(Rule::Default { direction: Direction::Outgoing })
+            Ok(Rule::Default {
+                direction: Direction::Outgoing
+            })
         );
     }
 
@@ -206,7 +220,14 @@ mod tests {
     /// half-applies is a perimeter nobody can reason about.
     #[test]
     fn anything_else_is_refused_with_a_reason() {
-        for bad in ["22", "22/sctp", "http/tcp", "0/tcp", "99999/tcp", "default/sideways"] {
+        for bad in [
+            "22",
+            "22/sctp",
+            "http/tcp",
+            "0/tcp",
+            "99999/tcp",
+            "default/sideways",
+        ] {
             let err = Rule::parse(bad).unwrap_err();
             assert!(!err.is_empty(), "{} produced an empty error", bad);
         }
@@ -241,7 +262,10 @@ mod tests {
 
     #[test]
     fn a_change_that_leaves_the_session_alone_is_permitted() {
-        assert_eq!(would_close_session(&[port(8080)], false, &[port(22)], Some(22)), None);
+        assert_eq!(
+            would_close_session(&[port(8080)], false, &[port(22)], Some(22)),
+            None
+        );
     }
 
     /// On a console there is no connection to lose, so nothing is refused on these grounds.

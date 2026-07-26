@@ -201,7 +201,11 @@ mod tests {
         let mut state = crate::model::DesiredState::default();
         state.packages.insert(
             "apt".into(),
-            vec![spec("apt", "zsh", true), spec("apt", "acl", true), spec("apt", "nano", false)],
+            vec![
+                spec("apt", "zsh", true),
+                spec("apt", "acl", true),
+                spec("apt", "nano", false),
+            ],
         );
         let doc = Evaluation::of(&state, Path::new("/repo"));
 
@@ -255,17 +259,17 @@ mod tests {
         use crate::config::grammar::{Options, Statement};
         let state = crate::model::DesiredState {
             extras: vec![
-            (
-                Statement::Firewall("22/tcp".into(), Options::default()),
-                Origin::new("/repo/modules/net.txt", 3),
-            ),
-            (
-                Statement::Repo {
-                    backend: "apt".into(),
-                    spec: "ppa:x/y".into(),
-                },
-                Origin::new("/repo/modules/net.txt", 1),
-            ),
+                (
+                    Statement::Firewall("22/tcp".into(), Options::default()),
+                    Origin::new("/repo/modules/net.txt", 3),
+                ),
+                (
+                    Statement::Repo {
+                        backend: "apt".into(),
+                        spec: "ppa:x/y".into(),
+                    },
+                    Origin::new("/repo/modules/net.txt", 1),
+                ),
             ],
             ..Default::default()
         };
@@ -322,11 +326,17 @@ mod tests {
             "modules/x.txt:7"
         );
         assert_eq!(
-            repo_relative("/home/a/.config/linix/modules/x.txt:7", Path::new("/home/a/.config/linix")),
+            repo_relative(
+                "/home/a/.config/linix/modules/x.txt:7",
+                Path::new("/home/a/.config/linix")
+            ),
             "modules/x.txt:7"
         );
         // A file-level origin has no line, and must not grow one.
-        assert_eq!(repo_relative(r"C:\repo\active", Path::new(r"C:\repo")), "active");
+        assert_eq!(
+            repo_relative(r"C:\repo\active", Path::new(r"C:\repo")),
+            "active"
+        );
     }
 
     /// A drive letter is not a line number. Splitting `C:/repo/x` on the last `:` would be

@@ -440,15 +440,26 @@ mod tests {
         // `pixi global list` on a machine with nothing installed prints a sentence, and the
         // parser used to take its first token -- reporting a phantom `pixi:No` that `adopt`
         // would write to a manifest and `purge-unmanaged` would try to delete.
-        assert!(pixi_list("No global environments found.
-", "pixi").is_empty());
-        assert!(names_only("No packages found.
-", "spack").is_empty());
+        assert!(pixi_list(
+            "No global environments found.
+",
+            "pixi"
+        )
+        .is_empty());
+        assert!(names_only(
+            "No packages found.
+",
+            "spack"
+        )
+        .is_empty());
 
         // A real listing that merely starts with a package beginning "no" still parses.
-        let pkgs = names_only("nodejs
+        let pkgs = names_only(
+            "nodejs
 nom
-", "spack");
+",
+            "spack",
+        );
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "nodejs");
     }
@@ -462,7 +473,11 @@ nom
 {PackageName}
                       └── @{Version} ({CheckSum})[Special Versions (if any)] ({InstallPath})
 ";
-        assert!(nimble_list(legend, "nimble").is_empty(), "{:?}", nimble_list(legend, "nimble"));
+        assert!(
+            nimble_list(legend, "nimble").is_empty(),
+            "{:?}",
+            nimble_list(legend, "nimble")
+        );
 
         // A real listing still parses, brackets and all.
         let real = "  chronos  [3.2.0, 3.1.0]

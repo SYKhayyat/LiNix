@@ -346,7 +346,12 @@ mod tests {
       ]
     }"#;
 
-    fn mise_with(list_json: &str) -> (Arc<MiseBackendCore>, Arc<crate::core::executor::MockExecutor>) {
+    fn mise_with(
+        list_json: &str,
+    ) -> (
+        Arc<MiseBackendCore>,
+        Arc<crate::core::executor::MockExecutor>,
+    ) {
         let vfs = Arc::new(dashmap::DashMap::new());
         let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
         mock.set_response(
@@ -375,7 +380,11 @@ mod tests {
         let (core, _) = mise_with(REAL_LIST_JSON);
         let listed = MiseQueryable { core }.list_installed().await.unwrap();
         let names: Vec<&str> = listed.iter().map(|p| p.name.as_str()).collect();
-        assert_eq!(names, vec!["node"], "an uninstalled tool was reported as installed");
+        assert_eq!(
+            names,
+            vec!["node"],
+            "an uninstalled tool was reported as installed"
+        );
     }
 
     /// The fail-silent bug the `tools` image caught: `info` asked mise's plugin CATALOGUE, so
@@ -412,7 +421,11 @@ mod tests {
     #[tokio::test]
     async fn an_empty_mise_lists_nothing() {
         let (core, _) = mise_with("{}");
-        assert!(MiseQueryable { core }.list_installed().await.unwrap().is_empty());
+        assert!(MiseQueryable { core }
+            .list_installed()
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

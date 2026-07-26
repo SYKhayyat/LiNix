@@ -1,5 +1,5 @@
-use crate::backends::BackendRegistry;
 use crate::app::vocab::Vocab;
+use crate::backends::BackendRegistry;
 use crate::config::grammar::{statement, Candidates, Gates, GrammarError, Origin, Statement};
 use crate::config::parser::HostFacts;
 use crate::config::Config;
@@ -322,9 +322,11 @@ impl<'a> StateResolver<'a> {
         // aliases, regexes, bare-name probing and collect — so generated lines get exactly the
         // same treatment (and the same guard and removal preview) as typed ones. Off by default,
         // and a failed generator is a failed resolution.
-        self.expand_generators(&mut reached.statements, &known, &facts).await?;
+        self.expand_generators(&mut reached.statements, &known, &facts)
+            .await?;
         self.resolve_aliases(&mut reached.statements);
-        self.expand_regexes(&mut reached.statements, &priority).await?;
+        self.expand_regexes(&mut reached.statements, &priority)
+            .await?;
         let answers = self
             .probe_bare_names(&reached.statements, &priority, Coverage::WholeModel)
             .await?;
@@ -443,7 +445,10 @@ impl<'a> StateResolver<'a> {
                 .output()
                 .await
                 .map_err(|e| {
-                    Error::Other(format!("{}: could not run `generate:{}` ({})", origin, cmd, e))
+                    Error::Other(format!(
+                        "{}: could not run `generate:{}` ({})",
+                        origin, cmd, e
+                    ))
                 })?;
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -512,11 +517,10 @@ impl<'a> StateResolver<'a> {
         statements: &mut Vec<(Statement, Origin, Gates)>,
         priority: &Priority,
     ) -> Result<()> {
-        if !statements
-            .iter()
-            .any(|(s, ..)| matches!(s, Statement::Package(d) | Statement::Absent(d)
-                if matches!(d.selector, crate::config::grammar::Selector::Regex(_))))
-        {
+        if !statements.iter().any(|(s, ..)| {
+            matches!(s, Statement::Package(d) | Statement::Absent(d)
+                if matches!(d.selector, crate::config::grammar::Selector::Regex(_)))
+        }) {
             return Ok(());
         }
 
@@ -550,11 +554,18 @@ impl<'a> StateResolver<'a> {
 
             let names = match lock.get(&backend, pattern) {
                 Some(frozen) => {
-                    debug!("`{}:re:{}` is frozen to {} name(s).", backend, pattern, frozen.len());
+                    debug!(
+                        "`{}:re:{}` is frozen to {} name(s).",
+                        backend,
+                        pattern,
+                        frozen.len()
+                    );
                     frozen.to_vec()
                 }
                 None => {
-                    let found = self.match_catalogue(&backend, pattern, &origin, priority).await?;
+                    let found = self
+                        .match_catalogue(&backend, pattern, &origin, priority)
+                        .await?;
                     lock_changed |= lock.record(&backend, pattern, found.clone());
                     found
                 }
@@ -579,7 +590,8 @@ impl<'a> StateResolver<'a> {
                 one.selector = crate::config::grammar::Selector::Name(name);
                 // The line that produced it, so `why` can say a pattern put this here rather
                 // than leaving a package nobody can find in any file.
-                one.options.insert("__from_regex".to_string(), pattern.clone());
+                one.options
+                    .insert("__from_regex".to_string(), pattern.clone());
                 let stmt = if present {
                     Statement::Package(one)
                 } else {
@@ -638,7 +650,12 @@ impl<'a> StateResolver<'a> {
             .into_iter()
             .filter(|n| re.is_match(n))
             .collect();
-        debug!("`{}:re:{}` matched {} name(s).", backend, pattern, names.len());
+        debug!(
+            "`{}:re:{}` matched {} name(s).",
+            backend,
+            pattern,
+            names.len()
+        );
         Ok(names)
     }
 
@@ -706,8 +723,7 @@ impl<'a> StateResolver<'a> {
         // anyone — which is the point, since re-deriving the answer against whatever is
         // installed today is how an unedited line comes to mean a different package. Deleting
         // the entry is how you ask again.
-        let lock_path =
-            crate::core::BareLock::path_in(&self.layout.locks_dir());
+        let lock_path = crate::core::BareLock::path_in(&self.layout.locks_dir());
         let mut lock = crate::core::BareLock::load(&lock_path)?;
         let mut lock_changed = match coverage {
             Coverage::WholeModel => {
@@ -721,7 +737,12 @@ impl<'a> StateResolver<'a> {
 
         let mut answers = HashMap::new();
         for question in questions {
-            let Question { name, candidates, constraint, origin } = question;
+            let Question {
+                name,
+                candidates,
+                constraint,
+                origin,
+            } = question;
             // A candidate `priority` does not list is not a candidate at all: `priority` says
             // which managers LiNix may use on this host, whatever a line asks for (V.15).
             let chain: Vec<String> = candidates
@@ -734,7 +755,10 @@ impl<'a> StateResolver<'a> {
                 // Honoured only when the line still accepts it and this machine still has
                 // it. The lock exists to stop an unedited line quietly changing meaning — it
                 // was never a licence to demand a manager that is not here.
-                let usable = self.registry.get(&backend).is_some_and(|b| b.is_available());
+                let usable = self
+                    .registry
+                    .get(&backend)
+                    .is_some_and(|b| b.is_available());
                 if chain.contains(&backend) && usable {
                     debug!("`{}` is locked to `{}`.", name, backend);
                     answers.insert(name, backend);
@@ -744,7 +768,11 @@ impl<'a> StateResolver<'a> {
                     "`{}` was locked to `{}`, which {}. Asking again.",
                     name,
                     backend,
-                    if usable { "this line no longer accepts" } else { "this machine does not have" }
+                    if usable {
+                        "this line no longer accepts"
+                    } else {
+                        "this machine does not have"
+                    }
                 );
             }
 
@@ -810,10 +838,7 @@ impl<'a> StateResolver<'a> {
                 None => {
                     let grammar = GrammarError::new(
                         origin,
-                        format!(
-                            "no package manager this line accepts has `{}`.",
-                            name
-                        ),
+                        format!("no package manager this line accepts has `{}`.", name),
                     )
                     .with_hint(if chain.is_empty() {
                         format!(
@@ -831,7 +856,7 @@ impl<'a> StateResolver<'a> {
                     return Err(Error::Unresolvable {
                         message: grammar.to_string(),
                         name,
-                    })
+                    });
                 }
             }
         }
@@ -934,7 +959,12 @@ impl<'a> StateResolver<'a> {
         let (mut decl, present) = match stmt {
             Statement::Package(d) => (d, true),
             Statement::Absent(d) => (d, false),
-            _ => return Err(Error::Config(format!("`{}` is not a package.", line.trim()))),
+            _ => {
+                return Err(Error::Config(format!(
+                    "`{}` is not a package.",
+                    line.trim()
+                )))
+            }
         };
 
         if let Some(b) = &decl.backend {
@@ -951,7 +981,11 @@ impl<'a> StateResolver<'a> {
                 b.clone()
             }
             None => {
-                let stmts = vec![(Statement::Package(decl.clone()), origin.clone(), Gates::new())];
+                let stmts = vec![(
+                    Statement::Package(decl.clone()),
+                    origin.clone(),
+                    Gates::new(),
+                )];
                 let answers = self
                     .probe_bare_names(&stmts, &priority, Coverage::OneLine)
                     .await?;
@@ -1139,10 +1173,10 @@ mod tests {
         };
         use crate::core::executor::{DryRunOutput, MockExecutor};
         use crate::core::{BackendCapabilities, CommandExecutor, Package};
-        use std::process::Output as StdOutput;
         use dashmap::DashMap;
         use std::collections::HashMap as Map;
         use std::path::PathBuf;
+        use std::process::Output as StdOutput;
 
         fn one_per_line(output: &str) -> Vec<Package> {
             crate::parsers::parse_bare_names(output, "test")
@@ -1202,13 +1236,8 @@ mod tests {
             mock.set_command_exists("second", true);
             mock.set_response("first search jq", Ok(first));
             mock.set_response("second search jq", Ok(second));
-            let exec = CommandExecutor::with_layer(
-                false,
-                false,
-                mock,
-                vfs,
-                Arc::new(DashMap::new()),
-            );
+            let exec =
+                CommandExecutor::with_layer(false, false, mock, vfs, Arc::new(DashMap::new()));
             let mut reg = BackendRegistry::new();
             reg.register(manager("first", exec.duplicate()));
             reg.register(manager("second", exec));
@@ -1252,9 +1281,10 @@ mod tests {
 
         #[tokio::test]
         async fn a_manager_that_said_no_lets_the_pick_be_recorded() {
-            let (backend, recorded) = settle(&bare_jq(), registry(DryRunOutput::new().into(), found()))
-                .await
-                .unwrap();
+            let (backend, recorded) =
+                settle(&bare_jq(), registry(DryRunOutput::new().into(), found()))
+                    .await
+                    .unwrap();
             assert_eq!(backend, "second");
             assert_eq!(recorded.as_deref(), Some("second"));
         }

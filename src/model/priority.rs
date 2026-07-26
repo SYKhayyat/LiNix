@@ -142,8 +142,8 @@ impl Priority {
 /// backend the onboarder added is not known to be safe to prefer over your distro.
 pub fn starter_order(available: &[String]) -> Vec<String> {
     const SYSTEM: &[&str] = &[
-        "apt", "dnf", "pacman", "zypper", "apk", "xbps", "yay", "paru", "winget", "scoop",
-        "choco", "brew", "nix", "flatpak", "snap",
+        "apt", "dnf", "pacman", "zypper", "apk", "xbps", "yay", "paru", "winget", "scoop", "choco",
+        "brew", "nix", "flatpak", "snap",
     ];
 
     // `service:` and `link:` are dependent STATEMENTS, not package managers: they never
@@ -319,7 +319,10 @@ mod tests {
         // body on the backend line rather than a new file or a new block kind.
         let p = parse("apt\ngithub {\n  formats = deb\n  formats = tarball\n}\n").unwrap();
         assert_eq!(p.order(), ["apt", "github"]);
-        assert_eq!(p.options("github").unwrap().all("formats"), ["deb", "tarball"]);
+        assert_eq!(
+            p.options("github").unwrap().all("formats"),
+            ["deb", "tarball"]
+        );
     }
 
     #[test]
@@ -333,7 +336,14 @@ mod tests {
     #[test]
     fn a_body_inside_a_when_block_applies_only_there() {
         let body = "when family == debian {\n  github {\n    formats = deb\n  }\n}\n";
-        assert_eq!(parse(body).unwrap().options("github").unwrap().all("formats"), ["deb"]);
+        assert_eq!(
+            parse(body)
+                .unwrap()
+                .options("github")
+                .unwrap()
+                .all("formats"),
+            ["deb"]
+        );
 
         let body = "when family == arch {\n  github {\n    formats = deb\n  }\n}\n";
         assert!(parse(body).unwrap().options("github").is_none());
@@ -344,7 +354,14 @@ mod tests {
         // Same first-mention-wins rule the order uses, so the two cannot disagree.
         let body = "when family == debian {\n  github {\n    formats = deb\n  }\n}\n\
                     github {\n  formats = binary\n}\n";
-        assert_eq!(parse(body).unwrap().options("github").unwrap().all("formats"), ["deb"]);
+        assert_eq!(
+            parse(body)
+                .unwrap()
+                .options("github")
+                .unwrap()
+                .all("formats"),
+            ["deb"]
+        );
     }
 
     #[test]

@@ -63,7 +63,10 @@ pub fn argv(needle: &str, paths: &[&str]) -> Vec<String> {
 /// edited it, a different and much less interesting fact, and one that would silently be right
 /// whenever a line has only ever been touched once.
 pub fn introduced_in(git_log: &str) -> Option<Introduced> {
-    git_log.lines().rfind(|l| !l.trim().is_empty()).and_then(parse_line)
+    git_log
+        .lines()
+        .rfind(|l| !l.trim().is_empty())
+        .and_then(parse_line)
 }
 
 fn parse_line(line: &str) -> Option<Introduced> {
@@ -146,8 +149,14 @@ a1111111111111111111111111111111111111111\t2026-03-14\tadd ripgrep
         let cmd = argv("ripgrep", &["modules", "profiles"]);
         assert!(cmd.iter().any(|a| a == "-S"), "{:?}", cmd);
         assert!(cmd.iter().any(|a| a == "ripgrep"), "{:?}", cmd);
-        let sep = cmd.iter().position(|a| a == "--").expect("a path separator");
-        assert_eq!(&cmd[sep + 1..], &["modules".to_string(), "profiles".to_string()]);
+        let sep = cmd
+            .iter()
+            .position(|a| a == "--")
+            .expect("a path separator");
+        assert_eq!(
+            &cmd[sep + 1..],
+            &["modules".to_string(), "profiles".to_string()]
+        );
     }
 
     /// The date format is fixed, not the reader's locale: this string is parsed by the test

@@ -62,9 +62,10 @@ async fn test_apt_backend_hermetic_logic() {
         "sudo apt install -y curl",
         Ok(DryRunOutput::default().into()),
     );
-    kernel
-        .mock_executor
-        .set_response("sudo apt purge -y -- curl", Ok(DryRunOutput::default().into()));
+    kernel.mock_executor.set_response(
+        "sudo apt purge -y -- curl",
+        Ok(DryRunOutput::default().into()),
+    );
 
     timeout(Duration::from_secs(5), run_capability_test(backend, "curl"))
         .await
@@ -153,9 +154,10 @@ async fn test_cargo_backend_hermetic_logic() {
         .get("cargo")
         .expect("Missing cargo backend");
 
-    kernel
-        .mock_executor
-        .set_response("cargo install -- ripgrep", Ok(DryRunOutput::default().into()));
+    kernel.mock_executor.set_response(
+        "cargo install -- ripgrep",
+        Ok(DryRunOutput::default().into()),
+    );
     kernel.mock_executor.set_response(
         "cargo uninstall ripgrep",
         Ok(DryRunOutput::default().into()),

@@ -190,7 +190,10 @@ impl Installable for AppImageInstallable {
                 link_path.to_string_lossy().to_string()
             };
             if download_only {
-                info!("AppImage: fetched {} (download-only, not on PATH)", filename);
+                info!(
+                    "AppImage: fetched {} (download-only, not on PATH)",
+                    filename
+                );
             }
 
             state.insert(

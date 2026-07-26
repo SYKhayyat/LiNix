@@ -157,7 +157,10 @@ async fn a_false_when_runs_nothing_and_keeps_the_count() {
     std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
 
     let state = resolve(&kernel).await;
-    assert!(state.has_execs(), "the gated exec: should be present when true");
+    assert!(
+        state.has_execs(),
+        "the gated exec: should be present when true"
+    );
     kernel.app.apply_execs(&state).await.expect("runs");
     assert_eq!(runs_of(&kernel, body), 1);
 
@@ -197,7 +200,9 @@ async fn a_failed_script_is_not_recorded_and_runs_again() {
     let script = kernel.app.config.config_root().join("./fails.sh");
     kernel.mock_executor.set_response(
         &exec_command_for(&script),
-        Err(linix::core::Error::CommandFailed("the script exited 1".into())),
+        Err(linix::core::Error::CommandFailed(
+            "the script exited 1".into(),
+        )),
     );
 
     let state = resolve(&kernel).await;
@@ -253,7 +258,11 @@ async fn removing_an_exec_runs_the_undo_it_declared() {
         calls
     );
     // Forgotten, so it does not run again on the next sync.
-    assert_eq!(runs_of(&kernel, body), 0, "the row survived a completed undo");
+    assert_eq!(
+        runs_of(&kernel, body),
+        0,
+        "the row survived a completed undo"
+    );
 }
 
 /// A script that declared no `@undo=` is forgotten and nothing is run. LiNix cannot invent an

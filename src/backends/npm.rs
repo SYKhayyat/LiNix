@@ -186,7 +186,6 @@ impl Upgradable for NpmUpgradable {
         }
         Ok(())
     }
-
 }
 
 impl NpmBackendCore {
@@ -223,7 +222,10 @@ mod tests {
 
     #[test]
     fn the_global_flag_precedes_the_terminator_and_the_name_follows_it() {
-        assert_eq!(global_argv("install", "cowsay"), ["install", "-g", "--", "cowsay"]);
+        assert_eq!(
+            global_argv("install", "cowsay"),
+            ["install", "-g", "--", "cowsay"]
+        );
         assert_eq!(
             global_argv("uninstall", "@scope/pkg"),
             ["uninstall", "-g", "--", "@scope/pkg"]

@@ -31,9 +31,7 @@ pub fn parse_dnf_search(output: &str) -> Vec<Package> {
     sanitize(output)
         .lines()
         .filter_map(|line| {
-            let (name_part, desc) = line
-                .split_once('\t')
-                .or_else(|| line.split_once(" : "))?;
+            let (name_part, desc) = line.split_once('\t').or_else(|| line.split_once(" : "))?;
             let name = strip_rpm_arch(name_part.trim());
             if name.is_empty() {
                 return None;
@@ -156,7 +154,10 @@ mod tests {
             let res = parse_zypper_search(input);
             assert_eq!(res.len(), 2, "{} the rule", label);
             assert_eq!(res[0].name, "jq");
-            assert_eq!(res[0].properties.get("installed").map(String::as_str), Some("true"));
+            assert_eq!(
+                res[0].properties.get("installed").map(String::as_str),
+                Some("true")
+            );
             assert_eq!(res[1].name, "htop");
             assert_eq!(res[1].properties.get("installed"), None);
         }

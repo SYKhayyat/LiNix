@@ -41,11 +41,26 @@ pub fn is_kernel_package(name: &str) -> bool {
     //   Fedora/RHEL: kernel, kernel-core, kernel-modules(-extra), kernel-devel, kernel-headers
     //   openSUSE:    kernel-default(-devel|-base), kernel-preempt
     const EXACT: [&str; 20] = [
-        "linux", "linux-lts", "linux-zen", "linux-hardened", "linux-rt",
-        "linux-zen-headers", "linux-lts-headers", "linux-hardened-headers", "linux-headers",
-        "linux-generic", "linux-image-generic",
-        "kernel", "kernel-core", "kernel-modules", "kernel-modules-extra", "kernel-devel",
-        "kernel-headers", "kernel-default", "kernel-default-devel", "kernel-preempt",
+        "linux",
+        "linux-lts",
+        "linux-zen",
+        "linux-hardened",
+        "linux-rt",
+        "linux-zen-headers",
+        "linux-lts-headers",
+        "linux-hardened-headers",
+        "linux-headers",
+        "linux-generic",
+        "linux-image-generic",
+        "kernel",
+        "kernel-core",
+        "kernel-modules",
+        "kernel-modules-extra",
+        "kernel-devel",
+        "kernel-headers",
+        "kernel-default",
+        "kernel-default-devel",
+        "kernel-preempt",
     ];
     EXACT.contains(&n.as_str())
 }
@@ -215,9 +230,9 @@ mod tests {
             "vlinux",
             "nginx",
             "python3",
-            "linux-libc-dev",   // userspace C headers, not a kernel
+            "linux-libc-dev", // userspace C headers, not a kernel
             "linux-tools-common",
-            "kernel-tools",     // the one the bare `kernel-` prefix used to catch
+            "kernel-tools", // the one the bare `kernel-` prefix used to catch
             "kernel-rpm-macros",
             "kernelshark",
             "liblinux",
@@ -231,7 +246,10 @@ mod tests {
         let changed = ["jq", "linux-image-6.8", "nginx", "linux-headers-6.8", "jq"];
         assert_eq!(
             kernels_in(changed.into_iter()),
-            vec!["linux-headers-6.8".to_string(), "linux-image-6.8".to_string()]
+            vec![
+                "linux-headers-6.8".to_string(),
+                "linux-image-6.8".to_string()
+            ]
         );
     }
 

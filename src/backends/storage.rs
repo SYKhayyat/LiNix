@@ -157,24 +157,20 @@ impl Queryable for ZfsQueryable {
 /// Split `vg/lv` into its volume group and logical volume. An LVM object is named `group/volume`,
 /// the one spelling both `lvcreate` and `lvremove` accept via their own conventions.
 fn split_lvm(name: &str) -> Result<(&str, &str)> {
-    name.split_once('/').filter(|(vg, lv)| !vg.is_empty() && !lv.is_empty()).ok_or_else(|| {
-        Error::Validation(format!(
-            "`lvm:{}` is not a volume — name it `group/volume`, e.g. `lvm:vg0/data`.",
-            name
-        ))
-    })
+    name.split_once('/')
+        .filter(|(vg, lv)| !vg.is_empty() && !lv.is_empty())
+        .ok_or_else(|| {
+            Error::Validation(format!(
+                "`lvm:{}` is not a volume — name it `group/volume`, e.g. `lvm:vg0/data`.",
+                name
+            ))
+        })
 }
 
 /// `lvcreate -n <lv> -L <size> <vg>` — a logical volume needs a size; without one there is
 /// nothing to create, which is a refusal, not a guess.
 fn lvm_create(vg: &str, lv: &str, size: &str) -> Vec<String> {
-    vec![
-        "-n".into(),
-        lv.into(),
-        "-L".into(),
-        size.into(),
-        vg.into(),
-    ]
+    vec!["-n".into(), lv.into(), "-L".into(), size.into(), vg.into()]
 }
 
 /// `lvremove -y <vg>/<lv>` — destroys the volume. The dangerous verb, run only past the guard.

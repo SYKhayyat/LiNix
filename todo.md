@@ -178,5 +178,7 @@ Legend: `[x]` done & verified on Windows · `[~]` written, pending Linux/macOS g
 2. **Architectural follow-ups (optional):** multi-source resolver tagging; registry OCP
    refactor; targeted `info()` queries; `Unsupported` error for unsupported `clean_orphans`;
    typed `backend_settings`; backend-health summary; centralized sudo handling; AUR/`yay`.
-3. **Formatting:** repo is not `rustfmt`-clean (pre-existing); the CI fmt step is
-   non-blocking until a dedicated format pass is run.
+3. ~~**Formatting:** repo is not `rustfmt`-clean (pre-existing); the CI fmt step is
+   non-blocking until a dedicated format pass is run.~~ **DONE 2026-07-26.** `cargo fmt`
+   swept the tree; `continue-on-error` is off in CI and `release-check.sh`'s fmt gate is
+   HARD, so it cannot drift back unnoticed.

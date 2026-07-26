@@ -70,15 +70,23 @@ pub fn select(config_root: &Path, source: &Option<String>) -> Result<Option<Sele
         let Some(kind) = kind_of(name) else {
             return Err(GrammarError::new(
                 origin(),
-                format!("`[vars] source = \"{}\"` is not a variable provider name", name),
+                format!(
+                    "`[vars] source = \"{}\"` is not a variable provider name",
+                    name
+                ),
             )
-            .with_hint("name the built-in `vars`, an embedded `vars.linix`, or an external `vars.<ext>`."));
+            .with_hint(
+                "name the built-in `vars`, an embedded `vars.linix`, or an external `vars.<ext>`.",
+            ));
         };
         let path = config_root.join(name);
         if !path.is_file() {
             return Err(GrammarError::new(
                 origin(),
-                format!("`[vars] source = \"{}\"` names a file that is not in the repo", name),
+                format!(
+                    "`[vars] source = \"{}\"` names a file that is not in the repo",
+                    name
+                ),
             )
             .with_hint("create the file, or point `source` at a provider that exists."));
         }
@@ -94,7 +102,10 @@ pub fn select(config_root: &Path, source: &Option<String>) -> Result<Option<Sele
         })),
         many => Err(GrammarError::new(
             origin(),
-            format!("more than one variable provider is present: {}", many.join(", ")),
+            format!(
+                "more than one variable provider is present: {}",
+                many.join(", ")
+            ),
         )
         .with_hint("set `[vars] source` in preferences.toml to choose which one is active.")),
     }
@@ -126,17 +137,27 @@ pub fn run_external_with_origins(path: &Path, facts: &HostFacts) -> Result<(Vars
         .env("LINIX_FAMILY", &facts.family);
 
     let output = cmd.output().map_err(|e| {
-        GrammarError::new(origin.clone(), format!("could not run the `{}` provider: {}", name, e))
-            .with_hint("an external provider needs its interpreter installed and on PATH.")
+        GrammarError::new(
+            origin.clone(),
+            format!("could not run the `{}` provider: {}", name, e),
+        )
+        .with_hint("an external provider needs its interpreter installed and on PATH.")
     })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let detail = stderr.trim();
-        let tail = if detail.is_empty() { String::new() } else { format!(": {}", detail) };
+        let tail = if detail.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", detail)
+        };
         return Err(GrammarError::new(
             origin,
-            format!("the `{}` provider exited with {}{}", name, output.status, tail),
+            format!(
+                "the `{}` provider exited with {}{}",
+                name, output.status, tail
+            ),
         ));
     }
 
@@ -202,7 +223,10 @@ fn parse_output(stdout: &str, origin: &Origin) -> Result<(Vars, VarOrigins)> {
 
 fn parse_json_object(text: &str, origin: &Origin) -> Result<(Vars, VarOrigins)> {
     let json: serde_json::Value = serde_json::from_str(text).map_err(|e| {
-        GrammarError::new(origin.clone(), format!("the provider's JSON did not parse: {}", e))
+        GrammarError::new(
+            origin.clone(),
+            format!("the provider's JSON did not parse: {}", e),
+        )
     })?;
     let serde_json::Value::Object(map) = json else {
         return Err(GrammarError::new(
@@ -237,7 +261,8 @@ fn json_to_value(value: &serde_json::Value, origin: &Origin) -> Result<Value> {
         )),
         serde_json::Value::Object(_) => Err(GrammarError::new(
             origin.clone(),
-            "a variable cannot be a JSON object; it is a string, number, boolean, or list".to_string(),
+            "a variable cannot be a JSON object; it is a string, number, boolean, or list"
+                .to_string(),
         )),
         serde_json::Value::Null => Err(GrammarError::new(
             origin.clone(),
@@ -397,7 +422,10 @@ mod tests {
         assert_eq!(vars["role"], Value::Str("travel".into()));
         assert_eq!(vars["cores"], Value::Num(8.0));
         assert_eq!(vars["gpu"], Value::Bool(true));
-        assert_eq!(vars["tags"], Value::List(vec![Value::Str("a".into()), Value::Str("b".into())]));
+        assert_eq!(
+            vars["tags"],
+            Value::List(vec![Value::Str("a".into()), Value::Str("b".into())])
+        );
         // JSON has no lines, so a variable's origin is the provider file itself.
         assert_eq!(origins["role"].to_string(), "vars.js");
     }
@@ -405,8 +433,11 @@ mod tests {
     #[test]
     fn name_value_lines_infer_types_like_a_vars_line() {
         let origin = Origin::new("vars.sh", 0);
-        let (vars, origins) =
-            parse_output("role = travel\ncores = 8\n# a comment\ngpu = true\n", &origin).unwrap();
+        let (vars, origins) = parse_output(
+            "role = travel\ncores = 8\n# a comment\ngpu = true\n",
+            &origin,
+        )
+        .unwrap();
         assert_eq!(vars["role"], Value::Str("travel".into()));
         assert_eq!(vars["cores"], Value::Num(8.0));
         assert_eq!(vars["gpu"], Value::Bool(true));
@@ -435,14 +466,21 @@ mod tests {
         let tmp = tmp();
         let dir = tmp.path();
         let (name, body) = if cfg!(windows) {
-            ("vars.cmd", "@echo off\r\necho role=%LINIX_OS%\r\necho cores=8\r\n")
+            (
+                "vars.cmd",
+                "@echo off\r\necho role=%LINIX_OS%\r\necho cores=8\r\n",
+            )
         } else {
             ("vars.sh", "echo role=$LINIX_OS\necho cores=8\n")
         };
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();
         let vars = run_external(&path, &facts()).unwrap();
-        assert_eq!(vars["role"], Value::Str("linux".into()), "the machine's facts reach the provider");
+        assert_eq!(
+            vars["role"],
+            Value::Str("linux".into()),
+            "the machine's facts reach the provider"
+        );
         assert_eq!(vars["cores"], Value::Num(8.0));
     }
 
@@ -458,6 +496,10 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, body).unwrap();
         let err = run_external(&path, &facts()).unwrap_err();
-        assert!(err.what.contains("boom"), "carries the provider's stderr: {}", err);
+        assert!(
+            err.what.contains("boom"),
+            "carries the provider's stderr: {}",
+            err
+        );
     }
 }

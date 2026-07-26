@@ -40,7 +40,10 @@ pub enum DiscoveryError {
         matches: Vec<String>,
     },
     /// `@bin=` named a path the archive does not contain.
-    BinNotFound { requested: String, found: Vec<String> },
+    BinNotFound {
+        requested: String,
+        found: Vec<String>,
+    },
 }
 
 impl fmt::Display for DiscoveryError {
@@ -130,12 +133,12 @@ fn find_named(entries: &[Entry], requested: &str) -> Result<PathBuf, DiscoveryEr
         .find(|e| normalise(&e.path) == wanted)
         .or_else(|| entries.iter().find(|e| e.file_name() == wanted));
 
-    by_path.map(|e| e.path.clone()).ok_or_else(|| {
-        DiscoveryError::BinNotFound {
+    by_path
+        .map(|e| e.path.clone())
+        .ok_or_else(|| DiscoveryError::BinNotFound {
             requested: requested.to_string(),
             found: display_all(&entries.iter().collect::<Vec<_>>()),
-        }
-    })
+        })
 }
 
 fn normalise(path: &Path) -> String {

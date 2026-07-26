@@ -256,7 +256,6 @@ impl Upgradable for CargoUpgradable {
         }
         Ok(())
     }
-
 }
 
 impl CargoBackendCore {
@@ -313,7 +312,11 @@ mod tests {
         assert!(said.contains("installs no program"), "{}", said);
         // And why a name can reach cargo and still install nothing — the part cargo's own
         // message does not say. True whether the line pinned cargo or resolved to it.
-        assert!(said.contains("cannot tell a program from a library"), "{}", said);
+        assert!(
+            said.contains("cannot tell a program from a library"),
+            "{}",
+            said
+        );
     }
 
     #[test]
@@ -338,7 +341,10 @@ mod tests {
 
     #[test]
     fn the_version_flag_precedes_the_terminator_and_the_crate_follows_it() {
-        assert_eq!(install_argv(&spec("ripgrep", None)), ["install", "--", "ripgrep"]);
+        assert_eq!(
+            install_argv(&spec("ripgrep", None)),
+            ["install", "--", "ripgrep"]
+        );
         assert_eq!(
             install_argv(&spec("ripgrep", Some("13.0.0"))),
             ["install", "--version", "13.0.0", "--", "ripgrep"]

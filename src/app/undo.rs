@@ -1,6 +1,4 @@
-use crate::core::{
-    Error, ManagedPackage, Result, Snapshot, SnapshotManager, StateRegistry,
-};
+use crate::core::{Error, ManagedPackage, Result, Snapshot, SnapshotManager, StateRegistry};
 use dialoguer::{theme::ColorfulTheme, Select};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -68,7 +66,10 @@ impl UndoManager {
         // read as an offer to restore one.
         if let Some(cap) = self.snapshot_manager.restore_capability() {
             if !cap.is_live() {
-                let name = self.snapshot_manager.provider_name().unwrap_or("this provider");
+                let name = self
+                    .snapshot_manager
+                    .provider_name()
+                    .unwrap_or("this provider");
                 println!("\n{}", cap.describe(name));
                 println!("The snapshots below can be inspected here, and put back elsewhere.");
             }
@@ -308,7 +309,10 @@ impl UndoManager {
         // The filesystem snapshot is a whole-`/` restore, so it already reverts your manifests
         // and `registry.json` along with everything else — there is no separate generation to
         // pair with anymore (the generation format was deleted; git is the manifest history).
-        println!("\nRestored from {}. Reboot to run the restored system.", snapshot.id);
+        println!(
+            "\nRestored from {}. Reboot to run the restored system.",
+            snapshot.id
+        );
         Ok(())
     }
 }

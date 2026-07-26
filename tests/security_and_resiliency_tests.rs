@@ -57,7 +57,6 @@ fn test_validator_blocks_command_injection_syntax() {
             "Security Failure: Validator allowed injection in name: {}",
             input
         );
-
     }
 }
 
@@ -113,10 +112,7 @@ async fn test_planner_protects_mission_critical_closure() {
     let state_guard = kernel.state.lock().await;
     let planner = ChangePlanner::new(kernel.app.registry.clone(), &state_guard, &config);
 
-    let plan = planner
-        .plan(&desired, None)
-        .await
-        .expect("Planning failed");
+    let plan = planner.plan(&desired, None).await.expect("Planning failed");
 
     for node in plan.graph.node_weights() {
         if let GraphAction::Remove { name, .. } = node {
@@ -146,9 +142,10 @@ async fn test_transaction_atomic_rollback_fidelity() {
         "brew install -- pkg-b",
         Err(Error::CommandFailed("Network Timeout".into())),
     );
-    kernel
-        .mock_executor
-        .set_response("brew uninstall -- pkg-a", Ok(DryRunOutput::default().into()));
+    kernel.mock_executor.set_response(
+        "brew uninstall -- pkg-a",
+        Ok(DryRunOutput::default().into()),
+    );
 
     let mut graph = petgraph::stable_graph::StableDiGraph::new();
     let a = graph.add_node(GraphAction::Install(spec_a));

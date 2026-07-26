@@ -187,7 +187,6 @@ impl Upgradable for UvUpgradable {
             .await?;
         Ok(())
     }
-
 }
 
 pub fn register(
@@ -236,7 +235,10 @@ ruff v0.2.1
 
     #[test]
     fn the_tool_subcommand_precedes_the_terminator_and_the_name_follows_it() {
-        assert_eq!(tool_argv("install", "ruff"), ["tool", "install", "--", "ruff"]);
+        assert_eq!(
+            tool_argv("install", "ruff"),
+            ["tool", "install", "--", "ruff"]
+        );
         assert_eq!(
             tool_argv("uninstall", "ruff==0.2.1"),
             ["tool", "uninstall", "--", "ruff==0.2.1"]

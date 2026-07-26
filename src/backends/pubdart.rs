@@ -10,8 +10,8 @@
 //   * search  — unsupported (pub.dev has no CLI search)
 
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec,
-    Queryable, Result, Upgradable,
+    BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
+    Result, Upgradable,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -169,7 +169,6 @@ impl Upgradable for PubUpgradable {
         }
         Ok(())
     }
-
 }
 
 /// Search is omitted: pub.dev has no CLI search.

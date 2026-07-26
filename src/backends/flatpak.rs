@@ -66,11 +66,8 @@ impl BackendCore for FlatpakBackendCore {
 #[async_trait]
 impl MetadataProvider for FlatpakBackendCore {
     async fn get_dependencies(&self, name: &str) -> Result<Vec<String>> {
-        let mut final_args: Vec<String> = self
-            .scope_args()
-            .into_iter()
-            .map(str::to_string)
-            .collect();
+        let mut final_args: Vec<String> =
+            self.scope_args().into_iter().map(str::to_string).collect();
         final_args.extend(["info".to_string(), "--show-metadata".to_string()]);
         crate::core::argv::push_names(&mut final_args, "flatpak", [name]);
         let arg_refs: Vec<&str> = final_args.iter().map(String::as_str).collect();

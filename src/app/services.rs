@@ -1,7 +1,7 @@
 use crate::app::scheduler::notify::NotificationManager;
 use crate::app::scheduler::SchedulerManager;
 use crate::app::{
-    diagnostics::FailureDiagnosticEngine, EphemeralShell, LuaHooks, MetricsCollector, Adopter,
+    diagnostics::FailureDiagnosticEngine, Adopter, EphemeralShell, LuaHooks, MetricsCollector,
     ProfileManager, ShimManager, UndoManager,
 };
 use crate::backends::{create_default_registry, BackendRegistry};

@@ -203,7 +203,10 @@ pub fn expand_args<'a>(
     let entered = Hop::new(asked_by.clone(), format!("use {}", name));
     if let Some(start) = seen.iter().position(|v| v.key == key) {
         // The loop only — what led *into* it is not part of it.
-        let mut hops: Vec<Hop> = seen[start + 1..].iter().map(|v| v.entered.clone()).collect();
+        let mut hops: Vec<Hop> = seen[start + 1..]
+            .iter()
+            .map(|v| v.entered.clone())
+            .collect();
         hops.push(entered);
         return Err(GrammarError::new(
             asked_by.clone(),
@@ -245,7 +248,15 @@ pub fn expand_args<'a>(
                 // A nested `use inner(x=$user)` may reference this module's own parameters, so
                 // its argument values are substituted before the inner module binds them.
                 let child_args = substitute_args(&child_args, &scope);
-                out.extend(expand_args(loader, &m, &origin, facts, seen, &gates, &child_args)?);
+                out.extend(expand_args(
+                    loader,
+                    &m,
+                    &origin,
+                    facts,
+                    seen,
+                    &gates,
+                    &child_args,
+                )?);
             }
             // Rejected at load time; unreachable, but not worth an unwrap.
             Statement::Use(Reference::Profile(_), _) => continue,
@@ -537,7 +548,11 @@ mod tests {
         // II.7: the error names every file and line in the loop, in order, and stops.
         let f = fixture(&[("a.txt", "use b\n"), ("b.txt", "use a\n")]);
         let err = expand_module(&f, "a").unwrap_err();
-        assert!(err.what.contains("modules use each other in a loop"), "{}", err);
+        assert!(
+            err.what.contains("modules use each other in a loop"),
+            "{}",
+            err
+        );
         assert!(err.what.contains("a.txt:1  use b"), "{}", err);
         assert!(err.what.contains("b.txt:1  use a"), "{}", err);
         assert!(err.what.trim_end().ends_with("^ back to a"), "{}", err);
@@ -577,13 +592,11 @@ mod tests {
 
     // --- U32: module parameters ---
 
-    fn expand_with_args(
-        f: &Fixture,
-        name: &str,
-        args: &[(&str, &str)],
-    ) -> Result<Vec<Statement>> {
-        let args: Vec<(String, String)> =
-            args.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    fn expand_with_args(f: &Fixture, name: &str, args: &[(&str, &str)]) -> Result<Vec<Statement>> {
+        let args: Vec<(String, String)> = args
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         let mut loader = ModuleLoader::new(&f.layout, &known);
         let out = expand_args(
             &mut loader,

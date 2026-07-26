@@ -227,7 +227,6 @@ impl Upgradable for PsResourceUpgradable {
         self.core.change_ps(script).await?;
         Ok(())
     }
-
 }
 
 pub fn register(reg: &mut crate::backends::BackendRegistry, exec: &CommandExecutor, _cfg: &Config) {

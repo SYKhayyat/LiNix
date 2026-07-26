@@ -123,7 +123,9 @@ fn dynamic_to_value(d: Dynamic, origin: &Origin) -> Result<Value> {
 fn register_stdlib(engine: &mut Engine) {
     // --- the clock (local time — "is it the weekend here") ---
     engine.register_fn("now", || chrono::Utc::now().timestamp());
-    engine.register_fn("today", || chrono::Local::now().format("%Y-%m-%d").to_string());
+    engine.register_fn("today", || {
+        chrono::Local::now().format("%Y-%m-%d").to_string()
+    });
     engine.register_fn("weekday", || chrono::Local::now().format("%A").to_string());
     engine.register_fn("hour", || chrono::Local::now().hour() as i64);
     engine.register_fn("year", || chrono::Local::now().year() as i64);
@@ -131,21 +133,24 @@ fn register_stdlib(engine: &mut Engine) {
     engine.register_fn("day", || chrono::Local::now().day() as i64);
 
     // --- the shell ---
-    engine.register_fn("sh", |cmd: &str| -> std::result::Result<String, Box<EvalAltResult>> {
-        let out = shell_command(cmd)
-            .output()
-            .map_err(|e| rt_err(format!("sh: could not run `{}`: {}", cmd, e)))?;
-        if !out.status.success() {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(rt_err(format!(
-                "sh: `{}` exited with {}: {}",
-                cmd,
-                out.status,
-                stderr.trim()
-            )));
-        }
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    });
+    engine.register_fn(
+        "sh",
+        |cmd: &str| -> std::result::Result<String, Box<EvalAltResult>> {
+            let out = shell_command(cmd)
+                .output()
+                .map_err(|e| rt_err(format!("sh: could not run `{}`: {}", cmd, e)))?;
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                return Err(rt_err(format!(
+                    "sh: `{}` exited with {}: {}",
+                    cmd,
+                    out.status,
+                    stderr.trim()
+                )));
+            }
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        },
+    );
     engine.register_fn("sh_ok", |cmd: &str| {
         shell_command(cmd)
             .output()
@@ -154,13 +159,18 @@ fn register_stdlib(engine: &mut Engine) {
     });
 
     // --- read-only filesystem ---
-    engine.register_fn("read_file", |path: &str| -> std::result::Result<String, Box<EvalAltResult>> {
-        let resolved = crate::core::Validator::validate_path_sync(std::path::Path::new(path))
-            .map_err(|e| rt_err(format!("read_file: {}: {}", path, e)))?;
-        std::fs::read_to_string(&resolved)
-            .map_err(|e| rt_err(format!("read_file: {}: {}", path, e)))
+    engine.register_fn(
+        "read_file",
+        |path: &str| -> std::result::Result<String, Box<EvalAltResult>> {
+            let resolved = crate::core::Validator::validate_path_sync(std::path::Path::new(path))
+                .map_err(|e| rt_err(format!("read_file: {}: {}", path, e)))?;
+            std::fs::read_to_string(&resolved)
+                .map_err(|e| rt_err(format!("read_file: {}: {}", path, e)))
+        },
+    );
+    engine.register_fn("path_exists", |path: &str| {
+        std::path::Path::new(path).exists()
     });
-    engine.register_fn("path_exists", |path: &str| std::path::Path::new(path).exists());
 
     // --- the environment (W7's escape hatch: LINIX_ROLE=work when hostname cannot say) ---
     engine.register_fn("env", |name: &str| std::env::var(name).unwrap_or_default());
@@ -170,21 +180,30 @@ fn register_stdlib(engine: &mut Engine) {
     engine.register_fn("has_env", |name: &str| std::env::var_os(name).is_some());
 
     // --- the network ---
-    engine.register_fn("http_get", |url: &str| -> std::result::Result<String, Box<EvalAltResult>> {
-        http_get(url).map_err(rt_err)
-    });
+    engine.register_fn(
+        "http_get",
+        |url: &str| -> std::result::Result<String, Box<EvalAltResult>> {
+            http_get(url).map_err(rt_err)
+        },
+    );
 
     // --- JSON, so an http_get body can be navigated for one value ---
-    engine.register_fn("parse_json", |text: &str| -> std::result::Result<Dynamic, Box<EvalAltResult>> {
-        let v: serde_json::Value =
-            serde_json::from_str(text).map_err(|e| rt_err(format!("parse_json: {}", e)))?;
-        Ok(json_to_dynamic(&v))
-    });
+    engine.register_fn(
+        "parse_json",
+        |text: &str| -> std::result::Result<Dynamic, Box<EvalAltResult>> {
+            let v: serde_json::Value =
+                serde_json::from_str(text).map_err(|e| rt_err(format!("parse_json: {}", e)))?;
+            Ok(json_to_dynamic(&v))
+        },
+    );
 }
 
 /// A Rhai runtime error, which [`resolve`] surfaces as a `GrammarError` naming `vars.linix`.
 fn rt_err(msg: String) -> Box<EvalAltResult> {
-    Box::new(EvalAltResult::ErrorRuntime(msg.into(), rhai::Position::NONE))
+    Box::new(EvalAltResult::ErrorRuntime(
+        msg.into(),
+        rhai::Position::NONE,
+    ))
 }
 
 /// The platform shell, so `sh("a | b")` behaves as the script author expects. The command is the
@@ -231,9 +250,11 @@ fn json_to_dynamic(v: &serde_json::Value) -> Dynamic {
             .map(Dynamic::from)
             .unwrap_or_else(|| n.as_f64().unwrap_or(0.0).into()),
         serde_json::Value::String(s) => s.clone().into(),
-        serde_json::Value::Array(a) => {
-            a.iter().map(json_to_dynamic).collect::<rhai::Array>().into()
-        }
+        serde_json::Value::Array(a) => a
+            .iter()
+            .map(json_to_dynamic)
+            .collect::<rhai::Array>()
+            .into(),
         serde_json::Value::Object(o) => {
             let mut map = rhai::Map::new();
             for (k, val) in o {
@@ -296,7 +317,10 @@ mod tests {
         assert_eq!(vars["cores"], Value::Num(8.0));
         assert_eq!(vars["ratio"], Value::Num(1.5));
         assert_eq!(vars["gpu"], Value::Bool(true));
-        assert_eq!(vars["tags"], Value::List(vec![Value::Str("a".into()), Value::Str("b".into())]));
+        assert_eq!(
+            vars["tags"],
+            Value::List(vec![Value::Str("a".into()), Value::Str("b".into())])
+        );
     }
 
     #[test]
@@ -309,12 +333,10 @@ mod tests {
     #[test]
     fn the_script_can_compute() {
         // The whole point over the line file: real logic decides the value.
-        let vars = run(
-            r#"
+        let vars = run(r#"
             let role = if HOST == "laptop" { "travel" } else { "desktop" };
             #{ role: role }
-        "#,
-        )
+        "#)
         .unwrap();
         assert_eq!(vars["role"], Value::Str("travel".into()));
     }
@@ -389,7 +411,11 @@ mod tests {
 
     #[test]
     fn a_failing_shell_command_throws() {
-        let cmd = if cfg!(windows) { "cmd /c exit 2" } else { "exit 2" };
+        let cmd = if cfg!(windows) {
+            "cmd /c exit 2"
+        } else {
+            "exit 2"
+        };
         let err = run(&format!(r#"#{{ x: sh("{}") }}"#, cmd)).unwrap_err();
         assert!(err.what.contains("sh:"), "{}", err);
     }
@@ -404,6 +430,10 @@ mod tests {
     fn an_http_get_to_a_dead_address_throws() {
         // Port 1 refuses fast; no live network needed. Proves failure is loud, not empty.
         let err = run(r#"#{ x: http_get("http://127.0.0.1:1/") }"#).unwrap_err();
-        assert!(err.what.contains("did not run") || err.what.contains("http"), "{}", err);
+        assert!(
+            err.what.contains("did not run") || err.what.contains("http"),
+            "{}",
+            err
+        );
     }
 }

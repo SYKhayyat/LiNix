@@ -21,11 +21,7 @@ use mock_providers::TestKernel;
 /// Write a lock recording `brew:ripgrep` at an old version, plus a module declaring it.
 async fn declare(kernel: &TestKernel, module_line: &str, locked_version: Option<&str>) {
     let root = kernel.app.config.config_root();
-    std::fs::write(
-        root.join("modules/tools.txt"),
-        format!("{}\n", module_line),
-    )
-    .unwrap();
+    std::fs::write(root.join("modules/tools.txt"), format!("{}\n", module_line)).unwrap();
     std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
     let locks = root.join("locks");
     std::fs::create_dir_all(&locks).unwrap();

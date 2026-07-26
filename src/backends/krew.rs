@@ -9,8 +9,8 @@
 //   * upgrade — `kubectl krew upgrade`; update refreshes the plugin index
 
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec,
-    Queryable, Result, Searchable, Upgradable,
+    BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
+    Result, Searchable, Upgradable,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -165,7 +165,6 @@ impl Upgradable for KrewUpgradable {
             .await?;
         Ok(())
     }
-
 }
 
 pub fn register(

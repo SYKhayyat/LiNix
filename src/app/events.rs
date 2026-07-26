@@ -415,10 +415,16 @@ mod tests {
         write_repo_hook(tmp.path(), Event::OnDrift, "#!/bin/sh\ntrue\n");
         let hooks = EventHooks::load(&config_at(tmp.path()));
 
-        assert_eq!(hooks.unapproved().len(), 1, "an unlocked hook is unapproved");
+        assert_eq!(
+            hooks.unapproved().len(),
+            1,
+            "an unlocked hook is unapproved"
+        );
         hooks.approve_all().unwrap();
         assert!(
-            EventHooks::load(&config_at(tmp.path())).unapproved().is_empty(),
+            EventHooks::load(&config_at(tmp.path()))
+                .unapproved()
+                .is_empty(),
             "lock should approve it"
         );
     }

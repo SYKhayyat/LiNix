@@ -100,7 +100,12 @@ fn is_channel_downgrade(from: &str, to: &str) -> bool {
 
 impl SnapInstallable {
     async fn is_installed(&self, name: &str) -> bool {
-        match self.core.executor.run_output("snap", &["list", name], false).await {
+        match self
+            .core
+            .executor
+            .run_output("snap", &["list", name], false)
+            .await
+        {
             Ok(out) => out
                 .lines()
                 .skip(1)
@@ -143,7 +148,11 @@ impl Installable for SnapInstallable {
                         );
                     }
                 }
-                let mut a = vec!["refresh".to_string(), "--channel".to_string(), channel.clone()];
+                let mut a = vec![
+                    "refresh".to_string(),
+                    "--channel".to_string(),
+                    channel.clone(),
+                ];
                 crate::core::argv::push_names(&mut a, "snap", [spec.name.as_str()]);
                 info!("Snap: Switching {} to channel {}...", spec.name, channel);
                 a
@@ -308,7 +317,6 @@ impl Upgradable for SnapUpgradable {
     async fn upgrade(&self, sudo: bool) -> Result<()> {
         self.update(sudo).await
     }
-
 }
 
 pub fn register(

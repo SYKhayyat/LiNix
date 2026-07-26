@@ -175,10 +175,7 @@ impl Journal {
             self.flush()?;
             trace!("Operation {} marked as Completed.", id);
         } else {
-            warn!(
-                "Attempted to mark unknown operation {} as successful.",
-                id
-            );
+            warn!("Attempted to mark unknown operation {} as successful.", id);
         }
         Ok(())
     }
@@ -189,15 +186,9 @@ impl Journal {
             entry.finished_at_unix = Some(Utc::now().timestamp());
             entry.error = Some(err.to_string());
             self.flush()?;
-            warn!(
-                "Operation {} recorded as Failed in WAL: {}",
-                id, err
-            );
+            warn!("Operation {} recorded as Failed in WAL: {}", id, err);
         } else {
-            warn!(
-                "Attempted to record failure for unknown operation {}.",
-                id
-            );
+            warn!("Attempted to record failure for unknown operation {}.", id);
         }
         Ok(())
     }
@@ -348,9 +339,16 @@ mod tests {
             s.push(".corrupt");
             std::path::PathBuf::from(s)
         };
-        assert!(backup.exists(), "the corrupt WAL should be preserved at {:?}", backup);
+        assert!(
+            backup.exists(),
+            "the corrupt WAL should be preserved at {:?}",
+            backup
+        );
         // ...and it is no longer at the live path (so it won't re-trigger).
-        assert!(!path.exists(), "the corrupt WAL should have been moved off the live path");
+        assert!(
+            !path.exists(),
+            "the corrupt WAL should have been moved off the live path"
+        );
     }
 
     #[test]

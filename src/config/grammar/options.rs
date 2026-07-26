@@ -32,7 +32,10 @@ impl Options {
     /// The single value for `key`, or `None`. A key holding a list yields its first value;
     /// callers that care about the difference use `all`.
     pub fn one(&self, key: &str) -> Option<&str> {
-        self.inner.get(key).and_then(|v| v.first()).map(String::as_str)
+        self.inner
+            .get(key)
+            .and_then(|v| v.first())
+            .map(String::as_str)
     }
 
     pub fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) {
@@ -59,8 +62,10 @@ impl Options {
 pub fn parse_short(origin: &Origin, text: &str) -> Result<Options> {
     let mut out = Options::default();
     if text.trim().is_empty() {
-        return Err(GrammarError::new(origin.clone(), "`@` with no options after it")
-            .with_hint("write `@key=value`, or drop the `@`."));
+        return Err(
+            GrammarError::new(origin.clone(), "`@` with no options after it")
+                .with_hint("write `@key=value`, or drop the `@`."),
+        );
     }
 
     for part in text.split(',') {
@@ -129,7 +134,10 @@ fn looks_like_a_version(token: &str) -> bool {
 /// from the wreckage of a comma-split value.
 fn is_key(token: &str) -> bool {
     !token.is_empty()
-        && token.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && token
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && token
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -171,9 +179,7 @@ pub fn parse_block_line(origin: &Origin, line: &str) -> Result<(String, String)>
             origin.clone(),
             format!("block value for `{}` contains ` # `", key),
         )
-        .with_hint(
-            "block values are verbatim — did you mean a comment? Put it on its own line.",
-        ));
+        .with_hint("block values are verbatim — did you mean a comment? Put it on its own line."));
     }
     Ok((key.to_string(), value.to_string()))
 }

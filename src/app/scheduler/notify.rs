@@ -102,10 +102,7 @@ impl NotificationManager {
         match note.show() {
             Ok(_) => debug!("Desktop alert dispatched."),
             Err(e) => {
-                warn!(
-                    "Desktop alerts unavailable ({}). Logging to console.",
-                    e
-                );
+                warn!("Desktop alerts unavailable ({}). Logging to console.", e);
                 info!("[{}] {}: {}", level.title_prefix(), subject, body);
             }
         }

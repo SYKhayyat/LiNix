@@ -158,7 +158,6 @@ pub trait SnapshotProvider: Send + Sync {
     fn restore_capability(&self) -> RestoreCapability;
 }
 
-
 /// A Windows restore point is a `SequenceNumber`. The delete/restore cmdlets interpolate it
 /// unquoted and run elevated, so it becomes a `u32` here or it does not reach them at all —
 /// there is no quoting to get right for a number (SEC5). This is the typed gate the Windows
@@ -307,7 +306,11 @@ impl ConfigSnapshotProvider {
                 .replace("{ts}", &Local::now().format("%Y%m%d%H%M%S").to_string())
                 .replace("{ts_}", &Local::now().format("%Y%m%d_%H%M%S").to_string())
                 .replace("{source}", &self.def.source),
-            None => format!("linix_{}_{}", label.as_str(), Local::now().format("%Y%m%d_%H%M%S")),
+            None => format!(
+                "linix_{}_{}",
+                label.as_str(),
+                Local::now().format("%Y%m%d_%H%M%S")
+            ),
         }
     }
 
@@ -329,7 +332,8 @@ impl ConfigSnapshotProvider {
             let seq = windows_sequence_number(id)?;
             s = s.replace("{id}", &seq.to_string());
         }
-        Ok(s.replace("{label}", label).replace("{source}", &self.def.source))
+        Ok(s.replace("{label}", label)
+            .replace("{source}", &self.def.source))
     }
 
     async fn run_ps(&self, command: &str, elevated: bool) -> Result<String> {
@@ -374,7 +378,11 @@ impl SnapshotProvider for ConfigSnapshotProvider {
             // marker id (list() reads the real ids). `label` is an enum, so no `'` reaches the
             // shell; there is no `{id}` in a create.
             let template = self.def.create.clone();
-            let line = self.fill_ps(self.first_command(&template, "create")?, None, label.as_str())?;
+            let line = self.fill_ps(
+                self.first_command(&template, "create")?,
+                None,
+                label.as_str(),
+            )?;
             info!("{}: creating snapshot ({})", self.def.name, label);
             self.run_ps(&line, true).await?;
             self.generated_id(label)
@@ -410,7 +418,8 @@ impl SnapshotProvider for ConfigSnapshotProvider {
     async fn list(&self) -> Result<Vec<Snapshot>> {
         let out = if self.def.powershell {
             let template = self.def.list.clone();
-            self.run_ps(self.first_command(&template, "list")?, false).await?
+            self.run_ps(self.first_command(&template, "list")?, false)
+                .await?
         } else {
             let (prog, args) = self
                 .def
@@ -517,7 +526,8 @@ fn config_snapshot_defs(config: &Config) -> Vec<SnapshotProviderDef> {
             return Vec::new();
         }
     };
-    if let Some(refusal) = crate::core::hook_lock::adapter_refusal(&path, &content, &layout.locks_dir())
+    if let Some(refusal) =
+        crate::core::hook_lock::adapter_refusal(&path, &content, &layout.locks_dir())
     {
         tracing::error!("{}", refusal);
         return Vec::new();
@@ -924,7 +934,10 @@ mod tests {
         assert!(!d.is_live(), "the default must be create-only");
 
         d.restores_running_system = true;
-        assert!(!d.is_live(), "the flag alone, with no restore command, is not live");
+        assert!(
+            !d.is_live(),
+            "the flag alone, with no restore command, is not live"
+        );
 
         d.restore = vec!["merge".into(), "{id}".into()];
         assert!(d.is_live(), "flag AND a restore command is live");
@@ -951,7 +964,10 @@ mod tests {
             executor: CommandExecutor::new(true, false),
             def: def("lvm"),
         };
-        let err = p.restore("linix_pre_sync_20260726_120000").await.unwrap_err();
+        let err = p
+            .restore("linix_pre_sync_20260726_120000")
+            .await
+            .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("linix_pre_sync_20260726_120000"), "{}", msg);
         assert!(msg.contains("cannot roll"), "{}", msg);
@@ -1053,7 +1069,11 @@ list_pattern = '(linix_\S+)'
     async fn no_priority_keeps_registration_order() {
         let providers = vec![fake("btrfs", true), fake("zfs", true)];
         let chosen = SnapshotManager::choose(providers, &[]).await.unwrap();
-        assert_eq!(chosen.name(), "btrfs", "built-ins first when no list is declared");
+        assert_eq!(
+            chosen.name(),
+            "btrfs",
+            "built-ins first when no list is declared"
+        );
     }
 
     #[tokio::test]
@@ -1071,7 +1091,13 @@ list_pattern = '(linix_\S+)'
     #[test]
     fn the_builtin_snapshot_defs_hold_their_invariants() {
         let file: SnapshotProviderFile = toml::from_str(BUILTIN_SNAPSHOT_DEFS).unwrap();
-        let by = |name: &str| file.snapshot.iter().find(|d| d.name == name).unwrap().clone();
+        let by = |name: &str| {
+            file.snapshot
+                .iter()
+                .find(|d| d.name == name)
+                .unwrap()
+                .clone()
+        };
 
         for d in &file.snapshot {
             // detect_path/source placeholders are filled at load, so is_usable (which does not
@@ -1081,7 +1107,10 @@ list_pattern = '(linix_\S+)'
 
         // Create-only, on purpose — claiming Live would be the V.60 lie.
         assert!(!by("apfs").is_live(), "apfs is create-only");
-        assert!(!by("btrfs").is_live(), "btrfs cannot restore a running root");
+        assert!(
+            !by("btrfs").is_live(),
+            "btrfs cannot restore a running root"
+        );
         // Live restore.
         assert!(by("zfs").is_live());
         assert!(by("timeshift").is_live());

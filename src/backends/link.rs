@@ -19,9 +19,7 @@ pub struct LinkBackendCore {
 /// Where a `@target=` value lands on disk. The install path and the pre-sync confirmation
 /// must answer this the same way, or the run confirms one destination and writes another.
 pub fn resolve_target(target: &str) -> Result<PathBuf> {
-    let home = || {
-        dirs::home_dir().ok_or_else(|| Error::Other("Could not find home".into()))
-    };
+    let home = || dirs::home_dir().ok_or_else(|| Error::Other("Could not find home".into()));
     if let Some(rest) = target.strip_prefix("~/") {
         Ok(home()?.join(rest))
     } else if target == "~" {
@@ -43,7 +41,10 @@ pub fn backup_path(target: &Path) -> PathBuf {
 /// key was deliberately not added — restore-on-removal already kills the pile-up one would have
 /// been for, so one mechanism answers the whole question.
 pub fn wants_backup(spec: &PackageSpec) -> bool {
-    !matches!(spec.options.get("backup").map(String::as_str), Some("no") | Some("false"))
+    !matches!(
+        spec.options.get("backup").map(String::as_str),
+        Some("no") | Some("false")
+    )
 }
 
 /// Refuse a decrypted secret whose destination is inside the config repo (T2).
@@ -173,7 +174,10 @@ impl LinkBackendCore {
         // T4: an unattended `watch` tick does not attempt a touch-required line.
         if self.config.unattended {
             if let Some(plugin) = &plugin {
-                warn!("{}", crate::model::secret::watch_skip_message(source, plugin));
+                warn!(
+                    "{}",
+                    crate::model::secret::watch_skip_message(source, plugin)
+                );
                 return Ok(None);
             }
         }
@@ -183,7 +187,10 @@ impl LinkBackendCore {
         // from stdout, bounded by the timeout, restricted before it is written. A provider is
         // trusted only because it promised stdout-only and the ledger approved its file.
         let (program, args) = if tool == "age" || tool == "sops" {
-            (tool.to_string(), decrypt_argv(tool, source, identity.as_deref())?)
+            (
+                tool.to_string(),
+                decrypt_argv(tool, source, identity.as_deref())?,
+            )
         } else {
             let provider = self
                 .secret_providers
@@ -200,35 +207,33 @@ impl LinkBackendCore {
                     ))
                 })?;
             let id = identity.as_deref().map(|p| p.to_string_lossy().to_string());
-            provider.command(&source.to_string_lossy(), id.as_deref()).ok_or_else(|| {
-                Error::Other(format!("the `{}` secret provider has no command", tool))
-            })?
+            provider
+                .command(&source.to_string_lossy(), id.as_deref())
+                .ok_or_else(|| {
+                    Error::Other(format!("the `{}` secret provider has no command", tool))
+                })?
         };
         let mut cmd = Command::new(&program);
         cmd.args(&args);
         // T3: a decrypt that does not complete is waiting on a prompt nobody will answer. Bound
         // it, and on timeout name the token and the identity rather than leaving the process
         // (and this sync) hung forever.
-        let output = match tokio::time::timeout(
-            crate::model::secret::DECRYPT_TIMEOUT,
-            cmd.output(),
-        )
-        .await
-        {
-            Ok(result) => result.map_err(|e| {
-                Error::Other(format!(
-                    "could not launch '{}' to decrypt {:?}: {} — is it installed and on PATH?",
-                    tool, source, e
-                ))
-            })?,
-            Err(_) => {
-                return Err(Error::Other(crate::model::secret::token_timeout_message(
-                    source,
-                    identity.as_deref().unwrap_or(Path::new("(none)")),
-                    plugin.as_deref(),
-                )));
-            }
-        };
+        let output =
+            match tokio::time::timeout(crate::model::secret::DECRYPT_TIMEOUT, cmd.output()).await {
+                Ok(result) => result.map_err(|e| {
+                    Error::Other(format!(
+                        "could not launch '{}' to decrypt {:?}: {} — is it installed and on PATH?",
+                        tool, source, e
+                    ))
+                })?,
+                Err(_) => {
+                    return Err(Error::Other(crate::model::secret::token_timeout_message(
+                        source,
+                        identity.as_deref().unwrap_or(Path::new("(none)")),
+                        plugin.as_deref(),
+                    )));
+                }
+            };
         if !output.status.success() {
             return Err(Error::Other(format!(
                 "{} failed to decrypt {:?}: {}",
@@ -271,7 +276,12 @@ impl LinkBackendCore {
     /// exactly this content it is left untouched (no backup, no write); otherwise any
     /// pre-existing file is backed up (once) before the managed content is written.
     /// Shared by inline-content and rendered-template modes.
-    async fn apply_managed_content(&self, target: &Path, desired: &str, backup: bool) -> Result<()> {
+    async fn apply_managed_content(
+        &self,
+        target: &Path,
+        desired: &str,
+        backup: bool,
+    ) -> Result<()> {
         if let Ok(existing) = self.executor.read_file(target).await {
             if existing == desired {
                 debug!("Link: {:?} is already up-to-date.", target);
@@ -545,8 +555,13 @@ impl Installable for LinkInstallable {
             if has_backup {
                 // A failed restore leaves the user with neither their file nor an error, so
                 // it propagates rather than being logged past.
-                tokio::fs::rename(&backup, path).await.map_err(Error::from)?;
-                info!("Link: {:?} restored from the backup taken when it was declared.", path);
+                tokio::fs::rename(&backup, path)
+                    .await
+                    .map_err(Error::from)?;
+                info!(
+                    "Link: {:?} restored from the backup taken when it was declared.",
+                    path
+                );
             } else {
                 info!("Link: removed {:?}", path);
             }
@@ -567,13 +582,15 @@ pub fn register(
         &layout.adapter_secret_file(),
         &layout.locks_dir(),
     )
-    .and_then(|body| match toml::from_str::<crate::model::secret::SecretProviderFile>(&body) {
-        Ok(f) => Some(crate::model::secret::providers(f.secret)),
-        Err(e) => {
-            tracing::warn!("ignoring adapters/secret.toml: {}", e);
-            None
-        }
-    })
+    .and_then(
+        |body| match toml::from_str::<crate::model::secret::SecretProviderFile>(&body) {
+            Ok(f) => Some(crate::model::secret::providers(f.secret)),
+            Err(e) => {
+                tracing::warn!("ignoring adapters/secret.toml: {}", e);
+                None
+            }
+        },
+    )
     .unwrap_or_default();
 
     let core = Arc::new(
@@ -619,7 +636,10 @@ mod tests {
     fn a_bare_tilde_is_the_home_directory_and_is_inside_it() {
         let home = dirs::home_dir().unwrap();
         assert_eq!(resolve_target("~").unwrap(), home);
-        assert_eq!(resolve_target("~/.gitconfig").unwrap(), home.join(".gitconfig"));
+        assert_eq!(
+            resolve_target("~/.gitconfig").unwrap(),
+            home.join(".gitconfig")
+        );
         assert!(!is_outside_home(&resolve_target("~/.config/nvim").unwrap()));
     }
 
@@ -779,7 +799,10 @@ mod tests {
         spec.options.insert("backup".into(), "false".into());
         assert!(!wants_backup(&spec));
         spec.options.insert("backup".into(), "yes".into());
-        assert!(wants_backup(&spec), "any value but no/false keeps the backup");
+        assert!(
+            wants_backup(&spec),
+            "any value but no/false keeps the backup"
+        );
     }
 
     #[tokio::test]

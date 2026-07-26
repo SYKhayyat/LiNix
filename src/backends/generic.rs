@@ -170,7 +170,10 @@ impl GenericBackendCore {
     /// The program that removes. Falls back to [`binary`](Self::binary), not to the name, so a
     /// user-defined noun with a separate remover still removes with the right tool.
     pub fn remove_binary(&self) -> &str {
-        self.config.remove_binary.as_deref().unwrap_or_else(|| self.binary())
+        self.config
+            .remove_binary
+            .as_deref()
+            .unwrap_or_else(|| self.binary())
     }
 }
 
@@ -201,7 +204,10 @@ impl BackendCore for GenericBackendCore {
             };
             return Ok(HealthReport {
                 status: HealthStatus::Critical,
-                message: Some(format!("{}, so the `{}` backend cannot run", where_, self.name)),
+                message: Some(format!(
+                    "{}, so the `{}` backend cannot run",
+                    where_, self.name
+                )),
             });
         }
         Ok(HealthReport {
@@ -259,8 +265,12 @@ pub struct GenericInstallable {
 /// trusted and wrong often enough to install a plugin under a name nothing can remove, and the
 /// name lives in the plugin's own `plugin.yaml`, which cannot be read before it is fetched.
 fn install_source(backend: &str, spec: &PackageSpec, key: &str) -> Result<String> {
-    spec.options.get(key).filter(|v| !v.trim().is_empty()).cloned().ok_or_else(|| {
-        crate::core::Error::Validation(format!(
+    spec.options
+        .get(key)
+        .filter(|v| !v.trim().is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            crate::core::Error::Validation(format!(
             "{backend}:{name} needs `@{key}=…`. {backend} installs from that value but lists and \
              removes by name, so the declaration has to carry both: \
              `{backend}:{name}@{key}=<source>`.",
@@ -268,7 +278,7 @@ fn install_source(backend: &str, spec: &PackageSpec, key: &str) -> Result<String
             name = spec.name,
             key = key,
         ))
-    })
+        })
 }
 
 #[async_trait]
@@ -349,12 +359,7 @@ impl Installable for GenericInstallable {
 }
 
 impl GenericInstallable {
-    async fn run_removal(
-        &self,
-        mut args: Vec<String>,
-        names: &[String],
-        sudo: bool,
-    ) -> Result<()> {
+    async fn run_removal(&self, mut args: Vec<String>, names: &[String], sudo: bool) -> Result<()> {
         if names.is_empty() {
             return Ok(());
         }
@@ -553,7 +558,10 @@ impl Upgradable for GenericUpgradable {
     async fn update(&self, sudo: bool) -> Result<()> {
         if let Some(ref update_args) = self.core.config.update_args {
             let args: Vec<&str> = update_args.iter().map(|s| s.as_str()).collect();
-            self.core.executor.run(self.core.binary(), &args, sudo).await?;
+            self.core
+                .executor
+                .run(self.core.binary(), &args, sudo)
+                .await?;
         }
         Ok(())
     }
@@ -572,7 +580,10 @@ impl Upgradable for GenericUpgradable {
                 .run_exclusive(self.core.binary(), self.core.binary(), &args, sudo)
                 .await?;
         } else {
-            self.core.executor.run(self.core.binary(), &args, sudo).await?;
+            self.core
+                .executor
+                .run(self.core.binary(), &args, sudo)
+                .await?;
         }
         Ok(())
     }
@@ -979,17 +990,23 @@ mod tests {
 
         let calls = mock.get_calls().await;
         assert!(
-            calls.iter().any(|c| c.contains("plugin install") && c.contains(url)),
+            calls
+                .iter()
+                .any(|c| c.contains("plugin install") && c.contains(url)),
             "install must send the url: {:?}",
             calls
         );
         assert!(
-            !calls.iter().any(|c| c.contains("plugin install") && c.contains(" diff")),
+            !calls
+                .iter()
+                .any(|c| c.contains("plugin install") && c.contains(" diff")),
             "install must not send the name: {:?}",
             calls
         );
         assert!(
-            calls.iter().any(|c| c.contains("plugin uninstall") && c.contains("diff")),
+            calls
+                .iter()
+                .any(|c| c.contains("plugin uninstall") && c.contains("diff")),
             "remove must send the name: {:?}",
             calls
         );

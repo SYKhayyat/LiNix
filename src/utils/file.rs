@@ -77,8 +77,21 @@ pub fn force_remove(path: &Path) -> Result<()> {
 /// the user's to make, and it is the whole file's worth of blast radius.
 /// Archive and package extensions, longest-tail first so `.tar.gz` comes off as a unit.
 const ARCHIVE_SUFFIXES: &[&str] = &[
-    ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tgz", ".tbz2", ".txz",
-    ".zip", ".gz", ".bz2", ".xz", ".zst", ".7z", ".exe", ".appimage",
+    ".tar.gz",
+    ".tar.bz2",
+    ".tar.xz",
+    ".tar.zst",
+    ".tgz",
+    ".tbz2",
+    ".txz",
+    ".zip",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".zst",
+    ".7z",
+    ".exe",
+    ".appimage",
 ];
 
 /// The name a downloaded file installs under.
@@ -90,10 +103,7 @@ pub fn strip_archive_suffixes(filename: &str) -> &str {
     let mut name = filename;
     loop {
         let lower = name.to_ascii_lowercase();
-        match ARCHIVE_SUFFIXES
-            .iter()
-            .find(|s| lower.ends_with(*s))
-        {
+        match ARCHIVE_SUFFIXES.iter().find(|s| lower.ends_with(*s)) {
             Some(suffix) => name = &name[..name.len() - suffix.len()],
             None => return name,
         }
@@ -387,9 +397,14 @@ mod suffix_tests {
     #[test]
     fn a_dotted_version_is_not_mistaken_for_an_extension() {
         // Cutting at the first `.` named the installed binary `ripgrep-14`.
-        assert_eq!(strip_archive_suffixes("ripgrep-14.1.0-x86_64.tar.gz"), "ripgrep-14.1.0-x86_64");
-        assert_eq!(strip_archive_suffixes("fd-v10.2.0-x86_64-unknown-linux-gnu.tar.gz"),
-                   "fd-v10.2.0-x86_64-unknown-linux-gnu");
+        assert_eq!(
+            strip_archive_suffixes("ripgrep-14.1.0-x86_64.tar.gz"),
+            "ripgrep-14.1.0-x86_64"
+        );
+        assert_eq!(
+            strip_archive_suffixes("fd-v10.2.0-x86_64-unknown-linux-gnu.tar.gz"),
+            "fd-v10.2.0-x86_64-unknown-linux-gnu"
+        );
     }
 
     #[test]

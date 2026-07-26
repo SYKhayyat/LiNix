@@ -22,8 +22,10 @@
 //! user's own row goes through. An adapter mechanism the built-ins bypass is one nobody has
 //! tested.
 
-use crate::core::{BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package,
-    PackageSpec, Queryable, Result};
+use crate::core::{
+    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    Queryable, Result,
+};
 use crate::model::scope::Scope;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -83,7 +85,9 @@ impl SettingAdapter {
     /// refused at load, so this never has to invent one.
     fn command(args: &[String], schema: &str, key: &str, value: &str) -> (String, Vec<String>) {
         let filled = Self::fill(args, schema, key, value);
-        let (prog, rest) = filled.split_first().expect("an empty adapter command was loaded");
+        let (prog, rest) = filled
+            .split_first()
+            .expect("an empty adapter command was loaded");
         (prog.clone(), rest.to_vec())
     }
 
@@ -133,11 +137,17 @@ impl SettingAdapter {
         if self.detect.trim().is_empty() {
             return Some("it has no `detect` command");
         }
-        for (label, args) in [("read", &self.read), ("write", &self.write), ("reset", &self.reset)] {
+        for (label, args) in [
+            ("read", &self.read),
+            ("write", &self.write),
+            ("reset", &self.reset),
+        ] {
             if args.is_empty() {
                 return Some(match label {
-                    "read" => "its `read` command is empty — a store LiNix cannot read is one it \
-                               would write on every sync",
+                    "read" => {
+                        "its `read` command is empty — a store LiNix cannot read is one it \
+                               would write on every sync"
+                    }
                     "write" => "its `write` command is empty",
                     _ => "its `reset` command is empty — removing a declaration would do nothing",
                 });
@@ -157,8 +167,8 @@ impl SettingAdapter {
 /// Every adapter this machine knows: the shipped rows, then the user's. A user row cannot take
 /// a shipped name — that is the same rule custom backends follow, and for the same reason.
 pub fn adapters(user_rows: Vec<SettingAdapter>) -> Vec<SettingAdapter> {
-    let shipped: SettingStoreFile = toml::from_str(BUILTIN_STORES)
-        .expect("the shipped setting_stores.toml must parse");
+    let shipped: SettingStoreFile =
+        toml::from_str(BUILTIN_STORES).expect("the shipped setting_stores.toml must parse");
     let mut out: Vec<SettingAdapter> = Vec::new();
     for row in shipped.setting_store.into_iter().chain(user_rows) {
         if let Some(why) = row.is_usable() {
@@ -191,7 +201,10 @@ pub fn user_adapters(cfg: &crate::config::Config) -> Vec<SettingAdapter> {
         Some(body) => match toml::from_str::<SettingStoreFile>(&body) {
             Ok(f) => f.setting_store,
             Err(e) => {
-                warn!("ignoring the settings adapters in adapters/settings.toml: {}", e);
+                warn!(
+                    "ignoring the settings adapters in adapters/settings.toml: {}",
+                    e
+                );
                 Vec::new()
             }
         },
@@ -242,15 +255,14 @@ impl SettingBackendCore {
     /// silently unapplied is worse than a refusal, because the whole point is that the file
     /// is the truth (X.4).
     pub fn adapter(&self) -> Option<&SettingAdapter> {
-        self.adapters.iter().find(|a| {
-            a.applies_to_this_os() && self.executor.command_exists_sync(&a.detect)
-        })
+        self.adapters
+            .iter()
+            .find(|a| a.applies_to_this_os() && self.executor.command_exists_sync(&a.detect))
     }
 
     fn split(spec_name: &str) -> Result<(&str, &str)> {
-        crate::config::grammar::statement::split_setting(spec_name).ok_or_else(|| {
-            Error::Validation(format!("`{}` is not `SCHEMA/KEY`", spec_name))
-        })
+        crate::config::grammar::statement::split_setting(spec_name)
+            .ok_or_else(|| Error::Validation(format!("`{}` is not `SCHEMA/KEY`", spec_name)))
     }
 
     /// What scope this line means, refusing rather than pretending when the store cannot do
@@ -322,14 +334,20 @@ impl Installable for SettingInstallable {
     async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
         for spec in specs {
             let (schema, key) = SettingBackendCore::split(&spec.name)?;
-            let want = spec.options.get("value").map(String::as_str).ok_or_else(|| {
-                Error::Validation(format!("`setting:{}` has no value", spec.name))
-            })?;
+            let want = spec
+                .options
+                .get("value")
+                .map(String::as_str)
+                .ok_or_else(|| {
+                    Error::Validation(format!("`setting:{}` has no value", spec.name))
+                })?;
 
             let Some(adapter) = self.core.adapter() else {
                 return Err(self.core.no_adapter(&spec.name));
             };
-            let scope = self.core.scope_of(adapter, spec.options.get("scope"), &spec.name)?;
+            let scope = self
+                .core
+                .scope_of(adapter, spec.options.get("scope"), &spec.name)?;
 
             // Read before write: only touch the store when it does not already hold `want`,
             // so a settled sync runs no command at all. Read in the SAME scope it will write:
@@ -468,7 +486,12 @@ mod tests {
             name: name.into(),
             detect: detect.into(),
             os: None,
-            read: vec![detect.into(), "read".into(), "{schema}".into(), "{key}".into()],
+            read: vec![
+                detect.into(),
+                "read".into(),
+                "{schema}".into(),
+                "{key}".into(),
+            ],
             write: vec![
                 detect.into(),
                 "write".into(),
@@ -476,7 +499,12 @@ mod tests {
                 "{key}".into(),
                 "{value}".into(),
             ],
-            reset: vec![detect.into(), "reset".into(), "{schema}".into(), "{key}".into()],
+            reset: vec![
+                detect.into(),
+                "reset".into(),
+                "{schema}".into(),
+                "{key}".into(),
+            ],
             system_read: vec![],
             system_write: vec![],
             system_reset: vec![],
@@ -489,8 +517,16 @@ mod tests {
     #[test]
     fn a_store_with_no_compiled_in_support_is_driven_from_a_row() {
         let all = adapters(vec![row("kde", "kwriteconfig6")]);
-        let kde = all.iter().find(|a| a.name == "kde").expect("the user row loaded");
-        let (prog, args) = kde.write_command(Scope::User, "kdeglobals/General", "ColorScheme", "BreezeDark");
+        let kde = all
+            .iter()
+            .find(|a| a.name == "kde")
+            .expect("the user row loaded");
+        let (prog, args) = kde.write_command(
+            Scope::User,
+            "kdeglobals/General",
+            "ColorScheme",
+            "BreezeDark",
+        );
         assert_eq!(prog, "kwriteconfig6");
         assert_eq!(
             args,
@@ -517,7 +553,9 @@ mod tests {
 
         let mut unresettable = row("half", "halfctl");
         unresettable.reset = vec![];
-        assert!(!adapters(vec![unresettable]).iter().any(|a| a.name == "half"));
+        assert!(!adapters(vec![unresettable])
+            .iter()
+            .any(|a| a.name == "half"));
 
         let mut nameless = row("", "halfctl");
         nameless.name = String::new();
@@ -579,11 +617,15 @@ mod tests {
         let core = SettingBackendCore::new(CommandExecutor::new(true, false), adapters(vec![]));
         let g = gsettings();
         assert_eq!(
-            core.scope_of(&g, Some(&"user".to_string()), "org.gnome.x/k").unwrap(),
+            core.scope_of(&g, Some(&"user".to_string()), "org.gnome.x/k")
+                .unwrap(),
             Scope::User
         );
         // And omitting it means the same thing.
-        assert_eq!(core.scope_of(&g, None, "org.gnome.x/k").unwrap(), Scope::User);
+        assert_eq!(
+            core.scope_of(&g, None, "org.gnome.x/k").unwrap(),
+            Scope::User
+        );
     }
 
     #[test]
@@ -619,7 +661,9 @@ mod tests {
     #[test]
     fn the_refusal_names_the_stores_it_looked_for() {
         let core = SettingBackendCore::new(CommandExecutor::new(true, false), adapters(vec![]));
-        let msg = core.no_adapter("org.gnome.desktop.interface/color-scheme").to_string();
+        let msg = core
+            .no_adapter("org.gnome.desktop.interface/color-scheme")
+            .to_string();
         assert!(msg.contains("gsettings"), "{}", msg);
         assert!(msg.contains("setting_store"), "{}", msg);
     }

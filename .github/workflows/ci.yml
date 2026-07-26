@@ -54,12 +54,9 @@ jobs:
     - name: Run tests
       run: cargo test --release --target ${{ matrix.target }}
 
-    # Informational only: the existing codebase is not yet rustfmt-clean. Kept
-    # non-blocking so it doesn't gate CI; remove continue-on-error once formatted.
     - name: Check formatting
       run: cargo fmt -- --check
       if: matrix.os == 'ubuntu-latest'
-      continue-on-error: true
 
     - name: Run clippy
       run: cargo clippy --all-targets --all-features -- -D warnings

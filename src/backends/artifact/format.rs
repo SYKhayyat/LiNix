@@ -291,19 +291,34 @@ mod tests {
     /// upgrade slips in.
     #[test]
     fn the_default_order_is_pinned_to_its_version() {
-        assert_eq!(FormatOrder::DEFAULT_ORDER_VERSION, 1, "bump the version WITH the order");
+        assert_eq!(
+            FormatOrder::DEFAULT_ORDER_VERSION,
+            1,
+            "bump the version WITH the order"
+        );
 
         let debian = FormatOrder::detected_default("linux", Some("debian"));
         assert_eq!(
             debian.as_slice(),
-            &[Format::Deb, Format::AppImage, Format::Tarball, Format::Binary]
+            &[
+                Format::Deb,
+                Format::AppImage,
+                Format::Tarball,
+                Format::Binary
+            ]
         );
         let windows = FormatOrder::detected_default("windows", None);
         assert_eq!(windows.as_slice(), &[Format::Exe, Format::Msi, Format::Zip]);
         let macos = FormatOrder::detected_default("macos", None);
         assert_eq!(
             macos.as_slice(),
-            &[Format::Dmg, Format::Pkg, Format::Tarball, Format::Zip, Format::Binary]
+            &[
+                Format::Dmg,
+                Format::Pkg,
+                Format::Tarball,
+                Format::Zip,
+                Format::Binary
+            ]
         );
     }
 
@@ -357,7 +372,9 @@ mod tests {
             assert!(Format::is_metadata_filename(name), "{}", name);
         }
         // And a package that merely ends in those letters is not one.
-        assert!(!Format::is_metadata_filename("consums-1.0-linux-amd64.tar.gz"));
+        assert!(!Format::is_metadata_filename(
+            "consums-1.0-linux-amd64.tar.gz"
+        ));
     }
 
     #[test]
@@ -395,7 +412,11 @@ mod tests {
         // gh, rclone and starship all ship their macOS build as a .zip; without it those
         // packages resolve to nothing on a Mac (D2).
         let order = FormatOrder::detected_default("macos", None);
-        assert!(order.as_slice().contains(&Format::Zip), "{:?}", order.as_slice());
+        assert!(
+            order.as_slice().contains(&Format::Zip),
+            "{:?}",
+            order.as_slice()
+        );
         // dmg and pkg still lead — a native installer beats an archive to unpack.
         assert_eq!(order.as_slice().first(), Some(&Format::Dmg));
     }
@@ -403,7 +424,9 @@ mod tests {
     #[test]
     fn a_detected_order_is_not_user_specified_but_a_marked_one_is() {
         assert!(!FormatOrder::detected_default("linux", Some("debian")).is_user_specified());
-        assert!(FormatOrder::new(vec![Format::Deb]).as_user_specified().is_user_specified());
+        assert!(FormatOrder::new(vec![Format::Deb])
+            .as_user_specified()
+            .is_user_specified());
     }
 
     #[test]

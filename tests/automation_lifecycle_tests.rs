@@ -17,10 +17,16 @@ async fn test_snapshot_retention_reaps_only_linix_owned_and_keeps_the_newest() {
     let mock_provider = MockSnapshotProvider::new();
 
     // LiNix-owned (the id carries `linix_`): one recent, one ancient.
-    mock_provider.add_historical_snapshot("linix_recent", 1).await;
-    mock_provider.add_historical_snapshot("linix_ancient", 45).await;
+    mock_provider
+        .add_historical_snapshot("linix_recent", 1)
+        .await;
+    mock_provider
+        .add_historical_snapshot("linix_ancient", 45)
+        .await;
     // NOT LiNix's — a user or other-tool snapshot. Retention must never touch it.
-    mock_provider.add_historical_snapshot("weekly_backup", 90).await;
+    mock_provider
+        .add_historical_snapshot("weekly_backup", 90)
+        .await;
 
     let manager = SnapshotManager::with_provider(Box::new(mock_provider));
 
@@ -63,8 +69,12 @@ async fn test_snapshot_retention_respects_dry_run() {
     use linix::core::RetentionPolicy;
     let mock_provider = MockSnapshotProvider::new();
     // Two owned snapshots so one is past the always-keep-newest floor.
-    mock_provider.add_historical_snapshot("linix_newest", 1).await;
-    mock_provider.add_historical_snapshot("linix_stale", 100).await;
+    mock_provider
+        .add_historical_snapshot("linix_newest", 1)
+        .await;
+    mock_provider
+        .add_historical_snapshot("linix_stale", 100)
+        .await;
     let manager = SnapshotManager::with_provider(Box::new(mock_provider));
 
     let policy = RetentionPolicy {

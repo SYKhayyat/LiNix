@@ -232,7 +232,6 @@ pub enum Commands {
         json: bool,
     },
 
-
     /// Compute what `sync` would do and freeze it to a reviewable file, so the exact plan you
     /// inspect is the one you later `apply` (Terraform-style plan/apply for packages).
     Plan {
@@ -416,7 +415,6 @@ pub enum Commands {
     /// Manage source repositories (PPA, Taps, Buckets, etc.)
     Repo(RepoArgs),
 
-
     /// Take over the machine: write the packages you installed by hand into a module
     Adopt,
 
@@ -584,7 +582,6 @@ pub enum Commands {
         interactive: bool,
     },
 
-
     /// Emit a CycloneDX software bill of materials (SBOM) spanning every backend
     Sbom,
 
@@ -729,7 +726,6 @@ pub enum Commands {
         #[arg(required = true)]
         packages: Vec<String>,
     },
-
 
     /// Check the desired system state against your [guard] install/change rules
     Policy,

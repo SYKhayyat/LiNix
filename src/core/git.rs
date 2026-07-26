@@ -60,7 +60,10 @@ impl Signature {
             Self::Unsigned => "unsigned".to_string(),
             Self::Good(signer) => format!("signed by {}", signer),
             Self::Unverified { signer, code } => {
-                format!("signed by {} — git will not vouch for it ({})", signer, code)
+                format!(
+                    "signed by {} — git will not vouch for it ({})",
+                    signer, code
+                )
             }
             Self::Bad => "a bad signature, or one git could not check".to_string(),
         }
@@ -432,7 +435,10 @@ mod tests {
                     +# a comment line, not a package\n";
         let changes = parse_manifest_changes(diff);
         // Kept: the real +/- package lines. Dropped: ---/+++ headers, context, and the comment.
-        assert_eq!(changes, vec!["- apt:nano".to_string(), "+ cargo:ripgrep".to_string()]);
+        assert_eq!(
+            changes,
+            vec!["- apt:nano".to_string(), "+ cargo:ripgrep".to_string()]
+        );
     }
 
     #[test]
@@ -472,9 +478,11 @@ mod tests {
     fn a_missing_identity_is_named_as_the_reason_the_commit_failed() {
         // Reachable only since LiNix stopped injecting `linix@localhost`: git's own message is
         // about `user.email`, and the hint has to be about how LiNix uses it.
-        let hint = commit_refusal_hint("*** Please tell me who you are.
+        let hint = commit_refusal_hint(
+            "*** Please tell me who you are.
 
-fatal: unable to auto-detect email address");
+fatal: unable to auto-detect email address",
+        );
         assert!(hint.contains("git config --global user.email"), "{}", hint);
         let signing = commit_refusal_hint("error: gpg failed to sign the data");
         assert!(signing.contains("commit.gpgsign"), "{}", signing);
@@ -530,13 +538,21 @@ fatal: unable to auto-detect email address");
 
         std::fs::write(tmp.path().join("modules/dev.txt"), "apt:curl\napt:nano\n").unwrap();
         git.commit_all("base").unwrap();
-        std::fs::write(tmp.path().join("modules/dev.txt"), "apt:curl\ncargo:ripgrep\n").unwrap();
+        std::fs::write(
+            tmp.path().join("modules/dev.txt"),
+            "apt:curl\ncargo:ripgrep\n",
+        )
+        .unwrap();
         git.commit_all("swap nano for ripgrep").unwrap();
 
         let changes = git.diff_manifest_changes("HEAD~1", Some("HEAD")).unwrap();
         // Package-level delta: nano removed, ripgrep added, curl untouched (in neither).
         assert!(changes.contains(&"- apt:nano".to_string()), "{:?}", changes);
-        assert!(changes.contains(&"+ cargo:ripgrep".to_string()), "{:?}", changes);
+        assert!(
+            changes.contains(&"+ cargo:ripgrep".to_string()),
+            "{:?}",
+            changes
+        );
         assert!(
             !changes.iter().any(|c| c.contains("apt:curl")),
             "unchanged lines must not appear: {:?}",

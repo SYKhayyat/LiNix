@@ -264,11 +264,31 @@ mod tests {
     /// the other machine's choices — vendoring them would silently reconfigure yours.
     #[test]
     fn only_shareable_files_are_vendored() {
-        assert_eq!(Vendored::of(Path::new("modules/tools.txt")), Some(Vendored::Module));
-        assert_eq!(Vendored::of(Path::new("adapters/backends.toml")), Some(Vendored::Adapter));
-        assert_eq!(Vendored::of(Path::new("scripts/setup.sh")), Some(Vendored::Script));
-        for skip in ["profiles/Work", "active", "priority", "README.md", "modules/notes.md"] {
-            assert_eq!(Vendored::of(Path::new(skip)), None, "{} should not vendor", skip);
+        assert_eq!(
+            Vendored::of(Path::new("modules/tools.txt")),
+            Some(Vendored::Module)
+        );
+        assert_eq!(
+            Vendored::of(Path::new("adapters/backends.toml")),
+            Some(Vendored::Adapter)
+        );
+        assert_eq!(
+            Vendored::of(Path::new("scripts/setup.sh")),
+            Some(Vendored::Script)
+        );
+        for skip in [
+            "profiles/Work",
+            "active",
+            "priority",
+            "README.md",
+            "modules/notes.md",
+        ] {
+            assert_eq!(
+                Vendored::of(Path::new(skip)),
+                None,
+                "{} should not vendor",
+                skip
+            );
         }
     }
 
@@ -283,7 +303,10 @@ mod tests {
     #[test]
     fn a_path_that_escapes_the_repo_is_refused() {
         assert_eq!(safe_relative(Path::new("../../.bashrc")), None);
-        assert_eq!(safe_relative(Path::new("modules/../../../etc/passwd")), None);
+        assert_eq!(
+            safe_relative(Path::new("modules/../../../etc/passwd")),
+            None
+        );
         assert_eq!(safe_relative(Path::new("/etc/passwd")), None);
         // A clean relative path survives, with a leading `./` stripped.
         assert_eq!(
@@ -303,7 +326,10 @@ mod tests {
         let plan = plan(&files, &|_| false);
         assert_eq!(plan.placements.len(), 2, "{:?}", plan.placements);
         assert!(plan.collisions.is_empty());
-        assert_eq!(plan.placements[0].to, PathBuf::from("adapters/backends.toml"));
+        assert_eq!(
+            plan.placements[0].to,
+            PathBuf::from("adapters/backends.toml")
+        );
         assert_eq!(plan.placements[1].to, PathBuf::from("modules/tools.txt"));
     }
 

@@ -1,7 +1,6 @@
 use crate::core::{
     BackendCore, CommandExecutor, Enumerable, Error, Installable, MetadataProvider, Package,
-    PackageSpec,
-    Queryable, RepoManager, Result, Searchable, Upgradable,
+    PackageSpec, Queryable, RepoManager, Result, Searchable, Upgradable,
 };
 use crate::parsers::pacman;
 use async_trait::async_trait;

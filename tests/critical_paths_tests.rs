@@ -203,9 +203,10 @@ async fn healing_an_interrupted_install_never_uninstalls() {
     record_interrupted(&kernel, JournalAction::Install(spec("stale-pkg", "brew"))).await;
 
     let engine = kernel.app.sync_engine().await;
-    kernel
-        .mock_executor
-        .set_response("brew install -- stale-pkg", Ok(DryRunOutput::default().into()));
+    kernel.mock_executor.set_response(
+        "brew install -- stale-pkg",
+        Ok(DryRunOutput::default().into()),
+    );
 
     engine.heal().await.expect("Healing cycle crashed.");
 
@@ -251,7 +252,9 @@ async fn healing_an_interrupted_removal_still_removes() {
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
-        calls.iter().any(|c| c.contains("uninstall") && c.contains("doomed-pkg")),
+        calls
+            .iter()
+            .any(|c| c.contains("uninstall") && c.contains("doomed-pkg")),
         "recovery did not complete the interrupted removal: {:?}",
         calls
     );
@@ -415,11 +418,19 @@ async fn list_aggregates_every_backend_that_answers() {
 
     let all = kernel.app.list(None).await.expect("list runs");
     let names: std::collections::HashSet<&str> = all.iter().map(|p| p.name.as_str()).collect();
-    assert!(names.contains("ripgrep"), "brew packages missing: {:?}", names);
+    assert!(
+        names.contains("ripgrep"),
+        "brew packages missing: {:?}",
+        names
+    );
     assert!(names.contains("bat"), "cargo packages missing: {:?}", names);
 
     // A backend filter still narrows to one.
     let brew_only = kernel.app.list(Some("brew")).await.unwrap();
-    assert!(brew_only.iter().all(|p| p.backend == "brew"), "{:?}", brew_only);
+    assert!(
+        brew_only.iter().all(|p| p.backend == "brew"),
+        "{:?}",
+        brew_only
+    );
     assert!(brew_only.iter().any(|p| p.name == "fd"));
 }

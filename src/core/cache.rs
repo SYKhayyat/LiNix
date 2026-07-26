@@ -81,7 +81,6 @@ where
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
     }
-
 }
 
 impl<K, V> Clone for SmartCache<K, V>

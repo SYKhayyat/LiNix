@@ -26,8 +26,7 @@ impl HostFacts {
             os: std::env::consts::OS.to_string(),
             arch: std::env::consts::ARCH.to_string(),
             host: crate::config::Config::get_hostname(),
-            family: distro_family()
-                .unwrap_or_else(|| std::env::consts::OS.to_string()),
+            family: distro_family().unwrap_or_else(|| std::env::consts::OS.to_string()),
             vars: Default::default(),
         }
     }
@@ -262,8 +261,14 @@ mod conditional_tests {
             family: "freebsd".into(),
             ..facts()
         };
-        assert!(!eval_when("family == debian", &bsd).unwrap(), "freebsd is not debian");
-        assert!(eval_when("family == freebsd", &bsd).unwrap(), "but it IS freebsd");
+        assert!(
+            !eval_when("family == debian", &bsd).unwrap(),
+            "freebsd is not debian"
+        );
+        assert!(
+            eval_when("family == freebsd", &bsd).unwrap(),
+            "but it IS freebsd"
+        );
         assert!(eval_when("family != debian", &bsd).unwrap());
     }
 
@@ -292,7 +297,10 @@ mod conditional_tests {
         let mut vars = crate::model::vars::Vars::new();
         vars.insert("os".into(), Value::Str("definitely-not-linux".into()));
         let f = facts().with_vars(vars);
-        assert!(eval_when("os == linux", &f).unwrap(), "`os` must stay the detected fact");
+        assert!(
+            eval_when("os == linux", &f).unwrap(),
+            "`os` must stay the detected fact"
+        );
         assert!(eval_when("$os == definitely-not-linux", &f).unwrap());
     }
 
@@ -302,7 +310,10 @@ mod conditional_tests {
         vars.insert("gpu".into(), Value::Bool(true));
         vars.insert("cores".into(), Value::Num(8.0));
         vars.insert("role".into(), Value::Str("travel".into()));
-        vars.insert("tags".into(), Value::List(vec![Value::Str("travel".into())]));
+        vars.insert(
+            "tags".into(),
+            Value::List(vec![Value::Str("travel".into())]),
+        );
         let f = facts().with_vars(vars);
 
         assert!(eval_when("$gpu == true", &f).unwrap());

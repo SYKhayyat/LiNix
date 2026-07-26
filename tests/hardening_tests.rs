@@ -48,7 +48,9 @@ async fn resolver_records_every_scope_a_package_belongs_to() {
     tokio::fs::write(root.join("modules/dev.txt"), "cargo:ripgrep\n")
         .await
         .unwrap();
-    tokio::fs::write(root.join("active"), "Work\n").await.unwrap();
+    tokio::fs::write(root.join("active"), "Work\n")
+        .await
+        .unwrap();
 
     let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
     let desired = resolver.resolve_desired_state().await.unwrap();
@@ -92,7 +94,9 @@ async fn scoped_upgrade_is_non_destructive_end_to_end() {
     tokio::fs::write(root.join("modules/dev.txt"), "cargo:ripgrep\n")
         .await
         .unwrap();
-    tokio::fs::write(root.join("active"), "Work\n").await.unwrap();
+    tokio::fs::write(root.join("active"), "Work\n")
+        .await
+        .unwrap();
 
     // A managed package that no active module declares == drift.
     {
@@ -159,10 +163,11 @@ async fn dependents_only_config_resolves_and_applies_the_dependent_phase() {
     )
     .await
     .unwrap();
-    tokio::fs::write(root.join("active"), "Work\n").await.unwrap();
+    tokio::fs::write(root.join("active"), "Work\n")
+        .await
+        .unwrap();
 
-    let resolver =
-        StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
+    let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
     let state = resolver.resolve_model().await.unwrap();
 
     assert!(
@@ -277,7 +282,9 @@ async fn pinned_version_reaches_install_command() {
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
-        calls.iter().any(|c| c.contains("install -- requests==2.31.0")),
+        calls
+            .iter()
+            .any(|c| c.contains("install -- requests==2.31.0")),
         "pip should pin with ==, got: {:?}",
         calls
     );
@@ -343,7 +350,11 @@ async fn declaring_an_unlisted_backend_writes_nothing() {
 
     let imperative = root.join("modules/imperative.txt");
     assert!(
-        !imperative.exists() || !tokio::fs::read_to_string(&imperative).await.unwrap().contains("npm"),
+        !imperative.exists()
+            || !tokio::fs::read_to_string(&imperative)
+                .await
+                .unwrap()
+                .contains("npm"),
         "the refused line reached the manifest anyway"
     );
 }

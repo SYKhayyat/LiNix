@@ -132,7 +132,10 @@ impl InitProvider {
             return Vec::new();
         };
         let Ok(re) = regex::Regex::new(pattern) else {
-            warn!("the `{}` init adapter's list_pattern is not a regex", self.name);
+            warn!(
+                "the `{}` init adapter's list_pattern is not a regex",
+                self.name
+            );
             return Vec::new();
         };
         let mut out = Vec::new();
@@ -293,7 +296,10 @@ impl Installable for ServiceInstallable {
                 "Service {}: applied {:?} (init={})",
                 spec.name,
                 actions,
-                self.core.detect_init().map(|p| p.name.as_str()).unwrap_or("none"),
+                self.core
+                    .detect_init()
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("none"),
             );
         }
         Ok(())
@@ -328,7 +334,11 @@ impl Queryable for ServiceQueryable {
         }
         let (prog, args) = init.list.split_first().expect("list is non-empty here");
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = self.core.executor.run_output(prog, &arg_refs, false).await?;
+        let out = self
+            .core
+            .executor
+            .run_output(prog, &arg_refs, false)
+            .await?;
         Ok(init.parse_list(&out))
     }
 
@@ -477,7 +487,11 @@ mod tests {
         );
         assert_eq!(
             p.plan(ServiceAction::Start, "sshd"),
-            vec![vec!["rc-service".to_string(), "sshd".into(), "start".into()]]
+            vec![vec![
+                "rc-service".to_string(),
+                "sshd".into(),
+                "start".into()
+            ]]
         );
     }
 
@@ -560,8 +574,14 @@ stop = [["evil"]]
 
     #[test]
     fn options_are_independent() {
-        assert_eq!(actions_for(None, Some("running")), vec![ServiceAction::Start]);
-        assert_eq!(actions_for(None, Some("stopped")), vec![ServiceAction::Stop]);
+        assert_eq!(
+            actions_for(None, Some("running")),
+            vec![ServiceAction::Start]
+        );
+        assert_eq!(
+            actions_for(None, Some("stopped")),
+            vec![ServiceAction::Stop]
+        );
         assert_eq!(actions_for(Some("true"), None), vec![ServiceAction::Enable]);
         assert_eq!(
             actions_for(Some("false"), None),

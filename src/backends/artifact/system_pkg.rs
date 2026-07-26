@@ -48,7 +48,12 @@ pub fn install_argv(format: Format, file: &Path) -> Result<Vec<String>> {
     let path = file.to_string_lossy().to_string();
     match format {
         Format::Deb => Ok(vec!["dpkg".into(), "-i".into(), path]),
-        Format::Rpm => Ok(vec!["rpm".into(), "-U".into(), "--replacepkgs".into(), path]),
+        Format::Rpm => Ok(vec![
+            "rpm".into(),
+            "-U".into(),
+            "--replacepkgs".into(),
+            path,
+        ]),
         other => Err(Error::Validation(format!(
             "{} is not a file LiNix hands to a system package manager",
             other
@@ -76,12 +81,7 @@ pub fn remove_argv(installer: &str, package: &str) -> Result<Vec<String>> {
 pub fn query_name_argv(format: Format, file: &Path) -> Result<Vec<String>> {
     let path = file.to_string_lossy().to_string();
     match format {
-        Format::Deb => Ok(vec![
-            "dpkg-deb".into(),
-            "-f".into(),
-            path,
-            "Package".into(),
-        ]),
+        Format::Deb => Ok(vec!["dpkg-deb".into(), "-f".into(), path, "Package".into()]),
         Format::Rpm => Ok(vec![
             "rpm".into(),
             "-qp".into(),
@@ -144,10 +144,7 @@ mod tests {
 
     #[test]
     fn remove_uses_the_package_name_not_the_file() {
-        assert_eq!(
-            remove_argv("dpkg", "fd").unwrap(),
-            vec!["dpkg", "-r", "fd"]
-        );
+        assert_eq!(remove_argv("dpkg", "fd").unwrap(), vec!["dpkg", "-r", "fd"]);
         assert_eq!(remove_argv("rpm", "fd").unwrap(), vec!["rpm", "-e", "fd"]);
         assert!(remove_argv("brew", "fd").is_err());
     }

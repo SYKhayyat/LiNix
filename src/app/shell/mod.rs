@@ -63,10 +63,7 @@ impl EphemeralShell {
     #[instrument(skip(self, packages))]
     pub async fn enter(&self, packages: &[String]) -> Result<()> {
         let session_id = format!("shell-{}", Uuid::new_v4().simple());
-        info!(
-            "starting ephemeral shell '{}'",
-            session_id
-        );
+        info!("starting ephemeral shell '{}'", session_id);
 
         {
             let mut state_guard = self.state.lock().await;
@@ -345,10 +342,7 @@ impl EphemeralShell {
             let mut state = self.state.lock().await;
             match restored {
                 Ok(()) => {
-                    info!(
-                        "restored session-suspended {}:{}",
-                        s.backend, s.name
-                    );
+                    info!("restored session-suspended {}:{}", s.backend, s.name);
                     state.add(
                         &s.backend,
                         &s.name,

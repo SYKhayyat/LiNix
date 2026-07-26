@@ -103,10 +103,7 @@ impl ShimManager {
             fs::remove_file(&target_path).await.map_err(Error::from)?;
         }
 
-        info!(
-            "Deploying shim for '{}' -> {:?}",
-            binary_name, target_path
-        );
+        info!("Deploying shim for '{}' -> {:?}", binary_name, target_path);
 
         #[cfg(unix)]
         {
@@ -114,10 +111,7 @@ impl ShimManager {
             // shim would report the name "linix" and dispatch to itself instead of the
             // shimmed tool. Copy is the fallback since a link cannot cross filesystems.
             if let Err(e) = fs::hard_link(&current_exe, &target_path).await {
-                debug!(
-                    "Hard link failed ({}), falling back to copy...",
-                    e
-                );
+                debug!("Hard link failed ({}), falling back to copy...", e);
                 fs::copy(&current_exe, &target_path)
                     .await
                     .map_err(Error::from)?;
@@ -159,10 +153,7 @@ impl ShimManager {
             return Ok(());
         }
         if !Self::is_deployed_shim(&target_path).await {
-            debug!(
-                "{:?} is not a LiNix shim — leaving it alone.",
-                target_path
-            );
+            debug!("{:?} is not a LiNix shim — leaving it alone.", target_path);
             return Ok(());
         }
         debug!("Removing shim {:?}", target_path);
@@ -186,9 +177,7 @@ impl ShimManager {
 
             if metadata.is_file() {
                 if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                    if name != "linix"
-                        && name != "linix.exe"
-                        && Self::is_deployed_shim(&path).await
+                    if name != "linix" && name != "linix.exe" && Self::is_deployed_shim(&path).await
                     {
                         #[cfg(windows)]
                         {
@@ -260,10 +249,16 @@ mod tests {
 
         let result = mgr.create_shim("jq").await;
 
-        assert!(result.is_err(), "create_shim must refuse to overwrite a user's file");
+        assert!(
+            result.is_err(),
+            "create_shim must refuse to overwrite a user's file"
+        );
         // And it must not have touched the file on its way to refusing.
         let after = tokio::fs::read(&victim).await.unwrap();
-        assert_eq!(after, contents, "the user's file was modified despite the refusal");
+        assert_eq!(
+            after, contents,
+            "the user's file was modified despite the refusal"
+        );
     }
 
     #[tokio::test]
@@ -276,7 +271,11 @@ mod tests {
         // `is_deployed_shim` compares against `current_exe`, which here is the test runner.
         // Windows shims carry `.exe`, which is the name `remove_shim` will look for.
         let exe = std::env::current_exe().unwrap();
-        let shim = bin.join(if cfg!(windows) { "ripgrep.exe" } else { "ripgrep" });
+        let shim = bin.join(if cfg!(windows) {
+            "ripgrep.exe"
+        } else {
+            "ripgrep"
+        });
         tokio::fs::copy(&exe, &shim).await.unwrap();
 
         mgr.remove_shim("ripgrep").await.unwrap();
@@ -291,7 +290,11 @@ mod tests {
         let mgr = ShimManager::with_bin_dir(bin.clone()).await.unwrap();
 
         let exe = std::env::current_exe().unwrap();
-        let deployed = bin.join(if cfg!(windows) { "ripgrep.exe" } else { "ripgrep" });
+        let deployed = bin.join(if cfg!(windows) {
+            "ripgrep.exe"
+        } else {
+            "ripgrep"
+        });
         tokio::fs::copy(&exe, &deployed).await.unwrap();
         tokio::fs::write(bin.join("my-script"), b"#!/bin/sh\n")
             .await

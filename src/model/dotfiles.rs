@@ -132,7 +132,10 @@ pub fn conflicting_destinations(plans: &[(String, TreePlan)]) -> BTreeMap<PathBu
 
 /// The destinations a set of plans would own, for the teardown ledger.
 pub fn destinations(plan: &TreePlan) -> BTreeSet<PathBuf> {
-    plan.placements.iter().map(|p| p.destination.clone()).collect()
+    plan.placements
+        .iter()
+        .map(|p| p.destination.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -190,8 +193,18 @@ mod tests {
     #[test]
     fn the_trees_own_git_metadata_is_never_placed() {
         let tree = tree_with(&[".git/config", ".gitignore", ".vimrc"]);
-        let p = plan(tree.path(), Path::new("/home/me"), &nothing_exists, &nothing_owned).unwrap();
-        let rels: Vec<String> = p.placements.iter().map(|x| x.relative.to_string_lossy().into()).collect();
+        let p = plan(
+            tree.path(),
+            Path::new("/home/me"),
+            &nothing_exists,
+            &nothing_owned,
+        )
+        .unwrap();
+        let rels: Vec<String> = p
+            .placements
+            .iter()
+            .map(|x| x.relative.to_string_lossy().into())
+            .collect();
         assert_eq!(rels, vec![".vimrc"]);
     }
 
@@ -214,7 +227,13 @@ mod tests {
     #[test]
     fn a_fresh_machine_has_no_collisions() {
         let tree = tree_with(&["a.conf"]);
-        let p = plan(tree.path(), Path::new("/home/me"), &nothing_exists, &nothing_owned).unwrap();
+        let p = plan(
+            tree.path(),
+            Path::new("/home/me"),
+            &nothing_exists,
+            &nothing_owned,
+        )
+        .unwrap();
         assert!(p.collisions.is_empty());
     }
 
@@ -250,7 +269,13 @@ mod tests {
     #[test]
     fn an_encrypted_file_is_placed_as_ciphertext_like_any_other() {
         let tree = tree_with(&["secrets/token.age"]);
-        let p = plan(tree.path(), Path::new("/home/me"), &nothing_exists, &nothing_owned).unwrap();
+        let p = plan(
+            tree.path(),
+            Path::new("/home/me"),
+            &nothing_exists,
+            &nothing_owned,
+        )
+        .unwrap();
         assert_eq!(p.placements.len(), 1);
         assert!(p.placements[0].destination.ends_with("token.age"));
     }

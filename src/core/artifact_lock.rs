@@ -138,7 +138,10 @@ impl ArtifactLedger {
 /// The set is compared by name, not by position: a release that reorders its assets is not a
 /// change to what was installed. Anything else — a name that was not locked, or one that is
 /// locked and no longer resolved — is the same objection [`verify_against`] raises for one.
-pub fn verify_set(locked: &[ArtifactLock], resolved: &[(String, Option<String>)]) -> Option<String> {
+pub fn verify_set(
+    locked: &[ArtifactLock],
+    resolved: &[(String, Option<String>)],
+) -> Option<String> {
     for (asset, sha) in resolved {
         let Some(entry) = locked.iter().find(|l| &l.asset == asset) else {
             return Some(format!(
@@ -245,12 +248,19 @@ mod tests {
         let mut led = ArtifactLedger::new();
         led.record(
             "foo/bar",
-            vec![lock("bar.tar.gz", Some("a1")), lock("bar-server.tar.gz", Some("b2"))],
+            vec![
+                lock("bar.tar.gz", Some("a1")),
+                lock("bar-server.tar.gz", Some("b2")),
+            ],
         );
         led.save(&path).unwrap();
 
         let back = ArtifactLedger::load(&path).unwrap();
-        let names: Vec<&str> = back.locked("foo/bar").iter().map(|l| l.asset.as_str()).collect();
+        let names: Vec<&str> = back
+            .locked("foo/bar")
+            .iter()
+            .map(|l| l.asset.as_str())
+            .collect();
         assert_eq!(names, vec!["bar.tar.gz", "bar-server.tar.gz"]);
     }
 
@@ -258,7 +268,10 @@ mod tests {
     fn recording_replaces_the_whole_set() {
         // A declaration that now resolves to fewer artifacts must not keep the dropped ones.
         let mut led = ArtifactLedger::new();
-        led.record("foo/bar", vec![lock("a.tar.gz", None), lock("b.tar.gz", None)]);
+        led.record(
+            "foo/bar",
+            vec![lock("a.tar.gz", None), lock("b.tar.gz", None)],
+        );
         led.record("foo/bar", vec![lock("a.tar.gz", None)]);
         assert_eq!(led.locked("foo/bar").len(), 1);
     }
@@ -296,7 +309,10 @@ mod tests {
         // D5: a `.deb` handed to dpkg records the installer and the name it listed the package
         // under; a plain PATH-deployed artifact contributes nothing to the dedup set.
         let mut led = ArtifactLedger::new();
-        led.record("sharkdp/fd", vec![system_lock("fd_10.2.0_amd64.deb", "dpkg", "fd")]);
+        led.record(
+            "sharkdp/fd",
+            vec![system_lock("fd_10.2.0_amd64.deb", "dpkg", "fd")],
+        );
         led.record("owner/plain", vec![lock("plain.tar.gz", Some("z9"))]);
         let owned = led.system_packages();
         assert_eq!(owned, vec![("dpkg".to_string(), "fd".to_string())]);
@@ -307,7 +323,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("github.toml");
         let mut led = ArtifactLedger::new();
-        led.record("sharkdp/fd", vec![system_lock("fd_10.2.0_amd64.deb", "rpm", "fd")]);
+        led.record(
+            "sharkdp/fd",
+            vec![system_lock("fd_10.2.0_amd64.deb", "rpm", "fd")],
+        );
         led.save(&path).unwrap();
         let back = ArtifactLedger::load(&path).unwrap();
         let l = &back.locked("sharkdp/fd")[0];

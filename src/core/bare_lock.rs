@@ -50,9 +50,19 @@ impl BareLock {
     pub fn path_for(locks_dir: &Path, host: &str) -> PathBuf {
         let safe: String = host
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
-        let safe = if safe.is_empty() { "unknown".to_string() } else { safe };
+        let safe = if safe.is_empty() {
+            "unknown".to_string()
+        } else {
+            safe
+        };
         locks_dir.join(format!("bare.{}.toml", safe.to_lowercase()))
     }
 

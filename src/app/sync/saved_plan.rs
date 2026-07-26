@@ -136,10 +136,8 @@ mod tests {
     #[test]
     fn a_plan_carries_its_variables_across_a_round_trip() {
         use crate::model::vars::Value;
-        let mut plan = SavedPlan::from_changes(
-            &crate::app::sync::planner::SyncChanges::default(),
-            Some(1),
-        );
+        let mut plan =
+            SavedPlan::from_changes(&crate::app::sync::planner::SyncChanges::default(), Some(1));
         plan.vars.insert("role".into(), Value::Str("travel".into()));
         plan.vars.insert("cores".into(), Value::Num(8.0));
         let json = serde_json::to_string(&plan).unwrap();
@@ -151,7 +149,8 @@ mod tests {
     #[test]
     fn a_plan_with_no_vars_field_deserializes_to_empty() {
         // The field is `serde(default)`, so a plan written before it existed still reads.
-        let raw = r#"{"schema":1,"created_at":null,"desired_hash":"x","installs":[],"removals":[]}"#;
+        let raw =
+            r#"{"schema":1,"created_at":null,"desired_hash":"x","installs":[],"removals":[]}"#;
         let plan: SavedPlan = serde_json::from_str(raw).unwrap();
         assert!(plan.vars.is_empty());
     }

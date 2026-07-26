@@ -25,10 +25,7 @@ impl<'a> UniversalSearch<'a> {
 
     #[instrument(skip(self, query))]
     pub async fn search(&self, query: &str) -> Result<Vec<Package>> {
-        info!(
-            "searching all backends for '{}'",
-            query
-        );
+        info!("searching all backends for '{}'", query);
 
         let searchable_backends: Vec<_> = if self.enabled.is_empty() {
             self.registry.available()
@@ -64,11 +61,7 @@ impl<'a> UniversalSearch<'a> {
                 if let Some(searchable) = b.as_searchable() {
                     match searchable.search(&query_string).await {
                         Ok(results) => {
-                            trace!(
-                                "Backend '{}' returned {} results.",
-                                b.name(),
-                                results.len()
-                            );
+                            trace!("Backend '{}' returned {} results.", b.name(), results.len());
                             Ok(results)
                         }
                         // Surface (don't swallow) the failure, tagged with the backend name,

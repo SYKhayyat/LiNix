@@ -96,7 +96,11 @@ mod tests {
         }
         let table = Exit::table();
         for e in Exit::ALL {
-            assert!(table.contains(e.meaning()), "{:?} missing from the table", e);
+            assert!(
+                table.contains(e.meaning()),
+                "{:?} missing from the table",
+                e
+            );
         }
     }
 }

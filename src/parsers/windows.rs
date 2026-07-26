@@ -295,7 +295,11 @@ mod tests {
             "a row whose Info says the install failed is not an installed package: {:?}",
             names
         );
-        assert!(names.contains(&"7zip") && names.contains(&"ripgrep"), "{:?}", names);
+        assert!(
+            names.contains(&"7zip") && names.contains(&"ripgrep"),
+            "{:?}",
+            names
+        );
     }
 
     #[test]
@@ -305,10 +309,15 @@ mod tests {
         assert_eq!(seven.version.as_deref(), Some("26.00"));
         // The date must never reach a version field — that is what the shifted read did.
         assert!(
-            res.iter()
-                .all(|p| !p.version.as_deref().unwrap_or_default().starts_with("2026-")),
+            res.iter().all(|p| !p
+                .version
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("2026-")),
             "an Updated timestamp was parsed as a version: {:?}",
-            res.iter().map(|p| (&p.name, &p.version)).collect::<Vec<_>>()
+            res.iter()
+                .map(|p| (&p.name, &p.version))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -319,7 +328,9 @@ mod tests {
             .map(|p| p.name)
             .collect();
         assert!(
-            !names.iter().any(|n| n == "Name" || n.starts_with('-') || n == "Installed"),
+            !names
+                .iter()
+                .any(|n| n == "Name" || n.starts_with('-') || n == "Installed"),
             "{:?}",
             names
         );

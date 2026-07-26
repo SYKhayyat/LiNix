@@ -1,12 +1,12 @@
-use crate::core::{
-    security::{generate_checksum, verify_checksum},
-    verify_set, ArtifactLedger, ArtifactLock, BackendCore, CommandExecutor, Error,
-    HealthReport, HealthStatus, Installable, MetadataProvider, Package, PackageSpec, Queryable,
-    RateLimiter, Result,
-};
 use crate::backends::artifact::{
     self, default_formats, system_pkg, ArtifactOptions, Asset as ArtifactAsset, AssetPattern,
     Entry as ArchiveEntry, Format, FormatOrder, Platform, Request as SelectRequest,
+};
+use crate::core::{
+    security::{generate_checksum, verify_checksum},
+    verify_set, ArtifactLedger, ArtifactLock, BackendCore, CommandExecutor, Error, HealthReport,
+    HealthStatus, Installable, MetadataProvider, Package, PackageSpec, Queryable, RateLimiter,
+    Result,
 };
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
@@ -209,8 +209,7 @@ impl GithubBackendCore {
     async fn send(&self, url: &str) -> Result<reqwest::Response> {
         let mut request_builder = self.client.get(url).header("User-Agent", "linix-manager");
         if let Some(token) = &self.github_token {
-            request_builder =
-                request_builder.header("Authorization", format!("Bearer {}", token));
+            request_builder = request_builder.header("Authorization", format!("Bearer {}", token));
         }
         request_builder.send().await.map_err(Error::from)
     }
@@ -311,7 +310,10 @@ fn installable_here(format: Format, has_dpkg: bool, has_rpm: bool) -> bool {
 }
 
 fn tag_url(repo: &str, tag: &str) -> String {
-    format!("https://api.github.com/repos/{}/releases/tags/{}", repo, tag)
+    format!(
+        "https://api.github.com/repos/{}/releases/tags/{}",
+        repo, tag
+    )
 }
 
 /// The two tags a pin may name. Roughly half of GitHub tags carry a leading `v`, so `@version=`
@@ -368,7 +370,13 @@ fn same_set(a: &[&str], b: &[&str]) -> bool {
 fn artifact_dir_name(asset: &str) -> String {
     asset
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -458,7 +466,11 @@ impl Installable for GithubInstallable {
             // offer and no `.deb` handoff yet). Rather than failing, it keeps the file — still
             // declared, still removed when the line goes, just never unpacked or put on PATH.
             let download_only = wanted.download_only || installable.is_empty();
-            let formats = if download_only { asked.clone() } else { installable };
+            let formats = if download_only {
+                asked.clone()
+            } else {
+                installable
+            };
 
             let pin = spec
                 .options
@@ -519,10 +531,14 @@ impl Installable for GithubInstallable {
             // The version alone is not the identity of what is installed: changing `formats`
             // on a pinned version must still reinstall, or the declaration and the disk part
             // ways with nothing to show it.
-            let chosen_assets: Vec<&str> =
-                selection.picks.iter().map(|p| p.asset.name.as_str()).collect();
+            let chosen_assets: Vec<&str> = selection
+                .picks
+                .iter()
+                .map(|p| p.asset.name.as_str())
+                .collect();
             if let Some(existing) = state.get(&spec.name) {
-                if existing.version == release.version && same_set(&existing.assets(), &chosen_assets)
+                if existing.version == release.version
+                    && same_set(&existing.assets(), &chosen_assets)
                 {
                     debug!(
                         "GitHub: {} is already at version {}",
@@ -552,7 +568,9 @@ impl Installable for GithubInstallable {
                     .await
                     .map_err(Error::from)?;
                 let dl_path = tmp_dir.path().join(&pick.asset.name);
-                tokio::fs::write(&dl_path, bytes).await.map_err(Error::from)?;
+                tokio::fs::write(&dl_path, bytes)
+                    .await
+                    .map_err(Error::from)?;
 
                 // `@sha256` is legal only on a line that resolves to exactly one file
                 // (VIII.2/D6), so it needs no per-artifact story here.
@@ -584,18 +602,25 @@ impl Installable for GithubInstallable {
             if download_only {
                 let pkg_dir = self.core.install_dir.join(spec.name.replace('/', "_"));
                 if tokio::fs::try_exists(&pkg_dir).await.unwrap_or(false) {
-                    tokio::fs::remove_dir_all(&pkg_dir).await.map_err(Error::from)?;
+                    tokio::fs::remove_dir_all(&pkg_dir)
+                        .await
+                        .map_err(Error::from)?;
                 }
-                tokio::fs::create_dir_all(&pkg_dir).await.map_err(Error::from)?;
+                tokio::fs::create_dir_all(&pkg_dir)
+                    .await
+                    .map_err(Error::from)?;
 
-                let reason = artifact::selection_reason(
-                    wanted.asset.is_some(),
-                    formats.is_user_specified(),
-                )
-                .to_string();
+                let reason =
+                    artifact::selection_reason(wanted.asset.is_some(), formats.is_user_specified())
+                        .to_string();
                 let previous: Vec<String> = state
                     .get(&spec.name)
-                    .map(|s| s.artifacts.iter().filter_map(|a| a.bin_path.clone()).collect())
+                    .map(|s| {
+                        s.artifacts
+                            .iter()
+                            .filter_map(|a| a.bin_path.clone())
+                            .collect()
+                    })
                     .unwrap_or_default();
 
                 let mut installed_artifacts: Vec<InstalledArtifact> = Vec::new();
@@ -664,7 +689,12 @@ impl Installable for GithubInstallable {
                 .join("bin");
             let previous: Vec<String> = state
                 .get(&spec.name)
-                .map(|s| s.artifacts.iter().filter_map(|a| a.bin_path.clone()).collect())
+                .map(|s| {
+                    s.artifacts
+                        .iter()
+                        .filter_map(|a| a.bin_path.clone())
+                        .collect()
+                })
                 .unwrap_or_default();
 
             // D5: a `.deb`/`.rpm` is handed to its system manager, never unpacked or put on
@@ -762,11 +792,9 @@ impl Installable for GithubInstallable {
 
             // D14: the same rule chose every pick of this declaration (they share the line's
             // formats and pattern), so the reason is computed once and recorded on each lock.
-            let reason = artifact::selection_reason(
-                wanted.asset.is_some(),
-                formats.is_user_specified(),
-            )
-            .to_string();
+            let reason =
+                artifact::selection_reason(wanted.asset.is_some(), formats.is_user_specified())
+                    .to_string();
 
             let mut installed_artifacts: Vec<InstalledArtifact> = Vec::new();
             let mut locks: Vec<ArtifactLock> = Vec::new();
@@ -796,7 +824,9 @@ impl Installable for GithubInstallable {
                     .to_string();
 
                 let install = system_pkg::install_argv(pick.format, dl_path)?;
-                let (iprog, iargs) = install.split_first().expect("an install argv is never empty");
+                let (iprog, iargs) = install
+                    .split_first()
+                    .expect("an install argv is never empty");
                 let irefs: Vec<&str> = iargs.iter().map(String::as_str).collect();
                 info!(
                     "{}: handing {} to {} — installs as `{}`",
@@ -855,10 +885,11 @@ impl Installable for GithubInstallable {
 
             // A declaration that used to deploy a name it no longer deploys leaves that file
             // on PATH, where nothing declares it and no `sync` can see it.
-            for stale in previous
-                .iter()
-                .filter(|p| !installed_artifacts.iter().any(|a| a.bin_path.as_ref() == Some(*p)))
-            {
+            for stale in previous.iter().filter(|p| {
+                !installed_artifacts
+                    .iter()
+                    .any(|a| a.bin_path.as_ref() == Some(*p))
+            }) {
                 if let Err(e) = crate::utils::remove_deployed_path(stale).await {
                     warn!("{}: could not remove the old `{}`: {}", spec.name, stale, e);
                 }
@@ -901,7 +932,10 @@ impl Installable for GithubInstallable {
                                     argv.split_first().expect("a remove argv is never empty");
                                 let refs: Vec<&str> = args.iter().map(String::as_str).collect();
                                 if let Err(e) = self.core.executor.run(prog, &refs, true).await {
-                                    errors.push(format!("{} -e {}: {}", installer, system_package, e));
+                                    errors.push(format!(
+                                        "{} -e {}: {}",
+                                        installer, system_package, e
+                                    ));
                                 }
                             }
                             Err(e) => errors.push(e.to_string()),
@@ -1040,7 +1074,10 @@ mod tests {
     #[test]
     fn a_403_that_is_not_a_rate_limit_is_never_waited_on() {
         // A bad token or a private repo: no header, and no amount of waiting changes it.
-        assert_eq!(rate_limit_action(403, None, 1000, 30), RateLimit::NotLimited);
+        assert_eq!(
+            rate_limit_action(403, None, 1000, 30),
+            RateLimit::NotLimited
+        );
         // A header that is not a number is not a reset time either.
         assert_eq!(
             rate_limit_action(403, Some("soon"), 1000, 30),

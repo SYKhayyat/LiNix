@@ -166,7 +166,6 @@ impl Upgradable for PipxUpgradable {
             .await?;
         Ok(())
     }
-
 }
 
 pub fn register(

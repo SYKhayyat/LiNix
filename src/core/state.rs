@@ -109,10 +109,7 @@ impl StateRegistry {
     }
 
     pub fn load_from(path: &Path) -> Result<Self> {
-        debug!(
-            "loading state from {:?}",
-            path
-        );
+        debug!("loading state from {:?}", path);
 
         if !path.exists() {
             info!(
@@ -223,10 +220,7 @@ impl StateRegistry {
         );
 
         self.packages.push(new_pkg);
-        debug!(
-            "Package {}:{} is now under management.",
-            backend, name
-        );
+        debug!("Package {}:{} is now under management.", backend, name);
     }
 
     pub fn add_simple(&mut self, backend: &str, name: &str, version: Option<String>) {
@@ -252,10 +246,7 @@ impl StateRegistry {
                     removed_at: Self::now(),
                 },
             );
-            debug!(
-                "Package {}:{} archived as Ghost.",
-                backend, name
-            );
+            debug!("Package {}:{} archived as Ghost.", backend, name);
         } else {
             trace!(
                 "Requested removal of {}:{} but it was not managed.",
@@ -279,10 +270,7 @@ impl StateRegistry {
             .position(|p| p.backend == backend && p.name == name)
         {
             self.packages.remove(pos);
-            debug!(
-                "Package {}:{} forgotten (left installed).",
-                backend, name
-            );
+            debug!("Package {}:{} forgotten (left installed).", backend, name);
             true
         } else {
             false

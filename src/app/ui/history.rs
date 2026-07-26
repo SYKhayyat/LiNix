@@ -57,7 +57,9 @@ pub struct CommitView {
 pub enum HistoryAction {
     Quit,
     /// Roll back to a commit: check out its manifests, then sync the machine to match.
-    Rollback { reference: String },
+    Rollback {
+        reference: String,
+    },
 }
 
 /// One row in the left-hand timeline: the short hash and the commit subject.
@@ -139,7 +141,13 @@ impl HistoryBrowser {
         let i = self
             .list_state
             .selected()
-            .map(|i| if i == 0 { self.commits.len() - 1 } else { i - 1 })
+            .map(|i| {
+                if i == 0 {
+                    self.commits.len() - 1
+                } else {
+                    i - 1
+                }
+            })
             .unwrap_or(0);
         self.list_state.select(Some(i));
     }
@@ -332,7 +340,11 @@ mod tests {
 
     #[test]
     fn detail_lines_show_metadata_and_changes() {
-        let c = cv("a1b2c3d", "swap nano for ripgrep", &["+ cargo:rg", "- apt:nano"]);
+        let c = cv(
+            "a1b2c3d",
+            "swap nano for ripgrep",
+            &["+ cargo:rg", "- apt:nano"],
+        );
         let joined = detail_lines(&c).join("\n");
         assert!(joined.contains("Commit  : a1b2c3d"));
         assert!(joined.contains("Message : swap nano for ripgrep"));
@@ -361,7 +373,11 @@ mod tests {
 
     #[test]
     fn navigation_wraps() {
-        let mut c = HistoryBrowser::new(vec![cv("c3", "", &[]), cv("c2", "", &[]), cv("c1", "", &[])]);
+        let mut c = HistoryBrowser::new(vec![
+            cv("c3", "", &[]),
+            cv("c2", "", &[]),
+            cv("c1", "", &[]),
+        ]);
         assert_eq!(c.selected().unwrap().short, "c3");
         c.previous(); // from 0 wraps to last
         assert_eq!(c.selected().unwrap().short, "c1");

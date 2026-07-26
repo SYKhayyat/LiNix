@@ -292,7 +292,6 @@ impl Upgradable for GoUpgradable {
         }
         Ok(())
     }
-
 }
 
 /// Search is intentionally omitted: Go has no CLI package search (pkg.go.dev is web-only).

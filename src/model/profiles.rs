@@ -1,8 +1,8 @@
 use super::cycle::{self, Hop, Visit};
 use super::layout::Layout;
 use crate::config::grammar::{
-    gated, parse_document, BackendNames, Gates, GrammarError, Origin, Reference, Result,
-    Statement, Vocabulary,
+    gated, parse_document, BackendNames, Gates, GrammarError, Origin, Reference, Result, Statement,
+    Vocabulary,
 };
 use crate::config::parser::HostFacts;
 
@@ -116,7 +116,10 @@ impl<'a> ProfileLoader<'a> {
     ) -> Result<Resolved> {
         let entered = Hop::new(asked_by.clone(), format!("use {}", name));
         if let Some(start) = seen.iter().position(|v| v.key == name) {
-            let mut hops: Vec<Hop> = seen[start + 1..].iter().map(|v| v.entered.clone()).collect();
+            let mut hops: Vec<Hop> = seen[start + 1..]
+                .iter()
+                .map(|v| v.entered.clone())
+                .collect();
             hops.push(entered);
             return Err(GrammarError::new(
                 asked_by.clone(),
@@ -182,11 +185,8 @@ impl<'a> ProfileLoader<'a> {
         let modules_dir = self.layout.modules_dir();
         let lower = name.to_lowercase();
         if modules_dir.join(format!("{}.txt", lower)).is_file() {
-            return GrammarError::new(
-                asked_by.clone(),
-                format!("no profile named `{}`", name),
-            )
-            .with_hint(format!(
+            return GrammarError::new(asked_by.clone(), format!("no profile named `{}`", name))
+                .with_hint(format!(
                 "did you mean the module `{}`? Profiles are Capitalized, modules are lowercase.",
                 lower
             ));
@@ -210,11 +210,7 @@ impl<'a> ProfileLoader<'a> {
 /// its own: a `when $role == travel` block read against the empty set is not a block that
 /// fails to match, it is an unknown key, and every caller that took the convenient form
 /// refused a correct file (W8).
-pub fn parse_active(
-    file: &std::path::Path,
-    body: &str,
-    facts: &HostFacts,
-) -> Result<Vec<String>> {
+pub fn parse_active(file: &std::path::Path, body: &str, facts: &HostFacts) -> Result<Vec<String>> {
     Ok(read_active(file, body, facts)?
         .into_iter()
         .filter(|e| e.on)
@@ -361,7 +357,9 @@ pub fn remove_from_active(
     read_active(file, body, facts)?;
 
     let bare = |raw: &str| -> String {
-        crate::config::grammar::strip_comment(raw).trim().to_string()
+        crate::config::grammar::strip_comment(raw)
+            .trim()
+            .to_string()
     };
 
     struct Open {
@@ -602,7 +600,10 @@ mod tests {
     #[test]
     fn a_profile_chooses_modules() {
         let f = fixture(&[("Work", "use editors\nuse dev\n")], &[]);
-        assert_eq!(module_names(&resolve(&f, "Work").unwrap()), ["editors", "dev"]);
+        assert_eq!(
+            module_names(&resolve(&f, "Work").unwrap()),
+            ["editors", "dev"]
+        );
     }
 
     #[test]
@@ -622,7 +623,10 @@ mod tests {
             &[("Work", "use Base\nuse dev\n"), ("Base", "use editors\n")],
             &[],
         );
-        assert_eq!(module_names(&resolve(&f, "Work").unwrap()), ["editors", "dev"]);
+        assert_eq!(
+            module_names(&resolve(&f, "Work").unwrap()),
+            ["editors", "dev"]
+        );
     }
 
     #[test]
@@ -647,13 +651,22 @@ mod tests {
         let err = resolve(&f, "Editors").unwrap_err();
         assert!(err.what.contains("no profile named `Editors`"), "{}", err);
         let hint = err.hint.unwrap();
-        assert!(hint.contains("did you mean the module `editors`"), "{}", hint);
+        assert!(
+            hint.contains("did you mean the module `editors`"),
+            "{}",
+            hint
+        );
         assert!(hint.contains("Profiles are Capitalized, modules are lowercase"));
     }
 
     #[test]
     fn active_is_a_plain_list_of_profile_names() {
-        let out = parse_active(&PathBuf::from("active"), "# on now\nWork\nGaming\n", &facts()).unwrap();
+        let out = parse_active(
+            &PathBuf::from("active"),
+            "# on now\nWork\nGaming\n",
+            &facts(),
+        )
+        .unwrap();
         assert_eq!(out, ["Work", "Gaming"]);
     }
 
@@ -674,7 +687,6 @@ mod tests {
         let out = parse_active(&PathBuf::from("active"), "Work\nWork\n", &facts()).unwrap();
         assert_eq!(out, ["Work"]);
     }
-
 }
 
 #[cfg(test)]
@@ -710,7 +722,10 @@ mod active_tests {
         // W8: `active` is the most useful place for a variable, and it used to fail with
         // "unknown when key '$role'" because it detected its own varless facts.
         let mut f = facts("anyhost");
-        f.vars.insert("role".into(), crate::model::vars::Value::Str("travel".into()));
+        f.vars.insert(
+            "role".into(),
+            crate::model::vars::Value::Str("travel".into()),
+        );
         let body = "when $role == travel {\n  Travel\n}\nWork\n";
         let names: Vec<String> = read_active(&PathBuf::from("active"), body, &f)
             .unwrap()
@@ -720,14 +735,21 @@ mod active_tests {
             .collect();
         assert_eq!(names, vec!["Travel".to_string(), "Work".to_string()]);
 
-        f.vars.insert("role".into(), crate::model::vars::Value::Str("desktop".into()));
+        f.vars.insert(
+            "role".into(),
+            crate::model::vars::Value::Str("desktop".into()),
+        );
         let names: Vec<String> = read_active(&PathBuf::from("active"), body, &f)
             .unwrap()
             .into_iter()
             .filter(|e| e.on)
             .map(|e| e.name)
             .collect();
-        assert_eq!(names, vec!["Work".to_string()], "Travel is off when the variable does not match");
+        assert_eq!(
+            names,
+            vec!["Work".to_string()],
+            "Travel is off when the variable does not match"
+        );
     }
 
     /// II.6's own example file. It did not parse: `active` rejected any line with more than

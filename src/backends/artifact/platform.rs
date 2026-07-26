@@ -53,7 +53,10 @@ const ARCH_ALIASES: &[(&str, &[&str])] = &[
     ("x86_64", &["x86_64", "x86-64", "amd64", "x64"]),
     ("aarch64", &["aarch64", "arm64", "armv8"]),
     ("x86", &["i686", "i386", "x86", "386", "ia32"]),
-    ("arm", &["armv7", "armv7l", "armv6", "armhf", "armel", "arm"]),
+    (
+        "arm",
+        &["armv7", "armv7l", "armv6", "armhf", "armel", "arm"],
+    ),
     ("riscv64", &["riscv64", "riscv"]),
     ("powerpc64", &["ppc64le", "ppc64", "powerpc64"]),
     ("s390x", &["s390x"]),

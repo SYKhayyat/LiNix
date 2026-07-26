@@ -13,8 +13,8 @@ pub use error::{GrammarError, Origin, Result};
 pub use gated::{GatedLine, Vocabulary};
 pub use options::Options;
 pub use statement::{
-    BackendNames, Candidates, PackageDecl, Reference, Selector, Statement,
-    PRIORITY_KEYWORD, RESERVED_BACKEND_NAMES,
+    BackendNames, Candidates, PackageDecl, Reference, Selector, Statement, PRIORITY_KEYWORD,
+    RESERVED_BACKEND_NAMES,
 };
 
 use crate::config::parser::{eval_when, HostFacts};
@@ -230,11 +230,7 @@ pub fn strip_comment(line: &str) -> &str {
 }
 
 /// Parse a whole file body.
-pub fn parse_document(
-    file: &Path,
-    body: &str,
-    backends: &dyn BackendNames,
-) -> Result<Document> {
+pub fn parse_document(file: &Path, body: &str, backends: &dyn BackendNames) -> Result<Document> {
     let mut lines = body.lines().enumerate().peekable();
     let items = parse_items(file, &mut lines, backends, false)?;
     Ok(Document { items })
@@ -261,7 +257,10 @@ fn parse_items(
             if nested {
                 return Ok(items);
             }
-            return Err(GrammarError::new(origin, "`}` closes a block that was never opened"));
+            return Err(GrammarError::new(
+                origin,
+                "`}` closes a block that was never opened",
+            ));
         }
 
         // A `{` at the end makes this a block header. The header decides the body kind.
@@ -277,11 +276,10 @@ fn parse_items(
     }
 
     if nested {
-        return Err(GrammarError::new(
-            Origin::new(file, 0),
-            "a `{` block is never closed",
-        )
-        .with_hint("add the matching `}`."));
+        return Err(
+            GrammarError::new(Origin::new(file, 0), "a `{` block is never closed")
+                .with_hint("add the matching `}`."),
+        );
     }
     Ok(items)
 }
@@ -316,7 +314,10 @@ fn parse_block(
     if let Some(name) = header.strip_prefix("module ") {
         let name = name.trim();
         if name.is_empty() {
-            return Err(GrammarError::new(origin.clone(), "`module` block has no name"));
+            return Err(GrammarError::new(
+                origin.clone(),
+                "`module` block has no name",
+            ));
         }
         // A module name is lowercase; a Capitalized one would mint a profile, which only a
         // file in `profiles/` may do (II.5).
@@ -328,16 +329,25 @@ fn parse_block(
             .with_hint("modules are lowercase; profiles are Capitalized."));
         }
         let body = parse_items(file, lines, backends, true)?;
-        return Ok(Item::Block(Block::Module(name.to_string(), body), origin.clone()));
+        return Ok(Item::Block(
+            Block::Module(name.to_string(), body),
+            origin.clone(),
+        ));
     }
 
     if let Some(pred) = header.strip_prefix("when ") {
         let pred = pred.trim();
         if pred.is_empty() {
-            return Err(GrammarError::new(origin.clone(), "`when` block has no condition"));
+            return Err(GrammarError::new(
+                origin.clone(),
+                "`when` block has no condition",
+            ));
         }
         let body = parse_items(file, lines, backends, true)?;
-        return Ok(Item::Block(Block::When(pred.to_string(), body), origin.clone()));
+        return Ok(Item::Block(
+            Block::When(pred.to_string(), body),
+            origin.clone(),
+        ));
     }
 
     // Not a keyword, so it is a declaration and its body is options (II.2).
@@ -356,7 +366,8 @@ fn parse_declaration_block(
     backends: &dyn BackendNames,
     origin: &Origin,
 ) -> Result<Item> {
-    let mut stmt = statement::parse(origin, header, backends).map_err(|e| unrecognised(e, header))?;
+    let mut stmt =
+        statement::parse(origin, header, backends).map_err(|e| unrecognised(e, header))?;
 
     let mut body_opts = Options::default();
     loop {
@@ -510,14 +521,15 @@ mod tests {
         let Statement::Package(d) = &out[0] else {
             panic!()
         };
-        assert_eq!(d.options.one("after_install"), Some("./setup.sh --flag=a,b"));
+        assert_eq!(
+            d.options.one("after_install"),
+            Some("./setup.sh --flag=a,b")
+        );
     }
 
     #[test]
     fn a_key_given_twice_in_a_block_makes_a_list() {
-        let out = stmts(
-            "apt:nginx {\n  requires = apt:libfoo\n  requires = apt:libbar\n}\n",
-        );
+        let out = stmts("apt:nginx {\n  requires = apt:libfoo\n  requires = apt:libbar\n}\n");
         let Statement::Package(d) = &out[0] else {
             panic!()
         };
@@ -567,7 +579,10 @@ mod tests {
             .unwrap()
             .statements_for(&facts())
             .unwrap_err();
-        assert!(err.hint.unwrap().contains("os, arch, host, hostname, family"));
+        assert!(err
+            .hint
+            .unwrap()
+            .contains("os, arch, host, hostname, family"));
     }
 
     // ------------------------------------------------------------ statements
@@ -600,17 +615,25 @@ mod tests {
                 "apt:nginx@requires=libfoo",
                 "apt:nginx {\n  requires = libfoo\n}",
             ),
-            ("apt:jq@hold@version=1.6", "apt:jq@hold {\n  version = 1.6\n}"),
+            (
+                "apt:jq@hold@version=1.6",
+                "apt:jq@hold {\n  version = 1.6\n}",
+            ),
             ("apt:nginx@colour=blue", "apt:nginx {\n  colour = blue\n}"),
             ("apt:nginx@lease=2h", "apt:nginx {\n  lease = 2h\n}"),
             ("apt:curl@formats=deb", "apt:curl {\n  formats = deb\n}"),
-            (
-                "apt:curl@expires=2h",
-                "apt:curl {\n  expires = 2h\n}",
-            ),
+            ("apt:curl@expires=2h", "apt:curl {\n  expires = 2h\n}"),
         ] {
-            assert!(doc(&format!("{}\n", short)).is_err(), "short form allowed `{}`", short);
-            assert!(doc(&format!("{}\n", block)).is_err(), "block form allowed `{}`", block);
+            assert!(
+                doc(&format!("{}\n", short)).is_err(),
+                "short form allowed `{}`",
+                short
+            );
+            assert!(
+                doc(&format!("{}\n", block)).is_err(),
+                "block form allowed `{}`",
+                block
+            );
         }
     }
 

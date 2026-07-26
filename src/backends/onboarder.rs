@@ -31,9 +31,9 @@
 // An unapproved or changed file registers nothing and says so; `linix lock` approves it.
 
 use crate::backends::generic::{
-    GenericBackendCore, GenericEnumerable, GenericInstallable, GenericQueryable, GenericRepoManager,
-    GenericSearchable, GenericUpgradable,
-    ManagerConfig, ManualListing, VersionPin,
+    GenericBackendCore, GenericEnumerable, GenericInstallable, GenericQueryable,
+    GenericRepoManager, GenericSearchable, GenericUpgradable, ManagerConfig, ManualListing,
+    VersionPin,
 };
 use crate::backends::BackendRegistry;
 use crate::core::{BackendCapabilities, CommandExecutor, Package};
@@ -46,7 +46,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tracing::{error, warn};
-
 
 fn default_name_key() -> String {
     "name".to_string()
@@ -259,7 +258,6 @@ impl OutputParser for ConfiguredParser {
     }
 }
 
-
 /// A user's version-pin choice, mirrored for `serde` (the runtime [`VersionPin`] is not
 /// `Deserialize`).
 #[derive(Debug, Clone, Deserialize)]
@@ -442,7 +440,10 @@ fn is_valid_binary(binary: &str) -> bool {
 /// where the definition becomes a runnable command. A `~` anywhere but the start is left alone:
 /// only a leading one is the home-directory shorthand.
 fn expand_binary(binary: &str) -> String {
-    if let Some(rest) = binary.strip_prefix("~/").or_else(|| binary.strip_prefix("~\\")) {
+    if let Some(rest) = binary
+        .strip_prefix("~/")
+        .or_else(|| binary.strip_prefix("~\\"))
+    {
         if let Some(home) = dirs::home_dir() {
             return home.join(rest).to_string_lossy().into_owned();
         }
@@ -461,7 +462,6 @@ fn is_valid_backend_name(name: &str) -> bool {
         && !name.contains([',', ':'])
         && !crate::config::grammar::RESERVED_BACKEND_NAMES.contains(&name)
 }
-
 
 /// Loads and registers the config repo's custom backends. Never fails the program: a missing
 /// file is normal, and a malformed or unapproved one is reported and skipped so the built-in
@@ -595,7 +595,10 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         // U2: a definition may now say how it reports its manual set. Absent stays
         // `Unsupported` — the safe default — so `adopt` skips a backend that has not opted in,
         // rather than risk adopting its dependency graph.
-        manual: def.manual.map(Into::into).unwrap_or(ManualListing::Unsupported),
+        manual: def
+            .manual
+            .map(Into::into)
+            .unwrap_or(ManualListing::Unsupported),
         essential_args: def.essential_args,
         search_args: def.search_args,
         search_binary: def.search_binary,
@@ -801,7 +804,10 @@ mod tests {
         register_custom_backends(&mut plain, &exec, vec![firewall_def()]);
         let caps = plain.get("firewall").unwrap();
         assert!(!caps.is_repo_manager(), "a bare def is not a repo manager");
-        assert!(caps.as_enumerable().is_none(), "a bare def cannot list a catalogue");
+        assert!(
+            caps.as_enumerable().is_none(),
+            "a bare def cannot list a catalogue"
+        );
 
         // The same backend, now told how to manage repos and list its catalogue.
         let mut full = BackendRegistry::new();
@@ -816,8 +822,14 @@ mod tests {
         };
         register_custom_backends(&mut full, &exec, vec![def]);
         let caps = full.get("firewall").unwrap();
-        assert!(caps.is_repo_manager(), "a def with repo args IS a repo manager");
-        assert!(caps.as_enumerable().is_some(), "a def with enumerate args CAN list its catalogue");
+        assert!(
+            caps.is_repo_manager(),
+            "a def with repo args IS a repo manager"
+        );
+        assert!(
+            caps.as_enumerable().is_some(),
+            "a def with enumerate args CAN list its catalogue"
+        );
     }
 
     fn firewall_def() -> CustomBackendDef {
@@ -836,13 +848,8 @@ mod tests {
         use dashmap::DashMap;
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
-        let exec = CommandExecutor::with_layer(
-            true,
-            false,
-            mock.clone(),
-            vfs,
-            Arc::new(DashMap::new()),
-        );
+        let exec =
+            CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
         (mock, exec)
     }
 
@@ -853,7 +860,10 @@ mod tests {
     async fn a_name_that_differs_from_its_binary_runs_the_binary_on_every_verb() {
         let (mock, exec) = mock_exec();
         let mut reg = BackendRegistry::new();
-        assert_eq!(register_custom_backends(&mut reg, &exec, vec![firewall_def()]), 1);
+        assert_eq!(
+            register_custom_backends(&mut reg, &exec, vec![firewall_def()]),
+            1
+        );
         let caps = reg.get("firewall").expect("firewall registered");
 
         caps.as_installable()
@@ -880,9 +890,17 @@ mod tests {
         let calls = mock.get_calls().await;
         assert_eq!(calls.len(), 3, "{:?}", calls);
         assert!(calls.iter().all(|c| c.starts_with("ufw ")), "{:?}", calls);
-        assert!(calls.iter().any(|c| c.contains("allow 22/tcp")), "{:?}", calls);
+        assert!(
+            calls.iter().any(|c| c.contains("allow 22/tcp")),
+            "{:?}",
+            calls
+        );
         assert!(calls.iter().any(|c| c.contains("status")), "{:?}", calls);
-        assert!(calls.iter().any(|c| c.contains("delete allow 22/tcp")), "{:?}", calls);
+        assert!(
+            calls.iter().any(|c| c.contains("delete allow 22/tcp")),
+            "{:?}",
+            calls
+        );
         // And the backend still answers to the name a line is written with.
         assert_eq!(caps.name(), "firewall");
     }
@@ -938,7 +956,11 @@ mod tests {
     fn a_leading_tilde_expands_to_home() {
         let expanded = expand_binary("~/bin/tool");
         assert!(!expanded.starts_with('~'), "{}", expanded);
-        assert!(expanded.ends_with("bin/tool") || expanded.ends_with("bin\\tool"), "{}", expanded);
+        assert!(
+            expanded.ends_with("bin/tool") || expanded.ends_with("bin\\tool"),
+            "{}",
+            expanded
+        );
         // A bare command and a `~` that is not a leading path segment are left untouched.
         assert_eq!(expand_binary("ufw"), "ufw");
         assert_eq!(expand_binary("/opt/x~y"), "/opt/x~y");
@@ -971,12 +993,8 @@ list_args = ["-Qm"]
 
         // Unapproved: nothing registers, however valid the definition is.
         let mut reg = BackendRegistry::new();
-        let n = load_custom_backends_from(
-            &mut reg,
-            &exec,
-            &tmp.path().join("backends.toml"),
-            &locks,
-        );
+        let n =
+            load_custom_backends_from(&mut reg, &exec, &tmp.path().join("backends.toml"), &locks);
         assert_eq!(n, 0, "an unapproved definition file registered a backend");
         assert!(reg.get("paru").is_none());
 
@@ -986,12 +1004,8 @@ list_args = ["-Qm"]
         ledger.save(&HookLedger::path_in(&locks)).unwrap();
 
         let mut reg = BackendRegistry::new();
-        let n = load_custom_backends_from(
-            &mut reg,
-            &exec,
-            &tmp.path().join("backends.toml"),
-            &locks,
-        );
+        let n =
+            load_custom_backends_from(&mut reg, &exec, &tmp.path().join("backends.toml"), &locks);
         assert_eq!(n, 1);
         assert!(reg.get("paru").is_some());
     }
@@ -1008,18 +1022,20 @@ list_args = ["-Qm"]
         ledger.approve(&adapter_id("backends.toml"), &hash_script(PARU_TOML));
         ledger.save(&HookLedger::path_in(&locks)).unwrap();
 
-        let edited = format!("{}\n[[backend]]\nname = \"yay\"\ninstall_args = [\"-S\"]\n", PARU_TOML);
+        let edited = format!(
+            "{}\n[[backend]]\nname = \"yay\"\ninstall_args = [\"-S\"]\n",
+            PARU_TOML
+        );
         write_repo(tmp.path(), &edited);
 
         let mut reg = BackendRegistry::new();
-        let n = load_custom_backends_from(
-            &mut reg,
-            &exec,
-            &tmp.path().join("backends.toml"),
-            &locks,
-        );
+        let n =
+            load_custom_backends_from(&mut reg, &exec, &tmp.path().join("backends.toml"), &locks);
         assert_eq!(n, 0, "an edited file kept running on the old approval");
-        assert!(reg.get("paru").is_none(), "the unchanged half kept running too");
+        assert!(
+            reg.get("paru").is_none(),
+            "the unchanged half kept running too"
+        );
     }
 
     /// A missing file is the ordinary case, not a refusal: nothing is approved and nothing
@@ -1047,7 +1063,8 @@ mod adapter_folder_tests {
     use super::*;
     use crate::core::hook_lock::{adapter_id, hash_script, HookLedger};
 
-    const BACKENDS: &str = "[[backend]]\nname = \"paru\"\ninstall_args = [\"-S\"]\nlist_args = [\"-Qm\"]\n";
+    const BACKENDS: &str =
+        "[[backend]]\nname = \"paru\"\ninstall_args = [\"-S\"]\nlist_args = [\"-Qm\"]\n";
     const SETTINGS: &str = "[[setting_store]]\nname = \"kde\"\ndetect = \"kwriteconfig6\"\nread = [\"kreadconfig6\"]\nwrite = [\"kwriteconfig6\"]\nreset = [\"kwriteconfig6\"]\n";
 
     fn approve(locks: &Path, file: &str, body: &str) {
@@ -1090,11 +1107,7 @@ mod adapter_folder_tests {
     #[test]
     fn the_adapters_folder_is_inside_the_config_repo() {
         let cfg = crate::config::Config {
-            config_root: std::path::PathBuf::from(if cfg!(windows) {
-                r"C:\repo"
-            } else {
-                "/repo"
-            }),
+            config_root: std::path::PathBuf::from(if cfg!(windows) { r"C:\repo" } else { "/repo" }),
             ..Default::default()
         };
         let layout = cfg.layout();

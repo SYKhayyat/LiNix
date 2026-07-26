@@ -104,7 +104,8 @@ mod tests {
         // Alpine names really do look like this. Split blind, `xz-libs-dev` became name
         // `xz` — and this is the installed lister, so `info()` could never find the real
         // package and `remove` silently did nothing.
-        let res = parse_dash_version_list("xz-libs-dev\npy3-requests-2.31.0-r0\nbash-5.2.15\n", "apk");
+        let res =
+            parse_dash_version_list("xz-libs-dev\npy3-requests-2.31.0-r0\nbash-5.2.15\n", "apk");
         assert_eq!(res[0].name, "xz-libs-dev");
         assert_eq!(res[0].version, None);
         assert_eq!(res[1].name, "py3-requests");

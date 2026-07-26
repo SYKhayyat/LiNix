@@ -1,13 +1,13 @@
 use crate::core::{Error, Result};
 use async_trait::async_trait;
-#[cfg(windows)]
-use std::process::Stdio;
 use dashmap::DashMap;
 use fs2::FileExt;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::process::Stdio;
 use std::process::{Command as StdCommand, Output as StdOutput};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
@@ -271,7 +271,12 @@ fn restrict_to_owner(path: &Path) -> Result<()> {
         .arg(format!("{}:F", user))
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| Error::Other(format!("could not run icacls to restrict {:?}: {}", path, e)))?;
+        .map_err(|e| {
+            Error::Other(format!(
+                "could not run icacls to restrict {:?}: {}",
+                path, e
+            ))
+        })?;
     if !output.status.success() {
         return Err(Error::Other(format!(
             "icacls could not restrict {:?}: {}",
@@ -793,13 +798,8 @@ mod search_read_tests {
         let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         mock.set_response(cmdline, Ok(response));
-        let e = CommandExecutor::with_layer(
-            false,
-            false,
-            mock.clone(),
-            vfs,
-            Arc::new(DashMap::new()),
-        );
+        let e =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
         (e, mock)
     }
 

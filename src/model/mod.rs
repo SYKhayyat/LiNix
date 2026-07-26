@@ -4,30 +4,30 @@
 //! system, and it stops being true the moment profiles hold things or modules make choices
 //! (V.2).
 
+pub mod bootstrap;
+pub mod cache;
 pub mod conflict;
 pub mod cycle;
 pub mod dated;
+pub mod dotfiles;
 pub mod edit;
 pub mod event;
-pub mod layout;
-pub mod modules;
-pub mod priority;
-pub mod profiles;
-pub mod rehearsal;
-pub mod resolve;
-pub mod bootstrap;
-pub mod cache;
-pub mod dotfiles;
 pub mod exec;
 pub mod firewall;
 pub mod groups;
 pub mod health;
 pub mod introduced;
 pub mod kernel;
+pub mod layout;
+pub mod modules;
+pub mod priority;
+pub mod profiles;
+pub mod rehearsal;
+pub mod resolve;
 pub mod schedule;
 pub mod scope;
-pub mod secret;
 pub mod script;
+pub mod secret;
 pub mod vars;
 pub mod vars_embedded;
 pub mod vars_provider;

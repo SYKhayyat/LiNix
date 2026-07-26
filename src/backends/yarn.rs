@@ -248,7 +248,6 @@ impl Upgradable for YarnUpgradable {
         }
         Ok(())
     }
-
 }
 
 impl YarnBackendCore {
@@ -285,7 +284,10 @@ mod tests {
 
     #[test]
     fn the_global_subcommand_precedes_the_terminator_and_the_name_follows_it() {
-        assert_eq!(global_argv("add", "cowsay"), ["global", "add", "--", "cowsay"]);
+        assert_eq!(
+            global_argv("add", "cowsay"),
+            ["global", "add", "--", "cowsay"]
+        );
         assert_eq!(
             global_argv("remove", "@scope/pkg"),
             ["global", "remove", "--", "@scope/pkg"]

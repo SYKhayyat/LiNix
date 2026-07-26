@@ -149,10 +149,15 @@ async fn test_bundle_then_restore_reproduces_the_package_set_without_git() {
 
     let kernel = TestKernel::new().await;
     let root = kernel.app.config.config_root().to_path_buf();
-    fs::write(root.join("modules/tools.txt"), "brew:neovim\nbrew:ripgrep\n")
+    fs::write(
+        root.join("modules/tools.txt"),
+        "brew:neovim\nbrew:ripgrep\n",
+    )
+    .await
+    .unwrap();
+    fs::write(root.join("profiles/Work"), "use tools\n")
         .await
         .unwrap();
-    fs::write(root.join("profiles/Work"), "use tools\n").await.unwrap();
     fs::write(root.join("active"), "Work\n").await.unwrap();
 
     let known = |n: &str| n == "brew";
@@ -160,13 +165,12 @@ async fn test_bundle_then_restore_reproduces_the_package_set_without_git() {
 
     // The set the source config resolves to.
     let src_layout = Layout::new(root.clone(), root.join("data"));
-    let before: std::collections::BTreeSet<String> =
-        Resolver::new(&src_layout, &known, &priority)
-            .resolve()
-            .unwrap()
-            .present()
-            .map(|p| format!("{}:{}", p.backend, p.name))
-            .collect();
+    let before: std::collections::BTreeSet<String> = Resolver::new(&src_layout, &known, &priority)
+        .resolve()
+        .unwrap()
+        .present()
+        .map(|p| format!("{}:{}", p.backend, p.name))
+        .collect();
     assert_eq!(before.len(), 2);
 
     // Bundle (no artifacts, no archive, no git repo present → history simply not included).
@@ -190,13 +194,15 @@ async fn test_bundle_then_restore_reproduces_the_package_set_without_git() {
         .unwrap();
 
     let clean_layout = Layout::new(clean.clone(), clean.join("data"));
-    let after: std::collections::BTreeSet<String> =
-        Resolver::new(&clean_layout, &known, &priority)
-            .resolve()
-            .unwrap()
-            .present()
-            .map(|p| format!("{}:{}", p.backend, p.name))
-            .collect();
+    let after: std::collections::BTreeSet<String> = Resolver::new(&clean_layout, &known, &priority)
+        .resolve()
+        .unwrap()
+        .present()
+        .map(|p| format!("{}:{}", p.backend, p.name))
+        .collect();
 
-    assert_eq!(before, after, "restore did not reproduce the declared package set");
+    assert_eq!(
+        before, after,
+        "restore did not reproduce the declared package set"
+    );
 }

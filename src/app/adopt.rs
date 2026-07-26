@@ -214,10 +214,11 @@ impl Adopter {
 
         let layout = self.config.layout();
         let manifest = self.render_manifest(&found);
-        let facts = crate::app::sync::StateResolver::new(&self.config, self.registry.clone(), false)
-            .await
-            .facts_for_host()
-            .await?;
+        let facts =
+            crate::app::sync::StateResolver::new(&self.config, self.registry.clone(), false)
+                .await
+                .facts_for_host()
+                .await?;
         let edit = crate::model::Editor::new(&layout, &vocab, facts)
             .write_module(&crate::model::Landing::Adopted.target(), &manifest)?;
         let manifest_path = edit.file.clone();
@@ -281,7 +282,10 @@ impl Adopter {
             if crate::config::grammar::is_declarable(&pkg.backend, &pkg.name) {
                 kept.push(pkg);
             } else {
-                warn!("`{}:{}` cannot be written as a package line.", pkg.backend, pkg.name);
+                warn!(
+                    "`{}:{}` cannot be written as a package line.",
+                    pkg.backend, pkg.name
+                );
                 found.skipped.push(Skipped {
                     package: pkg,
                     reason: "its manager reports a name no package line can hold".to_string(),
@@ -684,7 +688,11 @@ mod tests {
 
         assert_eq!(found.adopt.len(), 1, "only the writable name is adopted");
         assert_eq!(found.adopt[0].name, "7zip.7zip");
-        assert_eq!(found.skipped.len(), 1, "and the other is reported, not dropped");
+        assert_eq!(
+            found.skipped.len(),
+            1,
+            "and the other is reported, not dropped"
+        );
         assert!(
             found.skipped[0].package.name.contains("Android Studio"),
             "the manifest has to name what it could not take"
@@ -734,7 +742,11 @@ mod tests {
             "an OS-essential package must not be a live line:\n{}",
             text
         );
-        assert!(text.contains("#   apt:bash — "), "bash is commented, with a reason:\n{}", text);
+        assert!(
+            text.contains("#   apt:bash — "),
+            "bash is commented, with a reason:\n{}",
+            text
+        );
         assert!(text.contains("essential"), "{}", text);
     }
 

@@ -10,7 +10,10 @@ use std::fmt;
 pub enum AssetPattern {
     /// Every asset that survives the format filter is installed, rather than one being chosen.
     All,
-    Glob { source: String, compiled: Regex },
+    Glob {
+        source: String,
+        compiled: Regex,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,9 +38,7 @@ impl AssetPattern {
     pub fn names_exactly(&self, name: &str) -> bool {
         match self {
             AssetPattern::All => false,
-            AssetPattern::Glob { source, .. } => {
-                source == name && !source.contains(['*', '?'])
-            }
+            AssetPattern::Glob { source, .. } => source == name && !source.contains(['*', '?']),
         }
     }
 

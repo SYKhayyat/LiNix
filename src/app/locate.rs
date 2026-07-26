@@ -183,7 +183,10 @@ mod tests {
         let err = resolve_target(dir.path(), Some("prioritty")).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("prioritty"));
-        assert!(msg.contains("priority"), "the error must name the real file");
+        assert!(
+            msg.contains("priority"),
+            "the error must name the real file"
+        );
     }
 
     #[test]

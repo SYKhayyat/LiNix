@@ -391,7 +391,6 @@ pub struct Config {
     /// than one provider file (`vars`, `vars.py`, `vars.linix`); this picks the active one.
     #[serde(default)]
     pub vars: VarsSettings,
-
 }
 
 /// The `[vars]` table (Part IX): selecting a variable provider when the repo holds several.
@@ -470,7 +469,6 @@ fn default_network_timeout_secs() -> u64 {
 fn default_nix_gc_age() -> String {
     "30d".to_string()
 }
-
 
 /// Refuse a plan removing more than this many packages without an explicit opt-in.
 /// Twenty is comfortably above a routine cleanup and far below the ~100 that adopting a
@@ -775,7 +773,10 @@ impl Config {
 
     /// The `unprotected_packages` entry exempting `package_name`, if any.
     pub fn unprotect_rule(&self, package_name: &str) -> Option<&str> {
-        Self::first_match(&self.guard.unprotected_packages, &package_name.to_lowercase())
+        Self::first_match(
+            &self.guard.unprotected_packages,
+            &package_name.to_lowercase(),
+        )
     }
 
     /// The first pattern matching `name_lower`: exact (case-insensitive), or a prefix when
@@ -793,7 +794,6 @@ impl Config {
             })
             .map(|s| s.as_str())
     }
-
 }
 
 #[cfg(test)]
@@ -820,7 +820,6 @@ mod tests {
             "the refusal must name the key: {}",
             err
         );
-
     }
 
     #[test]
@@ -895,7 +894,11 @@ mod tests {
         // `[retention.snapshots]` is the only surface now (legacy `[snapshots]` count/age keys
         // deleted). The default preserves the old out-of-box behaviour: keep 10 / 30 days.
         let p = Config::default().snapshot_retention();
-        assert_eq!((p.keep_last, p.keep_days), (10, 30), "default should keep 10 / 30 days");
+        assert_eq!(
+            (p.keep_last, p.keep_days),
+            (10, 30),
+            "default should keep 10 / 30 days"
+        );
 
         // And an explicit policy is read straight through.
         let mut cfg = Config::default();

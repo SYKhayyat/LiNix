@@ -1,8 +1,8 @@
+use crate::backends::artifact::{system_pkg, Format};
 use crate::core::{
     security::verify_checksum, BackendCore, CommandExecutor, Error, Installable, MetadataProvider,
     Package, PackageSpec, Queryable, Result,
 };
-use crate::backends::artifact::{system_pkg, Format};
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -160,9 +160,8 @@ impl Installable for WebInstallable {
             // name it listed the package under, and skip the unpack/PATH path entirely. On a
             // machine without the manager it falls through and is kept as a plain resource.
             let url_filename = spec.name.split('/').next_back().unwrap_or("");
-            let handoff = Format::of_filename(url_filename).filter(|f| {
-                system_pkg::is_handoff_format(*f)
-            });
+            let handoff =
+                Format::of_filename(url_filename).filter(|f| system_pkg::is_handoff_format(*f));
             if let Some(format) = handoff {
                 let detect = system_pkg::detect_command(format).unwrap_or("");
                 if self.core.executor.command_exists(detect).await {
@@ -179,8 +178,9 @@ impl Installable for WebInstallable {
                         .to_string();
 
                     let install = system_pkg::install_argv(format, &dl_path)?;
-                    let (iprog, iargs) =
-                        install.split_first().expect("an install argv is never empty");
+                    let (iprog, iargs) = install
+                        .split_first()
+                        .expect("an install argv is never empty");
                     let irefs: Vec<&str> = iargs.iter().map(String::as_str).collect();
                     info!(
                         "Web: handing {} to {} — installs as `{}`",
@@ -320,9 +320,10 @@ impl Installable for WebInstallable {
             if let Some(entry) = state.remove(url) {
                 let mut errors = Vec::new();
                 // D5: a resource a system manager owns is removed *through* that manager.
-                if let (Some(installer), Some(system_package)) =
-                    (entry.installed_by.as_deref(), entry.system_package.as_deref())
-                {
+                if let (Some(installer), Some(system_package)) = (
+                    entry.installed_by.as_deref(),
+                    entry.system_package.as_deref(),
+                ) {
                     match system_pkg::remove_argv(installer, system_package) {
                         Ok(argv) => {
                             let (prog, args) =

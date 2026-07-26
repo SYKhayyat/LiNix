@@ -70,7 +70,11 @@ async fn test_recursive_module_expansion_logic() {
 
     // Where the line is, for a human; and what it belongs to, for `--module` / `--profile`.
     let curl_spec = brew_specs.iter().find(|s| s.name == "curl").unwrap();
-    assert!(curl_spec.options.get("__source").unwrap().contains("network.txt:1"));
+    assert!(curl_spec
+        .options
+        .get("__source")
+        .unwrap()
+        .contains("network.txt:1"));
     let scopes = curl_spec.options.get("__scopes").unwrap();
     assert!(scopes.contains("module:network"), "{}", scopes);
     assert!(scopes.contains("profile:Work"), "{}", scopes);
@@ -84,16 +88,19 @@ async fn vars_change_is_measured_against_the_committed_baseline() {
     let kernel = TestKernel::new().await;
     let root = kernel.app.config.config_root().to_path_buf();
 
-    fs::write(root.join("vars"), "role = travel\n").await.unwrap();
+    fs::write(root.join("vars"), "role = travel\n")
+        .await
+        .unwrap();
     let git = kernel.app.git_manager();
     git.init().unwrap();
     git.commit_all("baseline").unwrap();
 
     // Edit the working tree without committing — this is the "you edited vars" state.
-    fs::write(root.join("vars"), "role = desktop\n").await.unwrap();
+    fs::write(root.join("vars"), "role = desktop\n")
+        .await
+        .unwrap();
 
-    let resolver =
-        StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
+    let resolver = StateResolver::new(&kernel.app.config, kernel.app.registry.clone(), false).await;
     let baseline = resolver
         .vars_at_last_sync(&git)
         .await
@@ -101,8 +108,14 @@ async fn vars_change_is_measured_against_the_committed_baseline() {
         .expect("HEAD has a vars file, so there is a baseline");
     let now = resolver.resolve_vars().await.unwrap();
 
-    assert_eq!(baseline["role"], linix::model::vars::Value::Str("travel".into()));
-    assert_eq!(now["role"], linix::model::vars::Value::Str("desktop".into()));
+    assert_eq!(
+        baseline["role"],
+        linix::model::vars::Value::Str("travel".into())
+    );
+    assert_eq!(
+        now["role"],
+        linix::model::vars::Value::Str("desktop".into())
+    );
 
     let changed = linix::model::vars::diff(&baseline, &now);
     assert_eq!(changed.len(), 1, "only role changed: {:?}", changed);

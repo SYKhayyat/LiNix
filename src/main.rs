@@ -3,9 +3,8 @@ use clap::Parser;
 use linix::app::sync::planner::Scope as PlannerScope;
 use linix::app::{ui::TuiPreview, App};
 use linix::cli::{
-    Cli, Commands, ConfigCommand, GitCommand, HooksCommand,
-    ModuleCommand, ProfileCommand, RepoCommand, ScheduleCommand, ServiceCommand,
-    SnapshotCommand,
+    Cli, Commands, ConfigCommand, GitCommand, HooksCommand, ModuleCommand, ProfileCommand,
+    RepoCommand, ScheduleCommand, ServiceCommand, SnapshotCommand,
 };
 use std::collections::HashMap;
 use std::env;
@@ -161,9 +160,11 @@ async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
 
 async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
     match &cli.command {
-        Commands::Sync { locked, upgrade, json } => {
-            handle_sync(app, *locked, *upgrade, *json).await
-        }
+        Commands::Sync {
+            locked,
+            upgrade,
+            json,
+        } => handle_sync(app, *locked, *upgrade, *json).await,
         Commands::Watch {
             interval,
             on_change,
@@ -255,9 +256,7 @@ async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Apply { plan, yes } => handle_apply(app, plan, *yes).await,
         Commands::Update => handle_update(app).await,
         Commands::Reset { force } => handle_reset(app, *force).await,
-        Commands::Check { section, json } => {
-            handle_check(app, section.as_deref(), *json).await
-        }
+        Commands::Check { section, json } => handle_check(app, section.as_deref(), *json).await,
         Commands::Vars => handle_vars(app).await,
         Commands::PurgeUnmanaged { allow_mass_purge } => {
             handle_purge_unmanaged(app, *allow_mass_purge).await
@@ -410,9 +409,33 @@ fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::PathBuf> {
 /// preview of a writer reads the same state a concurrent writer is rewriting, and the run
 /// that proved it mattered was a `--dry-run sync` that entered recovery.
 const READ_ONLY_COMMANDS: &[&str] = &[
-    "plan", "status", "check", "list", "search", "doctor", "diff", "unmanaged", "absent",
-    "vars", "export", "sbom", "insight", "why", "info", "show", "audit", "outdated",
-    "history", "log", "completions", "help", "locate", "metrics", "verify", "eval", "try",
+    "plan",
+    "status",
+    "check",
+    "list",
+    "search",
+    "doctor",
+    "diff",
+    "unmanaged",
+    "absent",
+    "vars",
+    "export",
+    "sbom",
+    "insight",
+    "why",
+    "info",
+    "show",
+    "audit",
+    "outdated",
+    "history",
+    "log",
+    "completions",
+    "help",
+    "locate",
+    "metrics",
+    "verify",
+    "eval",
+    "try",
     "repl",
 ];
 
@@ -939,7 +962,10 @@ async fn handle_rebuild(
         }
     };
     match &snapshot {
-        Some(s) => info!("snapshot {} taken; a failed reinstall rolls back to it.", s.id),
+        Some(s) => info!(
+            "snapshot {} taken; a failed reinstall rolls back to it.",
+            s.id
+        ),
         None => warn!(
             "no snapshot provider here, so a failed reinstall cannot be rolled back \
              automatically."
@@ -1168,7 +1194,9 @@ impl UpgradeRequest<'_> {
         if let Some(p) = self.profile {
             Some(PlannerScope::Profile(p.clone()))
         } else {
-            self.module.as_ref().map(|m| PlannerScope::Module(m.clone()))
+            self.module
+                .as_ref()
+                .map(|m| PlannerScope::Module(m.clone()))
         }
     }
 }
@@ -1231,13 +1259,11 @@ async fn upgrade_targeted(
     let mut targets: Vec<(String, String)> = Vec::new();
     if !packages.is_empty() {
         for req in packages {
-            let (want_backend, want_name) = linix::config::parser::split_removal_target(
-                req,
-                |b| app.registry.get(b).is_some(),
-            );
-            let hit = managed.iter().find(|(b, n)| {
-                n == &want_name && want_backend.as_ref().is_none_or(|wb| wb == b)
-            });
+            let (want_backend, want_name) =
+                linix::config::parser::split_removal_target(req, |b| app.registry.get(b).is_some());
+            let hit = managed
+                .iter()
+                .find(|(b, n)| n == &want_name && want_backend.as_ref().is_none_or(|wb| wb == b));
             match hit {
                 Some((b, n)) => targets.push((b.clone(), n.clone())),
                 None => {
@@ -1571,7 +1597,6 @@ async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
         print_flight_plan(app, &changes);
     }
 
-
     if !changes.is_empty() {
         app.sync_engine()
             .await
@@ -1593,7 +1618,10 @@ async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<()> 
 
     // A dry run says where the line would move without touching a file or the machine.
     if app.config.dry_run {
-        println!("[DRY-RUN] would move `{}` to `{}:{}` and sync.", package, backend, package);
+        println!(
+            "[DRY-RUN] would move `{}` to `{}:{}` and sync.",
+            package, backend, package
+        );
         return Ok(());
     }
 
@@ -1635,7 +1663,10 @@ async fn handle_install(
             Some(dur) => {
                 let at = linix::model::dated::absolute_after(chrono::Utc::now(), dur)
                     .with_context(|| {
-                        format!("Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.", dur)
+                        format!(
+                            "Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.",
+                            dur
+                        )
                     })?;
                 format!("{}@expires={}", pkg_str.trim(), at)
             }
@@ -1686,7 +1717,10 @@ async fn handle_install(
     if let Err(e) = &synced {
         if let Some(linix::core::Error::Unresolvable { name, .. }) = e.downcast_ref() {
             if app.undeclare(name).await.is_ok_and(|es| !es.is_empty()) {
-                warn!("`{}` was taken back out of your files — nothing can install it.", name);
+                warn!(
+                    "`{}` was taken back out of your files — nothing can install it.",
+                    name
+                );
             }
         }
     }
@@ -1726,8 +1760,7 @@ async fn handle_uninstall(
     for pkg in packages {
         // II.8: a `--temp` uninstall of something undeclared has nothing to come back to.
         if let Some(Some(dur)) = temp {
-            let declared = !linix::model::active_module_files(&layout, &vocab, &facts)
-                .is_empty()
+            let declared = !linix::model::active_module_files(&layout, &vocab, &facts).is_empty()
                 && app.declares(pkg).await?;
             if !declared {
                 anyhow::bail!(
@@ -1741,10 +1774,14 @@ async fn handle_uninstall(
             // date beats the module that wants it (II.7 rule 6) until the date passes —
             // then the module wins again and it comes back. No timer, no sweep: the same
             // dated-line machinery `install --temp` uses, pointed the other way.
-            let at = linix::model::dated::absolute_after(chrono::Utc::now(), dur)
-                .with_context(|| {
-                    format!("Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.", dur)
-                })?;
+            let at = linix::model::dated::absolute_after(chrono::Utc::now(), dur).with_context(
+                || {
+                    format!(
+                        "Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.",
+                        dur
+                    )
+                },
+            )?;
             let spec = app
                 .resolve_spec(pkg)
                 .await?
@@ -1945,9 +1982,9 @@ async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
         }
         ModuleCommand::Show { name } => {
             let path = layout.module_file(&module_name(name)?);
-            let body = tokio::fs::read_to_string(&path).await.with_context(|| {
-                format!("no module `{}` — looked in {}", name, path.display())
-            })?;
+            let body = tokio::fs::read_to_string(&path)
+                .await
+                .with_context(|| format!("no module `{}` — looked in {}", name, path.display()))?;
             println!("{}", body);
         }
         ModuleCommand::Create { name, force } => {
@@ -1973,9 +2010,16 @@ async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> {
             )
             .await?;
             println!("Created {}", path.display());
-            println!("  Add it to a profile with `use {}` — nothing reads a module no profile names.", name);
+            println!(
+                "  Add it to a profile with `use {}` — nothing reads a module no profile names.",
+                name
+            );
         }
-        ModuleCommand::Add { source, name, force } => {
+        ModuleCommand::Add {
+            source,
+            name,
+            force,
+        } => {
             use linix::app::module_registry;
             let (url, default_name) = module_registry::resolve_module_source(source)?;
             let final_name = name.clone().unwrap_or(default_name);
@@ -2555,13 +2599,14 @@ async fn handle_diff(app: &App, from: &str, to: Option<&str>) -> Result<()> {
     for line in &changes {
         println!("  {}", line);
     }
-    let (added, removed) = changes
-        .iter()
-        .fold((0usize, 0usize), |(a, r), l| match l.chars().next() {
-            Some('+') => (a + 1, r),
-            Some('-') => (a, r + 1),
-            _ => (a, r),
-        });
+    let (added, removed) =
+        changes
+            .iter()
+            .fold((0usize, 0usize), |(a, r), l| match l.chars().next() {
+                Some('+') => (a + 1, r),
+                Some('-') => (a, r + 1),
+                _ => (a, r),
+            });
     println!("\n{} added, {} removed.", added, removed);
     Ok(())
 }
@@ -2673,7 +2718,7 @@ async fn handle_undo(app: &App) -> Result<()> {
         .map_err(|e| e.into())
 }
 async fn handle_history(app: &App) -> Result<()> {
-    use linix::app::ui::{HistoryBrowser, HistoryAction, CommitView};
+    use linix::app::ui::{CommitView, HistoryAction, HistoryBrowser};
 
     let git = app.git_manager();
     if !git.is_repo() {
@@ -2803,9 +2848,7 @@ async fn handle_remove_orphans(app: &App) -> Result<()> {
         match up.list_orphans().await {
             Ok(names) if names.is_empty() => {}
             Ok(names) => listed.push((backend.name().to_string(), names)),
-            Err(linix::core::Error::Unsupported(_)) => {
-                cannot_say.push(backend.name().to_string())
-            }
+            Err(linix::core::Error::Unsupported(_)) => cannot_say.push(backend.name().to_string()),
             Err(e) => warn!("could not list orphans for {}: {}", backend.name(), e),
         }
     }
@@ -2840,11 +2883,19 @@ async fn handle_remove_orphans(app: &App) -> Result<()> {
 
     // The guard sees the whole set at once, so the removal count and the protected list are
     // judged against the total rather than per backend.
-    enforce(&app.config, &app.registry, &removals, GuardScope::RemoveOrphans).await?;
+    enforce(
+        &app.config,
+        &app.registry,
+        &removals,
+        GuardScope::RemoveOrphans,
+    )
+    .await?;
 
     if app.config.dry_run {
-        println!("
-[DRY-RUN] Nothing was removed.");
+        println!(
+            "
+[DRY-RUN] Nothing was removed."
+        );
         return Ok(());
     }
 
@@ -3411,13 +3462,20 @@ async fn handle_lock(app: &App) -> Result<()> {
     // command that approves it could never resolve far enough to reach it (U33).
     let generators = approve_generate_commands(app)?;
     if generators > 0 {
-        info!("Lock: approved {} generate command(s) at their current hash.", generators);
+        info!(
+            "Lock: approved {} generate command(s) at their current hash.",
+            generators
+        );
     }
     let count = build_and_write_locks(app).await?;
     info!(
         "Lock: pinned {} package version(s) to {}",
         count,
-        app.config.config_root().join("locks").join("versions.json").display()
+        app.config
+            .config_root()
+            .join("locks")
+            .join("versions.json")
+            .display()
     );
     // II.12: `lock` is also how you approve hooks. Record the current hash of every hook so a
     // later change to any of them stops the next sync until it is re-approved here. "Hash
@@ -3427,10 +3485,8 @@ async fn handle_lock(app: &App) -> Result<()> {
         info!(
             "Lock: approved {} hook(s) at their current script hash ({}).",
             hooks,
-            linix::core::hook_lock::HookLedger::path_in(
-                &app.config.config_root().join("locks")
-            )
-            .display()
+            linix::core::hook_lock::HookLedger::path_in(&app.config.config_root().join("locks"))
+                .display()
         );
     }
     // A hook on one of LiNix's own events (XIII.13) is the same surface: a script the repo
@@ -3454,7 +3510,10 @@ async fn handle_lock(app: &App) -> Result<()> {
     // here is the one deliberate act that lets it run — a changed provider stops resolution,
     // which is `status` and `plan`, not just `sync`.
     if let Some(file) = approve_vars_provider(app)? {
-        info!("Lock: approved the vars provider `{}` at its current hash.", file);
+        info!(
+            "Lock: approved the vars provider `{}` at its current hash.",
+            file
+        );
     }
     // And every `adapters/` file (7a/U10). They travel with the repo, and a definition is
     // argv LiNix will run, so each is approved here or it does not load.
@@ -3465,13 +3524,19 @@ async fn handle_lock(app: &App) -> Result<()> {
     // configuration runs is approved by this command or it does not run.
     let execs = approve_exec_scripts(app).await?;
     if execs > 0 {
-        info!("Lock: approved {} exec script(s) at their current hash.", execs);
+        info!(
+            "Lock: approved {} exec script(s) at their current hash.",
+            execs
+        );
     }
     // And every user-declared health-check COMMAND (U31). A check is argv, run after a change,
     // so it is on the same trust model — approved here or the check counts as failed.
     let health = approve_health_checks(app).await?;
     if health > 0 {
-        info!("Lock: approved {} health-check command(s) at their current hash.", health);
+        info!(
+            "Lock: approved {} health-check command(s) at their current hash.",
+            health
+        );
     }
     Ok(())
 }
@@ -3530,7 +3595,12 @@ fn approve_generate_commands(app: &App) -> Result<usize> {
             app.config.config_root().join(declared)
         };
         let body = std::fs::read_to_string(&full).map_err(|e| {
-            anyhow::anyhow!("cannot read `generate:{}` at {} ({})", cmd, full.display(), e)
+            anyhow::anyhow!(
+                "cannot read `generate:{}` at {} ({})",
+                cmd,
+                full.display(),
+                e
+            )
         })?;
         ledger.approve(&generate_id(cmd), &hash_script(&body));
         approved += 1;
@@ -3561,7 +3631,13 @@ async fn approve_exec_scripts(app: &App) -> Result<usize> {
             app.config.config_root().join(declared)
         };
         let body = std::fs::read_to_string(&full).map_err(|e| {
-            anyhow::anyhow!("{}: cannot read `exec:{}` at {} ({})", origin, script, full.display(), e)
+            anyhow::anyhow!(
+                "{}: cannot read `exec:{}` at {} ({})",
+                origin,
+                script,
+                full.display(),
+                e
+            )
         })?;
         ledger.approve(&exec_id(script), &hash_script(&body));
         approved += 1;
@@ -3720,7 +3796,10 @@ async fn handle_unlock(app: &App, names: &[String], list: bool) -> Result<()> {
             } else {
                 // Not an error: a name with a manager written on its line was never frozen,
                 // and saying so is more use than a failure the caller has to interpret.
-                warn!("`{}` was not frozen on this host — nothing to unlock.", name);
+                warn!(
+                    "`{}` was not frozen on this host — nothing to unlock.",
+                    name
+                );
             }
         }
         any
@@ -3824,7 +3903,10 @@ async fn check_approvals(app: &App, json: bool) -> Result<()> {
             .iter()
             .map(|h| serde_json::json!({ "event": h.event.as_str(), "origin": h.origin }))
             .collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!(rows))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!(rows))?
+        );
         return Ok(());
     }
 
@@ -3879,22 +3961,23 @@ async fn check_summary(app: &App, json: bool) -> Result<()> {
         let enabled = app.priority_backends().await;
         let changes = {
             let guard = app.state.lock().await;
-            linix::app::sync::planner::ChangePlanner::new(
-                app.registry.clone(),
-                &guard,
-                &app.config,
-            )
-            .with_enabled(enabled)
-            .plan(&state.packages, None)
-            .await
+            linix::app::sync::planner::ChangePlanner::new(app.registry.clone(), &guard, &app.config)
+                .with_enabled(enabled)
+                .plan(&state.packages, None)
+                .await
         };
         match changes {
-            Ok(c) if c.is_empty() => {
-                findings.push(Finding::ok(Section::Drift, "the machine matches your files"))
-            }
+            Ok(c) if c.is_empty() => findings.push(Finding::ok(
+                Section::Drift,
+                "the machine matches your files",
+            )),
             Ok(c) => findings.push(Finding::attention(
                 Section::Drift,
-                format!("{} to install, {} to remove", c.total_install(), c.total_remove()),
+                format!(
+                    "{} to install, {} to remove",
+                    c.total_install(),
+                    c.total_remove()
+                ),
                 "linix sync",
             )),
             Err(e) => findings.push(Finding::attention(
@@ -3929,9 +4012,10 @@ async fn check_summary(app: &App, json: bool) -> Result<()> {
 
     // unmanaged — what adopt would take.
     match app.adopter().discover().await {
-        Ok(found) if found.adopt.is_empty() => {
-            findings.push(Finding::ok(Section::Unmanaged, "everything you chose is managed"))
-        }
+        Ok(found) if found.adopt.is_empty() => findings.push(Finding::ok(
+            Section::Unmanaged,
+            "everything you chose is managed",
+        )),
         Ok(found) => findings.push(Finding::attention(
             Section::Unmanaged,
             format!("{} package(s) LiNix does not manage", found.adopt.len()),
@@ -4014,7 +4098,10 @@ async fn check_summary(app: &App, json: bool) -> Result<()> {
                 })
             })
             .collect();
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!(rows))?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!(rows))?
+        );
         return Ok(());
     }
 
@@ -4022,8 +4109,10 @@ async fn check_summary(app: &App, json: bool) -> Result<()> {
         println!("{}", f.line());
     }
     if findings.iter().all(|f| f.ok) {
-        println!("
-Nothing needs you.");
+        println!(
+            "
+Nothing needs you."
+        );
         return Ok(());
     }
     // U21: a read-only command that looked and found work exits 2, not 0 — a script asking
@@ -4077,7 +4166,10 @@ async fn check_config(app: &App) -> Result<()> {
     // II.15: a pattern is the one line whose meaning is not on the line. The count is.
     let patterns = state.regex_expansions();
     if !patterns.is_empty() {
-        println!("\n{} pattern(s), frozen in `locks/regex.toml`:", patterns.len());
+        println!(
+            "\n{} pattern(s), frozen in `locks/regex.toml`:",
+            patterns.len()
+        );
         for (pattern, count) in &patterns {
             println!("  {:<28} {} package(s)", pattern, count);
         }
@@ -4099,8 +4191,11 @@ async fn check_config(app: &App) -> Result<()> {
     // breaks nothing, and on a fleet the reference may still live on another branch.
     if !state.vars.is_empty() {
         let referenced = referenced_variable_names(&app.config.config_root());
-        let mut unused: Vec<&String> =
-            state.vars.keys().filter(|k| !referenced.contains(*k)).collect();
+        let mut unused: Vec<&String> = state
+            .vars
+            .keys()
+            .filter(|k| !referenced.contains(*k))
+            .collect();
         unused.sort();
         if !unused.is_empty() {
             println!(
@@ -4179,13 +4274,7 @@ async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Result
             app.executor
                 .run(
                     "git",
-                    &[
-                        "clone",
-                        "--depth",
-                        "1",
-                        &url,
-                        &dest.to_string_lossy(),
-                    ],
+                    &["clone", "--depth", "1", &url, &dest.to_string_lossy()],
                     false,
                 )
                 .await
@@ -4272,9 +4361,8 @@ async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Result
         if let Some(parent) = to.parent() {
             std::fs::create_dir_all(parent).map_err(linix::core::Error::from)?;
         }
-        std::fs::copy(fetched.join(&pl.from), &to).map_err(|e| {
-            linix::core::Error::Io(format!("copying {}: {}", pl.to.display(), e))
-        })?;
+        std::fs::copy(fetched.join(&pl.from), &to)
+            .map_err(|e| linix::core::Error::Io(format!("copying {}: {}", pl.to.display(), e)))?;
         if pl.kind == Vendored::Module {
             modules += 1;
         } else {
@@ -4552,11 +4640,7 @@ async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) -> Result<()>
     // The ratio check, before anything else asks anything.
     let ratio = managed as f64 / unmanaged.len() as f64;
     if ratio < PURGE_RATIO && !allow_mass_purge {
-        let sample: Vec<String> = unmanaged
-            .iter()
-            .take(3)
-            .map(|p| p.name.clone())
-            .collect();
+        let sample: Vec<String> = unmanaged.iter().take(3).map(|p| p.name.clone()).collect();
         anyhow::bail!(
             "LiNix manages {} packages.\n\
              This will remove {}, including {}.\n\
@@ -4585,7 +4669,11 @@ async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) -> Result<()>
 
     // Snapshots first, automatically. If none can be taken, say so — "there is no undo for
     // this" is the most important sentence this command can print (II.11).
-    let snapshot = match app.snapshot_manager.auto_snapshot(linix::core::snapshot::SnapshotLabel::PurgeUnmanaged).await {
+    let snapshot = match app
+        .snapshot_manager
+        .auto_snapshot(linix::core::snapshot::SnapshotLabel::PurgeUnmanaged)
+        .await
+    {
         Ok(Some(snap)) => {
             println!("Snapshot taken: {}. That is your undo.\n", snap.id);
             Some(snap.id)
@@ -4797,10 +4885,7 @@ async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<(
     for r in &results {
         let spec = r["package"].as_str().unwrap_or_default();
         let forgotten = r["forgotten"].as_array().map(|a| a.len()).unwrap_or(0);
-        let lines = r["lines_removed"]
-            .as_array()
-            .map(|a| a.len())
-            .unwrap_or(0);
+        let lines = r["lines_removed"].as_array().map(|a| a.len()).unwrap_or(0);
         if forgotten == 0 && lines == 0 {
             println!(
                 "{}: not managed and not declared — nothing to forget.",
@@ -4895,7 +4980,10 @@ async fn handle_protected(app: &App, packages: &[String], json: bool) -> Result<
     }
 
     println!("Removal guard — what LiNix refuses to remove.\n");
-    println!("Protected packages ({}):", cfg.guard.protected_packages.len());
+    println!(
+        "Protected packages ({}):",
+        cfg.guard.protected_packages.len()
+    );
     for p in &cfg.guard.protected_packages {
         match p.strip_suffix('*') {
             Some(prefix) => println!("  {:<24} (any name starting with '{}')", p, prefix),
@@ -5054,8 +5142,8 @@ async fn handle_edit(cli: &Cli, file: Option<&str>) -> Result<()> {
     let target = locate::resolve_target(&resolved.path, file)?;
     let editor = locate::editor_command();
 
-    let is_preferences = target.file_name().and_then(|n| n.to_str())
-        == Some(linix::config::PREFERENCES_FILE_NAME);
+    let is_preferences =
+        target.file_name().and_then(|n| n.to_str()) == Some(linix::config::PREFERENCES_FILE_NAME);
     if is_preferences && !target.exists() {
         if let Some(parent) = target.parent() {
             tokio::fs::create_dir_all(parent).await.ok();
@@ -5171,7 +5259,11 @@ async fn repair_environment(app: &App) -> Vec<String> {
 
 /// Health-gated upgrade: snapshot, upgrade, run the test, roll back automatically on
 /// failure so a bad upgrade never leaves the machine broken.
-async fn handle_canary(app: &App, scope: Option<PlannerScope>, test: &Option<String>) -> Result<()> {
+async fn handle_canary(
+    app: &App,
+    scope: Option<PlannerScope>,
+    test: &Option<String>,
+) -> Result<()> {
     let test = test
         .clone()
         .ok_or_else(|| anyhow::anyhow!("--canary requires --test <command> (the health check)"))?;
@@ -5351,9 +5443,8 @@ async fn enforce_policy(
         .map(linix::app::sync::guard::describe_objection)
         .collect();
     if guard.require_snapshot && !app.snapshot_manager.has_provider() {
-        violations.push(
-            "requires a snapshot provider but none is available (require_snapshot)".into(),
-        );
+        violations
+            .push("requires a snapshot provider but none is available (require_snapshot)".into());
     }
     if guard.deny_vulnerable {
         match linix::app::insight::audit(app).await {
@@ -5610,7 +5701,8 @@ async fn handle_restore(app: &App, dir: &str, force: bool) -> Result<()> {
     let registry_path = { app.state.lock().await.path.clone() };
 
     let report =
-        linix::app::bundle::restore_bundle(&bundle_dir, &config_root, &registry_path, force).await?;
+        linix::app::bundle::restore_bundle(&bundle_dir, &config_root, &registry_path, force)
+            .await?;
 
     println!(
         "Restored {} config file(s) into {}.",
@@ -6400,7 +6492,10 @@ mod alias_tests {
     }
 
     fn builtins() -> HashSet<String> {
-        ["sync", "upgrade", "check"].into_iter().map(String::from).collect()
+        ["sync", "upgrade", "check"]
+            .into_iter()
+            .map(String::from)
+            .collect()
     }
 
     #[test]
@@ -6421,9 +6516,13 @@ mod alias_tests {
     #[test]
     fn a_verb_inherits_leading_global_flags_on_every_step() {
         let v = verbs(&[("refresh", &["sync", "check"])]);
-        let steps = plan_user_verb(&argv(&["linix", "-c", "/c.toml", "refresh"]), &v, &builtins())
-            .unwrap()
-            .unwrap();
+        let steps = plan_user_verb(
+            &argv(&["linix", "-c", "/c.toml", "refresh"]),
+            &v,
+            &builtins(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             steps,
             vec![
@@ -6512,8 +6611,8 @@ mod init_tests {
         // `linix config init` writes this file verbatim. A template that does not parse
         // hands every new user a broken config, and a template whose keys don't match the
         // struct silently documents settings that do nothing (as `cache_ttl` did).
-        let cfg: linix::config::Config =
-            toml::from_str(CONFIG_TEMPLATE).expect("CONFIG_TEMPLATE must be valid preferences.toml");
+        let cfg: linix::config::Config = toml::from_str(CONFIG_TEMPLATE)
+            .expect("CONFIG_TEMPLATE must be valid preferences.toml");
         assert_eq!(cfg.guard.max_removals, 20);
     }
 
@@ -6554,7 +6653,6 @@ mod init_tests {
             );
         }
     }
-
 }
 
 /// Write the II.1 repo: `priority`, `active`, and a profile to hang things on.

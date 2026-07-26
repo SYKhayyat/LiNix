@@ -17,19 +17,77 @@
 /// parses the arguments (apt's installs run `apt-get`, its queries run `dpkg-query`).
 const TERMINATES: &[&str] = &[
     // Coreutils/GNU-style parsers.
-    "apt", "apt-get", "apt-cache", "apt-mark", "dpkg", "dpkg-query", "aptitude", //
-    "dnf", "dnf5", "yum", "microdnf", "rpm", //
-    "pacman", "yay", "paru", "pamac", //
-    "apk", "xbps-install", "xbps-remove", "xbps-query", //
-    "zypper", "emerge", "eix", "equery", //
-    "nix-env", "nix", "guix", "flatpak", "snap", //
-    "pip", "pip3", "pipx", "cargo", "npm", "pnpm", "yarn", "bun", //
-    "go", "composer", "luarocks", "opam", "nimble", "mix", "cabal", "stack", //
-    "conda", "mamba", "micromamba", "uv", "pixi", "spack", "asdf", "mise", //
-    "brew", "port", "pkgin", "pkg", "pkg_add", "pkg_delete", "eopkg", "slackpkg", //
-    "helm", "kubectl", "krew", "dart", "flutter", "emacs", "systemctl", //
+    "apt",
+    "apt-get",
+    "apt-cache",
+    "apt-mark",
+    "dpkg",
+    "dpkg-query",
+    "aptitude", //
+    "dnf",
+    "dnf5",
+    "yum",
+    "microdnf",
+    "rpm", //
+    "pacman",
+    "yay",
+    "paru",
+    "pamac", //
+    "apk",
+    "xbps-install",
+    "xbps-remove",
+    "xbps-query", //
+    "zypper",
+    "emerge",
+    "eix",
+    "equery", //
+    "nix-env",
+    "nix",
+    "guix",
+    "flatpak",
+    "snap", //
+    "pip",
+    "pip3",
+    "pipx",
+    "cargo",
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun", //
+    "go",
+    "composer",
+    "luarocks",
+    "opam",
+    "nimble",
+    "mix",
+    "cabal",
+    "stack", //
+    "conda",
+    "mamba",
+    "micromamba",
+    "uv",
+    "pixi",
+    "spack",
+    "asdf",
+    "mise", //
+    "brew",
+    "port",
+    "pkgin",
+    "pkg",
+    "pkg_add",
+    "pkg_delete",
+    "eopkg",
+    "slackpkg", //
+    "helm",
+    "kubectl",
+    "krew",
+    "dart",
+    "flutter",
+    "emacs",
+    "systemctl", //
     // Go-flag parsers: `age` and `sops` are handed a source path a declaration chose.
-    "age", "sops",
+    "age",
+    "sops",
 ];
 
 /// Managers whose CLI has no `--`, checked and recorded so the absence is a fact and not an
@@ -37,7 +95,13 @@ const TERMINATES: &[&str] = &[
 /// bare `--` as a package.
 #[cfg(test)]
 const DOES_NOT_TERMINATE: &[&str] = &[
-    "winget", "choco", "scoop", "mas", "dotnet", "pwsh", "powershell", //
+    "winget",
+    "choco",
+    "scoop",
+    "mas",
+    "dotnet",
+    "pwsh",
+    "powershell", //
     // RubyGems' `--` is not an option terminator: it is the separator between the gem
     // names and the BUILD arguments handed to a C extension
     // (`gem install nokogiri -- --with-xml2-dir=…`). So `gem install -- colorize` names
@@ -54,7 +118,12 @@ const DOES_NOT_TERMINATE: &[&str] = &[
     // with no option terminator; the OpenRC and SysVinit wrappers are shell scripts that
     // read `$1` as the service, and all of them put the name *between* two positionals
     // (`rc-service <name> start`), which leaves no place a terminator could go.
-    "sc", "launchctl", "rc-service", "rc-update", "update-rc.d", "service",
+    "sc",
+    "launchctl",
+    "rc-service",
+    "rc-update",
+    "update-rc.d",
+    "service",
 ];
 
 /// Whether `binary` ends its option parsing at `--`.
@@ -66,16 +135,17 @@ pub fn terminates_options(binary: &str) -> bool {
 /// The bare program name, so an absolute path (`/usr/bin/apt-get`, `C:\...\scoop.exe`) is
 /// looked up as the program it is.
 fn base_name(binary: &str) -> &str {
-    let after_dir = binary
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(binary);
+    let after_dir = binary.rsplit(['/', '\\']).next().unwrap_or(binary);
     after_dir.strip_suffix(".exe").unwrap_or(after_dir)
 }
 
 /// Append package names to an argument list, ending the manager's options first where the
 /// manager honours `--`.
-pub fn push_names<S: AsRef<str>>(args: &mut Vec<String>, binary: &str, names: impl IntoIterator<Item = S>) {
+pub fn push_names<S: AsRef<str>>(
+    args: &mut Vec<String>,
+    binary: &str,
+    names: impl IntoIterator<Item = S>,
+) {
     let mut names = names.into_iter().peekable();
     if names.peek().is_none() {
         return;

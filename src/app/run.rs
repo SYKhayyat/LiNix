@@ -28,10 +28,7 @@ impl Runner {
     ///
     #[instrument(skip(self, packages, args))]
     pub async fn run(&self, packages: &[String], command: &str, args: &[String]) -> Result<()> {
-        info!(
-            "Provisioning environment for command '{}'...",
-            command
-        );
+        info!("Provisioning environment for command '{}'...", command);
 
         let mut sandbox_requested = false;
         let mut resolved_specs = Vec::new();
@@ -115,10 +112,7 @@ impl Runner {
 
         if !status.success() {
             let code = status.code().unwrap_or(-1);
-            error!(
-                "Environment command failed with exit code {}.",
-                code
-            );
+            error!("Environment command failed with exit code {}.", code);
             return Err(Error::CommandFailed(format!(
                 "Sub-process exited with code {}",
                 code

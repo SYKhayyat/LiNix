@@ -46,11 +46,7 @@ impl Target {
     }
 
     fn matches(&self, spec: &PackageSpec) -> bool {
-        self.name == spec.name
-            && self
-                .backend
-                .as_ref()
-                .is_none_or(|b| b == &spec.backend)
+        self.name == spec.name && self.backend.as_ref().is_none_or(|b| b == &spec.backend)
     }
 }
 
@@ -105,7 +101,11 @@ pub type IsFoundation<'a> = &'a dyn Fn(&str) -> bool;
 /// system compiler, and no `apt` package has ever needed a crate. Rebuilding user-space
 /// software first would rebuild it against the system state the rebuild is about to replace,
 /// leaving it stale the moment the foundation batch lands.
-pub fn order_backends(backends: &[String], priority: &[String], is_foundation: IsFoundation) -> Vec<String> {
+pub fn order_backends(
+    backends: &[String],
+    priority: &[String],
+    is_foundation: IsFoundation,
+) -> Vec<String> {
     let rank = |b: &String| priority.iter().position(|p| p == b).unwrap_or(usize::MAX);
 
     let mut ordered: Vec<String> = backends.to_vec();
@@ -186,16 +186,18 @@ pub fn plan(
 /// weakening the refusal or asking the guard to make an exception for one caller.
 pub fn without_protected(plan: &mut Plan, protection: &dyn Fn(&str, &str) -> Option<String>) {
     for batch in &mut plan.batches {
-        batch.specs.retain(|spec| match protection(&batch.backend, &spec.name) {
-            Some(reason) => {
-                plan.skipped.push(Skipped {
-                    key: format!("{}:{}", batch.backend, spec.name),
-                    reason,
-                });
-                false
-            }
-            None => true,
-        });
+        batch
+            .specs
+            .retain(|spec| match protection(&batch.backend, &spec.name) {
+                Some(reason) => {
+                    plan.skipped.push(Skipped {
+                        key: format!("{}:{}", batch.backend, spec.name),
+                        reason,
+                    });
+                    false
+                }
+                None => true,
+            });
     }
     plan.batches.retain(|b| !b.specs.is_empty());
     plan.skipped.sort_by(|a, b| a.key.cmp(&b.key));
@@ -358,7 +360,11 @@ mod tests {
 
     #[test]
     fn backend_scope_takes_that_backend_whole() {
-        let declared = vec![spec("cargo", "fd"), spec("apt", "curl"), spec("cargo", "rg")];
+        let declared = vec![
+            spec("cargo", "fd"),
+            spec("apt", "curl"),
+            spec("cargo", "rg"),
+        ];
         let p = plan(
             &Scope::Backend("cargo".into()),
             &declared,

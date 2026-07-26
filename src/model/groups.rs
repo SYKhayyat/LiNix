@@ -57,10 +57,18 @@ impl Groups {
                 .map(str::to_string)
                 .collect();
             if members.is_empty() {
-                return Err(format!("groups:{}: group `{}` names no backends", i + 1, name));
+                return Err(format!(
+                    "groups:{}: group `{}` names no backends",
+                    i + 1,
+                    name
+                ));
             }
             if raw.insert(name.to_string(), members).is_some() {
-                return Err(format!("groups:{}: group `{}` is defined twice", i + 1, name));
+                return Err(format!(
+                    "groups:{}: group `{}` is defined twice",
+                    i + 1,
+                    name
+                ));
             }
         }
 
@@ -187,15 +195,18 @@ mod tests {
     /// 2026-07-24). `all = system, user` flattens to every backend those two hold.
     #[test]
     fn a_group_can_contain_another_group() {
-        let g = Groups::parse(
-            "system = apt, dnf\nuser = cargo, npm\nall = system, user\n",
-        )
-        .unwrap();
+        let g =
+            Groups::parse("system = apt, dnf\nuser = cargo, npm\nall = system, user\n").unwrap();
         assert_eq!(
             g.expand("all"),
             Some(
-                ["apt".to_string(), "dnf".to_string(), "cargo".to_string(), "npm".to_string()]
-                    .as_slice()
+                [
+                    "apt".to_string(),
+                    "dnf".to_string(),
+                    "cargo".to_string(),
+                    "npm".to_string()
+                ]
+                .as_slice()
             )
         );
     }
@@ -204,10 +215,7 @@ mod tests {
     /// (first occurrence wins the order) rather than tripping the grammar's "named twice".
     #[test]
     fn nesting_is_transitive_and_dedups() {
-        let g = Groups::parse(
-            "a = apt\nb = a, dnf\nc = b, apt, cargo\n",
-        )
-        .unwrap();
+        let g = Groups::parse("a = apt\nb = a, dnf\nc = b, apt, cargo\n").unwrap();
         // c → b → a(apt) + dnf, then apt (dropped, already have it), then cargo.
         assert_eq!(
             g.expand("c"),
