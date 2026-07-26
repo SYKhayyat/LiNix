@@ -210,6 +210,27 @@ fn short(hash: &str) -> &str {
     &hash[..hash.len().min(12)]
 }
 
+/// The II.12 refusal for one `adapters/` file's current contents, or `None` when the ledger in
+/// `locks_dir` has approved it. The one approval check every adapter file shares — the backend
+/// onboarder, the snapshot loader and any future kind all call this rather than re-deriving the
+/// hash/verdict dance, so none of them can drift into trusting a file the others would refuse.
+pub fn adapter_refusal(path: &Path, content: &str, locks_dir: &Path) -> Option<String> {
+    let ledger = match HookLedger::load(&HookLedger::path_in(locks_dir)) {
+        Ok(l) => l,
+        Err(e) => return Some(format!("could not read the approval ledger: {}", e)),
+    };
+    let name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("adapter.toml");
+    let id = adapter_id(name);
+    let verdict = ledger.verdict(&id, &hash_script(content));
+    if verdict.is_approved() {
+        return None;
+    }
+    Some(refusal(&id, "adapter definition", &verdict))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

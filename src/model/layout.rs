@@ -149,6 +149,17 @@ impl Layout {
         self.adapters_dir().join("bootstrap.toml")
     }
 
+    /// `[[init]]` — how to drive an init system LiNix does not ship a built-in for (U36).
+    pub fn adapter_init_file(&self) -> PathBuf {
+        self.adapters_dir().join("init.toml")
+    }
+
+    /// `[[snapshot]]` — how to drive a snapshot/rollback provider from data (U27). A row that
+    /// does not declare it can restore a running system is create-only, never `Live` (V.60).
+    pub fn adapter_snapshot_file(&self) -> PathBuf {
+        self.adapters_dir().join("snapshot.toml")
+    }
+
     /// What everything resolved to. Generated, in git, yours. One file per backend.
     pub fn locks_dir(&self) -> PathBuf {
         self.config_root.join("locks")

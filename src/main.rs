@@ -3457,14 +3457,25 @@ fn approve_adapters(app: &App) -> Result<Vec<String>> {
     use linix::core::hook_lock::{adapter_id, hash_script, HookLedger};
 
     let layout = app.config.layout();
-    let files = [
-        layout.adapter_backends_file(),
-        layout.adapter_settings_file(),
-        layout.adapter_bootstrap_file(),
-    ];
+    // Every `*.toml` in the adapters folder, not a hardcoded list. The list was the bug: it
+    // named backends/settings/bootstrap and silently omitted `firewall.toml`, so a repo that
+    // carried a firewall adapter could never approve it and its rows were refused on every
+    // sync. Reading the folder means a new adapter kind (`init.toml`, `snapshot.toml`) is
+    // approvable the day it is added, with no second place to remember to edit.
+    let dir = layout.adapters_dir();
     let ledger_path = HookLedger::path_in(&layout.locks_dir());
     let mut ledger = HookLedger::load(&ledger_path)?;
     let mut approved = Vec::new();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(approved),
+        Err(e) => return Err(e.into()),
+    };
+    let mut files: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("toml"))
+        .collect();
+    files.sort();
     for file in files {
         let body = match std::fs::read_to_string(&file) {
             Ok(b) => b,

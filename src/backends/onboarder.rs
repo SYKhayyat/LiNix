@@ -527,23 +527,11 @@ pub fn read_approved_definitions(path: &Path, locks_dir: &Path) -> Option<String
     Some(content)
 }
 
-/// The II.12 refusal for this file's current contents, or `None` when it is approved.
+/// The II.12 refusal for this file's current contents, or `None` when it is approved. One line
+/// over the shared check, so the onboarder and the snapshot loader cannot disagree about what an
+/// approved adapter file is.
 fn unapproved(path: &Path, content: &str, locks_dir: &Path) -> Option<String> {
-    use crate::core::hook_lock::{adapter_id, hash_script, refusal, HookLedger};
-    let ledger = match HookLedger::load(&HookLedger::path_in(locks_dir)) {
-        Ok(l) => l,
-        Err(e) => return Some(format!("could not read the approval ledger: {}", e)),
-    };
-    let name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("backends.toml");
-    let id = adapter_id(name);
-    let verdict = ledger.verdict(&id, &hash_script(content));
-    if verdict.is_approved() {
-        return None;
-    }
-    Some(refusal(&id, "adapter definition", &verdict))
+    crate::core::hook_lock::adapter_refusal(path, content, locks_dir)
 }
 
 /// Registers a set of already-parsed definitions. Invalid names and collisions with an
