@@ -310,6 +310,11 @@ removing an `exec:` line drops the lock row and nothing else, and `plan` says so
 rather than implying a revert that will not happen. A script has no inverse, and inventing one
 would be LiNix claiming to undo something it cannot.
 
+**AMENDED by U33 (owner, 2026-07-26): this ruling stands.** U33 lets `exec:` install software, but
+does not give it an inverse — so an `exec:` that installs still leaves the software behind when the
+line goes unless `@undo=` is written, and `plan` still says so. The removal contract here is
+unchanged; only the *content* an `exec:` may carry widened.
+
 ---
 
 ## U9
@@ -768,7 +773,7 @@ things are fixed:
 
 ## U33
 
-**Status: OPEN — not blocking.**
+**Status: ANSWERED — ruled 2026-07-26 (owner overrode the recommendation; amends U3 and U4).**
 
 **U33 — Are generated declarations wanted at all — a config that runs a program to *produce*
 state, not describe it? (XIII.30.)** `vars` already lets a *value* come from a command through the
@@ -783,6 +788,32 @@ is a failed sync, never a silently empty set (VI.0). *Recommendation:* **not yet
 never.** `vars` covers values, U32 covers reuse, and what remains is precisely the unknowable-by-
 reading property this design exists to refuse. Filed so the answer is a recorded *no* rather than
 a gap someone fills quietly.
+
+**RULED (owner, 2026-07-26): build it — and `exec:` may do anything — each gated by a config key.**
+The recommendation was a recorded no; the owner overrode it deliberately. Both powers ship, and
+both are **off by default behind an explicit config key** — the deliberate opt-in shape LiNix
+already uses for every dangerous capability (`--allow-mass-removal`, `@allow_http`, `linix lock`).
+A user who wants the power turns the key; a user who does not is never exposed to it.
+
+- **Generated declarations exist.** A config may run a program that *produces* declarations, gated
+  by its own key. What it emits is **not** exempt from the machine's safety: the output passes the
+  guard and the removal preview exactly as if it had been typed, it runs through the II.12 approval
+  ledger (V.55), and a failed generator is a **failed sync, never a silently empty set** (VI.0,
+  fail-loud — a Part I principle, so it holds regardless of the key). The key buys the
+  unknowable-by-reading tradeoff; it does not buy silence.
+- **`exec:` may install software and do anything, gated by its own key. This amends U3 and U4.**
+  U4 said `exec:` is not a licence to install software; the owner has lifted that categorical
+  refusal and replaced it with a key. U3 still governs *removal*: `exec:` has no automatic inverse,
+  so an `exec:` that installs still leaves the software when the line goes unless `@undo=` is given,
+  and `plan` still says so. The onboarder remains the **better** path for anything installable (it
+  gives a noun that removes/lists/locks); it is no longer the *only* permitted one.
+- **Two keys, not one** ("a key which controls each") — generated declarations and `exec:`-anything
+  are separately gated, so enabling one does not silently enable the other.
+
+**Downstream, owed:** U3 and U4 entries carry an amendment note pointing here; the README's `exec:`
+boundary (U4's deliverable) and XIII.14's fear are revisited when this is built. The Part I
+principles (fail-loud, the guard, the plan showing every change) are **not** waived by either key —
+they are what keeps an opened door from being a silent one.
 
 ---
 
@@ -1234,6 +1265,13 @@ missing field (U2), not as usage to encourage.
 
 
 **RULED (owner, 2026-07-24): document the boundary.** `exec:` is for actions with no inverse, not for installing software — an `exec:` that installs is a one-way door (deleting the line does not undo it). The onboarder is the answer for anything installable: it gives a noun, which removes/lists/locks. The README's `exec:` section now says so and links the onboarder.
+
+**AMENDED by U33 (owner, 2026-07-26): the categorical refusal is lifted.** `exec:` may install
+software and do anything, gated behind an explicit config key (off by default). The boundary this
+entry drew is now a *recommendation*, not a prohibition: the onboarder is still the **better** path
+for anything installable (a noun that removes/lists/locks), and the README says so, but `exec:` is
+no longer forbidden from installing when the key is on. Removal is still governed by U3 — an
+installing `exec:` has no automatic inverse without `@undo=`.
 ---
 
 ## U6
