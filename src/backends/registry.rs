@@ -221,7 +221,6 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // prints bare names with no versions, hence BareNames.
             manual: ManualListing::Command {
                 binary: Some("apt-mark".into()),
-                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -242,7 +241,6 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             update_args: Some(vec!["update".into()]),
             orphan_dry_run: Some(OrphanDryRun {
                 binary: Some("apt-get".into()),
-                remove_binary: None,
                 args: vec!["autoremove".into(), "--dry-run".into()],
                 removes_line_prefix: "Remv ".into(),
             }),
@@ -315,7 +313,6 @@ fn register_aur_helper(
             // `-Qe` = explicitly installed only (11 of 173 on the arch test image).
             manual: ManualListing::Command {
                 binary: None,
-                remove_binary: None,
                 args: vec!["-Qe".into()],
                 format: ManualFormat::SameAsInstalled,
             },
@@ -376,7 +373,6 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // Entries may carry a version constraint or repo tag, which BareNames strips.
             manual: ManualListing::Command {
                 binary: Some("cat".into()),
-                remove_binary: None,
                 args: vec!["/etc/apk/world".into()],
                 format: ManualFormat::BareNames,
             },
@@ -899,7 +895,6 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // `port installed requested` = ports the user asked for, not pulled-in deps.
             manual: ManualListing::Command {
                 binary: None,
-                remove_binary: None,
                 args: vec!["installed".into(), "requested".into()],
                 format: ManualFormat::SameAsInstalled,
             },
