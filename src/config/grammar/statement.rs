@@ -753,7 +753,7 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
 pub const SHIM_OPTION_KEYS: &[&str] = &["source", "scope"];
 pub const SERVICE_OPTION_KEYS: &[&str] = &["enabled", "status"];
 pub const LINK_OPTION_KEYS: &[&str] =
-    &["target", "content", "template", "decrypt", "identity", "scope"];
+    &["target", "content", "template", "decrypt", "identity", "scope", "backup"];
 pub const SCHEDULE_OPTION_KEYS: &[&str] = &["cron", "run", "notify"];
 pub const SETTING_OPTION_KEYS: &[&str] = &["value", "scope"];
 /// `runs` caps how many times a distinct script content may run — `1` (the default) is

@@ -36,6 +36,14 @@ pub fn backup_path(target: &Path) -> PathBuf {
     PathBuf::from(format!("{}.linix-backup", target.display()))
 }
 
+/// Whether a `link:` line wants its pre-existing target preserved (T6). Backing up is the
+/// default; `@backup=no` opts a single line out, stated where the exception is. A machine-wide
+/// key was deliberately not added — restore-on-removal already kills the pile-up one would have
+/// been for, so one mechanism answers the whole question.
+pub fn wants_backup(spec: &PackageSpec) -> bool {
+    !matches!(spec.options.get("backup").map(String::as_str), Some("no") | Some("false"))
+}
+
 /// Refuse a decrypted secret whose destination is inside the config repo (T2).
 ///
 /// The repo is git-tracked and `sync` commits it, so a plaintext written there is a plaintext
@@ -226,14 +234,16 @@ impl LinkBackendCore {
     /// exactly this content it is left untouched (no backup, no write); otherwise any
     /// pre-existing file is backed up (once) before the managed content is written.
     /// Shared by inline-content and rendered-template modes.
-    async fn apply_managed_content(&self, target: &Path, desired: &str) -> Result<()> {
+    async fn apply_managed_content(&self, target: &Path, desired: &str, backup: bool) -> Result<()> {
         if let Ok(existing) = self.executor.read_file(target).await {
             if existing == desired {
                 debug!("Link: {:?} is already up-to-date.", target);
                 return Ok(());
             }
         }
-        self.backup_once(target).await?;
+        if backup {
+            self.backup_once(target).await?;
+        }
         info!("Link: Writing managed file {:?}", target);
         self.executor.write_atomic(target, desired).await?;
         Ok(())
@@ -332,11 +342,12 @@ impl Installable for LinkInstallable {
                 .ok_or_else(|| Error::Other("Link requires @target".into()))?;
 
             let target_path = resolve_target(target_str)?;
+            let backup = wants_backup(spec);
 
             // Mode A: Inline content declared directly (no separate source file).
             if let Some(content) = spec.options.get("content") {
                 self.core
-                    .apply_managed_content(&target_path, content)
+                    .apply_managed_content(&target_path, content, backup)
                     .await?;
                 continue;
             }
@@ -384,7 +395,7 @@ impl Installable for LinkInstallable {
             if spec.options.get("template") == Some(&"true".to_string()) {
                 let rendered = self.core.render_template(&source).await?;
                 self.core
-                    .apply_managed_content(&target_path, &rendered)
+                    .apply_managed_content(&target_path, &rendered, backup)
                     .await?;
                 continue;
             }
@@ -402,7 +413,9 @@ impl Installable for LinkInstallable {
                 }
 
                 // Preserve a pre-existing real file before replacing it with our symlink.
-                self.core.backup_once(&target_path).await?;
+                if backup {
+                    self.core.backup_once(&target_path).await?;
+                }
 
                 if self.core.executor.dry_run {
                     info!(
@@ -681,6 +694,40 @@ mod tests {
             !tokio::fs::try_exists(&backup).await.unwrap(),
             "nothing pre-existed, so no backup should be written"
         );
+    }
+
+    #[tokio::test]
+    async fn backup_no_opts_a_single_line_out_of_the_backup() {
+        // T6: @backup=no writes the managed content and leaves NO .linix-backup, so a user who
+        // explicitly does not want the original kept does not get a stray copy beside it.
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("gitconfig");
+        tokio::fs::write(&target, "ORIGINAL").await.unwrap();
+
+        let inst = installer();
+        let mut spec = inline_spec(&target, "MANAGED");
+        spec.options.insert("backup".into(), "no".into());
+        inst.install(&[spec], false).await.unwrap();
+
+        assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "MANAGED");
+        assert!(
+            !tokio::fs::try_exists(&backup_path(&target)).await.unwrap(),
+            "@backup=no must not leave a backup file"
+        );
+    }
+
+    #[test]
+    fn backup_defaults_on_and_only_no_or_false_opts_out() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("x");
+        let mut spec = inline_spec(&target, "c");
+        assert!(wants_backup(&spec), "absent @backup backs up by default");
+        spec.options.insert("backup".into(), "no".into());
+        assert!(!wants_backup(&spec));
+        spec.options.insert("backup".into(), "false".into());
+        assert!(!wants_backup(&spec));
+        spec.options.insert("backup".into(), "yes".into());
+        assert!(wants_backup(&spec), "any value but no/false keeps the backup");
     }
 
     #[tokio::test]
