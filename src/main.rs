@@ -3359,6 +3359,12 @@ async fn handle_lock(app: &App) -> Result<()> {
     if execs > 0 {
         info!("Lock: approved {} exec script(s) at their current hash.", execs);
     }
+    // And every user-declared health-check COMMAND (U31). A check is argv, run after a change,
+    // so it is on the same trust model — approved here or the check counts as failed.
+    let health = approve_health_checks(app).await?;
+    if health > 0 {
+        info!("Lock: approved {} health-check command(s) at their current hash.", health);
+    }
     Ok(())
 }
 
@@ -3393,6 +3399,49 @@ async fn approve_exec_scripts(app: &App) -> Result<usize> {
             anyhow::anyhow!("{}: cannot read `exec:{}` at {} ({})", origin, script, full.display(), e)
         })?;
         ledger.approve(&exec_id(script), &hash_script(&body));
+        approved += 1;
+    }
+    ledger.save(&path)?;
+    Ok(approved)
+}
+
+/// Record every declared health-check *command* in the hook ledger (U31), returning how many
+/// were approved. Port probes run no code and are not approved; only `Probe::Command` is.
+///
+/// Reads the resolved model (every `@health=` line the active profiles reach) plus the
+/// machine-wide `health` list, so it approves exactly the commands a sync would run.
+async fn approve_health_checks(app: &App) -> Result<usize> {
+    use linix::core::hook_lock::{hash_script, health_id, HookLedger};
+    use linix::model::health::Probe;
+
+    let resolver =
+        linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
+            .await;
+    let desired = resolver.resolve_desired_state().await?;
+
+    let mut commands: Vec<String> = Vec::new();
+    for specs in desired.values() {
+        for spec in specs {
+            if let Some(Probe::Command(cmd)) =
+                spec.options.get("health").and_then(|s| Probe::parse(s))
+            {
+                commands.push(cmd);
+            }
+        }
+    }
+    for written in &app.config.health {
+        if let Some(Probe::Command(cmd)) = Probe::parse(written) {
+            commands.push(cmd);
+        }
+    }
+    if commands.is_empty() {
+        return Ok(0);
+    }
+    let path = HookLedger::path_in(&app.config.layout().locks_dir());
+    let mut ledger = HookLedger::load(&path)?;
+    let mut approved = 0usize;
+    for cmd in commands {
+        ledger.approve(&health_id(&cmd), &hash_script(&cmd));
         approved += 1;
     }
     ledger.save(&path)?;

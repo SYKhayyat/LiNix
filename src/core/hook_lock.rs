@@ -65,6 +65,14 @@ pub fn exec_id(script: &str) -> String {
     format!("exec:{}", script)
 }
 
+/// The ledger id for a user-declared health-check *command* (U31). Only `Probe::Command` needs
+/// approval — a `port:` probe runs no code. The command text is the slot and its hash is the
+/// content, so a changed command reads as a different, un-approved check rather than silently
+/// inheriting the old approval.
+pub fn health_id(command: &str) -> String {
+    format!("health:{}", command)
+}
+
 /// The ledger identity of a hook on one of LiNix's own events (XIII.13, U15).
 ///
 /// **Keyed by event AND location**, because U15 put the same event's hook in two places: the
@@ -291,6 +299,18 @@ mod tests {
     fn a_missing_file_loads_as_an_empty_ledger() {
         let ledger = HookLedger::load(Path::new("does/not/exist/hooks.toml")).unwrap();
         assert!(ledger.is_empty());
+    }
+
+    #[test]
+    fn a_health_command_is_approved_by_its_hash_and_a_changed_one_is_not() {
+        // U31: a health-check command rides the ledger. Approving the exact command makes it
+        // Approved; editing it one byte makes it an unapproved (New) check, never a silent pass.
+        let cmd = "systemctl is-active nginx";
+        let mut ledger = HookLedger::new();
+        ledger.approve(&health_id(cmd), &hash_script(cmd));
+        assert!(ledger.verdict(&health_id(cmd), &hash_script(cmd)).is_approved());
+        let edited = "systemctl is-active nginx2";
+        assert!(!ledger.verdict(&health_id(edited), &hash_script(edited)).is_approved());
     }
 
     #[test]

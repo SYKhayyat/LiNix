@@ -155,6 +155,12 @@ impl<'a> SyncEngine<'a> {
         // package is touched — the only moment the answer is still actionable.
         self.require_revert_path(&changes)?;
 
+        // U31: a health-check COMMAND is argv from the config, so it rides II.12's ledger. An
+        // unapproved command cannot run, and a check that cannot run is a failed check — so this
+        // refuses before the change rather than doing it and then reverting on a check LiNix was
+        // never allowed to execute.
+        self.require_health_commands_approved(&changes)?;
+
         // The pre-sync snapshot is a safety NET, not a precondition: a Windows System
         // Restore checkpoint needs admin (and System Restore enabled), and btrfs/timeshift
         // may be unavailable — none of which should abort a package sync. Policies that
@@ -380,6 +386,50 @@ impl<'a> SyncEngine<'a> {
             Some(refusal) => Err(Error::Refused(refusal)),
             None => Ok(()),
         }
+    }
+
+    /// Refuse before the change when a declared health *command* has not been approved through
+    /// the II.12 ledger (U31). Port probes run no code and are never gated. `linix lock` is the
+    /// one place that approves, so the refusal names it.
+    fn require_health_commands_approved(&self, changes: &SyncChanges) -> Result<()> {
+        use crate::core::hook_lock::{hash_script, health_id, HookLedger};
+        use crate::model::health::Probe;
+
+        // A dry run changes nothing, so no health command runs — previewing must not be blocked
+        // by an approval that only matters when something is actually applied.
+        if self.config.dry_run {
+            return Ok(());
+        }
+        let commands: Vec<crate::model::health::Check> = self
+            .declared_health_checks(changes)
+            .into_iter()
+            .filter(|c| matches!(c.probe, Probe::Command(_)))
+            .collect();
+        if commands.is_empty() {
+            return Ok(());
+        }
+        let ledger =
+            HookLedger::load(&HookLedger::path_in(&self.config.layout().locks_dir()))
+                .unwrap_or_default();
+        let mut unapproved = Vec::new();
+        for check in &commands {
+            if let Probe::Command(cmd) = &check.probe {
+                if !ledger.verdict(&health_id(cmd), &hash_script(cmd)).is_approved() {
+                    unapproved.push(format!("{} ({})", check.subject, cmd));
+                }
+            }
+        }
+        if unapproved.is_empty() {
+            return Ok(());
+        }
+        Err(Error::Refused(format!(
+            "refusing to start: {} health-check command(s) have not been approved and LiNix will \
+             not run a command from the configuration it has not seen — a check it cannot run is \
+             a failed check, and a failed check reverts the change.\n  {}\n  \
+             Review them, then run `linix lock` to approve them.",
+            unapproved.len(),
+            unapproved.join("\n  ")
+        )))
     }
 
     /// Run the declared checks and act on the result: healthy, or restore the snapshot this
