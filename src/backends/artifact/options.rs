@@ -17,6 +17,11 @@ pub struct ArtifactOptions {
     pub formats: Option<FormatOrder>,
     pub asset: Option<AssetPattern>,
     pub bin: Option<String>,
+    /// `@download_only` (D3b): fetch the artifact and stop — never unpack it, shim it, or put it
+    /// on `PATH`. It is still declared, so it is still removed when the line goes. This is what a
+    /// download backend does *by default* when it has no way to install the thing it fetched (no
+    /// executable inside, no installer), rather than failing.
+    pub download_only: bool,
 }
 
 impl ArtifactOptions {
@@ -42,10 +47,16 @@ impl ArtifactOptions {
             .map(|b| b.trim().to_string())
             .filter(|b| !b.is_empty());
 
+        let download_only = options
+            .get("download_only")
+            .map(|v| v != "false" && v != "no")
+            .unwrap_or(false);
+
         Ok(ArtifactOptions {
             formats,
             asset,
             bin,
+            download_only,
         })
     }
 
@@ -123,5 +134,14 @@ mod tests {
     fn an_asset_pattern_is_compiled_once_here() {
         let read = ArtifactOptions::read(&opts(&[("asset", "*musl*")])).unwrap();
         assert!(read.asset.unwrap().matches("tool-musl.deb"));
+    }
+
+    #[test]
+    fn download_only_defaults_off_and_reads_a_bare_flag() {
+        assert!(!ArtifactOptions::read(&opts(&[])).unwrap().download_only);
+        // The grammar turns a bare `@download_only` into "true".
+        assert!(ArtifactOptions::read(&opts(&[("download_only", "true")])).unwrap().download_only);
+        assert!(!ArtifactOptions::read(&opts(&[("download_only", "false")])).unwrap().download_only);
+        assert!(!ArtifactOptions::read(&opts(&[("download_only", "no")])).unwrap().download_only);
     }
 }

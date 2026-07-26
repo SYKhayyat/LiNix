@@ -153,29 +153,42 @@ impl Installable for AppImageInstallable {
                 .or_else(|| filename.strip_suffix(".appimage"))
                 .unwrap_or(filename);
 
-            let link_path =
-                crate::utils::bin_destination(&bin_dir, link_name, self.core.confine_bin)?;
+            // D3b: `@download_only` keeps the fetched AppImage on disk but never links it onto
+            // PATH. It is still declared, so a later removal still deletes the file.
+            let download_only = crate::backends::artifact::ArtifactOptions::read(&spec.options)
+                .map(|o| o.download_only)
+                .unwrap_or(false);
 
-            crate::utils::deploy_executable(
-                &dest_path,
-                &link_path,
-                &self.core.install_dir,
-                state.get(&spec.name).map(|s| s.symlink_path.as_str()),
-            )
-            .await?;
+            let symlink_path = if download_only {
+                String::new()
+            } else {
+                let link_path =
+                    crate::utils::bin_destination(&bin_dir, link_name, self.core.confine_bin)?;
+                crate::utils::deploy_executable(
+                    &dest_path,
+                    &link_path,
+                    &self.core.install_dir,
+                    state.get(&spec.name).map(|s| s.symlink_path.as_str()),
+                )
+                .await?;
+                info!(
+                    "AppImage: Successfully installed {} to {}",
+                    link_name,
+                    link_path.display()
+                );
+                link_path.to_string_lossy().to_string()
+            };
+            if download_only {
+                info!("AppImage: fetched {} (download-only, not on PATH)", filename);
+            }
 
             state.insert(
                 spec.name.clone(),
                 AppImageState {
                     url: url.clone(),
                     local_path: dest_path.to_string_lossy().to_string(),
-                    symlink_path: link_path.to_string_lossy().to_string(),
+                    symlink_path,
                 },
-            );
-            info!(
-                "AppImage: Successfully installed {} to {}",
-                link_name,
-                link_path.display()
             );
         }
 
@@ -194,8 +207,11 @@ impl Installable for AppImageInstallable {
                 if let Err(e) = crate::utils::remove_deployed_path(&info.local_path).await {
                     errors.push(e);
                 }
-                if let Err(e) = crate::utils::remove_deployed_path(&info.symlink_path).await {
-                    errors.push(e);
+                // A download-only AppImage was never linked, so there is no PATH entry to drop.
+                if !info.symlink_path.is_empty() {
+                    if let Err(e) = crate::utils::remove_deployed_path(&info.symlink_path).await {
+                        errors.push(e);
+                    }
                 }
                 if errors.is_empty() {
                     info!("AppImage: Removed {}", name);

@@ -947,7 +947,7 @@ fn validate_extra_options(
 /// `absent:` only, and "not an option" would be the wrong error for a key that exists.
 const PACKAGE_OPTION_KEYS: &[&str] = &[
     "version", "hold", "expires", "until", "requires", "sha256", "formats", "asset", "bin",
-    "channel", "allow_http", "unverified", "health",
+    "channel", "allow_http", "unverified", "health", "download_only",
 ];
 
 /// Options that are only meaningful on a backend that resolves one name to several
@@ -1028,6 +1028,24 @@ pub fn validate_artifact_options(
             "one pattern, which may be a glob: `@asset=*musl*`. For every matching file, \
              `@asset=all`.",
         ));
+    }
+
+    // `@download_only` (D3b) means "fetch but do not install" — a distinction only a backend
+    // that downloads a file can draw. Every other backend hands the whole job to a package
+    // manager, so there is no fetch-without-install to ask for.
+    if o.contains("download_only") {
+        if let Some(backend) = backend {
+            if !capability::downloads(backend) {
+                return Err(GrammarError::new(
+                    origin.clone(),
+                    format!("`@download_only` is not an option on `{}`", backend),
+                )
+                .with_hint(format!(
+                    "it fetches a file without installing it, which only {} do.",
+                    capability::download_backends()
+                )));
+            }
+        }
     }
 
     // SEC2's two opt-outs relax a rule that only exists where LiNix downloads and executes.
@@ -1756,6 +1774,21 @@ mod artifact_option_tests {
     #[test]
     fn formats_on_appimage_is_a_contradiction_and_is_refused() {
         assert!(p("appimage:foo@formats=deb").is_err());
+    }
+
+    #[test]
+    fn download_only_is_read_on_a_download_backend_and_refused_elsewhere() {
+        // D3b: fetch-without-install is a distinction only a downloading backend can draw.
+        assert_eq!(
+            options_of("github:sharkdp/fd@download_only").one("download_only"),
+            Some("true")
+        );
+        assert_eq!(
+            options_of("web:https://host/x.bin@download_only").one("download_only"),
+            Some("true")
+        );
+        let err = p("apt:curl@download_only").unwrap_err();
+        assert!(format!("{}", err).contains("not an option on `apt`"));
     }
 
     #[test]

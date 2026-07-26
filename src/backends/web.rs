@@ -165,13 +165,16 @@ impl Installable for WebInstallable {
                     .map_err(Error::from)?;
             }
 
+            // D3b: `@download_only` fetches the file and stops. And a bare `web:` line that
+            // resolves to no runnable program keeps the download rather than failing — the
+            // default download-only fallback is simply "no binary was found to deploy" here,
+            // because the discovery below records `None` when it finds nothing.
+            let download_only = crate::backends::artifact::ArtifactOptions::read(&spec.options)
+                .map(|o| o.download_only)
+                .unwrap_or(false);
+
             let mut final_bin_link = None;
-            if spec
-                .options
-                .get("type")
-                .map(|t| t == "program")
-                .unwrap_or(true)
-            {
+            if !download_only {
                 // The name comes from the URL, not from an option: `@bin` is refused on
                 // `web` (it picks between several files of one release, and a `web:` URL names
                 // exactly one). Reading it here was the SEC1 traversal's entry point, and a

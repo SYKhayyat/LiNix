@@ -423,24 +423,13 @@ impl Installable for GithubInstallable {
         for spec in specs {
             let wanted = ArtifactOptions::read(&spec.options).map_err(Error::Validation)?;
             let asked = wanted.resolved_formats(&default_formats());
-            let formats = asked.retaining(installable_here);
-            if formats.is_empty() {
-                let refused = asked.rejected_by(installable_here);
-                return Err(Error::Validation(format!(
-                    "{}: `github` cannot install {} — it unpacks archives, and a system \
-                     package has to be handed to the package manager that owns it. Ask for \
-                     one of: {}.",
-                    spec.name,
-                    refused
-                        .iter()
-                        .map(|f| f.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    FormatOrder::new(
-                        Format::ALL.into_iter().filter(|f| installable_here(*f)).collect()
-                    )
-                )));
-            }
+            let installable = asked.retaining(installable_here);
+            // D3b: `@download_only` fetches without installing, and github does the same by
+            // default when nothing it was asked for is installable (e.g. only a `.deb` on
+            // offer and no `.deb` handoff yet). Rather than failing, it keeps the file — still
+            // declared, still removed when the line goes, just never unpacked or put on PATH.
+            let download_only = wanted.download_only || installable.is_empty();
+            let formats = if download_only { asked.clone() } else { installable };
 
             let pin = spec
                 .options
@@ -558,6 +547,71 @@ impl Installable for GithubInstallable {
                 if let Some(objection) = verify_set(locked, &resolved) {
                     return Err(Error::Validation(format!("{}: {}", spec.name, objection)));
                 }
+            }
+
+            // D3b: download-only. Keep each fetched file under the declaration's directory;
+            // never unpack it, discover an executable, or put anything on PATH. Still recorded
+            // and locked, so a removal still deletes it and a re-download that differs is caught.
+            if download_only {
+                let pkg_dir = self.core.install_dir.join(spec.name.replace('/', "_"));
+                if tokio::fs::try_exists(&pkg_dir).await.unwrap_or(false) {
+                    tokio::fs::remove_dir_all(&pkg_dir).await.map_err(Error::from)?;
+                }
+                tokio::fs::create_dir_all(&pkg_dir).await.map_err(Error::from)?;
+
+                let reason = artifact::selection_reason(
+                    wanted.asset.is_some(),
+                    formats.is_user_specified(),
+                )
+                .to_string();
+                let previous: Vec<String> = state
+                    .get(&spec.name)
+                    .map(|s| s.artifacts.iter().filter_map(|a| a.bin_path.clone()).collect())
+                    .unwrap_or_default();
+
+                let mut installed_artifacts: Vec<InstalledArtifact> = Vec::new();
+                let mut locks: Vec<ArtifactLock> = Vec::new();
+                for (pick, dl_path, sha) in &downloaded {
+                    let dest = pkg_dir.join(&pick.asset.name);
+                    tokio::fs::copy(dl_path, &dest).await.map_err(Error::from)?;
+                    installed_artifacts.push(InstalledArtifact {
+                        asset: pick.asset.name.clone(),
+                        format: pick.format.to_string(),
+                        bin_path: None,
+                    });
+                    locks.push(ArtifactLock {
+                        version: Some(release.version.clone()),
+                        asset: pick.asset.name.clone(),
+                        url: pick.asset.url.clone(),
+                        format: pick.format.to_string(),
+                        selected_by: Some(reason.clone()),
+                        sha256: Some((*sha).clone()),
+                    });
+                }
+                // A line that used to deploy a binary and is now download-only drops the old
+                // PATH entry, or it becomes drift nothing declares.
+                for stale in &previous {
+                    if let Err(e) = crate::utils::remove_deployed_path(stale).await {
+                        warn!("{}: could not remove the old `{}`: {}", spec.name, stale, e);
+                    }
+                }
+                info!(
+                    "{}: fetched {} artifact(s) for {} — download-only, not on PATH",
+                    spec.name,
+                    installed_artifacts.len(),
+                    release.version
+                );
+                ledger.record(spec.name.clone(), locks);
+                state.insert(
+                    spec.name.clone(),
+                    GithubState {
+                        repo: spec.name.clone(),
+                        version: release.version,
+                        install_path: pkg_dir.to_string_lossy().to_string(),
+                        artifacts: installed_artifacts,
+                    },
+                );
+                continue;
             }
 
             let pkg_dir_name = spec.name.replace('/', "_");
