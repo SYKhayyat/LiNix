@@ -535,6 +535,12 @@ pub enum Commands {
     /// in a pipeline. The output carries a top-level `schema` version.
     Eval,
 
+    /// An interactive prompt over the one resolver: resolve a name against this machine,
+    /// evaluate a `when` predicate here, or inspect the resolved model — by trying, not by
+    /// reading the manual. Read-only; it shares the parser and resolver `sync` uses and never
+    /// touches the machine. `:help` inside for commands.
+    Repl,
+
     /// Version-control your manifests/config directory with git: init, status, log, commit,
     /// and checkout (roll the *config* back to a past commit without touching packages).
     Git(GitArgs),
