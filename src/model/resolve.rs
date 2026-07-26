@@ -1,7 +1,7 @@
 use super::conflict::{reconcile, Declared};
 use super::dated::dating_of;
 use super::layout::Layout;
-use super::modules::{expand, ModuleLoader};
+use super::modules::{expand, expand_args, ModuleLoader};
 use super::priority::Priority;
 use super::profiles::{read_active, ProfileLoader, SetOp};
 use crate::config::grammar::{
@@ -415,7 +415,7 @@ impl<'a> Resolver<'a> {
         // 2. Resolve profiles -> the module set. Profiles may reference profiles; modules
         //    may not.
         let profiles = ProfileLoader::new(self.layout, self.backends);
-        let mut wanted_modules: Vec<(String, Gates)> = Vec::new();
+        let mut wanted_modules: Vec<(String, Gates, Vec<(String, String)>)> = Vec::new();
         // Which profiles want each module. A module two profiles both reach belongs to
         // both, and `upgrade --profile` for either must find it.
         let mut wanted_by: HashMap<String, Vec<String>> = HashMap::new();
@@ -440,10 +440,10 @@ impl<'a> Resolver<'a> {
             }
 
             for m in r.modules {
-                match wanted_modules.iter_mut().find(|(n, _)| *n == m.name) {
-                    Some((_, gates)) if m.gates.len() < gates.len() => *gates = m.gates.clone(),
+                match wanted_modules.iter_mut().find(|(n, ..)| *n == m.name) {
+                    Some((_, gates, _)) if m.gates.len() < gates.len() => *gates = m.gates.clone(),
                     Some(_) => {}
-                    None => wanted_modules.push((m.name.clone(), m.gates.clone())),
+                    None => wanted_modules.push((m.name.clone(), m.gates.clone(), m.args.clone())),
                 }
                 wanted_by.entry(m.name).or_default().push(name.clone());
             }
@@ -456,14 +456,15 @@ impl<'a> Resolver<'a> {
         }
 
         // 3. Parse ONLY the modules reached. Apply `when`.
-        for (m, reached_by) in &wanted_modules {
-            let stmts = expand(
+        for (m, reached_by, args) in &wanted_modules {
+            let stmts = expand_args(
                 &mut loader,
                 m,
                 &Origin::new(&active_file, 0),
                 &self.facts,
                 &mut Vec::new(),
                 reached_by,
+                args,
             )?;
             // Attributed by the file each line actually came from, so a module reached
             // through another module is scoped to itself and to the profile that led here.
@@ -601,7 +602,8 @@ impl<'a> Resolver<'a> {
                 // A schedule's `run` is a command line, where `$` belongs to the shell that
                 // will run it. Set math and `use` name files, which are not values.
                 Statement::Schedule(..)
-                | Statement::Use(_)
+                | Statement::Use(..)
+                | Statement::Param { .. }
                 | Statement::Exclude(_)
                 | Statement::Intersect(_)
                 | Statement::Subtract(_)
@@ -638,13 +640,14 @@ impl<'a> Resolver<'a> {
     ) -> Result<Vec<(Statement, Origin, Gates)>> {
         let mut base: Vec<(Statement, Origin, Gates)> = Vec::new();
         for m in &r.modules {
-            base.extend(expand(
+            base.extend(expand_args(
                 loader,
                 &m.name,
                 asked,
                 &self.facts,
                 &mut Vec::new(),
                 &m.gates,
+                &m.args,
             )?);
         }
         base.extend(r.direct.clone());
@@ -807,6 +810,19 @@ impl<'a> Resolver<'a> {
                     .with_hint(
                         "move it to the `vars` file in your config root. A variable is defined \
                          on every machine, so it cannot live behind a profile.",
+                    ));
+                }
+                // A `param` is a module's own declaration and is consumed when the module is
+                // `use`d (U32). Reaching resolution means it was written where nothing binds it —
+                // a profile, the `active` file — where it would silently bind nothing.
+                Statement::Param { ref name, .. } => {
+                    return Err(GrammarError::new(
+                        origin.clone(),
+                        format!("`param {}` is only valid in a module", name),
+                    )
+                    .with_hint(
+                        "a parameter is declared in the module it belongs to and bound by \
+                         `use module(name=value)`. A profile has nothing to bind it.",
                     ));
                 }
                 other => {

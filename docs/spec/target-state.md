@@ -313,6 +313,13 @@ best-effort.
   demand.
 - **No `present:`.** A bare line already means present.
 - `-` subtraction does not exist in modules. `absent:` does.
+- **A module may take parameters (U32).** `param user` (required) / `param gpu = none` (with a
+  default) at the top of a module; `use workstation(user=shaul, gpu=nvidia)` binds them. The
+  values substitute through the existing `$name` machinery one scope wider — into `when` and into
+  every value the global `vars` pass reaches — and a missing required parameter, or an argument
+  naming no parameter, is a loud error, never a silent empty string (V.78). The expansion is
+  ordinary declarations, shown in `linix eval` and the removal preview before anything runs. A
+  profile takes no arguments: only a module declares `param`.
 
 ## II.4 Profiles
 

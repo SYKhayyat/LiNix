@@ -396,7 +396,8 @@ fn merge_options(stmt: &mut Statement, extra: Options, origin: &Origin) -> Resul
         | Statement::Dotfiles(_, o)
         | Statement::Firewall(_, o) => o,
         Statement::Repo { .. }
-        | Statement::Use(_)
+        | Statement::Use(..)
+        | Statement::Param { .. }
         | Statement::Exclude(_)
         | Statement::Intersect(_)
         | Statement::Subtract(_)
@@ -586,7 +587,7 @@ mod tests {
         assert_eq!(out.len(), 9);
         assert!(matches!(out[3], Statement::Absent(_)));
         assert!(matches!(out[4], Statement::Repo { .. }));
-        assert!(matches!(out[8], Statement::Use(Reference::Module(_))));
+        assert!(matches!(out[8], Statement::Use(Reference::Module(_), _)));
     }
 
     /// The block form used to be a way around every rule in II.2's table: the header was

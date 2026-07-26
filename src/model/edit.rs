@@ -300,7 +300,7 @@ impl<'a> Editor<'a> {
                 d.selector.as_str()
             )),
             // `use` is not an identity to replace: a module may use many.
-            Statement::Use(_) => None,
+            Statement::Use(..) => None,
             other => other_key(other),
         }
     }
@@ -551,7 +551,7 @@ pub(crate) enum Match {
 /// that a bare name means "under whatever backend has it".
 fn other_key(stmt: &Statement) -> Option<String> {
     match stmt {
-        Statement::Use(_) => Some(stmt.key()),
+        Statement::Use(..) => Some(stmt.key()),
         _ if stmt.kind().is_some() => Some(stmt.key()),
         _ => None,
     }

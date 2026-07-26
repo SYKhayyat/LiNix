@@ -26,6 +26,8 @@ pub struct Resolved {
 pub struct UsedModule {
     pub name: String,
     pub gates: Gates,
+    /// The arguments the `use module(name=value)` passed (U32), empty for the plain form.
+    pub args: Vec<(String, String)>,
 }
 
 /// One set operation from a profile (II.4).
@@ -56,11 +58,15 @@ impl Resolved {
     /// A module named twice keeps the **shortest** gate chain, not the first: reached once
     /// inside `when $role == travel` and once outside it, the truth is that it is here
     /// unconditionally, and an explanation that names the condition anyway is a wrong answer.
-    fn reach(&mut self, name: String, gates: Gates) {
+    fn reach(&mut self, name: String, gates: Gates, args: Vec<(String, String)>) {
         match self.modules.iter_mut().find(|m| m.name == name) {
+            // A module reached twice keeps the shortest gate chain; the arguments from the first
+            // reach stand (a module reached with two different argument sets is a rare edge, and
+            // silently merging them would be worse than using the first — the plan preview shows
+            // what expanded, so a wrong binding is visible, not hidden).
             Some(existing) if gates.len() < existing.gates.len() => existing.gates = gates,
             Some(_) => {}
-            None => self.modules.push(UsedModule { name, gates }),
+            None => self.modules.push(UsedModule { name, gates, args }),
         }
     }
 }
@@ -131,12 +137,12 @@ impl<'a> ProfileLoader<'a> {
             let mut gates = inherited.to_vec();
             gates.extend(own);
             match stmt {
-                Statement::Use(Reference::Module(m)) => out.reach(m, gates),
+                Statement::Use(Reference::Module(m), args) => out.reach(m, gates, args),
                 // Profiles may reference profiles; modules may not (II.7 step 2).
-                Statement::Use(Reference::Profile(p)) => {
+                Statement::Use(Reference::Profile(p), _) => {
                     let inner = self.resolve(&p, &origin, facts, seen, &gates)?;
                     for m in inner.modules {
-                        out.reach(m.name, m.gates);
+                        out.reach(m.name, m.gates, m.args);
                     }
                     out.direct.extend(inner.direct);
                     // A profile's set math travels with it: `use Work` where Work excludes

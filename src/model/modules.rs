@@ -74,7 +74,7 @@ impl<'a> ModuleLoader<'a> {
     /// that rule is how a writer comes to produce files the reader refuses.
     fn reject_profile_references(&self, doc: &Document) -> Result<()> {
         for (stmt, origin) in flatten(doc) {
-            if let Statement::Use(Reference::Profile(p)) = stmt {
+            if let Statement::Use(Reference::Profile(p), _) = stmt {
                 return Err(GrammarError::new(
                     origin.clone(),
                     format!("a module cannot `use` the profile `{}`", p),
@@ -178,6 +178,27 @@ pub fn expand<'a>(
     seen: &mut Vec<Visit>,
     inherited: &Gates,
 ) -> Result<Vec<(Statement, Origin, Gates)>> {
+    expand_args(loader, name, asked_by, facts, seen, inherited, &[])
+}
+
+/// [`expand`], with call-site arguments binding this module's `param`s (U32).
+///
+/// The ordinary `use editors` reaches this with `args` empty and behaves exactly as before — no
+/// params, no substitution, nothing to bind. `use workstation(user=shaul)` reaches it with the
+/// bindings, which become a scope every statement's `$param` references are substituted against,
+/// **leaving unknown `$refs` intact** so the later global `vars` pass still resolves them (and
+/// still errors on a real typo). A required `param` the call omits is a loud error naming the
+/// module and the parameter (V.78) — never a silent empty string.
+#[allow(clippy::too_many_arguments)]
+pub fn expand_args<'a>(
+    loader: &mut ModuleLoader<'a>,
+    name: &str,
+    asked_by: &Origin,
+    facts: &HostFacts,
+    seen: &mut Vec<Visit>,
+    inherited: &Gates,
+    args: &[(String, String)],
+) -> Result<Vec<(Statement, Origin, Gates)>> {
     let key = name.to_lowercase();
     let entered = Hop::new(asked_by.clone(), format!("use {}", name));
     if let Some(start) = seen.iter().position(|v| v.key == key) {
@@ -195,23 +216,210 @@ pub fn expand<'a>(
         entered,
     });
 
-    let stmts = loader.load(&key, asked_by)?.statements_with_gating(facts)?;
+    // Bind params from the *raw* document (ungated), then flatten with the params merged into
+    // the facts — so a `when $gpu == nvidia` inside the module sees the bound parameter, not just
+    // a `link:` value does (XIII.29). Both are done while the doc is borrowed; `stmts` and
+    // `scope` are owned so the borrow ends before the recursive `expand_args` below.
+    let (scope, stmts) = {
+        let doc = loader.load(&key, asked_by)?;
+        let scope = bind_params(doc, args, &key, asked_by)?;
+        let mut augmented = facts.clone();
+        for (k, v) in &scope {
+            augmented
+                .vars
+                .insert(k.clone(), crate::model::vars::Value::parse_literal(v));
+        }
+        let stmts = doc.statements_with_gating(&augmented)?;
+        (scope, stmts)
+    };
 
     let mut out = Vec::new();
     for (stmt, origin, own) in stmts {
         let mut gates = inherited.clone();
         gates.extend(own);
         match stmt {
-            Statement::Use(Reference::Module(m)) => {
-                out.extend(expand(loader, &m, &origin, facts, seen, &gates)?);
+            // A `param` is consumed here: it declared what this module takes, and binding it is
+            // this function's job. It never reaches the resolved statement stream.
+            Statement::Param { .. } => continue,
+            Statement::Use(Reference::Module(m), child_args) => {
+                // A nested `use inner(x=$user)` may reference this module's own parameters, so
+                // its argument values are substituted before the inner module binds them.
+                let child_args = substitute_args(&child_args, &scope);
+                out.extend(expand_args(loader, &m, &origin, facts, seen, &gates, &child_args)?);
             }
             // Rejected at load time; unreachable, but not worth an unwrap.
-            Statement::Use(Reference::Profile(_)) => continue,
-            other => out.push((other, origin, gates)),
+            Statement::Use(Reference::Profile(_), _) => continue,
+            mut other => {
+                if !scope.is_empty() {
+                    substitute_in_statement(&mut other, &scope);
+                }
+                out.push((other, origin, gates));
+            }
         }
     }
     seen.pop();
     Ok(out)
+}
+
+/// Bind a module's declared `param`s against the call-site `args` (U32). A `param` with a
+/// default falls back to it; a required `param` the call omits is an error, and an argument that
+/// names no `param` is an error too — a closed vocabulary names its typos rather than binding
+/// them to nothing (VIII.2).
+fn bind_params(
+    doc: &Document,
+    args: &[(String, String)],
+    module: &str,
+    asked_by: &Origin,
+) -> Result<std::collections::HashMap<String, String>> {
+    // Ungated, so a `param` is found regardless of any `when` around it — and a param must be
+    // bound before `when` is evaluated, since a param may be what a `when` tests.
+    let params: Vec<(&str, &Option<String>)> = doc
+        .every_statement()
+        .into_iter()
+        .filter_map(|(s, _, _)| match s {
+            Statement::Param { name, default } => Some((name.as_str(), default)),
+            _ => None,
+        })
+        .collect();
+
+    // An argument that names no parameter is a typo, caught rather than dropped.
+    for (k, _) in args {
+        if !params.iter().any(|(name, _)| name == k) {
+            return Err(GrammarError::new(
+                asked_by.clone(),
+                format!("module `{}` has no parameter `{}`", module, k),
+            )
+            .with_hint(if params.is_empty() {
+                format!("`{}` declares no parameters.", module)
+            } else {
+                format!(
+                    "`{}` takes: {}.",
+                    module,
+                    params
+                        .iter()
+                        .map(|(n, _)| *n)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }));
+        }
+    }
+
+    let mut scope = std::collections::HashMap::new();
+    for (name, default) in params {
+        let value = args
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.clone())
+            .or_else(|| default.clone());
+        match value {
+            Some(v) => {
+                scope.insert(name.to_string(), v);
+            }
+            None => {
+                return Err(GrammarError::new(
+                    asked_by.clone(),
+                    format!("module `{}` requires parameter `{}`", module, name),
+                )
+                .with_hint(format!(
+                    "pass it: `use {}({}=…)`, or give the parameter a default: `param {} = …`.",
+                    module, name, name
+                )));
+            }
+        }
+    }
+    Ok(scope)
+}
+
+/// Replace `$param` in a value for every `param` in `scope`, leaving any other `$ref` verbatim.
+///
+/// This is deliberately *not* `vars::expand`: params are an inner scope resolved before the
+/// global one, so an unknown `$ref` here is not an error — it is a global variable the later pass
+/// will resolve (or a real typo the later pass will name). `$$` is a literal `$`.
+fn substitute_params(value: &str, scope: &std::collections::HashMap<String, String>) -> String {
+    if scope.is_empty() || !value.contains('$') {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        // `$$` → a literal `$`.
+        if matches!(chars.peek(), Some((_, '$'))) {
+            out.push('$');
+            chars.next();
+            continue;
+        }
+        let rest = &value[i + 1..];
+        let ident: String = rest
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        match scope.get(&ident) {
+            Some(v) if !ident.is_empty() => {
+                out.push_str(v);
+                for _ in 0..ident.chars().count() {
+                    chars.next();
+                }
+            }
+            // Not a param (unknown, or `$` not followed by an identifier): leave it for the
+            // global vars pass, verbatim.
+            _ => out.push('$'),
+        }
+    }
+    out
+}
+
+/// Substitute params into the values of a nested `use`'s arguments (`use inner(x=$user)`).
+fn substitute_args(
+    args: &[(String, String)],
+    scope: &std::collections::HashMap<String, String>,
+) -> Vec<(String, String)> {
+    args.iter()
+        .map(|(k, v)| (k.clone(), substitute_params(v, scope)))
+        .collect()
+}
+
+/// Substitute params into every interpolatable field of a statement — the same fields the global
+/// `vars` pass touches, so the two scopes reach exactly the same places (V.62).
+fn substitute_in_statement(
+    stmt: &mut Statement,
+    scope: &std::collections::HashMap<String, String>,
+) {
+    let sub = |s: &mut String| *s = substitute_params(s, scope);
+    match stmt {
+        Statement::Package(d) | Statement::Absent(d) => {
+            for value in d.options.values_mut() {
+                sub(value);
+            }
+        }
+        Statement::Shim(name, opts)
+        | Statement::Service(name, opts)
+        | Statement::Link(name, opts)
+        | Statement::Setting(name, opts)
+        | Statement::Exec(name, opts)
+        | Statement::Dotfiles(name, opts)
+        | Statement::Firewall(name, opts) => {
+            sub(name);
+            for value in opts.values_mut() {
+                sub(value);
+            }
+        }
+        Statement::Repo { spec, .. } => sub(spec),
+        // A schedule's `run` is a shell command where `$` is the shell's; set math and `use`
+        // name files, not values; a param never reaches here.
+        Statement::Schedule(..)
+        | Statement::Use(..)
+        | Statement::Param { .. }
+        | Statement::Exclude(_)
+        | Statement::Intersect(_)
+        | Statement::Subtract(_)
+        | Statement::Expr(_)
+        | Statement::Var { .. } => {}
+    }
 }
 
 #[cfg(test)]
@@ -364,5 +572,116 @@ mod tests {
             "apt:neovim\nwhen os == windows {\n  apt:notepad\n}\n",
         )]);
         assert_eq!(expand_module(&f, "dev").unwrap().len(), 1);
+    }
+
+    // --- U32: module parameters ---
+
+    fn expand_with_args(
+        f: &Fixture,
+        name: &str,
+        args: &[(&str, &str)],
+    ) -> Result<Vec<Statement>> {
+        let args: Vec<(String, String)> =
+            args.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let mut loader = ModuleLoader::new(&f.layout, &known);
+        let out = expand_args(
+            &mut loader,
+            name,
+            &Origin::argument(),
+            &facts(),
+            &mut Vec::new(),
+            &Vec::new(),
+            &args,
+        )?;
+        Ok(out.into_iter().map(|(s, _, _)| s).collect())
+    }
+
+    fn link_target(stmt: &Statement) -> Option<&str> {
+        match stmt {
+            Statement::Link(_, opts) => opts.one("target"),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_param_is_substituted_from_a_use_argument() {
+        // U32: the flagship example. `$user` in the module body becomes the passed value, and
+        // the `param` line itself never reaches the output.
+        let f = fixture(&[(
+            "workstation.txt",
+            "param user\nlink:./gitconfig@target=/home/$user/.gitconfig\n",
+        )]);
+        let stmts = expand_with_args(&f, "workstation", &[("user", "shaul")]).unwrap();
+        assert_eq!(stmts.len(), 1, "the param line is consumed: {:?}", stmts);
+        assert_eq!(link_target(&stmts[0]), Some("/home/shaul/.gitconfig"));
+    }
+
+    #[test]
+    fn a_param_default_is_used_when_no_argument_is_passed() {
+        let f = fixture(&[(
+            "workstation.txt",
+            "param dir = /opt\nlink:./x@target=$dir/x\n",
+        )]);
+        let stmts = expand_with_args(&f, "workstation", &[]).unwrap();
+        assert_eq!(link_target(&stmts[0]), Some("/opt/x"));
+    }
+
+    #[test]
+    fn a_required_param_with_no_argument_is_a_loud_error() {
+        // V.78: never a silent empty string.
+        let f = fixture(&[("workstation.txt", "param user\napt:vim\n")]);
+        let err = expand_with_args(&f, "workstation", &[]).unwrap_err();
+        assert!(err.what.contains("requires parameter `user`"), "{}", err);
+        assert!(err.what.contains("workstation"), "{}", err);
+    }
+
+    #[test]
+    fn an_argument_that_names_no_parameter_is_an_error() {
+        let f = fixture(&[("workstation.txt", "param user\napt:vim\n")]);
+        let err = expand_with_args(&f, "workstation", &[("gpu", "nvidia")]).unwrap_err();
+        assert!(err.what.contains("has no parameter `gpu`"), "{}", err);
+    }
+
+    #[test]
+    fn a_param_gates_a_when_block() {
+        // `$gpu` reaches a `when` — the same variable machinery, one scope wider.
+        let f = fixture(&[(
+            "workstation.txt",
+            "param gpu = none\nwhen $gpu == nvidia {\n  apt:nvidia-driver\n}\n",
+        )]);
+        assert!(expand_with_args(&f, "workstation", &[]).unwrap().is_empty());
+        let on = expand_with_args(&f, "workstation", &[("gpu", "nvidia")]).unwrap();
+        assert_eq!(on.len(), 1);
+    }
+
+    #[test]
+    fn an_unknown_dollar_reference_is_left_for_the_global_vars_pass() {
+        // A param scope substitutes only its own names; `$notaparam` survives verbatim so the
+        // later global `vars` pass resolves it (or names it as a typo). It must not error here.
+        let f = fixture(&[(
+            "m.txt",
+            "param user\nlink:./x@target=/home/$user/$notaparam\n",
+        )]);
+        let stmts = expand_with_args(&f, "m", &[("user", "a")]).unwrap();
+        assert_eq!(link_target(&stmts[0]), Some("/home/a/$notaparam"));
+    }
+
+    #[test]
+    fn a_nested_use_receives_substituted_arguments() {
+        // `use inner(who=$user)` inside a parameterized module: the outer param is substituted
+        // into the inner call's argument before the inner module binds it.
+        let f = fixture(&[
+            ("outer.txt", "param user\nuse inner(who=$user)\n"),
+            ("inner.txt", "param who\nlink:./x@target=/home/$who/x\n"),
+        ]);
+        let stmts = expand_with_args(&f, "outer", &[("user", "shaul")]).unwrap();
+        assert_eq!(link_target(&stmts[0]), Some("/home/shaul/x"));
+    }
+
+    #[test]
+    fn a_plain_use_of_a_parameterless_module_is_unchanged() {
+        // The common case: no params, no args, nothing substituted.
+        let f = fixture(&[("editors.txt", "apt:neovim\napt:vim\n")]);
+        assert_eq!(expand_module(&f, "editors").unwrap().len(), 2);
     }
 }

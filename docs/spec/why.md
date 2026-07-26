@@ -1143,4 +1143,20 @@ command. `linix repl` sits under the same principle from the read side (the U20 
 thin front end over the one parser and resolver, never a second implementation, because this
 repo's history is that a second implementation of anything eventually disagrees with the first.
 
+**V.78 — Why a missing module parameter is a loud error, not an empty string.** `param` (U32)
+gives a module arguments, and the substitution reuses the existing `$name` machinery one scope
+wider — the params bind first, `when` and every value see them, and an unknown `$ref` is left for
+the global `vars` pass rather than errored, so the two scopes compose. The one rule that is not
+negotiable is the failure mode: a `param` with no default that a `use` omits is an error naming
+the module and the parameter, never a silent empty string. An empty string would make
+`when $gpu == nvidia` quietly false and `link:@target=/home/$user/…` write to `/home//…` — the
+P3 silent-wrong failure the `vars` work was hardened against (IX.3), arriving through a new door.
+An argument that names no parameter is likewise an error, not a no-op: a closed vocabulary names
+its typos (VIII.2), and binding `gpu=nvidia` to a module with no `gpu` param would drop the
+intent without a word. Substitution reaches exactly the fields the global `vars` pass reaches
+(V.62), one shared helper, so the two cannot come to disagree about where a `$ref` is a value.
+The expansion is ordinary declarations, visible in `linix eval` and the removal preview before
+anything runs — a macro that could produce an action you cannot see is the one thing U32 must not
+be, which is why generated declarations are U33's separate, off-by-default question.
+
 ---

@@ -156,7 +156,16 @@ pub enum Statement {
     /// (Part XI). One spelling across ufw, firewalld and Windows Defender, which is the whole
     /// argument for a built-in backend rather than a per-machine `[[backend]]` naming `ufw`.
     Firewall(String, Options),
-    Use(Reference),
+    /// `use editors` / `use workstation(user=shaul, gpu=nvidia)` — bring in a module or profile
+    /// (II.2), optionally with **arguments** binding that module's `param`s (U32). The args are
+    /// empty for the ordinary form; a profile referenced with args is refused at parse time,
+    /// because a profile has no parameters to bind.
+    Use(Reference, Vec<(String, String)>),
+    /// `param NAME` / `param NAME = DEFAULT` — a module parameter (U32). A `param` with no
+    /// default is required: a `use` that omits it is a loud error naming the module and the
+    /// parameter, never an empty string that makes a `when` silently false (V.78). Legal only in
+    /// a module; parsed here so there is one parser, and rejected by file context like `schedule:`.
+    Param { name: String, default: Option<String> },
     /// `exclude heavy` — subtract that module's or profile's packages (II.4).
     Exclude(Reference),
     /// `intersect security` — keep only packages that are also in it (II.4).
@@ -200,7 +209,8 @@ impl Statement {
             Statement::Exec(n, _) => format!("exec:{}", n),
             Statement::Dotfiles(n, _) => format!("dotfiles:{}", n),
             Statement::Firewall(n, _) => format!("firewall:{}", n),
-            Statement::Use(r) => format!("use {}", r.name()),
+            Statement::Use(r, _) => format!("use {}", r.name()),
+            Statement::Param { name, .. } => format!("param {}", name),
             Statement::Exclude(r) => format!("exclude {}", r.name()),
             Statement::Intersect(r) => format!("intersect {}", r.name()),
             Statement::Subtract(p) => format!("-{}", p),
@@ -229,7 +239,8 @@ impl Statement {
             Statement::Firewall(..) => "firewall",
             Statement::Package(_)
             | Statement::Absent(_)
-            | Statement::Use(_)
+            | Statement::Use(..)
+            | Statement::Param { .. }
             | Statement::Exclude(_)
             | Statement::Intersect(_)
             | Statement::Subtract(_)
@@ -301,6 +312,15 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
     }
     if line == "use" || line.starts_with("use\t") {
         return parse_use(origin, line[3..].trim());
+    }
+
+    // `param NAME` / `param NAME = DEFAULT` (U32). Checked before the package parser so a bare
+    // `param gpu` is a parameter declaration, not a package named `param gpu`.
+    if let Some(rest) = line.strip_prefix("param ") {
+        return parse_param(origin, rest.trim());
+    }
+    if line == "param" || line.starts_with("param\t") {
+        return parse_param(origin, line[5..].trim());
     }
 
     // II.4's set directives. Checked before the package parser, which would otherwise read
@@ -461,31 +481,113 @@ fn parse_use(origin: &Origin, target: &str) -> Result<Statement> {
         return Err(GrammarError::new(origin.clone(), "`use` names nothing")
             .with_hint("write `use editors` (a module) or `use Work` (a profile)."));
     }
+
+    // Split off an optional `(args)` before validating the name, so a `/` inside an argument
+    // value (`use m(path=/etc/foo)`) is not mistaken for the path in a `use` target (U32).
+    let (name, args) = match target.split_once('(') {
+        Some((name, rest)) => {
+            let inner = rest.strip_suffix(')').ok_or_else(|| {
+                GrammarError::new(
+                    origin.clone(),
+                    format!("`use {}` opens `(` but never closes it", target),
+                )
+                .with_hint("write `use workstation(user=shaul, gpu=nvidia)`.")
+            })?;
+            (name.trim(), parse_use_args(origin, inner)?)
+        }
+        None => (target, Vec::new()),
+    };
+
     // `use` takes a name, never a path and never a URL (II.2). A file from the internet is
     // a fetch step that puts a module on disk; then you `use` it by name like everything
     // else.
-    if target.contains('/') || target.contains('\\') || target.contains("://") {
+    if name.contains('/') || name.contains('\\') || name.contains("://") {
         return Err(GrammarError::new(
             origin.clone(),
-            format!("`use {}` looks like a path or a URL", target),
+            format!("`use {}` looks like a path or a URL", name),
         )
         .with_hint(
             "`use` takes a name. Fetch the file into `modules/` first, then `use` it by name.",
         ));
     }
-    if target.split_whitespace().count() > 1 {
+    if name.split_whitespace().count() > 1 {
         return Err(GrammarError::new(
             origin.clone(),
-            format!("`use {}` names more than one thing", target),
+            format!("`use {}` names more than one thing", name),
         )
         .with_hint("one `use` per line."));
     }
-    Reference::classify(target).map(Statement::Use).ok_or_else(|| {
+    let reference = Reference::classify(name).ok_or_else(|| {
         GrammarError::new(
             origin.clone(),
-            format!("`{}` is neither a module nor a profile name", target),
+            format!("`{}` is neither a module nor a profile name", name),
         )
         .with_hint("profiles are Capitalized, modules are lowercase.")
+    })?;
+    // A profile has no parameters to bind (U32): only modules declare `param`.
+    if !args.is_empty() && matches!(reference, Reference::Profile(_)) {
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`use {}` passes arguments to a profile", name),
+        )
+        .with_hint("only a module takes parameters (`param`); a profile has none to bind."));
+    }
+    Ok(Statement::Use(reference, args))
+}
+
+/// Parse `k=v, k2=v2` from inside a `use name(...)`. Values are verbatim to the next comma,
+/// trimmed. An empty argument list (`use m()`) is allowed and binds nothing.
+fn parse_use_args(origin: &Origin, inner: &str) -> Result<Vec<(String, String)>> {
+    let mut out = Vec::new();
+    for piece in inner.split(',') {
+        let piece = piece.trim();
+        if piece.is_empty() {
+            continue;
+        }
+        let Some((k, v)) = piece.split_once('=') else {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`{}` is not a `name=value` argument", piece),
+            )
+            .with_hint("write each argument as `name=value`, comma-separated."));
+        };
+        let key = k.trim();
+        if key.is_empty() || !key.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`{}` is not a parameter name", key),
+            )
+            .with_hint("parameter names are letters, digits and `_`."));
+        }
+        out.push((key.to_string(), v.trim().to_string()));
+    }
+    Ok(out)
+}
+
+/// `param NAME` / `param NAME = DEFAULT` (U32). The name is an identifier; a default is
+/// verbatim to end of line, trimmed, exactly like a `Var` value.
+fn parse_param(origin: &Origin, rest: &str) -> Result<Statement> {
+    if rest.is_empty() {
+        return Err(GrammarError::new(origin.clone(), "`param` names nothing")
+            .with_hint("write `param user` (required) or `param gpu = none` (with a default)."));
+    }
+    let (name, default) = match rest.split_once('=') {
+        Some((n, d)) => (n.trim(), Some(d.trim().to_string())),
+        None => (rest.trim(), None),
+    };
+    if name.is_empty()
+        || !name.starts_with(|c: char| c.is_alphabetic() || c == '_')
+        || !name.chars().all(|c| c.is_alphanumeric() || c == '_')
+    {
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`{}` is not a parameter name", name),
+        )
+        .with_hint("parameter names start with a letter or `_` and hold letters, digits and `_`."));
+    }
+    Ok(Statement::Param {
+        name: name.to_string(),
+        default,
     })
 }
 
@@ -732,7 +834,8 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
         Statement::Dotfiles(name, o) => validate_extra_options(origin, "dotfiles", name, o),
         Statement::Firewall(name, o) => validate_firewall(origin, name, o),
         Statement::Repo { .. }
-        | Statement::Use(_)
+        | Statement::Use(..)
+        | Statement::Param { .. }
         | Statement::Exclude(_)
         | Statement::Intersect(_)
         | Statement::Subtract(_)
@@ -1525,7 +1628,7 @@ mod tests {
     fn use_takes_a_module_by_lowercase_name() {
         assert_eq!(
             p("use editors").unwrap(),
-            Statement::Use(Reference::Module("editors".into()))
+            Statement::Use(Reference::Module("editors".into()), vec![])
         );
     }
 
@@ -1533,8 +1636,71 @@ mod tests {
     fn use_takes_a_profile_by_capitalized_name() {
         assert_eq!(
             p("use Work").unwrap(),
-            Statement::Use(Reference::Profile("Work".into()))
+            Statement::Use(Reference::Profile("Work".into()), vec![])
         );
+    }
+
+    #[test]
+    fn use_parses_module_arguments() {
+        // U32: `use workstation(user=shaul, gpu=nvidia)`.
+        assert_eq!(
+            p("use workstation(user=shaul, gpu=nvidia)").unwrap(),
+            Statement::Use(
+                Reference::Module("workstation".into()),
+                vec![
+                    ("user".into(), "shaul".into()),
+                    ("gpu".into(), "nvidia".into())
+                ]
+            )
+        );
+    }
+
+    #[test]
+    fn use_argument_values_may_contain_slashes() {
+        // The `/` is in an argument value, not the `use` target, so it is not a path.
+        assert_eq!(
+            p("use m(path=/etc/foo)").unwrap(),
+            Statement::Use(
+                Reference::Module("m".into()),
+                vec![("path".into(), "/etc/foo".into())]
+            )
+        );
+    }
+
+    #[test]
+    fn a_profile_cannot_take_arguments() {
+        let err = p("use Work(user=shaul)").unwrap_err();
+        assert!(err.what.contains("passes arguments to a profile"), "{}", err);
+    }
+
+    #[test]
+    fn an_unclosed_use_paren_is_an_error() {
+        assert!(p("use m(user=shaul").is_err());
+    }
+
+    #[test]
+    fn param_parses_with_and_without_a_default() {
+        assert_eq!(
+            p("param user").unwrap(),
+            Statement::Param {
+                name: "user".into(),
+                default: None
+            }
+        );
+        assert_eq!(
+            p("param gpu = none").unwrap(),
+            Statement::Param {
+                name: "gpu".into(),
+                default: Some("none".into())
+            }
+        );
+    }
+
+    #[test]
+    fn param_names_must_be_identifiers() {
+        assert!(p("param 9lives").is_err());
+        assert!(p("param a-b").is_err());
+        assert!(p("param").is_err());
     }
 
     #[test]
