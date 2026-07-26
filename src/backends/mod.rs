@@ -23,6 +23,7 @@ pub mod pacman;
 pub mod service;
 pub mod setting;
 pub mod snap;
+pub mod storage;
 pub mod vscode;
 pub mod web;
 pub mod xbps;

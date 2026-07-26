@@ -19,6 +19,7 @@ adapters/           how to drive things LiNix does not ship
   bootstrap.toml      how to obtain a manager this machine lacks (7c)
   init.toml           an init system (U36)
   snapshot.toml       a snapshot/rollback provider (U27)
+  secret.toml         a secret-decryption provider (U38)
   firewall.toml       a firewall (7o)
 hooks/              a script per LiNix event — on_drift, after_sync, … (7j)
 locks/              what everything resolved to    one file per backend
@@ -1239,6 +1240,22 @@ Shepherd adds a row to `adapters/init.toml` — through the same loader and ledg
 last, never shadowing a built-in. A row that cannot both start and stop is refused, not
 half-used (V.73). This is XIII.33's one mechanism — a name, some argv, a way to read the result —
 applied to the init surface rather than a new plugin system.
+
+**Storage objects are one family, and destroying one goes through the normal guard (U30).**
+`zfs:tank/data` and `lvm:vg0/data` join `btrfs:` as declared, sized, mounted objects — Rust, not
+a `ManagerConfig`, because a volume has a size and a mountpoint, not a version. Because they are
+ordinary backends, a deleted line becomes drift becomes a removal through the same guard as any
+package: a volume is protectable (`[guard] protected_packages`), it counts against `max_removals`,
+and `zfs destroy` / `lvremove` is previewed before the guard clears it (V.80). No special
+escalation — normal is already the strongest gate there is.
+
+**Secret decryption opens to declared providers, last and most carefully (U38).** `age` and
+`sops` stay built in; any other decrypt tool (Vault, 1Password, a KMS, GPG) is a `[[secret]]`
+row in `adapters/secret.toml` — a name and the argv that puts plaintext on stdout. It plugs into
+the existing decrypt path, so it inherits the T-series rules unchanged (restrict-before-write T5,
+no-backup T1, never-into-the-repo T2, the touch timeout T3). **A provider that does not declare
+`stdout_only = true` is refused, not trusted** (V.81): LiNix will not hand a secret to a command
+that has not promised to keep it off disk and out of the logs.
 
 **A restore that cannot restore says so, before it is needed (V.60).** Taking a snapshot and
 restoring one are different capabilities and a provider may have the first without the second:

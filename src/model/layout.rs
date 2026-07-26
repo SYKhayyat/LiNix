@@ -160,6 +160,12 @@ impl Layout {
         self.adapters_dir().join("snapshot.toml")
     }
 
+    /// `[[secret]]` — how to decrypt with a provider LiNix does not ship (U38). A row that does
+    /// not promise the plaintext reaches stdout only is refused, never trusted with a secret.
+    pub fn adapter_secret_file(&self) -> PathBuf {
+        self.adapters_dir().join("secret.toml")
+    }
+
     /// What everything resolved to. Generated, in git, yours. One file per backend.
     pub fn locks_dir(&self) -> PathBuf {
         self.config_root.join("locks")

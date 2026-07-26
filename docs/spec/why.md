@@ -1181,4 +1181,33 @@ approves each script individually, so nothing runs unreviewed. U33 lifts only th
 per-script ledger would break every existing `exec:` line for no safety the ledger does not
 already provide. The ledger is exec's config key, per-script and already off until you approve.
 
+**V.80 — Why storage objects are ordinary backends, and their `remove` gets the normal guard.**
+A ZFS dataset and an LVM volume (U30) join btrfs as a declared, sized, mounted storage object —
+one family, because they are the same idea, and Rust rather than a `ManagerConfig` because a
+volume has a size and a mountpoint, not a version. The edge that decided the shape is the
+`remove` path: `zfs destroy` and `lvremove` erase a filesystem and everything on it. The ruling
+is that they go through the **normal** sync guard — no special escalation — and the reason is
+that "normal" is already the strongest thing there is: because they are backends, deleting a
+`zfs:tank/data` line makes it drift, drift makes it a removal, and the removal runs through the
+same guard as any package — so a volume is protectable (`[guard] protected_packages` matches
+`zfs:tank/data`), it counts against `max_removals`, and the destruction is previewed before the
+guard clears it. A storage backend that ran its own removal outside the guard would be the
+teleport bug (the 2026-07-17 lesson) with a filesystem on the end of it — which is exactly why
+being an ordinary backend, not a special one, is the safe answer.
+
+**V.81 — Why a declared secret provider must promise stdout-only, or it is refused.** U38 opens
+decryption to any command that turns a reference into plaintext (sops, Vault, 1Password, a KMS,
+GPG) — the same "rows, not Rust" move, on the one surface where the output *is* a secret. So it
+carries the strictest version of the capability-must-be-declared rule: a provider block that does
+not say `stdout_only = true` does not load, because LiNix will not hand a secret to a command
+that has not promised to keep it off disk and out of the logs. The promise is what lets the
+provider plug into the *existing* decrypt path, where the T-series rules already live — the
+plaintext is captured from stdout in memory, the destination is restricted before it is written
+(T5), never backed up (T1), never allowed into the git-tracked repo (T2), and the run is bounded
+by the touch timeout (T3). A provider gets all of that for free precisely because it promised
+stdout-only; a provider that writes its own file would bypass every one of those, which is why
+the unsafe reading is not merely discouraged but refused at load. `age` and `sops` stay built in
+(age carries the hardware-token handling W-series and T-series argued for); the door U38 opens is
+the one the mechanism already made trivial, and it opened last, after the T-series settled.
+
 ---

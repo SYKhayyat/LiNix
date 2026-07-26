@@ -12,6 +12,8 @@ pub struct LinkBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
     pub config: Arc<Config>,
+    /// Declared secret-decryption providers (U38), beyond the built-in `age`/`sops`.
+    pub secret_providers: Vec<crate::model::secret::SecretProvider>,
 }
 
 /// Where a `@target=` value lands on disk. The install path and the pre-sync confirmation
@@ -114,7 +116,17 @@ impl LinkBackendCore {
             executor,
             name: "link".to_string(),
             config,
+            secret_providers: Vec::new(),
         }
+    }
+
+    /// Attach declared secret providers (U38), loaded from `adapters/secret.toml`.
+    pub fn with_secret_providers(
+        mut self,
+        providers: Vec<crate::model::secret::SecretProvider>,
+    ) -> Self {
+        self.secret_providers = providers;
+        self
     }
 
     /// Resolve the age identity file: explicit `@identity=`, else `$LINIX_AGE_IDENTITY`,
@@ -166,8 +178,33 @@ impl LinkBackendCore {
             }
         }
 
-        let args = decrypt_argv(tool, source, identity.as_deref())?;
-        let mut cmd = Command::new(tool);
+        // `age`/`sops` are built in (age carries the hardware handling above); anything else is a
+        // declared provider (U38), which plugs into this same plaintext-handling path — captured
+        // from stdout, bounded by the timeout, restricted before it is written. A provider is
+        // trusted only because it promised stdout-only and the ledger approved its file.
+        let (program, args) = if tool == "age" || tool == "sops" {
+            (tool.to_string(), decrypt_argv(tool, source, identity.as_deref())?)
+        } else {
+            let provider = self
+                .secret_providers
+                .iter()
+                .find(|p| p.name == tool)
+                .ok_or_else(|| {
+                    let mut known = vec!["age".to_string(), "sops".to_string()];
+                    known.extend(self.secret_providers.iter().map(|p| p.name.clone()));
+                    Error::Other(format!(
+                        "unknown decrypt tool '{}' — known: {}. Add a `[[secret]]` row to \
+                         `adapters/secret.toml` for another provider.",
+                        tool,
+                        known.join(", ")
+                    ))
+                })?;
+            let id = identity.as_deref().map(|p| p.to_string_lossy().to_string());
+            provider.command(&source.to_string_lossy(), id.as_deref()).ok_or_else(|| {
+                Error::Other(format!("the `{}` secret provider has no command", tool))
+            })?
+        };
+        let mut cmd = Command::new(&program);
         cmd.args(&args);
         // T3: a decrypt that does not complete is waiting on a prompt nobody will answer. Bound
         // it, and on timeout name the token and the identity rather than leaving the process
@@ -524,10 +561,25 @@ pub fn register(
     exec: &CommandExecutor,
     cfg: &crate::config::Config,
 ) {
-    let core = Arc::new(LinkBackendCore::new(
-        exec.duplicate(),
-        Arc::new(cfg.clone()),
-    ));
+    // Declared secret providers (U38), through the same approved loader every adapter file uses.
+    let layout = cfg.layout();
+    let secret_providers = crate::backends::onboarder::read_approved_definitions(
+        &layout.adapter_secret_file(),
+        &layout.locks_dir(),
+    )
+    .and_then(|body| match toml::from_str::<crate::model::secret::SecretProviderFile>(&body) {
+        Ok(f) => Some(crate::model::secret::providers(f.secret)),
+        Err(e) => {
+            tracing::warn!("ignoring adapters/secret.toml: {}", e);
+            None
+        }
+    })
+    .unwrap_or_default();
+
+    let core = Arc::new(
+        LinkBackendCore::new(exec.duplicate(), Arc::new(cfg.clone()))
+            .with_secret_providers(secret_providers),
+    );
     reg.register(Arc::new(
         crate::core::BackendCapabilities::builder(core.clone())
             .with_installable(Arc::new(LinkInstallable { core: core.clone() }))
