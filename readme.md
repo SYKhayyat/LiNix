@@ -683,6 +683,22 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
   three may live in `preferences.toml`'s `[events]` table for hooks that are this machine's business rather than
   the repo's; **both run**, so adding a local one never silently disables the shared one. They
   are locked like any other script, and one that fails warns without failing the sync.
+  - **Slack, ntfy, webhooks, Telegram, paging — any channel — go through that hook, not a
+    separate setting.** There is no `[[channel]]` block, because a hook already sends anything a
+    `curl` can send, and two ways to do one thing is the thing this design removes. A copyable
+    `hooks/after_sync` that posts to Slack:
+    ```sh
+    #!/bin/sh
+    # stdin is the event as JSON. The webhook URL is an ENV var, never the repo — a secret in
+    # a committed file is a leaked secret (secrets are environment-only in LiNix).
+    payload=$(cat)
+    curl -sf -X POST -H 'Content-type: application/json' \
+      --data "$(printf '{"text":"linix on %s: %s"}' "$(hostname)" "$payload")" \
+      "$LINIX_SLACK_WEBHOOK"
+    ```
+    Approve it once with `linix lock` (it runs code, so the ledger gates it), and swap the
+    `curl` line for ntfy, a Telegram bot URL, or a PagerDuty event — the mechanism is the same.
+    The built-in `desktop`/`email` channels stay for the common case; everything else is this.
 - **Health checks revert.** `apt:nginx@health=port:80` on a line, or a machine-wide
   `health = [...]` in `preferences.toml`. A failing check restores the snapshot the sync took
   before it started — and a health check declared on a machine with no snapshot provider is
