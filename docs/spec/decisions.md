@@ -827,7 +827,7 @@ is owed. The schema is implementation.
 
 ## U37
 
-**Status: OPEN — not blocking.**
+**Status: ANSWERED — ruled 2026-07-26.**
 
 **U37 — Are notification channels their own declared-provider kind, or is an event hook the
 answer? (XIII.35.)** `app/scheduler/notify.rs` handles only `desktop`, `email`, `both` and warns
@@ -839,6 +839,15 @@ today; the question is whether a first-class `[[channel]]` block earns its keep 
 hook that already exists, and document it — unless a channel needs something a hook cannot express
 (per-level routing), the only thing that would justify a block of its own. Filed so the answer is
 a recorded decision, not a fifth channel bolted on next time someone asks.
+
+**RULED (owner, 2026-07-26): no new mechanism — route through the existing event hook, and
+document it.** Slack, ntfy, webhooks, Telegram and paging are reached by the event hook U15 already
+shipped (a hook that runs `curl` on `after_sync` / `on_drift` / `on_guard_refusal`), not by a new
+`[[channel]]` provider kind. A dedicated channel block would duplicate the hook — two ways to do
+one thing, the disease this rewrite cures. The one thing that could have justified a block of its
+own, per-severity routing, the owner did not ask for, so it is not built. The work owed here is
+**documentation** — a copyable Slack/webhook hook example — not a mechanism. If per-level routing
+is ever wanted, that, and only that, reopens the block question.
 
 ---
 
