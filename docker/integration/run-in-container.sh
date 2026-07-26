@@ -796,6 +796,15 @@ ok "vars resolves this machine's variables" lx vars
 # thing asserted is the contract: a top-level schema version, and valid JSON.
 grep_ok "eval prints a versioned document" '"schema"' lx eval
 ok "eval emits valid JSON" sh -c "$LINIX eval | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null || $LINIX eval | head -1 | grep -q '{'"
+# `repl` (U34) is the read side of the resolver — a REPL that reads stdin until EOF. A piped
+# session drives the loop (`:help`, `:vars`) and exits on EOF, proving it runs headless; it goes
+# through `lx` so the coverage check below counts it as really executed, not merely `--help`'d.
+if printf ':help\n:vars\n:quit\n' | lx repl >/tmp/it.out 2>&1; then
+    PASS=$((PASS + 1)); echo "  PASS  repl evaluates a piped session and exits on EOF (U34)"
+else
+    FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - repl piped session failed"
+    echo "  FAIL  repl piped session"; tail -4 /tmp/it.out | sed 's/^/        | /'
+fi
 # A container has no container runtime, which is exactly `try`'s refusal path —
 # and the one a developer's own machine (which has docker) can never exercise.
 nok "try refuses when there is no container runtime" lx try

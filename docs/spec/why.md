@@ -1211,3 +1211,28 @@ the unsafe reading is not merely discouraged but refused at load. `age` and `sop
 the one the mechanism already made trivial, and it opened last, after the T-series settled.
 
 ---
+
+**V.82 — Why the built-in Windows snapshot provider is a row of typed placeholders, not a string.**
+*(Owner decision session 2026-07-26; resolves the SEC5 tension U27 left open.)* U27 ruled that the
+built-in snapshot providers stop being a hardcoded `Vec` and become rows through the one loader, so
+the mechanism is proven by the providers that ship and cannot fork into a privileged path nobody
+tested. btrfs, zfs, timeshift and lvm are plain argv and became rows without incident. Windows
+System Restore was the exception that nearly earned a permanent exemption: it is not a program you
+exec with argv, it is elevated PowerShell cmdlets (`Checkpoint-Computer -Description '…'`,
+`Restore-Computer -RestorePoint {id}`), and SEC5 exists because those cmdlets were once built by
+string interpolation — a `'` in a label or a non-numeric id would have run as an elevated shell.
+SEC5 closed that by making the id a `u32` and the label a fixed enum, so nothing untyped could
+reach the interpolation. **A naive "row" reopens SEC5 exactly:** a free-text template a shared repo
+fills is a string with the id spliced back in. The resolution is that the row for a cmdlet provider
+carries *typed slots*, not a shell line — the loader substitutes the id only after parsing it as a
+`u32` and the label only from the `SnapshotLabel` enum, so the property SEC5 established ("nothing
+but a `u32`/enum reaches the PowerShell") holds after the conversion as much as before it. The
+owner chose this over a hardcoded exemption because the exemption would mean the K17/U1 invariant —
+every built-in goes through the tested door — is only *almost* true, and an "almost" on the safety
+layer is the thing that hid the eighth removal path. **The unsafe reading is not merely
+discouraged; it is unrepresentable:** there is no field on a snapshot row where a user could type a
+PowerShell string with an id in it, because id and label are the only variable parts and both are
+typed. And because the whole thing is expressible and testable on a Windows host, this is not a
+"trust the design, verify on hardware later" case — it is verified where it runs.
+
+---

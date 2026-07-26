@@ -573,6 +573,14 @@ done
 echo "[14] Command surface, executed"
 
 ok "vars resolves this machine's variables" lx vars
+# `repl` (U34) reads stdin until EOF; a piped session drives the loop and exits, and runs through
+# `lx` so the coverage check counts it as really executed, not merely `--help`'d.
+if printf ':help\n:vars\n:quit\n' | lx repl >/tmp/it.out 2>&1; then
+    PASS=$((PASS + 1)); echo "  PASS  repl evaluates a piped session and exits on EOF (U34)"
+else
+    FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - repl piped session failed"
+    echo "  FAIL  repl piped session"; tail -4 /tmp/it.out | sed 's/^/        | /'
+fi
 ok "unmanaged lists what LiNix does not manage" lx unmanaged
 ok "path prints the config repo" lx path
 ok "path --explain says which source won" lx path --explain

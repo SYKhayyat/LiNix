@@ -14,6 +14,94 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Build session 2026-07-26 — the last register items built: D5, U27 built-ins-as-rows, P0 re-measure
+
+**Everything the owner cleared the day before is now built, unit-tested, and committed. The
+register is at zero unbuilt items.** `cargo build --all-targets` → `cargo test --all-targets`
+(1205 lib + every integration binary, 0 failed) → `cargo clippy --all-targets` all green on the
+Windows host.
+
+1. **D5 — `github:`/`web:` install a `.deb`/`.rpm` via the system manager.** `97d2163`. One shared
+   `backends/artifact/system_pkg.rs` builds the handoff argv (`dpkg -i` / `rpm -U --replacepkgs`,
+   `dpkg -r` / `rpm -e`, and the `dpkg-deb`/`rpm -qp` name read); github and web both branch a
+   handoff format to it and record `installed_by` + `system_package` (github in the lock, web in its
+   state). `installable_here` gates the handoff on the manager existing, so a machine without it
+   falls through to download-only. Dedup/deference ride the existing per-backend ownership:
+   `Queryable::owned_system_packages` (default none, overridden by github/web) feeds
+   `installed_but_unmanaged` and `adopt`'s discovery, which subtract those names — `check` does not
+   double-count and `purge-unmanaged` defers. `rpm -U` not the ruling's literal `rpm -i`, because
+   `-i` refuses an already-installed package and the installer must own the upgrade; the builder
+   records why. Only the live `dpkg`/`rpm` round-trip is deferred to a real apt/rpm box.
+2. **U27 built-ins-as-rows — the hardcoded `Vec` is gone.** `7f1061d`. btrfs, timeshift, apfs,
+   windows-restore and zfs are rows in `src/core/snapshot_builtins.toml`, compiled in via
+   `include_str!` and read through the same `ConfigSnapshotProvider` loader a user row goes through.
+   The built-in file is **not** hook-ledger-gated (a first-party compiled-in asset; gating it would
+   leave a fresh machine with no safety net until `linix lock` ran); the user file still is and
+   registers last; zfs ships last among built-ins so btrfs wins on a machine with both.
+   `SnapshotProviderDef` gained `id_template` (LiNix-named: btrfs/zfs), `create_id_pattern`
+   (tool-named, read from create output: timeshift/apfs), `detect_path` (btrfs subvolume mounted),
+   `list_needs_root` (timeshift), and `powershell`. **Windows is the one row beyond plain argv:**
+   `powershell = true`, `{id}` substituted only after `windows_sequence_number` parses it as a `u32`
+   (`fill_ps`), so a crafted list id never reaches the elevated shell — SEC5 holds by construction
+   (V.82). lvm is the exemplar *user* row, not shipped built-in. Live restore stays hardware-deferred.
+3. **Phase 0 comment re-measure.** `src/` carries **9,572 comment-block lines** (was 8,896 est.,
+   884 measured 2026-07-16). The marketing/self-praise subset is confirmed swept (the sales
+   vocabulary greps empty; the two `magic` hits are pejorative). The narration subset stays a
+   per-comment judgement call for the comment-audit passes.
+4. **Harness drift fixed (K2).** Both integration harnesses (`run-in-container.sh` and its Windows
+   twin `integration-windows.sh`) still asserted `nok "bare rebuild is refused"`, which K2 overturned
+   — a bare rebuild now warns and rebuilds `--all`. Replaced with a `--dry-run` assertion that it is
+   accepted and warns "EVERY declared package". `run.sh` now auto-smokes gentoo per-distro so one
+   `DISTROS="ubuntu fedora arch alpine tools gentoo"` run is correct.
+
+**A rotted "green" caught by running it.** Running the container matrix this session surfaced a
+build that had been broken on Linux **and** macOS for a while: the U26 BSD work added
+`remove_binary` to `ManagerConfig` and a copy-paste put `remove_binary: None` into the
+`ManualListing::Command` / `OrphanDryRun` literals too — inside the `#[cfg(target_os = "linux")]`
+and `macos` register functions, which the Windows host never compiles. So `cargo build --release`
+failed in every Linux container with E0559/E0560 while the host stayed green, and the "matrix
+green, run for real" claim was true only of a build that no longer compiled. Fixed (five stray
+fields removed, `fix(registry)`), which is exactly the "green is a belief, not a command" lesson
+this document keeps relearning: the matrix was never re-run after U26 landed.
+
+**What is still owed is validation, not construction:** D5's live `dpkg`/`rpm` install and the
+Linux snapshot providers' live restore, both on real filesystems. The container matrix
+(ubuntu/fedora/arch/alpine/tools + gentoo smoke) was re-run this session via `wsl -- docker`.
+
+## Owner decision session 2026-07-26 — clearing the last two items to build before real-machine testing
+
+**No code this session — six rulings, each written into the spec so the next build session works
+from the docs, not a chat log.** The owner's goal: build everything now and validate on the real
+machine afterwards, so nothing is left "parked on hardware" that could instead be built blind.
+
+1. **D5 — build now, test later.** The `github:`/`web:`-installs-a-file capability (a `.deb` to
+   `dpkg -i`, an `.rpm` to `rpm -i`), the lock-records-installer wiring, `check`'s dedup and
+   `purge-unmanaged`'s deference are built and unit-tested now; only the live `dpkg`/`rpm` round-trip
+   waits for a real apt/rpm box. No longer held back whole. (`decisions.md` D5, `plan.md` Tier 1.)
+2. **U27 built-ins-become-rows — Option A, build now.** btrfs/zfs/timeshift/lvm become argv rows in
+   `adapters/snapshot.toml`, replacing the hardcoded `Vec` at `core/snapshot.rs:528`; live restore is
+   the Linux-box job. **Windows System Restore becomes a row too, via typed-placeholder substitution**
+   — id substituted only as a validated `u32`, label only as the `SnapshotLabel` enum, never raw
+   interpolation — so SEC5's property holds by construction and the row is testable on this Windows
+   host. This was the session's one real decision; the alternative was a permanent hand-written
+   exemption, which the owner declined so the K17/U1 "every built-in goes through the tested door"
+   invariant stays whole. Reasoned in **V.82**; rules in `target-state.md`; `decisions.md` U27;
+   `plan.md` Tier 3 item 6.
+3. **F4 — closed, leave as-is.** No wiring of `--help` to the registry; `doctor` already carries the
+   live count. (`bugs.md` F4.)
+4. **K18 — stays parked.** No dead atomic-swap key; it lands with the first backend that exposes
+   atomic swap. (`decisions.md` K18.)
+5. **Phase 0 comment sweep — part of this build.** Re-measure the comment lines against today's tree
+   and sweep the P6-violating (narrating / self-congratulating / spec-citing) ones; report the new
+   figure. No longer a standing "unmeasured" caveat. (`plan.md` Phase 0.)
+6. **Doc drift fixed / scheduled.** `target-state.md`'s "NOT YET BUILT (checked 2026-07-26)" note on
+   U27/U28/U29 was stale (they built 2026-07-27) and is corrected now; the build that removes the
+   hardcoded vec rewrites what remains of it. (`target-state.md`; `plan.md` Tier 3 item 6.)
+
+**After this session the register is zero-open and everything is cleared to build before the real
+machine.** What the real machine still owes is validation only, not construction: D5's live install,
+and the Linux snapshot providers' live restore.
+
 ## Session 2026-07-27 — the whole ruled backlog, built and green
 
 **Every ruled U-item that was outstanding is now built — U27, U28, U29, U30, U32, U33, U34, U35,
