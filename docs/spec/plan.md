@@ -216,17 +216,18 @@ new model deletes the flag instead. Do not try to preserve it.
 > holds four of the dangerous ones out of the shipped template by test. `github_token` moved to
 > the environment exactly as II.17 says (`github.rs:801` reads `GITHUB_TOKEN`).
 >
-> **What is NOT verified: the comment count.** Phase 0 also asks for the ~884 marketing comments
-> to go. That figure was measured on 2026-07-16 against a smaller tree and **has never been
-> re-measured**; `src/` now carries 8,896 comment lines in total, of which the marketing subset
-> is a judgement call no grep makes. Treat the deletion half of Phase 0 as done and the comment
-> half as unmeasured — not as done.
->
-> **PART OF THIS BUILD (owner decision session 2026-07-26).** The re-measurement and the
-> marketing-comment sweep ride the pre-real-machine build: re-count the comment lines against
-> today's tree, sweep the comments that narrate / congratulate / cite a spec paragraph instead of
-> stating a constraint the code can't show (the P6 rule), and report the new figure. It is no
-> longer left open as "unmeasured" — it is scheduled work, not a standing caveat.
+> **The comment count: RE-MEASURED 2026-07-26.** `src/` carries **9,572 comment-block lines**
+> (`grep -rhE '^\s*(//|/\*|\*)' src/ --include=*.rs`), up from the 8,896 estimated on 2026-07-26
+> and the ~884 measured on 2026-07-16 against a much smaller tree. The 884 figure is historical.
+> **The marketing/self-congratulation subset is confirmed swept:** a grep for the sales vocabulary
+> (`blazing`, `world-class`, `enterprise-grade`, `mission-critical`, `high-performance`, `seamless`,
+> `bulletproof`, `rock-solid`, `lightning-fast`, `state-of-the-art`, …) finds **nothing**, which is
+> the R1–R23/R7 and F5 passes holding; the only two `magic` hits are pejorative (`dotfiles.rs`:
+> "deciding by extension is magic that silently writes plaintext"), i.e. a constraint, not praise.
+> **What no grep measures** — a comment that narrates the line below it rather than stating a
+> constraint the code can't show — stays a per-comment judgement call, worked in the comment-audit
+> passes (R14, F5), not settled by one sweep. The re-measurement half of Phase 0 is now done and
+> reported; the deletion half was already done.
 
 **Pure subtraction. Nothing new can break. Tests stay green except those testing deleted
 features.** Do this first so nothing is carefully ported that was about to be deleted.

@@ -28,12 +28,15 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | XII | [secrets](spec/proposals/secrets.md) | T1–T7 |
 | XIII | [the next round](spec/proposals/next-round.md) | U1–U38 |
 
-**Where the work stands (updated 2026-07-27).** Phases 0–6 are built and the container matrix
+**Where the work stands (updated 2026-07-26).** Phases 0–6 are built and the container matrix
 (ubuntu/fedora/arch/alpine/tools) is green, run for real. **Phase 7 and the entire U-series
 backlog are built** — the provider mechanism (snapshots U27/U28/U29, init U36, storage U30,
 secrets U38), and the language-power features (module parameters U32, generated declarations U33,
-user verbs U35, `repl` U34). The only ruled items still open are `D5` (needs a real apt box) and
-U27's "built-ins become snapshot rows" half (needs zfs/lvm/btrfs hardware). The suite is green:
+user verbs U35, `repl` U34). **The last two open items — `D5` and U27's "built-ins become snapshot
+rows" half — were cleared to build by the owner decision session 2026-07-26 and are built now, not
+parked on hardware** (Option A: typed-placeholder Windows row; see `plan.md` Tier 1 and Tier 3
+item 6). What the real machine still owes is validation, not construction: D5's live `dpkg`/`rpm`
+install and the Linux snapshot providers' live restore. The suite is green:
 `cargo build --all-targets`, `cargo test --lib` (1195 passed / 0 failed), `cargo clippy
 --all-targets` all clean. **VI.0 — the bug that removed software with no guard, no plan and no
 count, and that `--dry-run` performed — is FIXED** (S24/S25, 2026-07-23, verified 2026-07-24).
@@ -150,10 +153,15 @@ already exists". You cannot implement this correctly from a summary.
 - **A comment states a constraint the code can't show. Nothing else.** Not what the line does.
   Not where it came from. Not that it's good. This repo had ~884 comments that break this
   rule, written by models congratulating themselves; do not add the next one.
-  *(139 in the first draft; re-measured 2026-07-16 at ~884 across 2,147 comment blocks. **It has
-  not been measured since, and the tree has roughly quadrupled** — `src/` carries 8,896 comment
-  lines as of 2026-07-26. Treat 884 as a historical figure, not a current one: the sweep over the
-  old comments is unfinished and is recorded that way in Phase 0 and in F3.)*
+  *(139 in the first draft; ~884 across 2,147 comment blocks on 2026-07-16. **Re-measured
+  2026-07-26: `src/` carries 9,572 comment-block lines** (`grep -rhE '^\s*(//|/\*|\*)'`). The 884
+  figure is historical, not current. The marketing/self-congratulation subset the R1–R23 and F5
+  passes swept is now confirmed clean — a grep for the sales vocabulary (`blazing`, `world-class`,
+  `enterprise-grade`, `mission-critical`, `seamless`, `bulletproof`, …) finds nothing; the only two
+  `magic` hits use the word pejoratively (V.83's "deciding by extension is magic that silently
+  writes plaintext"), which is a constraint, not praise. What no grep can measure — a comment that
+  narrates the line below it rather than stating a constraint — stays a per-comment judgement call,
+  and the codebase's comment-audit passes (R14, F5) are where it is worked, not a single sweep.)*
 
 ### Lessons from the 2026-07-17 review pass
 
