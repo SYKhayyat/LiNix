@@ -21,7 +21,9 @@ PKG="${1:-jq}"
 # `tools` is a broad cross-platform image whose expansion backends (composer, go, opam,
 # luarocks, nimble, cabal, stack, mix, helm, krew, asdf, pixi, spack) each get a REAL
 # install→list→remove; what it cannot run is plan-smoked and named.
-# `gentoo` (emerge, SMOKE-ONLY) is opt-in — it pulls a large base — via DISTROS="gentoo".
+# `gentoo` (emerge) is opt-in — it pulls a large base — via `DISTROS="... gentoo"`; it is always
+# run SMOKE-ONLY (a source-building emerge lifecycle costs hours), handled per-distro below, so it
+# composes into a full-matrix run without forcing the binary-package distros to smoke too.
 DISTROS="${DISTROS:-ubuntu fedora arch alpine tools}"
 
 backend_for() {
@@ -49,9 +51,14 @@ for d in $DISTROS; do
     # Mount the current test script so edits to it don't require an image rebuild.
     SCRIPT_MOUNT="$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro"
     # Forward the run-mode toggle into the container: SMOKE_ONLY=1 skips real mutation
-    # (discovery and plan-smoke only), for a source-building image like gentoo.
+    # (discovery and plan-smoke only), for a source-building image like gentoo. gentoo is
+    # ALWAYS smoke-only — a real emerge install→remove builds from source and costs hours — so a
+    # single `DISTROS="... gentoo"` run does the right thing per distro: full lifecycle for the
+    # binary-package managers, smoke for Portage. A global SMOKE_ONLY still forces every distro.
     ENVFLAGS=""
-    [ -n "${SMOKE_ONLY:-}" ] && ENVFLAGS="$ENVFLAGS -e SMOKE_ONLY=$SMOKE_ONLY"
+    smoke="${SMOKE_ONLY:-}"
+    [ "$d" = gentoo ] && smoke=1
+    [ -n "$smoke" ] && ENVFLAGS="$ENVFLAGS -e SMOKE_ONLY=$smoke"
     # shellcheck disable=SC2086
     if docker run --rm $ENVFLAGS -v "$SCRIPT_MOUNT" "linix-it-$d" "$be" "$PKG"; then
         summary="${summary}\n  ${d} (${be}): PASS"

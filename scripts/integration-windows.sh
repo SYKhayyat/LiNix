@@ -226,7 +226,11 @@ fi
 # --- 10. rebuild asserts, and writes no commit (K14) ----------------------
 echo "[10] rebuild"
 commits() { git -C "$LINIX_CONFIG_DIR" rev-list --count HEAD 2>/dev/null || echo 0; }
-nok "bare rebuild is refused — scope is required" lx -y rebuild
+# K2 (ruled 2026-07-24): a bare `rebuild` no longer REFUSES — it WARNS loudly and rebuilds
+# `--all`. Checked with `--dry-run` so the harness does not churn every manual package.
+ok "bare rebuild is accepted, not refused (K2)" lx --dry-run rebuild
+grep_ok "bare rebuild warns it will rebuild EVERY declared package (K2)" \
+    "EVERY declared package" lx --dry-run rebuild
 BEFORE_COMMITS=$(commits)
 if [ "$BEFORE_COMMITS" -ge 1 ]; then
     ok "rebuild $BACKEND:$PKG runs" lx -y rebuild "$BACKEND:$PKG"

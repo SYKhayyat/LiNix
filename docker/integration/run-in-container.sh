@@ -340,8 +340,13 @@ echo "[12] rebuild"
 # Git is asked directly, not `linix git log`: a rebuild that committed by some
 # other route would still move HEAD, and only git can say so.
 commits() { git -C "$LINIX_CONFIG_DIR" rev-list --count HEAD 2>/dev/null || echo 0; }
-# The refusal costs nothing to check anywhere: it happens before any package is touched.
-nok "bare rebuild is refused — scope is required" lx -y rebuild
+# K2 (ruled 2026-07-24): a bare `rebuild` no longer REFUSES — it WARNS loudly and rebuilds
+# `--all`. Checked with `--dry-run` so the harness does not actually churn every manual package
+# on the image to prove a claim about the default scope. The warning is the safeguard the old
+# refusal used to be, and it must be loud and it must not error.
+ok "bare rebuild is accepted, not refused (K2)" lx --dry-run rebuild
+grep_ok "bare rebuild warns it will rebuild EVERY declared package (K2)" \
+    "EVERY declared package" lx --dry-run rebuild
 if [ -n "$SMOKE" ]; then
     skip_smoke "the rebuild itself, and K14's no-commit proof (needs an installed package)"
 else
