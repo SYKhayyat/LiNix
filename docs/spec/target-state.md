@@ -1085,6 +1085,13 @@ declare whether it can restore a running machine; the field is required and neve
 provider that does not declare live-restore is create-only and refuses the rollback (V.60). A
 custom provider registers last and never shadows a built-in.
 
+**When several providers are available, a declared priority list picks the active one (U28)** —
+the `priority` shape, an ordered list of names with a shipped default the user overrides, first
+available in the list wins. The list chooses which provider; V.60 still governs what LiNix
+promises about it, and the pre-change notice states which kind of snapshot this machine takes, so
+a create-only provider chosen first is a visible choice, not a silent weaker net. One active
+provider; "snapshot with all, restore from the best" is a later question.
+
 **A restore that cannot restore says so, before it is needed (V.60).** Taking a snapshot and
 restoring one are different capabilities and a provider may have the first without the second:
 `btrfs subvolume snapshot SRC /` does not roll back a mounted root, whatever its exit code says.

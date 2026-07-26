@@ -584,7 +584,7 @@ active provider by capability, not list order) now has to answer.
 
 ## U28
 
-**Status: OPEN — not blocking.**
+**Status: ANSWERED — ruled 2026-07-26.**
 
 **U28 — Does a machine use one snapshot provider or several, and is the active one chosen by
 capability rather than list order? (XIII.23.)** `SnapshotManager::new` takes the first available
@@ -596,6 +596,27 @@ independent of registration order; leave "several active at once" (snapshot ever
 restore from the best) as a later question, since one strong provider is the safety net and N is
 an optimization. Blocked by nothing — but it is the wrong default to leave in place once U27
 makes providers plural.
+
+**RULED (owner, 2026-07-26): a declared priority list, exactly like package managers.** The active
+provider is not chosen by LiNix guessing from capability, and not by whatever order the providers
+were registered — it is chosen by an **ordered list the user declares**, the same mechanism
+package-manager `priority` already is: the first provider in the list that is available on this
+machine becomes the active safety net. A default order ships and the user overrides it, exactly as
+`priority` does for backends.
+
+- **The list decides *which* provider; V.60 decides what LiNix *promises* about it.** These do not
+  conflict. If the declared order puts a create-only provider first, LiNix uses it and **says so
+  before the change** — the pre-change notice states which kind of snapshot this machine takes, so
+  a weaker net is a visible choice, never a silent one. A provider that cannot restore a running
+  machine still refuses the rollback; the list cannot make it promise what it declared it cannot
+  do.
+- **One active provider, first-available-wins.** "Snapshot with every provider and restore from
+  the best" (belt-and-suspenders) stays a later question — one strong provider is the safety net;
+  N is an optimisation, not the floor.
+
+**Implementing call:** the ordered list is its own preference, sitting with the snapshot settings
+rather than jammed into package `priority` — one-question-per-file (U10) — but it *is* the
+`priority` shape (an ordered list of names, default shipped, user overrides), not a new one.
 
 ---
 
