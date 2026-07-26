@@ -26,7 +26,7 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | X | [rebuild, caches, desktops, backup](spec/proposals/rebuild.md) | K1–K18 |
 | XI | [`firewall:`](spec/proposals/firewall.md) | N1–N7 |
 | XII | [secrets](spec/proposals/secrets.md) | T1–T7 |
-| XIII | [the next round](spec/proposals/next-round.md) | U1–U38 |
+| XIII | [the next round](spec/proposals/next-round.md) | U1–U39 |
 
 **Where the work stands (updated 2026-07-26).** Phases 0–6 are built and the container matrix
 (ubuntu/fedora/arch/alpine/tools) is green, run for real. **Phase 7 and the entire U-series

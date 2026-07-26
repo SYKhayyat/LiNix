@@ -410,6 +410,7 @@ mod tests {
             version_pin: None,
             needs_root: false,
             is_exclusive: false,
+            install_source_option: None,
             flag_map: HashMap::new(),
         };
         config.manual = manual;

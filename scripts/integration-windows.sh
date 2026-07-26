@@ -326,6 +326,9 @@ canary() {
         pixi)     echo "ripgrep|rg|full|" ;;
         nimble)   echo "nimjson|nimjson|full|" ;;
         luarocks) echo "luafilesystem||full|" ;;
+        # A helm plugin installs under the user's own helm data dir and reaches PATH
+        # through nothing — it is run as `helm diff` — so no binary is asserted.
+        helm)     echo "diff||full||@url=https://github.com/databus23/helm-diff" ;;
         krew)     echo "ns|kubectl-ns|full|" ;;
         *)        echo "" ;;
     esac
@@ -343,10 +346,6 @@ no_lifecycle_reason() {
         setting)    echo "a dependent statement (setting:K @value=), and it writes a live desktop setting" ;;
         vscode)     echo "installs an extension into the developer's real editor profile" ;;
         emacs)      echo "installs a package into the developer's real Emacs profile" ;;
-        # OPEN BUG, not a property of this host: `helm plugin install` takes a URL and
-        # `helm plugin uninstall` takes the plugin NAME, and a declaration carries one
-        # name — so a helm plugin LiNix installed, LiNix cannot remove.
-        helm)       echo "OPEN: helm's install takes a URL and its uninstall takes a name, so LiNix cannot remove what it installed — see Part VII" ;;
         mise|asdf)  echo "rewrites the host's tool-version shims" ;;
         web|appimage) echo "installs from a pasted URL; no stable public canary — smoked in 13" ;;
         btrfs)      echo "a snapshot provider, not an install target" ;;
@@ -419,6 +418,9 @@ lifecycle() {
     cbin="$(echo "$spec" | cut -d'|' -f2)"
     cmode="$(echo "$spec" | cut -d'|' -f3)"
     ctok="$(echo "$spec" | cut -d'|' -f4)"
+    # `@k=v` appended at INSTALL only: helm installs a plugin from a URL and removes it
+    # by name, so the two verbs cannot be handed the same string (U39).
+    copts="$(echo "$spec" | cut -d'|' -f5)"
     [ -n "$ctok" ] || ctok="$cpkg"
 
     echo "    -- $be:$cpkg"
@@ -433,7 +435,7 @@ lifecycle() {
         return 0
     fi
 
-    if ! lx -y install "$be:$cpkg" >/tmp/itw-life.out 2>&1; then
+    if ! lx -y install "$be:$cpkg$copts" >/tmp/itw-life.out 2>&1; then
         soft "$be: install of $cpkg failed (ecosystem/network variance) — the checks after it did not run"
         tail -4 /tmp/itw-life.out | sed 's/^/        | /'
         echo "$be" >> "$LEDGER/be-life-partial"
@@ -524,7 +526,7 @@ smoke_pkg() {
         emerge)   echo "app-misc/jq" ;;
         vscode)   echo "ms-python.python" ;;
         flatpak)  echo "org.freedesktop.Platform" ;;
-        helm)     echo "https://github.com/databus23/helm-diff" ;;
+        helm)     echo "diff@url=https://github.com/databus23/helm-diff" ;;
         web)      echo "https://example.invalid/tool.tar.gz" ;;
         appimage) echo "https://example.invalid/tool.AppImage" ;;
         *)        echo "$PKG" ;;
@@ -558,7 +560,9 @@ for be in $ALL_BACKENDS; do
             echo "$be" >> "$LEDGER/be-smoke"; continue ;;
     esac
     sp="$(smoke_pkg "$be")"
-    if grep_ok "$be: a dry-run install plans $be:$sp" "$be:$sp" \
+    # The plan names the package; its options are not part of that name.
+    sp_tok="${sp%%@*}"
+    if grep_ok "$be: a dry-run install plans $be:$sp" "$be:$sp_tok" \
             smoke_lx --dry-run install "$be:$sp"; then
         echo "$be" >> "$LEDGER/be-smoke"
     fi

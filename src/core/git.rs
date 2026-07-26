@@ -485,28 +485,47 @@ fatal: unable to auto-detect email address");
         assert!(parse_log("\n\n").is_empty());
     }
 
-    // The following tests exercise real git; they self-skip when git is unavailable so the
-    // suite still passes in a minimal environment.
-
-    /// Give the temp repo its own identity. LiNix no longer injects one (a signed commit must
-    /// not be authored by a name nobody owns), so a test repo on a machine with no global
-    /// `user.email` would otherwise fail in `git commit` rather than in what it is testing.
-    fn identify(root: &Path) {
-        for (k, v) in [("user.name", "linix test"), ("user.email", "test@example.invalid")] {
-            let _ = std::process::Command::new("git")
-                .arg("-C").arg(root).args(["config", k, v]).output();
-        }
-    }
-    #[test]
-    fn diff_manifest_changes_reports_package_level_delta() {
+    /// Gate for the tests below, which drive real git. Returns false when git is absent so the
+    /// suite still passes in a minimal environment.
+    ///
+    /// The identity and the neutered config paths must be set before any of them runs: LiNix no
+    /// longer injects an identity (a signed commit must not be authored by a name nobody owns),
+    /// so without this the suite passes or fails according to the host's `~/.gitconfig` rather
+    /// than according to the code (S33). Setting it here rather than per-test is deliberate —
+    /// a step each test has to remember is a step a new test will forget.
+    fn git_or_skip() -> bool {
+        static HERMETIC: std::sync::Once = std::sync::Once::new();
+        // Twinned in `tests/mock_providers.rs`, which is a separate binary and cannot link to
+        // this module. Change one, change the other.
+        HERMETIC.call_once(|| {
+            for (k, v) in [
+                ("GIT_AUTHOR_NAME", "linix test"),
+                ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
+                ("GIT_COMMITTER_NAME", "linix test"),
+                ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
+                // Absent paths, so no `~/.gitconfig` or system config reaches these repos:
+                // a host that signs every commit would otherwise fail them at `git commit`.
+                ("GIT_CONFIG_GLOBAL", "linix-tests-absent-gitconfig"),
+                ("GIT_CONFIG_SYSTEM", "linix-tests-absent-gitconfig"),
+            ] {
+                std::env::set_var(k, v);
+            }
+        });
         if !GitManager::git_available() {
             eprintln!("skipping: git not installed");
+            return false;
+        }
+        true
+    }
+
+    #[test]
+    fn diff_manifest_changes_reports_package_level_delta() {
+        if !git_or_skip() {
             return;
         }
         let tmp = tempdir().unwrap();
         let git = GitManager::new(tmp.path());
         git.init().unwrap();
-        identify(tmp.path());
         std::fs::create_dir_all(tmp.path().join("modules")).unwrap();
 
         std::fs::write(tmp.path().join("modules/dev.txt"), "apt:curl\napt:nano\n").unwrap();
@@ -527,15 +546,13 @@ fatal: unable to auto-detect email address");
 
     #[test]
     fn init_commit_head_and_log_round_trip() {
-        if !GitManager::git_available() {
-            eprintln!("skipping: git not installed");
+        if !git_or_skip() {
             return;
         }
         let tmp = tempdir().unwrap();
         let git = GitManager::new(tmp.path());
         assert!(!git.is_repo());
         git.init().unwrap();
-        identify(tmp.path());
         assert!(git.is_repo());
         assert!(git.head().unwrap().is_none(), "no commits yet");
 
@@ -554,14 +571,12 @@ fatal: unable to auto-detect email address");
 
     #[test]
     fn checkout_files_restores_manifest_without_new_commit() {
-        if !GitManager::git_available() {
-            eprintln!("skipping: git not installed");
+        if !git_or_skip() {
             return;
         }
         let tmp = tempdir().unwrap();
         let git = GitManager::new(tmp.path());
         git.init().unwrap();
-        identify(tmp.path());
         let manifest = tmp.path().join("local.txt");
 
         std::fs::write(&manifest, "apt:curl\n").unwrap();

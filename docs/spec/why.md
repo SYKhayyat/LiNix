@@ -1236,3 +1236,20 @@ typed. And because the whole thing is expressible and testable on a Windows host
 "trust the design, verify on hardware later" case — it is verified where it runs.
 
 ---
+
+**V.83 — Why a declaration names what `list` shows, not what `install` takes (U39).** `helm
+plugin install` takes a URL and `helm plugin uninstall` takes the name inside the plugin's own
+`plugin.yaml`. LiNix declared the URL, because that is the string install needed, and the install
+worked — once. Every sync after it asked `helm plugin list` for a package called
+`https://github.com/databus23/helm-diff`, was told it was not there, decided that was drift, tried
+to remove it by that name, and failed with `Plugin: <url> not found`. **A failed removal is not a
+one-command failure: it leaves the same state behind, so it recurs on every sync forever, and every
+other backend queued behind it stops too.** One helm plugin wedged the whole model. The rule is
+therefore about *which string survives*: install runs once, list and remove run for the life of the
+declaration, so the name has to be the one those two answer to, and anything install needs beyond
+it is an option. **Deriving the name from the URL was rejected outright** — `helm-diff` → `diff`
+is a convention, not a contract, and the version that is wrong installs a plugin under a name
+nothing can remove, which is the exact bug with a smaller blast radius and no error message. The
+refusal is louder and cheaper: a `helm:` line with no `@url=` never installs anything.
+
+---

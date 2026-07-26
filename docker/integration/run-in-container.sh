@@ -470,7 +470,7 @@ fi
 # `global remove` vs `global uninstall` bug a dry-run plan could never see.
 echo "[14] Real lifecycle, every other manager on this image"
 
-# canary <backend> → "package|binary|remove-mode|list-token"
+# canary <backend> → "package|binary|remove-mode|list-token|install-options"
 #   binary      empty when the package ships no executable — the PATH check is
 #               then skipped rather than faked.
 #   remove-mode full        uninstall must succeed and the name must be gone
@@ -479,6 +479,9 @@ echo "[14] Real lifecycle, every other manager on this image"
 #   list-token  what `list` calls it, when that differs from what install takes
 #               (`go:golang.org/x/example/hello` is listed as `hello`); empty
 #               means the two are the same.
+#   install-options `@k=v` appended at INSTALL only. helm installs a plugin from a
+#               URL and removes it by name, so the two verbs cannot be handed the
+#               same string — which is exactly what this section exists to catch.
 canary() {
     case "$1" in
         npm)      echo "cowsay|cowsay|full|" ;;
@@ -500,6 +503,10 @@ canary() {
         # check and a forty-minute one.
         cabal)    echo "hello|hello|unsupported|" ;;
         mix)      echo "hex||full|" ;;
+        # A helm plugin has no binary on PATH — it is reached as `helm diff` — so the
+        # PATH check is skipped rather than faked. U39: the name is the identity, the
+        # URL is install-time data.
+        helm)     echo "diff||full||@url=https://github.com/databus23/helm-diff" ;;
         krew)     echo "ns|kubectl-ns|full|" ;;
         pixi)     echo "ripgrep|rg|full|" ;;
         spack)    echo "zlib||full|" ;;
@@ -542,12 +549,6 @@ no_lifecycle_reason() {
         web)      echo "installs from a pasted URL; no stable public canary — smoked in 15" ;;
         appimage) echo "needs FUSE, which a plain container does not have — smoked in 15" ;;
         stack)    echo "its first install downloads a whole GHC toolchain (~2 GB) — smoked in 15" ;;
-        # OPEN BUG, not a property of the container: `helm plugin install` takes a URL and
-        # `helm plugin uninstall` takes the plugin NAME, and a declaration carries one name
-        # — so a helm plugin LiNix installed, LiNix cannot remove. Proven by a real run
-        # (the install passed, the removal failed with `Plugin: <url> not found`) and left
-        # here in words rather than as a permanently red row.
-        helm)     echo "OPEN: helm's install takes a URL and its uninstall takes a name, so LiNix cannot remove what it installed — see Part VII" ;;
         flatpak)  echo "the smallest app pulls a multi-GB runtime, and there is no session bus here" ;;
         # Detected, not assumed: on a distro without the marker a system pip install is
         # ordinary and gets the full lifecycle. Naming it keeps a permanent, expected
@@ -625,6 +626,7 @@ lifecycle() {
     cbin="$(echo "$spec" | cut -d'|' -f2)"
     cmode="$(echo "$spec" | cut -d'|' -f3)"
     ctok="$(echo "$spec" | cut -d'|' -f4)"
+    copts="$(echo "$spec" | cut -d'|' -f5)"
     [ -n "$ctok" ] || ctok="$cpkg"
 
     echo "    -- $be:$cpkg"
@@ -632,7 +634,7 @@ lifecycle() {
     # READY set, but a manager that came up after init would not be there.
     grep -qx "$be" "$LINIX_CONFIG_DIR/priority" 2>/dev/null || echo "$be" >> "$LINIX_CONFIG_DIR/priority"
 
-    lx_slow -y install "$be:$cpkg" >/tmp/life.out 2>&1
+    lx_slow -y install "$be:$cpkg$copts" >/tmp/life.out 2>&1
     lrc=$?
     if [ "$lrc" -ne 0 ]; then
         # 124 is `timeout`'s. Reporting a build that ran out of clock as ecosystem
@@ -738,7 +740,7 @@ smoke_pkg() {
         emerge)   echo "app-misc/jq" ;;
         vscode)   echo "ms-python.python" ;;
         flatpak)  echo "org.freedesktop.Platform" ;;
-        helm)     echo "https://github.com/databus23/helm-diff" ;;
+        helm)     echo "diff@url=https://github.com/databus23/helm-diff" ;;
         web)      echo "https://example.invalid/tool.tar.gz" ;;
         appimage) echo "https://example.invalid/tool.AppImage" ;;
         *)        echo "$PKG" ;;
@@ -777,7 +779,9 @@ for be in $ALL_BACKENDS; do
             echo "$be" >> "$LEDGER/be-smoke"; continue ;;
     esac
     sp="$(smoke_pkg "$be")"
-    if grep_ok "$be: a dry-run install plans $be:$sp" "$be:$sp" \
+    # The plan names the package; its options are not part of that name.
+    sp_tok="${sp%%@*}"
+    if grep_ok "$be: a dry-run install plans $be:$sp" "$be:$sp_tok" \
             smoke_lx --dry-run install "$be:$sp"; then
         echo "$be" >> "$LEDGER/be-smoke"
     fi

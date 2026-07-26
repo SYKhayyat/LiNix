@@ -200,6 +200,20 @@ take the else branch — the silent-wrongness this rule closes.
 | `allow_http` | bare flag: this URL may be `http://`. Downloading backends only (SEC2) |
 | `unverified` | bare flag: no `@sha256` required on this line. Downloading backends only. **Never implied by `allow_http`** — over HTTP the checksum is the only thing left (SEC2) |
 | `health` | `port:N`, or a command that must exit 0. A failure **restores the pre-change snapshot** (XIII.5) |
+| `url` | where a `helm:` plugin is installed from. **Required on every `helm:` line** (U39) |
+
+### A name is what the manager will still answer to (U39)
+
+**A declaration names the package, never the thing its install command happens to take.** Where
+a manager installs by one string and lists and removes by another, the *listed* one is the name
+and the install argument rides in an option:
+
+```
+helm:diff @url=https://github.com/databus23/helm-diff
+```
+
+**A `helm:` line without `@url=` is refused, and the refusal names the fix.** LiNix does not
+derive the plugin name from the URL.
 
 ### `link:` and the file that was already there (T6, ruled 2026-07-23/26)
 

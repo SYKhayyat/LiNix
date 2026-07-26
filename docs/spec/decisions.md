@@ -1,4 +1,4 @@
-# The decision register — all 104, and every one of them ruled
+# The decision register — all 105, and every one of them ruled
 
 **One file, six features. Zero open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -18,7 +18,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **102** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **103** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -41,7 +41,7 @@ status loses that, so it is kept here:
   behaviour over time. D15–D17 are parked on purpose.
 - **W1–W14, `vars`.** W1–W5 blocked implementation and are all closed. W6–W10 are scope and
   grammar; W11–W14 behaviour and tooling.
-- **K1–K16, N1–N7, T1–T5, U1–U38.** *Blocking* means one thing in all four: **this cannot be
+- **K1–K16, N1–N7, T1–T5, U1–U39.** *Blocking* means one thing in all four: **this cannot be
   built without an answer, because two reasonable implementations differ.** **U27–U38 are the
   extension-surface round (XIII.23–XIII.36): opening the snapshot/rollback layer, macOS/BSD
   filesystems, declared storage objects, custom health checks, the "as open as Lisp" set
@@ -214,6 +214,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U36** | Are init systems a declared-provider kind (s6/dinit/runit/Shepherd), or stays a closed enum? | 2026-07-26 |
 | **U37** | Are notification channels their own declared kind, or is an event hook the answer? | 2026-07-26 |
 | **U38** | Is secret decryption a declared-provider kind, and behind which T-series rulings? | 2026-07-26 |
+| **U39** | When a manager installs by one string and removes by another, which one is the declaration? | 2026-07-26 |
 
 ---
 
@@ -1005,6 +1006,43 @@ GPG reachable on the same plugin mechanism and `linix lock` approval as every ot
   provider proves it handles plaintext safely, or it does not run.
 - Everything ruled gets built (2026-07-26 governance), so this is scheduled work, not a filed
   intention — now that its gate is open.
+
+---
+
+## U39
+
+**Status: ANSWERED — ruled 2026-07-26.**
+
+**In the tree today:** built in the same commit as this ruling. `ManagerConfig` carries
+`install_source_option`, `helm` sets it to `url`, and both harnesses run helm's full lifecycle
+where they previously named it as an open bug and skipped it.
+
+**U39 — When a manager installs by one string and removes by another, which one is the
+declaration?** `helm plugin install` takes a URL; `helm plugin list` and `helm plugin uninstall`
+speak the name in the plugin's own `plugin.yaml`. A LiNix declaration carries one name, so
+whichever half it named, the other half broke — and naming the URL is the half that breaks
+**silently and permanently**: the install succeeds, then every later sync sees a package that
+`list` never mentions, tries to remove it, and fails identically. One helm plugin wedged every
+operation after it. Proven by a real run on the `tools` image, and it is not helm-specific in
+principle — it is the general question of which string is the identity.
+
+**RULED (owner, 2026-07-26): the name is the identity, always. Install-time data rides in an
+option.** A declaration is `helm:diff@url=https://github.com/databus23/helm-diff`.
+
+- **The identity is the string the manager will still answer to later.** Install runs once;
+  list and remove run on every sync forever. A declaration that names the install argument is
+  a declaration LiNix can never check or undo, which is the opposite of what a declarative
+  model is for.
+- **A declaration missing its source is refused, not guessed.** Deriving `diff` from
+  `.../helm-diff` is right often enough to be trusted and wrong often enough to install a
+  plugin under a name nothing can remove; the real name lives in a `plugin.yaml` that cannot
+  be read before the plugin is fetched. The refusal names the fix.
+- **`go` already had the right shape and is why this is a rule rather than a helm patch.**
+  `go install` takes a module path and Go ships no uninstaller, but the module path is what
+  `go version -m` reports back, so the identity survives — and removal derives the binary from
+  it. `web` is consistent the other way (the URL is the identity at install, list *and*
+  remove). helm was the only backend where the two vocabularies differed and the code assumed
+  they did not.
 
 ---
 

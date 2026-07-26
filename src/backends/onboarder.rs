@@ -613,6 +613,7 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         version_pin: def.version_pin.map(Into::into),
         needs_root: def.needs_root,
         is_exclusive: def.is_exclusive,
+        install_source_option: None,
         flag_map: HashMap::new(),
     };
 

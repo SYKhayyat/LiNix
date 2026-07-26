@@ -40,10 +40,14 @@ features and none of them is a decision; they are the things a first user would 
 what blocks the next one. The reasoning and the measurements are the first entry in
 [`history.md`](history.md).
 
-0a. **S33 — make CI green.** One test (`tests/feature_logic_tests.rs:90`) commits to a temp git
-    repo and unwraps, so the suite passes only where a global git identity exists. Fix it in
-    `TestKernel` the way `src/core/git.rs::identify()` already does, not in the one test.
-    **Until this is green, every "green" in this document is a claim about one machine.**
+0a. ~~**S33 — make CI green.** One test (`tests/feature_logic_tests.rs:90`) commits to a temp git
+    repo and unwraps, so the suite passes only where a global git identity exists.~~ **FIXED
+    (2026-07-26).** `TestKernel::new` and `git.rs`'s test gate now set `GIT_AUTHOR_*`/
+    `GIT_COMMITTER_*` and point `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` at absent paths, so no
+    test reads the host's `~/.gitconfig` at all — the identity *and* a host that signs every
+    commit. Set once per binary rather than per test, because a step each test must remember is
+    the step the next test forgets, which is how this one was written. `identify()` and its
+    three call sites are gone.
 0b. **Run `tools` and `gentoo` in CI on a schedule, not only on dispatch.** They are the images
     that reach 18 real lifecycles instead of 7; leaving them opt-in means the broad backend
     coverage exists and is not consulted. A nightly is enough — the objection to gating every
@@ -51,10 +55,14 @@ what blocks the next one. The reasoning and the measurements are the first entry
 0c. **Close the live-validation gap on the destructive effectors**, in this order, because each
     is a path where being wrong costs a filesystem: btrfs restore, then zfs/lvm, then D5's
     `dpkg -i`/`rpm -U` handoff, then U30 storage removal. All are argv-tested; none has run.
-0d. **`helm` cannot remove what it installs** — install takes a URL, uninstall takes a name.
-    Proven by a real run and currently tracked only as a string in `run-in-container.sh:550`.
-    Either the backend learns to record the plugin name at install time, or it loses the
-    `remove` capability by name (V.60: a capability that cannot deliver must not be claimed).
+0d. ~~**`helm` cannot remove what it installs** — install takes a URL, uninstall takes a name.~~
+    **FIXED (2026-07-26), ruled as U39.** The name is the identity and the URL is an option:
+    `helm:diff@url=…`. `ManagerConfig::install_source_option` carries the key, a line without it
+    is refused with the fix in the message, and both harnesses now run helm's full
+    install → list → remove lifecycle where they previously named it as an open bug and skipped
+    it. Neither of the two options this item offered was taken: recording the name at install
+    time keeps a broken declaration working, and dropping `remove` keeps a package LiNix can
+    install and never undo.
 0e. **Cut a version.** `0.1.0`, no tags, `CHANGELOG` still `[Unreleased]`, and `install.sh`
     does `cargo install --git` from `HEAD` — so there is no artifact to install and nothing to
     roll back *to*. The tag-triggered release job in `ci.yml` exists and has never fired.

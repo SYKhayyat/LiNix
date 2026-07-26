@@ -267,6 +267,7 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(crate::parsers::apt::AptParser),
@@ -335,6 +336,7 @@ fn register_aur_helper(
             depends_args: None,
             needs_root: false,
             is_exclusive: true,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -407,6 +409,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -468,6 +471,7 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: Some(vec!["info".into(), "--requires".into(), "{name}".into()]),
             needs_root: true,
             is_exclusive: true,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -538,6 +542,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -593,6 +598,7 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -660,6 +666,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -711,6 +718,7 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -763,6 +771,7 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -811,6 +820,7 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -860,6 +870,7 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -913,6 +924,7 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -964,6 +976,7 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1022,6 +1035,7 @@ fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1081,6 +1095,7 @@ fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecuto
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1140,6 +1155,7 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
+            install_source_option: None,
             flag_map: HashMap::new(),
         },
         parser: Arc::new(LambdaParser {
@@ -1197,6 +1213,7 @@ fn base_config(name: &str) -> ManagerConfig {
         version_pin: None,
         needs_root: false,
         is_exclusive: false,
+        install_source_option: None,
         flag_map: HashMap::new(),
     }
 }
@@ -1395,10 +1412,15 @@ fn register_mix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 
 /// Helm plugins (`helm plugin ...`). Cross-platform; gated by the `helm` binary. (Chart
 /// releases are a different concept and out of scope here.) No plugin search.
+///
+/// A declaration is `helm:NAME@url=SOURCE`: helm installs a plugin from a URL but lists and
+/// uninstalls it by the name in its `plugin.yaml`, so naming the URL would install a plugin
+/// LiNix could never remove or recognise again (U39).
 fn register_helm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("helm");
     // Helm plugins are installed individually and pull in no plugin dependencies.
     cfg.manual = ManualListing::AllInstalled;
+    cfg.install_source_option = Some("url".into());
     cfg.install_args = vec!["plugin".into(), "install".into()];
     cfg.remove_args = vec!["plugin".into(), "uninstall".into()];
     cfg.list_args = vec!["plugin".into(), "list".into()];
@@ -1906,5 +1928,22 @@ mod tests {
             );
             assert_caps(&reg, "macports", FULL);
         }
+    }
+
+    /// U39, at the wiring rather than in `generic`: the registered `helm` is the one that has
+    /// to refuse a plugin declared without its source, because a plugin installed under the
+    /// wrong identity is one nothing can remove afterwards.
+    #[tokio::test]
+    async fn a_helm_plugin_declared_without_its_url_is_refused_by_name() {
+        let reg = build_registry().await;
+        let helm = reg.get("helm").expect("helm is registered");
+        let inst = helm.as_installable().expect("helm installs");
+        let spec = crate::core::PackageSpec {
+            name: "diff".into(),
+            backend: "helm".into(),
+            ..Default::default()
+        };
+        let msg = inst.install(&[spec], false).await.unwrap_err().to_string();
+        assert!(msg.contains("helm:diff@url="), "{}", msg);
     }
 }

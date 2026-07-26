@@ -139,6 +139,12 @@ pub struct ManagerConfig {
     pub depends_args: Option<Vec<String>>,
     /// Native syntax for pinning an exact version at install (None = no version pinning).
     pub version_pin: Option<VersionPin>,
+    /// Optional: the option key holding what `install_args` takes, when that is not the
+    /// package's own name. `helm plugin install` takes a URL while `plugin list` and `plugin
+    /// uninstall` speak the name from the plugin's `plugin.yaml` — so the name has to stay the
+    /// identity (a declaration that names the URL installs once and can never be removed or
+    /// recognised again), and the URL rides in an option. `None` = the name is the argument.
+    pub install_source_option: Option<String>,
     pub needs_root: bool,
     pub is_exclusive: bool,
     pub flag_map: HashMap<String, String>,
@@ -246,6 +252,25 @@ pub struct GenericInstallable {
     pub core: Arc<GenericBackendCore>,
 }
 
+/// The argument `install_args` takes for a backend whose install speaks a different vocabulary
+/// than its list and remove (`install_source_option`).
+///
+/// Refusing beats guessing: deriving `diff` from `.../helm-diff` is right often enough to be
+/// trusted and wrong often enough to install a plugin under a name nothing can remove, and the
+/// name lives in the plugin's own `plugin.yaml`, which cannot be read before it is fetched.
+fn install_source(backend: &str, spec: &PackageSpec, key: &str) -> Result<String> {
+    spec.options.get(key).filter(|v| !v.trim().is_empty()).cloned().ok_or_else(|| {
+        crate::core::Error::Validation(format!(
+            "{backend}:{name} needs `@{key}=…`. {backend} installs from that value but lists and \
+             removes by name, so the declaration has to carry both: \
+             `{backend}:{name}@{key}=<source>`.",
+            backend = backend,
+            name = spec.name,
+            key = key,
+        ))
+    })
+}
+
 #[async_trait]
 impl Installable for GenericInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
@@ -259,6 +284,10 @@ impl Installable for GenericInstallable {
         // the terminator cannot precede it — behind `--` that `-v` is a package.
         let mut trailing_flags = false;
         for spec in specs {
+            if let Some(key) = &self.core.config.install_source_option {
+                names.push(install_source(&self.core.name, spec, key)?);
+                continue;
+            }
             // Honor an exact version pin (reproducible/locked installs) using the
             // backend's native syntax, when both a pin syntax and a concrete version exist.
             match (spec.options.get("version"), &self.core.config.version_pin) {
@@ -717,6 +746,7 @@ mod tests {
                 version_pin: None,
                 needs_root: true, // apt needs root for writes — but reads must NOT escalate
                 is_exclusive: true,
+                install_source_option: None,
                 flag_map: HashMap::new(),
             },
             parser: Arc::new(LambdaParser {
@@ -903,6 +933,100 @@ mod tests {
             Err(crate::core::Error::Unsupported(name)) => assert_eq!(name, "apt"),
             other => panic!("expected Unsupported, got {:?}", other),
         }
+    }
+
+    /// A `helm`-shaped core: installs from an option, lists and removes by name.
+    fn source_option_core(
+        mock: Arc<MockExecutor>,
+        vfs: Arc<DashMap<std::path::PathBuf, String>>,
+    ) -> GenericBackendCore {
+        let mut core = apt_like_core(mock, vfs);
+        core.name = "helm".into();
+        core.config.name = "helm".into();
+        core.config.install_source_option = Some("url".into());
+        core.config.install_args = vec!["plugin".into(), "install".into()];
+        core.config.remove_args = vec!["plugin".into(), "uninstall".into()];
+        core.config.needs_root = false;
+        core
+    }
+
+    fn spec_with(name: &str, opts: &[(&str, &str)]) -> PackageSpec {
+        PackageSpec {
+            name: name.into(),
+            backend: "helm".into(),
+            options: opts
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn install_from_a_source_option_sends_the_source_and_removes_by_name() {
+        // U39. The whole bug in one test: what goes out at install is the URL, what goes out
+        // at remove is the name, and they come from the same one-line declaration.
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let core = Arc::new(source_option_core(mock.clone(), vfs));
+        let inst = GenericInstallable { core };
+
+        let url = "https://github.com/databus23/helm-diff";
+        inst.install(&[spec_with("diff", &[("url", url)])], false)
+            .await
+            .unwrap();
+        inst.remove(&["diff".to_string()], false).await.unwrap();
+
+        let calls = mock.get_calls().await;
+        assert!(
+            calls.iter().any(|c| c.contains("plugin install") && c.contains(url)),
+            "install must send the url: {:?}",
+            calls
+        );
+        assert!(
+            !calls.iter().any(|c| c.contains("plugin install") && c.contains(" diff")),
+            "install must not send the name: {:?}",
+            calls
+        );
+        assert!(
+            calls.iter().any(|c| c.contains("plugin uninstall") && c.contains("diff")),
+            "remove must send the name: {:?}",
+            calls
+        );
+    }
+
+    #[tokio::test]
+    async fn install_without_the_source_option_refuses_and_names_the_fix() {
+        // Refusing beats guessing a URL→name mapping: the old behaviour installed happily and
+        // then failed every later sync, because nothing could remove what it had installed.
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let core = Arc::new(source_option_core(mock.clone(), vfs));
+        let inst = GenericInstallable { core };
+
+        let err = inst
+            .install(&[spec_with("diff", &[])], false)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("helm:diff@url="), "{}", msg);
+        assert!(
+            mock.get_calls().await.is_empty(),
+            "nothing may reach the machine when the declaration is incomplete"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_source_option_is_as_missing_as_no_option() {
+        // `@url=` with nothing after it would otherwise run `helm plugin install ''`.
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let core = Arc::new(source_option_core(mock.clone(), vfs));
+        let inst = GenericInstallable { core };
+        assert!(inst
+            .install(&[spec_with("diff", &[("url", "  ")])], false)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

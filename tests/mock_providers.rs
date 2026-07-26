@@ -28,8 +28,35 @@ pub struct TestKernel {
     lock_map: Arc<DashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
+/// LiNix no longer injects a commit identity (a signed commit must not be authored by a name
+/// nobody owns), so a fixture that commits fails on any host without a global `user.email` —
+/// which is every CI runner (S33). The absent config paths keep the developer's own
+/// `~/.gitconfig` out too: a host that signs every commit would fail these at `git commit`.
+///
+/// Twinned in `src/core/git.rs`'s test module, which is a separate binary and cannot link to
+/// this one. Change one, change the other.
+fn hermetic_git_env() {
+    static HERMETIC: std::sync::Once = std::sync::Once::new();
+    HERMETIC.call_once(|| {
+        for (k, v) in [
+            ("GIT_AUTHOR_NAME", "linix test"),
+            ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
+            ("GIT_COMMITTER_NAME", "linix test"),
+            ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
+            ("GIT_CONFIG_GLOBAL", "linix-tests-absent-gitconfig"),
+            ("GIT_CONFIG_SYSTEM", "linix-tests-absent-gitconfig"),
+        ] {
+            std::env::set_var(k, v);
+        }
+    });
+}
+
 impl TestKernel {
     pub async fn new() -> Self {
+        // Before anything can commit: set in the kernel, not in the one test that noticed,
+        // so a fixture added later cannot forget it.
+        hermetic_git_env();
+
         let tmp = tempfile::Builder::new()
             .prefix("linix_hermetic_")
             .tempdir()
