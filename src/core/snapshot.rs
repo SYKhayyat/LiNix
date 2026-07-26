@@ -124,8 +124,9 @@ pub enum RestoreCapability {
     /// The running system is put back by `restore`.
     Live,
     /// The snapshot is real and restorable, but not from a running system. `how` says what
-    /// the person at the machine has to do instead.
-    NotFromRunningSystem { how: &'static str },
+    /// the person at the machine has to do instead. Owned because a config-driven provider
+    /// (U27) supplies its own sentence, and a built-in supplies a `&'static` one via `.into()`.
+    NotFromRunningSystem { how: String },
 }
 
 impl RestoreCapability {
@@ -238,7 +239,9 @@ impl SnapshotProvider for BtrfsProvider {
     }
 
     fn restore_capability(&self) -> RestoreCapability {
-        RestoreCapability::NotFromRunningSystem { how: BTRFS_NOT_LIVE }
+        RestoreCapability::NotFromRunningSystem {
+            how: BTRFS_NOT_LIVE.into(),
+        }
     }
 }
 
@@ -499,6 +502,111 @@ impl SnapshotProvider for WindowsRestoreProvider {
     }
 }
 
+/// macOS APFS local snapshots (U29). Every Mac ships APFS, and `tmutil localsnapshot` takes a
+/// whole-volume snapshot with no configuration — so the second platform LiNix supports gains the
+/// safety net it had none of.
+///
+/// **Declared create-only, on purpose (V.60).** An APFS restore is not a live operation: it
+/// needs a reboot into the recovery environment and `Restore from Time Machine`/`tmutil restore`,
+/// which LiNix cannot drive on a running system. Claiming `Live` here would be the exact bug
+/// V.60 exists for — a `restore` that exits without rolling the machine back. So it snapshots,
+/// and it refuses the rollback with the steps to do it by hand.
+pub struct ApfsProvider {
+    pub executor: CommandExecutor,
+}
+
+/// The mount point APFS local snapshots are taken of. The system volume, always.
+const APFS_VOLUME: &str = "/";
+
+const APFS_NOT_LIVE: &str =
+    "an APFS snapshot is restored by rebooting into macOS Recovery and using Time Machine / \
+     `tmutil restore`; LiNix cannot do that over a running system.";
+
+#[async_trait]
+impl SnapshotProvider for ApfsProvider {
+    fn name(&self) -> &str {
+        "apfs"
+    }
+
+    async fn is_available(&self) -> bool {
+        cfg!(target_os = "macos") && self.executor.command_exists("tmutil").await
+    }
+
+    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
+        // `tmutil localsnapshot` names the snapshot itself, by date, and does not take a label —
+        // so the LiNix marker lands in the description (like the Windows provider), where
+        // ownership (S3) reads it. `label` is an enum, so nothing user-supplied reaches here.
+        let out = self
+            .executor
+            .run_output("tmutil", &["localsnapshot"], true)
+            .await?;
+        // `tmutil` prints `Created local snapshot with date: 2026-07-26-120000`. Read the date
+        // back as the id; fall back to now-formatted if the phrasing changes.
+        let id = out
+            .lines()
+            .find_map(|l| l.rsplit_once("date: ").map(|(_, d)| d.trim().to_string()))
+            .unwrap_or_else(|| Local::now().format("%Y-%m-%d-%H%M%S").to_string());
+        Ok(Snapshot {
+            id,
+            timestamp: Utc::now().to_rfc3339(),
+            description: format!("LiNix: {}", label),
+            backend: "apfs".into(),
+        })
+    }
+
+    async fn list(&self) -> Result<Vec<Snapshot>> {
+        let out = self
+            .executor
+            .run_output("tmutil", &["listlocalsnapshots", APFS_VOLUME], false)
+            .await?;
+        Ok(out
+            .lines()
+            .filter_map(|l| {
+                // `com.apple.TimeMachine.2026-07-26-120000.local` → the date is the id.
+                let line = l.trim();
+                let date = line
+                    .strip_prefix("com.apple.TimeMachine.")
+                    .and_then(|s| s.strip_suffix(".local"))
+                    .unwrap_or(line);
+                if date.is_empty() {
+                    return None;
+                }
+                Some(Snapshot {
+                    id: date.to_string(),
+                    timestamp: Utc::now().to_rfc3339(),
+                    // LiNix cannot tell from `tmutil` which snapshots it made — the marker is in
+                    // a description APFS does not store. So these are reported but never reaped by
+                    // retention (is_linix_owned is false), which is the safe direction: LiNix
+                    // never deletes an APFS snapshot it cannot prove it created.
+                    description: "APFS local snapshot".into(),
+                    backend: "apfs".into(),
+                })
+            })
+            .collect())
+    }
+
+    async fn delete(&self, id: &str) -> Result<()> {
+        self.executor
+            .run("tmutil", &["deletelocalsnapshots", id], true)
+            .await
+            .map(|_| ())
+    }
+
+    async fn restore(&self, id: &str) -> Result<()> {
+        Err(Error::Snapshot(format!(
+            "LiNix cannot roll this Mac back to {} while it is running.\n  {}\n  \
+             The snapshot is intact and listed by `tmutil listlocalsnapshots /`.",
+            id, APFS_NOT_LIVE
+        )))
+    }
+
+    fn restore_capability(&self) -> RestoreCapability {
+        RestoreCapability::NotFromRunningSystem {
+            how: APFS_NOT_LIVE.into(),
+        }
+    }
+}
+
 impl WindowsRestoreProvider {
     /// A Windows restore point is a `SequenceNumber`. Both PowerShell commands below
     /// interpolate it unquoted and run elevated, so it becomes a number here or it does not
@@ -510,6 +618,246 @@ impl WindowsRestoreProvider {
                 id
             ))
         })
+    }
+}
+
+/// A snapshot provider described entirely in `adapters/snapshot.toml` (U27) — the same "rows,
+/// not Rust" move the backend, firewall, settings and init layers already made. A filesystem
+/// with create/list/delete/restore-shaped commands becomes a provider with no source change.
+///
+/// **The one rule that keeps this from being the V.60 footgun: a capability the row does not
+/// declare, it does not have.** `restores_running_system` defaults to `false`, so a provider is
+/// create-only unless the file *says* it can put a running machine back — and saying so is the
+/// line a reviewer sees in the diff. A row that omits it can snapshot and can refuse a rollback;
+/// it can never run a command that "restores" and rolls nothing back.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SnapshotProviderDef {
+    pub name: String,
+    /// Restrict to one OS (`std::env::consts::OS`). Absent means any.
+    #[serde(default)]
+    pub os: Option<String>,
+    /// The command whose presence means this provider can act on this machine.
+    pub detect: String,
+    /// What `{source}` expands to (a dataset, a volume group, a subvolume path). Optional.
+    #[serde(default)]
+    pub source: String,
+    /// Placeholders: `{id}`, `{label}`, `{source}`.
+    pub create: Vec<String>,
+    pub list: Vec<String>,
+    /// Placeholders: `{id}`.
+    pub delete: Vec<String>,
+    /// Placeholders: `{id}`. Empty means this provider cannot restore at all.
+    #[serde(default)]
+    pub restore: Vec<String>,
+    /// The safe default (U27/V.60): a provider is create-only unless the file names this true.
+    #[serde(default)]
+    pub restores_running_system: bool,
+    /// A regex whose first capture group is a snapshot id on each `list` line.
+    pub list_pattern: String,
+    /// The sentence shown when a create-only provider is asked to restore. A default is supplied
+    /// when the row omits it, so the refusal is never blank.
+    #[serde(default)]
+    pub restore_how: Option<String>,
+}
+
+impl SnapshotProviderDef {
+    /// A row LiNix will drive, or why it will not. It must be able to create, list and delete;
+    /// restore is the capability that is allowed to be absent, and its absence is the safe state.
+    pub fn is_usable(&self) -> Option<&'static str> {
+        if self.name.trim().is_empty() {
+            return Some("it has no `name`");
+        }
+        if self.detect.trim().is_empty() {
+            return Some("it has no `detect` command");
+        }
+        if self.create.is_empty() {
+            return Some("it cannot create a snapshot");
+        }
+        if self.list.is_empty() {
+            return Some("it cannot list snapshots, so retention could never reap them");
+        }
+        if self.delete.is_empty() {
+            return Some("it cannot delete a snapshot, so retention could never reap them");
+        }
+        if self.list_pattern.trim().is_empty() {
+            return Some("it has no `list_pattern`, so a listed line has no id");
+        }
+        None
+    }
+
+    fn applies_to_this_os(&self) -> bool {
+        match &self.os {
+            Some(os) => os.eq_ignore_ascii_case(std::env::consts::OS),
+            None => true,
+        }
+    }
+
+    /// Whether a declared row can actually put a running system back. `restores_running_system`
+    /// alone is not enough — a row that claims it but gives no `restore` command still cannot,
+    /// and claiming `Live` there is exactly the V.60 lie.
+    fn is_live(&self) -> bool {
+        self.restores_running_system && !self.restore.is_empty()
+    }
+}
+
+pub struct ConfigSnapshotProvider {
+    pub executor: CommandExecutor,
+    pub def: SnapshotProviderDef,
+}
+
+impl ConfigSnapshotProvider {
+    fn fill(cmd: &[String], id: &str, label: &str, source: &str) -> Vec<String> {
+        cmd.iter()
+            .map(|a| {
+                a.replace("{id}", id)
+                    .replace("{label}", label)
+                    .replace("{source}", source)
+            })
+            .collect()
+    }
+
+    async fn run(&self, cmd: Vec<String>) -> Result<()> {
+        let (prog, args) = cmd
+            .split_first()
+            .ok_or_else(|| Error::Snapshot("a snapshot command is empty".into()))?;
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        self.executor.run(prog, &refs, true).await.map(|_| ())
+    }
+}
+
+#[async_trait]
+impl SnapshotProvider for ConfigSnapshotProvider {
+    fn name(&self) -> &str {
+        &self.def.name
+    }
+
+    async fn is_available(&self) -> bool {
+        self.def.applies_to_this_os() && self.executor.command_exists(&self.def.detect).await
+    }
+
+    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
+        // The id carries the `linix_` marker so ownership (S3) and retention recognize it — a
+        // config provider that let a user's own snapshots look like LiNix's would have retention
+        // reap them.
+        let ts = Local::now().format("%Y%m%d_%H%M%S");
+        let id = format!("linix_{}_{}", label.as_str(), ts);
+        let cmd = Self::fill(&self.def.create, &id, label.as_str(), &self.def.source);
+        info!("{}: creating snapshot {}", self.def.name, id);
+        self.run(cmd).await?;
+        Ok(Snapshot {
+            id,
+            timestamp: Utc::now().to_rfc3339(),
+            description: label.to_string(),
+            backend: self.def.name.clone(),
+        })
+    }
+
+    async fn list(&self) -> Result<Vec<Snapshot>> {
+        let (prog, args) = self
+            .def
+            .list
+            .split_first()
+            .ok_or_else(|| Error::Snapshot("a snapshot list command is empty".into()))?;
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let out = self.executor.run_output(prog, &refs, false).await?;
+        let re = regex::Regex::new(&self.def.list_pattern)
+            .map_err(|e| Error::Snapshot(format!("bad list_pattern: {}", e)))?;
+        let mut snaps = Vec::new();
+        for line in out.lines() {
+            let Some(caps) = re.captures(line) else {
+                continue;
+            };
+            let Some(m) = caps.get(1) else { continue };
+            let id = m.as_str().to_string();
+            snaps.push(Snapshot {
+                timestamp: Snapshot::timestamp_from_id(&id)
+                    .unwrap_or_else(|| Utc::now().to_rfc3339()),
+                id,
+                description: self.def.name.clone(),
+                backend: self.def.name.clone(),
+            });
+        }
+        Ok(snaps)
+    }
+
+    async fn delete(&self, id: &str) -> Result<()> {
+        let cmd = Self::fill(&self.def.delete, id, "", &self.def.source);
+        self.run(cmd).await
+    }
+
+    async fn restore(&self, id: &str) -> Result<()> {
+        if !self.def.is_live() {
+            // The V.60 refusal, config-driven: a provider that did not declare live restore does
+            // not run a "restore" that might roll nothing back. It says so and leaves the
+            // snapshot intact.
+            return Err(Error::Snapshot(format!(
+                "{}: this provider cannot roll a running system back to {}. {}",
+                self.def.name,
+                id,
+                self.def
+                    .restore_how
+                    .clone()
+                    .unwrap_or_else(|| "The snapshot is intact; restore it by hand.".into())
+            )));
+        }
+        let cmd = Self::fill(&self.def.restore, id, "", &self.def.source);
+        self.run(cmd).await
+    }
+
+    fn restore_capability(&self) -> RestoreCapability {
+        if self.def.is_live() {
+            RestoreCapability::Live
+        } else {
+            RestoreCapability::NotFromRunningSystem {
+                how: self.def.restore_how.clone().unwrap_or_else(|| {
+                    "this provider was not declared able to restore a running system".into()
+                }),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SnapshotProviderFile {
+    #[serde(default)]
+    pub snapshot: Vec<SnapshotProviderDef>,
+}
+
+/// The config-driven providers this repo carries, if `adapters/snapshot.toml` is approved
+/// through the one II.12 ledger every adapter file goes through. An unapproved or unparseable
+/// file yields none, loudly — never a silent partial safety net.
+fn config_snapshot_defs(config: &Config) -> Vec<SnapshotProviderDef> {
+    let layout = config.layout();
+    let path = layout.adapter_snapshot_file();
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => {
+            warn!("could not read adapters/snapshot.toml: {}", e);
+            return Vec::new();
+        }
+    };
+    if let Some(refusal) = crate::core::hook_lock::adapter_refusal(&path, &content, &layout.locks_dir())
+    {
+        tracing::error!("{}", refusal);
+        return Vec::new();
+    }
+    match toml::from_str::<SnapshotProviderFile>(&content) {
+        Ok(f) => f
+            .snapshot
+            .into_iter()
+            .filter(|d| match d.is_usable() {
+                Some(why) => {
+                    warn!("ignoring the `{}` snapshot provider: {}.", d.name, why);
+                    false
+                }
+                None => true,
+            })
+            .collect(),
+        Err(e) => {
+            warn!("ignoring adapters/snapshot.toml: {}", e);
+            Vec::new()
+        }
     }
 }
 
@@ -531,6 +879,9 @@ impl SnapshotManager {
                 snapshot_root: config.btrfs_path.clone(),
             }),
             Box::new(TimeshiftProvider {
+                executor: executor.duplicate(),
+            }),
+            Box::new(ApfsProvider {
                 executor: executor.duplicate(),
             }),
             Box::new(WindowsRestoreProvider {
@@ -556,14 +907,50 @@ impl SnapshotManager {
             }
         }
 
-        let mut active = None;
+        // Config-declared providers register LAST (U27), so a `adapters/snapshot.toml` row can
+        // never shadow a built-in — the `custom_backends.toml` rule applied to the safety layer.
+        for def in config_snapshot_defs(config) {
+            providers.push(Box::new(ConfigSnapshotProvider {
+                executor: executor.duplicate(),
+                def,
+            }));
+        }
+
+        let active = Self::choose(providers, &config.snapshot_priority).await;
+        Self { provider: active }
+    }
+
+    /// The active provider (U28). When a `snapshot_priority` is declared, the first *available*
+    /// provider named in it wins — chosen by the user's declared order, not by registration
+    /// order and not by capability-guessing. A provider named in the list but absent from the
+    /// machine is skipped; a name in the list that matches no provider is ignored. With no list,
+    /// the first available in registration order wins (built-ins first), which is the historical
+    /// behaviour untouched.
+    async fn choose(
+        providers: Vec<Box<dyn SnapshotProvider>>,
+        priority: &[String],
+    ) -> Option<Box<dyn SnapshotProvider>> {
+        // Which are actually usable on this machine, in registration order.
+        let mut available: Vec<Box<dyn SnapshotProvider>> = Vec::new();
         for p in providers {
             if p.is_available().await {
-                active = Some(p);
-                break;
+                available.push(p);
             }
         }
-        Self { provider: active }
+        if priority.is_empty() {
+            return available.into_iter().next();
+        }
+        for want in priority {
+            if let Some(pos) = available
+                .iter()
+                .position(|p| p.name().eq_ignore_ascii_case(want))
+            {
+                return Some(available.swap_remove(pos));
+            }
+        }
+        // A declared priority that names nothing present: fall back rather than leave the machine
+        // with no safety net it could have had.
+        available.into_iter().next()
     }
 
     pub async fn auto_snapshot(&self, label: SnapshotLabel) -> Result<Option<Snapshot>> {
@@ -801,5 +1188,181 @@ mod tests {
         };
         let age = Utc::now() - snap.parse_time().unwrap();
         assert!(age.num_days() >= 6, "age should be ~7 days, was {:?}", age);
+    }
+
+    fn def(name: &str) -> SnapshotProviderDef {
+        SnapshotProviderDef {
+            name: name.into(),
+            os: None,
+            detect: "true".into(),
+            source: "tank/root".into(),
+            create: vec!["mk".into(), "{id}".into(), "{source}".into()],
+            list: vec!["ls".into()],
+            delete: vec!["rm".into(), "{id}".into()],
+            restore: vec![],
+            restores_running_system: false,
+            list_pattern: r"(\S+)".into(),
+            restore_how: None,
+        }
+    }
+
+    /// U27/V.60: a config provider is create-only unless the file *names* the live-restore
+    /// capability. The default — omit the field — is the safe one, and even declaring the flag is
+    /// not enough without a `restore` command to run.
+    #[test]
+    fn a_config_provider_is_create_only_unless_it_declares_both() {
+        let mut d = def("lvm");
+        assert!(!d.is_live(), "the default must be create-only");
+
+        d.restores_running_system = true;
+        assert!(!d.is_live(), "the flag alone, with no restore command, is not live");
+
+        d.restore = vec!["merge".into(), "{id}".into()];
+        assert!(d.is_live(), "flag AND a restore command is live");
+    }
+
+    #[test]
+    fn a_create_only_config_provider_reports_not_from_running_system() {
+        let d = def("lvm");
+        let cap = ConfigSnapshotProvider {
+            executor: CommandExecutor::new(true, false),
+            def: d,
+        }
+        .restore_capability();
+        assert!(!cap.is_live());
+        match cap {
+            RestoreCapability::NotFromRunningSystem { how } => assert!(!how.is_empty()),
+            _ => panic!("a create-only provider must not report Live"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_create_only_config_provider_refuses_restore_and_names_the_snapshot() {
+        let p = ConfigSnapshotProvider {
+            executor: CommandExecutor::new(true, false),
+            def: def("lvm"),
+        };
+        let err = p.restore("linix_pre_sync_20260726_120000").await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("linix_pre_sync_20260726_120000"), "{}", msg);
+        assert!(msg.contains("cannot roll"), "{}", msg);
+    }
+
+    #[test]
+    fn a_config_provider_missing_a_required_command_is_refused() {
+        let mut d = def("lvm");
+        d.create = vec![];
+        assert!(d.is_usable().is_some());
+        let mut d = def("lvm");
+        d.list = vec![];
+        assert!(d.is_usable().is_some());
+        let mut d = def("lvm");
+        d.list_pattern = String::new();
+        assert!(d.is_usable().is_some());
+        assert!(def("lvm").is_usable().is_none(), "a complete row is usable");
+    }
+
+    #[test]
+    fn the_snapshot_provider_schema_parses() {
+        let toml = r#"
+[[snapshot]]
+name = "lvm"
+detect = "lvcreate"
+source = "vg0/root"
+create = ["lvcreate", "--snapshot", "--name", "{id}", "{source}"]
+list = ["lvs", "--noheadings", "-o", "lv_name"]
+delete = ["lvremove", "-y", "{id}"]
+restore = ["lvconvert", "--merge", "{id}"]
+restores_running_system = true
+list_pattern = '(linix_\S+)'
+"#;
+        let file: SnapshotProviderFile = toml::from_str(toml).unwrap();
+        assert_eq!(file.snapshot.len(), 1);
+        assert!(file.snapshot[0].is_live());
+        assert!(file.snapshot[0].is_usable().is_none());
+    }
+
+    // A trivial provider for the priority test: available iff `here`, named `name`.
+    struct Fake {
+        name: String,
+        here: bool,
+    }
+    #[async_trait]
+    impl SnapshotProvider for Fake {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        async fn is_available(&self) -> bool {
+            self.here
+        }
+        async fn create(&self, _l: SnapshotLabel) -> Result<Snapshot> {
+            unreachable!()
+        }
+        async fn list(&self) -> Result<Vec<Snapshot>> {
+            Ok(vec![])
+        }
+        async fn delete(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+        async fn restore(&self, _id: &str) -> Result<()> {
+            Ok(())
+        }
+        fn restore_capability(&self) -> RestoreCapability {
+            RestoreCapability::Live
+        }
+    }
+
+    fn fake(name: &str, here: bool) -> Box<dyn SnapshotProvider> {
+        Box::new(Fake {
+            name: name.into(),
+            here,
+        })
+    }
+
+    #[tokio::test]
+    async fn priority_picks_the_first_available_in_the_declared_order() {
+        // btrfs and zfs both present; the list prefers zfs, so zfs wins over registration order.
+        let providers = vec![fake("btrfs", true), fake("zfs", true)];
+        let chosen = SnapshotManager::choose(providers, &["zfs".into(), "btrfs".into()])
+            .await
+            .unwrap();
+        assert_eq!(chosen.name(), "zfs");
+    }
+
+    #[tokio::test]
+    async fn priority_skips_a_named_provider_that_is_absent() {
+        // The list names zfs first, but zfs is not on this machine — so the next available named
+        // one wins, not "nothing".
+        let providers = vec![fake("btrfs", true), fake("zfs", false)];
+        let chosen = SnapshotManager::choose(providers, &["zfs".into(), "btrfs".into()])
+            .await
+            .unwrap();
+        assert_eq!(chosen.name(), "btrfs");
+    }
+
+    #[tokio::test]
+    async fn no_priority_keeps_registration_order() {
+        let providers = vec![fake("btrfs", true), fake("zfs", true)];
+        let chosen = SnapshotManager::choose(providers, &[]).await.unwrap();
+        assert_eq!(chosen.name(), "btrfs", "built-ins first when no list is declared");
+    }
+
+    #[tokio::test]
+    async fn a_priority_that_names_nothing_present_still_falls_back() {
+        let providers = vec![fake("btrfs", true)];
+        let chosen = SnapshotManager::choose(providers, &["apfs".into()])
+            .await
+            .unwrap();
+        assert_eq!(chosen.name(), "btrfs");
+    }
+
+    /// APFS is create-only (U29/V.60): a Mac restore needs a recovery-mode reboot, so claiming
+    /// Live would be the V.60 lie.
+    #[test]
+    fn apfs_is_declared_create_only() {
+        let p = ApfsProvider {
+            executor: CommandExecutor::new(true, false),
+        };
+        assert!(!p.restore_capability().is_live());
     }
 }

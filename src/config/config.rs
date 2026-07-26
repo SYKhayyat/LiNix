@@ -342,6 +342,13 @@ pub struct Config {
 
     pub zfs_dataset: Option<String>,
 
+    /// The order snapshot providers are chosen in (U28), the `priority`-file shape applied to the
+    /// safety net: the first *available* provider in this list wins, built-in or config-declared.
+    /// Empty means "the first available in registration order" — built-ins first, then the config
+    /// providers from `adapters/snapshot.toml`, which is the pre-U28 behaviour unchanged.
+    #[serde(default)]
+    pub snapshot_priority: Vec<String>,
+
     #[serde(default = "default_tmp_dir")]
     pub tmp_dir: PathBuf,
 
@@ -561,6 +568,7 @@ impl Default for Config {
             purge_this_run: false,
             btrfs_path: default_btrfs_path(),
             zfs_dataset: None,
+            snapshot_priority: Vec::new(),
             tmp_dir: default_tmp_dir(),
             github_dir: default_github_dir(),
             web_dir: default_web_dir(),
