@@ -1592,7 +1592,7 @@ rule.
 
 ## T6
 
-**Status: ANSWERED — ruled 2026-07-23 (the blocking half; two sub-questions remain open below).**
+**Status: ANSWERED — fully ruled (blocking half 2026-07-23; both sub-questions 2026-07-26).**
 
 **In the tree today:** `backup_once` (`link.rs:172`) has **no opt-out and no bound of any kind
 beyond one-per-target.** It never clobbers an existing backup, so a target accumulates exactly
@@ -1638,6 +1638,17 @@ with it the general path is already safe.
 (`@backup=no` on the line, a machine-wide key, or both), and sub-question 4, whether any command
 lists backups orphaned by the versions of LiNix that shipped before this ruling. Both are
 smaller once restore-on-removal exists, and neither blocks it.
+
+**RULED (owner, 2026-07-26): both sub-questions closed. T6 is fully answered.**
+
+- **Sub-question 1 — the opt-out is per-line `@backup=no`.** It states the exception exactly where
+  the exception is (this file, not the machine), and restore-on-removal already killed the pile-up
+  a machine-wide key would have been for — so a single mechanism, not two, and no "which one wins"
+  question. A machine-wide key is not added.
+- **Sub-question 4 — nothing is owed.** NO LEGACY: LiNix has no real users, so there are no
+  pre-ruling orphaned backups in the wild to sweep, and no cleanup command is built. If stray-
+  backup *visibility* is ever wanted it belongs as a line in `check`, never a new verb (U8) — but
+  it is not built now, because there is nothing to see.
 
 ---
 
