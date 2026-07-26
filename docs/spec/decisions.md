@@ -1,29 +1,35 @@
-# The decision register — all 104, and which are answered
+# The decision register — all 104, and every one of them ruled
 
-**One file, six features.** Every decision this design forces lives here, with its status. The
-registers used to sit at the tail of six proposal parts and **none of them recorded whether they
-had been answered**, so the same question could be argued twice and a question already settled in
-code could be re-opened by anyone reading the register instead of the tree.
+**One file, six features. Zero open.** Every decision this design forces lives here, with its
+status. The registers used to sit at the tail of six proposal parts and **none of them recorded
+whether they had been answered**, so the same question could be argued twice and a question
+already settled in code could be re-opened by anyone reading the register instead of the tree.
 
 **A recommendation is not a ruling.** Where an entry carries one, it is the author's reading and
 nothing more; the owner decides. When a decision is ruled, rewrite its entry as the rule, put the
-rule in [Part II](target-state.md) and its reason in [Part V](why.md), and move the row here to
-*Answered*.
+rule in [Part II](target-state.md) and its reason in [Part V](why.md), **and update this file's
+index in the same commit** — the index went 59 entries out of date because that last clause was
+not in this paragraph.
 
 ## The five statuses
 
-| status | means | what it needs |
-|---|---|---|
-| **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. |
-| **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. |
+| status | means | what it needs | count |
+|---|---|---|---|
+| **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **102** |
+| **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
-**Every status below was checked against the tree, not against the sentence.** Where an entry
-says *built*, the file and line are named. That distinction is the point of this file: fifteen
-entries the old registers listed as unanswered questions were in fact already answered by shipped
-code, and two the old registers implied were fine are live defects.
+**Three of these five statuses now describe nothing, and they stay.** The categories are not
+decoration: *OPEN — blocking* refills the moment a new feature is proposed, and *BUILT, NEVER
+RULED* refills the moment somebody implements a recommendation before it is put to the owner.
+Deleting an empty category is how the next one goes unnoticed.
+
+**A status is a claim about the tree, and the "In the tree today:" line in each entry is dated at
+the moment it was written.** Several of them are now stale in the direction that matters least —
+they say *nothing exists* for work that has since shipped. Where an entry's build state matters,
+`plan.md`'s ordered list is the checked answer; this file's job ends at the ruling.
 
 ## What each feature's questions cost if answered late
 
@@ -44,148 +50,176 @@ status loses that, so it is kept here:
   channels (U37), and secret decryption (U38). None blocks. They share one mechanism (XIII.33: a
   declared provider, argv from a file, capability-by-declaration) and one line (XIII.32: open a
   surface only where the added thing is data LiNix cannot hear, never behaviour it cannot see).
-  **Direction (owner, 2026-07-25):** for the *provider-list* surfaces — U27, U30, U31, U36, U37,
-  U38 — the *whether* is settled (they are to be opened, reachable without a source change,
-  XIII.33); what stays open on each is the *how* and the *safety order*. U33 (generated
-  declarations) is explicitly **not** in that set — XIII.32 still refuses it.**
+  **Direction (owner, 2026-07-25), then rulings (owner, 2026-07-26):** the direction settled the
+  *whether* for the provider-list surfaces — U27, U30, U31, U36, U37, U38 — and left the *how*
+  and the *safety order* open. **Those were all ruled the next day, and so were the four the
+  direction had excluded.** U33 in particular went the other way from XIII.32's refusal: the
+  owner ruled that generated declarations **are** built, behind their own config key, off by
+  default — which amends U3 and U4. Nothing in the U-series is open.
 
 ---
 
 ## Index
 
-### Open, and blocking — 13
+**Nothing here is open.** All 104 are ruled: **102 ANSWERED, 2 PARKED, 0 OPEN** — counted on
+2026-07-26 by reading every entry's own `Status:` line, not by reading this heading.
 
-| | question | feature |
+> **This index was the worst-drifted thing in the spec, and it drifted in the file whose whole
+> job is to stop drift.** Until 2026-07-26 it carried three tables — *Open and blocking — 13*,
+> *Open, not blocking — 46*, *Answered — 43* — that nobody updated as the rulings landed between
+> 2026-07-23 and 2026-07-26. So it advertised **59 open questions over 59 entries that each said
+> ANSWERED four lines further down.** Anyone who read the index instead of the entries would
+> have re-opened a settled question, which is the precise failure this file was created to end.
+> **An index is a claim about the file underneath it, and this one was checked against nothing.**
+
+**This index says whether a question is decided. It does not say whether the ruling is built** —
+that is the ordered list at the top of [`plan.md`](plan.md), and it is deliberately the only
+place that answers it. Two lists of build state is the two-of-everything disease applied to our
+own documentation.
+
+**The date column** is the entry's own `Status:` date where it carries one, and the first date in
+the entry body otherwise (the oldest entries were answered by being built and record the date
+there). It is when the question stopped being open, not when the code landed.
+
+### D — artifact selection and channels (Part VIII) — 18
+
+| | question | answered |
 |---|---|---|
-| **D3b** | Download-only artifacts: what is the option called, and does `check` count one as software? | artifacts |
-| **D5** | A `.deb` installed by `github:` — does apt own it or does LiNix? | artifacts |
-| **K2** | What is `rebuild`'s default scope? Is a bare `linix rebuild` an error? | rebuild |
-| **K4** | Is `clean_cache_on_remove` every backend, or only the ones whose file LiNix knows? | rebuild |
-| **U1** | Where does a custom backend definition live — the repo, or machine-local? | next |
-| **U3** | What does removing an `exec:` line mean when a script has no inverse? | next |
-| **U9** | Do the ten status commands collapse into one `linix check`? | next |
-| **U14** | Is sharing wanted, and what makes a vendored module safe to run? | next |
-| **U19** | Is LiNix acting for a user or for the machine? (`HKCU` vs `HKLM`) | next |
-| **U22** | Does the dotfiles tree link files, or whole directories? | next |
-| **U23** | What happens when a dotfile destination already holds the user's own file? | next |
-| **U24** | Is a `.age` file inside the dotfiles tree a secret to decrypt? | next |
-| **U26** | Is BSD supported, and what does `when family` answer there? | next |
+| **D1** | What is "the release"? — built as latest non-draft, non-prerelease; `v` prefix tolerated. | 2026-07-23 |
+| **D2** | How is a format recognised from a filename? — built as extension match plus `binary`. | 2026-07-23 |
+| **D3** | Two assets, same format — RULED 2026-07-20: shortest name, `@asset=` glob, `@asset=all`. | 2026-07-20 |
+| **D3b** | Download-only artifacts: what is the option called, and does `check` count one as software? | 2026-07-24 |
+| **D4** | What installing a tarball does — RULED 2026-07-20: extract, find, shim, `@bin=`. | 2026-07-20 |
+| **D5** | A `.deb` installed by `github:` — does apt own it or does LiNix? | 2026-07-24 |
+| **D6** | `@sha256` per machine — RULED 2026-07-20: checksums live in `locks/`, generated. | 2026-07-20 |
+| **D7** | Does a `formats` block enable the backend — ADOPTED and built: yes. | 2026-07-20 |
+| **D8** | May a `when` block appear inside an options body? | 2026-07-24 |
+| **D9** | A line's `formats` replaces the backend's — ADOPTED and built: replace, both seams. | 2026-07-20 |
+| **D10** | Where the closed vocabulary lives — built as one table in `artifact/format.rs`. | 2026-07-23 |
+| **D11** | The default format order is detected, so a LiNix upgrade can silently change it. | 2026-07-24 |
+| **D12** | Network, GitHub rate limits, and whether `sync` works on a plane. | 2026-07-24 |
+| **D13** | Changing a `channel` — refresh, or remove and reinstall? | 2026-07-24 |
+| **D14** | Does `why` explain which of the three levels chose the artifact? | 2026-07-24 |
+| **D15** | `.flatpak`/`.snap` assets in a release — PARKED until D5 is answered. | PARKED |
+| **D16** | libc variants (`gnu` vs `musl`) — CLOSED by D3's ruling. | PARKED |
+| **D17** | What does `github:re:…@formats=` mean across repos with different assets? | 2026-07-24 |
 
-### Open, not blocking — 46
+### W — user-defined `when` variables (Part IX) — 14
 
-| | question | feature |
+| | question | answered |
 |---|---|---|
-| **K18** | Should LiNix use a backend's own atomic swap where one exists (nix, rpm-ostree)? | rebuild |
-| **T7** | Runtime injection of secrets into process memory — reopened. | secrets |
-| **D8** | May a `when` block appear inside an options body? | artifacts |
-| **D11** | The default format order is detected, so a LiNix upgrade can silently change it. | artifacts |
-| **D12** | Network, GitHub rate limits, and whether `sync` works on a plane. | artifacts |
-| **D13** | Changing a `channel` — refresh, or remove and reinstall? | artifacts |
-| **D14** | Does `why` explain which of the three levels chose the artifact? | artifacts |
-| **D17** | What does `github:re:…@formats=` mean across repos with different assets? | artifacts |
-| **W9** | Interpolation outside `when` — stay banned? | vars |
-| **W10** | May a variable reference another variable? | vars |
-| **K6** | Does LiNix learn per-backend group syntax (`pacman -S plasma`)? | rebuild |
-| **K12** | Is a symlink at the default config path still supported? | rebuild |
-| **N4** | Is `default/incoming` a statement or a preference key? | firewall |
-| **N5** | What does removing a firewall rule restore? | firewall |
-| **N6** | What if a config declares both `firewall:` lines and a `link:` to the ruleset? | firewall |
-| **N7** | Does `watch` revert firewall drift unattended, or only report it? | firewall |
-| **T3** | What does a missing hardware token look like — prompt, hang, or error? | secrets |
-| **T4** | May an unattended `watch` tick decrypt with a touch-required key? | secrets |
-| **U2** | Is a custom backend a full peer of a built-in (repos, orphans, dependencies)? | next |
-| **U4** | Is `exec:` a licence to put a shell script where a backend belongs? | next |
-| **U6** | Does this document mark its Linux-only guarantees (snapshots, rollback)? | next |
-| **U7** | Is a health check per-package or per-sync? | next |
-| **U8** | Is the removal preview a flag or a new verb? | next |
-| **U10** | Where does a backend's bootstrap live — `priority` or the definition file? | next |
-| **U11** | Does `watch` imply `--locked`? | next |
-| **U12** | Does `try` reuse the Phase 6 images, or build from a base the config names? | next |
-| **U13** | Does `@runs=always` exist? | next |
-| **U15** | Where do LiNix-level event hooks live, and are they per-machine? | next |
-| **U16** | May a custom backend's `binary` be an absolute path? | next |
-| **U17** | Is `linix eval`'s JSON versioned from the first release? | next |
-| **U18** | Are grouped backends with per-group priority worth building at all? | next |
-| **U20** | Is a language server wanted, and may it be a second implementation? | next |
-| **U21** | Is the exit-code table settled once, up front? | next |
-| **U25** | One dotfiles tree, or several? | next |
-| **U27** | Is the snapshot/rollback layer opened to a registry + config-driven providers? | next |
-| **U28** | One snapshot provider or several, chosen by capability not list order? | next |
-| **U29** | Is APFS the macOS safety net, and is its restore `Live` or not? | next |
-| **U30** | Declare storage objects (zfs/lvm/btrfs) as a family — and does the guard cover destroying one? | next |
-| **U31** | Should health checks be an open vocabulary — a user-declared check command? | next |
-| **U32** | Do modules take parameters (the macro), and are parameter types checked? | next |
-| **U33** | Are generated declarations — a config that runs a program to produce state — wanted at all? | next |
-| **U34** | Is `linix repl` worth a second entry point, or is `eval \| jq` enough? | next |
-| **U35** | May a user name a new verb, strictly as a composition of built-ins? | next |
-| **U36** | Are init systems a declared-provider kind (s6/dinit/runit/Shepherd), or stays a closed enum? | next |
-| **U37** | Are notification channels their own declared kind, or is an event hook the answer? | next |
-| **U38** | Is secret decryption a declared-provider kind, and behind which T-series rulings? | next |
+| **W1** | The sigil — built as `$role`, never bare. | 2026-07-23 |
+| **W2** | Are values typed — RULED 2026-07-20: full JSON types, no coercion. Built. | 2026-07-20 |
+| **W3** | Is a bare `$flag` a condition — ADOPTED and built: no, it is a parse error. | 2026-07-20 |
+| **W4** | Where `vars` loads in resolution — built: once, before any `when`. | 2026-07-20 |
+| **W5** | What `check` does with an unused variable — built: a note, from a static scan. | 2026-07-20 |
+| **W6** | One `vars` file or a directory — built as one file; `vars.d/` ignored. | 2026-07-23 |
+| **W7** | The undetectable variable — ANSWERED by the provider model: `env()` is the hatch. | 2026-07-20 |
+| **W8** | Do variables work in `active` — built, including every path that edits your files. | 2026-07-20 |
+| **W9** | Interpolation outside `when` — stay banned? | 2026-07-24 |
+| **W10** | May a variable reference another variable? | 2026-07-24 |
+| **W11** | Does `why` explain a variable — built as a gate chain. | 2026-07-20 |
+| **W12** | A command to print resolved variables — built: `linix vars`. | 2026-07-20 |
+| **W13** | Does changing a variable hit the guard — RULED 2026-07-20: yes, plus a run-level note. | 2026-07-20 |
+| **W14** | Does `vars` belong in `diff` — built: yes, the line file and every provider file. | 2026-07-20 |
 
-### Built to the recommendation, never ruled — 0
+### K — rebuild, caches, desktops, backup (Part X) — 20
 
-**Empty, as of 2026-07-23.** All fifteen were put to the owner and ruled. The heading stays
-because the category refills on its own: it is what happens whenever a recommendation gets
-implemented before anyone rules on it.
-
-### Answered — 43
-
-| | question | feature |
+| | question | answered |
 |---|---|---|
-| **T6** | Must there be a way to opt out of `backup_once`, or bound how many pile up? | secrets |
-| **N1** | Is a declared perimeter exclusive (undeclared rules are drift) or additive? | firewall |
-| **N2** | What happens when the change would close the SSH session running it? | firewall |
-| **N3** | Which adapters ship — and is one adapter enough to justify the backend at all? | firewall |
-| **T1** | `backup_once` leaves a plaintext copy of the previous secret forever. | secrets |
-| **T2** | Nothing stops `@target=` writing a plaintext secret back inside the git repo. | secrets |
-| **T5** | Is the plaintext 0600 at creation, or chmod'd after? And on Windows? | secrets |
-| **K17** | How does `setting:` reach a store nobody wrote an adapter for? | rebuild |
-| **D2** | How is a format recognised from a filename? — built as extension match plus `binary`. | artifacts |
-| **K5** | A level-3 reset with a config repo — built as refuse unless `--force`. | rebuild |
-| **K11** | May the settings file hold more than the repo path — built as no, parser-enforced. | rebuild |
-| **K14** | Does `rebuild` produce a git commit — built as no, and asserted by no test. | rebuild |
-| **K16** | Does `clean-cache --all` need the guard — built as no; `reset` does. | rebuild |
-| **U5** | Does `setting:` get a Windows registry and a macOS `defaults` adapter? | next |
-| **D1** | What is "the release"? — built as latest non-draft, non-prerelease; `v` prefix tolerated. | artifacts |
-| **D10** | Where the closed vocabulary lives — built as one table in `artifact/format.rs`. | artifacts |
-| **W1** | The sigil — built as `$role`, never bare. | vars |
-| **W6** | One `vars` file or a directory — built as one file; `vars.d/` ignored. | vars |
-| **K7** | Which desktops `setting:` adapts to — built as GNOME only, KDE refused by name. | rebuild |
-| **K7b** | The `setting:` key syntax — built as the statement form, not a backend prefix. | rebuild |
-| **K8** | How a git-less LiNix announces it — built on the affected commands plus `doctor`. | rebuild |
-| **K10** | `linix edit` and `linix path` — built as two commands. | rebuild |
-| **K11b** | Where that file lives — built in the platform config dir. | rebuild |
-| **K13** | Does `rebuild` appear in `schedules` — built as refused by name. | rebuild |
-| **D3** | Two assets, same format — RULED 2026-07-20: shortest name, `@asset=` glob, `@asset=all`. | artifacts |
-| **D4** | What installing a tarball does — RULED 2026-07-20: extract, find, shim, `@bin=`. | artifacts |
-| **D6** | `@sha256` per machine — RULED 2026-07-20: checksums live in `locks/`, generated. | artifacts |
-| **D7** | Does a `formats` block enable the backend — ADOPTED and built: yes. | artifacts |
-| **D9** | A line's `formats` replaces the backend's — ADOPTED and built: replace, both seams. | artifacts |
-| **W2** | Are values typed — RULED 2026-07-20: full JSON types, no coercion. Built. | vars |
-| **W3** | Is a bare `$flag` a condition — ADOPTED and built: no, it is a parse error. | vars |
-| **W4** | Where `vars` loads in resolution — built: once, before any `when`. | vars |
-| **W5** | What `check` does with an unused variable — built: a note, from a static scan. | vars |
-| **W7** | The undetectable variable — ANSWERED by the provider model: `env()` is the hatch. | vars |
-| **W8** | Do variables work in `active` — built, including every path that edits your files. | vars |
-| **W11** | Does `why` explain a variable — built as a gate chain. | vars |
-| **W12** | A command to print resolved variables — built: `linix vars`. | vars |
-| **W13** | Does changing a variable hit the guard — RULED 2026-07-20: yes, plus a run-level note. | vars |
-| **W14** | Does `vars` belong in `diff` — built: yes, the line file and every provider file. | vars |
-| **K1** | `rebuild`'s granularity — RULED 2026-07-20: batch per backend, foundation first. | rebuild |
-| **K3** | A failed reinstall after a good removal — RULED 2026-07-20: snapshot and revert. | rebuild |
-| **K9** | Is the backup command `bundle` — RULED 2026-07-22: yes, plus `restore DIR`. Built. | rebuild |
-| **K15** | Does `plan` distinguish a rebuild's removals — built: `Reinstalled`, never `Removals`. | rebuild |
+| **K1** | `rebuild`'s granularity — RULED 2026-07-20: batch per backend, foundation first. | 2026-07-20 |
+| **K2** | What is `rebuild`'s default scope? Is a bare `linix rebuild` an error? | 2026-07-24 |
+| **K3** | A failed reinstall after a good removal — RULED 2026-07-20: snapshot and revert. | 2026-07-20 |
+| **K4** | Is `clean_cache_on_remove` every backend, or only the ones whose file LiNix knows? | 2026-07-24 |
+| **K5** | A level-3 reset with a config repo — built as refuse unless `--force`. | 2026-07-23 |
+| **K6** | Does LiNix learn per-backend group syntax (`pacman -S plasma`)? | 2026-07-24 |
+| **K7** | Which desktops `setting:` adapts to — built as GNOME only, KDE refused by name. | 2026-07-23 |
+| **K7b** | The `setting:` key syntax — built as the statement form, not a backend prefix. | 2026-07-23 |
+| **K8** | How a git-less LiNix announces it — built on the affected commands plus `doctor`. | 2026-07-23 |
+| **K9** | Is the backup command `bundle` — RULED 2026-07-22: yes, plus `restore DIR`. Built. | 2026-07-22 |
+| **K10** | `linix edit` and `linix path` — built as two commands. | 2026-07-23 |
+| **K11** | May the settings file hold more than the repo path — built as no, parser-enforced. | 2026-07-23 |
+| **K11b** | Where that file lives — built in the platform config dir. | 2026-07-23 |
+| **K12** | Is a symlink at the default config path still supported? | 2026-07-24 |
+| **K13** | Does `rebuild` appear in `schedules` — built as refused by name. | 2026-07-23 |
+| **K14** | Does `rebuild` produce a git commit — built as no, and asserted by no test. | 2026-07-23 |
+| **K15** | Does `plan` distinguish a rebuild's removals — built: `Reinstalled`, never `Removals`. | 2026-07-21 |
+| **K16** | Does `clean-cache --all` need the guard — built as no; `reset` does. | 2026-07-23 |
+| **K17** | How does `setting:` reach a store nobody wrote an adapter for? | 2026-07-23 |
+| **K18** | Should LiNix use a backend's own atomic swap where one exists (nix, rpm-ostree)? | 2026-07-24 |
 
-### Parked or closed — 2
+### N — `firewall:` (Part XI) — 7
 
-| | question | feature |
+| | question | answered |
 |---|---|---|
-| **D15** | `.flatpak`/`.snap` assets in a release — PARKED until D5 is answered. | artifacts |
-| **D16** | libc variants (`gnu` vs `musl`) — CLOSED by D3's ruling. | artifacts |
+| **N1** | Is a declared perimeter exclusive (undeclared rules are drift) or additive? | 2026-07-23 |
+| **N2** | What happens when the change would close the SSH session running it? | 2026-07-23 |
+| **N3** | Which adapters ship — and is one adapter enough to justify the backend at all? | 2026-07-23 |
+| **N4** | Is `default/incoming` a statement or a preference key? | 2026-07-24 |
+| **N5** | What does removing a firewall rule restore? | 2026-07-24 |
+| **N6** | What if a config declares both `firewall:` lines and a `link:` to the ruleset? | 2026-07-24 |
+| **N7** | Does `watch` revert firewall drift unattended, or only report it? | 2026-07-24 |
+
+### T — secrets (Part XII) — 7
+
+| | question | answered |
+|---|---|---|
+| **T1** | `backup_once` leaves a plaintext copy of the previous secret forever. | 2026-07-23 |
+| **T2** | Nothing stops `@target=` writing a plaintext secret back inside the git repo. | 2026-07-23 |
+| **T3** | What does a missing hardware token look like — prompt, hang, or error? | 2026-07-24 |
+| **T4** | May an unattended `watch` tick decrypt with a touch-required key? | 2026-07-24 |
+| **T5** | Is the plaintext 0600 at creation, or chmod'd after? And on Windows? | 2026-07-23 |
+| **T6** | Must there be a way to opt out of `backup_once`, or bound how many pile up? | 2026-07-23 |
+| **T7** | Runtime injection of secrets into process memory — reopened. | 2026-07-24 |
+
+### U — the next round (Part XIII) — 38
+
+| | question | answered |
+|---|---|---|
+| **U1** | Where does a custom backend definition live — the repo, or machine-local? | 2026-07-23 |
+| **U2** | Is a custom backend a full peer of a built-in (repos, orphans, dependencies)? | 2026-07-24 |
+| **U3** | What does removing an `exec:` line mean when a script has no inverse? | 2026-07-24 |
+| **U4** | Is `exec:` a licence to put a shell script where a backend belongs? | 2026-07-24 |
+| **U5** | Does `setting:` get a Windows registry and a macOS `defaults` adapter? | 2026-07-23 |
+| **U6** | Does this document mark its Linux-only guarantees (snapshots, rollback)? | 2026-07-24 |
+| **U7** | Is a health check per-package or per-sync? | 2026-07-24 |
+| **U8** | Is the removal preview a flag or a new verb? | 2026-07-24 |
+| **U9** | Do the ten status commands collapse into one `linix check`? | 2026-07-24 |
+| **U10** | Where does a backend's bootstrap live — `priority` or the definition file? | 2026-07-24 |
+| **U11** | Does `watch` imply `--locked`? | 2026-07-24 |
+| **U12** | Does `try` reuse the Phase 6 images, or build from a base the config names? | 2026-07-24 |
+| **U13** | Does `@runs=always` exist? | 2026-07-24 |
+| **U14** | Is sharing wanted, and what makes a vendored module safe to run? | 2026-07-24 |
+| **U15** | Where do LiNix-level event hooks live, and are they per-machine? | 2026-07-24 |
+| **U16** | May a custom backend's `binary` be an absolute path? | 2026-07-24 |
+| **U17** | Is `linix eval`'s JSON versioned from the first release? | 2026-07-24 |
+| **U18** | Are grouped backends with per-group priority worth building at all? | 2026-07-24 |
+| **U19** | Is LiNix acting for a user or for the machine? (`HKCU` vs `HKLM`) | 2026-07-24 |
+| **U20** | Is a language server wanted, and may it be a second implementation? | 2026-07-24 |
+| **U21** | Is the exit-code table settled once, up front? | 2026-07-24 |
+| **U22** | Does the dotfiles tree link files, or whole directories? | 2026-07-24 |
+| **U23** | What happens when a dotfile destination already holds the user's own file? | 2026-07-24 |
+| **U24** | Is a `.age` file inside the dotfiles tree a secret to decrypt? | 2026-07-24 |
+| **U25** | One dotfiles tree, or several? | 2026-07-24 |
+| **U26** | Is BSD supported, and what does `when family` answer there? | 2026-07-24 |
+| **U27** | Is the snapshot/rollback layer opened to a registry + config-driven providers? | 2026-07-26 |
+| **U28** | One snapshot provider or several, chosen by capability not list order? | 2026-07-26 |
+| **U29** | Is APFS the macOS safety net, and is its restore `Live` or not? | 2026-07-26 |
+| **U30** | Declare storage objects (zfs/lvm/btrfs) as a family — and does the guard cover destroying one? | 2026-07-26 |
+| **U31** | Should health checks be an open vocabulary — a user-declared check command? | 2026-07-26 |
+| **U32** | Do modules take parameters (the macro), and are parameter types checked? | 2026-07-26 |
+| **U33** | Are generated declarations — a config that runs a program to produce state — wanted at all? | 2026-07-26 |
+| **U34** | Is `linix repl` worth a second entry point, or is `eval \| jq` enough? | 2026-07-26 |
+| **U35** | May a user name a new verb, strictly as a composition of built-ins? | 2026-07-26 |
+| **U36** | Are init systems a declared-provider kind (s6/dinit/runit/Shepherd), or stays a closed enum? | 2026-07-26 |
+| **U37** | Are notification channels their own declared kind, or is an event hook the answer? | 2026-07-26 |
+| **U38** | Is secret decryption a declared-provider kind, and behind which T-series rulings? | 2026-07-26 |
 
 ---
 
-# Open, and blocking
+# The blocking round — thirteen questions, all ruled
+
+*These could not be built around: two reasonable implementations differed. Ruled 2026-07-23/24.*
 
 ## D3b
 
@@ -533,7 +567,9 @@ drives (`pkgin` is registered today).
 **RULED (owner, 2026-07-24): a family that cannot be shown to be X makes `family == X` false, not an error.** The owner rejected the hard-error option: an unidentifiable or non-matching family simply fails the positive comparison, because it cannot be demonstrated to be that family. This is already the behaviour — `HostFacts::current` falls back to `std::env::consts::OS`, which is `freebsd`/`openbsd`/`netbsd` on the BSDs, so `family` answers the OS name there and `== debian` is correctly false. The build is a test locking that in and a why note; BSD backend registration (`pkg`/`pkg_add`) is ordinary work for whenever.
 ---
 
-# Open, not blocking
+# The non-blocking round — forty-six questions, all ruled
+
+*Something could still be built around each of these. Ruled 2026-07-23 through 2026-07-26; the U27–U38 extension-surface set closed last, on 2026-07-26.*
 
 ## U27
 
@@ -1588,7 +1624,7 @@ rule.
 
 ---
 
-# Answered
+# Answered earlier — the first three rounds
 
 ## T6
 
@@ -2065,9 +2101,10 @@ read-before-write store on any platform, and it is the difference between LiNix 
 Windows machine's software and declaring the machine.
 
 **ANSWERED by K7's ruling (owner, 2026-07-23): yes.** `setting:` must work everywhere, so the
-registry and `defaults` adapters are owed rather than optional. **This does not unblock the
-work** — the registry adapter's first decision is `HKCU` or `HKLM`, which is **U19**, still open,
-and whatever it picks becomes the convention macOS inherits.
+registry and `defaults` adapters are owed rather than optional. *(This once read "does not unblock the work — U19 is still open".)* **U19 is answered and
+built** (2026-07-24): `@scope=user|system`, defaulting to whatever the store does anyway, and it
+is the convention macOS `defaults` inherits. **Nothing blocks the adapters now**; they are simply
+unwritten — `setting_stores.toml` still ships `gsettings` and nothing else.
 
 ---
 
@@ -2205,8 +2242,9 @@ LiNix owning individual lines inside a file it did not write — which is not wh
 adapter does, and `link:` already places whole files. **Whether Hyprland is a `setting:` adapter,
 a `link:` case, or a third thing is open and is not decided by this ruling.**
 
-**This answers U5: yes.** It does not unblock it — the registry adapter's first line is `HKCU` or
-`HKLM`, which is **U19**, still open.
+**This answers U5: yes.** It no longer waits on anything: the registry adapter's first line is
+`HKCU` or `HKLM`, which is **U19 — answered and built** (`@scope=user|system`, 2026-07-24). The
+adapter rows are unwritten work, not blocked work.
 
 ---
 

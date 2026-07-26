@@ -533,6 +533,21 @@ about to replace, leaving it stale the instant the foundation batch lands. Found
 graph nodes concurrently, and a `Remove` and an `Install` of the same package have no edge
 between them. In one graph they race, and the winner decides whether the package exists.
 
+**Why a bare `rebuild` warns and proceeds, rather than refusing.** *(K2, owner ruling
+2026-07-24, reversing the recommendation this entry originally carried.)* The first answer was
+"scope is required — a bare `rebuild` errors and lists the forms", on the reasoning that `--all`
+is too large a thing to reach by pressing enter. **The owner ruled the other way, and the reason
+is what `rebuild` is for.** Every other refusal in this design guards against *software being
+removed*; this one would guard against *software being repaired*. The failure this command
+exists to fix is a machine whose declared software is broken while `sync` reports success
+forever, and a refusal makes the repair one step harder to reach while doing nothing whatsoever
+about the scope — the user re-runs it with `--all` and gets the identical blast radius, having
+learned only that LiNix is fussy. **A warning carries the same information and does not stand
+between the user and the fix**, and it names the narrower forms in the same breath, which the
+refusal also did. This is the one place in this document where the answer to "large and
+consequential" is a loud sentence rather than a no, and the reason it can be is that
+`rebuild` never touches undeclared software: everything it removes, it removes to put back.
+
 **Why protected packages are dropped from the scope rather than exempted in the guard.** A
 rebuild's removal is only safe because a reinstall follows — and if that reinstall fails, the
 machine is genuinely without the package, which is exactly what the guard exists to prevent.
@@ -933,5 +948,131 @@ the checks — are both the reader's to make and neither is guessable from "heal
 `health` list answer different questions, but a broken nginx and a broken boot mean the same
 thing to the machine: go back. Giving them separate revert paths would mean maintaining two
 answers to a question that has one.
+
+**V.66 — Why `exec:` is a verb, and why a false `when` is not an undo.** *(XIII.3; U3 ruled
+2026-07-24.)*
+
+Every other statement in II.2 is a noun: it names a thing that should exist, so the machine can
+be compared against it and the difference removed. `exec:` names an *action*, and an action has
+no state to compare against — which is why it was nearly not built at all, and why it is the one
+place this model bends.
+
+**The bug it would cause if it were treated like a noun is flapping.** A script that succeeds
+usually makes its own condition false: `exec:./enable-thing.sh` guarded by `when` the thing is
+not enabled. Under the ordinary rule — false `when` means undeclared means remove — the script
+would run, succeed, become undeclared, and be "removed" on the next sync, which would make the
+condition true again. The machine would oscillate forever and every sync would report work done.
+
+So `exec:` is keyed by the **content hash of the script** in `locks/exec.toml`: what decides
+whether it runs is whether *this exact script* has already run, not whether a condition still
+holds. `@runs=1` is the default and `@runs=always` opts out, visibly.
+
+**And what removing the line means is the honest answer, not the convenient one.** If the line
+carries `@undo=`, that is what runs. If it does not, LiNix **drops the record and does nothing
+else**, and `plan` says so in those words. The alternative — inventing an inverse for a script
+whose author did not write one — is LiNix claiming to undo something it cannot, which is the
+same class of lie as printing "rolled back" on the strength of an exit code (V.60).
+
+**V.67 — Why a dotfiles tree links files and never directories.** *(U22–U25, ruled 2026-07-24.)*
+
+A dotfiles tree is the one declaration whose *layout is the statement*: `dotfiles:./home` stands
+for as many declarations as the folder holds, and adding a file to it is how you declare a new
+one. The temptation is to symlink the directory — one link instead of two hundred, and new files
+appear for free.
+
+**The bug that closes it is that a symlinked directory is a directory the application writes
+into.** Link `~/.config/nvim` and every plugin nvim installs, every lockfile it generates, every
+piece of session state it caches, lands **inside the git-tracked repo**. The repo stops being a
+declaration and becomes a mirror of runtime state; `linix diff` fills with noise; and `bundle` —
+whose whole promise is that the archive is safe to hand to someone — hands over whatever the
+application happened to leave there. Per-file links cost more link calls and are the only form
+where what LiNix manages is what the user wrote down.
+
+**A destination that already holds the user's own file is refused by name, not replaced** (U23).
+The tree has no place to write a per-line option, so there is no `@force` for it and there
+cannot be one — which is the same structural reason it **never decrypts** (U24): a `.age` file in
+the tree is a file, and there is nowhere to say otherwise. A secret that needs decrypting is a
+`link:` line, where the option can be written and read.
+
+**V.68 — Why `firewall:` is built in, and why the lockout check comes first.** *(N1–N7, ruled
+2026-07-23/24.)*
+
+A firewall looks exactly like something the onboarder should cover: `ufw` is a command with
+subcommands, and XIII.2 exists so a user can add a manager LiNix never heard of. **It is not,
+and the reason is the one thing a `[[backend]]` naming `ufw` could never give:
+`firewall:22/tcp` must mean the same thing on the Debian laptop and the Windows workstation.**
+A per-machine adapter definition makes the *declaration* per-machine, and a declaration that
+means something different on two machines is not a declaration. So the statement is built in and
+the **adapters** are rows (K17) — `ufw`, `firewalld`, `windows-defender` shipped as data, a
+fourth added without a release.
+
+**The lockout check is this feature's precondition, not one of its features.** LiNix detects the
+port carrying the controlling connection and refuses any plan that would deny it — from `sync`,
+from `purge-unmanaged`, and from an unattended `watch` tick. The tick is the dangerous one:
+nobody is there to read the refusal, and the machine that locks you out is the machine you can no
+longer reach to fix it. **Building the backend before the check is building the lockout**, which
+is why the check sits at the bottom of the module and everything above it is written against it.
+
+**V.69 — Why `@scope` exists on exactly three statements, and why writing the default is
+allowed.** *(U19, ruled 2026-07-24.)*
+
+LiNix used to act, implicitly, as whoever typed the command. The Linux backends mostly agree
+with that by accident. **The Windows registry cannot**: `HKCU` and `HKLM` are a real choice with
+no default that is right for both, and picking one silently means a config that reads identically
+on two machines configures the account on one and the machine on the other.
+
+So the question is asked where it can vary — `setting:`, `link:`, `shim:` — and **nowhere else**.
+A `service:` is the init system's business and a `repo:` is the manager's; putting `@scope` on
+them would be a key that means nothing, and a key that means nothing is a key someone writes and
+LiNix silently ignores, which II.2 closes with in exactly those words.
+
+**Writing the default is not an error.** `@scope=user` on a store whose default is already user
+is accepted and means what it says. A configuration is allowed to state a thing it also gets for
+free: saying it out loud is how the next reader learns the answer without going and looking it
+up, and refusing it would punish the person being explicit — which is the opposite of what a
+declarative system should reward.
+
+**V.70 — Why a `link:` backup is restored rather than retained, and why the opt-out is per
+line.** *(T6, ruled 2026-07-23 and closed 2026-07-26.)*
+
+`backup_once` exists for one reason: a user should not be silently robbed of a config file they
+hand-wrote because a `link:` line replaced it. The question that hung over it for weeks was how
+many such backups may accumulate, and whether there should be a retention key or a command to
+list the orphans.
+
+**Restoring on teardown dissolves the question instead of answering it.** Removing the `link:`
+declaration puts the original file back and deletes the backup — so a backup exists only while
+the thing that displaced it exists, and a pile cannot form. A retention policy would have been
+machinery for a problem created by not having this rule.
+
+**The opt-out is per line because a machine-wide one would travel.** `preferences.toml` is copied
+between machines and pasted from the internet like every other config; a key that turned backups
+off everywhere would arrive that way, and the file it silently stopped preserving would be one
+somebody hand-wrote. Stating the exception on the line that wants it puts the decision next to
+the file it is about. *(The fix that implemented this found a worse defect in the same three
+lines: the teardown was handed the declaration's **source**, so undoing a `link:` deleted the
+file in the user's own dotfiles repo and left the deployed copy standing. A link is keyed by its
+**destination** now, which also means editing `@target=` undoes the old destination instead of
+orphaning it forever.)*
+
+**V.71 — Why ten looking commands became one, and why `heal` survived.** *(U9, ruled 2026-07-24.)*
+
+`status`, `doctor`, `unmanaged`, `absent`, `conflicts`, `insight`, `metrics` and `audit` were
+eight answers to one question — *how is this machine doing?* — each with its own output shape,
+its own flags and its own idea of what counts as a problem. **The failure is not that there were
+too many; it is that the correct answer to "which one do I run" was "several, and compare".** A
+user who ran `status` and got a clean result had learned nothing about drift, conflicts or
+approvals, and nothing told them so.
+
+One command with named sections makes the set visible: `check` prints a line per section, so the
+questions you did not think to ask are on the screen next to the one you did. Naming a section
+prints its detail. The old names are **deleted, not aliased** — an alias would leave the ninth
+way to ask the question standing, and this repo's whole disease is two ways to do one thing.
+
+**`heal` survived the collapse and `doctor --fix` did not, and that is the dividing line the
+collapse rests on: `check` looks, `heal` acts.** A repair verb hidden behind a flag on a status
+command is a mutation reachable from something a user believes is read-only — which is the same
+shape as `--dry-run` performing a removal (S25). The line is drawn at the verb, not at the flag,
+because a flag is one keystroke from a routine command.
 
 ---

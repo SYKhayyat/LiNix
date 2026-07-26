@@ -485,7 +485,6 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
-                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -529,7 +528,6 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
-                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -588,7 +586,6 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
-                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -629,7 +626,6 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
-                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -706,7 +702,6 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
-                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -746,7 +741,6 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
-                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },

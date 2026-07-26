@@ -424,9 +424,14 @@ mod tests {
     #[test]
     fn the_shipped_table_parses_and_carries_gsettings() {
         let all = adapters(vec![]);
-        assert_eq!(all.len(), 1, "{:?}", all.iter().map(|a| &a.name).collect::<Vec<_>>());
-        assert_eq!(all[0].detect, "gsettings");
-        assert_eq!(all[0].os.as_deref(), Some("linux"));
+        let names: Vec<&str> = all.iter().map(|a| a.name.as_str()).collect();
+        // The shipped rows are unfiltered here (OS selection happens in `adapter()`), so both
+        // built-ins are present regardless of host.
+        assert!(names.contains(&"gsettings"), "{:?}", names);
+        assert!(names.contains(&"windows-registry"), "{:?}", names);
+        let gs = all.iter().find(|a| a.name == "gsettings").unwrap();
+        assert_eq!(gs.detect, "gsettings");
+        assert_eq!(gs.os.as_deref(), Some("linux"));
     }
 
     #[test]
@@ -498,7 +503,8 @@ mod tests {
         let all = adapters(vec![row("gsettings", "impostor")]);
         let g = all.iter().find(|a| a.name == "gsettings").unwrap();
         assert_eq!(g.detect, "gsettings", "a user row shadowed the shipped one");
-        assert_eq!(all.len(), 1);
+        // The impostor is rejected, so only the shipped rows remain.
+        assert_eq!(all.len(), 2);
     }
 
     /// A row that cannot be read is not an adapter: X.4's read-before-write is what makes
@@ -515,7 +521,8 @@ mod tests {
 
         let mut nameless = row("", "halfctl");
         nameless.name = String::new();
-        assert_eq!(adapters(vec![nameless]).len(), 1);
+        // Only the shipped rows remain once the nameless one is refused.
+        assert_eq!(adapters(vec![nameless]).len(), 2);
     }
 
     #[test]

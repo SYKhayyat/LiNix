@@ -132,8 +132,7 @@ impl Installable for SnapInstallable {
             let want_channel = spec.options.get("channel");
             let already = self.is_installed(&spec.name).await;
 
-            let args = if already && want_channel.is_some() {
-                let channel = want_channel.unwrap();
+            let args = if let (true, Some(channel)) = (already, want_channel) {
                 if let Some(current) = self.current_channel(&spec.name).await {
                     if is_channel_downgrade(&current, channel) {
                         // A downgrade is removal-shaped; name it so it is not a silent swap in

@@ -12,27 +12,33 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | [`spec/target-state.md`](spec/target-state.md) | II | **Canonical.** What to build. If code disagrees with it, the code is wrong. | Before you write a line. |
 | [`spec/why.md`](spec/why.md) | V | The reason behind every Part II rule — each one the scar of a real bug. | **Before changing any Part II rule.** |
 | [`spec/plan.md`](spec/plan.md) | III + IV | The work in dependency order, each phase with its exit condition; then the proofs. | When picking up work. |
-| [`spec/bugs.md`](spec/bugs.md) | VI | Bugs killed by this design, and bugs carried forward. **Read VI.0 first.** | Before building anything. |
-| [`spec/decisions.md`](spec/decisions.md) | — | **All 104 decisions, with a status on each.** | Before proposing anything. |
+| [`spec/bugs.md`](spec/bugs.md) | VI | Bugs killed by this design, and bugs carried forward. | Before building anything. |
+| [`spec/decisions.md`](spec/decisions.md) | — | **All 104 decisions. 102 answered, 2 parked, zero open.** | Before proposing anything. |
 | [`spec/history.md`](spec/history.md) | VII | How far the work got, session by session. **The living truth** — every frozen status line drifts behind the tree. | After Part II, before touching anything. |
-| [`spec/proposals/`](spec/proposals/) | VIII–XIII | Six features that are designed but not decided. | Only with the register open beside you. |
+| [`spec/proposals/`](spec/proposals/) | VIII–XIII | Six features, all designed and all now ruled. Kept for the reasoning, not the questions. | When building one of them. |
 
-**The proposals, and the decisions each one is waiting on:**
+**The proposals, and the decisions each one raised — every one of which is now ruled:**
 
 | part | file | decisions |
 |---|---|---|
 | VIII | [artifact selection and channels](spec/proposals/artifacts.md) | D1–D17 |
 | IX | [user-defined `when` variables](spec/proposals/vars.md) | W1–W14 |
-| X | [rebuild, caches, desktops, backup](spec/proposals/rebuild.md) | K1–K16 |
+| X | [rebuild, caches, desktops, backup](spec/proposals/rebuild.md) | K1–K18 |
 | XI | [`firewall:`](spec/proposals/firewall.md) | N1–N7 |
-| XII | [secrets](spec/proposals/secrets.md) | T1–T5 |
+| XII | [secrets](spec/proposals/secrets.md) | T1–T7 |
 | XIII | [the next round](spec/proposals/next-round.md) | U1–U38 |
 
-**VI.0 — FIXED (S24/S25, session 2026-07-23, sixteenth; verified 2026-07-24).** The bug that
-removed software with no guard, no plan and no count — and that `--dry-run` performed — is closed.
-It is no longer the blocker this line once made it, and it is no longer "build nothing before it."
-**For what remains to build and in what order, see the ordered list at the top of
-[`spec/plan.md`](spec/plan.md)** (`decisions.md` is now at zero-open).
+**Where the work stands (re-derived from `src/`, 2026-07-26).** Phases 0–6 are built and the
+container matrix (ubuntu/fedora/arch/alpine/tools) is green, run for real. Phase 7 is built except
+`7e` (half — the adapter table exists, only the `gsettings` row ships) and `7p` (not started).
+**VI.0 — the bug that removed software with no guard, no plan and no count, and that `--dry-run`
+performed — is FIXED** (S24/S25, 2026-07-23, verified 2026-07-24); it is no longer a blocker and
+no longer "build nothing before it."
+
+**For what remains to build and in what order, read the ordered list at the top of
+[`spec/plan.md`](spec/plan.md). It is the only list of build state** — the register says whether
+a question is decided and stops there, deliberately, because the last time two files both tracked
+what was built they disagreed for two days and the plan lost.
 
 Facts marked **(measured)** were verified against real containers or real code with a citation.
 Everything else is design.
@@ -59,15 +65,27 @@ already exists". You cannot implement this correctly from a summary.
 2. **Never change a Part II rule without reading its Part V entry first.** Each is the scar
    of a real bug. Most "obvious improvements" here are things we already tried and rejected;
    Part V says why. If Part V doesn't cover your case, that is a real gap — **ask.**
-3. **Ask before every real decision.** The owner makes the decisions; you are responsible for
-   bringing things to their attention. Explain clearly, in plain words, no jargon, as if to a
-   smart new intern. **Do not use metaphors.** Give real context and a recommendation.
+3. **Build without stopping for permission — and stop for exactly four things** (owner ruling,
+   2026-07-23; this replaced the older "ask before every real decision", which had people
+   stopping on file layout and test structure). **Stop and ask for:** anything with an ID in the
+   register (`D*`, `W*`, `K*`, `N*`, `T*`, `U*`); anything that changes behaviour a user would
+   notice; anything that would remove a feature; anything where Part II looks wrong. **Do not
+   stop for** implementation detail, naming, file layout, test structure, or a choice between two
+   options that is invisible from outside the program — make the call and put the reasoning in the
+   commit message. When you do ask, explain in plain words, no jargon, as if to a smart new
+   intern; **no metaphors**; real context and a recommendation.
 4. **Never remove a feature without asking**, even one this document doesn't mention. Some
    may be genuinely important. The deletion list in II.17 is already approved — anything
    beyond it is a question.
-5. **Do not invent.** If the spec doesn't say, it's a gap. Ask. Do not guess and do not
-   quietly pick a default — that is how this codebase got eleven magic numbers nobody can
-   change (V-P5).
+5. **Do not invent a rule; do decide a detail.** If the spec doesn't say and the answer would be
+   *visible from outside the program*, it is a gap — ask. If it is invisible from outside, decide
+   it and record why in the commit. What is banned is the quiet default nobody wrote down: that is
+   how this codebase got eleven magic numbers nobody can change (V-P5).
+   **When a question is answered, the ruling ships in the same commit** — rewritten into
+   `decisions.md` *and its index*, and into `target-state.md` plus `why.md` if it is a rule rather
+   than a detail. A ruling that lives only in a chat log is the drift that made 84 decisions
+   unanswerable; a ruling that lands in an entry but not in the index is the drift that made the
+   register advertise 59 open questions it had already closed.
 6. **Commit at every major step**, with a message that says what changed and what it does not
    yet do.
 7. **Check everywhere. We cannot afford bugs here.** This codebase's flagship bug ran
@@ -127,10 +145,12 @@ already exists". You cannot implement this correctly from a summary.
 - **There is no legacy.** No users exist. No migration path, no compatibility shim, no
   deprecation warning, no old-format reader. Delete legacy branches on sight.
 - **A comment states a constraint the code can't show. Nothing else.** Not what the line does.
-  Not where it came from. Not that it's good. This repo has ~884 comments that break this
+  Not where it came from. Not that it's good. This repo had ~884 comments that break this
   rule, written by models congratulating themselves; do not add the next one.
-  *(The figure was 139 in the first draft, measured against an older, smaller tree. Re-measured
-  2026-07-16 across 2,147 comment blocks.)*
+  *(139 in the first draft; re-measured 2026-07-16 at ~884 across 2,147 comment blocks. **It has
+  not been measured since, and the tree has roughly quadrupled** — `src/` carries 8,896 comment
+  lines as of 2026-07-26. Treat 884 as a historical figure, not a current one: the sweep over the
+  old comments is unfinished and is recorded that way in Phase 0 and in F3.)*
 
 ### Lessons from the 2026-07-17 review pass
 
@@ -140,13 +160,24 @@ paths, security) produced the `R*` and `SEC*` lists under **Phase 5**. The lesso
 - **Stale status drifts *both* ways.** This session the HEAD header lied *downward* — it said
   "Phases 3–6 not started" while a dozen Phase 3–5 items were done with commits behind them.
   Re-run the command; never trust a status line's direction. (Reinforces rules 9–11.)
-- **`R1–R23` are owner-approved fixes. `SEC1–SEC7` are recorded vulnerabilities whose solutions
-  are NOT yet decided — do not implement a SEC fix until the owner rules** (the one exception is
-  SEC7, a straight NO-LEGACY delete of dead code).
+- **`R1–R23` are owner-approved fixes — all done 2026-07-19. `SEC1–SEC7` were recorded
+  vulnerabilities held back for a decision, and that decision has been made: all seven are now
+  closed** (SEC1/SEC2 landed 2026-07-19, SEC4–SEC6 the same day, SEC7 deleted as dead code,
+  SEC3's confinement half ruled **won't-fix** with only the outside-home confirmation built).
+  *This bullet said "NOT yet decided — do not implement a SEC fix until the owner rules" for a
+  week after the owner ruled and the fixes shipped.* The standing rule it encoded is still
+  right and still applies to the next one: **a recorded vulnerability is not a licence to invent
+  a fix** — the shape of the defence is the owner's call, because every one of these has a
+  cheap version that closes the report and leaves the class.
 - **A "feature" that hand-rolls its own transaction/graph parallel to `sync` is a second engine to
   delete, not maintain.** Teleport and the `shim` command were imperative shortcuts for "edit the
   file, sync" — and teleport's private transaction *bypassed the guard* (a real safety hole). When
   you find a command doing the machine's core loop by itself, that is the bug.
+  **The follow-up matters as much as the finding:** what had to go was the private *engine*, not
+  the verb. `teleport` was later re-added as `retarget` + `handle_sync` — a line edit that syncs,
+  behind the guard like everything else — and it is in II.8's table today. `shim` did not come
+  back, because `shim:` as a line already covers it. **"Delete the second engine" is not "delete
+  the convenience"**; the test is whether the command routes through `sync`.
 - **When you surface a redundant feature, the teardown shape is yours to choose; that it goes is
   the owner's ruling.** State NO-LEGACY and that better code already exists (usually "edit the file,
   sync"); do not agonize over helper-vs-delete.
@@ -172,8 +203,18 @@ Three consequences, and they are rules, not observations:
    an interrupted operation can delete, and every one of them is outside the plan the user read.
    They need the guard *more* than the ordinary paths, not less, because nobody is watching.
 
-- **The security soft spot is the download/link backends.** The core is safe — every PM command is
-  argv (no `sh -c`), the II.12 hook ledger is enforced on every path, archive extraction rejects
-  `..`. But `web`/`appimage`/`github`/`link` take untrusted URLs and `@`-options straight to the
-  filesystem: validate `@`-option paths (no `..`/separators/absolute escapes) and enforce
-  TLS+checksum before making a downloaded file executable and putting it on PATH.
+- **The security soft spot was the download/link backends, and that batch has landed.** The core
+  was already safe — every PM command is argv (no `sh -c`), the II.12 hook ledger is enforced on
+  every path, archive extraction rejects `..`. The rest closed across 2026-07-19 and 2026-07-23:
+  **SEC1** `@bin` confinement (`[guard] confine_bin`, default on), **SEC2** HTTPS + checksum by
+  default with `@allow_http` and `@unverified` as separate, never-implied opt-outs, **SEC4–SEC6**
+  the injection/module-name hardening, **SEC7** the dead Lua exec path deleted. **SEC3 is decided
+  as won't-fix:** `@target` stays unconfined — placing files outside `$HOME` is the feature — and
+  only the outside-home confirmation was built. The secrets defects that outlived them are also
+  fixed: **T2** (a decrypted secret refused a destination inside the git repo, checked *before*
+  the tool is launched), **T5** (the plaintext is restricted before it exists, on all three
+  platforms, with the Windows ACL done rather than excused) and **T1** (decrypt mode never backs
+  up, so the previous secret cannot be left in plaintext beside the new one).
+  **What is still owed here is not in the download backends:** U31's ruling that a health-check
+  command rides the II.12 ledger is unbuilt, so an `@health=` command arriving with a pulled
+  config runs unapproved. That is the one runnable thing in the tree that the ledger does not see.

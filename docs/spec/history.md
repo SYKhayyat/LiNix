@@ -6,7 +6,189 @@
 says how far it got (P4).** Update it at the end of every session. Everything below was
 verified against the tree at the commit that last touched this section, not recalled.
 
-## Session 2026-07-24 — real-world validation, and making the read paths fast
+> **This file stopped being living for 52 commits, and that is the finding of the 2026-07-26
+> audit below.** It was last written at `c590036`; two sessions and the whole back half of Phase
+> 7 landed after it. Because Part III's build list was derived *from this file* rather than from
+> the tree, the plan then listed five shipped features as work still to do. **A living document
+> that is not updated is not merely out of date — it is a source other documents copy from**, and
+> the copy is what gets read. The rule at the top of this section is the fix and it was already
+> written: *update it at the end of every session.*
+
+## Audit 2026-07-26 — the specification checked against the tree, claim by claim
+
+**Nothing was built this session. The spec was made to match what was.** Every checkable claim in
+`docs/spec/` was re-derived from `src/` by grep, and the stale ones rewritten. What was wrong, in
+descending order of how much it would have cost the next person:
+
+- **Part VII (this file) was 52 commits behind** — see the note above.
+- **Part III's ordered build list was wrong about six of its eleven near-term items**, all in the
+  same direction: it listed as unbuilt work that had already shipped. `K2` (rebuild), `7c`
+  (backend bootstrap), `7d` (`sync --locked`), `7n` (dotfiles) and `7o` (`firewall:`) were
+  committed on 2026-07-24 — before the list naming them as remaining was written on 2026-07-26 —
+  and `T6` was sitting finished in the working tree. Two more (`7e`, `U31`) were listed as wholly
+  unbuilt when they are half built. **The list was assembled from this file, and this file did
+  not know.**
+- **The decision register's index claimed 59 open questions over 59 entries that each said
+  ANSWERED.** The three index tables — *Open and blocking — 13*, *Open, not blocking — 46*,
+  *Answered — 43* — were never touched as the rulings landed between 2026-07-23 and 2026-07-26.
+  The register is the one file whose entire purpose is to stop a settled question being re-argued,
+  and its front page was inviting exactly that. Rebuilt from the entries' own `Status:` lines:
+  **104 decisions, 102 ANSWERED, 2 PARKED, 0 OPEN.**
+- **Part II was missing three shipped statements.** `exec:`, `dotfiles:` and `firewall:` are in
+  `Statement`, are parsed, are tested and are documented in the readme — and II.2's statement
+  table did not list them. A grammar table that omits a shipped statement reads as the closed set
+  it is not. The option-key table was missing `scope`, `backup`, `runs`, `undo`, `value` and
+  `notify` for the same reason.
+- **Part II carried a rule the owner had reversed.** II.11b still said *"Scope is required. A bare
+  `linix rebuild` errors and names the three forms"* two days after K2 ruled warn-and-proceed and
+  `app/rebuild.rs` stopped bailing. This is the failure mode Part II is most dangerous in: it is
+  canonical, so a reader who found the code disagreeing with it would have "fixed" the code.
+- **Part II's II.10 enumerated seven removal paths; `GuardScope` has twelve.** The paragraph
+  directly above that list says *"a list is an assertion about what is absent"* and *"count the
+  paths from the code"* — and the list under it had not been. It is generated from the enum now.
+- **II.8's command table still listed `unmanaged`, `absent`, `status` and `doctor`** as commands,
+  eight days after U9 folded them into `check` and deleted the names.
+- **Part VI's G3 said `teleport` was deleted and the grep was silent.** It is not: a later session
+  re-added it as a declarative command, correctly, and II.8 lists it. A record of a deletion
+  outlived the deletion.
+- **Part V gained six entries** (V.66–V.71) and an addendum to V.49, because rules had been added
+  to Part II across four sessions without the matching *why* — which is the rule `CLAUDE.md` puts
+  above almost everything else.
+
+**What was checked and found true**, so it is not re-verified next time: Phase 0's deletion list
+(every II.17 entry is quiet in live code; the remaining hits are comments recording the bug each
+one caused); Phase 1's unification (every surviving `backend:name` splitter either is the grammar
+or consults the registry first, with the one in `context.rs:1336` validating on the next line);
+the guard's ten refusals against `Objection` + `Protection`; and the `[guard]` template test that
+holds four disarming keys out of the shipped config by assertion.
+
+**Not verified, and now marked as such:** Phase 0's *"delete the ~884 marketing comments"*. That
+figure was measured on 2026-07-16 against a smaller tree and has never been re-measured; `src/`
+carries 8,896 comment lines today and the marketing subset is a judgement no grep makes. It is
+recorded as unmeasured rather than as done.
+
+**The suite at the time of the audit:** `cargo test --lib` — **1139 passed, 0 failed**, which
+includes the uncommitted `@backup=no` work in the tree.
+
+## Session 2026-07-26 — the extension-surface round, ruled: U27–U38 and T6
+
+**Fifteen commits, no features. Every remaining open decision was put to the owner and ruled**,
+which is what took the register to zero-open. The through-line is XIII.33: a closed provider-list
+is a place where LiNix decided in Rust something the user could have declared in data.
+
+- **U27 — snapshot providers are a full plugin.** A registry beside `BackendRegistry`, providers
+  read from a file through 7a's one approval ledger, built-ins as rows. **Restore capability is a
+  required declared field, never inferred** — a provider that does not prove live restore is
+  create-only and refuses the rollback (V.60).
+- **U28 — the active provider is chosen by a declared priority list**, the `priority` shape:
+  first available in the list wins. Not by capability-guessing, not by registration order.
+- **U29 — macOS gets APFS**, declared **create-only**, because an APFS restore needs a reboot into
+  recovery and is therefore not a live undo.
+- **U30 — storage objects (zfs/lvm/btrfs) are one family**, and a `remove` that runs `zfs destroy`
+  goes through the **ordinary** guard gate — no special escalation — with a volume protectable
+  exactly like a package. zfs/lvm have no implementation; this is real new work.
+- **U31 — health checks are an open vocabulary.** A user-declared check command, argv, exit 0 =
+  healthy; a check that cannot run is a **failed** check; and it rides II.12's ledger like every
+  other runnable thing. *(The vocabulary half turned out to be already built — `Probe::Command`
+  takes any command. The ledger half is not.)*
+- **U36 — init systems become `[[init]]` rows**; the built-in enum becomes rows the same loader
+  reads. A row missing `start`/`stop` is refused, not half-used.
+- **U37 — notifications route through the existing event hook.** No new channel kind: a channel
+  beyond desktop/email is a 7j hook that shells out. Documentation, not mechanism.
+- **U38 — secret decryption opens to declared providers**, the T-series gate now being clear
+  (T1/T2/T5 fixed, T7 settled) — bound by the plaintext rules, and a provider that cannot promise
+  them is refused rather than trusted.
+- **U32 — modules take parameters**, and the user decides **per parameter** whether it is typed.
+- **U33 — generated declarations are built, AND `exec:` may do anything** — each behind its own
+  config key, off by default. **This overrode the recommendation and XIII.32's refusal**, and it
+  amends U3 and U4. The guard, the removal preview, the ledger and fail-loud are never waived; a
+  failed generator is a failed sync.
+- **U34 — `linix repl`, if it is easy.** The non-negotiable is a single engine: it shares the one
+  parser and resolver or it is not built.
+- **U35 — user-defined verbs are built**, and the owner widened it past the recommendation's
+  composition-only scope: a verb may run arbitrary commands, through U33's trust model.
+- **T6 — both sub-questions closed.** Per-line `@backup=no`, no machine-wide key; and no
+  orphan-cleanup command, because restore-on-teardown means backups cannot pile up.
+
+## Session 2026-07-24 (second half) — Phase 7 built, almost all of it
+
+**Thirty-seven commits (`c590036..HEAD` up to 2026-07-24), plus four immediately before them that
+this file never recorded at all** — `b772b71` (7b `exec:`), `2060d4b` (7d), `82d659d` (the
+`adapters/` folder, U10) and `8c2ec0b` (U19 `@scope`). **The phase that was going to take weeks
+landed in a day**, because 7a's loader and K17's adapter-table ruling meant most of these were
+rows and wiring rather than new mechanisms. Everything below is in the tree; each names its
+commit. Written retrospectively on 2026-07-26 from the log and the source, not from a session
+note — which is why it is shorter on reasoning than the entries above it, and why the rule at the
+top of this file exists.
+
+**The features:**
+
+- **7b `exec:`** — `b772b71`: run a script the config carries, once per content, keyed by content
+  hash in `locks/exec.toml` so a script that succeeds and makes its own condition false does not
+  flap. **`@undo=` (U3)** followed in `413c3a0`: what removing an `exec:` line means is `@undo=`
+  if the line carries one, and dropping the record and saying so if it does not — LiNix does not
+  invent an inverse for a script whose author did not write one.
+- **The `adapters/` folder (U10)** — `82d659d`. Three files, one folder, in the shareable config:
+  custom backends, setting stores and bootstrap rows all read by the one approved loader.
+- **S31/S32, found by the `tools` container image on its first run** — `9f5406e`. `mise`'s `info`
+  asked the plugin *catalogue* rather than the installed set, so the planner thought every mise
+  tool was already installed and `linix install mise:X` printed *already up to date* while
+  installing nothing — **every `mise:` line in every config was inert.** The sibling in the same
+  file: `list_installed` ignored mise's own `"installed": false`, so a tool stayed listed after
+  `mise uninstall`. No unit test could have reached either; none of them runs a real mise.
+- **7c backend bootstrap (U10)** — `ed0d996`. `adapters/bootstrap.toml`, through the ledger; the
+  command is printed in full and confirmed before it runs (P8: ask, then do).
+- **7d `sync --locked` (U11)** — `2060d4b`, and **generalised past the question asked**. `sync`
+  itself now defaults to the recorded version; `watch` inherits it; moving forward is
+  `--upgrade`. It was a live defect: `locks/versions.json` was read only under `--locked`, so a
+  machine rebuilt from a config got whatever upstream published that morning.
+- **7f health-checked upgrades (U7)** — `323215f`. Two scopes, one revert path; a declared check
+  with no snapshot provider is refused **before** the change (V.65).
+- **7g kernel/DKMS rebuild** — `fce6ae7`, verified against real DKMS in a container (`cfff4dc`):
+  a forced `linux-headers-generic` install drove `dkms autoinstall`, and an unbuildable module
+  failed the sync loudly at exit 1, before any reboot. Matcher narrowed in `3299b6b` so
+  `kernel-tools` and friends no longer trip it.
+- **7h `linix try` (U12)** — `a014ed0`. Config mounted read-only, container `--rm`; no runtime is
+  a refusal naming what is missing (`0bf1971` stopped it asserting what it could not know).
+- **7i the ten looking commands become one (U9)** — `5418def`. `check` with sections;
+  `doctor --fix`'s repairs moved to `heal`. **`check` looks, `heal` acts.** An `approvals`
+  section followed in `d8bf5d9` for event hooks that would otherwise silently not run.
+- **7j event hooks (U15)** — `85632eb`, with two real fixes on top: they read `[events]`, not
+  `[hooks]`, so they no longer double-fire (`d984791`), and `on_guard_refusal` fires where a
+  refusal becomes an exit code rather than inside the guard (`9660bbf`) — a side effect inside a
+  decision function runs wherever the decision is evaluated, including in tests, which would have
+  had `cargo test` executing the developer's own hooks.
+- **7k `linix eval` (U17)** — `afbae78`. Versioned JSON, no locks, repo-relative sources.
+- **7l `git blame` for a declaration** — `6d93235`. `why` names the commit from git's pickaxe;
+  nothing new is written at sync time to support it.
+- **7m the exit-code table (U21)** — `ed0d996` + `8837042`. Every guard refusal is
+  `Error::Refused` → exit 3, from one place; the install ceiling used to exit 1 while its
+  siblings exited 3.
+- **7n the dotfiles directory (U22–U25)** — `c7dea64`. Files, never directories; each file keyed
+  individually in the extras ledger so the teardown is the shared one; never decrypts.
+- **7o `firewall:` (N4–N7)** — `ca9466b`. Three adapter rows (`ufw`, `firewalld`,
+  `windows-defender`) in `firewall_adapters.toml`, and the session-port lockout check that is the
+  feature's precondition rather than one of its features.
+- **U2/U6/U26** — `d66730e`. First-class custom backends, Linux-only markings, and `when family`
+  answering correctly on a host with no `/etc/os-release` (never empty — an empty family is what
+  makes every `family ==` silently take the else branch).
+- **U14 `linix add`** — `daafadf`, covered in the container matrix by `c85b939`.
+- **U16/U13** — `780ae78`. Absolute-path binaries for a custom backend; `@runs=always` visible.
+- **U18 backend groups** — `8caddfe`. Named backend chains, nestable.
+- **U19 `@scope=user|system`** — `8c2ec0b`, on the three statements where it can vary.
+- **K2 rebuild warns-but-rebuilds** — `51bd3b1`.
+- **D11/D12/D14** — `5c50a5e`, `b66d662`. The default format order is versioned so a LiNix upgrade
+  cannot silently change it; `why` explains which rule chose the artifact.
+- **T3/T4 hardware-token decrypt** — `d0d159a`. Timeout, and an unattended tick skips rather than
+  hangs on a touch-required key.
+
+**Also:** `a135591` moved `after_sync` to fire **last**, after the check that can revert
+everything — a post-sync hook that ran before the health check could act on a machine that was
+about to be rolled back. `1a5131d` deleted the `BEHAVIOR.org` sections describing a program that
+no longer exists. `b4542e5` recorded U20 (LSP) as deferred: not "very easy", and `check` is the
+thin hook if it is ever wanted.
+
+## Session 2026-07-24 (first half) — real-world validation, and making the read paths fast
 
 **The Ubuntu container integration harness passed, run for real** (`DISTROS=ubuntu
 ./docker/integration/run.sh`, via Docker in WSL — recorded in memory). 271 hard checks, 0 fail, 5

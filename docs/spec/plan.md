@@ -2,18 +2,26 @@
 
 *[LiNix v7](../SPEC.md) — the map is there; this is one part of it.*
 
-## What is left to build — the ordered list (2026-07-26)
+## What is left to build — the ordered list (re-derived from `src/`, 2026-07-26)
 
 **This is the single view of remaining work, in the order to build it.** Every decision it
-depends on is now ruled — `decisions.md` is at zero-open. Detail for each item is in its Phase
+depends on is ruled — `decisions.md` is at zero-open. Detail for each item is in its Phase
 section below; this list is the sequence, not the spec.
 
-**Where the frontier is (verified against `history.md`, session 2026-07-24):** Phases 0–6 are
-built and the container matrix (ubuntu/fedora/arch/alpine/tools) is green, run for real. **The
-flagship VI.0 bug (S24/S25 — interrupted-install recovery removed a package past the guard) is
-FIXED** (session 2026-07-23, sixteenth) — so the "VI.0 first" warning at the top of `SPEC.md` is
-now stale; it is no longer the blocker. Phase 7a–7m are built (7c/7d/7e/7n/7o excepted). What
-remains is below, and nothing in it is blocked on a decision any more.
+> **The previous version of this list was written from `history.md` and was wrong about six of
+> its eleven near-term items**, all in the same direction: it listed as unbuilt work that had
+> already shipped. **K2** (`51bd3b1`), **7c** (`ed0d996`), **7d** (`2060d4b`), **7n** (`c7dea64`)
+> and **7o** (`ca9466b`) were all committed on 2026-07-24 — *before* that list was written on
+> 2026-07-26 — and **T6** was sitting finished in the working tree. Two more were listed as
+> wholly unbuilt when they are half built (`7e`, `U31`). **`history.md` was 52 commits behind
+> when it was consulted**, and a list derived from a stale source is stale however carefully it
+> is reasoned. Every line below is re-derived from the tree by grep, with the file that proves it
+> named; **rule 9 applies to a build list exactly as it applies to a ✅.**
+
+**Where the frontier is.** Phases 0–6 are built and the container matrix
+(ubuntu/fedora/arch/alpine/tools) is green, run for real. **The flagship VI.0 bug (S24/S25 —
+interrupted-install recovery removed a package past the guard) is FIXED** (session 2026-07-23,
+sixteenth). **Phase 7 is built except 7e (half) and 7p (not started)** — see the phase section.
 
 **Order is by dependency and blast radius, not size** — the safe, additive, foundational work
 first; the two things that can destroy data or leak a secret (storage removal, secret providers)
@@ -21,63 +29,113 @@ last, after the mechanism they ride is proven.
 
 ### Tier 1 — small ruled fixes (additive, low-risk, clears the register backlog)
 
-1. **K2** — a bare `linix rebuild` warns loudly, then rebuilds all (replace the old refusal/`bail`).
-2. **D3b** — download-only artifacts: `web:`/`github:` may fetch without installing, and this is
-   the default when a fetched thing cannot be installed. Removed when the line goes.
-3. **D5** — `github:`/`web:` may install a file (a `.deb` to `dpkg`); the lock records the
+1. **D5** — `github:`/`web:` may install a file (a `.deb` to `dpkg`); the lock records the
    installing backend, and that backend owns removal, upgrade and dedup (`check` never double-counts).
-4. **K4** — `clean_cache_on_remove` on download backends, plus a user cache pointer and a search
-   of the common cache locations.
-5. **D13** — a `channel` change refreshes in place; a channel *downgrade* routes through the plan
-   and the guard.
-6. **T6** — the per-line `@backup=no` opt-out.
+   *(Unbuilt: `github.rs` still says a `.deb` "would have to be handed to `dpkg`". The riskiest of
+   the four — it runs `dpkg`/`rpm` and needs a real apt box to verify cross-backend dedup, so it
+   was left for a session that can test it rather than built blind.)*
 
-### Tier 2 — the remaining Phase-7 parity features
+**Done since this list was last written, and struck from it:**
 
-7. **7c** — backend bootstrap: obtain a declared-but-missing manager (ask first, then install).
-8. **7d** — `sync --locked` / default-to-recorded-version (U11). *Verify first: the U11 entry
-   reads as already built; if so, close it and skip.*
-9. **7e** — `setting:` everywhere, not just GNOME (U5/K7/K17/U19 all ruled): Windows registry
-   first (`@scope` default user, U19), then KDE, COSMIC, and a decision on Hyprland.
-10. **7n** — the dotfiles directory (U22–U25): a tree whose layout is the declaration; per-file
-    links, collisions previewed, never decrypts.
-11. **7o** — `firewall:` (N1–N7): Windows Defender + one Linux adapter, on K17's adapter table;
-    the session-port refusal is its precondition, on every path that can close a port.
+- ~~**D3b** — download-only artifacts.~~ **BUILT** (session 2026-07-26; `ArtifactOptions.download_only`,
+  `@download_only` refused off download backends, and the github default-when-uninstallable path in
+  `github.rs`; web/appimage skip the deploy step). Still removed when the line goes.
+- ~~**K4** — `clean_cache_on_remove` + cache pointer + common-location search.~~ **BUILT**
+  (`config::{clean_cache_on_remove, cache_dirs}`, `model/cache.rs` — exact-name match, regular
+  files only, bounded depth; wired into github/web/appimage remove).
+- ~~**D13** — channel change refreshes in place; a downgrade is named.~~ **BUILT** (snap `info`
+  reads `tracking:`, planner detects a readable channel change, `snap install` switches in place via
+  `snap refresh --channel=`, a downgrade named loudly). Scope: snap wired; flatpak stays inert
+  (readable-only check, so no refresh loop) until its channel is parsed.
 
-### Tier 3 — declared providers (Phase 7p): build the mechanism, then rows, safest-first
+**Earlier, and struck from it:**
 
-12. **U27 — the provider mechanism.** A snapshot-provider registry + config-driven providers read
-    through 7a's one approval ledger; built-in providers become rows in it. **Restore-capability
-    is a required declared field, never inferred** (a provider that can't restore a running
-    machine is create-only and refuses the rollback). *Everything below in this tier rides this.*
-13. **U36 — init systems** as `[[init]]` rows (lowest risk: start/stop/enable, no data destroyed).
-14. **U31 — user-declared health checks** (argv, exit 0 = healthy; a check that can't run is a
-    failed check).
-15. **U37 — notifications**: documentation only — route Slack/webhooks through the existing 7j
-    event hook; no new mechanism.
-16. **U26 — BSD backends** (FreeBSD `pkg`, OpenBSD `pkg_add`) — ordinary backends, independent of
-    the mechanism.
-17. **U28 — snapshot-provider priority list** (choose the active provider by a declared order,
+- ~~**K2** — a bare `linix rebuild` warns loudly, then rebuilds all.~~ **BUILT** (`51bd3b1`;
+  `main.rs:712`, `app/rebuild.rs:14`). The old `bail` is gone. II.11b and V.49 now carry the ruling.
+- ~~**T6** — the per-line `@backup=no` opt-out.~~ **BUILT and committed** (session 2026-07-26;
+  `backends/link.rs::wants_backup`, `LINK_OPTION_KEYS`, test `backup_no_opts_a_single_line_out_of_the_backup`).
+
+### Tier 2 — Phase-7 parity: DONE
+
+5. ~~**7e** — `setting:` everywhere.~~ **BUILT** (session 2026-07-26). K17's adapter table +
+   U19's `@scope` were already there; this added the **Windows registry** row
+   (`setting_stores.toml`, HKCU/HKLM folded into the argv so `@scope` picks the hive, `already_set`
+   understands `reg query`'s verbose output for idempotency — verified against a real Win11 host).
+   **KDE, COSMIC and Hyprland are ruled, in the table's own comments:** KDE needs three-part
+   addressing (file+group+key) the two-part `SCHEMA/KEY` model cannot express yet; COSMIC is a file
+   tree, not a command store; **Hyprland is NOT a `setting:`** — its truth is a text file `link:`
+   already owns. So the mechanism is complete and open; the two remaining stores need address-model
+   work (recorded), not a row.
+
+**Done since this list was last written, and struck from it:**
+
+- ~~**7c** — backend bootstrap.~~ **BUILT** (`ed0d996`; `model/bootstrap.rs`,
+  `App::offer_bootstrap` at `main.rs:577`, `adapters/bootstrap.toml` through the II.12 ledger).
+- ~~**7d** — `sync --locked` / default-to-recorded-version (U11).~~ **BUILT** (`2060d4b`), and
+  generalised past the question asked: `sync` itself defaults to the recorded version, `watch`
+  inherits it, and moving forward is `--upgrade`.
+- ~~**7m** — the exit-code table (U21).~~ **BUILT** (`ed0d996`, `8837042`): every guard refusal is
+  `Error::Refused` → exit 3, from one place.
+- ~~**7n** — the dotfiles directory (U22–U25).~~ **BUILT** (`c7dea64`; `model/dotfiles.rs`,
+  `Statement::Dotfiles`, `App::plan_dotfiles`).
+- ~~**7o** — `firewall:` (N1–N7).~~ **BUILT** (`ca9466b`; `backends/firewall.rs`,
+  `firewall_adapters.toml` with `ufw`/`firewalld`/`windows-defender` as rows, `model/firewall.rs`).
+
+### Tier 3 — declared providers (Phase 7p): the snapshot-provider cluster remains
+
+**The three items independent of the snapshot mechanism are built (session 2026-07-26); the
+snapshot-provider cluster (U27 and everything that rides it) remains.** `core/snapshot.rs:528`
+still hardcodes the four providers into a `Vec` in `SnapshotManager::new`.
+
+6. **U27 — the provider mechanism.** A snapshot-provider registry + config-driven providers read
+   through 7a's one approval ledger; built-in providers become rows in it. **Restore-capability
+   is a required declared field, never inferred.** *Everything below in this tier rides this.*
+   **Session 2026-07-26 note — the safe plan, not yet built:** the *additive* half (a
+   `ConfigSnapshotProvider` from a TOML row, restore-capability declared, ledger-approved,
+   registered LAST so it never shadows a built-in) is safe and is what delivers the user value —
+   new providers as data. **The ruling's "built-ins become rows too" half was deliberately NOT
+   done blind:** btrfs/zfs restore and Windows System Restore cannot be validated on this host (no
+   btrfs/zfs box; testing Windows System Restore mutates the live machine), and Windows System
+   Restore is typed-PowerShell that cannot become safe argv-data without reintroducing SEC5. Both
+   need real hardware / an owner ruling on the SEC5 tension. Rewriting the tested safety net blind
+   is the one thing "we cannot afford bugs here" forbids.
+7. **U36 — init systems** as `[[init]]` rows (lowest risk: start/stop/enable, no data destroyed).
+   *Not built this session — its `plan_service` argv tests make the enum→table conversion safe to
+   do here, so it is the cleanest of the remaining refactors; deferred for time, not risk.*
+8. ~~**U31 — the ledger half of user-declared health checks.**~~ **BUILT** (session 2026-07-26).
+   A `Probe::Command` rides the II.12 ledger: `linix lock` approves every declared health command,
+   and `sync` refuses before the change if any is unapproved (a check that cannot run is a failed
+   check). Port probes run no code and are never gated. `hook_lock::health_id`,
+   `SyncEngine::require_health_commands_approved`, `main::approve_health_checks`.
+9. ~~**U37 — notifications**: documentation only.~~ **DONE** (session 2026-07-26; `readme.md` carries
+   a copyable Slack/webhook `hooks/after_sync`, and the ruling that there is no `[[channel]]` block).
+10. ~~**U26 — BSD backends** (FreeBSD `pkg`, OpenBSD `pkg_add`).~~ **BUILT** (session 2026-07-26;
+    `register_pkg_freebsd`/`register_pkg_add_openbsd`, `parsers/bsd.rs`; needed `ManagerConfig.remove_binary`
+    for OpenBSD's separate `pkg_delete`, which also opens separate-remove-binary to custom backends).
+11. **U28 — snapshot-provider priority list** (choose the active provider by a declared order,
     like package `priority`).
-18. **U29 — macOS APFS provider**, declared create-only (restore needs recovery-mode reboot).
-19. **U30 — storage objects** (zfs datasets, lvm volumes) as one family — **the `remove` path
+12. **U29 — macOS APFS provider**, declared create-only (restore needs recovery-mode reboot).
+13. **U30 — storage objects** (zfs datasets, lvm volumes) as one family — **the `remove` path
     destroys a filesystem, so it goes through the guard (normal gate), and a volume is
     protectable like a package.** zfs/lvm have no implementation today; this is real new work.
-20. **U38 — secret-decryption providers** (sops/Vault/1Password/KMS/GPG) — **last, and the most
+14. **U38 — secret-decryption providers** (sops/Vault/1Password/KMS/GPG) — **last, and the most
     dangerous**: bound by the T-series plaintext rules; a provider that can't promise them is
     refused, not trusted.
 
 ### Tier 4 — the language-power features (the "emacs-lisp power", all ruled 2026-07-26)
 
-21. **U32 — module parameters** (`param`, `use mod(x=y)`); types opt-in, the user's choice per
+**Nothing in this tier is built.** No `param` keyword in the grammar, no user-verb registry, no
+generated-declaration key, no `repl` subcommand.
+
+15. **U32 — module parameters** (`param`, `use mod(x=y)`); types opt-in, the user's choice per
     parameter; a missing required parameter is a loud error.
-22. **U35 — user-defined verbs**: safe composition of built-in verbs, ungated; arbitrary-command
+16. **U35 — user-defined verbs**: safe composition of built-in verbs, ungated; arbitrary-command
     verbs ride U33's key + ledger.
-23. **U33 — generated declarations AND `exec:`-can-do-anything**, each behind its own config key
+17. **U33 — generated declarations AND `exec:`-can-do-anything**, each behind its own config key
     (off by default). Output still passes the guard, the removal preview and the ledger; a failed
     generator is a failed sync. **The riskiest capability — build it after the mechanism above is
     proven.**
-24. **U34 — `linix repl`** (build if easy; must share the one parser/resolver, never a second
+18. **U34 — `linix repl`** (build if easy; must share the one parser/resolver, never a second
     implementation).
 
 ### Deferred by ruling (build later, on a trigger — not now)
@@ -103,13 +161,31 @@ new model deletes the flag instead. Do not try to preserve it.
 
 ## Phase 0 — Delete
 
-> **⚠ Marked ✅ elsewhere in this document. It is not done** (audited 2026-07-17, twice;
-> Part VII). The `-g` *flag* is gone. **`keep.txt` and `_active_profiles.txt` are now genuinely
-> dead** (Phase 2e/2f); `groups_dir` (≈51 refs, was 84), `prune` and `migrate` (606 lines) are
-> still live, and **`local.txt` still has readers** — `insight.rs:418` `line_declares`, which
-> Part VII wrongly recorded as deleted.
-> **The reason it matters is in this section's own first line:** *do this first so nothing is
-> carefully ported that was about to be deleted.* That is now happening.
+> **DONE — re-verified by grep 2026-07-26, and this block is kept because of what it used to
+> say.** It read "not done" through three audits while the tree caught up with it. It is now
+> quiet everywhere it pointed:
+>
+> | it said | today |
+> |---|---|
+> | `groups_dir` ≈51 refs | **1**, and it is a comment in `insight.rs:399` saying what the code *used to* crawl |
+> | `prune` and `migrate` still live (606 lines) | **gone.** No `Commands::Prune`, no `Migrator`; the surviving `prune_with_policy` is snapshot retention (II.13), not the deleted command |
+> | `local.txt` still has readers (`insight.rs:418` `line_declares`) | **gone.** `line_declares` does not exist; every `local.txt` hit is a test fixture or a comment |
+> | `keep.txt` / `_active_profiles.txt` dead | still dead, and now only named in comments explaining why |
+>
+> **Every II.17 entry is quiet in live code.** `group:`, `include:`, `host-*.txt`,
+> `bloatware.txt`, `policy.toml`, `locks.json`, `ghosts.json`, `locksig.rs`, `prune_on_sync`,
+> `prune_scope`, `protect_imperative`, `purge_orphans`, `cache_ttl`, `confirm_destructive`,
+> `remove_bloatware`, `timeshift_path`, `backend_priority`, `enabled_backends`,
+> `hostname_backends`, `default_backend` — each remaining hit is a comment recording the bug it
+> caused, and `the_template_documents_no_setting_that_would_disarm_the_guard` (`main.rs:6230`)
+> holds four of the dangerous ones out of the shipped template by test. `github_token` moved to
+> the environment exactly as II.17 says (`github.rs:801` reads `GITHUB_TOKEN`).
+>
+> **What is NOT verified: the comment count.** Phase 0 also asks for the ~884 marketing comments
+> to go. That figure was measured on 2026-07-16 against a smaller tree and **has never been
+> re-measured**; `src/` now carries 8,896 comment lines in total, of which the marketing subset
+> is a judgement call no grep makes. Treat the deletion half of Phase 0 as done and the comment
+> half as unmeasured — not as done.
 
 **Pure subtraction. Nothing new can break. Tests stay green except those testing deleted
 features.** Do this first so nothing is carefully ported that was about to be deleted.
@@ -121,16 +197,25 @@ Delete everything in II.17. Delete the ~884 marketing comments. Delete every leg
 
 ## Phase 1 — One parser and the grammar
 
-> **⚠ Marked ✅ elsewhere in this document. Half done** (audited 2026-07-17, Part VII).
-> **The grammar is built and it is good. The unification never happened:** `grammar/statement.rs`
-> was added *alongside* the other parsers rather than substituted for them. The bullet directly
-> below is the unmet one — it is a *replacement*, not an addition, and the ✅ was awarded for the
-> addition. **Re-audited 2026-07-17: it is now three skippers, not six** (`insight.rs:428`,
-> `manifest.rs:90`, `main.rs:1378`) — **and the bullet's own citation has rotted: `resolver.rs:212`
-> no longer parses anything**, because Phase 2d rewired it onto `model::Resolver`. The count in
-> that bullet is wrong in the direction this document never errs in — **the tree got better and
-> the doc did not notice.** Do not read this as licence to trust it; read it as the tripwire
-> working.
+> **DONE — the unification landed, re-measured by grep 2026-07-26.** This block spent three
+> audits saying "half done", each time with a smaller number, and the last two of those numbers
+> were already stale when written. **Every `backend:name` splitter in the tree now either is the
+> grammar or validates against the registry:**
+>
+> | site | what it splits | why it is not C13 |
+> |---|---|---|
+> | `config/grammar/statement.rs:366`, `:660` | the real thing | **it is the one parser** |
+> | `config/parser.rs:226` (`split_removal_target`) | a removal target | consults the registry before trusting the prefix |
+> | `app/context.rs:1336` | `repo:<backend>:<spec>` from LiNix's own extras ledger | `registry.get(backend)` on the next line, and errors by name if absent |
+> | `core/extras_lock.rs:62` | an extras-ledger key LiNix wrote | not a user-authored line at all |
+> | `model/resolve.rs:964` | the name half of an already-resolved key | the backend half was decided upstream |
+> | `parsers/ecosystem.rs:298` | `name:ver` | not a backend prefix |
+> | `app/eval.rs:76`, `config/grammar/error.rs:39`, `model/kernel.rs:103` | `file:line`, dkms output | not package syntax |
+>
+> **The prior citations rotted in the direction this document never errs in — the tree got
+> better and the doc did not notice.** `insight.rs`'s splitter, `manifest.rs`'s and `main.rs`'s
+> are all gone, and `resolver.rs:212` stopped parsing anything in Phase 2d. That is the tripwire
+> working, not licence to trust the next count without running it.
 
 **C13 and the grammar are one job, not two.** The grammar *is* the parser; unifying five
 parsers against the old grammar just to rewrite them is work done twice.
@@ -836,7 +921,7 @@ implementing agent's call; that it goes is not.**
   documented in the code before it was found in review. Both comments now state the rule that
   holds. Covered by `an_aged_out_crash_is_still_healable`.
 
-### Security — the 2026-07-17 review pass (PROBLEMS RECORDED, approaches DECIDED, most unimplemented)
+### Security — the 2026-07-17 review pass (ALL SEVEN CLOSED; kept for the reasoning)
 
 > **DEFERRED BY THE OWNER (2026-07-17): SEC1–SEC6 are consciously parked, to be decided and
 > fixed in a later dedicated pass — not forgotten.** The owner reviewed a proposed decision batch
@@ -863,8 +948,14 @@ implementing agent's call; that it goes is not.**
 > again.
 
 Unlike R1–R23 above (owner-approved fixes), these were recorded vulnerabilities held back from
-implementation until the owner ruled on the approach. **All six approaches are now ruled on;**
-what remains is the deferred pass for SEC1–SEC3, and the early batch for SEC4–SEC6. A pass 5
+implementation until the owner ruled on the approach. **All seven are now closed** (re-checked
+2026-07-26): SEC1 (`[guard] confine_bin`, default on) and SEC2 (HTTPS + checksum by default, with
+`@allow_http` and `@unverified` as separate opt-outs that never imply each other) landed
+2026-07-19; SEC4–SEC6 landed the same day; SEC7 was deleted as dead code; **SEC3's confinement
+half is ruled won't-fix** — `@target` stays unconfined because placing files outside `$HOME` is
+the feature — and only its outside-home confirmation was built. Nothing in this section is owed.
+The entries stay because each records the exploit and the reasoning behind the shape of the
+defence, and the next `@`-option that reaches the filesystem will need both. A pass 5
 security review confirmed the core is sound — every package-manager command is built as argv
 (no `sh -c`, no `format!`-into-shell), the II.12 hook-approval ledger is enforced on every
 hook-exec path, sudo is argv not a string, and archive extraction rejects `..`/absolute members.
@@ -1132,12 +1223,18 @@ was that the point is not what the document says but what gets built, so the app
 listed here, in Part III, where the work lives — and each carries the one command that shows it
 is done.
 
+**Status, re-derived from the tree 2026-07-26: 7a–7d and 7f–7o are BUILT; 7e is half-built (the
+adapter table exists, only the `gsettings` row ships); 7p is not started.** Each done item below
+names the commit and the file that proves it.
+
 **The theme is that LiNix stops being a fixed set of things it knows how to do.** Three axes of
 extension already half-exist and are finished here: conditions are user-programmable (Part IX's
-providers — built), backends are user-programmable (the onboarder — built but marooned on one
-machine), and actions become user-programmable (`exec:` — not built). With all three, a user
-adds a capability LiNix has never heard of without touching the binary. That is the whole of
-this phase's ambition, and two of the three legs are already standing.
+providers — built), backends are user-programmable (the onboarder — built, and no longer marooned
+on one machine: 7a moved the definitions into the config repo), and actions become
+user-programmable (`exec:` — **built**, 7b/`b772b71`, with `@undo=` in `413c3a0`). With all
+three, a user adds a capability LiNix has never heard of without touching the binary. **All three
+legs are now standing** — which is what makes 7p, the fourth surface (providers), the item that
+finishes the argument rather than opens it.
 
 **Order is by dependency and by blast radius, not by size.**
 
@@ -1190,8 +1287,10 @@ by declared path (*is this allowed to run?*), `locks/exec.toml` by content (*has
 run?*). A script edited after approval is therefore both unapproved and un-run, which is the pair
 you want.
 
-**Deliberately not built, and why:** `@undo=` and dropping the lock row when a line is deleted.
-Both are **U3**, still open. The row is *never* dropped, which is the safe direction — the
+**Not built when 7b landed, and why:** `@undo=` and dropping the lock row when a line is deleted.
+Both were **U3**, which was **ruled 2026-07-24 and `@undo=` shipped in `413c3a0`** — removing a
+line runs `@undo=` if it carries one, and otherwise drops the record and says so. The row is
+*never* dropped, which is the safe direction — the
 expensive bug XIII.3 warns about is a dropped row making a flapping condition re-run the script,
 whereas a row left behind for a deleted line is an unused entry that does nothing. An orphan-row
 GC needs the resolver to report `when`-false exec hashes so it can tell "condition off" from
@@ -1201,14 +1300,29 @@ GC needs the resolver to report `when`-false exec hashes so it can tell "conditi
 test asserting it: wiring a verb into a ledger built for nouns is how the un-enrol bug gets in
 through the back door.
 
-**7c — Backend bootstrap (XIII.9, U10).** The declared-and-missing manager is obtainable, by
-asking first and then doing it. **Exit:** on a machine with no Homebrew, a config declaring
-`brew:` explains what it would run, and — on yes — the next sync installs the package.
+**7c — Backend bootstrap (XIII.9, U10). DONE 2026-07-24** (`ed0d996`). The declared-and-missing
+manager is obtainable, by asking first and then doing it: `adapters/bootstrap.toml` carries
+`[[bootstrap]]` rows (`model/bootstrap.rs`), read through II.12's approval ledger like every
+other `adapters/` file, and `App::offer_bootstrap` (`main.rs:577`) prints the command in full and
+confirms before running it — never inform-and-leave, never act unasked (P8). **Exit:** on a
+machine with no Homebrew, a config declaring `brew:` explains what it would run, and — on yes —
+the next sync installs the package.
 
-**7d — `sync --locked` (XIII.10, U11).** **Exit:** a machine whose index has moved on fails with
-the package, the locked version and the offered one, and changes nothing.
+**7d — `sync --locked` (XIII.10, U11). DONE 2026-07-24** (`2060d4b`), **and generalised past the
+question that was asked.** U11 asked whether `watch` implies `--locked`; the answer is that it is
+not a watch question. `sync` itself now defaults to the recorded version, `watch` is sync with
+nobody watching and inherits it, and moving forward is `--upgrade`. It was a live defect, not a
+missing feature: `locks/versions.json` was read **only** under `sync --locked`, so a machine
+rebuilt from a config installed whatever upstream had published that morning — the exact
+reproducibility claim the lock exists to make. **Exit:** a machine whose index has moved on fails
+with the package, the locked version and the offered one, and changes nothing.
 
-**7e — `setting:` works everywhere, not on one desktop (XIII.4, U5, K7, K17, P7).** Ruled
+**7e — `setting:` works everywhere, not on one desktop (XIII.4, U5, K7, K17, P7). HALF BUILT —
+the mechanism landed, the rows did not.** Built: K17's adapter table
+(`backends/setting_stores.toml`, parsed by the loader a user's own row goes through) and U19's
+`@scope=user|system` (`model/scope.rs`, `8c2ec0b`). **Not built: every row but one.** The shipped
+table holds `gsettings` and nothing else — which is the state the ruling below was written to
+end, so the item is not closed by the mechanism existing. Ruled
 2026-07-23: **`gsettings` is a stage, not the answer**, and the only adapter that exists is the
 one store the owner does not run. `setting:` adapts to whatever the machine is actually running —
 the list below is a priority order, not the set.
@@ -1219,8 +1333,11 @@ because an adapter mechanism the built-ins bypass is one nobody has tested. **Th
 every adapter below** — the second adapter is where the shape sets, and four hard-coded arms
 nobody can extend is the shape this ruling exists to prevent.
 
-1. **Windows registry.** `HKCU` or `HKLM` is **U19**, still open, and it must be answered before
-   the first line — whatever this picks becomes the convention macOS `defaults` inherits.
+1. **Windows registry.** `HKCU` or `HKLM` was **U19**, and it is **answered and built**
+   (`8c2ec0b`, `model/scope.rs`): `@scope=user|system` is asked on the three statements where it
+   can vary — `setting:`, `link:`, `shim:` — and defaults to whatever the underlying store does
+   anyway, so `@scope=` is written only to override. Writing the default is not an error. **The
+   ruling is done; the registry row itself is not written.**
 2. **KDE** — `kreadconfig`/`kwriteconfig`. Ini files with no schema, so *reading the current
    value* is the hard half, and it is the half X.4 requires.
 3. **COSMIC** — the file tree under `~/.config/cosmic/`, one file per key.
@@ -1283,22 +1400,31 @@ written to support it. **Exit:** asking about a declared package names
 the commit that introduced it, its date and its message, and the implementation reads git —
 `grep` finds no new store written at sync time to support it.
 
-**7m — The exit-code table (XIII.20, U21).** Not a feature; a decision applied everywhere at
-once. **Exit:** 0/1/2/3 mean the same thing in every command that can produce them, a guard
-refusal is 3 and nothing else is, and the table is in the readme.
+**7m — The exit-code table (XIII.20, U21). DONE 2026-07-24** (`ed0d996`, `8837042`). Not a
+feature; a decision applied everywhere at once. Every guard refusal funnels through
+`guard::refuse` into `Error::Refused` → exit 3, from one place — the install ceiling used to
+return `Error::Other` and exit 1 while its siblings exited 3. `on_guard_refusal` fires where the
+refusal becomes an exit code, not inside the decision function (`9660bbf`), so evaluating the
+guard in a test cannot run the developer's own hooks. **Exit:** 0/1/2/3 mean the same thing in
+every command that can produce them, a guard refusal is 3 and nothing else is, and the table is
+in the readme.
 
-**Decided before 7e, not during it: user-or-system scope (XIII.17, U19).** The registry adapter
-cannot be written without an answer — `HKCU` and `HKLM` are a choice with no safe default — and
-whatever it picks becomes the convention for macOS `defaults` too.
+**Decided before 7e, not during it: user-or-system scope (XIII.17, U19). ANSWERED AND BUILT
+2026-07-24** (`8c2ec0b`). The registry adapter could not be written without an answer — `HKCU`
+and `HKLM` are a choice with no safe default — and what it picked is now the convention macOS
+`defaults` inherits: `@scope=user|system`, defaulting to whatever the store does anyway.
 
 **Not in this phase, and deliberately: sharing (XIII.14).** It is blocked on **U14**, the
 question of what makes a vendored module safe to run once `exec:` exists. Building the
 convenient half first is how this ends badly.
 
-**7o — `firewall:` (Part XI, N1–N3 ruled 2026-07-23).** Approved to build, and it rides K17's
-adapter table rather than being five Rust backends — so it comes after that work, not before.
-Windows Defender Firewall and one Linux adapter (`ufw` or `firewalld`) are the first set; P7
-means Windows is not a later phase.
+**7o — `firewall:` (Part XI, N1–N7). DONE 2026-07-24** (`ca9466b`). It rides K17's adapter table
+rather than being five Rust backends: `backends/firewall_adapters.toml` ships **three** rows —
+`ufw`, `firewalld` and `windows-defender` — parsed by the same loader a user's own row goes
+through, so P7's "Windows is not a later phase" held. `Statement::Firewall` carries
+`firewall:22/tcp` and `firewall:default/incoming @value=deny`; a default policy with no `@value=`
+is refused by name, because a default with no value declares nothing and is the most
+consequential line in a firewall.
 
 **The session-port refusal is not a feature of this item, it is its precondition.** LiNix detects
 the port carrying the controlling connection and refuses any plan that would deny it — on every
@@ -1311,21 +1437,31 @@ changed out of band is reported by name rather than by file; a plan that would c
 carrying the session is refused naming the port and the rule, from `sync`, from
 `purge-unmanaged`, and from a `watch` tick.
 
-**7n — the dotfiles directory (XIII.21, U22–U25).** **Exit:** a file added under the dotfiles
-tree appears at its mirrored destination after one `sync` with no line written anywhere, a file
-deleted from the tree has its link removed by the same `extras_lock` teardown every other extra
-uses, and a destination LiNix did not create is refused by name rather than replaced.
+**7n — the dotfiles directory (XIII.21, U22–U25). DONE 2026-07-24** (`c7dea64`).
+`Statement::Dotfiles` names a tree and stands for as many declarations as it holds;
+`model/dotfiles.rs` plans it, `App::plan_dotfiles` (`context.rs:824`) resolves it against this
+machine, and each file is keyed individually in the `extras_lock` so the teardown is the one
+every other extra uses. It links **files, never directories** (U22): a symlinked directory takes
+everything the application later writes there into the git-tracked repo, and `bundle` then hands
+it to whoever the backup goes to. It never decrypts (U24) — the tree has no place to write a
+per-file option. **Exit:** a file added under the dotfiles tree appears at its mirrored
+destination after one `sync` with no line written anywhere, a file deleted from the tree has its
+link removed by the same `extras_lock` teardown every other extra uses, and a destination LiNix
+did not create is refused by name rather than replaced.
 
-**7p — Declared providers: open the closed provider-lists (XIII.33; direction ruled 2026-07-25).**
+**7p — Declared providers: open the closed provider-lists (XIII.33; direction ruled 2026-07-25,
+every constituent decision ruled 2026-07-26). NOT STARTED.** `core/snapshot.rs:528` still
+hardcodes btrfs / zfs / timeshift / windows-restore into a `Vec` in `SnapshotManager::new`, of
+which only the first available is ever active — the "ninth parser" shape sitting untouched in the
+safety layer (XIII.23).
+
 The owner ruled the *outcome*: every closed provider-list becomes reachable without a source
-change (XIII.33). This item builds that. **Read the boundary before starting.** The *whether* is
-ruled for the surfaces under BUILD; the *how*-questions under STOP AND ASK are still the owner's
-and **must not be answered in code** — a decision the register calls open is not yours to settle
-(rules of engagement 1, 5). The three groups below are not ordered by letter; they are ordered by
-what is allowed.
+change (XIII.33). This item builds that. **There is no longer a STOP-AND-ASK half** — the four
+questions that carried that label (U28, U29, U30, U38) were ruled on 2026-07-26 and are listed
+below with the rest. Order is by blast radius: the mechanism, then the surfaces that cannot
+destroy anything, then the two that can destroy a filesystem or leak a secret.
 
-*BUILD — the whether is ruled; the mechanism first, then one surface proves it, then the rest are
-schema rows:*
+*The mechanism first, then one surface proves it, then the rest are schema rows:*
 
 1. **The mechanism (U27 — build).** A `SnapshotProviderRegistry` beside `BackendRegistry`, and a
    config-driven provider read from `providers.toml` (machine-local, II.1), registered last, never
@@ -1343,11 +1479,14 @@ schema rows:*
    rows, a user's s6/dinit/runit is a row too. A row missing `start`/`stop` is refused, not
    half-used. **Exit:** a `service:` line drives an init LiNix shipped no arm for, from a row; and
    systemd still works, driven from a row.
-3. **Health checks (U31 — build).** 7f shipped built-in `@health=`; this opens it to a
-   user-declared check command — argv, exit 0 = healthy, on II.12's ledger. A check that cannot
-   run is a failed check, loudly, never a passed one. **Exit:** an `@health=` naming a
-   user-declared check rolls the upgrade back when the check exits non-zero, and a missing check
-   binary fails the sync rather than passing it.
+3. **Health checks (U31 — the ledger half only; the vocabulary half is already built).** 7f
+   shipped `@health=`, and `model/health.rs::Probe::Command` already takes **any** command with
+   exit 0 = healthy, so the open vocabulary exists; `probe_ok` returns false when the command
+   cannot run, which is the fail-loud half. **What is missing is the trust half the ruling names:**
+   a check command is argv a shared config repo can carry, so it must ride II.12's hook ledger and
+   be approved by `linix lock`. It is approved by nothing today. **Exit:** an `@health=` command
+   arriving with a pulled config is refused until approved, and a changed one stops the sync —
+   the same two sentences a hook script gets.
 4. **Notifications (U37 — no new mechanism unless ruled).** The outcome is already met by 7j's
    event hooks: a channel beyond `desktop`/`email` is a hook that shells out to `curl`. Build
    nothing new here unless U37 rules a first-class `[[channel]]` is needed; the default is to
@@ -1359,23 +1498,23 @@ schema rows:*
    and `adopt` separates user-chosen packages from dependencies via `%a`.
 
 *RULED 2026-07-26 — these four were "STOP AND ASK" until the owner ruled them; they are now BUILD,
-in the ordered list at the top (items 17–20). Detail in `decisions.md`:*
+in the ordered list at the top (items 11–14). Detail in `decisions.md`:*
 
 - **Storage objects that destroy data (U30) — RULED.** One family (zfs/lvm/btrfs); the `remove`
   path that runs `zfs destroy` / `lvremove` goes through `app/sync/guard.rs` at the **normal** gate
   (no special escalation), and a volume is **protectable like a package**. zfs/lvm have no
-  implementation yet — real new work. Build order: item 19, after the mechanism.
+  implementation yet — real new work. Build order: item 13, after the mechanism.
 - **Secret providers (U38) — RULED, gate now clear.** The T-series that blocked this is settled
   (T1/T2/T5/T7), so `[[secret]]` is built — **bound by the T-series plaintext rules, and a provider
-  that cannot promise them is refused, not trusted.** Build order: item 20, last and most dangerous.
+  that cannot promise them is refused, not trusted.** Build order: item 14, last and most dangerous.
 - **APFS live-or-not (U29) — RULED.** macOS gets APFS, declared **create-only** (an APFS restore
-  needs a recovery-mode reboot, so never `Live`, V.60). Build order: item 18.
+  needs a recovery-mode reboot, so never `Live`, V.60). Build order: item 12.
 - **Provider preference (U28) — RULED.** The active provider is chosen by a **declared priority
   list**, like package `priority` (first available in the list wins), not by capability-guessing or
-  registration order. Build order: item 17.
+  registration order. Build order: item 11.
 
 *RULED 2026-07-26 — the "as open as Lisp" set is no longer NOT-GREENLIT; the owner ruled all four
-(and widened two past their recommendations). They are Tier 4 in the ordered list (items 21–24):*
+(and widened two past their recommendations). They are Tier 4 in the ordered list (items 15–18):*
 
 - **Parameterized modules (U32) — build; types opt-in, the user's choice per parameter.**
 - **User-defined verbs (U35) — build; safe composition ungated, arbitrary-command verbs ride U33.**

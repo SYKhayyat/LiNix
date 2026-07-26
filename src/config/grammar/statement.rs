@@ -1784,7 +1784,7 @@ mod artifact_option_tests {
             Some("true")
         );
         assert_eq!(
-            options_of("web:https://host/x.bin@download_only").one("download_only"),
+            options_of("appimage:https://host/x.AppImage@download_only").one("download_only"),
             Some("true")
         );
         let err = p("apt:curl@download_only").unwrap_err();

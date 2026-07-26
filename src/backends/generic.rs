@@ -789,7 +789,6 @@ mod tests {
         let q = queryable_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
-                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },

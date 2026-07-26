@@ -13,9 +13,20 @@ active              which profiles are on
 priority            which backends, in order
 vars                your own names for conditions
 schedules           when LiNix runs itself
+adapters/           how to drive things LiNix does not ship
+  backends.toml       a package manager (XIII.2)
+  settings.toml       a settings store (K17)
+  bootstrap.toml      how to obtain a manager this machine lacks (7c)
+hooks/              a script per LiNix event — on_drift, after_sync, … (7j)
 locks/              what everything resolved to    one file per backend
 preferences.toml    refusals and behaviour
 ```
+
+**`adapters/` is three files rather than one because they answer three questions** — how to
+*drive* a manager, how to *drive* a settings store, and how to *get* a manager. All three are
+code the repo carries, so all three go through II.12's approval ledger: they arrive with a pulled
+config, and a config that can run a command on first sync without being read is the whole reason
+that ledger exists.
 
 **LiNix's data** — `$LINIX_DATA_DIR` or the platform data dir. **Never in git. Never in a
 folder LiNix scans.**
@@ -70,8 +81,25 @@ schedule:NAME                 a scheduled task (only in `schedules`)
 service:NAME                  a service
 link:SOURCE                   a managed file
 setting:SCHEMA/KEY            a desktop setting (`@value=…`), read-before-write
+dotfiles:PATH                 a folder mirrored into place, one file at a time
+firewall:PORT/PROTO           a port; `firewall:default/incoming @value=deny` a policy
+exec:PATH                     run a script the config carries — the one verb
 use NAME                      reference a module (lowercase) or profile (Capitalized)
 ```
+
+**The last three arrived after this list was first written, and it did not notice them for two
+days.** `exec:` is XIII.3 (built 7b), `dotfiles:` is U22–U25 (built 7n), `firewall:` is N1–N7
+(built 7o) — all shipped, all in `Statement`, none of them here. **A grammar table that omits a
+shipped statement is worse than one that is short: it reads as the closed set it is not.** The
+authority is `config/grammar/statement.rs`'s `Statement` enum; this table is the human copy and
+must be checked against it, not against itself.
+
+**`exec:` is the one statement that is a verb, and it bends the model in exactly one place.** A
+false `when` on every other statement means *undo*; on `exec:` it does not, because a script that
+succeeds makes its own condition false and treating that as removal would flap. What removing an
+`exec:` line means is `@undo=` if the line carries one, and **dropping the record and nothing
+else** if it does not (U3) — LiNix does not invent an inverse for a script that has none, and
+`plan` says so in those words.
 
 `use` takes **a name. Never a path, never a URL.** A file from the internet is a fetch step
 that puts a module on disk; then you `use` it by name like everything else.
@@ -150,9 +178,13 @@ take the else branch — the silent-wrongness this rule closes.
 | `requires` | `BACKEND:NAME` — install that first. **A bare name is an error** |
 | `after_install`, `before_install`, … | a hook. Hashed and locked |
 | `source` | on `shim:` |
-| `cron`, `run` | on `schedule:` |
-| `target`, `content`, `template`, `decrypt`, `identity` | on `link:` |
+| `cron`, `run`, `notify` | on `schedule:` |
+| `target`, `content`, `template`, `decrypt`, `identity`, `backup` | on `link:` |
 | `enabled`, `status` | on `service:` |
+| `value` | on `setting:` (the value to write) and on `firewall:default/…` (`allow` or `deny`) |
+| `target` | on `dotfiles:` — where the tree is mirrored. Absent means the home directory. **There is no per-file option**: the tree has no place to write one, which is why it never decrypts (U24) |
+| `runs`, `undo` | on `exec:` — `runs` caps how many times one script *content* may run (`1` is the default, `always` opts out); `undo` is what removing the line runs (U3) |
+| `scope` | `user` or `system` — on `setting:`, `link:` and `shim:`, the three statements where "for me" and "for the machine" can differ (U19). Defaults to whatever the store does anyway, so it is written only to override. **Writing the default is not an error**: a config is allowed to state a thing it also gets for free |
 | `formats` | ordered artifact preference. Repeated key makes the list. Backends that offer a choice only |
 | `asset` | filename or glob narrowing the choice; `all` takes every match |
 | `bin` | the executable inside an archive |
@@ -161,6 +193,28 @@ take the else branch — the silent-wrongness this rule closes.
 | `allow_http` | bare flag: this URL may be `http://`. Downloading backends only (SEC2) |
 | `unverified` | bare flag: no `@sha256` required on this line. Downloading backends only. **Never implied by `allow_http`** — over HTTP the checksum is the only thing left (SEC2) |
 | `health` | `port:N`, or a command that must exit 0. A failure **restores the pre-change snapshot** (XIII.5) |
+
+### `link:` and the file that was already there (T6, ruled 2026-07-23/26)
+
+**A `link:` that replaces a file you wrote backs it up first, and removing the declaration puts
+it back.** The backup is not a pile that grows: it exists to survive one replacement, and the
+teardown restores it and deletes it. That is what dissolves the question of how many may
+accumulate — **a backup that is put back cannot accumulate**, so there is no retention key and no
+command to list orphaned backups.
+
+**`@backup=no` opts one line out, and there is deliberately no machine-wide key.** The exception
+is stated where the exception is. A setting that turned backups off everywhere would be copied
+between machines and pasted from the internet like every other setting, and the file it silently
+stopped preserving would be one somebody hand-wrote.
+
+**A link is keyed by its destination, never by its source.** The teardown used to be handed the
+declaration's source, so undoing a `link:` deleted the file in the user's own dotfiles repo and
+left the deployed copy standing. Keying by destination also means editing `@target=` undoes the
+old destination instead of orphaning it forever.
+
+**Decrypt mode never backs up at all.** `backup_once` exists so a user is not silently robbed of
+a config file they hand-wrote; a secret LiNix itself decrypted a moment ago is not that, and the
+copy would sit in plaintext under the ordinary umask beside a file that got `0600` (T1).
 
 ### Health checks (XIII.5, U7)
 
@@ -179,6 +233,12 @@ user's machine needs. **A check that cannot run is a failed check, never a passe
 loud): if LiNix cannot execute it, the result is unhealthy and the change rolls back. A check
 command is argv a shared repo can carry, so it rides the II.12 hook ledger and is approved by
 `linix lock`.
+
+> **Half built (checked 2026-07-26).** The open vocabulary and the fail-loud rule are real —
+> `model/health.rs::Probe::Command` takes any command, and `probe_ok` returns false when it
+> cannot run. **The ledger sentence is not:** `verify_health` runs the command directly and
+> consults no ledger, so an `@health=` arriving with a pulled config runs unapproved. It is the
+> one runnable thing in the tree that II.12 does not see. Phase 7p, item 8.
 
 ```
 apt:nginx@health=port:80          the port must answer after this installs
@@ -395,6 +455,8 @@ write is deleted (II.17), because two stores could disagree about what this mach
 | **resolved artifact** | `sharkdp/fd → fd-…-linux-gnu.tar.gz`, its URL, format and hash | **built** (`locks/github.toml`) |
 | **resolved backend for an unpinned name** | `ripgrep → cargo` | **built** (`locks/bare.HOST.toml`) |
 | **regex expansion** | `re:^texlive- → [312 names]` | **built** (`locks/regex.toml`) |
+| **`exec:` script content already run here** | `sha256:… → 1` | **built** (`locks/exec.toml`). Keyed by **content**, while `locks/hooks.toml` is keyed by declared path — the two answer different questions (*has this already run?* vs *is this allowed to run?*), so a script edited after approval is both unapproved and un-run, which is the pair you want |
+| **applied extras** | `service:nginx`, `link:<destination>`, `repo:apt:ppa:x/y` | **built** (`locks/extras.toml`). It is what makes *removing* a `service:`/`link:`/`shim:`/`repo:` line undo it — without a record of what was applied, deleting the last extra line is a change with nothing to diff against |
 
 `linix lock` regenerates the version pins. **It takes no arguments** — the per-name and
 per-backend forms this section used to promise (`lock <name>`, `lock --backend cargo`) do not
@@ -723,14 +785,19 @@ else, ever.**
 | `adopt [PKG]` | take over the machine, or one package |
 | `sync` | make the machine match |
 | `plan` | show what sync would do |
-| `check` | parse everything, report errors |
+| `check` | **the one looking command** (U9). Eight sections — `config`, `drift`, `unmanaged`, `absent`, `conflicts`, `health`, `security`, `approvals` — one line each by default, detail when a section is named |
+| `heal` | **the one acting-on-what-check-found command.** `doctor --fix`'s repairs live here |
+| `rebuild` | remove and reinstall what is declared, one backend at a time (II.11b) |
 | `lock [NAME]` | freeze versions / expansions, approve hooks |
 | `unlock [NAME…] [--list]` | forget which manager an unpinned name resolved to, so sync asks again (II.6) |
 | `purge-unmanaged` | delete everything LiNix doesn't manage |
 | `remove-orphans` | the names each backend can say are orphaned — shown, guarded, removed (II.11c) |
 | `clean-cache` | downloaded archives and build caches. Removes no installed package |
-| `unmanaged` | what `adopt` would adopt |
-| `absent` | every `absent:` line in force, and its module |
+| `add SOURCE` | vendor someone else's module into your repo (U14) — it lands as a file you can read, never as a live reference |
+| `try` | rehearse this config on a clean machine in a container (U12) |
+| `eval` | print the resolved desired state as versioned JSON (U17). Takes no locks, changes nothing |
+| `vars` | print each resolved variable, its typed value, its type, and the active provider (II.6b) |
+| `why PKG` | why this is declared: the gate chain, the variables behind it, and the commit that introduced the line (7l) |
 | `diff COMMIT COMMIT` | the change in **packages**, not text |
 | `teleport PKG BACKEND` | move a package to another manager: rewrite the line in place, sync |
 | `shell` | throwaway shell. Outside the model |
@@ -739,7 +806,14 @@ else, ever.**
 | `export FORMAT` | Brewfile / requirements.txt / package.json |
 | `activate NAME… [-a]` | write `active` — the list, or `-a` to add to it (II.6), sync |
 | `deactivate NAME…` | take away from `active` (II.6), sync |
-| `upgrade`, `list`, `status`, `doctor`, `profile`, `service`, `repo`, `hold` | as today, all reduced to file edits |
+| `upgrade`, `list`, `profile`, `service`, `repo`, `hold` | as today, all reduced to file edits |
+
+**`status`, `doctor`, `unmanaged`, `absent`, `conflicts`, `insight`, `metrics` and `audit` are
+gone, and they are gone rather than aliased** (U9, ruled 2026-07-24; built 7i). They were ten
+ways to ask *how is this machine doing*, each with its own output shape, and the answer to "which
+one do I run" was to run several. They are sections of `check` now. **The dividing line the whole
+collapse rests on is `check` looks, `heal` acts** — which is why `heal` survived the collapse and
+`doctor --fix` did not: a command that repairs is not a status command with a flag.
 
 **`shell` must be honest about being outside the model:** it writes no module, and **stops
 recording transient packages in the registry** — which is what lets a session's leftovers
@@ -845,9 +919,23 @@ in your file, and deleting that line is refused (V.26).
 | `require_snapshot` (default **off**) | never change anything when no snapshot can be taken |
 | `deny_vulnerable` (default **off**) | never apply when `audit` reports a managed package vulnerable |
 
-All in `[guard]` in `preferences.toml`. One decision function. **Every removal path calls
-it** — sync, `absent:`, expiry, `purge-unmanaged`, `remove-orphans`, shell exit, `uninstall`.
-The last three also gate *installs* and *changes*, so the install paths call it too.
+All in `[guard]` in `preferences.toml`. One decision function.
+
+**Every removal path calls it, and the list of paths is `GuardScope`, not a sentence.** The
+enumeration below is generated by reading the enum in `app/sync/guard.rs`, because that enum is
+the thing a new caller has to add itself to; a prose list is a place a path can be missing from
+without anything noticing, which is exactly how S24 survived thirteen sessions.
+
+```
+Apply  RemoveOrphans  PurgeUnmanaged  Sync  Watch  Upgrade
+Canary  Remove  ShellExit  ExpirySweep  Heal  Rebuild
+```
+
+**The scope is passed explicitly, never inferred** — every caller has to declare itself, so a new
+deletion path cannot quietly inherit someone else's exemption, and a refusal can name what
+refused in the words the user typed (`Remove` prints as `uninstall`, `Canary` as
+`upgrade --canary`). `Sync`, `Rebuild`, `Upgrade` and the install paths also gate *installs* and
+*changes*, so `max_installs`, `deny_packages` and `pinned_only` are reached from them too.
 
 > **This sentence was false from the day the journal was written until 2026-07-23, and the
 > eighth path is why the rule below exists.** `heal()` recovered an interrupted *install* by
@@ -963,8 +1051,14 @@ wearing a new name; the opt-in already exists and is this command.
 **`sync` converges; `rebuild` asserts.** Convergence cannot repair state that is wrong while
 the difference is empty (X.1). `rebuild` removes what is declared so it can install it again.
 
-- **Scope is required.** A bare `linix rebuild` errors and names the three forms. `--all` is
-  not a default you can reach by pressing enter.
+- **A bare `linix rebuild` warns loudly, then rebuilds everything** (K2, owner ruling
+  2026-07-24). It does **not** refuse. *This rule reversed on 2026-07-24 and this file carried
+  the old one for two days after the code changed* — it read "Scope is required. A bare `linix
+  rebuild` errors and names the three forms", which is what `app/rebuild.rs` used to `bail` with.
+  The owner chose warn-and-proceed: the failure mode being guarded against is **software missing
+  from a machine**, and a refusal makes the repair harder to reach while doing nothing about the
+  scope. The warning is the safeguard the refusal was standing in for, and it names the narrower
+  forms (`linix rebuild <pkg>`, `linix rebuild --backend <name>`) in the same breath. See V.49.
 - **Batch per backend, one backend at a time.** All of a backend's packages come down, then
   all of them go back up, then the next backend. Within a backend a dependency shared only by
   packages that all leave really does orphan, so the repair repairs; and a failure strands one
@@ -1084,6 +1178,13 @@ stored, because declaration + convergence reproduces it. **There is no generatio
 
 **Snapshots are a preference**, default on if the machine can do it (btrfs, ZFS, or
 Timeshift). Retention prunes — **one engine** (`retention`), not two.
+
+> **The three rules below are ruled and NOT YET BUILT (checked 2026-07-26).**
+> `core/snapshot.rs:528` still hardcodes btrfs / zfs / timeshift / windows-restore into a `Vec`,
+> and only the first available one is ever active. They are marked because of what II.6 already
+> had to learn the hard way: *a target belongs in Part III or marked, never stated in the present
+> tense* — two rows written here as though they were real cost the 2026-07-20 audit a check. They
+> are Phase 7p, items 6, 11 and 12 in `plan.md`'s ordered list.
 
 **Snapshot providers are declarable (U27).** A provider is a row in an `adapters/` file — the
 take/list/delete/restore argv as data — read through the same loader and hook ledger as a custom
