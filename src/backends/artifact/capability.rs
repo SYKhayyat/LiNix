@@ -48,6 +48,13 @@ pub fn channel_backends() -> String {
     HAS_CHANNELS.join(", ")
 }
 
+/// The comparable part of a channel string. A snap channel is `track/risk`
+/// (`latest/stable`), and the user usually writes just the risk (`stable`), so the two must
+/// compare equal or a channel change would fire on every sync (D13).
+pub fn channel_risk(channel: &str) -> &str {
+    channel.rsplit('/').next().unwrap_or(channel).trim()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,7 +5,7 @@ use crate::core::{
 use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 pub struct SnapBackendCore {
     pub executor: CommandExecutor,
@@ -79,15 +79,81 @@ fn install_args(spec: &PackageSpec) -> Vec<String> {
     args
 }
 
+/// Snap risk levels, most stable first. Moving toward a *more* stable level is a downgrade —
+/// `edge -> stable` gives you an older build (D13).
+const RISK_ORDER: &[&str] = &["stable", "candidate", "beta", "edge"];
+
+fn risk_rank(channel: &str) -> Option<usize> {
+    let risk = crate::backends::artifact::capability::channel_risk(channel);
+    RISK_ORDER.iter().position(|r| *r == risk)
+}
+
+/// Whether moving from `from` to `to` is a downgrade (a more-stable, less-recent channel). An
+/// unknown risk on either side is not called a downgrade — better to under-warn than to cry
+/// downgrade on a channel we do not understand.
+fn is_channel_downgrade(from: &str, to: &str) -> bool {
+    match (risk_rank(from), risk_rank(to)) {
+        (Some(f), Some(t)) => t < f,
+        _ => false,
+    }
+}
+
+impl SnapInstallable {
+    async fn is_installed(&self, name: &str) -> bool {
+        match self.core.executor.run_output("snap", &["list", name], false).await {
+            Ok(out) => out
+                .lines()
+                .skip(1)
+                .any(|l| l.split_whitespace().next() == Some(name)),
+            Err(_) => false,
+        }
+    }
+
+    /// The channel `name` is currently following, read from `snap info`'s `tracking:` line.
+    async fn current_channel(&self, name: &str) -> Option<String> {
+        let out = self
+            .core
+            .executor
+            .run_output("snap", &["info", name], false)
+            .await
+            .ok()?;
+        out.lines()
+            .find_map(|l| l.strip_prefix("tracking:"))
+            .map(|v| crate::backends::artifact::capability::channel_risk(v).to_string())
+    }
+}
+
 #[async_trait]
 impl Installable for SnapInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         for spec in specs {
-            let args = install_args(spec);
+            // D13: `snap install` refuses an already-installed snap, so a `@channel` change has
+            // to go through `snap refresh --channel=`. Decide by whether the snap is present.
+            let want_channel = spec.options.get("channel");
+            let already = self.is_installed(&spec.name).await;
+
+            let args = if already && want_channel.is_some() {
+                let channel = want_channel.unwrap();
+                if let Some(current) = self.current_channel(&spec.name).await {
+                    if is_channel_downgrade(&current, channel) {
+                        // A downgrade is removal-shaped; name it so it is not a silent swap in
+                        // the plan the user is confirming.
+                        warn!(
+                            "Snap: {} is a channel downgrade ({} -> {}) — a less recent build",
+                            spec.name, current, channel
+                        );
+                    }
+                }
+                let mut a = vec!["refresh".to_string(), "--channel".to_string(), channel.clone()];
+                crate::core::argv::push_names(&mut a, "snap", [spec.name.as_str()]);
+                info!("Snap: Switching {} to channel {}...", spec.name, channel);
+                a
+            } else {
+                info!("Snap: Installing {}...", spec.name);
+                install_args(spec)
+            };
 
             let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-            info!("Snap: Installing {}...", spec.name);
-
             self.core
                 .executor
                 .run_exclusive("snap", "snap", &arg_refs, sudo)
@@ -172,6 +238,12 @@ impl Queryable for SnapQueryable {
             if let Some(v) = line.strip_prefix("installed:") {
                 let ver = v.split_whitespace().next().unwrap_or(v);
                 p.version = Some(ver.trim().to_string());
+            }
+            // D13: the channel this snap is following, so a `@channel` change is visible to the
+            // planner. `snap info` prints `tracking:     latest/stable`.
+            if let Some(v) = line.strip_prefix("tracking:") {
+                let risk = crate::backends::artifact::capability::channel_risk(v.trim());
+                p.properties.insert("channel".into(), risk.to_string());
             }
         }
         Ok(Some(p))
@@ -303,6 +375,19 @@ mod tests {
     fn snap_without_a_channel_passes_no_channel_flag() {
         let args = install_args(&spec_with("code", &[]));
         assert_eq!(args, ["install", "--", "code"]);
+    }
+
+    #[test]
+    fn moving_to_a_more_stable_channel_is_a_downgrade() {
+        // D13: edge -> stable gives an older build, so the guard/plan should see it.
+        assert!(is_channel_downgrade("edge", "stable"));
+        assert!(is_channel_downgrade("latest/beta", "latest/candidate"));
+        // stable -> edge is newer, not a downgrade.
+        assert!(!is_channel_downgrade("stable", "edge"));
+        // Same channel, whichever way it is spelled, is not a downgrade.
+        assert!(!is_channel_downgrade("latest/stable", "stable"));
+        // A channel we do not understand is never called a downgrade.
+        assert!(!is_channel_downgrade("weird", "stable"));
     }
 
     #[tokio::test]

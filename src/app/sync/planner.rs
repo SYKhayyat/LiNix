@@ -541,6 +541,16 @@ impl<'a> ChangePlanner<'a> {
                 .as_deref()
                 .is_none_or(|inst_v| !self.satisfies_constraint(inst_v, req_v)));
         }
+        // D13: a `@channel` that differs from what the package is following needs a refresh —
+        // otherwise a channel change is invisible and does nothing. Only acts when the current
+        // channel is *readable*: a channel we cannot read is left alone rather than refreshed
+        // on every sync, which would be worse than the drift it is meant to catch.
+        if let Some(want) = spec.options.get("channel") {
+            use crate::backends::artifact::capability::channel_risk;
+            if let Some(current) = installed.properties.get("channel") {
+                return Ok(channel_risk(current) != channel_risk(want));
+            }
+        }
         if spec.backend == "link" && spec.options.get("template") == Some(&"true".into()) {
             return Ok(self.template_needs_update(spec).await);
         }
