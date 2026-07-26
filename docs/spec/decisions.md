@@ -803,9 +803,7 @@ reopening the `exec:` trust question the dangerous 10% would.
 
 ## U36
 
-**Status: OPEN — whether ruled (build), how open.** **Direction (owner, 2026-07-25): open it —
-build the `[[init]]` kind per XIII.33 and Phase 7p** (the K17 rows move). The how is
-implementation.
+**Status: ANSWERED — ruled 2026-07-26.**
 
 **U36 — Are init systems a declared-provider kind, or does the built-in enum stay closed? (XIII.34.)**
 `backends/service.rs` is a fixed `enum InitSystem` (Systemd, OpenRC, SysVinit, launchd, Windows
@@ -815,6 +813,15 @@ problem in another file, and the **lowest-risk** surface to open — start/stop/
 reversible operations with no data to destroy. *Recommendation:* open it as a `[[init]]` block on
 XIII.33's mechanism; it is the cleanest fit the mechanism has, and P7 is better served by "write
 six lines" than by "unsupported". Not blocking — the five built-ins cover most machines.
+
+**RULED (owner, 2026-07-26): open it, as recommended.** Init systems become a declared-provider
+kind — a `[[init]]` block on the same plugin mechanism as custom backends, setting stores and
+snapshot providers, so s6, dinit, runit, GNU Shepherd and any appliance init are reachable by
+writing a small file rather than shipping a release. The five built-ins become rows read through
+the same loader (no two of everything), and a declared init system is argv a shared repo can carry,
+so it rides the II.12 ledger and `linix lock` approves it. This is the lowest-risk surface —
+start/stop/enable are reversible and destroy no data — so nothing beyond the standard trust rule
+is owed. The schema is implementation.
 
 ---
 
