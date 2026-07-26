@@ -14,6 +14,66 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-26 (later the same day) — building the ruled backlog, safest-first
+
+**Eight ruled items built, each committed on its own, `cargo test` 0 failed and `cargo clippy`
+clean at the end.** The order was the plan's — additive and testable first, the safety-critical
+and hardware-blocked last — and the two of those that could not be validated on this host were
+deliberately left rather than built blind.
+
+**Tier 1 (four of five):**
+- **D3b — download-only artifacts.** `ArtifactOptions.download_only`; `@download_only` fetches
+  without unpacking/shimming/PATH and is refused off a non-download backend; `github:` does the
+  same by *default* when nothing it was asked for is installable (only a `.deb` on offer) rather
+  than failing. web/appimage skip their deploy step. The dead `@type=program` branch in `web.rs`
+  (unreachable — `type` was never a grammar key) was replaced by the real flag.
+- **K4 — `clean_cache_on_remove`.** New `config::{clean_cache_on_remove, cache_dirs}` +
+  `model/cache.rs`: on removing a download-backend package, delete cached copies by **exact
+  filename, regular files only, bounded depth** across the user's dirs plus `$XDG_CACHE_HOME`/
+  `~/.cache`/`/var/cache`. Conservative by construction — a cache clean is a removal.
+- **D13 — a channel change refreshes in place; a downgrade is named.** snap `info` reads
+  `tracking:`, the planner detects a *readable* channel change (readable-only, so no refresh loop),
+  `snap install` switches in place via `snap refresh --channel=`, and a downgrade (edge→stable, an
+  older build) is named loudly in the plan. snap wired; flatpak stays inert until its channel is
+  parsed.
+- **T6 — `@backup=no`.** The per-line opt-out `link.rs::wants_backup`; restore-on-removal was
+  already built.
+- **D5 left unbuilt on purpose** — it runs `dpkg`/`rpm` and needs a real apt box to verify
+  cross-backend dedup, so it is for a session that can test it.
+
+**Tier 2 — 7e finished.** Windows registry is a full `setting:` adapter row (HKCU/HKLM folded into
+the argv so `@scope` picks the hive; `already_set` now reads `reg query`'s verbose output for
+idempotency — verified against this Win11 host). KDE (three-part addressing), COSMIC (a file tree,
+not a command store) and Hyprland (**not** a `setting:` — `link:`'s job) are ruled in the table's
+own comments; the mechanism is complete and open.
+
+**Tier 3 — the three items independent of the snapshot mechanism:**
+- **U26 — BSD backends.** FreeBSD `pkg` (single binary) and OpenBSD `pkg_add`/`pkg_delete`/
+  `pkg_info`. OpenBSD's separate remover needed a model extension — `ManagerConfig.remove_binary`,
+  wired through `run_removal`, with an empty `remove_args` no longer read as "no uninstall" when a
+  separate remove binary is set — which also lets a *custom* backend declare a separate remover.
+  `parsers/bsd.rs` shares the pkgsrc name-version heuristic under the right label.
+- **U31 — health commands ride the II.12 ledger.** `linix lock` approves every declared health
+  *command*, and `sync` refuses before the change if any is unapproved (a check that cannot run is
+  a failed check). Port probes run no code and are never gated. The open vocabulary was already
+  there; this is the trust half.
+- **U37 — notifications = docs.** A copyable Slack/webhook `hooks/after_sync` in `readme.md`, and
+  the ruling recorded that there is no `[[channel]]` block — the hook already sends anything.
+
+**Not built, and why — the snapshot-provider cluster (U27 and everything on it), U36, D5.** U27's
+*additive* half (a config-driven `ConfigSnapshotProvider`, restore-capability declared, ledger-
+approved, registered last so it never shadows a built-in) is the safe design and is what delivers
+the user value; the ruling's "built-ins become rows too" half was **not done blind** — btrfs/zfs
+restore and Windows System Restore cannot be validated here, and Windows System Restore is
+typed-PowerShell that cannot become safe argv-data without reintroducing SEC5, which is an owner
+question. U36 (init `[[init]]` rows) is safe to do here — its `plan_service` argv tests guard the
+enum→table conversion — and was deferred for time, not risk. Rewriting a tested safety net blind
+is the one thing "we cannot afford bugs here" forbids, so it waited.
+
+**Fixtures the changes shifted, fixed in the same pass:** three `setting.rs` shipped-store counts
+(two rows now), the `download_only` grammar test (its harness knows `appimage`, not `web`), and one
+clippy `unwrap`-after-`is_some`.
+
 ## Audit 2026-07-26 — the specification checked against the tree, claim by claim
 
 **Nothing was built this session. The spec was made to match what was.** Every checkable claim in
