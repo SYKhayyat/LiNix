@@ -819,7 +819,7 @@ they are what keeps an opened door from being a silent one.
 
 ## U34
 
-**Status: OPEN — not blocking.**
+**Status: ANSWERED — ruled 2026-07-26.**
 
 **U34 — Is `linix repl` worth a second entry point, or is `linix eval | jq` enough? (XIII.31.)** A
 read-only prompt that resolves a name against *this* machine, evaluates a `when`, and expands a
@@ -828,6 +828,15 @@ read-only prompt that resolves a name against *this* machine, evaluates a `when`
 implementation (the U20 rule). *Recommendation:* low priority — real value for anyone authoring a
 config, but `eval` already exposes the model, so this is ergonomics, not capability. Worth it only
 if it stays a thin front end over the existing engine.
+
+**RULED (owner, 2026-07-26): build it — if it is easy.** `linix repl` ships as an interactive
+read-only prompt for authoring a config. The owner did not require it be a literal thin wrapper,
+only that it be easy — so the implementation shape is free, **with one non-negotiable that is a
+correctness rule, not a style choice: it shares the one parser and resolver, never a second
+implementation (U20).** Two engines drift and then disagree, which is the failure this rewrite
+exists to end; that constraint holds however the repl is structured. It is ergonomics over the
+model `eval` already exposes, so if it turns out not to be easy while staying single-engine, it is
+not worth a half-build.
 
 ---
 
