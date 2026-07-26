@@ -14,6 +14,76 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-26 (later) — the assessment's list, worked: CI green on three platforms for the first time
+
+**The previous entry measured the gap. This one closes the top of it.** Seven commits, in the
+order the owner asked for: S33, helm, rustfmt, `main.rs`, the comment sweep, then the coverage
+that findings 2 and 3 named.
+
+**The headline is not any one fix. It is that the suite had never been green anywhere but this
+Windows box, and nobody could see it because the first red job hid the second.** CI run
+`30219497156` — the first run to ever see the 112 pushed commits — failed on all three
+platforms, and on *two different bugs*:
+
+- **Windows: S33**, as predicted. `tests/feature_logic_tests.rs:90` commits to a temp repo and
+  unwraps, so it passes only where a global git identity exists.
+- **Linux and macOS: S34**, which nobody had ever seen, because S33 was the one being watched.
+  `app::eval::tests::sources_are_repo_relative_and_forward_slashed` asserted Windows path
+  semantics (`Path::strip_prefix` on `C:\repo\…`) on every platform. A backslash is a separator
+  on Windows and a filename character everywhere else.
+
+Both are the same *class* — **a test whose truth is a property of the machine that wrote it** —
+and both are now fixed at the mechanism rather than at the instance. S33's fix is a `Once` in
+`TestKernel` and in `git.rs`'s test gate that sets `GIT_AUTHOR_*`/`GIT_COMMITTER_*` and points
+`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` at absent paths: the tests now read **no** host git
+config at all, so neither a missing identity nor a host that signs every commit can decide the
+result. `identify()` and its three call sites are deleted. Set once per binary, not once per
+test, because a step each test has to remember is the step the next test forgets — which is
+literally how S33 was written.
+
+**Proven, not argued.** The whole suite was run in the `linix-it-ubuntu` container, which has no
+global git identity (`git config --global user.email` is empty there): **1,307 tests, 0 failures
+on Linux**, including the `tests/` binaries that `cargo test --lib` never reaches. That is the
+first green Linux run this repo has.
+
+**What else landed:**
+
+- **U39 — helm.** Finding 6, ruled, built, and **proven against real helm v3.21.2 in the
+  `tools` container**: `helm:diff@url=https://github.com/databus23/helm-diff` installs,
+  `helm plugin list` reports `diff 3.15.10`, `linix list --backend helm` agrees, and
+  `uninstall helm:diff` removes it. That is the same lifecycle that failed when the bug was
+  found. `capability::INSTALLS_FROM_SOURCE` is one table read by both the grammar and the
+  backend row, and the whole ruling — `decisions.md` U39, `target-state.md` II.2, `why.md`
+  V.83 — shipped with it.
+  **The first version of the fix was broken and only the live run said so.** The unit tests
+  built a `PackageSpec` in code, so nothing asked the grammar whether `@url` was a legal
+  option key — II.2's table is closed and it was not, so every real declaration came back as
+  a misspelling while 1,310 tests passed. This is finding 2's argument in miniature, made by
+  finding 6: a mock cannot tell you the grammar refuses your line.
+- **rustfmt.** 130 files, and the gate is now hard in both places (`continue-on-error` off in
+  CI, INFO → HARD in `release-check.sh`). A fmt check nothing fails is a check that measures
+  nothing, which is how the tree drifted 609 hunks while both gates reported on it every run.
+- **`main.rs`: 6,774 → 902 lines.** Nine modules under `src/verbs/`, one per verb family, each
+  test module moved with the code it tests. Pure motion — 1,310 tests before and after,
+  `--help` still lists 62 commands.
+- **F3's comment sweep, by defined class rather than by claim.** Marketing was already clear.
+  Citation-as-explanation went 13 → 4 (the 4 that remain close a sentence that states the
+  constraint). Restatement: 64 flagged by identifier-overlap, 10 real and deleted. **What is
+  not claimed is written down as not claimed:** a comment that narrates its block without
+  echoing an identifier is a judgement over 9,593 lines and one pass cannot finish it.
+- **Findings 2 and 3, in the only place they can be closed — the gates.** `fedora`/`dnf` joins
+  the per-push container matrix, which had been running only ubuntu/alpine/arch while the local
+  runner swept five. `tools` and `gentoo` move from dispatch-only to nightly, turning the widest
+  live coverage this repo has (18 real lifecycles) from *existing* into *consulted*. And a
+  `macos-native` job runs the same brew sweep `release-check.sh`'s Darwin branch does — nightly,
+  not per-push, because a job whose first execution gates other people's commits is a job that
+  gets disabled rather than fixed.
+
+**What this does not do.** It does not close findings 4 (the hardware-deferred destructive
+effectors) or 5 (never released), and it does not make macOS *proven* — it makes macOS
+*scheduled*, which is the most that can be done without hardware. The numbered list below is
+updated in place to say which items are now closed.
+
 ## Assessment 2026-07-26 — production readiness, measured; and the tree pushed after 112 commits
 
 **No code changed this session. It read the tree, pushed it, and ran the one gate that had never
@@ -51,23 +121,34 @@ not run that binary at all; `--all-targets`, which this file cited, does, and pa
 
 **What is not ready, in the order it should be fixed:**
 
-1. **S33 — CI red.** One test, one fixture, and the fix is the `identify()` helper `git.rs`
-   already has. Until it is green, every claim in this file rests on one machine.
+1. ~~**S33 — CI red.** One test, one fixture, and the fix is the `identify()` helper `git.rs`
+   already has.~~ **CLOSED 2026-07-26 — and it was two bugs, not one.** S33 was red on Windows;
+   Linux and macOS were red on **S34**, a second host-dependent fixture that nobody had seen
+   because the first red job hid it. Both are fixed at the mechanism, and the full suite now
+   runs green in a Linux container that has no global git identity at all (1,307 tests).
 2. **Breadth of live validation: 52 registered backends, and exactly 22 have ever been run for
    real.** Counted, not estimated: the `tools` image's 18 (`apt bun cargo composer conda dotnet
    emacs gem github go krew luarocks mise npm pipx pixi pub uv`), plus `dnf`, `pacman` and `apk`
    from the distro images, plus `scoop` from the native Windows sweep — `winget` and `choco` are
    deliberately plan-smoked there because they install machine-wide on a real machine. Per image
    it is 7 real lifecycles (ubuntu / fedora / arch / alpine) and **45 plan-smoked**; only the
-   `tools` image reaches 18, and `tools` runs on manual dispatch.
+   `tools` image reaches 18. **Partly closed 2026-07-26:** `tools` and `gentoo` moved from
+   manual dispatch to nightly, so the 18 are now *consulted* rather than merely *available*, and
+   `fedora`/`dnf` joined the per-push matrix, which had been running three images while the local
+   runner swept five. The count of backends that have ever run for real is unchanged; what
+   changed is that the widest run of them happens without anyone remembering to press a button.
    The remainder are proven against mocks, **"which is where format drift is invisible by
    construction"** — this file's own words, written before S22, S23 and S31 each proved it by
    being found only when a real manager was run. **This is the single largest gap between "the
    suite is green" and "a user's machine is safe."**
-3. **macOS builds and unit-tests in CI and has never been exercised.** brew, mas and macports
-   have no live lifecycle; the APFS provider is create-only and unrun; launchd scheduling is
-   unrun; `release-check.sh`'s Darwin branch has never been executed. There is no macOS hardware
-   in this project.
+3. **macOS builds and unit-tests in CI and has never been *run*. Scheduled 2026-07-26, not yet
+   proven.** A `macos-native` CI job now runs the same brew sweep `release-check.sh`'s Darwin
+   branch does, nightly — the first time that branch will ever have executed. It is deliberately
+   not on the per-push gate: it has never run, and a job whose first execution gates other
+   people's commits is a job that gets disabled rather than fixed. **Still unproven until it goes
+   green:** mas, macports, the create-only APFS provider, and launchd scheduling. There is no
+   macOS hardware in this project, so a runner is the whole of what is available. The macOS
+   column did earn its keep already — it is where S34 was caught.
 4. **The hardware-deferred list is exactly the high-blast-radius set.** btrfs / zfs / lvm
    *restore*, D5's live `dpkg -i` / `rpm -U` handoff, `U30` storage-object removal (which
    destroys filesystems), and the `U38` secret providers. Each is argv-tested and pure-logic
@@ -78,16 +159,18 @@ not run that binary at all; `--all-targets`, which this file cited, does, and pa
    `scripts/install.sh` builds from git `HEAD` with `cargo install --git`, so it requires a Rust
    toolchain and pins nothing. The tag-triggered release job in `ci.yml` has never fired. There
    is no artifact a user could install, and nothing to roll back *to*.
-6. **One open product bug, recorded in the harness and nowhere else:** `helm plugin install`
+6. ~~**One open product bug, recorded in the harness and nowhere else:** `helm plugin install`
    takes a URL and `helm plugin uninstall` takes a name, so **a helm plugin LiNix installed,
-   LiNix cannot remove.** Proven by a real run. It is a `no_lifecycle_reason` string in
-   `run-in-container.sh:550` — which is the right place for it to be *said* and the wrong place
-   for it to be *tracked*.
-7. **Hygiene, none of it blocking:** the tree is not `rustfmt`-clean (both CI and
-   `release-check.sh` keep `fmt` non-blocking and say so); `main.rs` is 6,676 lines; F3's comment
-   sweep is still openly not done at 9,572 comment lines; and seven scratch artefacts are tracked
-   in git at the repo root (`prompt.txt`, `blocks.json`, `docker_log_7_10.txt`,
-   `docker_log_7_23.txt`, `scratch_u9.sh`, `Cargo.txt.txt`, `todo.md`).
+   LiNix cannot remove.**~~ **CLOSED 2026-07-26 as U39** — the name is the identity, the URL is
+   an option, and both harnesses now run helm's real lifecycle instead of naming the bug and
+   skipping it.
+7. **Hygiene, none of it blocking. Three of four closed 2026-07-26:** the tree ~~is not
+   `rustfmt`-clean~~ **is fmt-clean and the gate is hard in both places**; ~~`main.rs` is 6,676
+   lines~~ **`main.rs` is 902 lines and the verbs live in `src/verbs/`**; ~~F3's comment sweep is
+   still openly not done~~ **F3's greppable classes are swept and its residual is stated rather
+   than claimed**. **Still open:** seven scratch artefacts tracked in git at the repo root
+   (`prompt.txt`, `blocks.json`, `docker_log_7_10.txt`, `docker_log_7_23.txt`, `scratch_u9.sh`,
+   `Cargo.txt.txt`, `todo.md`).
 
 **The verdict, in the terms the question was asked.** Judged as *architecture*, this is closer to
 production than most 1.0s: the removal guard is on every path, there is one parser, one

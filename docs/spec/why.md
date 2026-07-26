@@ -1252,4 +1252,12 @@ is a convention, not a contract, and the version that is wrong installs a plugin
 nothing can remove, which is the exact bug with a smaller blast radius and no error message. The
 refusal is louder and cheaper: a `helm:` line with no `@url=` never installs anything.
 
+The fix itself then demonstrated the rule it exists to serve. The first version added
+`install_source_option` to the backend and tested it by building a `PackageSpec` in code — so
+nothing ever asked the **grammar** whether `@url` was a legal key. II.2's option table is closed,
+so it was not, and every real `helm:diff@url=…` line came back as a misspelling while the whole
+suite passed. It was caught by running an actual `helm` in a container, which is the same way the
+original bug was caught, and it is the argument for `capability::INSTALLS_FROM_SOURCE` being **one
+table read by both ends** rather than the key being written down twice.
+
 ---

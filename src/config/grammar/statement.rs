@@ -1124,7 +1124,7 @@ fn validate_extra_options(
 ///
 /// `until` is here and refused below unless the line is `absent:` — II.2 puts it on
 /// `absent:` only, and "not an option" would be the wrong error for a key that exists.
-const PACKAGE_OPTION_KEYS: &[&str] = &[
+pub(crate) const PACKAGE_OPTION_KEYS: &[&str] = &[
     "version",
     "hold",
     "expires",
@@ -1139,6 +1139,9 @@ const PACKAGE_OPTION_KEYS: &[&str] = &[
     "unverified",
     "health",
     "download_only",
+    // U39. Legal only on a backend that installs from something other than the name, and
+    // refused by name everywhere else — `capability::INSTALLS_FROM_SOURCE` is the one table.
+    "url",
 ];
 
 /// Options that are only meaningful on a backend that resolves one name to several
@@ -1232,6 +1235,29 @@ pub fn validate_artifact_options(
                     capability::download_backends()
                 )));
             }
+        }
+    }
+
+    // U39's install source. On a backend that installs by name it is a line that does nothing,
+    // and — worse than the artifact options above — it would read as the *name* being wrong.
+    for key in PACKAGE_OPTION_KEYS
+        .iter()
+        .filter(|k| capability::is_source_key(k))
+    {
+        if !o.contains(key) {
+            continue;
+        }
+        let Some(backend) = backend else { continue };
+        if capability::install_source_key(backend).is_none() {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`@{}` is not an option on `{}`", key, backend),
+            )
+            .with_hint(format!(
+                "it says where to install a package from, for a manager that installs by one \
+                 string and removes by another: {}. Everywhere else the name is both.",
+                capability::source_backends(key)
+            )));
         }
     }
 
@@ -2000,7 +2026,10 @@ mod artifact_option_tests {
     use super::*;
 
     fn known(name: &str) -> bool {
-        matches!(name, "apt" | "github" | "snap" | "flatpak" | "appimage")
+        matches!(
+            name,
+            "apt" | "github" | "snap" | "flatpak" | "appimage" | "helm"
+        )
     }
 
     fn p(line: &str) -> Result<Statement> {
@@ -2066,6 +2095,23 @@ mod artifact_option_tests {
         );
         let err = p("apt:curl@download_only").unwrap_err();
         assert!(format!("{}", err).contains("not an option on `apt`"));
+    }
+
+    #[test]
+    fn a_helm_plugin_carries_its_install_source_and_nothing_else_may() {
+        // U39. The unit tests for this built a `PackageSpec` by hand and so never asked the
+        // grammar whether `@url` was a legal key — it was not, and a real `helm` said so.
+        assert_eq!(
+            options_of("helm:diff@url=https://github.com/databus23/helm-diff").one("url"),
+            Some("https://github.com/databus23/helm-diff")
+        );
+        let err = p("apt:curl@url=https://example.com/curl").unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("not an option on `apt`"), "{}", msg);
+        assert!(
+            err.hint.unwrap().contains("helm"),
+            "the refusal names who takes it"
+        );
     }
 
     #[test]

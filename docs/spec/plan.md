@@ -48,10 +48,11 @@ what blocks the next one. The reasoning and the measurements are the first entry
     commit. Set once per binary rather than per test, because a step each test must remember is
     the step the next test forgets, which is how this one was written. `identify()` and its
     three call sites are gone.
-0b. **Run `tools` and `gentoo` in CI on a schedule, not only on dispatch.** They are the images
-    that reach 18 real lifecycles instead of 7; leaving them opt-in means the broad backend
-    coverage exists and is not consulted. A nightly is enough — the objection to gating every
-    push (V.57: a slow gate teaches people to skip it) does not apply to a nightly.
+0b. ~~**Run `tools` and `gentoo` in CI on a schedule, not only on dispatch.**~~ **DONE
+    2026-07-26.** Both run on a nightly `schedule:` as well as dispatch. `fedora`/`dnf` also
+    joined the per-push matrix, which had been running ubuntu/alpine/arch while
+    `docker/integration/run.sh` swept five images locally — so CI had been narrower than the
+    thing a developer runs by hand, which is the wrong way round.
 0c. **Close the live-validation gap on the destructive effectors**, in this order, because each
     is a path where being wrong costs a filesystem: btrfs restore, then zfs/lvm, then D5's
     `dpkg -i`/`rpm -U` handoff, then U30 storage removal. All are argv-tested; none has run.
@@ -66,10 +67,14 @@ what blocks the next one. The reasoning and the measurements are the first entry
 0e. **Cut a version.** `0.1.0`, no tags, `CHANGELOG` still `[Unreleased]`, and `install.sh`
     does `cargo install --git` from `HEAD` — so there is no artifact to install and nothing to
     roll back *to*. The tag-triggered release job in `ci.yml` exists and has never fired.
-0f. **macOS has never been exercised**, only compiled and unit-tested. brew/mas/macports have no
-    live lifecycle, the APFS provider is create-only and unrun, launchd scheduling is unrun, and
-    `release-check.sh`'s Darwin branch has never been executed. This needs hardware, so it is
-    last — but it must be *said*, because "builds on macOS in CI" reads as support and is not.
+0f. **macOS has never been exercised**, only compiled and unit-tested. **Scheduled 2026-07-26,
+    not yet proven:** a `macos-native` job runs `scripts/integration-windows.sh brew wget` on
+    `macos-latest`, nightly — the first execution `release-check.sh`'s Darwin branch will ever
+    have had. Nightly rather than per-push on purpose: it has never run, and a never-run job on
+    the push gate gets disabled rather than fixed. Promote it once it has been green a few
+    nights. **Still unproven:** mas, macports, the create-only APFS provider, launchd. "Builds on
+    macOS in CI" still reads as support and still is not — but the macOS column has now caught a
+    real bug (S34), which is more than it had done before.
 
 ### Tier 1 — small ruled fixes (additive, low-risk, clears the register backlog)
 

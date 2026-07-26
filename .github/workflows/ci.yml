@@ -5,6 +5,12 @@ on:
     branches: [ main ]
   pull_request:
   workflow_dispatch:
+  # The slow images and the macOS sweep are the broad half of the coverage, and coverage
+  # that only runs when somebody remembers to press a button is coverage nobody consults.
+  # Nightly, because V.57's objection — a slow gate teaches people to skip it — is about
+  # gating every push, not about running at 03:00.
+  schedule:
+    - cron: '0 3 * * *'
 
 env:
   CARGO_TERM_COLOR: always
@@ -104,6 +110,7 @@ jobs:
       matrix:
         include:
           - { distro: ubuntu, backend: apt,    pkg: jq }
+          - { distro: fedora, backend: dnf,    pkg: jq }
           - { distro: alpine, backend: apk,    pkg: jq }
           - { distro: arch,   backend: pacman, pkg: jq }
     steps:
@@ -116,12 +123,14 @@ jobs:
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
 
-  # Opt-in: the source-building images. `tools` gives the ecosystem managers a real
-  # install → list → remove; `gentoo` runs Portage in SMOKE_ONLY. Both are too slow to gate
-  # every push, so they run on manual dispatch (Actions → CI → Run workflow).
+  # The source-building images. `tools` is where 18 of the ecosystem managers get a real
+  # install → list → remove — the widest live coverage this repo has — and `gentoo` runs
+  # Portage in SMOKE_ONLY. Both are too slow to gate every push, so they run nightly and on
+  # manual dispatch. Nightly and not never: dispatch-only meant the broad coverage existed
+  # and was not consulted, which is indistinguishable from not having it.
   slow-containers:
-    name: Integration (${{ matrix.distro }}, opt-in)
-    if: github.event_name == 'workflow_dispatch'
+    name: Integration (${{ matrix.distro }}, nightly)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -138,3 +147,23 @@ jobs:
         docker run --rm ${{ matrix.smoke }} \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
+
+  # macOS, run rather than compiled. A Darwin build passing `cargo test` says the code
+  # compiles there; it says nothing about whether `brew install` reaches brew, whether the
+  # parser reads `brew list --versions`, or whether a removal comes back. This is the same
+  # sweep `release-check.sh` runs on a Mac, on the runner instead of on hardware nobody has.
+  #
+  # Nightly and dispatch, not every push: it has never run, and a job whose first execution
+  # gates other people's commits is a job that gets disabled rather than fixed. Promote it to
+  # `containers`' schedule once it has been green a few nights.
+  macos-native:
+    name: Integration (macOS native, nightly)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Build
+      run: cargo build --release
+    - name: Native sweep (brew)
+      run: LINIX="$PWD/target/release/linix" bash scripts/integration-windows.sh brew wget

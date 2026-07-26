@@ -1013,9 +1013,17 @@ GPG reachable on the same plugin mechanism and `linix lock` approval as every ot
 
 **Status: ANSWERED — ruled 2026-07-26.**
 
-**In the tree today:** built in the same commit as this ruling. `ManagerConfig` carries
-`install_source_option`, `helm` sets it to `url`, and both harnesses run helm's full lifecycle
-where they previously named it as an open bug and skipped it.
+**In the tree today:** built in the same commit as this ruling. `capability::INSTALLS_FROM_SOURCE`
+is the one table — `("helm", "url")` — read by both ends: the grammar admits `@url` as a package
+option and refuses it by name on every backend that installs by name, and `register_helm` builds
+its `ManagerConfig::install_source_option` from the same row. Both harnesses run helm's full
+lifecycle where they previously named it as an open bug and skipped it.
+
+**The first version of this shipped broken, and only a real `helm` said so.** The unit tests built
+a `PackageSpec` by hand, so nothing ever asked the grammar whether `@url` was a legal key — and it
+was not: II.2's option table is closed, so every `helm:diff@url=…` line was refused as a
+misspelling while every test passed. `capability.rs` now has a test that every install-source key
+is in `PACKAGE_OPTION_KEYS`, which is the drift this could otherwise repeat.
 
 **U39 — When a manager installs by one string and removes by another, which one is the
 declaration?** `helm plugin install` takes a URL; `helm plugin list` and `helm plugin uninstall`

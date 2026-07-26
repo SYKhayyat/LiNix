@@ -40,25 +40,30 @@ install and the Linux snapshot providers' live restore. **VI.0 — the bug that 
 with no guard, no plan and no count, and that `--dry-run` performed — is FIXED** (S24/S25,
 2026-07-23, verified 2026-07-24).
 
-**On "the suite is green" — read this before quoting it (2026-07-26 assessment).** It is green,
-and green here has always meant *on the developer's Windows box*: `cargo build --all-targets`,
-`cargo test --all-targets` (1205 passed / 0 failed), `cargo clippy --all-targets`. Two things
-qualify it, both measured. **First, `origin/main` was 112 commits behind `HEAD` until 2026-07-26**
-— the entire U-series, D5 and the provider mechanism had never been compiled on Linux or macOS,
-nor run through the container matrix, because CI never saw them. **Second, the two CI runs that
-did happen both failed**, on `ubuntu-latest` and `windows-latest` alike, on one test that commits
-to a git repo and unwraps: it passes wherever a global git identity exists and fails wherever one
-does not (**S33**). So the green was real, and was partly a property of one machine's `git
-config`. Note also that `cargo test --lib` — which this paragraph cited for a week — **does not
-run the `tests/` binaries at all**, which is where that failure lives.
+**On "the suite is green" — read this before quoting it.** Green here had always meant *on the
+developer's Windows box*, and on 2026-07-26 that turned out to be load-bearing. `origin/main` was
+112 commits behind `HEAD` until that day — the entire U-series, D5 and the provider mechanism had
+never been compiled on Linux or macOS. The first CI run that saw them **failed on all three
+platforms, on two different bugs**: Windows on a test that commits to a git repo and unwraps
+(**S33** — it passes wherever a global git identity exists), Linux and macOS on a test asserting
+Windows path semantics everywhere (**S34** — nobody had seen it, because the first red job hid the
+second). Both are fixed, at the mechanism rather than the instance: the test binaries now read no
+host git config at all, and the platform-specific assertion is behind `#[cfg(windows)]`. **The
+suite is now green on Linux too, proven in a container with no git identity — 1,307 tests, 0
+failures — including the `tests/` binaries that `cargo test --lib` never reaches.** That last
+point is why this paragraph was wrong for a week: it cited `cargo test --lib`, which does not run
+the binary where S33 lived.
 
 **Build state is not readiness, and this file should stop implying it is.** The register is at
 zero unbuilt items; the *validation* surface is far narrower than the build surface. **52 backends
 are registered and exactly 22 have ever been run against a real package manager** — 7 per distro
-image, 18 in the manual-dispatch `tools` image, `scoop` on the native Windows sweep, **45
-plan-smoked** on any one image. macOS is compiled and
-unit-tested and has never been exercised. The destructive effectors — btrfs/zfs/lvm restore, D5's
-`dpkg -i`/`rpm -U` handoff, U30 storage removal — are argv-tested and unrun. The full assessment,
+image, 18 in the `tools` image, `scoop` on the native Windows sweep, **45 plan-smoked** on any one
+image. Since 2026-07-26 `tools` and `gentoo` run nightly rather than on manual dispatch and
+`fedora` joined the per-push matrix, so the widest run happens without anyone pressing a button —
+**but the count of backends that have ever run for real is unchanged.** macOS is compiled and
+unit-tested and has never been *run*; a nightly `macos-native` job now exists and has not yet gone
+green. The destructive effectors — btrfs/zfs/lvm restore, D5's `dpkg -i`/`rpm -U` handoff, U30
+storage removal — are argv-tested and unrun. The full assessment,
 with the numbers and the order to fix them in, is the first entry in
 [`spec/history.md`](spec/history.md).
 
