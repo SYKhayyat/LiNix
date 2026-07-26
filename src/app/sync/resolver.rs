@@ -1027,6 +1027,7 @@ mod tests {
             let config = ManagerConfig {
                 name: name.into(),
                 binary: None,
+                remove_binary: None,
                 install_args: vec![],
                 remove_args: vec![],
                 list_args: vec![],

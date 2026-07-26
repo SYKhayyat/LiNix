@@ -155,6 +155,8 @@ pub async fn create_default_registry(
     register_gem(&mut reg, &executor);
     register_bun(&mut reg, &executor);
     register_pkgin(&mut reg, &executor);
+    register_pkg_freebsd(&mut reg, &executor);
+    register_pkg_add_openbsd(&mut reg, &executor);
     register_dotnet(&mut reg, &executor);
 
     // --- Ecosystem backends (generic, config-driven; cross-platform, runtime-gated) ---
@@ -203,6 +205,7 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "apt".into(),
             binary: None,
+            remove_binary: None,
             version_pin: Some(VersionPin::Inline("{name}={version}".into())),
             install_args: vec!["install".into(), "-y".into()],
             remove_args: vec!["remove".into(), "-y".into()],
@@ -217,6 +220,7 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // prints bare names with no versions, hence BareNames.
             manual: ManualListing::Command {
                 binary: Some("apt-mark".into()),
+                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -237,6 +241,7 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             update_args: Some(vec!["update".into()]),
             orphan_dry_run: Some(OrphanDryRun {
                 binary: Some("apt-get".into()),
+                remove_binary: None,
                 args: vec!["autoremove".into(), "--dry-run".into()],
                 removes_line_prefix: "Remv ".into(),
             }),
@@ -299,6 +304,7 @@ fn register_aur_helper(
         config: ManagerConfig {
             name: name.into(),
             binary: None,
+            remove_binary: None,
             // AUR + Arch are rolling: no exact-version pin (mirrors pacman).
             version_pin: None,
             install_args: vec!["-S".into(), "--noconfirm".into(), "--needed".into()],
@@ -308,6 +314,7 @@ fn register_aur_helper(
             // `-Qe` = explicitly installed only (11 of 173 on the arch test image).
             manual: ManualListing::Command {
                 binary: None,
+                remove_binary: None,
                 args: vec!["-Qe".into()],
                 format: ManualFormat::SameAsInstalled,
             },
@@ -356,6 +363,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "apk".into(),
             binary: None,
+            remove_binary: None,
             version_pin: Some(VersionPin::Inline("{name}={version}".into())),
             install_args: vec!["add".into()],
             remove_args: vec!["del".into()],
@@ -367,6 +375,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // Entries may carry a version constraint or repo tag, which BareNames strips.
             manual: ManualListing::Command {
                 binary: Some("cat".into()),
+                remove_binary: None,
                 args: vec!["/etc/apk/world".into()],
                 format: ManualFormat::BareNames,
             },
@@ -436,6 +445,7 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "zypper".into(),
             binary: None,
+            remove_binary: None,
             version_pin: Some(VersionPin::Inline("{name}={version}".into())),
             install_args: vec!["install".into(), "-y".into()],
             remove_args: vec!["remove".into(), "-y".into()],
@@ -488,6 +498,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "winget".into(),
             binary: None,
+            remove_binary: None,
             version_pin: Some(VersionPin::Flag(vec![
                 "--version".into(),
                 "{version}".into(),
@@ -556,6 +567,7 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "scoop".into(),
             binary: None,
+            remove_binary: None,
             version_pin: None, // scoop pins via versioned manifests; not a simple flag
 
             install_args: vec!["install".into()],
@@ -610,6 +622,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "choco".into(),
             binary: None,
+            remove_binary: None,
             version_pin: Some(VersionPin::Flag(vec![
                 "--version".into(),
                 "{version}".into(),
@@ -677,6 +690,7 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "mas".into(),
             binary: None,
+            remove_binary: None,
             version_pin: None, // Mac App Store installs the current published version only
 
             install_args: vec!["install".into()],
@@ -727,6 +741,7 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "pip".into(),
             binary: None,
+            remove_binary: None,
             version_pin: Some(VersionPin::Inline("{name}=={version}".into())),
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into(), "-y".into()],
@@ -775,6 +790,7 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "gem".into(),
             binary: None,
+            remove_binary: None,
             version_pin: Some(VersionPin::Flag(vec!["-v".into(), "{version}".into()])),
             install_args: vec!["install".into()],
             remove_args: vec!["uninstall".into()],
@@ -823,6 +839,7 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "bun".into(),
             binary: None,
+            remove_binary: None,
             version_pin: Some(VersionPin::Inline("{name}@{version}".into())),
             install_args: vec!["add".into(), "-g".into()],
             remove_args: vec!["remove".into(), "-g".into()],
@@ -870,6 +887,7 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "macports".into(),
             binary: None,
+            remove_binary: None,
             // MacPorts pins via `install name @version`, but versions are entangled with
             // variants/revisions; skip automatic pinning rather than risk a wrong ref.
             version_pin: None,
@@ -880,6 +898,7 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // `port installed requested` = ports the user asked for, not pulled-in deps.
             manual: ManualListing::Command {
                 binary: None,
+                remove_binary: None,
                 args: vec!["installed".into(), "requested".into()],
                 format: ManualFormat::SameAsInstalled,
             },
@@ -925,6 +944,7 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "pkgin".into(),
             binary: None,
+            remove_binary: None,
             version_pin: None,
             install_args: vec!["-y".into(), "install".into()],
             remove_args: vec!["-y".into(), "remove".into()],
@@ -966,6 +986,123 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     ));
 }
 
+/// FreeBSD's `pkg` (U26). One binary with subcommands, like apt — `pkg install`, `pkg delete`,
+/// `pkg info`. Gated at runtime by the presence of `pkg`; on a Linux/mac box it simply is not
+/// available. `when family == freebsd` already answers on a BSD (`d66730e`), so a module can
+/// scope its `pkg:` lines to the platform.
+fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let core = Arc::new(GenericBackendCore {
+        name: "pkg".into(),
+        executor: executor.duplicate(),
+        config: ManagerConfig {
+            name: "pkg".into(),
+            binary: None,
+            remove_binary: None,
+            version_pin: None,
+            install_args: vec!["install".into(), "-y".into()],
+            // `pkg delete` is the canonical uninstall; `-y` so a non-interactive sync does not hang.
+            remove_args: vec!["delete".into(), "-y".into()],
+            purge_args: None,
+            list_args: vec!["info".into()],
+            // FreeBSD marks automatically-installed packages; `%a = 0` selects the ones the
+            // user asked for, `%n` prints just the name. That is exactly `adopt`'s manual set.
+            manual: ManualListing::Command {
+                binary: None,
+                args: vec!["query".into(), "-e".into(), "%a = 0".into(), "%n".into()],
+                format: crate::backends::generic::ManualFormat::BareNames,
+            },
+            essential_args: None,
+            search_args: vec!["search".into()],
+            search_binary: None,
+            enumerate_args: None,
+            enumerate_binary: None,
+            list_binary: None,
+            upgrade_args: vec!["upgrade".into(), "-y".into()],
+            update_args: Some(vec!["update".into()]),
+            orphan_dry_run: None,
+            repo_add_args: None,
+            repo_remove_args: None,
+            repo_list_args: None,
+            depends_args: None,
+            needs_root: true,
+            is_exclusive: true,
+            flag_map: HashMap::new(),
+        },
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::bsd::parse_pkg(o),
+            search_fn: |o| crate::parsers::bsd::parse_pkg(o),
+        }),
+    });
+    reg.register(Arc::new(
+        BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(GenericQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(GenericSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
+}
+
+/// OpenBSD's package tools (U26). Unlike FreeBSD there is no single frontend: install is
+/// `pkg_add <name>` (no subcommand), remove is a SEPARATE binary `pkg_delete <name>`, and both
+/// listing and search are `pkg_info`. The `remove_binary` field is what lets one backend drive
+/// three tools. Gated by the presence of `pkg_add`.
+fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    let core = Arc::new(GenericBackendCore {
+        name: "pkg_add".into(),
+        executor: executor.duplicate(),
+        config: ManagerConfig {
+            name: "pkg_add".into(),
+            binary: None,
+            // The uninstaller is its own program; `pkg_delete <name>` takes no subcommand, so
+            // remove_args stays empty and the separate-binary path in `remove` handles it.
+            remove_binary: Some("pkg_delete".into()),
+            version_pin: None,
+            // `pkg_add <name>` — the binary itself is the verb, so no leading subcommand.
+            install_args: vec![],
+            remove_args: vec![],
+            purge_args: None,
+            // `pkg_info` with no args lists installed packages.
+            list_args: vec![],
+            list_binary: Some("pkg_info".into()),
+            // OpenBSD does not expose a stable manual/automatic split through pkg_info, so
+            // adoption skips it rather than risk adopting dependency packages.
+            manual: ManualListing::Unsupported,
+            essential_args: None,
+            // `pkg_info -Q <query>` searches the remote package set.
+            search_args: vec!["-Q".into()],
+            search_binary: Some("pkg_info".into()),
+            enumerate_args: None,
+            enumerate_binary: None,
+            // `pkg_add -u` updates every installed package to the newest build.
+            upgrade_args: vec!["-u".into()],
+            update_args: None,
+            orphan_dry_run: None,
+            repo_add_args: None,
+            repo_remove_args: None,
+            repo_list_args: None,
+            depends_args: None,
+            needs_root: true,
+            is_exclusive: true,
+            flag_map: HashMap::new(),
+        },
+        parser: Arc::new(LambdaParser {
+            installed_fn: |o| crate::parsers::bsd::parse_pkg_add(o),
+            search_fn: |o| crate::parsers::bsd::parse_pkg_add(o),
+        }),
+    });
+    reg.register(Arc::new(
+        BackendCapabilities::builder(core.clone())
+            .with_installable(Arc::new(GenericInstallable { core: core.clone() }))
+            .with_queryable(Arc::new(GenericQueryable { core: core.clone() }))
+            .with_searchable(Arc::new(GenericSearchable { core: core.clone() }))
+            .with_upgradable(Arc::new(GenericUpgradable { core: core.clone() }))
+            .with_metadata_provider(core.clone())
+            .build(),
+    ));
+}
+
 /// .NET global tools (`dotnet tool ...`). Cross-platform; gated by the `dotnet` binary.
 /// This is the system-inventory surface of the .NET ecosystem — plain NuGet packages
 /// are project-scoped and deliberately out of scope.
@@ -976,6 +1113,7 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: ManagerConfig {
             name: "dotnet".into(),
             binary: None,
+            remove_binary: None,
             version_pin: Some(VersionPin::Flag(vec![
                 "--version".into(),
                 "{version}".into(),
@@ -1037,6 +1175,7 @@ fn base_config(name: &str) -> ManagerConfig {
     ManagerConfig {
         name: name.into(),
         binary: None,
+        remove_binary: None,
         install_args: vec![],
         remove_args: vec![],
         purge_args: None,
@@ -1614,6 +1753,10 @@ mod tests {
 
         // Cross-platform generic managers (gated at runtime by their binary)
         assert_caps(&reg, "pkgin", FULL);
+        // U26: the BSD package tools. Registered on every platform (runtime-gated by binary
+        // presence), so they are asserted unconditionally like pkgin.
+        assert_caps(&reg, "pkg", FULL);
+        assert_caps(&reg, "pkg_add", FULL);
         assert_caps(&reg, "dotnet", FULL);
 
         // Language managers (generic)

@@ -1,5 +1,6 @@
 pub mod apt;
 pub mod brew;
+pub mod bsd;
 pub mod common;
 pub mod conda;
 pub mod dnf;

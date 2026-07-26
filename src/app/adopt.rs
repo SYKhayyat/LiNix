@@ -372,6 +372,7 @@ mod tests {
         let mut config = ManagerConfig {
             name: "apt".into(),
             binary: None,
+            remove_binary: None,
             install_args: vec![],
             remove_args: vec![],
             list_args: vec!["-W".into()],
@@ -484,6 +485,7 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
+                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -527,6 +529,7 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
+                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -585,6 +588,7 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
+                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -625,6 +629,7 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
+                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -701,6 +706,7 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
+                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
@@ -740,6 +746,7 @@ mod tests {
         let reg = registry_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
+                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },

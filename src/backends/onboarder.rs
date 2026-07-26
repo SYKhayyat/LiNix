@@ -288,6 +288,9 @@ pub struct CustomBackendDef {
     /// The program actually run. Absent means the name is the command, which is what every
     /// definition said before XIII.12 split the two.
     pub binary: Option<String>,
+    /// The program that removes, when it is a separate binary from `binary` (OpenBSD installs
+    /// with `pkg_add` and removes with `pkg_delete`). Absent ⇒ removal uses `binary`.
+    pub remove_binary: Option<String>,
     #[serde(default)]
     pub install_args: Vec<String>,
     #[serde(default)]
@@ -597,6 +600,7 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
     let config = ManagerConfig {
         name: def.name.clone(),
         binary: def.binary.as_deref().map(expand_binary),
+        remove_binary: def.remove_binary.as_deref().map(expand_binary),
         install_args: def.install_args,
         remove_args: def.remove_args,
         list_args: def.list_args,
@@ -831,6 +835,7 @@ mod tests {
         CustomBackendDef {
             name: "firewall".into(),
             binary: Some("ufw".into()),
+            remove_binary: None,
             install_args: vec!["allow".into()],
             remove_args: vec!["delete".into(), "allow".into()],
             list_args: vec!["status".into()],
@@ -904,6 +909,7 @@ mod tests {
             let mut r = BackendRegistry::new();
             let def = CustomBackendDef {
                 binary: Some(path.into()),
+                remove_binary: None,
                 ..firewall_def()
             };
             assert_eq!(
@@ -926,6 +932,7 @@ mod tests {
             let mut reg = BackendRegistry::new();
             let def = CustomBackendDef {
                 binary: Some(bad.into()),
+                remove_binary: None,
                 ..firewall_def()
             };
             assert_eq!(

@@ -100,6 +100,10 @@ pub struct ManagerConfig {
     pub binary: Option<String>,
     pub install_args: Vec<String>,
     pub remove_args: Vec<String>,
+    /// Optional: the program that runs the REMOVE commands, when a manager uninstalls with a
+    /// *separate* binary from the one it installs with — OpenBSD installs with `pkg_add` and
+    /// removes with `pkg_delete`. `None` = removal uses the same binary as everything else.
+    pub remove_binary: Option<String>,
     /// Args that also destroy the package's configuration (Debian's `purge`). `None` means
     /// this manager draws no such distinction, and `--purge` on it is refused rather than
     /// quietly doing an ordinary removal.
@@ -155,6 +159,12 @@ impl GenericBackendCore {
     /// fall back to this, not to the name.
     pub fn binary(&self) -> &str {
         self.config.binary.as_deref().unwrap_or(&self.name)
+    }
+
+    /// The program that removes. Falls back to [`binary`](Self::binary), not to the name, so a
+    /// user-defined noun with a separate remover still removes with the right tool.
+    pub fn remove_binary(&self) -> &str {
+        self.config.remove_binary.as_deref().unwrap_or_else(|| self.binary())
     }
 }
 
@@ -283,9 +293,10 @@ impl Installable for GenericInstallable {
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
         // Some managers (e.g. Haskell's cabal/stack) genuinely have no uninstall verb.
-        // An empty `remove_args` encodes that: report it honestly as Unsupported instead
-        // of running the bare binary with just the package names, which would misbehave.
-        if self.core.config.remove_args.is_empty() {
+        // An empty `remove_args` encodes that — UNLESS the manager removes with a separate
+        // binary that is itself the verb (OpenBSD's `pkg_delete <name>`, no subcommand). A
+        // separate remove binary means removal is supported however few args it takes.
+        if self.core.config.remove_args.is_empty() && self.core.config.remove_binary.is_none() {
             return Err(crate::core::Error::Unsupported(self.core.name.clone()));
         }
         self.run_removal(self.core.config.remove_args.clone(), names, sudo)
@@ -318,19 +329,17 @@ impl GenericInstallable {
         if names.is_empty() {
             return Ok(());
         }
-        crate::core::argv::push_names(&mut args, self.core.binary(), names);
+        let bin = self.core.remove_binary();
+        crate::core::argv::push_names(&mut args, bin, names);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         if self.core.config.is_exclusive {
             self.core
                 .executor
-                .run_exclusive(self.core.binary(), self.core.binary(), &arg_refs, sudo)
+                .run_exclusive(bin, bin, &arg_refs, sudo)
                 .await?;
         } else {
-            self.core
-                .executor
-                .run(self.core.binary(), &arg_refs, sudo)
-                .await?;
+            self.core.executor.run(bin, &arg_refs, sudo).await?;
         }
         Ok(())
     }
@@ -681,6 +690,7 @@ mod tests {
             config: ManagerConfig {
                 name: "apt".into(),
                 binary: None,
+                remove_binary: None,
                 install_args: vec![],
                 remove_args: vec![],
                 list_args: vec![],
@@ -779,6 +789,7 @@ mod tests {
         let q = queryable_with(
             ManualListing::Command {
                 binary: Some("apt-mark".into()),
+                remove_binary: None,
                 args: vec!["showmanual".into()],
                 format: ManualFormat::BareNames,
             },
