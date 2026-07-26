@@ -54,8 +54,9 @@ run the `tests/` binaries at all**, which is where that failure lives.
 
 **Build state is not readiness, and this file should stop implying it is.** The register is at
 zero unbuilt items; the *validation* surface is far narrower than the build surface. **52 backends
-are registered and at most 22 have ever been run against a real package manager** — 7 per distro
-image, 18 in the manual-dispatch `tools` image, **45 plan-smoked**. macOS is compiled and
+are registered and exactly 22 have ever been run against a real package manager** — 7 per distro
+image, 18 in the manual-dispatch `tools` image, `scoop` on the native Windows sweep, **45
+plan-smoked** on any one image. macOS is compiled and
 unit-tested and has never been exercised. The destructive effectors — btrfs/zfs/lvm restore, D5's
 `dpkg -i`/`rpm -U` handoff, U30 storage removal — are argv-tested and unrun. The full assessment,
 with the numbers and the order to fix them in, is the first entry in

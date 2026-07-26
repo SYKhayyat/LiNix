@@ -53,9 +53,13 @@ not run that binary at all; `--all-targets`, which this file cited, does, and pa
 
 1. **S33 — CI red.** One test, one fixture, and the fix is the `identify()` helper `git.rs`
    already has. Until it is green, every claim in this file rests on one machine.
-2. **Breadth of live validation: 52 registered backends, and at most 22 have ever been run for
-   real.** Per image it is 7 real lifecycles (ubuntu / fedora / arch / alpine) and **45
-   plan-smoked**; the broad `tools` image reaches 18, and `tools` runs only on manual dispatch.
+2. **Breadth of live validation: 52 registered backends, and exactly 22 have ever been run for
+   real.** Counted, not estimated: the `tools` image's 18 (`apt bun cargo composer conda dotnet
+   emacs gem github go krew luarocks mise npm pipx pixi pub uv`), plus `dnf`, `pacman` and `apk`
+   from the distro images, plus `scoop` from the native Windows sweep — `winget` and `choco` are
+   deliberately plan-smoked there because they install machine-wide on a real machine. Per image
+   it is 7 real lifecycles (ubuntu / fedora / arch / alpine) and **45 plan-smoked**; only the
+   `tools` image reaches 18, and `tools` runs on manual dispatch.
    The remainder are proven against mocks, **"which is where format drift is invisible by
    construction"** — this file's own words, written before S22, S23 and S31 each proved it by
    being found only when a real manager was run. **This is the single largest gap between "the
