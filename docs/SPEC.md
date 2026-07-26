@@ -36,10 +36,30 @@ user verbs U35, `repl` U34). **The last two open items — `D5` and U27's "built
 rows" half — were cleared to build by the owner decision session 2026-07-26 and are built now, not
 parked on hardware** (Option A: typed-placeholder Windows row; see `plan.md` Tier 1 and Tier 3
 item 6). What the real machine still owes is validation, not construction: D5's live `dpkg`/`rpm`
-install and the Linux snapshot providers' live restore. The suite is green:
-`cargo build --all-targets`, `cargo test --lib` (1195 passed / 0 failed), `cargo clippy
---all-targets` all clean. **VI.0 — the bug that removed software with no guard, no plan and no
-count, and that `--dry-run` performed — is FIXED** (S24/S25, 2026-07-23, verified 2026-07-24).
+install and the Linux snapshot providers' live restore. **VI.0 — the bug that removed software
+with no guard, no plan and no count, and that `--dry-run` performed — is FIXED** (S24/S25,
+2026-07-23, verified 2026-07-24).
+
+**On "the suite is green" — read this before quoting it (2026-07-26 assessment).** It is green,
+and green here has always meant *on the developer's Windows box*: `cargo build --all-targets`,
+`cargo test --all-targets` (1205 passed / 0 failed), `cargo clippy --all-targets`. Two things
+qualify it, both measured. **First, `origin/main` was 112 commits behind `HEAD` until 2026-07-26**
+— the entire U-series, D5 and the provider mechanism had never been compiled on Linux or macOS,
+nor run through the container matrix, because CI never saw them. **Second, the two CI runs that
+did happen both failed**, on `ubuntu-latest` and `windows-latest` alike, on one test that commits
+to a git repo and unwraps: it passes wherever a global git identity exists and fails wherever one
+does not (**S33**). So the green was real, and was partly a property of one machine's `git
+config`. Note also that `cargo test --lib` — which this paragraph cited for a week — **does not
+run the `tests/` binaries at all**, which is where that failure lives.
+
+**Build state is not readiness, and this file should stop implying it is.** The register is at
+zero unbuilt items; the *validation* surface is far narrower than the build surface. **52 backends
+are registered and at most 22 have ever been run against a real package manager** — 7 per distro
+image, 18 in the manual-dispatch `tools` image, **45 plan-smoked**. macOS is compiled and
+unit-tested and has never been exercised. The destructive effectors — btrfs/zfs/lvm restore, D5's
+`dpkg -i`/`rpm -U` handoff, U30 storage removal — are argv-tested and unrun. The full assessment,
+with the numbers and the order to fix them in, is the first entry in
+[`spec/history.md`](spec/history.md).
 
 **For what remains to build and in what order, read the ordered list at the top of
 [`spec/plan.md`](spec/plan.md). It is the only list of build state** — the register says whether

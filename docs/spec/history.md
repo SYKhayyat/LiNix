@@ -14,6 +14,87 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Assessment 2026-07-26 — production readiness, measured; and the tree pushed after 112 commits
+
+**No code changed this session. It read the tree, pushed it, and ran the one gate that had never
+seen it.** The question asked was how close this is to production, and the honest answer has two
+halves that point in opposite directions: **the safety architecture and the test apparatus are
+past most shipping tools; the validation surface and the release apparatus are pre-release.**
+
+**The finding that reframes every green in this file: `origin/main` was 112 commits behind
+`HEAD`, last pushed 2026-07-23.** Everything in Tiers 1–4 — D5, the whole U-series, the provider
+mechanism, `repl`, user verbs, module parameters — had been built, unit-tested and committed on
+one Windows box and **never once compiled on Linux or macOS, and never run through the container
+matrix.** CI is not a formality here: it is the only thing in this project that builds the tree
+on a platform other than the developer's. It was pushed this session (`d901a77..2db5aca`).
+
+**And the two CI runs before it had both failed** — 2026-07-23 and 2026-07-23 — while this
+document recorded green for the same tree. Both halves of that are true at once, and the
+explanation is **S33**: `tests/feature_logic_tests.rs:90` commits to a temp git repo and unwraps,
+so it passes on any host with a global git identity and fails on any host without one. The green
+was a property of the developer's `git config`. `cargo test --lib`, which `SPEC.md` cited, does
+not run that binary at all; `--all-targets`, which this file cited, does, and passes here.
+**Neither report was dishonest and neither was a measurement of the code.**
+
+**What is genuinely strong, measured not asserted:**
+
+- **Zero `todo!()` / `unimplemented!()` in 74,462 lines.** One `TODO`-shaped grep hit and it is a
+  `/gnu/store/xxx` path in a parser fixture. No `#[allow(dead_code)]` anywhere.
+- **39 `.unwrap()`s outside test blocks**, 24 of them in two files that are tests by content
+  (VI.3 re-measured). Production maximum 5 in one file.
+- **1,231 unit tests in `src/`, 82 integration tests, and a container harness whose section 17
+  is a coverage audit that hard-fails on any registered backend or any `--help` subcommand that
+  no real lifecycle and no plan-smoke touched.** A gate that can notice what is *missing* is rare;
+  this one exists and is green.
+- **63 subcommands in `--help`, 58 actually executed in-container, 5 exempt with a named reason
+  each.** Nothing is shipped as `--help` text over a stub.
+
+**What is not ready, in the order it should be fixed:**
+
+1. **S33 — CI red.** One test, one fixture, and the fix is the `identify()` helper `git.rs`
+   already has. Until it is green, every claim in this file rests on one machine.
+2. **Breadth of live validation: 52 registered backends, and at most 22 have ever been run for
+   real.** Per image it is 7 real lifecycles (ubuntu / fedora / arch / alpine) and **45
+   plan-smoked**; the broad `tools` image reaches 18, and `tools` runs only on manual dispatch.
+   The remainder are proven against mocks, **"which is where format drift is invisible by
+   construction"** — this file's own words, written before S22, S23 and S31 each proved it by
+   being found only when a real manager was run. **This is the single largest gap between "the
+   suite is green" and "a user's machine is safe."**
+3. **macOS builds and unit-tests in CI and has never been exercised.** brew, mas and macports
+   have no live lifecycle; the APFS provider is create-only and unrun; launchd scheduling is
+   unrun; `release-check.sh`'s Darwin branch has never been executed. There is no macOS hardware
+   in this project.
+4. **The hardware-deferred list is exactly the high-blast-radius set.** btrfs / zfs / lvm
+   *restore*, D5's live `dpkg -i` / `rpm -U` handoff, `U30` storage-object removal (which
+   destroys filesystems), and the `U38` secret providers. Each is argv-tested and pure-logic
+   tested, and none has ever run. It is a coherent risk profile — the mechanism is proven, the
+   effector is not — but it means **snapshots cannot yet be described to a user as the safety net
+   under a bad sync**, because no one has watched one come back.
+5. **Never released.** `version = "0.1.0"`, no tags, `CHANGELOG` still `[Unreleased]`, and
+   `scripts/install.sh` builds from git `HEAD` with `cargo install --git`, so it requires a Rust
+   toolchain and pins nothing. The tag-triggered release job in `ci.yml` has never fired. There
+   is no artifact a user could install, and nothing to roll back *to*.
+6. **One open product bug, recorded in the harness and nowhere else:** `helm plugin install`
+   takes a URL and `helm plugin uninstall` takes a name, so **a helm plugin LiNix installed,
+   LiNix cannot remove.** Proven by a real run. It is a `no_lifecycle_reason` string in
+   `run-in-container.sh:550` — which is the right place for it to be *said* and the wrong place
+   for it to be *tracked*.
+7. **Hygiene, none of it blocking:** the tree is not `rustfmt`-clean (both CI and
+   `release-check.sh` keep `fmt` non-blocking and say so); `main.rs` is 6,676 lines; F3's comment
+   sweep is still openly not done at 9,572 comment lines; and seven scratch artefacts are tracked
+   in git at the repo root (`prompt.txt`, `blocks.json`, `docker_log_7_10.txt`,
+   `docker_log_7_23.txt`, `scratch_u9.sh`, `Cargo.txt.txt`, `todo.md`).
+
+**The verdict, in the terms the question was asked.** Judged as *architecture*, this is closer to
+production than most 1.0s: the removal guard is on every path, there is one parser, one
+transaction engine, a WAL that heals, a dry-run that cannot mutate, and an exit-code table.
+Judged as a *product*, it is a **beta on Linux for apt / dnf / pacman / apk plus the dozen
+language managers the `tools` image really exercises, and an alpha everywhere else** — because
+the other thirty backends, the macOS platform, and every destructive filesystem operation have
+been proven by construction and not by use. **The gap is not build quality. It is that this
+codebase's last four real bugs were each found by running a real manager, and thirty backends
+have never been run.**
+
 ## Build session 2026-07-26 — the last register items built: D5, U27 built-ins-as-rows, P0 re-measure
 
 **Everything the owner cleared the day before is now built, unit-tested, and committed. The

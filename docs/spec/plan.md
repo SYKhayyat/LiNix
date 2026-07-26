@@ -33,6 +33,36 @@ register is unbuilt.
 first; the two things that can destroy data or leak a secret (storage removal, secret providers)
 last, after the mechanism they ride is proven.
 
+### Tier 0 — what stands between this tree and a release (added by the 2026-07-26 assessment)
+
+**The register is at zero unbuilt items and that is not the same as ready.** These are not
+features and none of them is a decision; they are the things a first user would hit. Ordered by
+what blocks the next one. The reasoning and the measurements are the first entry in
+[`history.md`](history.md).
+
+0a. **S33 — make CI green.** One test (`tests/feature_logic_tests.rs:90`) commits to a temp git
+    repo and unwraps, so the suite passes only where a global git identity exists. Fix it in
+    `TestKernel` the way `src/core/git.rs::identify()` already does, not in the one test.
+    **Until this is green, every "green" in this document is a claim about one machine.**
+0b. **Run `tools` and `gentoo` in CI on a schedule, not only on dispatch.** They are the images
+    that reach 18 real lifecycles instead of 7; leaving them opt-in means the broad backend
+    coverage exists and is not consulted. A nightly is enough — the objection to gating every
+    push (V.57: a slow gate teaches people to skip it) does not apply to a nightly.
+0c. **Close the live-validation gap on the destructive effectors**, in this order, because each
+    is a path where being wrong costs a filesystem: btrfs restore, then zfs/lvm, then D5's
+    `dpkg -i`/`rpm -U` handoff, then U30 storage removal. All are argv-tested; none has run.
+0d. **`helm` cannot remove what it installs** — install takes a URL, uninstall takes a name.
+    Proven by a real run and currently tracked only as a string in `run-in-container.sh:550`.
+    Either the backend learns to record the plugin name at install time, or it loses the
+    `remove` capability by name (V.60: a capability that cannot deliver must not be claimed).
+0e. **Cut a version.** `0.1.0`, no tags, `CHANGELOG` still `[Unreleased]`, and `install.sh`
+    does `cargo install --git` from `HEAD` — so there is no artifact to install and nothing to
+    roll back *to*. The tag-triggered release job in `ci.yml` exists and has never fired.
+0f. **macOS has never been exercised**, only compiled and unit-tested. brew/mas/macports have no
+    live lifecycle, the APFS provider is create-only and unrun, launchd scheduling is unrun, and
+    `release-check.sh`'s Darwin branch has never been executed. This needs hardware, so it is
+    last — but it must be *said*, because "builds on macOS in CI" reads as support and is not.
+
 ### Tier 1 — small ruled fixes (additive, low-risk, clears the register backlog)
 
 1. ~~**D5** — `github:`/`web:` may install a file (a `.deb` to `dpkg`); the lock records the
