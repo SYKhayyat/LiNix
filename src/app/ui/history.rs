@@ -40,7 +40,6 @@ use std::io;
 pub struct CommitView {
     /// Short commit hash — the row's identifier.
     pub short: String,
-    /// Commit date.
     pub date: String,
     /// Commit subject (the change's message).
     pub subject: String,
@@ -91,11 +90,9 @@ pub fn detail_lines(current: &CommitView) -> Vec<String> {
     lines
 }
 
-/// HistoryBrowser UI state.
 pub struct HistoryBrowser {
     commits: Vec<CommitView>,
     list_state: ListState,
-    /// The shell input buffer.
     input: String,
     /// True while the user is typing a command into the shell line.
     command_mode: bool,

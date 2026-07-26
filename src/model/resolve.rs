@@ -241,7 +241,7 @@ impl<'a> Resolver<'a> {
         self
     }
 
-    /// II.7, steps 1-7.
+    /// The state these files declare, with every line the active profiles reach.
     pub fn resolve(&self) -> Result<DesiredState> {
         let statements = self.statements()?;
         self.collect(statements)
@@ -1268,7 +1268,8 @@ mod tests {
 
     #[test]
     fn an_explicit_backend_not_in_priority_is_refused() {
-        // V.15, and the message II.6 specifies.
+        // The refusal has to name `priority`: a backend LiNix simply cannot see and one
+        // the host deliberately does not list produce the same silence otherwise.
         let f = fx(
             "Work\n",
             &[("Work", "use base\n")],
@@ -1296,7 +1297,6 @@ mod tests {
 
     #[test]
     fn a_profile_can_hold_a_package_directly() {
-        // II.4/V.3.
         let f = fx("Work\n", &[("Work", "apt:slack\n")], &[]);
         assert_eq!(names(&resolve(&f).unwrap(), "apt"), ["slack"]);
     }

@@ -2180,7 +2180,6 @@ mod exec_tests {
 
     #[test]
     fn a_generate_names_a_command() {
-        // U33.
         let Statement::Generate(cmd, _) = pv("generate:./bin/pick.sh").unwrap() else {
             panic!("not a generate");
         };

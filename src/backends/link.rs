@@ -570,7 +570,6 @@ impl Installable for LinkInstallable {
     }
 }
 
-/// Build and register the symlink/template backend.
 pub fn register(
     reg: &mut crate::backends::BackendRegistry,
     exec: &CommandExecutor,

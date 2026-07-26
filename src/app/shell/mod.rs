@@ -18,7 +18,6 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
-/// Orchestrates ephemeral shell sessions.
 pub struct EphemeralShell {
     registry: Arc<BackendRegistry>,
     pub state: Arc<Mutex<StateRegistry>>,

@@ -25,7 +25,6 @@ pub struct TuiPreview<'a> {
     pub backend_overrides: HashMap<NodeIndex, String>,
     /// List of available backend candidates for specific nodes.
     pub alternatives: HashMap<NodeIndex, Vec<String>>,
-    /// Maps UI list positions to actual NodeIndex
     pub ui_index_to_node: Vec<NodeIndex>,
     list_state: ListState,
 }

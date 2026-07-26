@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn two_contradicting_declarations_are_an_error() {
-        // V.5. The disk used to decide this.
+        // Two lines that disagree are an error, not a last-one-wins.
         let a = decl("modules/a.txt", 1, &[("version", "1.6")]);
         let b = decl("modules/b.txt", 3, &[("version", "1.7")]);
         let err = reconcile("apt:jq", a, b, now()).unwrap_err();

@@ -262,10 +262,15 @@ new model deletes the flag instead. Do not try to preserve it.
 > `bulletproof`, `rock-solid`, `lightning-fast`, `state-of-the-art`, …) finds **nothing**, which is
 > the R1–R23/R7 and F5 passes holding; the only two `magic` hits are pejorative (`dotfiles.rs`:
 > "deciding by extension is magic that silently writes plaintext"), i.e. a constraint, not praise.
-> **What no grep measures** — a comment that narrates the line below it rather than stating a
-> constraint the code can't show — stays a per-comment judgement call, worked in the comment-audit
-> passes (R14, F5), not settled by one sweep. The re-measurement half of Phase 0 is now done and
-> reported; the deletion half was already done.
+> **Swept 2026-07-26** for the two classes a grep does reach. *Citation-as-explanation* — a comment
+> whose whole content is a spec reference — went from 13 to 4, and those 4 close a sentence that
+> states the constraint. *Restatement* — a comment that respells the identifier under it — was found
+> by identifier-overlap: 64 flagged, 10 real and deleted (`/// LiNix Version Identifier` over
+> `pub const VERSION`), the rest kept, because `cli/args.rs`'s doc comments **are** the `--help`
+> text. `src/` is at **9,593** comment lines.
+>
+> **What no grep measures** — a comment that narrates its block without echoing an identifier —
+> stays a per-comment judgement call over 9,593 lines. **It is not claimed as done.**
 
 **Pure subtraction. Nothing new can break. Tests stay green except those testing deleted
 features.** Do this first so nothing is carefully ported that was about to be deleted.

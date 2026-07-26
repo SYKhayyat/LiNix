@@ -215,7 +215,6 @@ fn parse_winget_search(output: &str) -> Vec<Package> {
         .collect()
 }
 
-/// Parses 'choco search' results.
 fn parse_choco_search(output: &str) -> Vec<Package> {
     sanitize(output)
         .lines()

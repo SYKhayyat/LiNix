@@ -86,7 +86,6 @@ pub(crate) async fn upgrade_targeted(
             .collect()
     };
 
-    // Build the target list.
     let mut targets: Vec<(String, String)> = Vec::new();
     if !packages.is_empty() {
         for req in packages {

@@ -21,11 +21,8 @@ use tracing::{debug, info, instrument, trace, warn};
 ///    registry, and anything in that registry is a removal candidate on the next sync. An
 ///    over-broad adoption is not a cosmetic mistake; it is a queued mass removal.
 pub struct Adopter {
-    /// Registry for capability-based discovery across all backends.
     registry: Arc<BackendRegistry>,
-    /// Shared mutable access to the system state.
     state: Arc<Mutex<StateRegistry>>,
-    /// Global application configuration.
     config: Arc<Config>,
 }
 

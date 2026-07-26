@@ -19,5 +19,4 @@ pub use core::error::{Error, Result};
 pub use core::manager::BackendCore;
 pub use core::transaction::TransactionConfig;
 
-/// LiNix Version Identifier
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

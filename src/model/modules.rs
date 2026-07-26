@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn only_txt_files_are_modules_so_a_readme_costs_nothing() {
-        // II.3: the folder decides.
+        // The folder decides what is a module, not the file's contents.
         let f = fixture(&[
             ("editors.txt", "apt:neovim\n"),
             ("README.md", "# these are my modules\n"),
@@ -642,7 +642,7 @@ mod tests {
 
     #[test]
     fn a_required_param_with_no_argument_is_a_loud_error() {
-        // V.78: never a silent empty string.
+        // Never a silent empty string.
         let f = fixture(&[("workstation.txt", "param user\napt:vim\n")]);
         let err = expand_with_args(&f, "workstation", &[]).unwrap_err();
         assert!(err.what.contains("requires parameter `user`"), "{}", err);
