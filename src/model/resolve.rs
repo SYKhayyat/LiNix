@@ -601,6 +601,13 @@ impl<'a> Resolver<'a> {
                 }
                 // A schedule's `run` is a command line, where `$` belongs to the shell that
                 // will run it. Set math and `use` name files, which are not values.
+                // A `generate:` command line may carry `$vars` (a machine fact in the path).
+                Statement::Generate(name, opts) => {
+                    *name = crate::model::vars::expand(name, vars, origin)?;
+                    for value in opts.values_mut() {
+                        *value = crate::model::vars::expand(value, vars, origin)?;
+                    }
+                }
                 Statement::Schedule(..)
                 | Statement::Use(..)
                 | Statement::Param { .. }
@@ -810,6 +817,21 @@ impl<'a> Resolver<'a> {
                     .with_hint(
                         "move it to the `vars` file in your config root. A variable is defined \
                          on every machine, so it cannot live behind a profile.",
+                    ));
+                }
+                // A `generate:` is expanded before collection (the app layer runs it through the
+                // ledger and merges its output). Reaching here means generators are OFF
+                // (`allow_generators` unset) — a refusal, not a silent skip: code the config
+                // meant to run did not, and pretending the machine converged would be a lie.
+                Statement::Generate(ref name, _) => {
+                    return Err(GrammarError::new(
+                        origin.clone(),
+                        format!("`generate:{}` is not enabled", name),
+                    )
+                    .with_hint(
+                        "a generator runs a command and treats its output as declarations — off \
+                         by default. Set `allow_generators = true` to enable it, and run \
+                         `linix lock` to approve the command.",
                     ));
                 }
                 // A `param` is a module's own declaration and is consumed when the module is
@@ -1129,6 +1151,20 @@ mod tests {
             .with_facts(facts())
             .at(parse_absolute("2026-07-16T12:00").unwrap())
             .resolve()
+    }
+
+    #[test]
+    fn a_generate_line_is_refused_when_generators_are_off() {
+        // U33/VI.0: a generator that reaches collection unexpanded (generators off) is a loud
+        // refusal, never a silent skip — code the config meant to run did not.
+        let f = fx(
+            "Work\n",
+            &[("Work", "use gen\n")],
+            &[("gen.txt", "generate:./pick.sh\n")],
+        );
+        let err = resolve(&f).unwrap_err();
+        assert!(err.what.contains("is not enabled"), "{}", err);
+        assert!(err.hint.unwrap().contains("allow_generators"), "names the key");
     }
 
     fn names(d: &DesiredState, backend: &str) -> Vec<String> {

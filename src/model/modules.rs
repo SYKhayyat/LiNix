@@ -401,6 +401,7 @@ fn substitute_in_statement(
         | Statement::Link(name, opts)
         | Statement::Setting(name, opts)
         | Statement::Exec(name, opts)
+        | Statement::Generate(name, opts)
         | Statement::Dotfiles(name, opts)
         | Statement::Firewall(name, opts) => {
             sub(name);

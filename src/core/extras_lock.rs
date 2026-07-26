@@ -48,7 +48,10 @@ pub fn extra_key(stmt: &Statement) -> Option<String> {
         // A dotfiles tree is excluded for the opposite reason: its files ARE keyed here, but
         // individually by the tree applier — one ledger row per placed file (U22), which this
         // function has no way to enumerate from the declaration alone.
-        Statement::Exec(..) | Statement::Dotfiles(..) => None,
+        // `generate:` is excluded for the same reason as `exec:`: it is a verb that runs a
+        // command, not a noun with an inverse. Its output declarations ARE nouns and are keyed
+        // here individually once merged, but the generate line itself has no teardown.
+        Statement::Exec(..) | Statement::Generate(..) | Statement::Dotfiles(..) => None,
         // Everything else with a keyword is a noun with an inverse: deleting a `firewall:` line
         // closes the port (N5), deleting a `service:` line disables the service.
         _ => stmt.kind().map(|_| stmt.key()),

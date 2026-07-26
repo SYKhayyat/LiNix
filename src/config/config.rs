@@ -328,6 +328,13 @@ pub struct Config {
     #[serde(skip)]
     pub allow_mass_install: bool,
 
+    /// Allow `generate:` — a command whose stdout is treated as declarations (U33). **Off by
+    /// default**: this is the one surface where the config computes its state instead of stating
+    /// it, so it stays dormant unless deliberately enabled. Even on, the output passes the guard,
+    /// the removal preview and the II.12 ledger, and a generator that fails is a failed sync.
+    #[serde(default)]
+    pub allow_generators: bool,
+
     /// The `[guard]` table (II.10): all ten refusals — protection, the removal/install
     /// count ceilings, and the install/change rules. See [`GuardSettings`].
     #[serde(default)]
@@ -579,6 +586,7 @@ impl Default for Config {
             btrfs_path: default_btrfs_path(),
             zfs_dataset: None,
             snapshot_priority: Vec::new(),
+            allow_generators: false,
             tmp_dir: default_tmp_dir(),
             github_dir: default_github_dir(),
             web_dir: default_web_dir(),

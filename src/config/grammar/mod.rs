@@ -398,6 +398,7 @@ fn merge_options(stmt: &mut Statement, extra: Options, origin: &Origin) -> Resul
         Statement::Repo { .. }
         | Statement::Use(..)
         | Statement::Param { .. }
+        | Statement::Generate(..)
         | Statement::Exclude(_)
         | Statement::Intersect(_)
         | Statement::Subtract(_)

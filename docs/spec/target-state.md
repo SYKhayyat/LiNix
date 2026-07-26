@@ -313,6 +313,13 @@ best-effort.
   demand.
 - **No `present:`.** A bare line already means present.
 - `-` subtraction does not exist in modules. `absent:` does.
+- **`generate:PATH` — a command whose stdout is declarations (U33), off by default.** With
+  `allow_generators = true`, a generator runs through the II.12 ledger and its output is spliced
+  into the stream before probing and collection, so it passes the same guard and removal preview
+  as a typed line; a generator that fails is a failed resolution, never an empty set (V.79). It
+  takes no options and is approved by `linix lock` (scanned first, because resolving runs it).
+  The `exec:` half of U33 is the U4 amendment: `exec:` may now install software — a documentation
+  change, since exec's per-script ledger approval is already its gate.
 - **A module may take parameters (U32).** `param user` (required) / `param gpu = none` (with a
   default) at the top of a module; `use workstation(user=shaul, gpu=nvidia)` binds them. The
   values substitute through the existing `$name` machinery one scope wider — into `when` and into

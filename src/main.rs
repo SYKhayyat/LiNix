@@ -3406,6 +3406,13 @@ async fn build_and_write_locks(app: &App) -> Result<usize> {
 }
 
 async fn handle_lock(app: &App) -> Result<()> {
+    // Generators are approved FIRST, by scanning the files — before anything calls
+    // `resolve_model`, which now runs generators and would refuse an unapproved one, so the very
+    // command that approves it could never resolve far enough to reach it (U33).
+    let generators = approve_generate_commands(app)?;
+    if generators > 0 {
+        info!("Lock: approved {} generate command(s) at their current hash.", generators);
+    }
     let count = build_and_write_locks(app).await?;
     info!(
         "Lock: pinned {} package version(s) to {}",
@@ -3475,6 +3482,63 @@ async fn handle_lock(app: &App) -> Result<()> {
 /// Reads the model rather than the filesystem so it approves exactly what a sync would run —
 /// approving a script no active profile reaches would be approving something the user cannot
 /// see in `plan`.
+/// Approve every declared `generate:` command's current script hash (U33), scanning the files
+/// directly rather than the resolved model — because resolving the model *runs* generators, and
+/// a generator cannot be approved by a command that must resolve past it first. Reads
+/// `modules/` and `profiles/`, ungated, so a generator behind a `when` is still approvable.
+fn approve_generate_commands(app: &App) -> Result<usize> {
+    use linix::config::grammar::{parse_document, Statement};
+    use linix::core::hook_lock::{generate_id, hash_script, HookLedger};
+
+    let layout = app.config.layout();
+    let known = |name: &str| app.registry.get(name).is_some();
+    let mut commands: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for dir in [layout.modules_dir(), layout.profiles_dir()] {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Ok(body) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(doc) = parse_document(&path, &body, &known) else {
+                continue;
+            };
+            for (stmt, _, _) in doc.every_statement() {
+                if let Statement::Generate(cmd, _) = stmt {
+                    commands.insert(cmd.clone());
+                }
+            }
+        }
+    }
+    if commands.is_empty() {
+        return Ok(0);
+    }
+    let locks = layout.locks_dir();
+    let ledger_path = HookLedger::path_in(&locks);
+    let mut ledger = HookLedger::load(&ledger_path)?;
+    let mut approved = 0usize;
+    for cmd in &commands {
+        let declared = std::path::Path::new(cmd);
+        let full = if declared.is_absolute() {
+            declared.to_path_buf()
+        } else {
+            app.config.config_root().join(declared)
+        };
+        let body = std::fs::read_to_string(&full).map_err(|e| {
+            anyhow::anyhow!("cannot read `generate:{}` at {} ({})", cmd, full.display(), e)
+        })?;
+        ledger.approve(&generate_id(cmd), &hash_script(&body));
+        approved += 1;
+    }
+    ledger.save(&ledger_path)?;
+    Ok(approved)
+}
+
 async fn approve_exec_scripts(app: &App) -> Result<usize> {
     use linix::core::hook_lock::{exec_id, hash_script, HookLedger};
 
@@ -4235,9 +4299,10 @@ async fn handle_add(app: &App, source: &str, trust: bool, force: bool) -> Result
             let _ = events.approve_all();
             let approved = app.hooks.approve_all_hooks().unwrap_or(0);
             approve_adapters(app).ok();
+            approve_generate_commands(app).ok();
             approve_exec_scripts(app).await.ok();
             info!(
-                "--trust: approved the vendored code ({} hook set(s) + adapters/exec).",
+                "--trust: approved the vendored code ({} hook set(s) + adapters/exec/generate).",
                 approved
             );
         } else {

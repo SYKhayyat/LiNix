@@ -145,6 +145,14 @@ pub enum Statement {
     /// XIII.3. The script goes through II.12's approval ledger like any other code the repo
     /// runs ("hash everything, no exceptions").
     Exec(String, Options),
+    /// `generate:PATH` — run a command whose stdout is *declarations*, merged into the desired
+    /// state as if typed (XIII.30, U33). The dangerous half of Lisp: a config that computes its
+    /// state rather than stating it. **Off by default** (`allow_generators`), it runs through the
+    /// II.12 ledger like `exec:`, its output passes the same guard and removal preview as a typed
+    /// line, and a generator that fails is a failed sync — never a silently empty declaration set,
+    /// which is a mass-removal input (VI.0). Takes no options: it runs every resolution to
+    /// compute the current answer, so there is no `@runs` ceiling to set.
+    Generate(String, Options),
     /// `dotfiles:PATH` — a folder mirrored into place, one file at a time (XIII.21).
     ///
     /// Every other statement names one thing; this names a tree and stands for as many
@@ -207,6 +215,7 @@ impl Statement {
             Statement::Link(n, _) => format!("link:{}", n),
             Statement::Setting(n, _) => format!("setting:{}", n),
             Statement::Exec(n, _) => format!("exec:{}", n),
+            Statement::Generate(n, _) => format!("generate:{}", n),
             Statement::Dotfiles(n, _) => format!("dotfiles:{}", n),
             Statement::Firewall(n, _) => format!("firewall:{}", n),
             Statement::Use(r, _) => format!("use {}", r.name()),
@@ -235,6 +244,7 @@ impl Statement {
             Statement::Link(..) => "link",
             Statement::Setting(..) => "setting",
             Statement::Exec(..) => "exec",
+            Statement::Generate(..) => "generate",
             Statement::Dotfiles(..) => "dotfiles",
             Statement::Firewall(..) => "firewall",
             Statement::Package(_)
@@ -419,6 +429,7 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
         ("link:", Statement::Link),
         ("setting:", Statement::Setting),
         ("exec:", Statement::Exec),
+        ("generate:", Statement::Generate),
         ("dotfiles:", Statement::Dotfiles),
         ("firewall:", Statement::Firewall),
     ] {
@@ -831,6 +842,7 @@ pub fn validate(origin: &Origin, stmt: &Statement) -> Result<()> {
         Statement::Schedule(name, o) => validate_extra_options(origin, "schedule", name, o),
         Statement::Setting(name, o) => validate_setting(origin, name, o),
         Statement::Exec(name, o) => validate_exec(origin, name, o),
+        Statement::Generate(name, o) => validate_generate(origin, name, o),
         Statement::Dotfiles(name, o) => validate_extra_options(origin, "dotfiles", name, o),
         Statement::Firewall(name, o) => validate_firewall(origin, name, o),
         Statement::Repo { .. }
@@ -937,6 +949,28 @@ fn validate_scope(origin: &Origin, prefix: &str, name: &str, options: &Options) 
             "scope is {}. Omitting it means whatever this store does by default.",
             crate::model::scope::Scope::vocabulary()
         )));
+    }
+    Ok(())
+}
+
+/// `generate:` runs a command and reads declarations from its stdout (U33). It takes no options:
+/// unlike `exec:`, it runs every resolution to compute the current answer, so there is no `@runs`
+/// ceiling — a ceiling would freeze a stale set. The gate that matters is `allow_generators`
+/// (off by default), enforced where the command is actually run, not in the grammar.
+fn validate_generate(origin: &Origin, name: &str, options: &Options) -> Result<()> {
+    if name.trim().is_empty() {
+        return Err(GrammarError::new(origin.clone(), "`generate:` names no command")
+            .with_hint("write `generate:./bin/pick.sh` — a command whose stdout is declarations."));
+    }
+    if let Some(key) = options.keys().next() {
+        return Err(GrammarError::new(
+            origin.clone(),
+            format!("`generate:{}` has an option `{}`, but generate takes none", name, key),
+        )
+        .with_hint(
+            "a generator runs every resolution to compute the current set, so there is no \
+             `@runs` ceiling to set.",
+        ));
     }
     Ok(())
 }
@@ -2062,6 +2096,28 @@ mod exec_tests {
         };
         assert_eq!(script, "./bin/enroll-tpm.sh");
         assert!(opts.one("runs").is_none(), "no ceiling means the default");
+    }
+
+    #[test]
+    fn a_generate_names_a_command() {
+        // U33.
+        let Statement::Generate(cmd, _) = pv("generate:./bin/pick.sh").unwrap() else {
+            panic!("not a generate");
+        };
+        assert_eq!(cmd, "./bin/pick.sh");
+        assert_eq!(pv("generate:./bin/pick.sh").unwrap().kind(), Some("generate"));
+    }
+
+    #[test]
+    fn a_generate_takes_no_options() {
+        // It runs every resolution, so there is no `@runs` ceiling to set.
+        let err = pv("generate:./pick.sh@runs=3").unwrap_err();
+        assert!(err.what.contains("takes none"), "{}", err);
+    }
+
+    #[test]
+    fn a_generate_with_no_command_is_an_error() {
+        assert!(pv("generate:").is_err());
     }
 
     #[test]

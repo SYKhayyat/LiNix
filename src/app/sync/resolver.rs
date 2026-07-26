@@ -318,6 +318,11 @@ impl<'a> StateResolver<'a> {
         let mut reached = crate::model::Resolver::new(&self.layout, &known, &priority)
             .with_facts(facts.clone())
             .statements()?;
+        // U33: run any `generate:` command and splice its declarations into the stream BEFORE
+        // aliases, regexes, bare-name probing and collect — so generated lines get exactly the
+        // same treatment (and the same guard and removal preview) as typed ones. Off by default,
+        // and a failed generator is a failed resolution.
+        self.expand_generators(&mut reached.statements, &known, &facts).await?;
         self.resolve_aliases(&mut reached.statements);
         self.expand_regexes(&mut reached.statements, &priority).await?;
         let answers = self
@@ -349,6 +354,126 @@ impl<'a> StateResolver<'a> {
             state.absent().count()
         );
         Ok(state)
+    }
+
+    /// Run every `generate:` command and splice its output into the statement stream (U33).
+    ///
+    /// The dangerous half of Lisp, kept on the safe side of XIII.32's line by four rules, none
+    /// waived:
+    /// - **Off by default.** With `allow_generators` unset, a `generate:` line is a refusal,
+    ///   naming the config key and `linix lock`. The computing-config surface is dormant unless
+    ///   turned on deliberately.
+    /// - **The ledger gates it.** A generator runs code the repo carries; it is approved by
+    ///   `linix lock` (content-addressed, like `exec:`), and an unapproved or changed command
+    ///   stops resolution. `-y` cannot approve it.
+    /// - **A failure is a failed resolution.** A non-zero exit is an error, never an empty set —
+    ///   an empty declaration set is a mass-removal input (VI.0), and "the generator broke" must
+    ///   never be read as "nothing is declared".
+    /// - **The output is shown, not trusted.** Spliced in before probing and collection, so the
+    ///   generated lines pass the same conflict check, guard and removal preview as typed ones.
+    async fn expand_generators(
+        &self,
+        statements: &mut Vec<(Statement, Origin, Gates)>,
+        known: &dyn crate::config::grammar::BackendNames,
+        facts: &HostFacts,
+    ) -> Result<()> {
+        use crate::core::hook_lock::{generate_id, hash_script, refusal, HookLedger};
+
+        if !statements
+            .iter()
+            .any(|(s, _, _)| matches!(s, Statement::Generate(..)))
+        {
+            return Ok(());
+        }
+
+        // Split the stream: keep everything that is not a generator, process the generators.
+        let mut kept: Vec<(Statement, Origin, Gates)> = Vec::new();
+        let mut gens: Vec<(String, Origin, Gates)> = Vec::new();
+        for (stmt, origin, gates) in std::mem::take(statements) {
+            match stmt {
+                Statement::Generate(cmd, _) => gens.push((cmd, origin, gates)),
+                other => kept.push((other, origin, gates)),
+            }
+        }
+
+        let ledger = HookLedger::load(&HookLedger::path_in(&self.layout.locks_dir()))?;
+
+        for (cmd, origin, gates) in gens {
+            if !self.config.allow_generators {
+                return Err(Error::Refused(format!(
+                    "{}: `generate:{}` is off by default.\n  \
+                     A generator runs a command and treats its stdout as declarations — the one \
+                     place the config computes its state instead of stating it.\n  \
+                     Set `allow_generators = true` to enable it, then `linix lock` to approve the \
+                     command.",
+                    origin, cmd
+                )));
+            }
+
+            // Content-addressed approval, like `exec:`: hash the script's bytes so an edit
+            // re-requires approval. A command that is not a readable file is refused rather than
+            // run as a bare shell word.
+            let declared = std::path::Path::new(&cmd);
+            let path = if declared.is_absolute() {
+                declared.to_path_buf()
+            } else {
+                self.config.config_root().join(declared)
+            };
+            let body = std::fs::read_to_string(&path).map_err(|e| {
+                Error::Validation(format!(
+                    "{}: `generate:{}` — cannot read the command at {} ({}). A generator names a \
+                     script the config carries; its contents are hashed and run.",
+                    origin,
+                    cmd,
+                    path.display(),
+                    e
+                ))
+            })?;
+            let verdict = ledger.verdict(&generate_id(&cmd), &hash_script(&body));
+            if !verdict.is_approved() {
+                return Err(Error::Refused(format!(
+                    "{}: {}",
+                    origin,
+                    refusal(&generate_id(&cmd), "generate command", &verdict)
+                )));
+            }
+
+            let output = tokio::process::Command::new(&path)
+                .current_dir(self.config.config_root())
+                .output()
+                .await
+                .map_err(|e| {
+                    Error::Other(format!("{}: could not run `generate:{}` ({})", origin, cmd, e))
+                })?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(Error::Other(format!(
+                    "{}: `generate:{}` failed (exit {}). A generator that fails is a failed \
+                     resolution — its output is not trusted as an empty declaration set.\n{}",
+                    origin,
+                    cmd,
+                    output.status.code().unwrap_or(-1),
+                    stderr.trim()
+                )));
+            }
+
+            // Parse the output through the ONE grammar parser, so a generated line is a line —
+            // same statements, same errors, same downstream treatment. Origins name the
+            // generator, so `eval`/`why` can say a declaration came from one.
+            let out = String::from_utf8_lossy(&output.stdout);
+            let synthetic = std::path::PathBuf::from(format!("generate:{}", cmd));
+            let doc = crate::config::grammar::parse_document(&synthetic, &out, known)?;
+            for (s, o, own) in doc.statements_with_gating(facts)? {
+                // The generated line inherits the `generate:` line's own gates, then its own.
+                let mut g = gates.clone();
+                g.extend(own);
+                let _ = &origin; // origin is preserved via the synthetic path in `o`
+                kept.push((s, o, g));
+            }
+        }
+
+        *statements = kept;
+        Ok(())
     }
 
     /// Rewrite an aliased backend to its real name before anything reads it.
