@@ -181,6 +181,15 @@ pub struct Config {
     #[serde(default)]
     pub command_aliases: HashMap<String, String>,
 
+    /// User-defined verbs (U35): a name that runs a *sequence* of built-in verbs, e.g.
+    /// `refresh = ["sync", "upgrade --all"]`. Where a `command_alias` renames one command, a
+    /// verb composes several — the `defun` over the command surface (XIII.31). **Composition
+    /// only:** every step must name a built-in subcommand; a step that names anything else is
+    /// refused, because a verb that could run arbitrary argv is `exec:` wearing a command's
+    /// clothes (U33's territory, off by default). A verb never shadows a built-in.
+    #[serde(default)]
+    pub verbs: HashMap<String, Vec<String>>,
+
     #[serde(default)]
     pub dry_run: bool,
 
@@ -539,6 +548,7 @@ impl Default for Config {
         Self {
             aliases: HashMap::new(),
             command_aliases: HashMap::new(),
+            verbs: HashMap::new(),
             dry_run: false,
             unattended: false,
             yes: false,

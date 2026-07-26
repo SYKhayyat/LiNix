@@ -54,18 +54,36 @@ async fn main() -> Result<()> {
     // 3. CLI & Config Bootstrap
     // Expand user-defined command aliases (config `[command_aliases]`) BEFORE clap parses, so
     // `linix up` can stand in for `linix upgrade --all`. Built-in subcommands always win.
-    let cli = {
-        let raw_argv: Vec<String> = std::env::args().collect();
-        let aliases = preferences_path_from_argv(&raw_argv)
-            .and_then(|p| linix::config::Config::from_file(&p).ok())
-            .map(|c| c.command_aliases)
-            .unwrap_or_default();
-        if aliases.is_empty() {
-            Cli::parse()
-        } else {
-            let known = known_subcommands();
-            Cli::parse_from(expand_command_aliases(raw_argv, &aliases, &known))
+    let raw_argv: Vec<String> = std::env::args().collect();
+    let prefs = preferences_path_from_argv(&raw_argv)
+        .and_then(|p| linix::config::Config::from_file(&p).ok());
+    let aliases = prefs
+        .as_ref()
+        .map(|c| c.command_aliases.clone())
+        .unwrap_or_default();
+    let verbs = prefs.as_ref().map(|c| c.verbs.clone()).unwrap_or_default();
+
+    // U35: a user-defined verb runs a *sequence* of built-in verbs. It is intercepted here,
+    // before clap, because the verb name is not a Cli subcommand — clap would reject it. A verb
+    // never shadows a built-in (built-ins always win), and every step must itself be a built-in
+    // (composition only; arbitrary argv is U33's key, off by default).
+    if !verbs.is_empty() {
+        let known = known_subcommands();
+        match plan_user_verb(&raw_argv, &verbs, &known) {
+            Some(Ok(steps)) => return run_user_verb(steps).await,
+            Some(Err(msg)) => {
+                eprintln!("{}", msg);
+                std::process::exit(linix::core::Exit::Failed.code());
+            }
+            None => {}
         }
+    }
+
+    let cli = if aliases.is_empty() {
+        Cli::parse()
+    } else {
+        let known = known_subcommands();
+        Cli::parse_from(expand_command_aliases(raw_argv, &aliases, &known))
     };
     let mut config = load_and_merge_config(&cli).await?;
     // T4: `watch` runs unattended, so nobody is present to touch a hardware key. Set on the
@@ -200,6 +218,7 @@ async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::Rollback { reference } => handle_rollback(app, reference).await,
         Commands::Diff { from, to } => handle_diff(app, from, to.as_deref()).await,
         Commands::Eval => handle_eval(app).await,
+        Commands::Repl => linix::app::repl::run(app).await.map_err(Into::into),
         Commands::Try { image } => handle_try(app, image.as_deref()).await,
         Commands::Add {
             source,
@@ -394,6 +413,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "plan", "status", "check", "list", "search", "doctor", "diff", "unmanaged", "absent",
     "vars", "export", "sbom", "insight", "why", "info", "show", "audit", "outdated",
     "history", "log", "completions", "help", "locate", "metrics", "verify", "eval", "try",
+    "repl",
 ];
 
 /// Take the lock for a mutating command. The command is read from argv rather than matched
@@ -504,6 +524,87 @@ fn expand_command_aliases(
         return out;
     }
     argv
+}
+
+/// Plan a user-defined verb (U35) into the per-step argv it runs, or `None` when the invocation
+/// is not a verb (a built-in, an alias, or `--version` with no subcommand).
+///
+/// Pure and unit-tested. Each step inherits the leading global flags (`-c path`) so config
+/// selection is the same for every step, and gains no trailing arguments — a verb is a fixed
+/// composition, and threading `linix refresh --dry-run` into some steps and not others is the
+/// kind of surprise the closed vocabulary exists to avoid. **Composition only:** a step whose
+/// first token is not a built-in subcommand is an error, because a verb that runs arbitrary argv
+/// is `exec:` wearing a command's clothes (U33, off by default).
+fn plan_user_verb(
+    argv: &[String],
+    verbs: &HashMap<String, Vec<String>>,
+    known: &std::collections::HashSet<String>,
+) -> Option<std::result::Result<Vec<Vec<String>>, String>> {
+    let idx = find_subcommand_index(argv)?;
+    let cmd = &argv[idx];
+    // Built-ins always win, so a verb can never mask a real command.
+    if known.contains(cmd) {
+        return None;
+    }
+    let steps = verbs.get(cmd)?;
+
+    // A verb takes no arguments of its own: it is a fixed sequence. Anything after the name is
+    // refused loudly rather than silently dropped or smeared across every step.
+    if argv.len() > idx + 1 {
+        return Some(Err(format!(
+            "the verb `{}` takes no arguments, but `{}` was given.\n  \
+             A verb is a fixed sequence of built-in commands (U35). To vary a step, edit the \
+             `[verbs]` entry.",
+            cmd,
+            argv[idx + 1..].join(" ")
+        )));
+    }
+
+    let leading = &argv[1..idx];
+    let mut planned = Vec::with_capacity(steps.len());
+    for step in steps {
+        let tokens: Vec<String> = step.split_whitespace().map(|s| s.to_string()).collect();
+        let Some(first) = tokens.first() else {
+            return Some(Err(format!(
+                "the verb `{}` has an empty step. Every step must be a built-in command.",
+                cmd
+            )));
+        };
+        if !known.contains(first) {
+            return Some(Err(format!(
+                "the verb `{}` step `{}` is not a built-in command.\n  \
+                 A user verb may only compose built-in commands (U35). Running an arbitrary \
+                 command from a verb is `exec:`'s job and is off by default (U33).",
+                cmd, first
+            )));
+        }
+        let mut one = Vec::with_capacity(1 + leading.len() + tokens.len());
+        one.push(argv[0].clone());
+        one.extend(leading.iter().cloned());
+        one.extend(tokens);
+        planned.push(one);
+    }
+    Some(Ok(planned))
+}
+
+/// Run a user verb: build the config and app once from the shared leading flags, then dispatch
+/// each step against them in order, stopping at the first failure. One data lock covers the
+/// whole verb — the verb name is unknown to `acquire_data_lock`, so it locks as a writer, the
+/// safe default for a sequence that may install or remove.
+async fn run_user_verb(steps: Vec<Vec<String>>) -> Result<()> {
+    let first = Cli::parse_from(&steps[0]);
+    let config = load_and_merge_config(&first).await?;
+    linix::backends::node_registry::set_http_timeout(config.network_timeout_secs);
+    let _data_lock = acquire_data_lock()?;
+    let app = App::new(config).await?;
+    for step in &steps {
+        let cli = Cli::parse_from(step);
+        let outcome = dispatch(&app, &cli).await;
+        if outcome.is_err() {
+            return finish(&app, outcome).await;
+        }
+    }
+    finish(&app, Ok(())).await
 }
 
 // ============================================================================
@@ -6224,6 +6325,79 @@ mod alias_tests {
             expand_command_aliases(argv(&["linix", "notanalias"]), &aliases, &known),
             argv(&["linix", "notanalias"])
         );
+    }
+
+    fn verbs(pairs: &[(&str, &[&str])]) -> HashMap<String, Vec<String>> {
+        pairs
+            .iter()
+            .map(|(k, steps)| (k.to_string(), steps.iter().map(|s| s.to_string()).collect()))
+            .collect()
+    }
+
+    fn builtins() -> HashSet<String> {
+        ["sync", "upgrade", "check"].into_iter().map(String::from).collect()
+    }
+
+    #[test]
+    fn a_verb_expands_to_one_argv_per_step() {
+        let v = verbs(&[("refresh", &["sync", "upgrade --all"])]);
+        let steps = plan_user_verb(&argv(&["linix", "refresh"]), &v, &builtins())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            steps,
+            vec![
+                argv(&["linix", "sync"]),
+                argv(&["linix", "upgrade", "--all"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_verb_inherits_leading_global_flags_on_every_step() {
+        let v = verbs(&[("refresh", &["sync", "check"])]);
+        let steps = plan_user_verb(&argv(&["linix", "-c", "/c.toml", "refresh"]), &v, &builtins())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            steps,
+            vec![
+                argv(&["linix", "-c", "/c.toml", "sync"]),
+                argv(&["linix", "-c", "/c.toml", "check"]),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_verb_never_shadows_a_builtin() {
+        let v = verbs(&[("sync", &["upgrade"])]);
+        // `sync` is a real command, so the verb is invisible and normal parsing proceeds.
+        assert!(plan_user_verb(&argv(&["linix", "sync"]), &v, &builtins()).is_none());
+    }
+
+    #[test]
+    fn a_verb_step_must_be_a_builtin() {
+        let v = verbs(&[("evil", &["rm -rf /"])]);
+        let err = plan_user_verb(&argv(&["linix", "evil"]), &v, &builtins())
+            .unwrap()
+            .unwrap_err();
+        assert!(err.contains("not a built-in"), "{}", err);
+        assert!(err.contains("exec:"), "{}", err);
+    }
+
+    #[test]
+    fn a_verb_takes_no_arguments() {
+        let v = verbs(&[("refresh", &["sync"])]);
+        let err = plan_user_verb(&argv(&["linix", "refresh", "--dry-run"]), &v, &builtins())
+            .unwrap()
+            .unwrap_err();
+        assert!(err.contains("takes no arguments"), "{}", err);
+    }
+
+    #[test]
+    fn a_name_that_is_neither_builtin_nor_verb_is_left_alone() {
+        let v = verbs(&[("refresh", &["sync"])]);
+        assert!(plan_user_verb(&argv(&["linix", "whatever"]), &v, &builtins()).is_none());
     }
 }
 
