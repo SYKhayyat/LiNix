@@ -105,6 +105,16 @@ pub trait Queryable: Send + Sync {
     }
 
     async fn info(&self, name: &str) -> Result<Option<Package>>;
+
+    /// System packages this backend installed *through another manager* (D5), as
+    /// `(installer, package_name)` pairs. When `github:`/`web:` hands a `.deb` to `dpkg`, the
+    /// package shows up in apt's installed list, but it is not unmanaged drift — it is owned
+    /// here. The unmanaged crawl subtracts these so it neither reports the file twice nor lets
+    /// `purge-unmanaged` delete a package a download declaration is responsible for. Default:
+    /// none, for every manager that never hands a file to a second one.
+    async fn owned_system_packages(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }
 
 /// Every package name this manager could install, without being told what to look for.

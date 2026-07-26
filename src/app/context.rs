@@ -1531,6 +1531,12 @@ impl App {
                 q.list_installed().await.unwrap_or_default()
             })
             .await;
+        // D5: a `.deb`/`.rpm` a download backend handed to a system manager is listed by that
+        // manager as installed, but a download declaration owns it — so it is not unmanaged, and
+        // `purge-unmanaged` must defer to the recorded installer rather than delete it. Match by
+        // name: the installer is `dpkg`/`rpm`, the lister is `apt`/`dnf`, and the name is the one
+        // identity they share.
+        let owned = self.owned_system_package_names().await;
         // The managed check touches the state lock once, after the process work is done,
         // rather than holding it across every backend's query.
         let state = self.state.lock().await;
@@ -1538,7 +1544,25 @@ impl App {
             .into_iter()
             .flatten()
             .filter(|pkg| !state.is_managed(&pkg.backend, &pkg.name))
+            .filter(|pkg| !owned.contains(&pkg.name))
             .collect())
+    }
+
+    /// Every system package a download backend (`github:`/`web:`) installed through a second
+    /// manager (D5), by name. Used to keep those packages out of the unmanaged crawl so they are
+    /// neither double-counted nor purged out from under the declaration that owns them.
+    pub async fn owned_system_package_names(&self) -> std::collections::HashSet<String> {
+        let backends = self.registry.available();
+        let owned = self
+            .query_backends_concurrently(backends, |q| async move {
+                q.owned_system_packages().await
+            })
+            .await;
+        owned
+            .into_iter()
+            .flatten()
+            .map(|(_installer, pkg)| pkg)
+            .collect()
     }
 
     /// Run one read-only query against every queryable backend concurrently, capped at

@@ -2,6 +2,7 @@ use crate::core::{
     security::verify_checksum, BackendCore, CommandExecutor, Error, Installable, MetadataProvider,
     Package, PackageSpec, Queryable, Result,
 };
+use crate::backends::artifact::{system_pkg, Format};
 use crate::utils::archive::extract_archive;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,14 @@ struct WebState {
     bin_link: Option<String>,
     etag: Option<String>,
     last_modified: Option<String>,
+    /// The system manager that owns this resource (D5), when the URL pointed at a `.deb`/`.rpm`
+    /// that was handed to `dpkg`/`rpm`. `None` is the ordinary web resource LiNix unpacked or put
+    /// on PATH itself; when set, removal and dedup route through this manager.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    installed_by: Option<String>,
+    /// The name that manager listed it under — what removal and dedup key on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_package: Option<String>,
 }
 
 pub struct WebBackendCore {
@@ -146,6 +155,56 @@ impl Installable for WebInstallable {
                 verify_checksum(&dl_path, expected_sha)?;
             }
 
+            // D5: a URL that points at a `.deb`/`.rpm` installs itself into a system database.
+            // Hand it to its manager, which then owns it — record only which manager and the
+            // name it listed the package under, and skip the unpack/PATH path entirely. On a
+            // machine without the manager it falls through and is kept as a plain resource.
+            let url_filename = spec.name.split('/').next_back().unwrap_or("");
+            let handoff = Format::of_filename(url_filename).filter(|f| {
+                system_pkg::is_handoff_format(*f)
+            });
+            if let Some(format) = handoff {
+                let detect = system_pkg::detect_command(format).unwrap_or("");
+                if self.core.executor.command_exists(detect).await {
+                    let installer = system_pkg::installer_for(format).unwrap_or(detect);
+                    let query = system_pkg::query_name_argv(format, &dl_path)?;
+                    let (qprog, qargs) = query.split_first().expect("a query argv is never empty");
+                    let qrefs: Vec<&str> = qargs.iter().map(String::as_str).collect();
+                    let system_package = self
+                        .core
+                        .executor
+                        .run_output(qprog, &qrefs, false)
+                        .await?
+                        .trim()
+                        .to_string();
+
+                    let install = system_pkg::install_argv(format, &dl_path)?;
+                    let (iprog, iargs) =
+                        install.split_first().expect("an install argv is never empty");
+                    let irefs: Vec<&str> = iargs.iter().map(String::as_str).collect();
+                    info!(
+                        "Web: handing {} to {} — installs as `{}`",
+                        url_filename, installer, system_package
+                    );
+                    self.core.executor.run(iprog, &irefs, true).await?;
+
+                    state.insert(
+                        spec.name.clone(),
+                        WebState {
+                            url: spec.name.clone(),
+                            // No local tree LiNix owns: the manager placed the files.
+                            local_path: String::new(),
+                            bin_link: None,
+                            etag: remote_etag,
+                            last_modified: remote_mod,
+                            installed_by: Some(installer.to_string()),
+                            system_package: Some(system_package),
+                        },
+                    );
+                    continue;
+                }
+            }
+
             let id = format!("{:x}", md5::compute(&spec.name));
             let dest_dir = self.core.install_dir.join(&id);
             if dest_dir.exists() {
@@ -244,6 +303,8 @@ impl Installable for WebInstallable {
                     bin_link: final_bin_link,
                     etag: remote_etag,
                     last_modified: remote_mod,
+                    installed_by: None,
+                    system_package: None,
                 },
             );
         }
@@ -258,13 +319,31 @@ impl Installable for WebInstallable {
         for url in urls {
             if let Some(entry) = state.remove(url) {
                 let mut errors = Vec::new();
+                // D5: a resource a system manager owns is removed *through* that manager.
+                if let (Some(installer), Some(system_package)) =
+                    (entry.installed_by.as_deref(), entry.system_package.as_deref())
+                {
+                    match system_pkg::remove_argv(installer, system_package) {
+                        Ok(argv) => {
+                            let (prog, args) =
+                                argv.split_first().expect("a remove argv is never empty");
+                            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                            if let Err(e) = self.core.executor.run(prog, &refs, true).await {
+                                errors.push(format!("{} {}: {}", installer, system_package, e));
+                            }
+                        }
+                        Err(e) => errors.push(e.to_string()),
+                    }
+                }
                 if let Some(ref l) = entry.bin_link {
                     if let Err(e) = crate::utils::remove_deployed_path(l).await {
                         errors.push(e);
                     }
                 }
-                if let Err(e) = crate::utils::remove_deployed_path(&entry.local_path).await {
-                    errors.push(e);
+                if !entry.local_path.is_empty() {
+                    if let Err(e) = crate::utils::remove_deployed_path(&entry.local_path).await {
+                        errors.push(e);
+                    }
                 }
                 if errors.is_empty() {
                     info!("Web: Removed resource: {}", url);
@@ -310,6 +389,20 @@ impl Queryable for WebQueryable {
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let all = self.list_installed().await?;
         Ok(all.into_iter().find(|p| p.name == name))
+    }
+
+    async fn owned_system_packages(&self) -> Vec<(String, String)> {
+        // D5: report the `.deb`/`.rpm` resources this backend handed to a system manager, so the
+        // unmanaged crawl defers to it.
+        self.core
+            .load_state()
+            .await
+            .values()
+            .filter_map(|s| match (&s.installed_by, &s.system_package) {
+                (Some(installer), Some(pkg)) => Some((installer.clone(), pkg.clone())),
+                _ => None,
+            })
+            .collect()
     }
 }
 

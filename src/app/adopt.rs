@@ -75,6 +75,18 @@ impl Adopter {
         let mut seen_keys = HashSet::new();
         let mut candidates: Vec<Package> = Vec::new();
 
+        // D5: a `.deb`/`.rpm` a download backend handed to a system manager is listed by that
+        // manager as manually installed, but a `github:`/`web:` declaration already owns it —
+        // so adopt must not offer to manage it a second time. Gathered once, matched by name.
+        let mut owned_system: HashSet<String> = HashSet::new();
+        for backend in self.registry.available() {
+            if let Some(q) = backend.as_queryable() {
+                for (_installer, pkg) in q.owned_system_packages().await {
+                    owned_system.insert(pkg);
+                }
+            }
+        }
+
         for backend in self.registry.available() {
             let Some(queryable) = backend.as_queryable() else {
                 continue;
@@ -106,6 +118,7 @@ impl Adopter {
                     for pkg in pkgs {
                         let key = format!("{}:{}", pkg.backend, pkg.name);
                         if !state_guard.is_managed(&pkg.backend, &pkg.name)
+                            && !owned_system.contains(&pkg.name)
                             && seen_keys.insert(key.clone())
                         {
                             trace!("candidate: {}", key);

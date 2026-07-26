@@ -40,6 +40,17 @@ pub struct ArtifactLock {
     /// The hash of the bytes that were installed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    /// The system installer that owns this artifact once it is placed (D5) — `dpkg` for a
+    /// `.deb`, `rpm` for an `.rpm`. `None` is the ordinary case: LiNix unpacked it and put it on
+    /// PATH itself. When set, removal, upgrade and dedup route through this manager rather than
+    /// through a file delete, and `system_package` is the name it was recorded under.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_by: Option<String>,
+    /// The package name the system manager knows this artifact as (read from the file at install
+    /// time). Only meaningful alongside `installed_by`; it is what `dpkg -r`/`rpm -e` and the
+    /// unmanaged-dedup key on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_package: Option<String>,
 }
 
 /// `locks/<backend>.toml`, keyed by the package name the declaration used. A `BTreeMap` so the
@@ -104,6 +115,21 @@ impl ArtifactLedger {
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &[ArtifactLock])> {
         self.entries.iter().map(|(k, v)| (k.as_str(), v.as_slice()))
+    }
+
+    /// Every system package these declarations installed through a system manager (D5), as
+    /// `(installer, package_name)` pairs. The unmanaged crawl and `check` subtract these so a
+    /// `.deb` a `github:` line handed to `dpkg` is not also reported as apt-visible drift, and
+    /// `purge-unmanaged` defers to the recorded installer rather than deleting it.
+    pub fn system_packages(&self) -> Vec<(String, String)> {
+        self.entries
+            .values()
+            .flatten()
+            .filter_map(|l| match (&l.installed_by, &l.system_package) {
+                (Some(installer), Some(pkg)) => Some((installer.clone(), pkg.clone())),
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -182,6 +208,7 @@ mod tests {
             format: "tarball".into(),
             selected_by: None,
             sha256: sha.map(str::to_string),
+            ..Default::default()
         }
     }
 
@@ -250,6 +277,42 @@ mod tests {
     #[test]
     fn nothing_locked_is_an_empty_slice_not_a_missing_answer() {
         assert!(ArtifactLedger::new().locked("foo/bar").is_empty());
+    }
+
+    fn system_lock(asset: &str, installer: &str, pkg: &str) -> ArtifactLock {
+        ArtifactLock {
+            version: Some("10.2.0".into()),
+            asset: asset.into(),
+            url: format!("https://example.invalid/{}", asset),
+            format: "deb".into(),
+            installed_by: Some(installer.into()),
+            system_package: Some(pkg.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn system_packages_reports_only_handoff_locks() {
+        // D5: a `.deb` handed to dpkg records the installer and the name it listed the package
+        // under; a plain PATH-deployed artifact contributes nothing to the dedup set.
+        let mut led = ArtifactLedger::new();
+        led.record("sharkdp/fd", vec![system_lock("fd_10.2.0_amd64.deb", "dpkg", "fd")]);
+        led.record("owner/plain", vec![lock("plain.tar.gz", Some("z9"))]);
+        let owned = led.system_packages();
+        assert_eq!(owned, vec![("dpkg".to_string(), "fd".to_string())]);
+    }
+
+    #[test]
+    fn a_handoff_lock_survives_a_toml_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("github.toml");
+        let mut led = ArtifactLedger::new();
+        led.record("sharkdp/fd", vec![system_lock("fd_10.2.0_amd64.deb", "rpm", "fd")]);
+        led.save(&path).unwrap();
+        let back = ArtifactLedger::load(&path).unwrap();
+        let l = &back.locked("sharkdp/fd")[0];
+        assert_eq!(l.installed_by.as_deref(), Some("rpm"));
+        assert_eq!(l.system_package.as_deref(), Some("fd"));
     }
 
     #[test]

@@ -249,7 +249,7 @@ software (it is not software, so probably not). Recorded as **D3b, open**, not a
 
 **Status: ANSWERED — ruled 2026-07-24.**
 
-**In the tree today:** Not reachable: `github.rs:225` says a `.deb` *"would have to be handed to `dpkg`"* — the backend does not install one today, which is why this is still askable.
+**In the tree today: BUILT (2026-07-26).** `github:`/`web:` hand a `.deb` to `dpkg -i` and an `.rpm` to `rpm -U` (`backends/artifact/system_pkg.rs` is the one place that argv is built); the lock records `installed_by`/`system_package` (`ArtifactLock`), removal routes back through the recorded manager (`dpkg -r`/`rpm -e`), and `installed_but_unmanaged` + `adopt`'s discovery subtract those names so `check` does not double-count and `purge-unmanaged` defers. `installable_here` now accepts a `.deb` only where `dpkg` exists and an `.rpm` only where `rpm` does — otherwise the line falls through to download-only. Unit-tested (argv, lock round-trip, dedup accessor, installer gating); only the live `dpkg -i`/`rpm -U` round-trip is deferred to a real apt/rpm box.
 
 **D5 — A `deb` installed by `github` — who owns it?** `dpkg -i` puts it in apt's database. Now
 `apt` can upgrade it out from under LiNix, `linix check` may see it twice (once as a github
@@ -261,6 +261,8 @@ box, not a mock.
 
 
 **RULED (owner, 2026-07-24): the installing backend owns it.** When `github:`/`web:` installs a file (a `.deb` handed to `dpkg`, etc.), the lock records which backend installed it, and that backend owns removal, upgrade and dedup — `check` does not report it twice, and `purge-unmanaged` defers to the recorded installer. This is the existing per-backend ownership (every managed package carries its backend); the `github:`-installs-a-`.deb` capability itself is separate and unbuilt, but the ownership rule is settled for when it lands.
+
+**BUILD DIRECTIVE (owner, 2026-07-26): build it now, test the live install later.** No longer held back for an apt box. The capability — `github:`/`web:` handing a `.deb` to `dpkg -i` / an `.rpm` to `rpm -i`, the lock recording the installing backend, `check`'s dedup, and `purge-unmanaged`'s deference — is built now and unit-tested (argv construction, lock round-trip, dedup logic, purge deference). Only the live `dpkg -i` / `rpm -i` round-trip is deferred to a real apt/rpm box; it is exercised there, not claimed here.
 ---
 
 ## K2
@@ -621,7 +623,24 @@ or retention is disabled for that provider; a row missing `restore` or a require
 is refused at load, not half-used. This makes providers plural, which is what **U28** (choose the
 active provider by capability, not list order) now has to answer.
 
----
+**RULED (owner decision session 2026-07-26): the "built-ins become rows too" half is Option A —
+build it now, no permanent exemption.** The additive `ConfigSnapshotProvider` shipped 2026-07-27;
+this closes the other half the original ruling asked for — the built-ins stop being a hardcoded
+`Vec` (`core/snapshot.rs:528`) and go through the one loader, so the mechanism is proven by the
+shipped providers and cannot drift into a privileged path nobody tested (the K17/U1 invariant).
+
+- **btrfs, zfs, timeshift and lvm become argv rows** in `adapters/snapshot.toml`. Their live
+  restore is validated on a Linux box with those filesystems afterwards; the argv and wiring are
+  unit-tested here.
+- **Windows System Restore becomes a row too — but via typed-placeholder substitution, not a
+  free-text template.** This was the one point that needed the owner: Windows System Restore is
+  typed PowerShell cmdlets (`Checkpoint-Computer`, `Restore-Computer -RestorePoint {id}`) run
+  elevated, and SEC5 closed an injection hole there by making the id a `u32` and the label a fixed
+  enum. The owner ruled it stays a row rather than a hand-written exemption, on the condition that
+  the loader substitutes the id only as a validated `u32` and the label only as the enum value —
+  never raw interpolation — so SEC5's property is preserved by construction. This is buildable and
+  testable on the Windows host itself, so nothing about the Windows row waits on foreign hardware.
+  Reasoned in **V.82**.
 
 ## U28
 
@@ -1026,6 +1045,8 @@ is blocked on it — it is filed so that the answer stops being "no" when it is 
 **RULED (owner, 2026-07-24): make it an option.** Where a backend has its own atomic swap, a config option lets LiNix use it; the default stays K3's pre-removal snapshot, because most package swaps cannot be atomic and a guarantee that only sometimes holds must be asked for, not assumed.
 
 **RULED (2026-07-24): an option, added when a backend needs it.** Where a backend has its own atomic swap, a config option uses it; the default stays K3's pre-removal snapshot. NOT added as a dead key now: no backend currently exposes atomic swap, and this project holds that a preference that silently does nothing is worse than none (K4's own reasoning). The option lands with the first backend that can honour it — the ruling is what that backend's option will implement.
+
+**REAFFIRMED (owner decision session 2026-07-26): stays parked, not part of this build.** The pre-real-machine build does NOT add a dead atomic-swap key. K18 lands with the first backend that actually exposes atomic swap, exactly as ruled above.
 ---
 
 ## T7

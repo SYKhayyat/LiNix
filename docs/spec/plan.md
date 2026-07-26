@@ -22,9 +22,12 @@ section below; this list is the sequence, not the spec.
 (ubuntu/fedora/arch/alpine/tools) is green, run for real. **The flagship VI.0 bug (S24/S25 —
 interrupted-install recovery removed a package past the guard) is FIXED** (session 2026-07-23,
 sixteenth). **Phase 7 and the whole U-series backlog are built (session 2026-07-27):** Tiers 2–4
-are DONE, and the only ruled items still open are **D5** (Tier 1, needs a real apt box) and
-**U27's "built-ins become snapshot rows" half** (needs zfs/lvm/btrfs hardware; the additive
-config-driven half shipped). Nothing else in the register is unbuilt.
+are DONE. **The two items that were open are now cleared to build (owner decision session
+2026-07-26): D5 and U27's "built-ins become snapshot rows" half are BUILT NOW and validated on the
+real machine afterwards** — neither is held back for hardware any more. D5's live `dpkg -i`/`rpm -i`
+run and the Linux snapshot providers' live restore are the box's job; everything else (argv,
+lock, dedup, the typed-placeholder Windows row) is built and unit-tested here. Nothing else in the
+register is unbuilt.
 
 **Order is by dependency and blast radius, not size** — the safe, additive, foundational work
 first; the two things that can destroy data or leak a secret (storage removal, secret providers)
@@ -32,11 +35,20 @@ last, after the mechanism they ride is proven.
 
 ### Tier 1 — small ruled fixes (additive, low-risk, clears the register backlog)
 
-1. **D5** — `github:`/`web:` may install a file (a `.deb` to `dpkg`); the lock records the
-   installing backend, and that backend owns removal, upgrade and dedup (`check` never double-counts).
-   *(Unbuilt: `github.rs` still says a `.deb` "would have to be handed to `dpkg`". The riskiest of
-   the four — it runs `dpkg`/`rpm` and needs a real apt box to verify cross-backend dedup, so it
-   was left for a session that can test it rather than built blind.)*
+1. ~~**D5** — `github:`/`web:` may install a file (a `.deb` to `dpkg`); the lock records the
+   installing backend, and that backend owns removal, upgrade and dedup (`check` never double-counts).~~
+   **BUILT (session 2026-07-26).** One shared `backends/artifact/system_pkg.rs` builds the handoff
+   argv (`dpkg -i` / `rpm -U --replacepkgs`, `dpkg -r` / `rpm -e`, and the `dpkg-deb`/`rpm -qp` name
+   read); `github.rs` and `web.rs` both branch a `.deb`/`.rpm` to it and record `installed_by` +
+   `system_package` in the lock (github) / state (web). `installable_here` gates the handoff on the
+   manager existing, so a machine without it falls through to download-only. Dedup/deference ride the
+   existing per-backend ownership: `Queryable::owned_system_packages` (default none, overridden by
+   github/web) feeds `installed_but_unmanaged` and `adopt`'s discovery, which subtract those names —
+   so `check` does not double-count and `purge-unmanaged` defers to the recorded installer. Unit-tested
+   (argv, lock TOML round-trip, `system_packages()` accessor, installer gating). **Only the live
+   `dpkg -i`/`rpm -U` round-trip is deferred to a real apt/rpm box** — the same hardware boundary
+   btrfs/zfs restore sits behind. `rpm -U` (not the ruling's literal `rpm -i`) because `-i` refuses an
+   already-installed package and the installer must own the upgrade; the argv builder records why.
 
 **Done since this list was last written, and struck from it:**
 
@@ -84,15 +96,14 @@ last, after the mechanism they ride is proven.
 - ~~**7o** — `firewall:` (N1–N7).~~ **BUILT** (`ca9466b`; `backends/firewall.rs`,
   `firewall_adapters.toml` with `ufw`/`firewalld`/`windows-defender` as rows, `model/firewall.rs`).
 
-### Tier 3 — declared providers (Phase 7p): DONE
+### Tier 3 — declared providers (Phase 7p): DONE except U27's built-ins-as-rows (now cleared to build)
 
 **The whole tier is built (session 2026-07-27). The snapshot layer is data (U27), priority
 chooses among providers (U28), APFS is the macOS net (U29), init systems are data (U36), storage
 objects are a guarded family (U30), and secret decryption opens to declared providers (U38). The
-one part deliberately left is U27's "built-ins become rows too" half — btrfs/zfs restore and
-Windows System Restore — because it cannot be *validated* on this host (no zfs/lvm/btrfs box, and
-Windows System Restore is typed-PowerShell that cannot become argv-data without reintroducing
-SEC5); rewriting a tested safety net blind is the one thing "we cannot afford bugs here" forbids.**
+one remaining part — U27's "built-ins become rows too" half — is CLEARED TO BUILD by the owner
+decision session 2026-07-26 (Option A), no longer parked. See item 6 below for exactly what to
+build and what is deferred to hardware.**
 
 6. ~~**U27 — the provider mechanism.**~~ **BUILT (additive half)** (session 2026-07-27). A
    `ConfigSnapshotProvider` reads `adapters/snapshot.toml` through the one II.12 ledger and
@@ -100,9 +111,23 @@ SEC5); rewriting a tested safety net blind is the one thing "we cannot afford bu
    field with the safe default** — `restores_running_system` omitted ⇒ create-only, and a
    "restore" that could roll nothing back never runs (V.60). `core/snapshot.rs::ConfigSnapshotProvider`,
    `SnapshotProviderDef`, `config_snapshot_defs`. **The ruling's "built-ins become rows too" half
-   is still deliberately NOT done blind:** btrfs/zfs restore and Windows System Restore cannot be
-   validated on this host, and Windows System Restore is typed-PowerShell that cannot become safe
-   argv-data without reintroducing SEC5 — real hardware / an owner ruling on the SEC5 tension.
+   is now CLEARED TO BUILD — owner decision session 2026-07-26, Option A.** Build it now:
+   - **btrfs / zfs / timeshift / lvm become rows** in `adapters/snapshot.toml` (the take/list/
+     delete/restore argv as data), read through the same loader the `ConfigSnapshotProvider`
+     already uses, replacing the hardcoded `Vec` at `core/snapshot.rs:528`. The argv construction
+     and the "registered where a row expects it" wiring are unit-tested here; the **live restore**
+     (zfs/lvm/btrfs) is the only part deferred to a Linux box with those filesystems — the same
+     hardware boundary btrfs/zfs restore has always sat behind.
+   - **Windows System Restore becomes a row too, via typed-placeholder substitution** — NOT a
+     free-text template. The row names the cmdlet and the loader substitutes the id only as a
+     validated `u32` and the label only as the fixed `SnapshotLabel` enum, never raw string
+     interpolation, so SEC5's property ("nothing but a `u32`/enum reaches the PowerShell") holds by
+     construction after the conversion. **This is testable on this Windows host** — the argv build
+     and the `a_restore_point_id_that_is_not_a_number_never_reaches_powershell` /
+     `every_snapshot_label_is_a_fixed_string` tests run here — so it is not deferred to foreign
+     hardware. See **V.82** for why the Windows row is typed placeholders rather than a string.
+   - **Fix `target-state.md`'s stale "NOT YET BUILT" note (lines ~1212)** as part of this build:
+     removing the hardcoded vec is exactly what that note is waiting on.
 7. ~~**U36 — init systems** as `[[init]]` rows.~~ **BUILT** (session 2026-07-27;
    `backends/service.rs` is now a table over `init_providers.toml` + `adapters/init.toml`; the
    closed `enum InitSystem` is gone, a row register last, a row missing start/stop is refused).
@@ -198,6 +223,12 @@ new model deletes the flag instead. Do not try to preserve it.
 > re-measured**; `src/` now carries 8,896 comment lines in total, of which the marketing subset
 > is a judgement call no grep makes. Treat the deletion half of Phase 0 as done and the comment
 > half as unmeasured — not as done.
+>
+> **PART OF THIS BUILD (owner decision session 2026-07-26).** The re-measurement and the
+> marketing-comment sweep ride the pre-real-machine build: re-count the comment lines against
+> today's tree, sweep the comments that narrate / congratulate / cite a spec paragraph instead of
+> stating a constraint the code can't show (the P6 rule), and report the new figure. It is no
+> longer left open as "unmeasured" — it is scheduled work, not a standing caveat.
 
 **Pure subtraction. Nothing new can break. Tests stay green except those testing deleted
 features.** Do this first so nothing is carefully ported that was about to be deleted.

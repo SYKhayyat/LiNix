@@ -5,7 +5,7 @@ use crate::core::{
     RateLimiter, Result,
 };
 use crate::backends::artifact::{
-    self, default_formats, ArtifactOptions, Asset as ArtifactAsset, AssetPattern,
+    self, default_formats, system_pkg, ArtifactOptions, Asset as ArtifactAsset, AssetPattern,
     Entry as ArchiveEntry, Format, FormatOrder, Platform, Request as SelectRequest,
 };
 use crate::utils::archive::extract_archive;
@@ -36,6 +36,13 @@ struct InstalledArtifact {
     asset: String,
     format: String,
     bin_path: Option<String>,
+    /// The system manager that owns this artifact (D5), when the file installed itself into a
+    /// package database (`dpkg`/`rpm`) rather than being deployed to PATH by LiNix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    installed_by: Option<String>,
+    /// The name that manager knows it as — what removal and dedup use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    system_package: Option<String>,
 }
 
 impl GithubState {
@@ -287,12 +294,20 @@ pub struct GithubInstallable {
     pub core: Arc<GithubBackendCore>,
 }
 
-/// What this backend can install today. A `.deb` would have to be handed to `dpkg`, which
-/// puts it in apt's database and makes apt able to upgrade it out from under LiNix — an
-/// ownership question that is recorded and unanswered, so the format is selected against
-/// rather than half-installed.
-fn installable_here(format: Format) -> bool {
-    format.is_archive() || matches!(format, Format::AppImage | Format::Binary)
+/// What this backend can install, given which system installers this machine has (D5). A `.deb`
+/// is installable only where `dpkg` exists and an `.rpm` only where `rpm` does — the file is
+/// handed to that manager, which then *owns* it (removal, upgrade and dedup route back through
+/// the recorded installer). On a machine without the manager the format is not installable, so a
+/// line that offers only a `.deb` there falls through to download-only rather than failing.
+fn installable_here(format: Format, has_dpkg: bool, has_rpm: bool) -> bool {
+    if format.is_archive() || matches!(format, Format::AppImage | Format::Binary) {
+        return true;
+    }
+    match system_pkg::installer_for(format) {
+        Some("dpkg") => has_dpkg,
+        Some("rpm") => has_rpm,
+        _ => false,
+    }
 }
 
 fn tag_url(repo: &str, tag: &str) -> String {
@@ -428,10 +443,16 @@ impl Installable for GithubInstallable {
         let mut state = self.core.load_state_internal().await;
         let mut ledger = ArtifactLedger::load(&self.core.locks_file)?;
 
+        // Which system installers this machine has, computed once: it gates whether a `.deb`/
+        // `.rpm` is installable here at all (D5), and a missing one turns such a line into a
+        // download-only keep rather than a failure.
+        let has_dpkg = self.core.executor.command_exists("dpkg").await;
+        let has_rpm = self.core.executor.command_exists("rpm").await;
+
         for spec in specs {
             let wanted = ArtifactOptions::read(&spec.options).map_err(Error::Validation)?;
             let asked = wanted.resolved_formats(&default_formats());
-            let installable = asked.retaining(installable_here);
+            let installable = asked.retaining(|f| installable_here(f, has_dpkg, has_rpm));
             // D3b: `@download_only` fetches without installing, and github does the same by
             // default when nothing it was asked for is installable (e.g. only a `.deb` on
             // offer and no `.deb` handoff yet). Rather than failing, it keeps the file — still
@@ -586,6 +607,8 @@ impl Installable for GithubInstallable {
                         asset: pick.asset.name.clone(),
                         format: pick.format.to_string(),
                         bin_path: None,
+                        installed_by: None,
+                        system_package: None,
                     });
                     locks.push(ArtifactLock {
                         version: Some(release.version.clone()),
@@ -594,6 +617,7 @@ impl Installable for GithubInstallable {
                         format: pick.format.to_string(),
                         selected_by: Some(reason.clone()),
                         sha256: Some((*sha).clone()),
+                        ..Default::default()
                     });
                 }
                 // A line that used to deploy a binary and is now download-only drops the old
@@ -638,18 +662,37 @@ impl Installable for GithubInstallable {
                 .ok_or_else(|| Error::Other("Home directory not found".into()))?
                 .join(".local")
                 .join("bin");
-            let one_artifact = downloaded.len() == 1;
             let previous: Vec<String> = state
                 .get(&spec.name)
                 .map(|s| s.artifacts.iter().filter_map(|a| a.bin_path.clone()).collect())
                 .unwrap_or_default();
 
+            // D5: a `.deb`/`.rpm` is handed to its system manager, never unpacked or put on
+            // PATH; the rest are LiNix's to deploy. Split them so the deploy-naming rule counts
+            // only the artifacts that actually take a PATH name.
+            let handoff_idx: Vec<usize> = downloaded
+                .iter()
+                .enumerate()
+                .filter(|(_, (pick, _, _))| system_pkg::is_handoff_format(pick.format))
+                .map(|(i, _)| i)
+                .collect();
+            let regular_idx: Vec<usize> = downloaded
+                .iter()
+                .enumerate()
+                .filter(|(_, (pick, _, _))| !system_pkg::is_handoff_format(pick.format))
+                .map(|(i, _)| i)
+                .collect();
+            let one_artifact = regular_idx.len() == 1;
+
             // Unpack and find each program first, deploy nothing yet: the name two artifacts
             // fight over is only knowable once both archives are open, and a refusal that
             // arrives after the first is already on PATH has half-installed the line it
-            // refused.
+            // refused. Handoffs to a system manager (below) run only after this pass is clean,
+            // for the same reason: a `dpkg -i` that ran before a sibling clash was found would
+            // leave the line half-installed.
             let mut resolved: Vec<(&artifact::Pick, &String, PathBuf, PathBuf)> = Vec::new();
-            for (pick, dl_path, sha) in &downloaded {
+            for &i in &regular_idx {
+                let (pick, dl_path, sha) = &downloaded[i];
                 // One subdirectory per artifact: two archives under one declaration can both
                 // contain `bin/`, and unpacking them over each other loses one of them.
                 let unpack_dir = pkg_dir.join(artifact_dir_name(&pick.asset.name));
@@ -727,6 +770,59 @@ impl Installable for GithubInstallable {
 
             let mut installed_artifacts: Vec<InstalledArtifact> = Vec::new();
             let mut locks: Vec<ArtifactLock> = Vec::new();
+
+            // D5: hand each `.deb`/`.rpm` to its manager. The manager now owns the files — LiNix
+            // records only *which* manager and the name it listed the package under, and removal,
+            // upgrade and dedup route through that record. The name is read from the file before
+            // the install, because after the install the file is gone and the name is the only
+            // handle removal has.
+            for &i in &handoff_idx {
+                let (pick, dl_path, sha) = &downloaded[i];
+                let installer = system_pkg::installer_for(pick.format).ok_or_else(|| {
+                    Error::Other(format!(
+                        "{}: no system installer for {}",
+                        spec.name, pick.format
+                    ))
+                })?;
+                let query = system_pkg::query_name_argv(pick.format, dl_path)?;
+                let (qprog, qargs) = query.split_first().expect("a query argv is never empty");
+                let qrefs: Vec<&str> = qargs.iter().map(String::as_str).collect();
+                let system_package = self
+                    .core
+                    .executor
+                    .run_output(qprog, &qrefs, false)
+                    .await?
+                    .trim()
+                    .to_string();
+
+                let install = system_pkg::install_argv(pick.format, dl_path)?;
+                let (iprog, iargs) = install.split_first().expect("an install argv is never empty");
+                let irefs: Vec<&str> = iargs.iter().map(String::as_str).collect();
+                info!(
+                    "{}: handing {} to {} — installs as `{}`",
+                    spec.name, pick.asset.name, installer, system_package
+                );
+                self.core.executor.run(iprog, &irefs, true).await?;
+
+                installed_artifacts.push(InstalledArtifact {
+                    asset: pick.asset.name.clone(),
+                    format: pick.format.to_string(),
+                    bin_path: None,
+                    installed_by: Some(installer.to_string()),
+                    system_package: Some(system_package.clone()),
+                });
+                locks.push(ArtifactLock {
+                    version: Some(release.version.clone()),
+                    asset: pick.asset.name.clone(),
+                    url: pick.asset.url.clone(),
+                    format: pick.format.to_string(),
+                    selected_by: Some(reason.clone()),
+                    sha256: Some((*sha).clone()),
+                    installed_by: Some(installer.to_string()),
+                    system_package: Some(system_package),
+                });
+            }
+
             for (pick, sha, discovered, bin_dest) in &resolved {
                 crate::utils::deploy_executable(
                     discovered,
@@ -743,6 +839,8 @@ impl Installable for GithubInstallable {
                     asset: pick.asset.name.clone(),
                     format: pick.format.to_string(),
                     bin_path: Some(bin_dest.to_string_lossy().to_string()),
+                    installed_by: None,
+                    system_package: None,
                 });
                 locks.push(ArtifactLock {
                     version: Some(release.version.clone()),
@@ -751,6 +849,7 @@ impl Installable for GithubInstallable {
                     format: pick.format.to_string(),
                     selected_by: Some(reason.clone()),
                     sha256: Some((*sha).clone()),
+                    ..Default::default()
                 });
             }
 
@@ -789,6 +888,26 @@ impl Installable for GithubInstallable {
         for name in names {
             if let Some(pkg) = state.remove(name) {
                 let mut errors = Vec::new();
+                // D5: an artifact a system manager owns is removed *through* that manager, by the
+                // name it was recorded under — a file delete would leave the package in apt/rpm's
+                // database, drift no `sync` could see.
+                for art in &pkg.artifacts {
+                    if let (Some(installer), Some(system_package)) =
+                        (art.installed_by.as_deref(), art.system_package.as_deref())
+                    {
+                        match system_pkg::remove_argv(installer, system_package) {
+                            Ok(argv) => {
+                                let (prog, args) =
+                                    argv.split_first().expect("a remove argv is never empty");
+                                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                                if let Err(e) = self.core.executor.run(prog, &refs, true).await {
+                                    errors.push(format!("{} -e {}: {}", installer, system_package, e));
+                                }
+                            }
+                            Err(e) => errors.push(e.to_string()),
+                        }
+                    }
+                }
                 for bp in pkg.artifacts.iter().filter_map(|a| a.bin_path.as_ref()) {
                     if let Err(e) = crate::utils::remove_deployed_path(bp).await {
                         errors.push(e);
@@ -850,6 +969,14 @@ impl Queryable for GithubQueryable {
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let all = self.list_installed().await?;
         Ok(all.into_iter().find(|p| p.name == name))
+    }
+
+    async fn owned_system_packages(&self) -> Vec<(String, String)> {
+        // D5: read the ledger LiNix wrote, not the network — a `.deb` this backend handed to
+        // dpkg is recorded there as `installed_by`/`system_package`.
+        ArtifactLedger::load(&self.core.locks_file)
+            .map(|l| l.system_packages())
+            .unwrap_or_default()
     }
 }
 
@@ -953,6 +1080,7 @@ mod tests {
             format: format.to_string(),
             selected_by: None,
             sha256: Some("abc123".into()),
+            ..Default::default()
         }
     }
 
@@ -967,6 +1095,8 @@ mod tests {
                     asset: (*a).to_string(),
                     format: "tarball".into(),
                     bin_path: Some(format!("/home/u/.local/bin/{}", a)),
+                    installed_by: None,
+                    system_package: None,
                 })
                 .collect(),
         }
@@ -974,6 +1104,22 @@ mod tests {
 
     fn tarballs() -> FormatOrder {
         FormatOrder::new(vec![Format::Tarball, Format::Binary])
+    }
+
+    #[test]
+    fn a_deb_is_installable_only_where_dpkg_exists() {
+        // D5: on a machine with the manager the file is a handoff install; without it, the
+        // format is not installable here, so a line offering only a `.deb` becomes download-only
+        // rather than failing.
+        assert!(installable_here(Format::Deb, true, false));
+        assert!(!installable_here(Format::Deb, false, false));
+        assert!(installable_here(Format::Rpm, false, true));
+        assert!(!installable_here(Format::Rpm, false, false));
+        // Archives never depend on a system installer.
+        assert!(installable_here(Format::Tarball, false, false));
+        assert!(installable_here(Format::Binary, false, false));
+        // A macOS/Windows database shape LiNix does not hand off is not installable via this path.
+        assert!(!installable_here(Format::Msi, true, true));
     }
 
     #[test]
