@@ -653,10 +653,7 @@ it" is scheduled work, not an acknowledgement filed for later, and this applies 
 
 ## U30
 
-**Status: OPEN — create ruled, destroy/guard open.** **Direction (owner, 2026-07-25): declaring a
-storage object is opened (Phase 7p).** But the *remove* path destroys a filesystem — **do not ship
-it until this rules what the guard owes it**; that half is genuinely open, and the family-vs-
-separate-backends shape with it.
+**Status: ANSWERED — ruled 2026-07-26.**
 
 **U30 — Is "declare a storage object" a family (zfs datasets, lvm volumes, btrfs subvolumes) or
 separate backends, and what does the guard owe a removal that destroys a filesystem? (XIII.25.)**
@@ -670,6 +667,24 @@ assumed** (the II.10 lesson: a removal path nobody names is a removal path nobod
 *Recommendation:* settle the guard's contract for filesystem objects — at minimum, a declared
 storage object with data on it is never destroyed without the gate a protected package gets —
 before any second storage backend grows a `remove`.
+
+**RULED (owner, 2026-07-26): one family, and the ordinary guard — no special escalation.**
+
+- **Shape: one family.** zfs datasets, lvm volumes and btrfs subvolumes are the same
+  declared-sized-mounted noun, so they share one trait, not three backends. (The owner agreed the
+  cosmetic half.)
+- **Guard: the normal gate, and it must fire.** A removal that destroys a filesystem goes through
+  `app/sync/guard.rs` exactly as a protected-package removal does — the same mass-removal-style
+  confirmation, no stronger dedicated gate and no refuse-to-auto-destroy special case. What is
+  **not** optional is that the guard fires at all: this is a removal path, it destroys a
+  filesystem, and II.10 says every removal path calls the guard — so a `zfs destroy` / `subvolume
+  delete` reached by removing a line is never silent, it is guarded like any destructive change.
+  The owner chose the normal gate over the two stricter options (empty-only auto-destroy;
+  never-auto-destroy-a-populated-volume) — a storage removal is guarded, not special-cased.
+
+The line that was genuinely open — *does a filesystem-destroying removal earn MORE than the normal
+gate* — is answered **no**. It earns exactly the guard every removal earns, and the danger is met
+by the guard firing, not by a second heavier gate.
 
 ---
 
