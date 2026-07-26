@@ -853,10 +853,7 @@ is ever wanted, that, and only that, reopens the block question.
 
 ## U38
 
-**Status: OPEN — ruled in principle, GATED on the T-series.** **Direction (owner, 2026-07-25):
-open it eventually — but do NOT build until the T-series settles how plaintext is handled.**
-Opening this surface before that is decided hands an unaudited command the one thing LiNix guards.
-Phase 7p lists it under STOP AND ASK for exactly this reason.
+**Status: ANSWERED — ruled 2026-07-26. The T-series gate is now clear.**
 
 **U38 — Is secret decryption a declared-provider kind, and behind which T-series rulings?
 (XIII.36.)** `model/secret.rs` is built around `age` (age plugins, hardware tokens); sops, Vault,
@@ -870,6 +867,21 @@ principle — the mechanism is identical and users genuinely have other secret m
 before the T-series settles how plaintext is handled**, because opening this surface first hands an
 unaudited command the one thing LiNix promises to guard. Safe order: rule the T-series, then open
 the door the mechanism already makes trivial.
+
+**RULED (owner, 2026-07-26): open it — the T-series is settled, so the gate is clear.** The
+plaintext-handling rules this surface waited on are all ruled: decrypt never silently backs up
+(T1), plaintext cannot be written back into the repo (T2), it is created with locked-down
+permissions (T5), and LiNix does not hold secrets in process memory (T7, ruled out). With those
+fixed, secret decryption becomes a declared-provider kind — sops, Vault, 1Password, cloud KMS and
+GPG reachable on the same plugin mechanism and `linix lock` approval as every other surface.
+
+- **The safety cost is real and is paid by a refusal, not a warning.** A decrypt provider's output
+  *is* a secret, so a declared provider is **bound by the T-series handling rules** (no plaintext
+  to disk, none left in the process table, none logged), and **one that cannot promise them is
+  refused, not trusted.** Openness here is not free the way it is for init systems (U36): the
+  provider proves it handles plaintext safely, or it does not run.
+- Everything ruled gets built (2026-07-26 governance), so this is scheduled work, not a filed
+  intention — now that its gate is open.
 
 ---
 
