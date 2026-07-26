@@ -842,7 +842,7 @@ not worth a half-build.
 
 ## U35
 
-**Status: OPEN — not blocking.**
+**Status: ANSWERED — ruled 2026-07-26 (owner widened past composition-only).**
 
 **U35 — May a user name a new verb, strictly as a composition of built-ins? (XIII.31.)** LiNix has
 ~sixty commands (XIII.8) and no way to add the sixty-first. A verb that *sequences* existing verbs
@@ -852,6 +852,20 @@ line:** a user verb sequences built-in verbs and nothing else; the moment it run
 is `exec:` wearing a command's clothes, which U4 already settled as no. *Recommendation:* build it
 with that boundary hard-coded — composition only, no shell — so the safe 90% ships without
 reopening the `exec:` trust question the dangerous 10% would.
+
+**RULED (owner, 2026-07-26): build it, and a user verb may run arbitrary commands too.** The
+recommendation held the line at composition-only; the owner widened it, consistent with U33 letting
+`exec:` do anything. So a user verb has two registers, and **one door, not two**:
+
+- **Composing built-in verbs is safe and ungated.** `linix refresh` = `sync`, then `upgrade`, then
+  the fleet report — it sequences audited operations and produces nothing new, so it needs no key.
+- **Running arbitrary commands rides the `exec:` trust model from U33.** The moment a user verb
+  runs argv of its own, that portion is the same power `exec:` is, so it inherits the same
+  controls: gated behind U33's `exec:`-anything config key (off by default), approved through the
+  II.12 ledger, and never exempt from the guard, the plan and fail-loud (Part I). It does **not**
+  get a second, looser trust question of its own — that is the mistake the composition-only
+  recommendation was guarding against, and routing arbitrary-command verbs through U33's existing
+  gate answers it without a new mechanism.
 
 ---
 
