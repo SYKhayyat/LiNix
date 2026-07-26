@@ -1,4 +1,4 @@
-# The decision register — all 92, and which are answered
+# The decision register — all 104, and which are answered
 
 **One file, six features.** Every decision this design forces lives here, with its status. The
 registers used to sit at the tail of six proposal parts and **none of them recorded whether they
@@ -35,8 +35,19 @@ status loses that, so it is kept here:
   behaviour over time. D15–D17 are parked on purpose.
 - **W1–W14, `vars`.** W1–W5 blocked implementation and are all closed. W6–W10 are scope and
   grammar; W11–W14 behaviour and tooling.
-- **K1–K16, N1–N7, T1–T5, U1–U26.** *Blocking* means one thing in all four: **this cannot be
-  built without an answer, because two reasonable implementations differ.**
+- **K1–K16, N1–N7, T1–T5, U1–U38.** *Blocking* means one thing in all four: **this cannot be
+  built without an answer, because two reasonable implementations differ.** **U27–U38 are the
+  extension-surface round (XIII.23–XIII.36): opening the snapshot/rollback layer, macOS/BSD
+  filesystems, declared storage objects, custom health checks, the "as open as Lisp" set
+  (parameterized modules U32, generated declarations U33, a REPL U34, user verbs U35), and the
+  three more closed provider-lists the code review found — init systems (U36), notification
+  channels (U37), and secret decryption (U38). None blocks. They share one mechanism (XIII.33: a
+  declared provider, argv from a file, capability-by-declaration) and one line (XIII.32: open a
+  surface only where the added thing is data LiNix cannot hear, never behaviour it cannot see).
+  **Direction (owner, 2026-07-25):** for the *provider-list* surfaces — U27, U30, U31, U36, U37,
+  U38 — the *whether* is settled (they are to be opened, reachable without a source change,
+  XIII.33); what stays open on each is the *how* and the *safety order*. U33 (generated
+  declarations) is explicitly **not** in that set — XIII.32 still refuses it.**
 
 ---
 
@@ -60,7 +71,7 @@ status loses that, so it is kept here:
 | **U24** | Is a `.age` file inside the dotfiles tree a secret to decrypt? | next |
 | **U26** | Is BSD supported, and what does `when family` answer there? | next |
 
-### Open, not blocking — 34
+### Open, not blocking — 46
 
 | | question | feature |
 |---|---|---|
@@ -98,6 +109,18 @@ status loses that, so it is kept here:
 | **U20** | Is a language server wanted, and may it be a second implementation? | next |
 | **U21** | Is the exit-code table settled once, up front? | next |
 | **U25** | One dotfiles tree, or several? | next |
+| **U27** | Is the snapshot/rollback layer opened to a registry + config-driven providers? | next |
+| **U28** | One snapshot provider or several, chosen by capability not list order? | next |
+| **U29** | Is APFS the macOS safety net, and is its restore `Live` or not? | next |
+| **U30** | Declare storage objects (zfs/lvm/btrfs) as a family — and does the guard cover destroying one? | next |
+| **U31** | Should health checks be an open vocabulary — a user-declared check command? | next |
+| **U32** | Do modules take parameters (the macro), and are parameter types checked? | next |
+| **U33** | Are generated declarations — a config that runs a program to produce state — wanted at all? | next |
+| **U34** | Is `linix repl` worth a second entry point, or is `eval \| jq` enough? | next |
+| **U35** | May a user name a new verb, strictly as a composition of built-ins? | next |
+| **U36** | Are init systems a declared-provider kind (s6/dinit/runit/Shepherd), or stays a closed enum? | next |
+| **U37** | Are notification channels their own declared kind, or is an event hook the answer? | next |
+| **U38** | Is secret decryption a declared-provider kind, and behind which T-series rulings? | next |
 
 ### Built to the recommendation, never ruled — 0
 
@@ -506,6 +529,257 @@ drives (`pkgin` is registered today).
 ---
 
 # Open, not blocking
+
+## U27
+
+**Status: ANSWERED — ruled 2026-07-26.**
+
+**U27 — Is the snapshot/rollback layer opened to a registry and config-driven providers, the way
+backends are, or do new providers stay hand-written Rust? (XIII.23.)** Today `SnapshotProvider`
+is a seven-method trait and the four providers (btrfs, zfs, timeshift, `windows_restore`) are a
+hardcoded vec in `SnapshotManager::new` (`snapshot.rs:528`), first-available active. Adding
+APFS/LVM/bcachefs/WinBtrfs is a full Rust impl each. Two reasonable answers: **(a)** a
+`SnapshotProviderRegistry` plus a config-driven provider and a `custom_snapshots.toml`, matching
+the backend model — a create/list/delete/restore filesystem becomes ~thirty lines of data;
+**(b)** a registry only — providers stay Rust, but pluggable and no longer a hardcoded vec — on
+the grounds that a provider which gets `restore_capability` wrong bricks a machine (V.60), a
+higher bar than a package listing and maybe too high for a TOML file. *Recommendation:* (a),
+with the one constraint that makes it safe — **`restore_capability` is never inferred**: a
+provider whose config does not prove it can restore a running system is create-only
+(`NotFromRunningSystem`), never `Live`, so the worst a wrong config does is decline an undo it
+could have offered, never perform one it cannot keep. Ownership marking (S3) must be expressible
+or retention is disabled for that provider; a custom provider registers last and never shadows a
+built-in (XIII.2's rule).
+
+**RULED (owner, 2026-07-26): option (a), the full plugin — and the restore capability is a value
+the plugin author enters, not one LiNix guesses.** A snapshot provider is a declared block (the
+same shape as a custom backend and a `[[setting_store]]`): the commands to take, list, delete and
+restore a snapshot, as data in a file in the config repo. No new release is needed to teach LiNix
+a new snapshot technology.
+
+- **The plugin must state whether it can restore a *running* machine** — the one thing that
+  cannot be inferred (V.60): taking a snapshot and restoring one over the live system are
+  different abilities, and a wrong guess is a machine reported safe that is not. The author writes
+  it because the author knows it. Restore-capability is a **required field with no default**;
+  omitting it is a loud error naming the provider, never a silent "assume it can" or "assume it
+  can't". A provider declared unable to restore a running system is create-only — it saves state
+  and refuses the rollback rather than attempting one it cannot finish.
+- **It must work for everything, so the built-ins use the same door.** btrfs, zfs, timeshift and
+  Windows System Restore stop being a hardcoded list and become rows read through the one loader a
+  user's row goes through — the K17/U1 rule, so the mechanism is proven by the shipped providers
+  and cannot drift into a privileged path nobody tested. APFS, LVM, bcachefs and the rest are then
+  data, not code.
+- **It must be easy to add.** One file, roughly thirty lines of data, beside the other adapters in
+  `adapters/` (U10), under the II.12 hook ledger because it is argv a shared repo can run —
+  approved by `linix lock`, the same trust answer already given for custom backends and settings
+  stores, not a new one.
+
+**Implementing calls (owner ruled the shape; these follow from it):** a custom provider registers
+last and never shadows a built-in (XIII.2); ownership marking (S3) must be expressible in the row
+or retention is disabled for that provider; a row missing `restore` or a required capability field
+is refused at load, not half-used. This makes providers plural, which is what **U28** (choose the
+active provider by capability, not list order) now has to answer.
+
+---
+
+## U28
+
+**Status: OPEN — not blocking.**
+
+**U28 — Does a machine use one snapshot provider or several, and is the active one chosen by
+capability rather than list order? (XIII.23.)** `SnapshotManager::new` takes the first available
+provider and stops. But a machine can have a btrfs `/` and a ZFS data pool at once, and they are
+not equal: ZFS restores a running system live, btrfs cannot (V.60). Choosing by vec order means
+a btrfs-first machine silently gets the weaker safety net when a live-capable one is present.
+*Recommendation:* prefer a `Live` provider over a create-only one when both are available,
+independent of registration order; leave "several active at once" (snapshot every provider,
+restore from the best) as a later question, since one strong provider is the safety net and N is
+an optimization. Blocked by nothing — but it is the wrong default to leave in place once U27
+makes providers plural.
+
+---
+
+## U29
+
+**Status: OPEN — not blocking.**
+
+**U29 — Is APFS local-snapshot the macOS safety net, and does an APFS restore count as `Live` or
+`NotFromRunningSystem`? (XIII.24.)** U6 is ruled — the Linux-only snapshot promise is documented
+as such — but macOS ships APFS with local snapshots (`tmutil localsnapshot`, `diskutil apfs`)
+and LiNix uses none of it, so the pre-sync snapshot / `rebuild` revert / `rollback` are simply
+absent on the second supported platform. An `ApfsProvider` is the natural first customer of
+U27's registry. *Recommendation:* build it, and answer the capability honestly — an APFS
+snapshot that can only be restored by rebooting into the recovery environment is
+`NotFromRunningSystem`, not `Live` (V.60). Whether macOS parity is *scheduled* or merely *listed*
+(XIII.4) is the owner's call; the *capability* question must be answered before the provider
+ships, whenever that is.
+
+---
+
+## U30
+
+**Status: OPEN — create ruled, destroy/guard open.** **Direction (owner, 2026-07-25): declaring a
+storage object is opened (Phase 7p).** But the *remove* path destroys a filesystem — **do not ship
+it until this rules what the guard owes it**; that half is genuinely open, and the family-vs-
+separate-backends shape with it.
+
+**U30 — Is "declare a storage object" a family (zfs datasets, lvm volumes, btrfs subvolumes) or
+separate backends, and what does the guard owe a removal that destroys a filesystem? (XIII.25.)**
+`backends/btrfs.rs` declares subvolumes as objects; there is no zfs-dataset or lvm-volume
+equivalent, though each is the same declared-sized-mounted noun. They do not fit `ManagerConfig`,
+so it is Rust regardless — the question is one shared trait versus three backends. *The half that
+is not cosmetic:* `btrfs:` remove runs `subvolume delete`, which destroys a filesystem, and a
+zfs-dataset `remove` (`zfs destroy`) is the same at larger blast radius. **Every removal path
+calls the guard (`app/sync/guard.rs`), and this one must too — verified from the code, not
+assumed** (the II.10 lesson: a removal path nobody names is a removal path nobody guards).
+*Recommendation:* settle the guard's contract for filesystem objects — at minimum, a declared
+storage object with data on it is never destroyed without the gate a protected package gets —
+before any second storage backend grows a `remove`.
+
+---
+
+## U31
+
+**Status: OPEN — whether ruled (build), how open.** **Direction (owner, 2026-07-25): open it —
+build per XIII.33 and Phase 7p**, on the fail-loud constraint below. The how (exact schema) is
+implementation, not a further ruling.
+
+**U31 — Should health checks be an open vocabulary — a user-declared check command — rather than
+a fixed set? (XIII.26.)** A health-checked upgrade (XIII.5) rolls back when the machine is
+"unhealthy", but health is only what LiNix already knows how to test; a user whose service must
+answer on a port, or whose config file must parse, cannot express it. A check is argv with exit
+0 = healthy — the most check-shaped extension there is. *Recommendation:* open it, on the II.12
+hook trust model (a check command is argv from a file, and the file may travel), and fail loud —
+a check that cannot run is a failed check, not a passed one, or "healthy" quietly comes to mean
+"the check was broken" (V's silent-wrongness). Not blocking: the built-in checks work; this is
+the difference between a safety net LiNix designed and one the user can shape.
+
+---
+
+## U32
+
+**Status: OPEN — not blocking.**
+
+**U32 — Do modules take parameters (the macro LiNix doesn't have), and is a parameter's type
+checked? (XIII.29.)** A module is a named set of declarations that cannot take an argument, so two
+machines wanting *almost* the same set copy it and drift. *Proposed:* `param user` / `param gpu =
+none` in the module, `use workstation(user=shaul, gpu=nvidia)` at the call site; substitution is
+`vars`' existing interpolation reaching into the module's parameters, and the expansion is
+ordinary declarations, visible in `linix eval` and the removal preview before it runs. A missing
+`param` with no default is a **loud error naming module and parameter**, never an empty string
+that makes a `when` silently false (P3, the failure `vars` was hardened against). *The actual
+decision:* whether a parameter is typed — a `gpu` that must be one of a named set versus free text.
+A typed parameter is a second closed vocabulary the user defines: it names its legal values in the
+error (VIII.2's virtue) but is also a second place a name can be misspelled. *Recommendation:*
+build parameters; make types opt-in (free text with a loud "missing" is the floor, a named set is
+sugar on top), so the feature is useful before the type system is finished.
+
+---
+
+## U33
+
+**Status: OPEN — not blocking.**
+
+**U33 — Are generated declarations wanted at all — a config that runs a program to *produce*
+state, not describe it? (XIII.30.)** `vars` already lets a *value* come from a command through the
+hook ledger; this is a whole *declaration* from a command ("install whatever `./pick-python.sh`
+prints"). It is `read`/`eval` with `read`/`eval`'s liability: the config's behaviour stops being
+knowable by reading it. LiNix already treats the neighbouring feature as radioactive — `exec:` is
+"run a thing", and U3/U4 confined it to actions with no inverse, explicitly *not* installing
+software; a generator that emits installs walks back to that line, now able to *generate* the
+`exec:` (XIII.14's fear). If ever built, only under exec's constraints: output passes the guard
+and the removal preview as if typed; it runs through the II.12 ledger (V.55); a failed generator
+is a failed sync, never a silently empty set (VI.0). *Recommendation:* **not yet, and possibly
+never.** `vars` covers values, U32 covers reuse, and what remains is precisely the unknowable-by-
+reading property this design exists to refuse. Filed so the answer is a recorded *no* rather than
+a gap someone fills quietly.
+
+---
+
+## U34
+
+**Status: OPEN — not blocking.**
+
+**U34 — Is `linix repl` worth a second entry point, or is `linix eval | jq` enough? (XIII.31.)** A
+read-only prompt that resolves a name against *this* machine, evaluates a `when`, and expands a
+`use workstation(gpu=nvidia)` — answering "what does this resolve to here" by trying it. It is
+`eval` (XIII.15) with a cursor and must share the same parser and resolver, never a second
+implementation (the U20 rule). *Recommendation:* low priority — real value for anyone authoring a
+config, but `eval` already exposes the model, so this is ergonomics, not capability. Worth it only
+if it stays a thin front end over the existing engine.
+
+---
+
+## U35
+
+**Status: OPEN — not blocking.**
+
+**U35 — May a user name a new verb, strictly as a composition of built-ins? (XIII.31.)** LiNix has
+~sixty commands (XIII.8) and no way to add the sixty-first. A verb that *sequences* existing verbs
+— `linix refresh` = `sync`, then `upgrade`, then the fleet report — is `defun` over the command
+surface, and safe because it composes audited operations rather than producing new ones. **The
+line:** a user verb sequences built-in verbs and nothing else; the moment it runs arbitrary argv it
+is `exec:` wearing a command's clothes, which U4 already settled as no. *Recommendation:* build it
+with that boundary hard-coded — composition only, no shell — so the safe 90% ships without
+reopening the `exec:` trust question the dangerous 10% would.
+
+---
+
+## U36
+
+**Status: OPEN — whether ruled (build), how open.** **Direction (owner, 2026-07-25): open it —
+build the `[[init]]` kind per XIII.33 and Phase 7p** (the K17 rows move). The how is
+implementation.
+
+**U36 — Are init systems a declared-provider kind, or does the built-in enum stay closed? (XIII.34.)**
+`backends/service.rs` is a fixed `enum InitSystem` (Systemd, OpenRC, SysVinit, launchd, Windows
+`sc`) behind a hardcoded command table; s6, dinit, runit, GNU Shepherd and appliance inits are
+unreachable, and a `service:` line on such a host has no branch to take. It is the snapshot vec's
+problem in another file, and the **lowest-risk** surface to open — start/stop/enable are ordinary
+reversible operations with no data to destroy. *Recommendation:* open it as a `[[init]]` block on
+XIII.33's mechanism; it is the cleanest fit the mechanism has, and P7 is better served by "write
+six lines" than by "unsupported". Not blocking — the five built-ins cover most machines.
+
+---
+
+## U37
+
+**Status: OPEN — not blocking.**
+
+**U37 — Are notification channels their own declared-provider kind, or is an event hook the
+answer? (XIII.35.)** `app/scheduler/notify.rs` handles only `desktop`, `email`, `both` and warns
+"unknown channel" for the rest, so Slack, ntfy, webhooks, Telegram, paging — every channel a real
+fleet uses — is absent. **The overlap with XIII.13's event hooks is the decision:** a hook can
+already shell out to `curl` on a sync or a guard refusal, so "notify me on Slack" is *possible*
+today; the question is whether a first-class `[[channel]]` block earns its keep on top of that.
+*Recommendation:* do not add a second mechanism — route non-built-in channels through the event
+hook that already exists, and document it — unless a channel needs something a hook cannot express
+(per-level routing), the only thing that would justify a block of its own. Filed so the answer is
+a recorded decision, not a fifth channel bolted on next time someone asks.
+
+---
+
+## U38
+
+**Status: OPEN — ruled in principle, GATED on the T-series.** **Direction (owner, 2026-07-25):
+open it eventually — but do NOT build until the T-series settles how plaintext is handled.**
+Opening this surface before that is decided hands an unaudited command the one thing LiNix guards.
+Phase 7p lists it under STOP AND ASK for exactly this reason.
+
+**U38 — Is secret decryption a declared-provider kind, and behind which T-series rulings?
+(XIII.36.)** `model/secret.rs` is built around `age` (age plugins, hardware tokens); sops, Vault,
+1Password, cloud KMS and GPG have no way in, though each is "run a command that turns a reference
+into plaintext" — XIII.33's shape exactly. **This is the surface where openness is not cheap.** A
+decrypt provider's output *is* a secret: a bad one writes plaintext to disk, leaves it in the
+process table, or logs it — the failure `secret:` exists to prevent. So a declared secret provider
+is bound by the T-series handling rules LiNix argued for age (no-disk / in-memory / no-log, T7
+reopened), and one that cannot promise them is refused, not trusted. *Recommendation:* yes in
+principle — the mechanism is identical and users genuinely have other secret managers — but **not
+before the T-series settles how plaintext is handled**, because opening this surface first hands an
+unaudited command the one thing LiNix promises to guard. Safe order: rule the T-series, then open
+the door the mechanism already makes trivial.
+
+---
 
 ## K18
 

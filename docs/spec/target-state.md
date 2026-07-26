@@ -1078,6 +1078,13 @@ stored, because declaration + convergence reproduces it. **There is no generatio
 **Snapshots are a preference**, default on if the machine can do it (btrfs, ZFS, or
 Timeshift). Retention prunes — **one engine** (`retention`), not two.
 
+**Snapshot providers are declarable (U27).** A provider is a row in an `adapters/` file — the
+take/list/delete/restore argv as data — read through the same loader and hook ledger as a custom
+backend, and the built-in providers are rows in it too, not a hardcoded list. **The row must
+declare whether it can restore a running machine; the field is required and never inferred** — a
+provider that does not declare live-restore is create-only and refuses the rollback (V.60). A
+custom provider registers last and never shadows a built-in.
+
 **A restore that cannot restore says so, before it is needed (V.60).** Taking a snapshot and
 restoring one are different capabilities and a provider may have the first without the second:
 `btrfs subvolume snapshot SRC /` does not roll back a mounted root, whatever its exit code says.

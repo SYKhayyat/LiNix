@@ -797,6 +797,14 @@ handling only btrfs and Timeshift, so ZFS and Windows silently restored nothing 
 the provider it duplicated implements both. **One restore, not two** (P-prefer-deleting): the
 weaker copy is the one wired to `undo`.
 
+When providers became declarable (U27, 2026-07-26), this rule set the one field that stays the
+author's to state rather than data to infer: **a declared provider must say whether it can restore
+a running machine.** Everything else about a provider — the commands, the filesystem — is
+observable, but live-restore capability is the thing whose wrong guess is a machine reported safe
+that is not, so it is a required field with no default. Omitting it is a loud refusal, not an
+assumption in either direction: the design would rather decline a rollback it could have done than
+promise one it cannot.
+
 **V.61 — Why the data directory takes a lock.** *(Found by audit 2026-07-22; owner directed the
 fix.)* `registry.json` was loaded once per process into a `tokio::Mutex` — which coordinates
 tasks inside one process and nothing between processes — and written back whole, with no re-read
