@@ -1209,12 +1209,17 @@ stored, because declaration + convergence reproduces it. **There is no generatio
 **Snapshots are a preference**, default on if the machine can do it (btrfs, ZFS, or
 Timeshift). Retention prunes — **one engine** (`retention`), not two.
 
-> **The three rules below are ruled and NOT YET BUILT (checked 2026-07-26).**
-> `core/snapshot.rs:528` still hardcodes btrfs / zfs / timeshift / windows-restore into a `Vec`,
-> and only the first available one is ever active. They are marked because of what II.6 already
-> had to learn the hard way: *a target belongs in Part III or marked, never stated in the present
-> tense* — two rows written here as though they were real cost the 2026-07-20 audit a check. They
-> are Phase 7p, items 6, 11 and 12 in `plan.md`'s ordered list.
+> **The three rules below are BUILT, and the hardcoded `Vec` is gone (U27 Option A — session
+> 2026-07-26).** There is no hardcoded provider list any more: the built-in providers (btrfs,
+> timeshift, apfs, windows-restore, then zfs) are rows in `src/core/snapshot_builtins.toml`,
+> compiled in and read through the same `ConfigSnapshotProvider` loader a user's
+> `adapters/snapshot.toml` row goes through — so the mechanism is proven by the providers that
+> ship (K17/U1). The built-in file is *not* hook-ledger-gated (a first-party compiled-in asset,
+> and gating it would leave a fresh machine with no safety net until `linix lock` ran); the user's
+> file still is, and registers last. lvm is the exemplar *user* row (no universal origin volume),
+> not a shipped built-in. Windows is the one row beyond plain argv — `powershell = true` with the
+> id typed as a `u32` (V.82). The live restore (zfs/lvm/btrfs) is still the only part exercised on
+> hardware, not here.
 
 **Snapshot providers are declarable (U27).** A provider is a row in an `adapters/` file — the
 take/list/delete/restore argv as data — read through the same loader and hook ledger as a custom
@@ -1222,6 +1227,15 @@ backend, and the built-in providers are rows in it too, not a hardcoded list. **
 declare whether it can restore a running machine; the field is required and never inferred** — a
 provider that does not declare live-restore is create-only and refuses the rollback (V.60). A
 custom provider registers last and never shadows a built-in.
+
+**The built-in providers use the same door (U27, Option A, owner 2026-07-26).** btrfs, zfs,
+timeshift and lvm are argv rows in `adapters/snapshot.toml`, not a hardcoded `Vec`. **Windows
+System Restore is a row too, but its id and label are typed placeholders, never free text** — the
+loader substitutes the restore-point id only as a validated `u32` and the label only as the fixed
+`SnapshotLabel` enum, so a declared Windows row can no more reach the elevated PowerShell with a
+quote than the hardcoded path could (SEC5). A snapshot technology whose interface is typed cmdlets
+is expressed as typed slots, not as a shell string; that is the one shape a snapshot row may carry
+beyond plain argv, and V.82 says why.
 
 **When several providers are available, a declared priority list picks the active one (U28)** —
 the `priority` shape, an ordered list of names with a shipped default the user overrides, first

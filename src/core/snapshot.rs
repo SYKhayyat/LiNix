@@ -158,467 +158,20 @@ pub trait SnapshotProvider: Send + Sync {
     fn restore_capability(&self) -> RestoreCapability;
 }
 
-pub struct BtrfsProvider {
-    pub executor: CommandExecutor,
-    pub snapshot_root: String,
-}
 
-#[async_trait]
-impl SnapshotProvider for BtrfsProvider {
-    fn name(&self) -> &str {
-        "btrfs"
-    }
-
-    async fn is_available(&self) -> bool {
-        cfg!(target_os = "linux")
-            && self.executor.command_exists("btrfs").await
-            && Path::new(&self.snapshot_root).exists()
-    }
-
-    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
-        let ts_id = Local::now().format("%Y%m%d%H%M%S").to_string();
-        let id = format!("linix_pre_{}_{}", label, ts_id);
-        let path = format!("{}/{}", self.snapshot_root, id);
-
-        info!("BTRFS: Creating read-only snapshot: {}", id);
-        self.executor
-            .run("btrfs", &["subvolume", "snapshot", "-r", "/", &path], true)
-            .await?;
-
-        Ok(Snapshot {
-            id,
-            timestamp: Utc::now().to_rfc3339(),
-            description: label.to_string(),
-            backend: "btrfs".into(),
-        })
-    }
-
-    async fn list(&self) -> Result<Vec<Snapshot>> {
-        let out = self
-            .executor
-            .run_output("btrfs", &["subvolume", "list", "/"], false)
-            .await?;
-        Ok(out
-            .lines()
-            .filter(|l| l.contains("linix_pre_"))
-            .filter_map(|l| {
-                let id = l.split('/').next_back()?.trim();
-                Some(Snapshot {
-                    // S2: read the real creation time out of the id, not `Utc::now()` — else
-                    // every listed snapshot is zero seconds old and retention keeps them all.
-                    timestamp: Snapshot::timestamp_from_id(id)
-                        .unwrap_or_else(|| Utc::now().to_rfc3339()),
-                    id: id.to_string(),
-                    description: "BTRFS System State".into(),
-                    backend: "btrfs".into(),
-                })
-            })
-            .collect())
-    }
-
-    async fn delete(&self, id: &str) -> Result<()> {
-        let path = format!("{}/{}", self.snapshot_root, id);
-        self.executor
-            .run("btrfs", &["subvolume", "delete", &path], true)
-            .await
-            .map(|_| ())
-    }
-
-    async fn restore(&self, id: &str) -> Result<()> {
-        Err(Error::Snapshot(format!(
-            "LiNix cannot roll this machine back to {} while it is running.\n  \
-             {}\n  \
-             The snapshot is intact at {}/{}. Rolling back to it means swapping the root \
-             subvolume from a live USB or the boot menu — a step LiNix will not take on your \
-             behalf, because getting it wrong leaves a machine that does not boot.",
-            id,
-            BTRFS_NOT_LIVE,
-            self.snapshot_root,
+/// A Windows restore point is a `SequenceNumber`. The delete/restore cmdlets interpolate it
+/// unquoted and run elevated, so it becomes a `u32` here or it does not reach them at all —
+/// there is no quoting to get right for a number (SEC5). This is the typed gate the Windows
+/// snapshot row substitutes `{id}` through (V.82): a row can name the cmdlet, but the id it fills
+/// is validated as a `u32` first, so a free-text template with an id spliced into a shell is
+/// unrepresentable.
+pub fn windows_sequence_number(id: &str) -> Result<u32> {
+    id.trim().parse::<u32>().map_err(|_| {
+        Error::Validation(format!(
+            "`{}` is not a Windows restore point — an id is a SequenceNumber, a plain number.",
             id
-        )))
-    }
-
-    fn restore_capability(&self) -> RestoreCapability {
-        RestoreCapability::NotFromRunningSystem {
-            how: BTRFS_NOT_LIVE.into(),
-        }
-    }
-}
-
-/// `btrfs subvolume snapshot <snap> /` exits 0 and creates `<snap>` *inside* `/` as a nested
-/// subvolume. Every recovery path in this tree believed that exit code once.
-const BTRFS_NOT_LIVE: &str =
-    "a btrfs rollback replaces the root subvolume, which cannot be done over a mounted `/`; \
-     boot from other media and swap the subvolume there.";
-
-pub struct ZfsProvider {
-    pub executor: CommandExecutor,
-    pub dataset: String,
-}
-
-#[async_trait]
-impl SnapshotProvider for ZfsProvider {
-    fn name(&self) -> &str {
-        "zfs"
-    }
-    async fn is_available(&self) -> bool {
-        self.executor.command_exists("zfs").await
-    }
-
-    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
-        let id = format!(
-            "{}@linix_{}",
-            self.dataset,
-            Local::now().format("%Y%m%d_%H%M%S")
-        );
-        info!("ZFS: Creating recursive snapshot: {}", id);
-        self.executor
-            .run("zfs", &["snapshot", "-r", &id], true)
-            .await?;
-        Ok(Snapshot {
-            id,
-            timestamp: Utc::now().to_rfc3339(),
-            description: label.to_string(),
-            backend: "zfs".into(),
-        })
-    }
-
-    async fn list(&self) -> Result<Vec<Snapshot>> {
-        let out = self
-            .executor
-            .run_output(
-                "zfs",
-                &["list", "-H", "-r", "-t", "snapshot", "-o", "name"],
-                false,
-            )
-            .await?;
-        Ok(out
-            .lines()
-            .filter(|l| l.contains("@linix_"))
-            .map(|l| {
-                let id = l.trim();
-                Snapshot {
-                    // S2: derive the age from the id, not `Utc::now()`.
-                    timestamp: Snapshot::timestamp_from_id(id)
-                        .unwrap_or_else(|| Utc::now().to_rfc3339()),
-                    id: id.to_string(),
-                    description: "ZFS Snapshot".into(),
-                    backend: "zfs".into(),
-                }
-            })
-            .collect())
-    }
-
-    async fn delete(&self, id: &str) -> Result<()> {
-        self.executor
-            .run("zfs", &["destroy", "-r", id], true)
-            .await
-            .map(|_| ())
-    }
-
-    async fn restore(&self, id: &str) -> Result<()> {
-        self.executor
-            .run("zfs", &["rollback", "-r", id], true)
-            .await
-            .map(|_| ())
-    }
-
-    fn restore_capability(&self) -> RestoreCapability {
-        RestoreCapability::Live
-    }
-}
-
-pub struct TimeshiftProvider {
-    pub executor: CommandExecutor,
-}
-
-#[async_trait]
-impl SnapshotProvider for TimeshiftProvider {
-    fn name(&self) -> &str {
-        "timeshift"
-    }
-    async fn is_available(&self) -> bool {
-        cfg!(target_os = "linux") && self.executor.command_exists("timeshift").await
-    }
-
-    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
-        let out = self
-            .executor
-            .run_output(
-                "timeshift",
-                &["--create", "--comments", label.as_str(), "--tags", "D"],
-                true,
-            )
-            .await?;
-        let id = out
-            .lines()
-            .find(|l| l.contains("Snapshot: "))
-            .map(|l| l.replace("Snapshot: ", "").trim().to_string())
-            .unwrap_or_else(|| Local::now().format("%Y-%m-%d_%H-%M-%S").to_string());
-        Ok(Snapshot {
-            id,
-            timestamp: Utc::now().to_rfc3339(),
-            description: label.to_string(),
-            backend: "timeshift".into(),
-        })
-    }
-
-    async fn list(&self) -> Result<Vec<Snapshot>> {
-        let out = self
-            .executor
-            .run_output("timeshift", &["--list"], true)
-            .await?;
-        let mut results = Vec::new();
-        for line in out.lines() {
-            if line.contains(">") {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(id) = parts.get(2) {
-                    results.push(Snapshot {
-                        id: id.to_string(),
-                        timestamp: parts.get(1).unwrap_or(&"unknown").to_string(),
-                        description: parts.get(4..).unwrap_or(&[]).join(" "),
-                        backend: "timeshift".into(),
-                    });
-                }
-            }
-        }
-        Ok(results)
-    }
-
-    async fn delete(&self, id: &str) -> Result<()> {
-        self.executor
-            .run("timeshift", &["--delete", "--snapshot", id], true)
-            .await
-            .map(|_| ())
-    }
-
-    async fn restore(&self, id: &str) -> Result<()> {
-        self.executor
-            .run(
-                "timeshift",
-                &[
-                    "--restore",
-                    "--snapshot",
-                    id,
-                    "--target-device",
-                    "/",
-                    "--yes",
-                ],
-                true,
-            )
-            .await
-            .map(|_| ())
-    }
-
-    fn restore_capability(&self) -> RestoreCapability {
-        RestoreCapability::Live
-    }
-}
-
-pub struct WindowsRestoreProvider {
-    pub executor: CommandExecutor,
-}
-
-#[async_trait]
-impl SnapshotProvider for WindowsRestoreProvider {
-    fn name(&self) -> &str {
-        "windows_restore"
-    }
-    async fn is_available(&self) -> bool {
-        cfg!(target_os = "windows")
-    }
-
-    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
-        // `label` is an enum, so no caller can bring a `'` to this interpolation (SEC5).
-        let ps_cmd = format!(
-            "Checkpoint-Computer -Description 'LiNix: {}' -RestorePointType 'APPLICATION_INSTALL'",
-            label
-        );
-        self.executor
-            .run("powershell", &["-Command", &ps_cmd], true)
-            .await?;
-        Ok(Snapshot {
-            id: Local::now().timestamp().to_string(),
-            timestamp: Utc::now().to_rfc3339(),
-            description: label.to_string(),
-            backend: "windows_restore".into(),
-        })
-    }
-
-    async fn list(&self) -> Result<Vec<Snapshot>> {
-        let ps_cmd = "Get-ComputerRestorePoint | ConvertTo-Json";
-        let out = self
-            .executor
-            .run_output("powershell", &["-Command", ps_cmd], false)
-            .await?;
-        if out.is_empty() || out == "null" {
-            return Ok(vec![]);
-        }
-        let json: serde_json::Value = serde_json::from_str(&out).map_err(Error::from)?;
-        let mut list = Vec::new();
-        if let Some(items) = json.as_array() {
-            for item in items {
-                // Parsed at the boundary Windows hands it over, so nothing downstream carries
-                // a SequenceNumber that was never a number (SEC5). `to_string()` here kept the
-                // JSON quotes when the field came back as a string.
-                let seq = item["SequenceNumber"]
-                    .as_u64()
-                    .or_else(|| item["SequenceNumber"].as_str()?.trim().parse().ok());
-                let Some(seq) = seq else {
-                    debug!("skipping a restore point with no usable SequenceNumber: {item}");
-                    continue;
-                };
-                list.push(Snapshot {
-                    id: seq.to_string(),
-                    timestamp: item["CreationTime"].as_str().unwrap_or("").to_string(),
-                    description: item["Description"].as_str().unwrap_or("").to_string(),
-                    backend: "windows_restore".into(),
-                });
-            }
-        }
-        Ok(list)
-    }
-
-    async fn delete(&self, id: &str) -> Result<()> {
-        let seq = Self::sequence_number(id)?;
-        let ps_cmd = format!("Get-WmiObject -Namespace root\\default -Class SystemRestore | ForEach-Object {{ $_.DeleteStatus({}) }}", seq);
-        self.executor
-            .run("powershell", &["-Command", &ps_cmd], true)
-            .await
-            .map(|_| ())
-    }
-
-    async fn restore(&self, id: &str) -> Result<()> {
-        let seq = Self::sequence_number(id)?;
-        let ps_cmd = format!("Restore-Computer -RestorePoint {} -Confirm:$false", seq);
-        self.executor
-            .run("powershell", &["-Command", &ps_cmd], true)
-            .await
-            .map(|_| ())
-    }
-
-    fn restore_capability(&self) -> RestoreCapability {
-        RestoreCapability::Live
-    }
-}
-
-/// macOS APFS local snapshots (U29). Every Mac ships APFS, and `tmutil localsnapshot` takes a
-/// whole-volume snapshot with no configuration — so the second platform LiNix supports gains the
-/// safety net it had none of.
-///
-/// **Declared create-only, on purpose (V.60).** An APFS restore is not a live operation: it
-/// needs a reboot into the recovery environment and `Restore from Time Machine`/`tmutil restore`,
-/// which LiNix cannot drive on a running system. Claiming `Live` here would be the exact bug
-/// V.60 exists for — a `restore` that exits without rolling the machine back. So it snapshots,
-/// and it refuses the rollback with the steps to do it by hand.
-pub struct ApfsProvider {
-    pub executor: CommandExecutor,
-}
-
-/// The mount point APFS local snapshots are taken of. The system volume, always.
-const APFS_VOLUME: &str = "/";
-
-const APFS_NOT_LIVE: &str =
-    "an APFS snapshot is restored by rebooting into macOS Recovery and using Time Machine / \
-     `tmutil restore`; LiNix cannot do that over a running system.";
-
-#[async_trait]
-impl SnapshotProvider for ApfsProvider {
-    fn name(&self) -> &str {
-        "apfs"
-    }
-
-    async fn is_available(&self) -> bool {
-        cfg!(target_os = "macos") && self.executor.command_exists("tmutil").await
-    }
-
-    async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
-        // `tmutil localsnapshot` names the snapshot itself, by date, and does not take a label —
-        // so the LiNix marker lands in the description (like the Windows provider), where
-        // ownership (S3) reads it. `label` is an enum, so nothing user-supplied reaches here.
-        let out = self
-            .executor
-            .run_output("tmutil", &["localsnapshot"], true)
-            .await?;
-        // `tmutil` prints `Created local snapshot with date: 2026-07-26-120000`. Read the date
-        // back as the id; fall back to now-formatted if the phrasing changes.
-        let id = out
-            .lines()
-            .find_map(|l| l.rsplit_once("date: ").map(|(_, d)| d.trim().to_string()))
-            .unwrap_or_else(|| Local::now().format("%Y-%m-%d-%H%M%S").to_string());
-        Ok(Snapshot {
-            id,
-            timestamp: Utc::now().to_rfc3339(),
-            description: format!("LiNix: {}", label),
-            backend: "apfs".into(),
-        })
-    }
-
-    async fn list(&self) -> Result<Vec<Snapshot>> {
-        let out = self
-            .executor
-            .run_output("tmutil", &["listlocalsnapshots", APFS_VOLUME], false)
-            .await?;
-        Ok(out
-            .lines()
-            .filter_map(|l| {
-                // `com.apple.TimeMachine.2026-07-26-120000.local` → the date is the id.
-                let line = l.trim();
-                let date = line
-                    .strip_prefix("com.apple.TimeMachine.")
-                    .and_then(|s| s.strip_suffix(".local"))
-                    .unwrap_or(line);
-                if date.is_empty() {
-                    return None;
-                }
-                Some(Snapshot {
-                    id: date.to_string(),
-                    timestamp: Utc::now().to_rfc3339(),
-                    // LiNix cannot tell from `tmutil` which snapshots it made — the marker is in
-                    // a description APFS does not store. So these are reported but never reaped by
-                    // retention (is_linix_owned is false), which is the safe direction: LiNix
-                    // never deletes an APFS snapshot it cannot prove it created.
-                    description: "APFS local snapshot".into(),
-                    backend: "apfs".into(),
-                })
-            })
-            .collect())
-    }
-
-    async fn delete(&self, id: &str) -> Result<()> {
-        self.executor
-            .run("tmutil", &["deletelocalsnapshots", id], true)
-            .await
-            .map(|_| ())
-    }
-
-    async fn restore(&self, id: &str) -> Result<()> {
-        Err(Error::Snapshot(format!(
-            "LiNix cannot roll this Mac back to {} while it is running.\n  {}\n  \
-             The snapshot is intact and listed by `tmutil listlocalsnapshots /`.",
-            id, APFS_NOT_LIVE
-        )))
-    }
-
-    fn restore_capability(&self) -> RestoreCapability {
-        RestoreCapability::NotFromRunningSystem {
-            how: APFS_NOT_LIVE.into(),
-        }
-    }
-}
-
-impl WindowsRestoreProvider {
-    /// A Windows restore point is a `SequenceNumber`. Both PowerShell commands below
-    /// interpolate it unquoted and run elevated, so it becomes a number here or it does not
-    /// reach them at all — there is no quoting to get right for a `u32` (SEC5).
-    fn sequence_number(id: &str) -> Result<u32> {
-        id.trim().parse::<u32>().map_err(|_| {
-            Error::Validation(format!(
-                "`{}` is not a Windows restore point — an id is a SequenceNumber, a plain number.",
-                id
-            ))
-        })
-    }
+        ))
+    })
 }
 
 /// A snapshot provider described entirely in `adapters/snapshot.toml` (U27) — the same "rows,
@@ -638,6 +191,10 @@ pub struct SnapshotProviderDef {
     pub os: Option<String>,
     /// The command whose presence means this provider can act on this machine.
     pub detect: String,
+    /// A path that must also exist for the provider to be available — btrfs is only usable if
+    /// its snapshot subvolume is mounted, which the `detect` binary existing does not prove.
+    #[serde(default)]
+    pub detect_path: Option<String>,
     /// What `{source}` expands to (a dataset, a volume group, a subvolume path). Optional.
     #[serde(default)]
     pub source: String,
@@ -652,12 +209,36 @@ pub struct SnapshotProviderDef {
     /// The safe default (U27/V.60): a provider is create-only unless the file names this true.
     #[serde(default)]
     pub restores_running_system: bool,
-    /// A regex whose first capture group is a snapshot id on each `list` line.
+    /// A regex whose first capture group is a snapshot id on each `list` line. An optional
+    /// second group, when present, is the snapshot's description — which is where Windows carries
+    /// the `LiNix:` ownership marker (btrfs/zfs carry it in the id instead).
     pub list_pattern: String,
     /// The sentence shown when a create-only provider is asked to restore. A default is supplied
     /// when the row omits it, so the refusal is never blank.
     #[serde(default)]
     pub restore_how: Option<String>,
+    /// How LiNix builds the id it names a snapshot with, when it is LiNix that names it (btrfs,
+    /// zfs, lvm). Placeholders: `{label}`, `{source}`, `{ts}` (`%Y%m%d%H%M%S`, 14 contiguous
+    /// digits so [`Snapshot::time_from_id`] can read the age back) and `{ts_}` (`%Y%m%d_%H%M%S`,
+    /// the zfs shape). Absent and with no `create_id_pattern`, the id defaults to
+    /// `linix_<label>_<%Y%m%d_%H%M%S>`.
+    #[serde(default)]
+    pub id_template: Option<String>,
+    /// When the *tool* names the snapshot (timeshift, apfs), this regex reads the id back from
+    /// the create command's stdout — its first capture group is the id. Mutually exclusive with
+    /// `id_template`: either LiNix names it or the tool does.
+    #[serde(default)]
+    pub create_id_pattern: Option<String>,
+    /// Whether `list` must run elevated (timeshift's `--list` needs root; btrfs/zfs do not).
+    #[serde(default)]
+    pub list_needs_root: bool,
+    /// Windows System Restore is not argv — it is elevated PowerShell cmdlets. When set, each
+    /// command is one PowerShell line run via `powershell -Command`, and `{id}` is substituted
+    /// **only** after [`windows_sequence_number`] parses it as a `u32`, so nothing but a number
+    /// reaches the elevated shell (SEC5/V.82). This is the one shape a snapshot row carries
+    /// beyond plain argv.
+    #[serde(default)]
+    pub powershell: bool,
 }
 
 impl SnapshotProviderDef {
@@ -716,12 +297,51 @@ impl ConfigSnapshotProvider {
             .collect()
     }
 
+    /// The id LiNix generates for a provider it names itself (btrfs/zfs/lvm). The `linix_` marker
+    /// is what ownership (S3) and retention key on, so a config provider can never make a user's
+    /// own snapshots look like LiNix's.
+    fn generated_id(&self, label: SnapshotLabel) -> String {
+        match &self.def.id_template {
+            Some(t) => t
+                .replace("{label}", label.as_str())
+                .replace("{ts}", &Local::now().format("%Y%m%d%H%M%S").to_string())
+                .replace("{ts_}", &Local::now().format("%Y%m%d_%H%M%S").to_string())
+                .replace("{source}", &self.def.source),
+            None => format!("linix_{}_{}", label.as_str(), Local::now().format("%Y%m%d_%H%M%S")),
+        }
+    }
+
     async fn run(&self, cmd: Vec<String>) -> Result<()> {
         let (prog, args) = cmd
             .split_first()
             .ok_or_else(|| Error::Snapshot("a snapshot command is empty".into()))?;
         let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         self.executor.run(prog, &refs, true).await.map(|_| ())
+    }
+
+    /// Fill one PowerShell line, substituting `{id}` as a validated `u32` (V.82) — the typed slot
+    /// that makes a Windows snapshot row safe by construction. A non-numeric id is refused before
+    /// it can reach the elevated shell.
+    fn fill_ps(&self, template: &str, id: Option<&str>, label: &str) -> Result<String> {
+        let mut s = template.to_string();
+        if s.contains("{id}") {
+            let id = id.ok_or_else(|| Error::Snapshot("a snapshot id is required".into()))?;
+            let seq = windows_sequence_number(id)?;
+            s = s.replace("{id}", &seq.to_string());
+        }
+        Ok(s.replace("{label}", label).replace("{source}", &self.def.source))
+    }
+
+    async fn run_ps(&self, command: &str, elevated: bool) -> Result<String> {
+        self.executor
+            .run_output("powershell", &["-Command", command], elevated)
+            .await
+    }
+
+    fn first_command<'a>(&self, cmd: &'a [String], what: &str) -> Result<&'a str> {
+        cmd.first()
+            .map(String::as_str)
+            .ok_or_else(|| Error::Snapshot(format!("the {} command is empty", what)))
     }
 }
 
@@ -732,18 +352,53 @@ impl SnapshotProvider for ConfigSnapshotProvider {
     }
 
     async fn is_available(&self) -> bool {
-        self.def.applies_to_this_os() && self.executor.command_exists(&self.def.detect).await
+        if !self.def.applies_to_this_os() {
+            return false;
+        }
+        if !self.executor.command_exists(&self.def.detect).await {
+            return false;
+        }
+        // btrfs's binary can be present on a machine whose root is not btrfs; the snapshot
+        // subvolume existing is what proves the provider can act.
+        if let Some(p) = &self.def.detect_path {
+            if !Path::new(p).exists() {
+                return false;
+            }
+        }
+        true
     }
 
     async fn create(&self, label: SnapshotLabel) -> Result<Snapshot> {
-        // The id carries the `linix_` marker so ownership (S3) and retention recognize it — a
-        // config provider that let a user's own snapshots look like LiNix's would have retention
-        // reap them.
-        let ts = Local::now().format("%Y%m%d_%H%M%S");
-        let id = format!("linix_{}_{}", label.as_str(), ts);
-        let cmd = Self::fill(&self.def.create, &id, label.as_str(), &self.def.source);
-        info!("{}: creating snapshot {}", self.def.name, id);
-        self.run(cmd).await?;
+        let id = if self.def.powershell {
+            // Windows: the cmdlet does not return the SequenceNumber, so LiNix carries a synthetic
+            // marker id (list() reads the real ids). `label` is an enum, so no `'` reaches the
+            // shell; there is no `{id}` in a create.
+            let template = self.def.create.clone();
+            let line = self.fill_ps(self.first_command(&template, "create")?, None, label.as_str())?;
+            info!("{}: creating snapshot ({})", self.def.name, label);
+            self.run_ps(&line, true).await?;
+            self.generated_id(label)
+        } else if let Some(pattern) = &self.def.create_id_pattern {
+            // The tool names the snapshot; read the id back from its output.
+            let cmd = Self::fill(&self.def.create, "", label.as_str(), &self.def.source);
+            let (prog, args) = cmd
+                .split_first()
+                .ok_or_else(|| Error::Snapshot("the create command is empty".into()))?;
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            let out = self.executor.run_output(prog, &refs, true).await?;
+            let re = regex::Regex::new(pattern)
+                .map_err(|e| Error::Snapshot(format!("bad create_id_pattern: {}", e)))?;
+            re.captures(&out)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_else(|| self.generated_id(label))
+        } else {
+            let id = self.generated_id(label);
+            let cmd = Self::fill(&self.def.create, &id, label.as_str(), &self.def.source);
+            info!("{}: creating snapshot {}", self.def.name, id);
+            self.run(cmd).await?;
+            id
+        };
         Ok(Snapshot {
             id,
             timestamp: Utc::now().to_rfc3339(),
@@ -753,13 +408,20 @@ impl SnapshotProvider for ConfigSnapshotProvider {
     }
 
     async fn list(&self) -> Result<Vec<Snapshot>> {
-        let (prog, args) = self
-            .def
-            .list
-            .split_first()
-            .ok_or_else(|| Error::Snapshot("a snapshot list command is empty".into()))?;
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = self.executor.run_output(prog, &refs, false).await?;
+        let out = if self.def.powershell {
+            let template = self.def.list.clone();
+            self.run_ps(self.first_command(&template, "list")?, false).await?
+        } else {
+            let (prog, args) = self
+                .def
+                .list
+                .split_first()
+                .ok_or_else(|| Error::Snapshot("a snapshot list command is empty".into()))?;
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            self.executor
+                .run_output(prog, &refs, self.def.list_needs_root)
+                .await?
+        };
         let re = regex::Regex::new(&self.def.list_pattern)
             .map_err(|e| Error::Snapshot(format!("bad list_pattern: {}", e)))?;
         let mut snaps = Vec::new();
@@ -769,11 +431,17 @@ impl SnapshotProvider for ConfigSnapshotProvider {
             };
             let Some(m) = caps.get(1) else { continue };
             let id = m.as_str().to_string();
+            // Group 2, when the pattern captures it, is the description — where Windows keeps its
+            // `LiNix:` ownership marker. Otherwise the provider name stands in.
+            let description = caps
+                .get(2)
+                .map(|d| d.as_str().to_string())
+                .unwrap_or_else(|| self.def.name.clone());
             snaps.push(Snapshot {
                 timestamp: Snapshot::timestamp_from_id(&id)
                     .unwrap_or_else(|| Utc::now().to_rfc3339()),
                 id,
-                description: self.def.name.clone(),
+                description,
                 backend: self.def.name.clone(),
             });
         }
@@ -781,8 +449,14 @@ impl SnapshotProvider for ConfigSnapshotProvider {
     }
 
     async fn delete(&self, id: &str) -> Result<()> {
-        let cmd = Self::fill(&self.def.delete, id, "", &self.def.source);
-        self.run(cmd).await
+        if self.def.powershell {
+            let template = self.def.delete.clone();
+            let line = self.fill_ps(self.first_command(&template, "delete")?, Some(id), "")?;
+            self.run_ps(&line, true).await.map(|_| ())
+        } else {
+            let cmd = Self::fill(&self.def.delete, id, "", &self.def.source);
+            self.run(cmd).await
+        }
     }
 
     async fn restore(&self, id: &str) -> Result<()> {
@@ -800,8 +474,14 @@ impl SnapshotProvider for ConfigSnapshotProvider {
                     .unwrap_or_else(|| "The snapshot is intact; restore it by hand.".into())
             )));
         }
-        let cmd = Self::fill(&self.def.restore, id, "", &self.def.source);
-        self.run(cmd).await
+        if self.def.powershell {
+            let template = self.def.restore.clone();
+            let line = self.fill_ps(self.first_command(&template, "restore")?, Some(id), "")?;
+            self.run_ps(&line, true).await.map(|_| ())
+        } else {
+            let cmd = Self::fill(&self.def.restore, id, "", &self.def.source);
+            self.run(cmd).await
+        }
     }
 
     fn restore_capability(&self) -> RestoreCapability {
@@ -861,6 +541,52 @@ fn config_snapshot_defs(config: &Config) -> Vec<SnapshotProviderDef> {
     }
 }
 
+/// The snapshot providers LiNix ships (U27, Option A). Compiled into the binary, so — unlike the
+/// user's `adapters/snapshot.toml` — they are not read through the hook ledger: a first-party
+/// asset cannot be tampered with by a pulled config, and gating it would leave a fresh machine
+/// with no safety net until `linix lock` ran.
+const BUILTIN_SNAPSHOT_DEFS: &str = include_str!("snapshot_builtins.toml");
+
+/// The auto-detected zfs root dataset, when `zfs_dataset` is not configured. Empty when zfs is
+/// absent or the query fails — which drops the row rather than shipping a source-less one.
+fn detect_zfs_root() -> String {
+    StdCommand::new("zfs")
+        .args(["list", "-H", "-o", "name", "-r", "/"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.lines().next().map(|l| l.trim().to_string()))
+        .unwrap_or_default()
+}
+
+/// The built-in provider rows, with btrfs/zfs's machine-specific `source`/`detect_path` filled
+/// from config. A row whose source is still unresolved (zfs with no dataset) is dropped, because
+/// a provider that cannot name what to snapshot is a create that fails, not a safety net.
+fn builtin_snapshot_defs(config: &Config) -> Vec<SnapshotProviderDef> {
+    let mut file: SnapshotProviderFile = toml::from_str(BUILTIN_SNAPSHOT_DEFS)
+        .expect("built-in snapshot defs are compiled in and must parse");
+    for def in &mut file.snapshot {
+        match def.name.as_str() {
+            "btrfs" => {
+                def.source = config.btrfs_path.clone();
+                def.detect_path = Some(config.btrfs_path.clone());
+            }
+            "zfs" => {
+                def.source = config
+                    .zfs_dataset
+                    .clone()
+                    .filter(|d| !d.trim().is_empty())
+                    .unwrap_or_else(detect_zfs_root);
+            }
+            _ => {}
+        }
+    }
+    file.snapshot
+        .into_iter()
+        .filter(|d| !(d.name == "zfs" && d.source.trim().is_empty()))
+        .collect()
+}
+
 pub struct SnapshotManager {
     provider: Option<Box<dyn SnapshotProvider>>,
 }
@@ -873,41 +599,19 @@ impl SnapshotManager {
     }
 
     pub async fn new(executor: CommandExecutor, config: &Config) -> Self {
-        let mut providers: Vec<Box<dyn SnapshotProvider>> = vec![
-            Box::new(BtrfsProvider {
-                executor: executor.duplicate(),
-                snapshot_root: config.btrfs_path.clone(),
-            }),
-            Box::new(TimeshiftProvider {
-                executor: executor.duplicate(),
-            }),
-            Box::new(ApfsProvider {
-                executor: executor.duplicate(),
-            }),
-            Box::new(WindowsRestoreProvider {
-                executor: executor.duplicate(),
-            }),
-        ];
+        let mut providers: Vec<Box<dyn SnapshotProvider>> = Vec::new();
 
-        if executor.command_exists("zfs").await {
-            let dataset = config.zfs_dataset.clone().unwrap_or_else(|| {
-                StdCommand::new("zfs")
-                    .args(["list", "-H", "-o", "name", "-r", "/"])
-                    .output()
-                    .ok()
-                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default()
-            });
-            if !dataset.is_empty() {
-                providers.push(Box::new(ZfsProvider {
-                    executor: executor.duplicate(),
-                    dataset,
-                }));
-            }
+        // The built-in providers are rows through the same loader a user row goes through (U27,
+        // V.82) — btrfs, timeshift, apfs, windows, then zfs (last, so btrfs wins on a machine
+        // with both). There is no hardcoded provider `Vec` any more.
+        for def in builtin_snapshot_defs(config) {
+            providers.push(Box::new(ConfigSnapshotProvider {
+                executor: executor.duplicate(),
+                def,
+            }));
         }
 
-        // Config-declared providers register LAST (U27), so a `adapters/snapshot.toml` row can
+        // User-declared providers register LAST (U27), so a `adapters/snapshot.toml` row can
         // never shadow a built-in — the `custom_backends.toml` rule applied to the safety layer.
         for def in config_snapshot_defs(config) {
             providers.push(Box::new(ConfigSnapshotProvider {
@@ -1067,8 +771,8 @@ mod tests {
     #[test]
     fn a_restore_point_id_that_is_not_a_number_never_reaches_powershell() {
         // SEC5. Both PowerShell strings interpolate the id unquoted and run elevated.
-        assert_eq!(WindowsRestoreProvider::sequence_number("42").unwrap(), 42);
-        assert_eq!(WindowsRestoreProvider::sequence_number("  7 ").unwrap(), 7);
+        assert_eq!(windows_sequence_number("42").unwrap(), 42);
+        assert_eq!(windows_sequence_number("  7 ").unwrap(), 7);
         for bad in [
             "1); Start-Process calc; #",
             "-1",
@@ -1078,7 +782,7 @@ mod tests {
             "0x10",
         ] {
             assert!(
-                WindowsRestoreProvider::sequence_number(bad).is_err(),
+                windows_sequence_number(bad).is_err(),
                 "`{}` must be refused",
                 bad
             );
@@ -1203,6 +907,11 @@ mod tests {
             restores_running_system: false,
             list_pattern: r"(\S+)".into(),
             restore_how: None,
+            detect_path: None,
+            id_template: None,
+            create_id_pattern: None,
+            list_needs_root: false,
+            powershell: false,
         }
     }
 
@@ -1356,13 +1065,68 @@ list_pattern = '(linix_\S+)'
         assert_eq!(chosen.name(), "btrfs");
     }
 
-    /// APFS is create-only (U29/V.60): a Mac restore needs a recovery-mode reboot, so claiming
-    /// Live would be the V.60 lie.
+    /// The built-in defs parse, and the invariants the shipped rows must hold (U27, V.82): every
+    /// row is usable, apfs/btrfs are create-only (V.60), windows is a typed-PowerShell row, and
+    /// zfs registers last so btrfs wins on a machine with both (U28).
     #[test]
-    fn apfs_is_declared_create_only() {
-        let p = ApfsProvider {
+    fn the_builtin_snapshot_defs_hold_their_invariants() {
+        let file: SnapshotProviderFile = toml::from_str(BUILTIN_SNAPSHOT_DEFS).unwrap();
+        let by = |name: &str| file.snapshot.iter().find(|d| d.name == name).unwrap().clone();
+
+        for d in &file.snapshot {
+            // detect_path/source placeholders are filled at load, so is_usable (which does not
+            // check them) must pass for every shipped row as written.
+            assert!(d.is_usable().is_none(), "{} must be a usable row", d.name);
+        }
+
+        // Create-only, on purpose — claiming Live would be the V.60 lie.
+        assert!(!by("apfs").is_live(), "apfs is create-only");
+        assert!(!by("btrfs").is_live(), "btrfs cannot restore a running root");
+        // Live restore.
+        assert!(by("zfs").is_live());
+        assert!(by("timeshift").is_live());
+        assert!(by("windows_restore").is_live());
+
+        // Windows is the one typed-PowerShell row (V.82); nothing else is a shell line.
+        assert!(by("windows_restore").powershell);
+        for name in ["btrfs", "zfs", "timeshift", "apfs"] {
+            assert!(!by(name).powershell, "{} must be plain argv", name);
+        }
+
+        // zfs ships last so btrfs wins on a machine with both (U28 registration order).
+        let names: Vec<&str> = file.snapshot.iter().map(|d| d.name.as_str()).collect();
+        let btrfs_at = names.iter().position(|n| *n == "btrfs").unwrap();
+        let zfs_at = names.iter().position(|n| *n == "zfs").unwrap();
+        assert!(btrfs_at < zfs_at, "btrfs must register before zfs");
+    }
+
+    /// V.82: the Windows row's `{id}` is a typed slot. A crafted list id — the injection SEC5
+    /// exists for — never reaches the elevated PowerShell, because the fill parses it as a `u32`
+    /// first and refuses anything else.
+    #[test]
+    fn the_windows_row_substitutes_the_id_only_as_a_number() {
+        let file: SnapshotProviderFile = toml::from_str(BUILTIN_SNAPSHOT_DEFS).unwrap();
+        let def = file
+            .snapshot
+            .iter()
+            .find(|d| d.name == "windows_restore")
+            .unwrap()
+            .clone();
+        let p = ConfigSnapshotProvider {
             executor: CommandExecutor::new(true, false),
+            def,
         };
-        assert!(!p.restore_capability().is_live());
+        // A good id fills to exactly the number.
+        let line = p.fill_ps(&p.def.restore[0], Some(" 42 "), "").unwrap();
+        assert!(line.contains("42"), "{}", line);
+        assert!(!line.contains("{id}"));
+        // An injection attempt is refused before it can reach the shell.
+        for bad in ["1); Start-Process calc; #", "$(whoami)", "-1", "0x10", ""] {
+            assert!(
+                p.fill_ps(&p.def.delete[0], Some(bad), "").is_err(),
+                "`{}` must be refused",
+                bad
+            );
+        }
     }
 }

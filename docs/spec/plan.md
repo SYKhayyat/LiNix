@@ -105,29 +105,27 @@ one remaining part — U27's "built-ins become rows too" half — is CLEARED TO 
 decision session 2026-07-26 (Option A), no longer parked. See item 6 below for exactly what to
 build and what is deferred to hardware.**
 
-6. ~~**U27 — the provider mechanism.**~~ **BUILT (additive half)** (session 2026-07-27). A
-   `ConfigSnapshotProvider` reads `adapters/snapshot.toml` through the one II.12 ledger and
-   registers LAST so it never shadows a built-in; **restore-capability is a required declared
-   field with the safe default** — `restores_running_system` omitted ⇒ create-only, and a
-   "restore" that could roll nothing back never runs (V.60). `core/snapshot.rs::ConfigSnapshotProvider`,
-   `SnapshotProviderDef`, `config_snapshot_defs`. **The ruling's "built-ins become rows too" half
-   is now CLEARED TO BUILD — owner decision session 2026-07-26, Option A.** Build it now:
-   - **btrfs / zfs / timeshift / lvm become rows** in `adapters/snapshot.toml` (the take/list/
-     delete/restore argv as data), read through the same loader the `ConfigSnapshotProvider`
-     already uses, replacing the hardcoded `Vec` at `core/snapshot.rs:528`. The argv construction
-     and the "registered where a row expects it" wiring are unit-tested here; the **live restore**
-     (zfs/lvm/btrfs) is the only part deferred to a Linux box with those filesystems — the same
-     hardware boundary btrfs/zfs restore has always sat behind.
-   - **Windows System Restore becomes a row too, via typed-placeholder substitution** — NOT a
-     free-text template. The row names the cmdlet and the loader substitutes the id only as a
-     validated `u32` and the label only as the fixed `SnapshotLabel` enum, never raw string
-     interpolation, so SEC5's property ("nothing but a `u32`/enum reaches the PowerShell") holds by
-     construction after the conversion. **This is testable on this Windows host** — the argv build
-     and the `a_restore_point_id_that_is_not_a_number_never_reaches_powershell` /
-     `every_snapshot_label_is_a_fixed_string` tests run here — so it is not deferred to foreign
-     hardware. See **V.82** for why the Windows row is typed placeholders rather than a string.
-   - **Fix `target-state.md`'s stale "NOT YET BUILT" note (lines ~1212)** as part of this build:
-     removing the hardcoded vec is exactly what that note is waiting on.
+6. ~~**U27 — the provider mechanism, built-ins-as-rows half.**~~ **BUILT (session 2026-07-26).**
+   The hardcoded `Vec` at `core/snapshot.rs` is gone. The built-in providers are rows in
+   `src/core/snapshot_builtins.toml` (btrfs, timeshift, apfs, windows-restore, then zfs),
+   compiled in via `include_str!` and read through the same `ConfigSnapshotProvider` loader a
+   user's `adapters/snapshot.toml` row goes through — so the mechanism is proven by the shipped
+   providers. The built-in file is **not** hook-ledger-gated (a first-party compiled-in asset;
+   gating it would leave a fresh machine with no safety net until `linix lock` ran), the user's
+   file still is and registers last, and zfs ships last among built-ins so btrfs wins on a machine
+   with both (U28). `SnapshotProviderDef` gained `id_template` (LiNix-named ids: btrfs/zfs),
+   `create_id_pattern` (tool-named ids read from create output: timeshift/apfs), `detect_path`
+   (btrfs's subvolume must be mounted), `list_needs_root` (timeshift), and `powershell` (windows).
+   - **Windows System Restore is a row via typed placeholders** — `powershell = true`, and `{id}`
+     is substituted only after `windows_sequence_number` parses it as a `u32` (`fill_ps`), so a
+     crafted list id never reaches the elevated shell. SEC5's property holds by construction after
+     the conversion. Tested here (`the_windows_row_substitutes_the_id_only_as_a_number`,
+     `the_builtin_snapshot_defs_hold_their_invariants`); the label is the `SnapshotLabel` enum.
+   - **lvm is the exemplar *user* row** (no universal origin volume), already supported by the
+     loader and covered by `the_snapshot_provider_schema_parses` — not shipped as a built-in.
+   - The **live restore** (zfs/lvm/btrfs) is the only part deferred to a Linux box with those
+     filesystems — the same hardware boundary it has always sat behind.
+   - `target-state.md`'s stale "NOT YET BUILT" note is rewritten: the vec it named is gone.
 7. ~~**U36 — init systems** as `[[init]]` rows.~~ **BUILT** (session 2026-07-27;
    `backends/service.rs` is now a table over `init_providers.toml` + `adapters/init.toml`; the
    closed `enum InitSystem` is gone, a row register last, a row missing start/stop is refused).
