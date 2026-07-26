@@ -173,6 +173,13 @@ sync took before it started.
 **Declared health checks with no snapshot provider are refused before the change starts** —
 not after, when the upgrade has already happened and the check can only confirm the damage.
 
+**Health is an open vocabulary (U31).** A check is a user-declared command (argv, exit 0 =
+healthy) beside the built-in checks — a service on a port, a config that must parse, whatever the
+user's machine needs. **A check that cannot run is a failed check, never a passed one** (fail
+loud): if LiNix cannot execute it, the result is unhealthy and the change rolls back. A check
+command is argv a shared repo can carry, so it rides the II.12 hook ledger and is approved by
+`linix lock`.
+
 ```
 apt:nginx@health=port:80          the port must answer after this installs
 apt:nginx@health=systemctl is-active nginx

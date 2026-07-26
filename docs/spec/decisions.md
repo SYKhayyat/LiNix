@@ -706,9 +706,7 @@ objects are finished."
 
 ## U31
 
-**Status: OPEN — whether ruled (build), how open.** **Direction (owner, 2026-07-25): open it —
-build per XIII.33 and Phase 7p**, on the fail-loud constraint below. The how (exact schema) is
-implementation, not a further ruling.
+**Status: ANSWERED — ruled 2026-07-26.**
 
 **U31 — Should health checks be an open vocabulary — a user-declared check command — rather than
 a fixed set? (XIII.26.)** A health-checked upgrade (XIII.5) rolls back when the machine is
@@ -719,6 +717,18 @@ hook trust model (a check command is argv from a file, and the file may travel),
 a check that cannot run is a failed check, not a passed one, or "healthy" quietly comes to mean
 "the check was broken" (V's silent-wrongness). Not blocking: the built-in checks work; this is
 the difference between a safety net LiNix designed and one the user can shape.
+
+**RULED (owner, 2026-07-26): open it, as recommended.** Health checks become an open vocabulary —
+a user declares a check command (argv, exit 0 = healthy) beside the built-in checks. Two rules,
+both the standard ones:
+
+- **Fail loud: a check that cannot run is a *failed* check.** If LiNix cannot execute the check,
+  the result is "unhealthy" and the change rolls back — never "assume healthy". Otherwise "healthy"
+  silently degrades to "the check was broken", the exact silent-wrongness this design refuses.
+- **Same trust as every runnable thing:** a check command is argv a shared config repo can carry,
+  so it rides the II.12 hook ledger and is approved by `linix lock`, not a new trust model.
+
+The exact schema is implementation, not a further ruling.
 
 ---
 
