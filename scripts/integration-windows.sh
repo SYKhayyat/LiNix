@@ -80,13 +80,36 @@ lx() { record_argv "$@"; $TO "$LINIX" "$@"; }
 
 PASS=0; FAILC=0; SOFTC=0; FAILED_NAMES=""
 
+# What a failing command actually said. `tail` alone is not that: RUST_BACKTRACE is on in
+# CI, so the last six lines of a panic are six stack frames — on macOS, six identical
+# `__mh_execute_header` — and the one line that says what went wrong scrolls past. The
+# panic message is surfaced explicitly, then the tail.
+excerpt() {
+    if grep -q "panicked at" /tmp/itw.out 2>/dev/null; then
+        grep -m1 -A 1 "panicked at" /tmp/itw.out | sed 's/^/        | /'
+    fi
+    tail -6 /tmp/itw.out | sed 's/^/        | /'
+}
 ok() {
     desc="$1"; shift
     if "$@" >/tmp/itw.out 2>&1; then
         PASS=$((PASS + 1)); echo "  PASS  $desc"; return 0
     else
         rc=$?; FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc)"
-        echo "  FAIL  $desc (rc=$rc)"; sed 's/^/        | /' /tmp/itw.out | tail -6; return 1
+        echo "  FAIL  $desc (rc=$rc)"; excerpt; return 1
+    fi
+}
+# For a command whose 2 means "answered, and here is what I found" rather than "failed":
+# the aggregate `check` reports findings that way, and a machine with unmanaged packages
+# is the ordinary case, not a broken run.
+answers() {
+    desc="$1"; shift
+    "$@" >/tmp/itw.out 2>&1; rc=$?
+    if [ "$rc" = 0 ] || [ "$rc" = 2 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  $desc (rc=$rc)"; return 0
+    else
+        FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc)"
+        echo "  FAIL  $desc (rc=$rc)"; excerpt; return 1
     fi
 }
 # A command that could not run is not a refusal. 127 (no such command), 126 (not
@@ -103,7 +126,7 @@ nok() {
     elif never_ran "$rc"; then
         FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc — never ran, not a refusal)"
         echo "  FAIL  $desc (rc=$rc — the command never ran; that is not a refusal)"
-        sed 's/^/        | /' /tmp/itw.out | tail -6; return 1
+        excerpt; return 1
     else
         PASS=$((PASS + 1)); echo "  PASS  $desc (correctly refused)"; return 0
     fi
@@ -122,9 +145,17 @@ soft() { SOFTC=$((SOFTC + 1)); echo "  soft  $1"; }
 # Is NAME runnable right now? `command -v` alone answers from the shell's hash table
 # and keeps naming a path after the file is gone, so a removal check written with it
 # cannot fail. A fresh `sh` has an empty cache and has to look.
-on_path() { sh -c 'command -v "$1" >/dev/null 2>&1' _ "$1"; }
+#
+# A predicate answers yes or no and nothing else. `command -v` reports "not found" as 1
+# under bash and as 127 under dash and busybox ash — the same 127 that means "I could not
+# run at all", which is a distinction `nok` has to make. Collapsing it here keeps that
+# ambiguity out of every caller instead of teaching each one about the host's /bin/sh.
+on_path() {
+    sh -c 'command -v "$1" >/dev/null 2>&1' _ "$1" && return 0
+    return 1
+}
 # Where does NAME resolve, if anywhere. Same fresh-shell rule as on_path.
-path_of() { sh -c 'command -v "$1" 2>/dev/null' _ "$1"; }
+path_of() { sh -c 'command -v "$1" 2>/dev/null' _ "$1" || true; }
 
 echo "=============================================================="
 echo " LiNix v7 Windows/macOS harness — backend=$BACKEND package=$PKG"
@@ -152,10 +183,12 @@ grep_ok "priority names this backend" "$BACKEND" cat "$LINIX_CONFIG_DIR/priority
 
 # --- 2. Discovery / read-only ---------------------------------------------
 echo "[2] Discovery / read-only verbs"
-ok "doctor" lx doctor
-ok "status" lx status
-ok "check" lx check
-ok "absent" lx absent
+ok "check health" lx check health
+ok "check drift" lx check drift
+# The aggregate `check` exits 2 when it has findings to report, and an unmanaged package
+# on a developer's own machine is a finding. Every named section exits 0.
+answers "check parses the model" lx check
+ok "check absent" lx check absent
 ok "protected" lx protected
 ok "plan --dry-run" lx --dry-run plan
 
@@ -191,7 +224,20 @@ if ok "install $BACKEND:$PKG" lx -y install "$BACKEND:$PKG"; then
     ok "$PKG is still installed after unmanage" on_path "$PKG"
     ok "declaring it again takes it back" lx -y install "$BACKEND:$PKG"
     ok "uninstall $BACKEND:$PKG" lx -y uninstall "$BACKEND:$PKG"
-    nok "$PKG binary gone after uninstall" on_path "$PKG"
+    # S36 again, on the package the run did not install. When the host already owned
+    # $PKG, absence is not this harness's to demand: the manager may legitimately keep a
+    # formula another one depends on, and a second copy may live outside its prefix. The
+    # strict assertion is kept for the case it is actually about — a package this run put
+    # on the machine and took back off.
+    if [ -n "$PKG_WAS_HERE" ]; then
+        if on_path "$PKG"; then
+            soft "$PKG is still on PATH after uninstall — it predates the run, so absence is not asserted"
+        else
+            PASS=$((PASS + 1)); echo "  PASS  $PKG binary gone after uninstall"
+        fi
+    else
+        nok "$PKG binary gone after uninstall" on_path "$PKG"
+    fi
     if [ -n "$PKG_WAS_HERE" ]; then
         if lx -y install "$BACKEND:$PKG" >/dev/null 2>&1; then
             soft "$PKG was on this host before the run — put back, so the sweep leaves nothing missing"
@@ -211,7 +257,7 @@ nok "installing a nonexistent package fails" lx -y install "$BACKEND:linix-no-su
 # not a wrong name, and only a name nothing can resolve is withdrawn. So the harness clears it,
 # exactly as the container one does — left in, it is committed and then reinstalled by the
 # `rollback` in section 9, which fails there instead of here.
-ok "a failed install leaves the model parseable" lx status
+answers "a failed install leaves the model parseable" lx check
 sed -i '/linix-no-such-pkg-zzz/d' "$LINIX_CONFIG_DIR/modules/imperative.txt" 2>/dev/null || true
 
 # --- 7. Adopt (II.9: Windows managers install no deps, so adopt is exact) --
@@ -459,7 +505,7 @@ undeclare_canary() {
     mv "$_imp.tmp" "$_imp"
 }
 
-READY_LIST=$(lx doctor 2>/dev/null | grep '^\[READY\]' | awk '{print $2}' | sort)
+READY_LIST=$(lx check health 2>/dev/null | grep '^\[READY\]' | awk '{print $2}' | sort)
 echo "        READY backends: $(echo $READY_LIST | tr '\n' ' ')"
 
 lifecycle() {
@@ -554,10 +600,10 @@ done
 # ==========================================================================
 echo "[13] Plan-smoke, every backend not lifecycled above"
 
-ALL_BACKENDS=$(lx doctor --json 2>/dev/null \
+ALL_BACKENDS=$(lx check health --json 2>/dev/null \
     | sed -n 's/.*"backend"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | sort -u)
 echo "        registered backends: $(echo $ALL_BACKENDS | wc -w)"
-ok "doctor --json enumerates the registry" test -n "$ALL_BACKENDS"
+ok "check health --json enumerates the registry" test -n "$ALL_BACKENDS"
 
 SMOKE_CFG="${TMPDIR:-/tmp}/linix-it-win-smoke"
 rm -rf "$SMOKE_CFG" 2>/dev/null; mkdir -p "$SMOKE_CFG/modules" "$SMOKE_CFG/profiles"
@@ -644,12 +690,12 @@ else
     FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - repl piped session failed"
     echo "  FAIL  repl piped session"; tail -4 /tmp/it.out | sed 's/^/        | /'
 fi
-ok "unmanaged lists what LiNix does not manage" lx unmanaged
+ok "check unmanaged lists what LiNix does not manage" lx check unmanaged
 ok "path prints the config repo" lx path
 ok "path --explain says which source won" lx path --explain
 ok "config show prints the active configuration" lx config show
 ok "policy checks the desired state against [guard]" lx policy
-ok "conflicts reports cross-backend conflicts" lx conflicts
+ok "check conflicts reports cross-backend conflicts" lx check conflicts
 ok "sbom emits a bill of materials" lx sbom
 # `try` rehearses in a container. Named against an image that cannot exist, so the
 # answer is a refusal on every host: with no runtime it refuses for want of one, with a
@@ -703,10 +749,10 @@ ok "deactivate previews dropping one" lx --dry-run deactivate HarnessProfile
 ok "hold pins a package against bulk upgrade" lx hold "$PKG"
 ok "unhold releases it" lx unhold "$PKG"
 ok "teleport previews moving a package between managers" lx --dry-run teleport "$PKG" cargo
-if lx audit >/tmp/itw.out 2>&1; then
-    PASS=$((PASS + 1)); echo "  PASS  audit scans for vulnerabilities"
+if lx check security >/tmp/itw.out 2>&1; then
+    PASS=$((PASS + 1)); echo "  PASS  check security scans for vulnerabilities"
 else
-    soft "audit ran but could not reach the OSV.dev database"
+    soft "check security ran but could not reach the OSV.dev database"
 fi
 ok "export writes native manifests" lx export --out "${TMPDIR:-/tmp}/linix-it-win-export"
 # PINNED to this host's manager. An unpinned name resolved to a library crate on a

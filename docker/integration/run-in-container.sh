@@ -79,6 +79,16 @@ FAILC=0
 SOFTC=0
 FAILED_NAMES=""
 
+# What a failing command actually said. `tail` alone is not that: RUST_BACKTRACE is on in
+# CI, so the last six lines of a panic are six stack frames — on macOS, six identical
+# `__mh_execute_header` — and the one line that says what went wrong scrolls past. The
+# panic message is surfaced explicitly, then the tail.
+excerpt() {
+    if grep -q "panicked at" /tmp/it.out 2>/dev/null; then
+        grep -m1 -A 1 "panicked at" /tmp/it.out | sed 's/^/        | /'
+    fi
+    tail -6 /tmp/it.out | sed 's/^/        | /'
+}
 # ok "desc" cmd...   — passes when cmd exits 0.
 ok() {
     desc="$1"; shift
@@ -86,7 +96,7 @@ ok() {
         PASS=$((PASS + 1)); echo "  PASS  $desc"; return 0
     else
         rc=$?; FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc)"
-        echo "  FAIL  $desc (rc=$rc)"; sed 's/^/        | /' /tmp/it.out | tail -6; return 1
+        echo "  FAIL  $desc (rc=$rc)"; excerpt; return 1
     fi
 }
 
@@ -104,7 +114,7 @@ answers() {
         PASS=$((PASS + 1)); echo "  PASS  $desc (rc=$rc)"; return 0
     else
         FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc)"
-        echo "  FAIL  $desc (rc=$rc)"; sed 's/^/        | /' /tmp/it.out | tail -6; return 1
+        echo "  FAIL  $desc (rc=$rc)"; excerpt; return 1
     fi
 }
 
@@ -124,7 +134,7 @@ nok() {
     elif never_ran "$rc"; then
         FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc — never ran, not a refusal)"
         echo "  FAIL  $desc (rc=$rc — the command never ran; that is not a refusal)"
-        sed 's/^/        | /' /tmp/it.out | tail -6; return 1
+        excerpt; return 1
     else
         PASS=$((PASS + 1)); echo "  PASS  $desc (correctly refused)"; return 0
     fi
@@ -155,9 +165,17 @@ skip_smoke() { soft "$1 — SMOKE_ONLY: this run installs and removes nothing"; 
 # where it found a name, and keeps answering from that cache after the file is
 # deleted — so a package removed in section 9 still "existed" because section 4 had
 # looked it up. A fresh `sh` has an empty cache and has to touch the filesystem.
-on_path() { sh -c 'command -v "$1" >/dev/null 2>&1' _ "$1"; }
+#
+# A predicate answers yes or no and nothing else. `command -v` reports "not found" as 1
+# under bash and as 127 under dash and busybox ash — the same 127 that means "I could not
+# run at all", which is a distinction `nok` has to make. Collapsing it here keeps that
+# ambiguity out of every caller instead of teaching each one about the host's /bin/sh.
+on_path() {
+    sh -c 'command -v "$1" >/dev/null 2>&1' _ "$1" && return 0
+    return 1
+}
 # Where does NAME resolve, if anywhere. Same fresh-shell rule as on_path.
-path_of() { sh -c 'command -v "$1" 2>/dev/null' _ "$1"; }
+path_of() { sh -c 'command -v "$1" 2>/dev/null' _ "$1" || true; }
 
 echo "=============================================================="
 echo " LiNix v7 harness — backend=$BACKEND package=$PKG"

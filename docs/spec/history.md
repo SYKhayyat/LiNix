@@ -45,6 +45,32 @@ that only run nightly, so both were found a day late by whoever read the log.
 so it cannot drift — and tests them in a second on **every push**. Against the previous revision
 it fails exactly four of its 13 cases, which are exactly the two findings.
 
+**Fixing S37 made the macOS column legible, and it had more to say. Two further findings, one
+of them still open.**
+
+- **S38.** The host harness was driving a command surface that no longer exists: `doctor`,
+  `status`, `absent`, `unmanaged`, `conflicts` and `audit` were folded into `check <section>`
+  and only the container harness was updated. Six checks failed — but the real damage is that
+  `READY_LIST` and `ALL_BACKENDS` are both built from `lx doctor`, so **two whole sections
+  iterated over an empty list and reported nothing wrong.** `READY backends:` printed blank and
+  the run carried on. A stale verb reads as no coverage, not as reduced coverage. The same file
+  had never had `answers()`, so the aggregate `check` — which exits 2 for *findings* under
+  U21's table — was asserted with a hard `ok`.
+- **S39, open.** `rollback HEAD`, `activate` and `restore --force` each **panic on macOS**. All
+  three converge, and converging is a no-op on the Windows box where they pass. Not reproduced
+  here and not yet diagnosed, because the harness printed `tail -6` of a failure and the last
+  six lines of a panic are six stack frames. That is fixed (`excerpt()` surfaces `panicked at`
+  first, in both harnesses) — **the panics themselves are not.**
+
+**One regression, mine, worth writing down because it is the same shape as the bug it came
+from.** The `never_ran` guard made 127 a hard failure in `nok`; `on_path` answers "not found"
+through `command -v`, which returns 1 under bash and **127 under dash and busybox ash** — so
+ubuntu, alpine and tools each failed two checks on names that were correctly absent. A predicate
+that says "no" with the code that means "I could not run" is the same ambiguity `never_ran`
+exists to remove, so `on_path` is normalised to 0/1 at the source rather than special-cased at
+each caller. The guard covers it, and only bites where `/bin/sh` is dash — which is the runner
+it runs on.
+
 ## Session 2026-07-26 (later) — the assessment's list, worked: CI green on three platforms for the first time
 
 **The previous entry measured the gap. This one closes the top of it.** Seven commits, in the

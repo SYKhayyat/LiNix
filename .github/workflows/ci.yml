@@ -70,8 +70,11 @@ jobs:
     # The integration harnesses decide pass/fail for every backend, and they only run
     # nightly — so a wrong verdict inside one of them is a day late and easy to read
     # past. Their predicates are cheap to test directly, so they are tested on every push.
+    # LINIX_BIN also lets it check that every subcommand the harnesses invoke still
+    # exists: six of them had been folded into `check <section>` and the host harness
+    # was never updated, which silently emptied two whole sections of that sweep.
     - name: Harness predicates
-      run: bash scripts/harness-logic-test.sh
+      run: LINIX_BIN="$PWD/target/${{ matrix.target }}/release/linix" bash scripts/harness-logic-test.sh
       if: matrix.os == 'ubuntu-latest'
 
     - name: Upload binary artifact

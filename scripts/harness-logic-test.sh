@@ -25,6 +25,21 @@ fi
 
 TOTAL=0; BAD=0
 
+# Pull one function's definition out of a harness, so this file tests what CI runs rather
+# than a copy of it. Handles both the one-line `f() { …; }` form and the braces-on-their-
+# own-line form, and refuses anything implausibly long: a range that runs off the end of a
+# function swallows the rest of the script, and `eval` would then RUN it — which is how a
+# first attempt at this printed the harness's banner and died on an unset variable.
+lift() {
+    _name="$1"; _file="$2"
+    awk -v fn="$_name" '
+        $0 ~ "^" fn "\\(\\) \\{" { inside = 1 }
+        inside { print; n++ }
+        inside && /\}[[:space:]]*$/ && (n > 1 || /\{.*\}/) { exit }
+        n > 40 { exit 1 }
+    ' "$_file"
+}
+
 run_against() {
     SRC="$1"
     echo "== $SRC"
@@ -37,8 +52,14 @@ run_against() {
     FAKE=""; FAKE_NAME="hello"
     path_of() { case "$1" in "$FAKE_NAME") echo "$FAKE" ;; *) echo "" ;; esac; }
 
-    eval "$(sed -n '/^never_ran() {/,/^}/p' "$SRC")"
-    eval "$(sed -n '/^assert_binary_gone() {/,/^}/p' "$SRC")"
+    for _fn in never_ran assert_binary_gone on_path; do
+        _body="$(lift "$_fn" "$SRC")"
+        if [ -z "$_body" ]; then
+            echo "  FATAL: could not lift $_fn() from this harness"
+            TOTAL=$((TOTAL + 1)); BAD=$((BAD + 1)); return 1
+        fi
+        eval "$_body"
+    done
     command -v assert_binary_gone >/dev/null || { echo "  FATAL: could not lift assert_binary_gone"; BAD=$((BAD + 1)); return 1; }
     command -v never_ran >/dev/null || { echo "  FATAL: could not lift never_ran"; BAD=$((BAD + 1)); return 1; }
 
@@ -93,9 +114,61 @@ run_against() {
         if never_ran "$rc"; then echo "  BAD   rc=$rc must be a real verdict"; BAD=$((BAD + 1))
         else echo "  ok    rc=$rc is a real verdict"; fi
     done
+
+    # A predicate answers yes or no. `command -v` says "not found" with 1 under bash and
+    # 127 under dash and busybox ash — and 127 is what `nok` must read as "never ran", so
+    # an unnormalised on_path made three container jobs fail on a name that was correctly
+    # absent. This case only bites where /bin/sh is dash: ubuntu's runner, which is where
+    # this file runs.
+    TOTAL=$((TOTAL + 1))
+    on_path linix-no-such-binary-zzz; _rc=$?
+    if [ "$_rc" = 1 ]; then
+        echo "  ok    on_path says no with 1, not with the shell's not-found code"
+    else
+        echo "  BAD   on_path answered 'no' with rc=$_rc — nok cannot tell that from 'never ran'"
+        BAD=$((BAD + 1))
+    fi
+    TOTAL=$((TOTAL + 1))
+    if on_path sh; then echo "  ok    on_path still finds a name that is there"
+    else echo "  BAD   on_path could not find sh"; BAD=$((BAD + 1)); fi
 }
 
 for src in $SOURCES; do run_against "$src"; done
+
+# ---------------------------------------------------------------------------
+# Every subcommand a harness invokes must exist in the binary.
+#
+# This is not pedantry: `linix doctor`, `status`, `absent`, `unmanaged`, `conflicts` and
+# `audit` were folded into `check <section>`, the host harness was never updated, and
+# clap answered "unrecognized subcommand" with exit 2. One of those calls builds
+# READY_LIST — so the entire real-lifecycle section and the entire plan-smoke section
+# iterated over an empty list and reported nothing wrong. A stale name does not announce
+# itself as missing coverage; it announces itself as no coverage at all.
+#
+# Runs only when a binary is given, so the predicate tests above stay runnable anywhere.
+BIN="${LINIX_BIN:-}"
+if [ -n "$BIN" ] && "$BIN" --version >/dev/null 2>&1; then
+    echo "== subcommands invoked vs subcommands that exist ($BIN)"
+    _real="$("$BIN" --help 2>&1 | sed -n '/^Commands:/,/^Options:/p' \
+        | awk '{print $1}' | grep -E '^[a-z]' | sort -u)"
+    for src in $SOURCES; do
+        _used="$(grep -oE '(\b(lx|lx_slow|smoke_lx|silent_lx|restore_lx))( +-[-a-zA-Z]+)* +[a-z][a-z-]*' "$src" \
+            | awk '{print $NF}' | sort -u)"
+        _unknown=""
+        for _v in $_used; do
+            printf '%s\n' "$_real" | grep -qx "$_v" || _unknown="$_unknown $_v"
+        done
+        TOTAL=$((TOTAL + 1))
+        if [ -z "$_unknown" ]; then
+            echo "  ok    $(basename "$src") invokes only subcommands that exist"
+        else
+            echo "  BAD   $(basename "$src") invokes subcommands the binary does not have:$_unknown"
+            BAD=$((BAD + 1))
+        fi
+    done
+else
+    echo "== subcommands invoked vs subcommands that exist: SKIPPED (set LINIX_BIN to a built binary)"
+fi
 
 echo "--------------------------------------------------------------"
 echo " harness predicates: $((TOTAL - BAD))/$TOTAL ok"
