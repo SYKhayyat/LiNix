@@ -1,5 +1,27 @@
 # LiNix — Production Readiness Review & Work Order
 
+## STATUS — worked 2026-07-27. An audit nobody retires becomes the next thing nobody believes.
+
+| item | outcome |
+|---|---|
+| **C1** pty test in CI | **DONE** — `tests/pty_tests.rs`, named step in CI's fast half. Watched failing against the old behaviour in WSL first. |
+| **B1** child stdout/stderr | **DONE** — S42, ruled U40, rule II.12c, reason V.84. Mutations still show progress: output is mirrored to stderr as it arrives. |
+| **B2** pagers | **DONE** — S43. Suppressed on the env map every spawn inherits; `--no-pager` on every systemd row and scheduler call. |
+| **B3** rollback + guard | **DONE** — S45, ruled U41, rule II.10, reason V.85. All three parts, plus the `Remove` arm's lost pin. |
+| **B4** orphaned children | **DONE** — `kill_on_drop` on the spawn, in the S42 commit. |
+| **H1** exec lock | **DONE** — moved to the data directory with `datalock.rs`'s treatment. |
+| **H2** repo removal | **DONE** — S44, **and a second fault it uncovered**: apt and apk named a program in the argument position, so `repo add/remove/list` had never worked on either. |
+| **H3** sudo keepalive | **DONE** — `tokio::process`, `-n`, stdin null, behind a guard that aborts on drop. |
+| **H4** version | **HALF WRONG, HALF OPEN.** No hardcoded `v6.0.0` exists in `src/` — `lib.rs` derives `VERSION` from `CARGO_PKG_VERSION`; the banner this review saw came from the stale July binary on disk. `Cargo.toml`'s `version = "0.1.0"` is real and is **the owner's number to pick**. |
+| §7 instability | **PARTLY DONE** — S46 (two `.expect()`ed spawns on the dry-run path) and S47 (`attempt` renamed to `retries`; the arithmetic was right, the name lied). **Uniform retry semantics is not attempted**: telling a retryable failure from a permanent one needs the structured errors §6 asks for. |
+| §6 SOLID, **U1**, **U2**, U3 | **OPEN, deliberately.** U1 removes commands and U2 changes what every run prints — owner rulings. §6 is real and explicitly not a shipping blocker. U3 (`status` is slow) is worth re-measuring now that B1 is fixed. |
+
+Verified after the work: `cargo build --all-targets` → `cargo test` → `cargo clippy
+--all-targets --all-features -- -D warnings` clean on **Windows (1,340 tests) and Linux (1,339,
+in WSL)**. The Linux run caught two faults the Windows run could not see.
+
+---
+
 > Review date: 2026-07-27 · Reviewer: Claude (Opus 5)
 > Commit reviewed: `89bed26` (main, clean tree) · binary reports `linix 0.1.0`
 > Build verified: `cargo build --release` on Linux (WSL/Ubuntu 26.04) — **exit 0, 0 warnings**
