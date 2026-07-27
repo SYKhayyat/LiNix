@@ -230,9 +230,7 @@ impl Installable for WebInstallable {
                 .await
                 .map_err(|e| Error::Other(e.to_string()))??;
             } else {
-                tokio::fs::copy(&dl_path, dest_dir.join(filename))
-                    .await
-                    .map_err(Error::from)?;
+                crate::utils::file::copy_over(&dl_path, &dest_dir.join(filename)).await?;
             }
 
             // D3b: `@download_only` fetches the file and stops. And a bare `web:` line that

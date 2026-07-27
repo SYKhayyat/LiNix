@@ -62,6 +62,17 @@ of them still open.**
   manager failed for the one reason their names cannot say: there wasn't one. Both branches
   are written now. Three faults this week were the same thing — a file whose header promises
   it mirrors the container harness section for section, and had stopped.
+- **S41 — the one real product bug the whole sweep found.** With the harness finally honest,
+  macOS came down to a single failure, and it was ours: **`restore --force` cannot overwrite a
+  read-only file.** `bundle` copies the whole config root, that root is a git repo, git writes
+  its objects at 0444, and `fs::copy` carries the bits across — so the first restore lays down
+  a read-only tree and the second, which is the only thing `--force` exists for, gets EACCES.
+  It named none of the several hundred paths it had copied. **Nothing caught it because the
+  container harness runs as root**, and root bypasses the permission check; it reproduces on
+  Windows too, so it was never a macOS bug, only a non-root one. Fixed at one function —
+  `copy_over` in `utils/file.rs`, whose neighbour already carried the lesson in a comment — and
+  applied to its family: four copies in `bundle.rs`, plus `github.rs` and `web.rs`, which write
+  over a previous copy on reinstall.
 - **S39, closed — and it was never the product.** `rollback HEAD`, `activate` and
   `restore --force` each exited 1 on macOS. The cause is one line of the harness: section 6
   installs an unresolvable name on purpose and then deletes the manifest line with

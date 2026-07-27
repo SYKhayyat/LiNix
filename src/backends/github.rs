@@ -627,7 +627,7 @@ impl Installable for GithubInstallable {
                 let mut locks: Vec<ArtifactLock> = Vec::new();
                 for (pick, dl_path, sha) in &downloaded {
                     let dest = pkg_dir.join(&pick.asset.name);
-                    tokio::fs::copy(dl_path, &dest).await.map_err(Error::from)?;
+                    crate::utils::file::copy_over(dl_path, &dest).await?;
                     installed_artifacts.push(InstalledArtifact {
                         asset: pick.asset.name.clone(),
                         format: pick.format.to_string(),

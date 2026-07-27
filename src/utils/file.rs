@@ -419,3 +419,36 @@ mod suffix_tests {
         assert_eq!(strip_archive_suffixes("tool.tar.gz"), "tool");
     }
 }
+
+/// Copy `from` over `to`, whatever `to` currently is, and name the path if it cannot.
+///
+/// Two things `tokio::fs::copy` alone does not do. It cannot open a read-only destination for
+/// writing — and a restored config root is full of them, because `bundle` copies the whole
+/// root, that root is a git repo, and git writes its objects at 0444 which `copy` carries
+/// across. Removing the destination first is what makes an overwrite an overwrite. (Running as
+/// root hides this entirely, which is why every container run was green.)
+///
+/// And its error is `Permission denied (os error 13)` with no path in it, on one of several
+/// hundred copies. An I/O error that names no file is one nobody can act on.
+pub async fn copy_over(from: &Path, to: &Path) -> Result<()> {
+    // Only an existing FILE is removed: a directory in the way is a different fault, and
+    // deleting one to make room for a file would turn a mistake into data loss.
+    if tokio::fs::symlink_metadata(to)
+        .await
+        .map(|m| !m.is_dir())
+        .unwrap_or(false)
+    {
+        tokio::fs::remove_file(to)
+            .await
+            .map_err(|e| Error::Io(format!("could not replace {}: {}", to.display(), e)))?;
+    }
+    tokio::fs::copy(from, to).await.map_err(|e| {
+        Error::Io(format!(
+            "could not copy {} to {}: {}",
+            from.display(),
+            to.display(),
+            e
+        ))
+    })?;
+    Ok(())
+}

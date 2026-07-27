@@ -8,6 +8,7 @@
 
 use crate::app::App;
 use crate::core::{Error, Result};
+use crate::utils::file::copy_over;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 
@@ -84,7 +85,7 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, skip: Option<&Path>) -> Resu
             if ft.is_dir() {
                 stack.push((from, to));
             } else {
-                tokio::fs::copy(&from, &to).await.map_err(Error::from)?;
+                copy_over(&from, &to).await?;
                 count += 1;
             }
         }
@@ -145,7 +146,7 @@ pub async fn create_bundle(
             state.path.clone()
         };
         if tokio::fs::try_exists(&registry_path).await.unwrap_or(false)
-            && tokio::fs::copy(&registry_path, out.join("registry.json"))
+            && copy_over(&registry_path, &out.join("registry.json"))
                 .await
                 .is_ok()
         {
@@ -332,7 +333,7 @@ pub async fn restore_bundle(
             if let Some(p) = to.parent() {
                 tokio::fs::create_dir_all(p).await.map_err(Error::from)?;
             }
-            tokio::fs::copy(&from, &to).await.map_err(Error::from)?;
+            copy_over(&from, &to).await?;
             report.config_files += 1;
         }
     }
@@ -343,9 +344,7 @@ pub async fn restore_bundle(
         if let Some(p) = registry_path.parent() {
             tokio::fs::create_dir_all(p).await.map_err(Error::from)?;
         }
-        tokio::fs::copy(&bundled_registry, registry_path)
-            .await
-            .map_err(Error::from)?;
+        copy_over(&bundled_registry, registry_path).await?;
         report.registry_restored = true;
     }
 
@@ -389,6 +388,85 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(clean.join("modules/tools.txt")).unwrap(),
             "apt:jq\n"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `--force` restores over a config that is already there — which is the only reason it
+    /// exists — and a restored tree contains read-only files by construction: `bundle` copies
+    /// the whole config root, that root is a git repo, and git writes its objects at 0444.
+    /// `fs::copy` carries those bits across, so the second restore meets a destination it
+    /// cannot open for writing. Root does not notice (it bypasses the check), which is why
+    /// every container run was green and only the macOS sweep failed.
+    #[tokio::test]
+    async fn force_restores_over_files_the_first_restore_left_read_only() {
+        let tmp = std::env::temp_dir().join(format!("linix-restore-ro-{}", std::process::id()));
+        let bundle = tmp.join("bundle");
+        let cfg = tmp.join("cfg");
+        let data = tmp.join("data");
+        let _ = std::fs::remove_dir_all(&tmp);
+        // A git-shaped bundle: a nested read-only object, and an ordinary file beside it.
+        std::fs::create_dir_all(bundle.join(".git/objects/ab")).unwrap();
+        std::fs::create_dir_all(bundle.join("modules")).unwrap();
+        std::fs::write(bundle.join("modules/tools.txt"), "apt:jq\n").unwrap();
+        std::fs::write(bundle.join("packages.json"), "{\"packages\":[]}").unwrap();
+        let obj = bundle.join(".git/objects/ab/cdef");
+        std::fs::write(&obj, "object").unwrap();
+        let mut perms = std::fs::metadata(&obj).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&obj, perms).unwrap();
+
+        let reg = data.join("registry.json");
+        restore_bundle(&bundle, &cfg, &reg, false)
+            .await
+            .expect("first restore into a clean directory");
+        assert!(
+            std::fs::metadata(cfg.join(".git/objects/ab/cdef"))
+                .unwrap()
+                .permissions()
+                .readonly(),
+            "the copy must carry the read-only bit across, or this test proves nothing"
+        );
+
+        restore_bundle(&bundle, &cfg, &reg, true)
+            .await
+            .expect("--force must overwrite a read-only file, not fail with EACCES");
+        assert_eq!(
+            std::fs::read_to_string(cfg.join("modules/tools.txt")).unwrap(),
+            "apt:jq\n"
+        );
+
+        // Windows refuses to delete a read-only file, so the tree has to be made writable
+        // before cleanup. Unix needs nothing: removal is governed by the directory's mode,
+        // not the file's — and `set_readonly(false)` there would hand write to everyone.
+        #[cfg(windows)]
+        for f in [cfg.join(".git/objects/ab/cdef"), obj.clone()] {
+            if let Ok(m) = std::fs::metadata(&f) {
+                let mut p = m.permissions();
+                #[allow(clippy::permissions_set_readonly_false)]
+                p.set_readonly(false);
+                let _ = std::fs::set_permissions(&f, p);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// An I/O failure that names no file is a failure nobody can act on. This is the error
+    /// that cost a CI round: `Permission denied (os error 13)`, on one of several hundred
+    /// copied paths, with nothing to say which.
+    #[tokio::test]
+    async fn a_copy_that_fails_names_the_file() {
+        let tmp = std::env::temp_dir().join(format!("linix-copy-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let missing = tmp.join("no-such-source");
+        let err = copy_over(&missing, &tmp.join("dest"))
+            .await
+            .expect_err("copying a file that is not there must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no-such-source"),
+            "the error must name the path it could not copy, got: {msg}"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
