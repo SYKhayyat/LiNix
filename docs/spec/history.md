@@ -56,11 +56,19 @@ of them still open.**
   the run carried on. A stale verb reads as no coverage, not as reduced coverage. The same file
   had never had `answers()`, so the aggregate `check` — which exits 2 for *findings* under
   U21's table — was asserted with a hard `ok`.
-- **S39, open.** `rollback HEAD`, `activate` and `restore --force` each **panic on macOS**. All
-  three converge, and converging is a no-op on the Windows box where they pass. Not reproduced
-  here and not yet diagnosed, because the harness printed `tail -6` of a failure and the last
-  six lines of a panic are six stack frames. That is fixed (`excerpt()` surfaces `panicked at`
-  first, in both harnesses) — **the panics themselves are not.**
+- **S40.** Section 11b of the *Windows/macOS* harness stages a manager that cannot answer by
+  shadowing cargo with a `cargo.bat` — which Windows resolves through PATHEXT and macOS does
+  not resolve at all. On macOS it shadowed nothing, so the two assertions that need a silent
+  manager failed for the one reason their names cannot say: there wasn't one. Both branches
+  are written now. Three faults this week were the same thing — a file whose header promises
+  it mirrors the container harness section for section, and had stopped.
+- **S39, open.** `rollback HEAD`, `activate` and `restore --force` each **exit 1 on macOS**.
+  All three converge, and converging is a no-op on the Windows box where they pass. **First
+  reading was wrong: these are not panics** — the second macOS run found no `panicked at`
+  anywhere, so they are ordinary errors whose backtrace prints because `RUST_BACKTRACE=1` is
+  set in CI. The harness could not show either: `tail -6` of a failure is six stack frames, and
+  a first fix keyed on the word `panicked` therefore showed nothing. `excerpt()` now drops
+  frames and prints what is left. **The three failures are unfixed and undiagnosed.**
 
 **One regression, mine, worth writing down because it is the same shape as the bug it came
 from.** The `never_ran` guard made 127 a hard failure in `nok`; `on_path` answers "not found"

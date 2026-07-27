@@ -81,14 +81,17 @@ lx() { record_argv "$@"; $TO "$LINIX" "$@"; }
 PASS=0; FAILC=0; SOFTC=0; FAILED_NAMES=""
 
 # What a failing command actually said. `tail` alone is not that: RUST_BACKTRACE is on in
-# CI, so the last six lines of a panic are six stack frames — on macOS, six identical
-# `__mh_execute_header` — and the one line that says what went wrong scrolls past. The
-# panic message is surfaced explicitly, then the tail.
+# CI, so the last lines of a failure are stack frames — on macOS, a column of identical
+# `__mh_execute_header`, because the release binary carries no symbols — and the one line
+# that says what went wrong scrolls off the top. A frame is never the reason a check
+# failed, so the backtrace is dropped and what remains is the message.
 excerpt() {
-    if grep -q "panicked at" /tmp/itw.out 2>/dev/null; then
-        grep -m1 -A 1 "panicked at" /tmp/itw.out | sed 's/^/        | /'
+    _kept="$(grep -vE '^[[:space:]]*[0-9]+:|^[[:space:]]*at |^stack backtrace:|^note: [A-Z]?[a-z]* ?run with' /tmp/itw.out)"
+    if [ -n "$_kept" ]; then
+        printf '%s\n' "$_kept" | tail -8 | sed 's/^/        | /'
+    else
+        tail -6 /tmp/itw.out | sed 's/^/        | /'
     fi
-    tail -6 /tmp/itw.out | sed 's/^/        | /'
 }
 ok() {
     desc="$1"; shift
@@ -345,12 +348,32 @@ if [ -z "$REAL_CARGO" ]; then
     soft "no cargo on this host — cannot stage a manager that fails to answer"
 else
     # Shadow only cargo's *search*, so exactly one candidate in the chain goes silent
-    # while the manager under test is untouched. A `.bat` because Windows resolves a
-    # bare `cargo` through PATHEXT, so the shim has to be something CreateProcess runs.
+    # while the manager under test is untouched.
+    #
+    # The shim has to be something the host's process launcher will actually run.
+    # Windows resolves a bare `cargo` through PATHEXT, so there it must be a `.bat`;
+    # every other host resolves the executable bit, and a `.bat` on macOS is an inert
+    # file that shadows nothing — so this section staged no silent manager at all, and
+    # then reported that the plan failed to mention one.
     SILENT_BIN="${TMPDIR:-/tmp}/linix-it-silent-bin"
     rm -rf "$SILENT_BIN"; mkdir -p "$SILENT_BIN"
-    printf '@echo off\r\nif "%%1"=="search" (\r\n  echo error: failed to fetch the registry index 1>&2\r\n  exit /b 1\r\n)\r\n"%s" %%*\r\n' \
-        "$(cygpath -w "$REAL_CARGO" 2>/dev/null || echo "$REAL_CARGO")" > "$SILENT_BIN/cargo.bat"
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*|Windows_NT)
+            printf '@echo off\r\nif "%%1"=="search" (\r\n  echo error: failed to fetch the registry index 1>&2\r\n  exit /b 1\r\n)\r\n"%s" %%*\r\n' \
+                "$(cygpath -w "$REAL_CARGO" 2>/dev/null || echo "$REAL_CARGO")" > "$SILENT_BIN/cargo.bat"
+            ;;
+        *)
+            cat > "$SILENT_BIN/cargo" <<EOSHIM
+#!/bin/sh
+if [ "\$1" = "search" ]; then
+    echo "error: failed to fetch the registry index" >&2
+    exit 1
+fi
+exec "$REAL_CARGO" "\$@"
+EOSHIM
+            chmod +x "$SILENT_BIN/cargo"
+            ;;
+    esac
 
     SILENT_CFG="${TMPDIR:-/tmp}/linix-it-silent"
     rm -rf "$SILENT_CFG"; mkdir -p "$SILENT_CFG/modules" "$SILENT_CFG/profiles"
@@ -640,20 +663,20 @@ for be in $ALL_BACKENDS; do
     case "$be" in
         service)
             printf 'service:Spooler\n' > "$SMOKE_CFG/modules/base.txt"
-            ok "service: a service statement parses" smoke_lx check
+            answers "service: a service statement parses" smoke_lx check
             ok "service: and reaches a plan" smoke_lx --dry-run sync
             : > "$SMOKE_CFG/modules/base.txt"
             echo "$be" >> "$LEDGER/be-smoke"; continue ;;
         link)
             printf 'link:/etc/hostname @target=/tmp/linix-it-hostname\n' > "$SMOKE_CFG/modules/base.txt"
-            ok "link: a link statement parses" smoke_lx check
+            answers "link: a link statement parses" smoke_lx check
             ok "link: and reaches a plan" smoke_lx --dry-run sync
             : > "$SMOKE_CFG/modules/base.txt"
             echo "$be" >> "$LEDGER/be-smoke"; continue ;;
         setting)
             printf 'setting:org.gnome.desktop.interface/color-scheme @value=prefer-dark\n' \
                 > "$SMOKE_CFG/modules/base.txt"
-            ok "setting: a setting statement parses" smoke_lx check
+            answers "setting: a setting statement parses" smoke_lx check
             ok "setting: and reaches a plan" smoke_lx --dry-run sync
             : > "$SMOKE_CFG/modules/base.txt"
             echo "$be" >> "$LEDGER/be-smoke"; continue ;;
@@ -795,7 +818,7 @@ restore_lx() {
 }
 record_argv restore "$BUNDLE_DIR"
 ok "restore into a clean config directory" restore_lx restore "$BUNDLE_DIR"
-ok "the restored model parses" restore_lx check
+answers "the restored model parses" restore_lx check
 nok "restore refuses a config directory that is not empty" restore_lx restore "$BUNDLE_DIR"
 ok "and --force overrides it" restore_lx restore "$BUNDLE_DIR" --force
 

@@ -80,14 +80,17 @@ SOFTC=0
 FAILED_NAMES=""
 
 # What a failing command actually said. `tail` alone is not that: RUST_BACKTRACE is on in
-# CI, so the last six lines of a panic are six stack frames — on macOS, six identical
-# `__mh_execute_header` — and the one line that says what went wrong scrolls past. The
-# panic message is surfaced explicitly, then the tail.
+# CI, so the last lines of a failure are stack frames — on macOS, a column of identical
+# `__mh_execute_header`, because the release binary carries no symbols — and the one line
+# that says what went wrong scrolls off the top. A frame is never the reason a check
+# failed, so the backtrace is dropped and what remains is the message.
 excerpt() {
-    if grep -q "panicked at" /tmp/it.out 2>/dev/null; then
-        grep -m1 -A 1 "panicked at" /tmp/it.out | sed 's/^/        | /'
+    _kept="$(grep -vE '^[[:space:]]*[0-9]+:|^[[:space:]]*at |^stack backtrace:|^note: [A-Z]?[a-z]* ?run with' /tmp/it.out)"
+    if [ -n "$_kept" ]; then
+        printf '%s\n' "$_kept" | tail -8 | sed 's/^/        | /'
+    else
+        tail -6 /tmp/it.out | sed 's/^/        | /'
     fi
-    tail -6 /tmp/it.out | sed 's/^/        | /'
 }
 # ok "desc" cmd...   — passes when cmd exits 0.
 ok() {
