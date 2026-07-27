@@ -74,7 +74,12 @@ async fn a_script_runs_once_then_not_again_until_its_content_changes() {
     declare_exec(&kernel, "exec:./bin/setup.sh", "./bin/setup.sh", v2).await;
     approve(&kernel, "./bin/setup.sh", v2);
     let state = resolve(&kernel).await;
-    kernel.app.execs().apply(&state).await.expect("post-edit run");
+    kernel
+        .app
+        .execs()
+        .apply(&state)
+        .await
+        .expect("post-edit run");
     assert_eq!(runs_of(&kernel, v2), 1, "the edited script did not run");
     assert_eq!(runs_of(&kernel, v1), 1, "the old content's count was lost");
 }
@@ -107,7 +112,8 @@ async fn an_unapproved_script_refuses_the_sync_and_never_runs() {
     let state = resolve(&kernel).await;
     let err = kernel
         .app
-        .execs().apply(&state)
+        .execs()
+        .apply(&state)
         .await
         .expect_err("an unapproved script must stop the sync");
     let msg = err.to_string();
@@ -200,15 +206,14 @@ async fn a_failed_script_is_not_recorded_and_runs_again() {
     let script = kernel.app.config.config_root().join("./fails.sh");
     kernel.mock_executor.set_response(
         &exec_command_for(&script),
-        Err(linix::core::Error::command_failed(
-            "the script exited 1",
-        )),
+        Err(linix::core::Error::command_failed("the script exited 1")),
     );
 
     let state = resolve(&kernel).await;
     let err = kernel
         .app
-        .execs().apply(&state)
+        .execs()
+        .apply(&state)
         .await
         .expect_err("a failing script must surface, not be swallowed");
     assert!(err.to_string().contains("exited 1"), "{}", err);

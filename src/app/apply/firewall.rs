@@ -24,11 +24,7 @@ impl Firewall<'_> {
     /// N6: a config that both declares rules and links a ruleset file **warns and applies
     /// both**, with the declaration winning. A base file plus overrides is legible; two silent
     /// owners are not.
-    pub async fn apply(
-        &self,
-        state: &crate::model::DesiredState,
-        scope: &str,
-    ) -> Result<()> {
+    pub async fn apply(&self, state: &crate::model::DesiredState, scope: &str) -> Result<()> {
         use crate::model::firewall::{self, Direction, Rule};
 
         let declared: Vec<(Rule, &crate::config::grammar::Options)> = state

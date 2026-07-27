@@ -725,8 +725,7 @@ impl CommandExecutor {
     /// here. An executor with no policy is the honest default: every non-zero exit fails and
     /// nothing is classified, which is what the retry loop already assumed.
     fn ensure_status(&self, cmd: &str, output: StdOutput) -> Result<StdOutput> {
-        let status_ok =
-            output.status.success() || self.exit_policy.is_benign(output.status.code());
+        let status_ok = output.status.success() || self.exit_policy.is_benign(output.status.code());
         if status_ok
             && !self
                 .exit_policy
@@ -1214,7 +1213,10 @@ mod exit_status_tests {
         let out = "Couldn't find manifest for 'linix-nonexistent-pkg'.\n";
         assert!(scoop.ensure_status("scoop", finished(0, out, "")).is_err());
         assert!(scoop
-            .ensure_status("scoop", finished(0, "'jq' (1.8.2) was installed successfully!\n", ""))
+            .ensure_status(
+                "scoop",
+                finished(0, "'jq' (1.8.2) was installed successfully!\n", "")
+            )
             .is_ok());
     }
 
@@ -1272,7 +1274,9 @@ mod exit_status_tests {
     #[test]
     fn an_executor_with_no_policy_classifies_nothing() {
         let plain = CommandExecutor::new(true, false);
-        assert!(plain.ensure_status("choco", finished(3010, "", "")).is_err());
+        assert!(plain
+            .ensure_status("choco", finished(3010, "", ""))
+            .is_err());
         assert!(plain.ensure_status("apt", finished(0, "", "")).is_ok());
         let err = plain
             .ensure_status("apt", finished(100, "", "E: Unable to locate package nope"))

@@ -44,10 +44,9 @@ async fn main() -> Result<()> {
     // exactly why `--verbose` used to do nothing at all.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(log_level_from_argv(&std::env::args().collect::<Vec<_>>()))),
-        )
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            EnvFilter::new(log_level_from_argv(&std::env::args().collect::<Vec<_>>()))
+        }))
         .init();
 
     // 2. Shim hijack
@@ -961,7 +960,10 @@ mod log_level_tests {
         for one in [&["linix", "-v", "list"], &["linix", "--verbose", "list"]] {
             assert_eq!(log_level_from_argv(&argv(one)), "info");
         }
-        assert_eq!(log_level_from_argv(&argv(&["linix", "-vv", "list"])), "debug");
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "-vv", "list"])),
+            "debug"
+        );
         assert_eq!(
             log_level_from_argv(&argv(&["linix", "-v", "-v", "list"])),
             "debug"
@@ -971,21 +973,36 @@ mod log_level_tests {
             "debug"
         );
         // Past two there is nothing more to say, and it must not fall back to the default.
-        assert_eq!(log_level_from_argv(&argv(&["linix", "-vvvv", "list"])), "debug");
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "-vvvv", "list"])),
+            "debug"
+        );
     }
 
     /// A short flag can arrive bundled with its neighbours, and every letter in the bundle
     /// counts — `-nv` is a dry run that talks.
     #[test]
     fn bundled_short_flags_are_read_letter_by_letter() {
-        assert_eq!(log_level_from_argv(&argv(&["linix", "-nv", "sync"])), "info");
-        assert_eq!(log_level_from_argv(&argv(&["linix", "-nvv", "sync"])), "debug");
-        assert_eq!(log_level_from_argv(&argv(&["linix", "-nq", "sync"])), "error");
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "-nv", "sync"])),
+            "info"
+        );
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "-nvv", "sync"])),
+            "debug"
+        );
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "-nq", "sync"])),
+            "error"
+        );
     }
 
     #[test]
     fn quiet_wins_over_loud_whichever_order_they_come_in() {
-        assert_eq!(log_level_from_argv(&argv(&["linix", "-q", "list"])), "error");
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "-q", "list"])),
+            "error"
+        );
         assert_eq!(
             log_level_from_argv(&argv(&["linix", "-q", "-vv", "list"])),
             "error"

@@ -6,9 +6,9 @@ use crate::app::scheduler::notify::NotificationManager;
 use crate::app::scheduler::SchedulerManager;
 use crate::app::shell::EphemeralShell;
 use crate::app::shim_manager::ShimManager;
+use crate::app::snapshot_restore::SnapshotRestore;
 use crate::app::sync::resolver::StateResolver;
 use crate::app::sync::SyncEngine;
-use crate::app::snapshot_restore::SnapshotRestore;
 use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::grammar::Origin;
 use crate::config::Config;
@@ -312,30 +312,6 @@ impl App {
         Ok(edit)
     }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     /// Whether any active file declares this package.
     ///
     /// Asked through the resolver, so "declared" means the same thing here as it does to
@@ -586,11 +562,6 @@ impl App {
         }
         out
     }
-
-
-
-
-
 
     /// A [`GitManager`] scoped to the LiNix repo root (II.1), which holds `modules/`,
     /// `profiles/`, `active`, `priority` and `locks/`.

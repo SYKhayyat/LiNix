@@ -265,10 +265,26 @@ mod tests {
     #[test]
     fn each_distro_policy_tells_a_held_lock_from_a_missing_name() {
         let cases = [
-            (dnf(), "Another app is currently holding the yum lock", "No match for argument: nope"),
-            (pacman(), "error: unable to lock database", "error: target not found: nope"),
-            (apk(), "ERROR: temporary error (try again later)", "ERROR: unable to select packages:"),
-            (brew(), "curl: (28) Operation timed out", "Error: No available formula with the name \"nope\""),
+            (
+                dnf(),
+                "Another app is currently holding the yum lock",
+                "No match for argument: nope",
+            ),
+            (
+                pacman(),
+                "error: unable to lock database",
+                "error: target not found: nope",
+            ),
+            (
+                apk(),
+                "ERROR: temporary error (try again later)",
+                "ERROR: unable to select packages:",
+            ),
+            (
+                brew(),
+                "curl: (28) Operation timed out",
+                "Error: No available formula with the name \"nope\"",
+            ),
         ];
         for (policy, transient, permanent) in cases {
             assert_eq!(

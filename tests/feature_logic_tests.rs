@@ -355,7 +355,8 @@ async fn a_failed_undo_stays_in_the_extras_ledger() {
     let state = linix::model::DesiredState::default();
     kernel
         .app
-        .extras().reconcile(&state)
+        .extras()
+        .reconcile(&state)
         .await
         .expect("a failed undo is reported, not fatal");
 

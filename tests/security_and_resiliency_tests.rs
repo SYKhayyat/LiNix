@@ -426,13 +426,18 @@ fn impatient() -> TransactionConfig {
 }
 
 /// How many times a single-node transaction actually asked the manager to install.
-async fn attempts_for(kernel: &TestKernel, answer: linix::core::Result<std::process::Output>) -> usize {
+async fn attempts_for(
+    kernel: &TestKernel,
+    answer: linix::core::Result<std::process::Output>,
+) -> usize {
     kernel
         .mock_executor
         .set_response("brew install -- pkg-a", answer);
 
     let mut graph = petgraph::stable_graph::StableDiGraph::new();
-    graph.add_node(GraphAction::Install(create_dummy_spec("pkg-a", "brew", None)));
+    graph.add_node(GraphAction::Install(create_dummy_spec(
+        "pkg-a", "brew", None,
+    )));
 
     let mut tx = Transaction::with_config(
         graph,
@@ -480,7 +485,11 @@ async fn a_transient_failure_is_retried_to_the_limit() {
 #[tokio::test]
 async fn an_unclassified_failure_still_retries() {
     let kernel = TestKernel::new().await;
-    let attempts = attempts_for(&kernel, Err(Error::command_failed("something nobody named"))).await;
+    let attempts = attempts_for(
+        &kernel,
+        Err(Error::command_failed("something nobody named")),
+    )
+    .await;
     assert_eq!(attempts, (impatient().max_retries + 1) as usize);
 }
 
@@ -546,5 +555,8 @@ async fn a_permanent_removal_failure_is_attempted_once() {
         .iter()
         .filter(|c| c.contains("uninstall -- pkg-a"))
         .count();
-    assert_eq!(attempts, 1, "a permanent removal failure must not be retried");
+    assert_eq!(
+        attempts, 1,
+        "a permanent removal failure must not be retried"
+    );
 }
