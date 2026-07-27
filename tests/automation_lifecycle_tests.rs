@@ -146,9 +146,14 @@ async fn test_systemd_oncalendar_translation_logic() {
     );
 
     // Verify Call Log: Check if systemctl reload/enable was "recorded"
-    kernel.assert_called("systemctl --user daemon-reload").await;
+    // `--no-pager` is part of the argv, not decoration: systemctl decides to page from the
+    // terminal and from $SYSTEMD_PAGER, and a pager waits for a keypress no captured child
+    // receives (S43).
     kernel
-        .assert_called("systemctl --user enable --now linix-weekly-sync-task.timer")
+        .assert_called("systemctl --no-pager --user daemon-reload")
+        .await;
+    kernel
+        .assert_called("systemctl --no-pager --user enable --now linix-weekly-sync-task.timer")
         .await;
 }
 

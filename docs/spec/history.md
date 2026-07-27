@@ -14,6 +14,60 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-27 (later) — a production-readiness review, and the blind spot every gate shared
+
+A full read of the tree (202 files, 72,824 lines, 1,324 tests) against the running binary on
+Linux produced `PRODUCTION-READINESS-REVIEW.md`. Its verdict was **not production ready**, on one
+finding that mattered more than the rest: **nothing in CI, in the container harnesses, or in any
+test had ever run LiNix attached to a terminal**, and every blocker lived in that gap. A green
+suite was not evidence against the findings; it was the reason they survived. All of them are
+now fixed, and each was watched failing first.
+
+- **S42/S43 — the terminal.** `RawExecutor::execute` decided all three of the child's handles
+  from whether *LiNix's own* stdin was a tty. Attached, the child inherited stdout, so
+  `output.stdout` came back empty and all 79 `run_output` call sites parsed an empty string:
+  `linix list -b apt` reported **609 packages piped and 1 under a terminal**. And with stdout
+  inherited, `systemctl` started a pager, so read-only `linix status` hung on a keypress and
+  printed 80/640/83 lines across three identical runs. Capture is now a property of the call
+  (`ChildStdin::Closed` for reads, `Interactive` for mutations); pagers are suppressed on the one
+  env map every spawn inherits. Ruled **U40**, rule II.12c, reason V.84.
+- **S45 — the rollback, and the mass-uninstall chain.** A `@version=` change schedules an
+  `Install` node for a package that is already there, and rollback compensated every `Install`
+  with `remove()` — so a failed upgrade *uninstalled* the package. `needs_change` also read "I
+  could not ask" as "not installed", which under S42 was **every package**, so a single failure
+  rolled back across the whole managed set. And `transaction.rs` contained **zero** references to
+  the guard: rollback's removals never passed the plan-time gate, while II.10 said every removal
+  path calls it. Ruled **U41**, rule in II.10, reason V.85.
+- **S44 — repositories.** `{url}` was never substituted on the removal path, so apk's `sed`
+  searched for the literal text, matched nothing and **exited 0** — a repository reported removed
+  that was still there. An unsubstituted placeholder is now a hard error. The fix uncovered a
+  second fault: apt's and apk's repo rows named a *program* in the argument position, so the real
+  commands were `apt add-apt-repository …` and `apk sh -c …`. **`repo add`/`remove`/`list` had
+  never worked on either manager.**
+- **S46/S47, and the ones that were already right.** Two `.expect()`ed spawns on the dry-run path
+  (`/bin/false`, `cmd /C exit 1`) replaced with `ExitStatusExt::from_raw`; `TaskResult.attempt`
+  renamed to `retries`, which is what it held. **The review's H4 is half wrong and the entry says
+  so**: there is no hardcoded `v6.0.0` in `src/` — the banner it saw came from the stale July
+  binary on disk. What is real is `Cargo.toml`'s `version = "0.1.0"`, and that number is the
+  owner's.
+
+**The gate that closes the class is `tests/pty_tests.rs`**, which runs the built binary under
+`script -qec` against a stub manager on `PATH` and asserts that what LiNix printed is what LiNix
+parsed. It is a named step in CI's fast half. Verified failing against the previous behaviour in
+WSL before it was made to pass.
+
+**Verified, not asserted:** `cargo build --all-targets` → `cargo test` → `cargo clippy
+--all-targets --all-features -- -D warnings` clean on **both Windows (1,340 tests) and Linux
+(1,339 tests, run in WSL)**. Two Linux-only faults were caught by that second run and would
+otherwise have gone to CI red: an import that is Windows-only once the fabricated `ExitStatus`
+stopped spawning, and a scheduler test pinning the systemctl argv that `--no-pager` changed.
+
+**Left open on purpose.** The review's U1 (45 top-level commands, overlapping clusters) and U2
+(INFO logging on by default) remove or change behaviour a user would notice, so they are the
+owner's to rule; the SOLID items in §6 are real and are explicitly not shipping blockers.
+Uniform retry semantics (`transaction.rs` retries a nonexistent package as patiently as a held
+dpkg lock) needs structured errors to fix properly and is not attempted here.
+
 ## Session 2026-07-27 — the push went green, and the nightly half said why that was not enough
 
 > **Closed green.** Run `30237464029` (`945fba0`): **every job passed, including

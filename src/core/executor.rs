@@ -6,8 +6,10 @@ use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::process::Command as StdCommand;
+use std::process::Output as StdOutput;
 use std::process::Stdio;
-use std::process::{Command as StdCommand, Output as StdOutput};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
