@@ -46,11 +46,8 @@ impl GoBackendCore {
             .run_output("go", &["env", "GOPATH"], false)
             .await
         {
-            let first = gopath.lines().next().unwrap_or("").trim();
-            // GOPATH may be a list; the first entry owns `bin`.
-            let first = first.split([';', ':']).next().unwrap_or(first).trim();
-            if !first.is_empty() {
-                return Ok(PathBuf::from(first).join("bin"));
+            if let Some(bin) = gopath_bin(&gopath) {
+                return Ok(bin);
             }
         }
         let home = dirs::home_dir()
@@ -71,31 +68,54 @@ impl GoBackendCore {
     }
 }
 
-/// Parse `go version -m <bin>` output into (module_path, version). The block looks like:
-///   /path/fzf: go1.21.0
-///   \tpath\tgithub.com/junegunn/fzf/...
-///   \tmod\tgithub.com/junegunn/fzf\tv0.42.0\th1:...
-/// Prefer the `mod` line (carries the version); fall back to `path`.
+/// The `bin` directory belonging to the first entry of a `go env GOPATH` reading.
+///
+/// GOPATH is a list in the platform's own separator, so it is split by the platform's own
+/// rule: on Windows the separator is `;` and a colon is part of every drive letter.
+fn gopath_bin(raw: &str) -> Option<PathBuf> {
+    let line = raw.lines().next().unwrap_or("").trim();
+    if line.is_empty() {
+        return None;
+    }
+    let first = std::env::split_paths(line).next()?;
+    if first.as_os_str().is_empty() {
+        return None;
+    }
+    Some(first.join("bin"))
+}
+
+/// Parse `go version -m <bin>` into the name `go install` would take, and its version. The
+/// block looks like:
+///   /path/goimports: go1.26.5
+///   \tpath\tgolang.org/x/tools/cmd/goimports
+///   \tmod\tgolang.org/x/tools\tv0.48.0\th1:...
+///
+/// `path` is the identity and `mod` only carries the version: a program in a subdirectory of
+/// its module has two different names here, and the one `sync` compares against a declaration
+/// — the one `go install` accepts — is `path`.
 fn parse_go_version_m(output: &str) -> Option<(String, Option<String>)> {
-    let mut path_only: Option<String> = None;
+    let mut package_path: Option<String> = None;
+    let mut module: Option<(String, Option<String>)> = None;
     for line in output.lines() {
         let mut fields = line.split_whitespace();
         match fields.next() {
-            Some("mod") => {
-                if let Some(module) = fields.next() {
-                    let version = fields.next().map(|s| s.to_string());
-                    return Some((module.to_string(), version));
+            Some("path") => {
+                if let Some(p) = fields.next() {
+                    package_path.get_or_insert_with(|| p.to_string());
                 }
             }
-            Some("path") => {
-                if let Some(module) = fields.next() {
-                    path_only.get_or_insert_with(|| module.to_string());
+            Some("mod") if module.is_none() => {
+                if let Some(m) = fields.next() {
+                    module = Some((m.to_string(), fields.next().map(|s| s.to_string())));
                 }
             }
             _ => {}
         }
     }
-    path_only.map(|p| (p, None))
+    let version = module.as_ref().and_then(|(_, v)| v.clone());
+    package_path
+        .or_else(|| module.map(|(m, _)| m))
+        .map(|name| (name, version))
 }
 
 #[async_trait]
@@ -381,5 +401,61 @@ mod tests {
     #[test]
     fn non_go_binary_yields_none() {
         assert!(parse_go_version_m("some random text\nno module info here\n").is_none());
+    }
+
+    /// Captured from `go version -m` on a real install of
+    /// `golang.org/x/tools/cmd/goimports@latest` (go1.26.5).
+    const SUBPACKAGE: &str = include_str!("../../tests/fixtures/go/version-m-subpackage.txt");
+    /// Captured from a real install of `golang.org/x/example/hello@latest`, where the
+    /// package sits at the module root so `path` and `mod` agree.
+    const MODULE_ROOT: &str = include_str!("../../tests/fixtures/go/version-m-module-root.txt");
+    /// Captured from `go env GOPATH` on Windows — a drive letter, so a colon.
+    const GOPATH_WINDOWS: &str = include_str!("../../tests/fixtures/go/env-gopath-windows.txt");
+
+    /// `sync` compares what was declared against what `list` reports, so the name `list`
+    /// reports must be the name `go install` takes — the package path. Preferring the `mod`
+    /// line reported `golang.org/x/tools` for a binary declared as
+    /// `golang.org/x/tools/cmd/goimports`: never equal, so drift that never converges, and an
+    /// `upgrade` that reinstalls a module with no program in it.
+    #[test]
+    fn the_identity_is_the_package_path_not_the_module() {
+        let (name, version) = parse_go_version_m(SUBPACKAGE).unwrap();
+        assert_eq!(name, "golang.org/x/tools/cmd/goimports");
+        assert_eq!(version.as_deref(), Some("v0.48.0"));
+    }
+
+    #[test]
+    fn a_package_at_the_module_root_still_carries_its_version() {
+        let (name, version) = parse_go_version_m(MODULE_ROOT).unwrap();
+        assert_eq!(name, "golang.org/x/example/hello");
+        assert_eq!(
+            version.as_deref(),
+            Some("v0.0.0-20250915201037-7f05d217867b")
+        );
+    }
+
+    /// GOPATH is a list in the platform's own separator. Splitting on `:` as well as `;`
+    /// decapitated every Windows path at the drive letter, so the bin dir resolved to `C\bin`,
+    /// which does not exist — and a missing bin dir is reported as "nothing installed".
+    #[test]
+    fn a_windows_gopath_keeps_its_drive_letter() {
+        let bin = gopath_bin(GOPATH_WINDOWS).unwrap();
+        assert_eq!(bin, PathBuf::from(r"C:\Users\Administrator\go").join("bin"));
+    }
+
+    #[test]
+    fn the_first_entry_of_a_gopath_list_owns_bin() {
+        let (list, first) = if cfg!(windows) {
+            (r"C:\one;D:\two", r"C:\one")
+        } else {
+            ("/one:/two", "/one")
+        };
+        assert_eq!(gopath_bin(list).unwrap(), PathBuf::from(first).join("bin"));
+    }
+
+    #[test]
+    fn an_empty_gopath_resolves_to_nothing_rather_than_to_bin() {
+        assert!(gopath_bin("").is_none());
+        assert!(gopath_bin("   \n").is_none());
     }
 }
