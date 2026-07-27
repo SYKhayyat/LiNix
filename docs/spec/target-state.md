@@ -1201,6 +1201,29 @@ holds, because the set of flags belongs to the manager and changes without us.
 path it names, or it is deleted. Two of everything is bad; one of everything, unwired, is worse
 — it reads as a defence in the source and is absent at runtime.
 
+## II.12c What comes back from a command line (V.84, U40)
+
+**LiNix reads the output of every command it runs.** stdout and stderr are captured on every
+path, on every platform, whether or not a terminal is attached. Capture is a property of the
+call; it is never decided by what LiNix's own handles happen to be, because a parser that works
+in CI and not on a person's machine is worse than one that never works — only one of those two
+gets reported.
+
+**stdin is the one stream a child may share, and only a mutating command may share it.** `sudo`
+asks for a password on the terminal it was started from. A read has nothing to ask and nobody to
+answer it, so a read never takes the terminal.
+
+**Captured is not hidden.** While a mutation runs with a terminal attached, its output is
+mirrored as it arrives — to stderr, never stdout, because stdout carries LiNix's own answer.
+
+**Pagers are suppressed at the spawn.** `SYSTEMD_PAGER`, `PAGER` and `GIT_PAGER` are set on the
+one environment map every spawn inherits, and every systemctl invocation carries `--no-pager`. A
+pager waits for a keypress a captured child will never receive, and its escape sequences land in
+the text a parser is about to read.
+
+**There is no switch for any of this** — no config key, no environment variable, no flag. One
+path. A switch here is a switch that turns the bug back on.
+
 ## II.13 History
 
 **Git is your intent. Snapshots are your machine.** Two jobs, two mechanisms, neither

@@ -1261,3 +1261,41 @@ original bug was caught, and it is the argument for `capability::INSTALLS_FROM_S
 table read by both ends** rather than the key being written down twice.
 
 ---
+
+**V.84 — Why LiNix reads every command's output, and why a child never gets the screen (U40,
+S42/S43).** *(Found by the production-readiness review, 2026-07-27; ruled and built the same
+day.)* `RawExecutor::execute` asked one question — is *LiNix's* stdin a terminal? — and used the
+answer to decide all three of the child's handles. When it was, the child inherited stdout, so
+`output.stdout` came back empty and all 79 `run_output` call sites parsed an empty string. `linix
+list -b apt` reported **609 packages piped and 1 under a terminal, on the same machine, from the
+same command.** The failure is worse than a wrong answer because it does not look like one: what
+reaches the screen is `dpkg-query`'s own output, which reads like a package list to anyone who
+is not comparing formats.
+
+**The rule is therefore about *who* decides, not about which way it goes.** Capture belongs to
+the call — a read parses, so a read captures; a mutation may need a password, so a mutation may
+share stdin and nothing else. Making it ambient made LiNix behave one way for the machines that
+test it and another way for the machines that run it, and only the first kind reports back.
+
+**The same inheritance turned a read-only command into a hang.** With stdout inherited,
+`systemctl` concluded a human was watching and piped itself into a pager; `linix status` waited
+for a keypress and had to be killed, and across three identical runs printed 80, 640 and 83
+lines. So the pager suppression is not a second fix for the same bug — capturing removes the
+usual trigger, but `$PAGER` and `$SYSTEMD_PAGER` force one regardless, and a forced pager puts
+`lines 1-16/16 (END)` and a screenful of escapes into the text a parser is about to read. It is
+set on the env map every spawn inherits, because a suppression applied at some call sites is the
+`command -v` case again: the sibling that was missed is the one that runs.
+
+**Mirroring exists so the fix does not cost what it fixes.** Inheriting the handles was the wrong
+mechanism for a real requirement — a five-minute `apt install` that prints nothing is a tool that
+looks wedged. The bytes now go both places, and the mirror is stderr because stdout is where
+LiNix's own answer goes and interleaving the two makes both unreadable to whoever piped us.
+
+**What this cost, and why the test matters more than the fix.** 1,324 tests, four container
+lifecycles and three OS builds were green throughout, and not one of them could have observed
+any of it: every gate in the repo runs with pipes on every handle. A green suite was not evidence
+against the finding — it was the reason the finding survived. `tests/pty_tests.rs` closes the
+gap with `script -qec` and a stub manager on `PATH`, asserting that what LiNix printed is what
+LiNix parsed, and it was watched failing against the old behaviour before it was made to pass.
+
+---

@@ -3,10 +3,9 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use fs2::FileExt;
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
 use std::process::Stdio;
 use std::process::{Command as StdCommand, Output as StdOutput};
 use std::sync::Arc;
@@ -78,9 +77,98 @@ pub trait ExecutionLayer: Send + Sync {
     ) -> Result<StdOutput>;
     fn check_command(&self, cmd: &str) -> bool;
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()>;
+
+    /// Whether a child spawned by this layer may read LiNix's own stdin. Only the raw layer
+    /// behind mutations may; a layer that spawns nothing answers false.
+    fn shares_stdin(&self) -> bool {
+        false
+    }
 }
 
-pub struct RawExecutor;
+/// Whether a spawned child may read from LiNix's own stdin.
+///
+/// It is the only stream a child ever shares. stdout and stderr are captured on every path,
+/// because every read parses `output.stdout` — a child writing straight to the terminal hands
+/// the parser an empty string while the user sees raw manager output and believes it worked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildStdin {
+    /// Reads and existence probes. There is nothing to type at them, and a read that consumed
+    /// the terminal could not be answered anyway.
+    Closed,
+    /// Mutations. `sudo` asks for a password on the terminal it was started from, and a
+    /// mutation that cannot ask for one cannot run.
+    Interactive,
+}
+
+pub struct RawExecutor {
+    stdin: ChildStdin,
+}
+
+impl RawExecutor {
+    /// The layer behind `run_output`/`search_output`/`command_exists`.
+    pub fn reader() -> Self {
+        Self {
+            stdin: ChildStdin::Closed,
+        }
+    }
+
+    /// The layer behind `run`/`run_exclusive`.
+    pub fn mutator() -> Self {
+        Self {
+            stdin: ChildStdin::Interactive,
+        }
+    }
+
+    /// Collect the child's output while echoing it to the terminal as it arrives.
+    ///
+    /// Both streams must be drained concurrently with the wait: a pipe buffer that fills while
+    /// nothing reads it blocks the child forever, and a package manager writing more than the
+    /// buffer holds is not an edge case.
+    async fn wait_mirroring(mut child: tokio::process::Child) -> Result<StdOutput> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn pump<R: tokio::io::AsyncRead + Unpin>(mut src: R) -> std::io::Result<Vec<u8>> {
+            let mut collected = Vec::new();
+            let mut buf = [0u8; 8192];
+            let mut sink = tokio::io::stderr();
+            loop {
+                let n = src.read(&mut buf).await?;
+                if n == 0 {
+                    return Ok(collected);
+                }
+                collected.extend_from_slice(&buf[..n]);
+                sink.write_all(&buf[..n]).await?;
+                sink.flush().await?;
+            }
+        }
+
+        let out_pipe = child.stdout.take();
+        let err_pipe = child.stderr.take();
+        let out_task = tokio::spawn(async move {
+            match out_pipe {
+                Some(p) => pump(p).await,
+                None => Ok(Vec::new()),
+            }
+        });
+        let err_task = tokio::spawn(async move {
+            match err_pipe {
+                Some(p) => pump(p).await,
+                None => Ok(Vec::new()),
+            }
+        });
+
+        let status = child.wait().await?;
+        let joined = |r: std::result::Result<std::io::Result<Vec<u8>>, tokio::task::JoinError>| {
+            r.map_err(|e| Error::Other(format!("output reader failed: {}", e)))?
+                .map_err(Error::from)
+        };
+        Ok(StdOutput {
+            status,
+            stdout: joined(out_task.await)?,
+            stderr: joined(err_task.await)?,
+        })
+    }
+}
 
 /// Windows only: some tools on PATH are not `.exe` files but shim scripts —
 /// e.g. scoop ships as `scoop.ps1`. `where`/`which` find them (so availability checks
@@ -163,24 +251,40 @@ impl ExecutionLayer for RawExecutor {
         let mut command = Command::new(cmd);
         command.args(args).envs(env);
 
-        if std::io::stdin().is_terminal() {
-            command
-                .stdin(std::process::Stdio::inherit())
-                .stdout(std::process::Stdio::inherit())
-                .stderr(std::process::Stdio::inherit());
-        } else {
-            command
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-        }
+        // A worker whose task is aborted — a failed node, the global timeout — drops this
+        // future, and dropping a future does not kill the process it spawned. Without this an
+        // `apt install` keeps running against the same dpkg lock the rollback is about to take,
+        // and whatever it completes is in no history that could compensate it.
+        command.kill_on_drop(true);
 
-        let output = command
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let interactive = self.stdin == ChildStdin::Interactive;
+        command.stdin(if interactive && std::io::stdin().is_terminal() {
+            Stdio::inherit()
+        } else {
+            // Not `inherit` when LiNix's own stdin is a pipe: a child that reads it would eat
+            // input meant for LiNix, and one that blocks on it would never return.
+            Stdio::null()
+        });
+
+        let child = command
             .spawn()
-            .map_err(|e| Error::CommandFailed(format!("Failed to spawn {}: {}", cmd, e)))?
-            .wait_with_output()
-            .await?;
+            .map_err(|e| Error::CommandFailed(format!("Failed to spawn {}: {}", cmd, e)))?;
+
+        // A mutation can run for minutes. Its progress used to reach the terminal because the
+        // handles were inherited — which is exactly what emptied `output.stdout` and broke
+        // every parser. Capture it and mirror it instead, so the bytes go both places.
+        // The mirror is stderr, never stdout: stdout carries LiNix's own answer, and a child's
+        // chatter interleaved with it is not parseable by whoever piped us.
+        if interactive && std::io::stderr().is_terminal() {
+            return Self::wait_mirroring(child).await;
+        }
+        let output = child.wait_with_output().await?;
         Ok(output)
+    }
+
+    fn shares_stdin(&self) -> bool {
+        self.stdin == ChildStdin::Interactive
     }
 
     fn check_command(&self, cmd: &str) -> bool {
@@ -238,7 +342,7 @@ impl ExecutionLayer for DryRunExecutor {
     /// Whether a command exists is a fact about this machine, not something a preview gets
     /// to invent. Answering `true` for everything made every backend look installed.
     fn check_command(&self, cmd: &str) -> bool {
-        RawExecutor.check_command(cmd)
+        RawExecutor::reader().check_command(cmd)
     }
 
     async fn symlink(&self, src: &Path, dst: &Path) -> Result<()> {
@@ -291,6 +395,9 @@ pub struct MockExecutor {
     pub responses: DashMap<String, Result<StdOutput>>,
     pub command_existence: DashMap<String, bool>,
     pub call_log: Arc<Mutex<Vec<String>>>,
+    /// The environment the last call carried. The env map is where the pager suppression and
+    /// the recursion guard live, and neither is visible in the argv the call log records.
+    pub last_env: Arc<Mutex<HashMap<String, String>>>,
     vfs: Arc<DashMap<PathBuf, String>>,
 }
 
@@ -300,6 +407,7 @@ impl MockExecutor {
             responses: DashMap::new(),
             command_existence: DashMap::new(),
             call_log: Arc::new(Mutex::new(Vec::new())),
+            last_env: Arc::new(Mutex::new(HashMap::new())),
             vfs,
         }
     }
@@ -323,12 +431,16 @@ impl ExecutionLayer for MockExecutor {
         &self,
         cmd: &str,
         args: &[String],
-        _env: &HashMap<String, String>,
+        env: &HashMap<String, String>,
     ) -> Result<StdOutput> {
         let full_cmd = format!("{} {}", cmd, args.join(" "));
         {
             let mut log = self.call_log.lock().await;
             log.push(full_cmd.clone());
+        }
+        {
+            let mut seen = self.last_env.lock().await;
+            *seen = env.clone();
         }
         if let Some(res) = self.responses.get(&full_cmd) {
             return res.clone();
@@ -372,13 +484,13 @@ impl CommandExecutor {
         let inner: Arc<dyn ExecutionLayer> = if dry_run {
             Arc::new(DryRunExecutor::new(vfs.clone()))
         } else {
-            Arc::new(RawExecutor)
+            Arc::new(RawExecutor::mutator())
         };
         Self {
             dry_run,
             verbose,
             inner,
-            reader: Arc::new(RawExecutor),
+            reader: Arc::new(RawExecutor::reader()),
             vfs,
             lock_map,
         }
@@ -454,8 +566,27 @@ impl CommandExecutor {
             crate::core::executor::INSIDE_LINIX.to_string(),
             std::process::id().to_string(),
         );
+        Self::suppress_pagers(&mut env);
 
         layer.execute(&final_cmd, &final_args, &env).await
+    }
+
+    /// Stop a child from piping itself into a pager.
+    ///
+    /// `systemctl status`, `git log` and friends page when they believe a human is watching.
+    /// A pager waits for a keypress that a captured child will never get, so the run hangs;
+    /// and even when it does not, the escape sequences and the `lines 1-16/16 (END)` banner
+    /// land in the text a parser is about to read. Capturing stdout removes the usual trigger,
+    /// but `$PAGER`/`$SYSTEMD_PAGER` in the user's environment forces one anyway — so the
+    /// suppression is set here, on the one env map every spawn inherits, rather than trusted
+    /// to the absence of a terminal.
+    fn suppress_pagers(env: &mut HashMap<String, String>) {
+        // systemd reads an empty value as "no pager"; git and the rest need a command that
+        // exists and exits, so `cat`.
+        env.insert("SYSTEMD_PAGER".to_string(), String::new());
+        env.insert("SYSTEMD_LESS".to_string(), String::new());
+        env.insert("PAGER".to_string(), "cat".to_string());
+        env.insert("GIT_PAGER".to_string(), "cat".to_string());
     }
 
     /// Run a *mutating* command and enforce success. `RawExecutor::execute` hands back the
@@ -500,6 +631,41 @@ impl CommandExecutor {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     }
 
+    /// The file behind `run_exclusive`'s cross-process lock, in LiNix's own data directory.
+    ///
+    /// It lived at a fixed, guessable name in the shared temp directory and was opened with
+    /// `File::create`, which truncates and follows symlinks — so anyone with write access to
+    /// that directory could pre-plant `linix_apt.lock` as a symlink and have the next
+    /// exclusive run, frequently privileged, truncate the target. `datalock.rs` had already
+    /// solved this; this is the same treatment, so there is one locking style in the tree and
+    /// not two.
+    fn open_exec_lock(lock_key: &str) -> Result<File> {
+        Self::open_lock_at(&crate::utils::safe_data_dir().join("exec-locks"), lock_key)
+    }
+
+    pub(crate) fn open_lock_at(dir: &Path, lock_key: &str) -> Result<File> {
+        std::fs::create_dir_all(dir).map_err(Error::from)?;
+        // A lock key is a backend name, and a backend name comes from a config file. Anything
+        // that is not a plain name would otherwise pick the directory the lock lands in.
+        let stem: String = lock_key
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.join(format!("{}.lock", stem)))
+            .map_err(Error::from)
+    }
+
     pub async fn run_exclusive(
         &self,
         lock_key: &str,
@@ -518,8 +684,7 @@ impl CommandExecutor {
             return self.run(cmd, args, sudo).await;
         }
 
-        let lock_path = std::env::temp_dir().join(format!("linix_{}.lock", lock_key));
-        let lock_file = File::create(lock_path).map_err(Error::from)?;
+        let lock_file = Self::open_exec_lock(lock_key)?;
         lock_file.lock_exclusive().map_err(Error::from)?;
         let result = self.run_raw(cmd, args, sudo).await;
         let _ = lock_file.unlock();
@@ -529,8 +694,8 @@ impl CommandExecutor {
 
     /// Classify a finished mutating command as success or failure. A non-zero exit is a
     /// failure EXCEPT for a few Windows managers that signal benign outcomes with non-zero
-    /// codes (see `is_benign_exit`). Surfaces captured stderr (present when output is piped,
-    /// i.e. non-interactive) so logs can explain what went wrong.
+    /// codes (see `is_benign_exit`). Surfaces the captured stderr so logs can explain what
+    /// went wrong.
     fn ensure_status(cmd: &str, output: StdOutput) -> Result<StdOutput> {
         let status_ok = output.status.success() || Self::is_benign_exit(cmd, output.status.code());
         if status_ok && !Self::output_signals_failure(cmd, &output.stdout, &output.stderr) {
@@ -565,8 +730,6 @@ impl CommandExecutor {
     /// found — notably scoop: `scoop install <missing>` prints "Couldn't find manifest for
     /// 'x'." and still returns 0, so a bogus install would be silently trusted. Scan the
     /// captured output for such hard-failure markers and treat them as a real failure.
-    /// Only consulted when output is piped (non-interactive); interactive runs surface the
-    /// message to the user directly and are rare in automation.
     fn output_signals_failure(cmd: &str, stdout: &[u8], stderr: &[u8]) -> bool {
         // Normalize `\` to `/` before taking the stem: a Windows shim path like
         // `C:\…\scoop.ps1` only splits on `\` when running ON Windows, so on Linux/CI
@@ -727,16 +890,53 @@ impl CommandExecutor {
         self.reader.check_command(cmd)
     }
 
-    pub async fn start_sudo_keepalive(&self) -> Option<tokio::task::JoinHandle<()>> {
+    /// Refresh the `sudo` timestamp for as long as the returned guard is held, so a long sync
+    /// is not interrupted halfway by a password prompt.
+    ///
+    /// The guard is the whole point: the previous version handed back a bare `JoinHandle`,
+    /// which detaches when dropped, so the loop outlived every caller and could not be
+    /// stopped by any of them.
+    pub async fn start_sudo_keepalive(&self) -> SudoKeepalive {
         if cfg!(windows) || Self::is_root() || self.dry_run {
-            return None;
+            return SudoKeepalive(None);
         }
-        Some(tokio::spawn(async move {
+        SudoKeepalive(Some(tokio::spawn(async move {
             loop {
-                let _ = StdCommand::new("sudo").arg("-v").status();
+                // `-n` so this never prompts. The foreground command owns the terminal; a
+                // background task racing it for the same password prompt is two processes
+                // reading one keyboard, and the visible one loses. An expired timestamp is
+                // the foreground command's to raise, where the user can see which command
+                // is asking.
+                let _ = Command::new("sudo")
+                    .args(["-n", "-v"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .kill_on_drop(true)
+                    .status()
+                    .await;
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             }
-        }))
+        })))
+    }
+}
+
+/// Stops the `sudo -v` loop when it goes out of scope.
+pub struct SudoKeepalive(Option<tokio::task::JoinHandle<()>>);
+
+impl SudoKeepalive {
+    /// Whether a refresher is actually running — false on Windows, as root, and under
+    /// `--dry-run`, where there is no timestamp to keep warm.
+    pub fn is_running(&self) -> bool {
+        self.0.as_ref().is_some_and(|h| !h.is_finished())
+    }
+}
+
+impl Drop for SudoKeepalive {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
     }
 }
 
@@ -784,6 +984,150 @@ mod windows_shim_tests {
     #[test]
     fn leaves_exe_alone() {
         assert!(windows_shim_wrap("winget", Path::new(r"C:\x\winget.exe"), &[]).is_none());
+    }
+}
+
+#[cfg(test)]
+mod child_process_tests {
+    use super::{ChildStdin, CommandExecutor, MockExecutor, RawExecutor};
+    use dashmap::DashMap;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn wired() -> (CommandExecutor, Arc<MockExecutor>) {
+        let vfs: Arc<DashMap<PathBuf, String>> = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let e =
+            CommandExecutor::with_layer(false, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        (e, mock)
+    }
+
+    fn tmpdir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("linix-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// A pager waits for a keypress nothing will send, and its escape sequences land in the
+    /// text a parser is about to read. `systemctl status` and `git log` both start one.
+    #[tokio::test]
+    async fn every_spawn_carries_the_pager_suppression() {
+        let (e, mock) = wired();
+        let _ = e.run("systemctl", &["status", "--", "nginx"], false).await;
+        let env = mock.last_env.lock().await.clone();
+        assert_eq!(env.get("SYSTEMD_PAGER").map(String::as_str), Some(""));
+        assert_eq!(env.get("PAGER").map(String::as_str), Some("cat"));
+        assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
+    }
+
+    /// The suppression must not be a property of the mutating path only — a read is exactly
+    /// where a pager's banner corrupts the parse.
+    #[tokio::test]
+    async fn a_read_carries_it_too() {
+        let (e, mock) = wired();
+        let _ = e.run_output("git", &["log", "--oneline"], false).await;
+        let env = mock.last_env.lock().await.clone();
+        assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
+        assert!(env.contains_key(super::INSIDE_LINIX));
+    }
+
+    /// Reads must never take the terminal: a read is answered by parsing its output, and a
+    /// read that could block on input has nobody to answer it.
+    #[test]
+    fn the_reader_layer_never_shares_stdin() {
+        assert_eq!(RawExecutor::reader().stdin, ChildStdin::Closed);
+        assert_eq!(RawExecutor::mutator().stdin, ChildStdin::Interactive);
+    }
+
+    /// The two layers a `CommandExecutor` builds must be the two policies, not one policy
+    /// twice — routing reads through the mutating layer is how the parsers were starved.
+    #[test]
+    fn a_real_executor_wires_a_reader_and_a_mutator() {
+        let e = CommandExecutor::new(false, false);
+        assert!(!e.reader.shares_stdin(), "a read took the terminal");
+        assert!(e.inner.shares_stdin(), "sudo cannot ask for a password");
+    }
+
+    /// The lock is a shared, guessable name by design — that is what makes it a lock. It must
+    /// therefore never truncate what it opens, or a symlink planted at that path destroys the
+    /// file it points at, often as root.
+    #[cfg(unix)]
+    #[test]
+    fn taking_the_exec_lock_does_not_truncate_a_planted_symlink() {
+        let root = tmpdir("execlock");
+        let canary = root.join("canary");
+        std::fs::write(&canary, "must survive").unwrap();
+        let lock_dir = root.join("exec-locks");
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        std::os::unix::fs::symlink(&canary, lock_dir.join("apt.lock")).unwrap();
+
+        drop(CommandExecutor::open_lock_at(&lock_dir, "apt").unwrap());
+        assert_eq!(std::fs::read_to_string(&canary).unwrap(), "must survive");
+    }
+
+    /// A key is a backend name from a config file; one carrying a separator would otherwise
+    /// pick the directory the lock file lands in.
+    #[test]
+    fn a_lock_key_cannot_escape_the_lock_directory() {
+        let root = tmpdir("execkey");
+        let lock_dir = root.join("exec-locks");
+        assert!(CommandExecutor::open_lock_at(&lock_dir, "../../evil").is_ok());
+        let landed: Vec<String> = std::fs::read_dir(&lock_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(landed.len(), 1, "{:?}", landed);
+        assert!(!landed[0].contains('.') || landed[0].ends_with(".lock"));
+        assert!(landed[0].ends_with("evil.lock"), "{:?}", landed);
+        assert!(!root.parent().unwrap().join("evil.lock").exists());
+    }
+
+    /// An existing lock file must survive being opened — the contended case is a second
+    /// process arriving while the first holds it, and truncating it there is how the owner
+    /// stamp beside it stopped meaning anything.
+    #[test]
+    fn opening_an_existing_lock_keeps_its_contents() {
+        let root = tmpdir("execkeep");
+        let lock_dir = root.join("exec-locks");
+        std::fs::create_dir_all(&lock_dir).unwrap();
+        std::fs::write(lock_dir.join("dnf.lock"), "held").unwrap();
+        drop(CommandExecutor::open_lock_at(&lock_dir, "dnf").unwrap());
+        assert_eq!(
+            std::fs::read_to_string(lock_dir.join("dnf.lock")).unwrap(),
+            "held"
+        );
+    }
+
+    /// The old keepalive returned a bare `JoinHandle`, which detaches on drop — so nothing a
+    /// caller did could stop the loop.
+    #[tokio::test]
+    async fn dropping_the_keepalive_guard_stops_the_loop() {
+        let e = CommandExecutor::new(false, false);
+        let keep = e.start_sudo_keepalive().await;
+        if !keep.is_running() {
+            return; // root, Windows: there is no timestamp to refresh
+        }
+        let handle = keep.0.as_ref().map(|h| h.abort_handle()).unwrap();
+        drop(keep);
+        for _ in 0..200 {
+            if handle.is_finished() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("the keepalive outlived its guard");
+    }
+
+    /// `envs()` adds to what the child inherits, so a value LiNix sets must win over the same
+    /// name in the environment it was started with.
+    #[test]
+    fn the_suppression_overrides_a_user_pager() {
+        let mut env = HashMap::new();
+        env.insert("PAGER".to_string(), "less -R".to_string());
+        CommandExecutor::suppress_pagers(&mut env);
+        assert_eq!(env.get("PAGER").map(String::as_str), Some("cat"));
     }
 }
 

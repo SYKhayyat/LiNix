@@ -1,4 +1,4 @@
-# The decision register — all 105, and every one of them ruled
+# The decision register — all 106, and every one of them ruled
 
 **One file, six features. Zero open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -18,7 +18,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **103** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **104** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -215,6 +215,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U37** | Are notification channels their own declared kind, or is an event hook the answer? | 2026-07-26 |
 | **U38** | Is secret decryption a declared-provider kind, and behind which T-series rulings? | 2026-07-26 |
 | **U39** | When a manager installs by one string and removes by another, which one is the declaration? | 2026-07-26 |
+| **U40** | Does a command LiNix runs write to your terminal, or to LiNix? | 2026-07-27 |
 
 ---
 
@@ -1051,6 +1052,54 @@ option.** A declaration is `helm:diff@url=https://github.com/databus23/helm-diff
   it. `web` is consistent the other way (the URL is the identity at install, list *and*
   remove). helm was the only backend where the two vocabularies differed and the code assumed
   they did not.
+
+---
+
+## U40
+
+**Status: ANSWERED — ruled 2026-07-27.**
+
+**In the tree today:** built in the same commit as this ruling. `RawExecutor` carries a
+`ChildStdin` policy — `Closed` for the reader layer, `Interactive` for the mutating one — and
+captures stdout and stderr on both. `run_on` sets `SYSTEMD_PAGER`/`PAGER`/`GIT_PAGER` on every
+spawn, and the systemd rows in `init_providers.toml` carry `--no-pager`.
+
+**U40 — Does a command LiNix runs write to your terminal, or to LiNix?** It had been answered
+by accident, and both ways at once: `RawExecutor::execute` asked whether *LiNix's own stdin* was
+a terminal and, if it was, handed the child all three handles. That meant the answer differed
+between a human and CI, and the human got the worse half of it — with stdout inherited,
+`output.stdout` came back empty and all 79 `run_output` call sites parsed an empty string. `linix
+list -b apt` reported **609 packages piped and 1 under a terminal**. Nothing looked broken,
+because what reached the screen was `dpkg-query`'s own output, which reads like a package list.
+The same inheritance let `systemctl` decide a human was watching and start a pager, so read-only
+`linix status` hung on a keypress and had to be killed, and printed 80, 640 and 83 lines across
+three identical runs.
+
+**RULED (owner, 2026-07-27): LiNix reads every command's output, and shows you what it read.**
+Capture is a property of the call, never of the terminal LiNix happens to have.
+
+- **stdout and stderr are always captured, on every path, on every platform.** A parser that
+  works in CI and not on your machine is worse than one that never works, because only one of
+  the two gets reported.
+- **stdin is the one stream a child may share, and only a mutation may share it.** `sudo` asks
+  for a password on the terminal it was started from; a read has nothing to ask and nobody to
+  answer it. `sudo` writes its prompt to `/dev/tty`, so the prompt still reaches the user with
+  stderr captured.
+- **A long mutation still shows its progress.** The bytes go both places: captured for the
+  caller, mirrored to stderr as they arrive when a terminal is attached. Mirrored to stderr and
+  never stdout — stdout carries LiNix's own answer, and a manager's chatter interleaved with it
+  is not parseable by whoever piped us.
+- **Pagers are suppressed at the spawn, not left to the absence of a terminal.** Capturing
+  removes the usual trigger, but `$PAGER`/`$SYSTEMD_PAGER` forces one anyway. The suppression
+  goes in the one env map every spawn inherits, and `--no-pager` on every systemctl row besides.
+- **No config key, no environment variable, no `--capture` flag.** One path. A switch here is a
+  switch that turns the bug back on.
+
+**The blind spot is the finding, not the defect.** 1,324 tests, four container lifecycles and
+three OS builds all ran with pipes on every handle, so not one of them could observe any of
+this. `tests/pty_tests.rs` runs the built binary under `script -qec` against a stub manager on
+`PATH` and asserts that what LiNix printed is what LiNix parsed; it is a named step in CI's fast
+half. Confirmed to fail against the previous behaviour before it was made to pass.
 
 ---
 

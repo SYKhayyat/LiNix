@@ -60,6 +60,15 @@ jobs:
     - name: Run tests
       run: cargo test --release --target ${{ matrix.target }}
 
+    # The blind spot every other gate in this file shares: builds, tests, clippy and all four
+    # container lifecycles run with pipes on every handle, so none of them can see what LiNix
+    # does when a human is at a terminal — which is where a defect sat that emptied the output
+    # of every command LiNix runs. `cargo test` already includes this file; it is named as its
+    # own step so a regression is legible in the job list instead of buried in 1,300 results.
+    - name: Terminal (pty) behaviour
+      run: cargo test --release --target ${{ matrix.target }} --test pty_tests
+      if: matrix.os == 'ubuntu-latest'
+
     - name: Check formatting
       run: cargo fmt -- --check
       if: matrix.os == 'ubuntu-latest'

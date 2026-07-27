@@ -143,12 +143,21 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
             );
             executor.write_atomic(&service_path, &boot_service).await?;
             executor
-                .run("systemctl", &["--user", "daemon-reload"], false)
+                .run(
+                    "systemctl",
+                    &["--no-pager", "--user", "daemon-reload"],
+                    false,
+                )
                 .await?;
             executor
                 .run(
                     "systemctl",
-                    &["--user", "enable", &format!("{}.service", unit_name)],
+                    &[
+                        "--no-pager",
+                        "--user",
+                        "enable",
+                        &format!("{}.service", unit_name),
+                    ],
                     false,
                 )
                 .await?;
@@ -163,12 +172,22 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
             );
             executor.write_atomic(&timer_path, &timer_content).await?;
             executor
-                .run("systemctl", &["--user", "daemon-reload"], false)
+                .run(
+                    "systemctl",
+                    &["--no-pager", "--user", "daemon-reload"],
+                    false,
+                )
                 .await?;
             executor
                 .run(
                     "systemctl",
-                    &["--user", "enable", "--now", &format!("{}.timer", unit_name)],
+                    &[
+                        "--no-pager",
+                        "--user",
+                        "enable",
+                        "--now",
+                        &format!("{}.timer", unit_name),
+                    ],
                     false,
                 )
                 .await?;
@@ -184,14 +203,14 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
         let _ = executor
             .run(
                 "systemctl",
-                &["--user", "disable", "--now", &timer_name],
+                &["--no-pager", "--user", "disable", "--now", &timer_name],
                 false,
             )
             .await;
         let _ = executor
             .run(
                 "systemctl",
-                &["--user", "disable", "--now", &service_name],
+                &["--no-pager", "--user", "disable", "--now", &service_name],
                 false,
             )
             .await;
@@ -217,7 +236,11 @@ impl TaskProvisioner for LinuxSystemdProvisioner {
     async fn is_task_active(&self, executor: &CommandExecutor, name: &str) -> bool {
         let unit = format!("linix-{}.timer", name);
         match executor
-            .run("systemctl", &["--user", "is-active", &unit], false)
+            .run(
+                "systemctl",
+                &["--no-pager", "--user", "is-active", &unit],
+                false,
+            )
             .await
         {
             Ok(out) => String::from_utf8_lossy(&out.stdout).trim() == "active",

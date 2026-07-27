@@ -15,15 +15,18 @@
 name = "systemd"
 os = "linux"
 detect = "systemctl"
-enable  = [["systemctl", "enable", "--", "{name}"]]
-disable = [["systemctl", "disable", "--", "{name}"]]
-start   = [["systemctl", "start", "--", "{name}"]]
-stop    = [["systemctl", "stop", "--", "{name}"]]
-restart = [["systemctl", "restart", "--", "{name}"]]
-list = ["systemctl", "list-units", "--type=service", "--state=running", "--no-legend"]
+# `--no-pager` on every row, not only the two that print a screenful. systemctl decides to page
+# from the terminal and from $SYSTEMD_PAGER, and a pager waits for a keypress that a captured
+# child never receives — `linix status` hung there, on a read-only command.
+enable  = [["systemctl", "--no-pager", "enable", "--", "{name}"]]
+disable = [["systemctl", "--no-pager", "disable", "--", "{name}"]]
+start   = [["systemctl", "--no-pager", "start", "--", "{name}"]]
+stop    = [["systemctl", "--no-pager", "stop", "--", "{name}"]]
+restart = [["systemctl", "--no-pager", "restart", "--", "{name}"]]
+list = ["systemctl", "--no-pager", "list-units", "--type=service", "--state=running", "--no-legend"]
 list_pattern = '^(\S+)'
 list_strip_suffix = ".service"
-status = ["systemctl", "status", "--", "{name}"]
+status = ["systemctl", "--no-pager", "status", "--", "{name}"]
 
 [[init]]
 name = "openrc"
