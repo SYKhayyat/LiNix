@@ -252,16 +252,17 @@ nok "installing a nonexistent package fails" lx -y install "linix-no-such-pkg-zz
 # The failure must not be left in the manifest. Every later command parses the
 # model, so one unresolvable line wedges the config until someone hand-edits it.
 ok "a failed install leaves the model parseable" lx check drift
-# Whatever the verdict above, the rest of the run needs a model it can read.
+# This asserts the PRODUCT withdrew the line. It used to `grep -v` the name out first and
+# then assert it was absent, which tested its own `grep -v` and printed PASS on every run
+# while the product did the opposite. If this goes red, LiNix stopped withdrawing an
+# unresolvable name — do not put the scrub back.
 #
-# Not `sed -i`: it works here because every image has GNU sed, and the identical line in
-# the host harness deleted nothing on macOS, where sed reads the next argument as a
-# backup suffix — silently, because `2>/dev/null || true` swallowed it. The same
-# read-filter-move as undeclare_canary works everywhere, and the result is asserted.
+# The name here is deliberately unqualified: nothing claims it, so it is `Unresolvable` and
+# withdrawing it is the behaviour both harnesses have always agreed on. The qualified form
+# (`<backend>:<typo>`, which resolves and then fails to install) is a different question and
+# is asserted in the host harness.
 IMPERATIVE="$LINIX_CONFIG_DIR/modules/imperative.txt"
 if [ -f "$IMPERATIVE" ]; then
-    grep -v -F "linix-no-such-pkg-zzz" "$IMPERATIVE" > "$IMPERATIVE.tmp" 2>/dev/null
-    mv "$IMPERATIVE.tmp" "$IMPERATIVE"
     nok "the unresolvable name is out of the manifest" \
         grep -q "linix-no-such-pkg-zzz" "$IMPERATIVE"
 fi
@@ -1038,7 +1039,7 @@ fi
 
 # Commands that cannot be executed in a container, each with the reason. Anything
 # not on this list must have been RUN — `--help` does not count.
-EXEMPT_CMDS="shell undo history bisect fleet"
+EXEMPT_CMDS="shell history bisect fleet"
 # A SMOKE run installs nothing, so no commit is ever written, and the two verbs
 # that read one have nothing to read. Named here rather than silently passing:
 # an exemption that appears only in one mode has to say which mode.
@@ -1046,7 +1047,6 @@ EXEMPT_CMDS="shell undo history bisect fleet"
 exempt_reason() {
     case "$1" in
         shell)    echo "opens an interactive subshell" ;;
-        undo)     echo "an interactive snapshot gallery" ;;
         history)  echo "an interactive manifest-history TUI" ;;
         bisect)   echo "restores system snapshots, and may need a reboot between steps" ;;
         fleet)    echo "compares machines over SSH; there are no peers here" ;;

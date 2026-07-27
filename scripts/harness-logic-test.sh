@@ -166,6 +166,29 @@ if [ -n "$BIN" ] && "$BIN" --version >/dev/null 2>&1; then
             BAD=$((BAD + 1))
         fi
     done
+    # The other half, and the half that was missing. An exemption says "this subcommand
+    # exists and cannot be driven here, for this reason" — so a name that does not exist
+    # cannot be exempt, it can only be stale. `undo` sat in both lists after the command was
+    # renamed to snapshot/rollback, and nothing looked, because the audit only ever checked
+    # the names that were *used*. An unvalidated exemption list is where coverage goes to
+    # disappear quietly: the printed "5 exempt" was wrong and read as reassurance.
+    echo "== subcommands exempted vs subcommands that exist ($BIN)"
+    for src in $SOURCES; do
+        _exempt="$(sed -n 's/^[[:space:]]*EXEMPT_CMDS="\([^"]*\)".*/\1/p' "$src" | tr ' ' '\n' \
+            | grep -E '^[a-z]' | sort -u)"
+        [ -n "$_exempt" ] || continue
+        _stale=""
+        for _v in $_exempt; do
+            printf '%s\n' "$_real" | grep -qx "$_v" || _stale="$_stale $_v"
+        done
+        TOTAL=$((TOTAL + 1))
+        if [ -z "$_stale" ]; then
+            echo "  ok    $(basename "$src") exempts only subcommands that exist"
+        else
+            echo "  BAD   $(basename "$src") exempts subcommands the binary does not have:$_stale"
+            BAD=$((BAD + 1))
+        fi
+    done
 else
     echo "== subcommands invoked vs subcommands that exist: SKIPPED (set LINIX_BIN to a built binary)"
 fi

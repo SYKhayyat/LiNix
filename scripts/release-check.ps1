@@ -4,7 +4,7 @@
 #   1. cargo clippy -D warnings   (HARD)
 #      cargo test --release        (HARD)
 #      cargo build --release       (HARD)
-#      cargo fmt --check           (informational)
+#      cargo fmt -- --check        (HARD - CI fails the build on it, so this must too)
 #   2. scripts/integration-windows.sh - real install/list/remove for every backend installable
 #      on this host (scoop + any bootstrapped ecosystem managers + winget/choco if present),
 #      full feature coverage, and the self-checking coverage audit.
@@ -63,9 +63,9 @@ function Find-Bash {
 # ------------------------------------------------------------------ 1. hermetic
 Step "1. HERMETIC GATES (cargo clippy / test / build / fmt)"
 
-Write-Host "-> cargo fmt --check"
-cargo fmt --check *> $null
-if ($LASTEXITCODE -eq 0) { Pass "cargo fmt --check (formatting clean)" } else { Info "cargo fmt --check reports diffs (non-blocking)" }
+Write-Host "-> cargo fmt -- --check"
+cargo fmt -- --check *> $null
+if ($LASTEXITCODE -eq 0) { Pass "cargo fmt -- --check (formatting clean)" } else { Fail "cargo fmt -- --check reports diffs - run ``cargo fmt``" }
 
 Write-Host "-> cargo clippy --all-targets --all-features -- -D warnings"
 cargo clippy --all-targets --all-features -- -D warnings
@@ -78,6 +78,18 @@ if ($LASTEXITCODE -eq 0) { Pass "cargo test: all tests pass" } else { Fail "carg
 Write-Host "-> cargo build --release"
 cargo build --release
 if ($LASTEXITCODE -eq 0) { Pass "release build succeeds" } else { Fail "release build FAILED" }
+
+# CI runs this on every push and this gate did not run it at all, so the one check that asks
+# whether the harnesses' own predicates work could fail in CI after a local GO.
+Write-Host "-> scripts/harness-logic-test.sh"
+$bashForPredicates = Find-Bash
+if ($null -eq $bashForPredicates) {
+    Fail "no real bash found (install Git for Windows): cannot run the harness predicates"
+} else {
+    $env:LINIX_BIN = "$RepoRoot/target/release/linix.exe"
+    & $bashForPredicates "scripts/harness-logic-test.sh"
+    if ($LASTEXITCODE -eq 0) { Pass "harness predicates" } else { Fail "harness predicates FAILED" }
+}
 
 # ------------------------------------------------------------------ 2. integration
 if ($SkipIntegration) {

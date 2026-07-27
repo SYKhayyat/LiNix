@@ -872,11 +872,10 @@ else
     PASS=$((PASS + 1)); echo "  PASS  every registered backend got a lifecycle or a plan-smoke"
 fi
 
-EXEMPT_CMDS="shell undo history bisect fleet"
+EXEMPT_CMDS="shell history bisect fleet"
 exempt_reason() {
     case "$1" in
         shell)   echo "opens an interactive subshell" ;;
-        undo)    echo "an interactive snapshot gallery" ;;
         history) echo "an interactive manifest-history TUI" ;;
         bisect)  echo "restores system snapshots, and may need a reboot between steps" ;;
         fleet)   echo "compares machines over SSH; there are no peers here" ;;
