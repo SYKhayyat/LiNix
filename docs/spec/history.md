@@ -14,6 +14,37 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-27 — the push went green, and the nightly half said why that was not enough
+
+**CI run `30228257690` is the first green `main` this repo has had**: all three build/test/clippy
+columns, plus the four fast container integrations. S33 and S34 are confirmed fixed on the
+platforms that reported them, which is the negative S33's own entry said only CI could prove.
+
+**Then the broad half ran, and found two more.** The jobs that carry the real coverage — the
+`tools` image's 18 managers, Portage, and the macOS native sweep — are `schedule`/`workflow_dispatch`
+only, so the green push had not touched them. Dispatched against the same commit (`30229794698`):
+gentoo passed, `tools` failed on one check out of 333, and `macos-native` failed on all of them.
+
+- **S36 — `tools`.** `go: hello is still on PATH after removal`, with `go: hello is gone from
+  list` passing on the line above it. Not a go bug: cabal's canary is also `hello`, cabal has no
+  uninstall verb, and its copy stays for the whole run on purpose. **This is S32 verbatim** — the
+  same vacuous PATH check, with different backends in it — and it came back because S32 was fixed
+  by renaming one canary instead of by fixing the predicate.
+- **S37 — `macos-native`, on its first ever execution.** `TO="timeout 900"`, and macOS has no
+  `timeout`; every command exited 127. **The run still printed passes**, because `nok` read 127 as
+  the refusal it wanted. A whole platform's sweep, reporting a result for checks that never ran.
+
+**The lesson both share is one the repo already wrote down and did not apply to itself: an
+assertion that cannot fail is worse than a missing one**, because it is counted. Both are now
+fixed at the mechanism — the removal check compares against the pre-install resolution rather
+than asking PATH, and 127/126/124 are hard failures in both harnesses rather than refusals.
+
+**The guard is the part that matters.** Both faults lived in two-line shell predicates, in files
+that only run nightly, so both were found a day late by whoever read the log.
+`scripts/harness-logic-test.sh` lifts those predicates out of the harnesses — lifted, not copied,
+so it cannot drift — and tests them in a second on **every push**. Against the previous revision
+it fails exactly four of its 13 cases, which are exactly the two findings.
+
 ## Session 2026-07-26 (later) — the assessment's list, worked: CI green on three platforms for the first time
 
 **The previous entry measured the gap. This one closes the top of it.** Seven commits, in the

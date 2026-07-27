@@ -63,7 +63,19 @@ record_argv() {
 # `uninstall` that hung here stopped the whole sweep for as long as anyone let it, and
 # a run that never ends reports nothing at all. 900s is longer than any real build on
 # this host and short enough that a wedged command is a named failure instead of a wait.
-TO="timeout 900"
+#
+# `timeout` is GNU coreutils: Linux ships it, macOS ships neither it nor `gtimeout`
+# unless somebody installed coreutils. Naming it unconditionally is what a whole macOS
+# run cost — every wrapped call exited 127, and 127 is indistinguishable from a refusal
+# to anything that only asks "was it non-zero". Unbounded is worse than a wedge only if
+# nobody is told, so the fallback is announced rather than assumed.
+if command -v timeout >/dev/null 2>&1; then
+    TO="timeout 900"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TO="gtimeout 900"
+else
+    TO=""
+fi
 lx() { record_argv "$@"; $TO "$LINIX" "$@"; }
 
 PASS=0; FAILC=0; SOFTC=0; FAILED_NAMES=""
@@ -77,11 +89,21 @@ ok() {
         echo "  FAIL  $desc (rc=$rc)"; sed 's/^/        | /' /tmp/itw.out | tail -6; return 1
     fi
 }
+# A command that could not run is not a refusal. 127 (no such command), 126 (not
+# executable) and 124 (killed by the bound) all exit non-zero without the program ever
+# reaching its own decision — and reading them as "correctly refused" is how a macOS run
+# where nothing executed still printed passes.
+never_ran() { [ "$1" = 127 ] || [ "$1" = 126 ] || [ "$1" = 124 ]; }
 nok() {
     desc="$1"; shift
-    if "$@" >/tmp/itw.out 2>&1; then
+    "$@" >/tmp/itw.out 2>&1; rc=$?
+    if [ "$rc" = 0 ]; then
         FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (expected non-zero, got 0)"
         echo "  FAIL  $desc (expected refusal, but it succeeded)"; return 1
+    elif never_ran "$rc"; then
+        FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc — never ran, not a refusal)"
+        echo "  FAIL  $desc (rc=$rc — the command never ran; that is not a refusal)"
+        sed 's/^/        | /' /tmp/itw.out | tail -6; return 1
     else
         PASS=$((PASS + 1)); echo "  PASS  $desc (correctly refused)"; return 0
     fi
@@ -101,13 +123,25 @@ soft() { SOFTC=$((SOFTC + 1)); echo "  soft  $1"; }
 # and keeps naming a path after the file is gone, so a removal check written with it
 # cannot fail. A fresh `sh` has an empty cache and has to look.
 on_path() { sh -c 'command -v "$1" >/dev/null 2>&1' _ "$1"; }
+# Where does NAME resolve, if anywhere. Same fresh-shell rule as on_path.
+path_of() { sh -c 'command -v "$1" 2>/dev/null' _ "$1"; }
 
 echo "=============================================================="
 echo " LiNix v7 Windows/macOS harness — backend=$BACKEND package=$PKG"
 echo " LINIX=$LINIX"
 echo "=============================================================="
 
-command -v "$LINIX" >/dev/null 2>&1 || { echo "FATAL: linix not found at '$LINIX' — set LINIX or build it."; exit 2; }
+# Runnable, not merely present — and runnable THROUGH the wrapper every check below uses.
+# `command -v` answers about the binary alone, so a missing `timeout` left every one of
+# the sweep's own invocations exiting 127 while this line reported the binary was fine.
+if ! $TO "$LINIX" --version >/dev/null 2>&1; then
+    echo "FATAL: '${TO:+$TO }$LINIX --version' did not run — nothing below would be tested."
+    command -v "$LINIX" >/dev/null 2>&1 \
+        || echo "       '$LINIX' is not on PATH: set LINIX to the built binary, or build it."
+    [ -n "$TO" ] || echo "       (no timeout wrapper in use, so the binary itself is the fault)"
+    exit 2
+fi
+[ -n "$TO" ] || soft "no \`timeout\` nor \`gtimeout\` on this host — commands run unbounded"
 
 # --- 1. Bootstrap ----------------------------------------------------------
 echo "[1] Bootstrap"
@@ -363,10 +397,27 @@ removal_leaves_binary() {
     esac
 }
 
+# assert_binary_gone <backend> <binary> <what-the-name-resolved-to-before-the-install>
+#
+# The question is "did this backend's install get undone", NOT "does this name resolve".
+# Two managers can ship a binary of the same name, and one of them may hold it on
+# purpose: cabal's canary is `hello`, cabal has no uninstall verb, so its `hello` stays
+# for the rest of the run — and go's canary is also `hello`. Asking PATH handed cabal's
+# leftover to go as a failure, on a removal that had worked.
+#
+# So the assertion is against the state before the install: whatever the install added
+# must be gone, and whatever was already there is not this backend's to answer for.
 assert_binary_gone() {
-    _be="$1"; _bin="$2"
-    if ! on_path "$_bin"; then
-        PASS=$((PASS + 1)); echo "  PASS  $_be: $_bin is off PATH"; return 0
+    _be="$1"; _bin="$2"; _was="$3"
+    _now="$(path_of "$_bin")"
+    if [ "$_now" = "$_was" ]; then
+        if [ -n "$_now" ]; then
+            PASS=$((PASS + 1))
+            echo "  PASS  $_be: $_bin is back to the pre-install $_now (not this backend's copy)"
+        else
+            PASS=$((PASS + 1)); echo "  PASS  $_be: $_bin is off PATH"
+        fi
+        return 0
     fi
     _known="$(removal_leaves_binary "$_be")"
     if [ -n "$_known" ]; then
@@ -374,8 +425,8 @@ assert_binary_gone() {
         return 0
     fi
     FAILC=$((FAILC + 1))
-    FAILED_NAMES="$FAILED_NAMES\n    - $_be: $_bin is still on PATH after removal"
-    echo "  FAIL  $_be: $_bin is still on PATH after removal"
+    FAILED_NAMES="$FAILED_NAMES\n    - $_be: $_bin is still on PATH after removal (at $_now)"
+    echo "  FAIL  $_be: $_bin is still on PATH after removal (at $_now)"
     return 1
 }
 
@@ -435,6 +486,11 @@ lifecycle() {
         return 0
     fi
 
+    # Read before the install, because the removal check below is a comparison against
+    # it: a name another manager already owns must not be scored as this one's leftover.
+    _prepath="$(path_of "$cbin")"
+    [ -n "$_prepath" ] && soft "$be: $cbin already resolves to $_prepath — the removal check compares against that, not against absence"
+
     if ! lx -y install "$be:$cpkg$copts" >/tmp/itw-life.out 2>&1; then
         soft "$be: install of $cpkg failed (ecosystem/network variance) — the checks after it did not run"
         tail -4 /tmp/itw-life.out | sed 's/^/        | /'
@@ -472,7 +528,7 @@ lifecycle() {
     ok "$be: uninstall $cpkg" lx -y uninstall "$be:$cpkg"
     [ -n "$_nolist" ] || nok "$be: $ctok is gone from list" sh -c \
         "$LINIX list --backend '$be' 2>/dev/null | grep -q '$ctok'"
-    [ -n "$cbin" ] && assert_binary_gone "$be" "$cbin"
+    [ -n "$cbin" ] && assert_binary_gone "$be" "$cbin" "$_prepath"
     undeclare_canary "$be:$cpkg"
     return 0
 }
@@ -577,6 +633,9 @@ done
 echo "[14] Command surface, executed"
 
 ok "vars resolves this machine's variables" lx vars
+# `eval` is the one output that will acquire consumers LiNix cannot see, so the thing
+# asserted is the contract: a top-level schema version.
+grep_ok "eval prints a versioned document" '"schema"' lx eval
 # `repl` (U34) reads stdin until EOF; a piped session drives the loop and exits, and runs through
 # `lx` so the coverage check counts it as really executed, not merely `--help`'d.
 if printf ':help\n:vars\n:quit\n' | lx repl >/tmp/it.out 2>&1; then
@@ -592,6 +651,23 @@ ok "config show prints the active configuration" lx config show
 ok "policy checks the desired state against [guard]" lx policy
 ok "conflicts reports cross-backend conflicts" lx conflicts
 ok "sbom emits a bill of materials" lx sbom
+# `try` rehearses in a container. Named against an image that cannot exist, so the
+# answer is a refusal on every host: with no runtime it refuses for want of one, with a
+# runtime it refuses for want of the image — and neither spends ten minutes building.
+nok "try refuses to rehearse on an image that is not there" lx try --image linix-it-no-such-image
+grep_ok "try's refusal says what it refused" "refusing to rehearse" lx try --image linix-it-no-such-image
+# `add` vendors a source's modules. A local path is the network-free case: it copies the
+# module in and reports it. The line names the package this run already manages, so
+# vendoring it declares nothing new.
+SHARE_SRC="${TMPDIR:-/tmp}/linix-it-share"
+rm -rf "$SHARE_SRC" 2>/dev/null; mkdir -p "$SHARE_SRC/modules"
+printf '%s:%s\n' "$BACKEND" "$PKG" > "$SHARE_SRC/modules/shared.txt"
+ok "add vendors a module from a local source" lx add "$SHARE_SRC"
+ok "add brought the module file in" test -f "$LINIX_CONFIG_DIR/modules/shared.txt"
+nok "add refuses a source that does not exist" lx add "${TMPDIR:-/tmp}/linix-it-no-such-source"
+# Proved, then taken back out: a module left behind changes what every section after
+# this one plans, and this section is about `add`, not about the model.
+rm -f "$LINIX_CONFIG_DIR/modules/shared.txt"
 ok "completions powershell generates a script" lx completions powershell
 ok "profile list" lx profile list
 ok "profile active" lx profile active

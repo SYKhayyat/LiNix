@@ -67,6 +67,13 @@ jobs:
     - name: Run clippy
       run: cargo clippy --all-targets --all-features -- -D warnings
 
+    # The integration harnesses decide pass/fail for every backend, and they only run
+    # nightly — so a wrong verdict inside one of them is a day late and easy to read
+    # past. Their predicates are cheap to test directly, so they are tested on every push.
+    - name: Harness predicates
+      run: bash scripts/harness-logic-test.sh
+      if: matrix.os == 'ubuntu-latest'
+
     - name: Upload binary artifact
       uses: actions/upload-artifact@v4
       with:
@@ -165,5 +172,10 @@ jobs:
     - uses: dtolnay/rust-toolchain@stable
     - name: Build
       run: cargo build --release
+    # The sweep bounds every command it runs, and macOS ships no `timeout`. It degrades
+    # to unbounded and says so, but unbounded on a hosted runner means a wedged command
+    # burns the job's whole clock — so give it the real thing.
+    - name: Install coreutils (gtimeout)
+      run: brew install coreutils
     - name: Native sweep (brew)
       run: LINIX="$PWD/target/release/linix" bash scripts/integration-windows.sh brew wget

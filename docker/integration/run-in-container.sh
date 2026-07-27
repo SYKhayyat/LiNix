@@ -108,12 +108,23 @@ answers() {
     fi
 }
 
+# A command that could not run is not a refusal. 127 (no such command), 126 (not
+# executable) and 124 (killed by `timeout`) all exit non-zero without the program ever
+# reaching its own decision. The FATAL preflight below catches the image-wide case; this
+# catches the per-check one, and it is what let a macOS sweep with no `timeout` report
+# passes for checks that never executed.
+never_ran() { [ "$1" = 127 ] || [ "$1" = 126 ] || [ "$1" = 124 ]; }
 # nok "desc" cmd...  — passes when cmd exits NON-zero (a refusal/negative path).
 nok() {
     desc="$1"; shift
-    if "$@" >/tmp/it.out 2>&1; then
+    "$@" >/tmp/it.out 2>&1; rc=$?
+    if [ "$rc" = 0 ]; then
         FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (expected non-zero, got 0)"
         echo "  FAIL  $desc (expected refusal, but it succeeded)"; return 1
+    elif never_ran "$rc"; then
+        FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc — never ran, not a refusal)"
+        echo "  FAIL  $desc (rc=$rc — the command never ran; that is not a refusal)"
+        sed 's/^/        | /' /tmp/it.out | tail -6; return 1
     else
         PASS=$((PASS + 1)); echo "  PASS  $desc (correctly refused)"; return 0
     fi
@@ -145,6 +156,8 @@ skip_smoke() { soft "$1 — SMOKE_ONLY: this run installs and removes nothing"; 
 # deleted — so a package removed in section 9 still "existed" because section 4 had
 # looked it up. A fresh `sh` has an empty cache and has to touch the filesystem.
 on_path() { sh -c 'command -v "$1" >/dev/null 2>&1' _ "$1"; }
+# Where does NAME resolve, if anywhere. Same fresh-shell rule as on_path.
+path_of() { sh -c 'command -v "$1" 2>/dev/null' _ "$1"; }
 
 echo "=============================================================="
 echo " LiNix v7 harness — backend=$BACKEND package=$PKG"
@@ -569,10 +582,28 @@ removal_leaves_binary() {
     esac
 }
 
+# assert_binary_gone <backend> <binary> <what-the-name-resolved-to-before-the-install>
+#
+# The question is "did this backend's install get undone", NOT "does this name resolve".
+# Two managers can ship a binary of the same name, and one of them may hold it on
+# purpose: cabal's canary is `hello`, cabal has no uninstall verb (remove-mode
+# `unsupported`), so its ~/.cabal/bin/hello stays for the rest of the run — and go's
+# canary binary is also `hello`. Asking PATH handed cabal's leftover to go as a failure,
+# on a removal `list` had just confirmed worked.
+#
+# So the assertion is against the state before the install: whatever the install added
+# must be gone, and whatever was already there is not this backend's to answer for.
 assert_binary_gone() {
-    _be="$1"; _bin="$2"
-    if ! on_path "$_bin"; then
-        PASS=$((PASS + 1)); echo "  PASS  $_be: $_bin is off PATH"; return 0
+    _be="$1"; _bin="$2"; _was="$3"
+    _now="$(path_of "$_bin")"
+    if [ "$_now" = "$_was" ]; then
+        if [ -n "$_now" ]; then
+            PASS=$((PASS + 1))
+            echo "  PASS  $_be: $_bin is back to the pre-install $_now (not this backend's copy)"
+        else
+            PASS=$((PASS + 1)); echo "  PASS  $_be: $_bin is off PATH"
+        fi
+        return 0
     fi
     _known="$(removal_leaves_binary "$_be")"
     if [ -n "$_known" ]; then
@@ -580,8 +611,8 @@ assert_binary_gone() {
         return 0
     fi
     FAILC=$((FAILC + 1))
-    FAILED_NAMES="$FAILED_NAMES\n    - $_be: $_bin is still on PATH after removal"
-    echo "  FAIL  $_be: $_bin is still on PATH after removal"
+    FAILED_NAMES="$FAILED_NAMES\n    - $_be: $_bin is still on PATH after removal (at $_now)"
+    echo "  FAIL  $_be: $_bin is still on PATH after removal (at $_now)"
     return 1
 }
 
@@ -634,6 +665,11 @@ lifecycle() {
     # READY set, but a manager that came up after init would not be there.
     grep -qx "$be" "$LINIX_CONFIG_DIR/priority" 2>/dev/null || echo "$be" >> "$LINIX_CONFIG_DIR/priority"
 
+    # Read before the install, because the removal check below is a comparison against
+    # it: a name another manager already owns must not be scored as this one's leftover.
+    _prepath="$(path_of "$cbin")"
+    [ -n "$_prepath" ] && soft "$be: $cbin already resolves to $_prepath — the removal check compares against that, not against absence"
+
     lx_slow -y install "$be:$cpkg$copts" >/tmp/life.out 2>&1
     lrc=$?
     if [ "$lrc" -ne 0 ]; then
@@ -676,7 +712,7 @@ lifecycle() {
     ok "$be: uninstall $cpkg" lx_slow -y uninstall "$be:$cpkg"
     [ -n "$_nolist" ] || nok "$be: $ctok is gone from list" sh -c \
         "$LINIX list --backend '$be' 2>/dev/null | grep -q '$ctok'"
-    [ -n "$cbin" ] && assert_binary_gone "$be" "$cbin"
+    [ -n "$cbin" ] && assert_binary_gone "$be" "$cbin" "$_prepath"
     # A successful uninstall already removed the line; this covers the run where it
     # reported success and did not, which is the whole point of asserting the rest.
     undeclare_canary "$be:$cpkg"
