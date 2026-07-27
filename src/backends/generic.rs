@@ -136,6 +136,15 @@ pub struct ManagerConfig {
     pub repo_add_args: Option<Vec<String>>,
     pub repo_remove_args: Option<Vec<String>>,
     pub repo_list_args: Option<Vec<String>>,
+    /// Optional: the program that runs `repo_add_args`/`repo_remove_args`, when a manager
+    /// edits its sources with a *separate* tool. apt's is `add-apt-repository` and apk's is a
+    /// line appended to a file by `sh` — neither is `apt` or `apk`, and running them as
+    /// subcommands of the manager is the same defect `list_binary` exists to prevent.
+    pub repo_binary: Option<String>,
+    /// Optional: the program that runs `repo_list_args`. Separate from `repo_binary` because a
+    /// manager can write its sources one way and read them another (apk writes with `sh` and
+    /// reads with `cat`). Falls back to `binary`, not to `repo_binary`.
+    pub repo_list_binary: Option<String>,
     pub depends_args: Option<Vec<String>>,
     /// Native syntax for pinning an exact version at install (None = no version pinning).
     pub version_pin: Option<VersionPin>,
@@ -172,6 +181,22 @@ impl GenericBackendCore {
     pub fn remove_binary(&self) -> &str {
         self.config
             .remove_binary
+            .as_deref()
+            .unwrap_or_else(|| self.binary())
+    }
+
+    /// The program that adds and removes repositories.
+    pub fn repo_binary(&self) -> &str {
+        self.config
+            .repo_binary
+            .as_deref()
+            .unwrap_or_else(|| self.binary())
+    }
+
+    /// The program that lists repositories.
+    pub fn repo_list_binary(&self) -> &str {
+        self.config
+            .repo_list_binary
             .as_deref()
             .unwrap_or_else(|| self.binary())
     }
@@ -626,6 +651,75 @@ fn reject_shell_meta(field: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// The first `{placeholder}` still standing in a template argument, if any.
+fn find_placeholder(s: &str) -> Option<String> {
+    let mut rest = s;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        if let Some(close) = after.find('}') {
+            let inner = &after[..close];
+            if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                return Some(format!("{{{}}}", inner));
+            }
+            rest = &after[close..];
+        } else {
+            return None;
+        }
+    }
+    None
+}
+
+/// Refuse an argv that still carries a template placeholder.
+///
+/// apk's removal row is `sed -i '\|{url}|d' /etc/apk/repositories`. With `{url}` never filled,
+/// sed searched for the literal text `{url}`, matched nothing, and **exited 0** — so `run()`
+/// saw success and LiNix reported a repository removed that was still there. An unfilled
+/// placeholder has to be a loud failure, or the next row with a new placeholder repeats that
+/// silently.
+fn reject_unsubstituted(backend: &str, args: &[String]) -> Result<()> {
+    for a in args {
+        if let Some(ph) = find_placeholder(a) {
+            return Err(crate::core::Error::Other(format!(
+                "the `{}` backend's repository command still contains `{}` after substitution, \
+                 so it would run against the literal text. Refusing. This is a defect in the \
+                 backend definition, not in what you asked for.",
+                backend, ph
+            )));
+        }
+    }
+    Ok(())
+}
+
+impl GenericRepoManager {
+    /// The URL of the repository the user named.
+    ///
+    /// A few managers know a repository only by its URL — `gem sources -r <url>`, apk's line in
+    /// `/etc/apk/repositories` — so their removal rows carry `{url}` while the caller has one
+    /// identifier. Ask the manager's own listing first; a manager whose listing is the URL
+    /// itself (apk prints one field per line, which `list_repos` cannot read as a pair) leaves
+    /// the identifier as the only thing that can be it.
+    async fn url_for(&self, ident: &str) -> Result<String> {
+        if let Ok(repos) = self.list_repos().await {
+            if let Some((_, url)) = repos.iter().find(|(n, _)| n == ident) {
+                return Ok(url.clone());
+            }
+            if repos.iter().any(|(_, url)| url == ident) {
+                return Ok(ident.to_string());
+            }
+        }
+        if ident.contains("://") || ident.starts_with('/') {
+            return Ok(ident.to_string());
+        }
+        Err(crate::core::Error::Other(format!(
+            "`{backend}` identifies a repository by its URL, and `{ident}` is neither a URL nor \
+             a name `{backend}` reports.\n  \
+             Run `linix repo list -b {backend}` and pass the source exactly as it appears there.",
+            backend = self.core.name,
+            ident = ident
+        )))
+    }
+}
+
 #[async_trait]
 impl RepoManager for GenericRepoManager {
     async fn add_repo(&self, name: &str, url: &str, sudo: bool) -> Result<()> {
@@ -639,12 +733,13 @@ impl RepoManager for GenericRepoManager {
         for arg in base_args {
             final_args.push(arg.replace("{name}", name).replace("{url}", url));
         }
+        reject_unsubstituted(&self.core.name, &final_args)?;
 
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
         info!("Repo: Adding {} to {}...", name, self.core.name);
         self.core
             .executor
-            .run(self.core.binary(), &arg_refs, sudo)
+            .run(self.core.repo_binary(), &arg_refs, sudo)
             .await?;
         Ok(())
     }
@@ -655,15 +750,32 @@ impl RepoManager for GenericRepoManager {
             crate::core::Error::Other("Repository removal not supported for this backend".into())
         })?;
 
+        // Resolved before anything runs: the URL comes from the manager's own listing or from
+        // the identifier, and either way it can land inside an `sh -c` string.
+        let url = if base_args.iter().any(|a| a.contains("{url}")) {
+            let resolved = self.url_for(name).await?;
+            reject_shell_meta("url", &resolved)?;
+            Some(resolved)
+        } else {
+            None
+        };
+
         let final_args: Vec<String> = base_args
             .iter()
-            .map(|a| a.replace("{name}", name))
+            .map(|a| {
+                let filled = a.replace("{name}", name);
+                match &url {
+                    Some(u) => filled.replace("{url}", u),
+                    None => filled,
+                }
+            })
             .collect();
+        reject_unsubstituted(&self.core.name, &final_args)?;
         let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
 
         self.core
             .executor
-            .run(self.core.binary(), &arg_refs, sudo)
+            .run(self.core.repo_binary(), &arg_refs, sudo)
             .await?;
         Ok(())
     }
@@ -676,7 +788,7 @@ impl RepoManager for GenericRepoManager {
         let output = self
             .core
             .executor
-            .run_output(self.core.binary(), &arg_refs, false)
+            .run_output(self.core.repo_list_binary(), &arg_refs, false)
             .await?;
 
         let mut repos = Vec::new();
@@ -748,6 +860,8 @@ mod tests {
                 repo_add_args: None,
                 repo_remove_args: None,
                 repo_list_args: None,
+                repo_binary: None,
+                repo_list_binary: None,
                 depends_args: Some(vec![
                     "depends".into(),
                     "--no-recommends".into(),
@@ -1058,6 +1172,174 @@ mod tests {
             Err(crate::core::Error::Unsupported(name)) => assert_eq!(name, "apt"),
             other => panic!("expected Unsupported, got {:?}", other),
         }
+    }
+
+    fn repo_mgr(
+        name: &str,
+        mock: Arc<MockExecutor>,
+        vfs: Arc<DashMap<std::path::PathBuf, String>>,
+        edit: impl FnOnce(&mut ManagerConfig),
+    ) -> GenericRepoManager {
+        let mut core = apt_like_core(mock, vfs);
+        core.name = name.to_string();
+        core.config.name = name.to_string();
+        edit(&mut core.config);
+        GenericRepoManager {
+            core: Arc::new(core),
+        }
+    }
+
+    fn apk_repo(
+        mock: Arc<MockExecutor>,
+        vfs: Arc<DashMap<std::path::PathBuf, String>>,
+    ) -> GenericRepoManager {
+        repo_mgr("apk", mock, vfs, |c| {
+            c.repo_add_args = Some(vec![
+                "-c".into(),
+                "echo '{url}' >> /etc/apk/repositories".into(),
+            ]);
+            c.repo_remove_args = Some(vec![
+                "-c".into(),
+                "sed -i '\\|{url}|d' /etc/apk/repositories".into(),
+            ]);
+            c.repo_list_args = Some(vec!["/etc/apk/repositories".into()]);
+            c.repo_binary = Some("sh".into());
+            c.repo_list_binary = Some("cat".into());
+        })
+    }
+
+    /// The finding: `{url}` was never substituted on the removal path, so `sed` searched for
+    /// the literal text `{url}`, matched nothing, and **exited 0** — LiNix reported a
+    /// repository removed that was still in the file.
+    #[tokio::test]
+    async fn apk_repo_removal_carries_the_real_url_and_no_placeholder() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let mgr = apk_repo(mock.clone(), vfs);
+        mgr.remove_repo("https://dl-cdn.alpinelinux.org/alpine/edge/testing", false)
+            .await
+            .expect("a URL is a repository apk can be told to forget");
+        let calls = mock.get_calls().await;
+        assert!(
+            calls.iter().any(|c| c.contains("dl-cdn.alpinelinux.org")),
+            "{:?}",
+            calls
+        );
+        assert!(
+            !calls.iter().any(|c| c.contains("{url}")),
+            "the placeholder reached the machine: {:?}",
+            calls
+        );
+    }
+
+    /// A removal LiNix cannot address must refuse, not run a command that matches nothing.
+    #[tokio::test]
+    async fn a_repo_named_by_something_that_is_not_a_url_is_refused() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let mgr = apk_repo(mock.clone(), vfs);
+        let err = mgr
+            .remove_repo("testing", false)
+            .await
+            .expect_err("apk knows no repository called `testing`")
+            .to_string();
+        assert!(err.contains("testing"), "{}", err);
+        assert!(err.contains("repo list"), "{}", err);
+        assert!(
+            !mock
+                .get_calls()
+                .await
+                .iter()
+                .any(|c| c.contains("sed") || c.contains("echo")),
+            "nothing may run when the repository cannot be identified"
+        );
+    }
+
+    /// The other `{url}` template: gem removes by source URL, and a name the listing knows
+    /// resolves to one.
+    #[tokio::test]
+    async fn a_listed_name_resolves_to_its_url() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let mut listed: std::process::Output = DryRunOutput::new().into();
+        listed.stdout = b"internal https://gems.example.invalid/\n".to_vec();
+        mock.set_response("gem sources", Ok(listed));
+        let mgr = repo_mgr("gem", mock.clone(), vfs, |c| {
+            c.repo_remove_args = Some(vec!["sources".into(), "-r".into(), "{url}".into()]);
+            c.repo_list_args = Some(vec!["sources".into()]);
+        });
+        mgr.remove_repo("internal", false).await.unwrap();
+        let calls = mock.get_calls().await;
+        assert!(
+            calls
+                .iter()
+                .any(|c| c == "gem sources -r https://gems.example.invalid/"),
+            "{:?}",
+            calls
+        );
+    }
+
+    /// The part that makes this a fixed *class* rather than a fixed instance: a template
+    /// carrying a placeholder nothing fills is refused before it runs, whatever the
+    /// placeholder is.
+    #[tokio::test]
+    async fn a_template_with_an_unfillable_placeholder_is_refused() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let mgr = repo_mgr("weird", mock.clone(), vfs, |c| {
+            c.repo_remove_args = Some(vec!["drop".into(), "{name}".into(), "{channel}".into()]);
+        });
+        let err = mgr
+            .remove_repo("internal", false)
+            .await
+            .expect_err("an unfilled placeholder is not a repository name")
+            .to_string();
+        assert!(err.contains("{channel}"), "{}", err);
+        assert!(
+            mock.get_calls().await.is_empty(),
+            "the template ran with a placeholder in it"
+        );
+    }
+
+    /// `add_repo` substitutes both keys and always did — asserted so the guard cannot break
+    /// the path that was working.
+    #[tokio::test]
+    async fn add_repo_still_substitutes_name_and_url() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let mgr = repo_mgr("winget", mock.clone(), vfs, |c| {
+            c.repo_add_args = Some(vec![
+                "source".into(),
+                "add".into(),
+                "--name".into(),
+                "{name}".into(),
+                "--arg".into(),
+                "{url}".into(),
+            ]);
+        });
+        mgr.add_repo("internal", "https://feed.example.invalid/", false)
+            .await
+            .unwrap();
+        assert_eq!(
+            mock.get_calls().await,
+            vec!["winget source add --name internal --arg https://feed.example.invalid/"]
+        );
+    }
+
+    #[test]
+    fn a_placeholder_is_recognised_wherever_it_sits_in_the_argument() {
+        assert_eq!(find_placeholder("{url}").as_deref(), Some("{url}"));
+        assert_eq!(
+            find_placeholder("sed -i '\\|{url}|d' /etc/apk/repositories").as_deref(),
+            Some("{url}")
+        );
+        assert_eq!(find_placeholder("--name").as_deref(), None);
+        // A brace that is not a placeholder must not become a refusal: shell brace expansion
+        // and printf formats both use them.
+        assert_eq!(find_placeholder("printf '%s\\n'").as_deref(), None);
+        assert_eq!(find_placeholder("{NAME}").as_deref(), None);
+        assert_eq!(find_placeholder("{}").as_deref(), None);
+        assert_eq!(find_placeholder("a{b").as_deref(), None);
     }
 
     #[test]

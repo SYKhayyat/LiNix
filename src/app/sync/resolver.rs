@@ -1205,6 +1205,8 @@ mod tests {
                 repo_remove_args: None,
                 depends_args: None,
                 repo_list_args: None,
+                repo_binary: None,
+                repo_list_binary: None,
                 version_pin: None,
                 needs_root: false,
                 is_exclusive: false,

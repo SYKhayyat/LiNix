@@ -233,18 +233,14 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 args: vec!["autoremove".into(), "--dry-run".into()],
                 removes_line_prefix: "Remv ".into(),
             }),
-            repo_add_args: Some(vec![
-                "add-apt-repository".into(),
-                "-y".into(),
-                "{url}".into(),
-            ]),
-            repo_remove_args: Some(vec![
-                "add-apt-repository".into(),
-                "--remove".into(),
-                "-y".into(),
-                "{name}".into(),
-            ]),
+            repo_add_args: Some(vec!["-y".into(), "{url}".into()]),
+            repo_remove_args: Some(vec!["--remove".into(), "-y".into(), "{name}".into()]),
             repo_list_args: None,
+            // `add-apt-repository` is its own program. Left as the first *argument* it ran as
+            // `apt add-apt-repository -y <url>`, which apt refuses — so repo add and remove
+            // could never have worked on apt at all.
+            repo_binary: Some("add-apt-repository".into()),
+            repo_list_binary: None,
             // No transitive dependency expansion for apt. apt resolves and installs a
             // package's full dependency closure itself at `apt-get install` time, so LiNix
             // re-deriving it is redundant. Worse, the planner's expansion is a recursive
@@ -321,6 +317,8 @@ fn register_aur_helper(
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: false,
             is_exclusive: true,
@@ -376,16 +374,19 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             update_args: Some(vec!["update".into()]),
             orphan_dry_run: None,
             repo_add_args: Some(vec![
-                "sh".into(),
                 "-c".into(),
                 "echo '{url}' >> /etc/apk/repositories".into(),
             ]),
             repo_remove_args: Some(vec![
-                "sh".into(),
                 "-c".into(),
                 "sed -i '\\|{url}|d' /etc/apk/repositories".into(),
             ]),
-            repo_list_args: Some(vec!["cat".into(), "/etc/apk/repositories".into()]),
+            repo_list_args: Some(vec!["/etc/apk/repositories".into()]),
+            // apk has no repo verb at all: its sources are a plain file. The shell writes
+            // it and `cat` reads it — as arguments they ran as `apk sh -c …` and `apk cat
+            // …`, which apk refuses.
+            repo_binary: Some("sh".into()),
+            repo_list_binary: Some("cat".into()),
             // No transitive dependency expansion for apk. `apk info -R <pkg>` emits a
             // header line ("<pkg>-<ver>-<rev> depends on:") plus virtual provider tokens
             // (`so:libc.musl…`, `pc:…`, `cmd:…`) — none of which are installable package
@@ -454,6 +455,8 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_add_args: Some(vec!["addrepo".into(), "{url}".into(), "{name}".into()]),
             repo_remove_args: Some(vec!["removerepo".into(), "{name}".into()]),
             repo_list_args: Some(vec!["repos".into()]),
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: Some(vec!["info".into(), "--requires".into(), "{name}".into()]),
             needs_root: true,
             is_exclusive: true,
@@ -524,6 +527,8 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 "{name}".into(),
             ]),
             repo_list_args: Some(vec!["source".into(), "list".into()]),
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
@@ -579,6 +584,8 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             ]),
             repo_remove_args: Some(vec!["bucket".into(), "rm".into(), "{name}".into()]),
             repo_list_args: Some(vec!["bucket".into(), "list".into()]),
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
@@ -646,6 +653,8 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
                 "{name}".into(),
             ]),
             repo_list_args: Some(vec!["source".into(), "list".into()]),
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
@@ -697,6 +706,8 @@ fn register_mas(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
@@ -750,6 +761,8 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
@@ -799,6 +812,8 @@ fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_add_args: Some(vec!["sources".into(), "-a".into(), "{url}".into()]),
             repo_remove_args: Some(vec!["sources".into(), "-r".into(), "{url}".into()]),
             repo_list_args: Some(vec!["sources".into()]),
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
@@ -849,6 +864,8 @@ fn register_bun(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
@@ -905,6 +922,8 @@ fn register_macports(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
@@ -957,6 +976,8 @@ fn register_pkgin(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
@@ -1016,6 +1037,8 @@ fn register_pkg_freebsd(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
@@ -1076,6 +1099,8 @@ fn register_pkg_add_openbsd(reg: &mut BackendRegistry, executor: &CommandExecuto
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: true,
             is_exclusive: true,
@@ -1136,6 +1161,8 @@ fn register_dotnet(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             needs_root: false,
             is_exclusive: false,
@@ -1193,6 +1220,8 @@ fn base_config(name: &str) -> ManagerConfig {
         repo_add_args: None,
         repo_remove_args: None,
         repo_list_args: None,
+        repo_binary: None,
+        repo_list_binary: None,
         depends_args: None,
         version_pin: None,
         needs_root: false,
@@ -2066,6 +2095,77 @@ mod tests {
                     "{}: no call contained `{}`\n  calls: {:?}",
                     name,
                     want,
+                    calls
+                );
+            }
+        }
+    }
+
+    /// The leading word of a repository command is a program, and for two backends it was a
+    /// subcommand of a manager that has no such subcommand — `apt add-apt-repository …` and
+    /// `apk sh -c …`. Both fail on any real host, so `repo add`/`repo remove` had never worked
+    /// on apt or apk. This is `every_os_native_backend_sends_the_argv_its_manager_expects` for
+    /// the repository surface, and it exists because that test covered install and remove only.
+    #[tokio::test]
+    async fn every_repo_row_runs_the_program_that_edits_that_managers_sources() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+
+        type Registrar = fn(&mut BackendRegistry, &CommandExecutor);
+        // backend, registrar, the program `repo add` must run, the program `repo list` must run.
+        let cases: &[(&str, Registrar, &str, Option<&str>)] = &[
+            ("apt", register_apt, "add-apt-repository", None),
+            ("apk", register_apk, "sh", Some("cat")),
+            ("zypper", register_zypper, "zypper", None),
+            ("winget", register_winget, "winget", Some("winget")),
+            ("scoop", register_scoop, "scoop", Some("scoop")),
+            ("choco", register_choco, "choco", Some("choco")),
+            ("gem", register_gem, "gem", Some("gem")),
+        ];
+
+        for (name, register, want_write, want_read) in cases {
+            let vfs = Arc::new(DashMap::new());
+            let mock = Arc::new(MockExecutor::new(vfs.clone()));
+            let exec = CommandExecutor::with_layer(
+                true,
+                false,
+                mock.clone(),
+                vfs,
+                Arc::new(DashMap::new()),
+            );
+            let mut reg = BackendRegistry::new();
+            register(&mut reg, &exec);
+            let b = reg
+                .get(name)
+                .unwrap_or_else(|| panic!("{} did not register", name));
+            let mgr = b
+                .as_repo_manager()
+                .unwrap_or_else(|| panic!("{} manages no repositories", name));
+
+            let _ = mgr
+                .add_repo("linixtest", "https://example.invalid/repo", false)
+                .await;
+            if want_read.is_some() {
+                let _ = mgr.list_repos().await;
+            }
+            let calls = mock.get_calls().await;
+            assert!(
+                calls
+                    .iter()
+                    .any(|c| c.split_whitespace().next() == Some(want_write)),
+                "{}: repo add ran none of the right program `{}`\n  calls: {:?}",
+                name,
+                want_write,
+                calls
+            );
+            if let Some(read) = want_read {
+                assert!(
+                    calls
+                        .iter()
+                        .any(|c| c.split_whitespace().next() == Some(read)),
+                    "{}: repo list ran none of the right program `{}`\n  calls: {:?}",
+                    name,
+                    read,
                     calls
                 );
             }

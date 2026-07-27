@@ -333,6 +333,11 @@ pub struct CustomBackendDef {
     pub repo_add_args: Option<Vec<String>>,
     pub repo_remove_args: Option<Vec<String>>,
     pub repo_list_args: Option<Vec<String>>,
+    /// Binary for `repo_add_args`/`repo_remove_args`, when sources are edited by a separate
+    /// tool (apt's is `add-apt-repository`; apk's is `sh`).
+    pub repo_binary: Option<String>,
+    /// Binary for `repo_list_args`, when sources are read by a different program again.
+    pub repo_list_binary: Option<String>,
     /// Querying a package's dependencies (reverse-dependency reports, `why`).
     pub depends_args: Option<Vec<String>>,
     /// A dry run of the manager's own orphan verb, so `sync` can remove what it *would*
@@ -612,6 +617,8 @@ fn build_capabilities(def: CustomBackendDef, exec: &CommandExecutor) -> BackendC
         repo_add_args: def.repo_add_args,
         repo_remove_args: def.repo_remove_args,
         repo_list_args: def.repo_list_args,
+        repo_binary: def.repo_binary,
+        repo_list_binary: def.repo_list_binary,
         depends_args: def.depends_args,
         version_pin: def.version_pin.map(Into::into),
         needs_root: def.needs_root,
@@ -815,6 +822,8 @@ mod tests {
             repo_add_args: Some(vec!["repo".into(), "add".into()]),
             repo_remove_args: Some(vec!["repo".into(), "rm".into()]),
             repo_list_args: Some(vec!["repo".into(), "list".into()]),
+            repo_binary: None,
+            repo_list_binary: None,
             enumerate_args: Some(vec!["list".into(), "--all".into()]),
             depends_args: Some(vec!["deps".into()]),
             manual: Some(ManualListingDef::AllInstalled),

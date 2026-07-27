@@ -407,6 +407,8 @@ mod tests {
             repo_add_args: None,
             repo_remove_args: None,
             repo_list_args: None,
+            repo_binary: None,
+            repo_list_binary: None,
             depends_args: None,
             version_pin: None,
             needs_root: false,
