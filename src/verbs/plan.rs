@@ -472,13 +472,13 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     // command that approves it could never resolve far enough to reach it (U33).
     let generators = approve_generate_commands(app)?;
     if generators > 0 {
-        info!(
+        println!(
             "Lock: approved {} generate command(s) at their current hash.",
             generators
         );
     }
     let count = build_and_write_locks(app).await?;
-    info!(
+    println!(
         "Lock: pinned {} package version(s) to {}",
         count,
         app.config
@@ -492,7 +492,7 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     // everything, including your own scripts" — one rule, no exceptions.
     let hooks = app.hooks.approve_all_hooks()?;
     if hooks > 0 {
-        info!(
+        println!(
             "Lock: approved {} hook(s) at their current script hash ({}).",
             hooks,
             linix::core::hook_lock::HookLedger::path_in(&app.config.config_root().join("locks"))
@@ -505,7 +505,7 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     let events = linix::app::events::EventHooks::load(&app.config);
     let approved_events = events.approve_all()?;
     if approved_events > 0 {
-        info!(
+        println!(
             "Lock: approved {} event hook(s) — {}.",
             approved_events,
             events
@@ -520,7 +520,7 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     // here is the one deliberate act that lets it run — a changed provider stops resolution,
     // which is `status` and `plan`, not just `sync`.
     if let Some(file) = approve_vars_provider(app)? {
-        info!(
+        println!(
             "Lock: approved the vars provider `{}` at its current hash.",
             file
         );
@@ -528,13 +528,13 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     // And every `adapters/` file (7a/U10). They travel with the repo, and a definition is
     // argv LiNix will run, so each is approved here or it does not load.
     for name in approve_adapters(app)? {
-        info!("Lock: approved `adapters/{}` at its current hash.", name);
+        println!("Lock: approved `adapters/{}` at its current hash.", name);
     }
     // And every declared `exec:` script (XIII.3). II.12 admits no exceptions: a script the
     // configuration runs is approved by this command or it does not run.
     let execs = approve_exec_scripts(app).await?;
     if execs > 0 {
-        info!(
+        println!(
             "Lock: approved {} exec script(s) at their current hash.",
             execs
         );
@@ -543,7 +543,7 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     // so it is on the same trust model — approved here or the check counts as failed.
     let health = approve_health_checks(app).await?;
     if health > 0 {
-        info!(
+        println!(
             "Lock: approved {} health-check command(s) at their current hash.",
             health
         );
@@ -783,11 +783,11 @@ pub(crate) async fn handle_unlock(app: &App, names: &[String], list: bool) -> Re
 
     if list || (names.is_empty() && lock.is_empty()) {
         if lock.is_empty() {
-            info!("Nothing is frozen on this host.");
+            println!("Nothing is frozen on this host.");
             return Ok(());
         }
         for (name, backend) in lock.entries() {
-            info!("{} -> {}", name, backend);
+            println!("{} -> {}", name, backend);
         }
         return Ok(());
     }
@@ -795,14 +795,14 @@ pub(crate) async fn handle_unlock(app: &App, names: &[String], list: bool) -> Re
     let changed = if names.is_empty() {
         let n = lock.entries().count();
         lock.clear();
-        info!("Unlocked {} name(s). The next sync asks again.", n);
+        println!("Unlocked {} name(s). The next sync asks again.", n);
         true
     } else {
         let mut any = false;
         for name in names {
             if lock.forget(name) {
                 any = true;
-                info!("Unlocked `{}`. The next sync asks again.", name);
+                println!("Unlocked `{}`. The next sync asks again.", name);
             } else {
                 // Not an error: a name with a manager written on its line was never frozen,
                 // and saying so is more use than a failure the caller has to interpret.
@@ -817,7 +817,7 @@ pub(crate) async fn handle_unlock(app: &App, names: &[String], list: bool) -> Re
 
     if changed {
         lock.save(&path)?;
-        info!(
+        println!(
             "Run `linix sync` to re-resolve. A name that moves manager is reinstalled from \
              the new one and removed from the old."
         );

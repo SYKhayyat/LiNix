@@ -40,7 +40,10 @@ pub enum Error {
     /// exit — the backend's [`ExitPolicy`](crate::core::ExitPolicy) for a spawned manager,
     /// [`Retryability::Unknown`] for everyone else — so the retry loop never has to read the
     /// message back to decide what to do.
-    #[error("Command execution failed: {message}")]
+    /// The message says which command and how it failed, so it is printed as itself. The old
+    /// "Command execution failed: " prefix produced "Command execution failed: `apt` failed
+    /// (exit 100): …", which says it twice and pushes the manager's own words off the line.
+    #[error("{message}")]
     CommandFailed {
         message: String,
         retry: Retryability,

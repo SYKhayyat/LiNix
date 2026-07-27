@@ -1343,3 +1343,74 @@ between "no result" and "could not answer" (V.7c) — written down twice now, in
 is the argument for reading V.7c before adding the next boolean about a manager's reply.
 
 ---
+
+**V.86 — Why the command surface was not consolidated, and why one command was renamed (U42).**
+*(Raised by the production-readiness review, 2026-07-27; measured, ruled and built the same day.)*
+
+The review counted 45 top-level commands and named four overlapping clusters. The count was 62
+and **ten of the thirteen commands it named do not exist** — `remove`, `prune`, `orphans`,
+`clean`, `unmanaged`, `status`, `doctor`, `migrate`, `clone`, `generation`. Both of its headline
+examples were about commands that are not in the program. This is S24's lesson wearing different
+clothes: *an audit reads what is written; only running it reads what is there.* The cluster list
+was assembled by reading, and `linix --help` would have taken ten seconds.
+
+**So the first rule here is about rulings, not commands: a decision to remove a feature is
+checked against the running program before it is made.** A consolidation argued from a wrong
+inventory removes real capabilities to fix an overlap that was never there.
+
+The removal verbs are not synonyms, and the proof is that no two of them can be swapped:
+`uninstall` takes a package away; `remove-orphans` takes away what the *manager* considers
+orphaned; `purge-unmanaged` takes away everything LiNix does not manage; `unmanage` takes away
+nothing and forgets one package; `reset` takes away nothing and forgets all of them;
+`clean-cache` takes away archives and no packages at all. Two of those six delete software, two
+delete records, one deletes downloads. A count is not a smell.
+
+**What was real was a name.** Going back has two mechanisms — the filesystem, and the manifest
+history — and II.13 already says so in one line: *"Git is your intent. Snapshots are your
+machine."* The command surface did not say it. `undo` was the snapshot gallery; `history` and
+`rollback` are the manifest history. The most natural word in the program pointed at the less
+likely of the two meanings, so someone wanting to undo their last `sync` reached for `undo` and
+got a filesystem restore. **A verb inherits the vocabulary of the mechanism it drives** —
+`snapshot restore` sits with `snapshot list` and `snapshot prune`, and says which of the two it
+is before it is run rather than after.
+
+**`undo` is retired, not reassigned.** Giving a word that already meant the wrong thing a second
+meaning leaves every existing mention of it ambiguous, including the ones in a user's shell
+history. There is no legacy here, so the name goes.
+
+---
+
+**V.87 — Why an ordinary run says nothing about itself (U43).** *(Raised by the
+production-readiness review, 2026-07-27; measured, ruled and built the same day.)*
+
+The default log level was `info`, and 256 `info!`/`warn!` sites sat above it. What that produced
+on every ordinary run was LiNix narrating its own startup — `No state file found at …`, printed
+*every* time and not just the first, because a read-only command never writes the registry it
+has just reported missing. The user asked what is installed and was told, first, about a file
+they have never heard of.
+
+**A program's output is its answer. Everything else is asked for.** That is the rule, and the
+default follows from it rather than from a preference about verbosity.
+
+**The half that had to land first is the half that makes the rule safe.** Some `info!` lines
+were not narration — they were the whole answer. `sync` on an up-to-date machine printed
+`already up to date` at `info!` with **nothing on stdout**; `lock` and `unlock` reported
+everything they did the same way. Dropping the default level without moving those would have
+made a no-op sync completely silent, which is worse than noise: noise is ignorable, and silence
+is indistinguishable from a crash. So the ruling is two rules and the order between them
+matters — **a command's answer goes to stdout; only narration goes to the log** — and twenty-three
+lines moved before the default changed.
+
+**The flag that was supposed to cover this did not work, and the reason is the general one.**
+`--verbose` promised debug-level logging and delivered none: the subscriber was built at
+`main.rs:41`, clap did not parse until `:81`, and `cli.verbose` was read into the executor and
+never into the filter. It had been that way long enough for the help text to be quoted as though
+it were true. **A flag whose effect is set up before its value is read is a flag that does
+nothing, and nothing about it looks wrong** — no warning, no error, and a help string that
+promises the behaviour. The level is now read from argv directly, which is also what lets it be
+correct before the shim hijack runs.
+
+**`-q` beats `-v`.** A run that asks for both meant the quiet half; nobody types `--quiet` by
+accident.
+
+---

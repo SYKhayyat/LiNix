@@ -8,7 +8,7 @@ use crate::app::shell::EphemeralShell;
 use crate::app::shim_manager::ShimManager;
 use crate::app::sync::resolver::StateResolver;
 use crate::app::sync::SyncEngine;
-use crate::app::undo::UndoManager;
+use crate::app::snapshot_restore::SnapshotRestore;
 use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::grammar::Origin;
 use crate::config::Config;
@@ -151,8 +151,8 @@ impl App {
         )
     }
 
-    pub fn undo_manager(&self) -> UndoManager {
-        UndoManager::new(self.snapshot_manager.clone(), self.state.clone())
+    pub fn snapshot_restore(&self) -> SnapshotRestore {
+        SnapshotRestore::new(self.snapshot_manager.clone(), self.state.clone())
     }
 
     pub fn runner(&self) -> Runner {

@@ -842,6 +842,8 @@ else, ever.**
 | `export FORMAT` | Brewfile / requirements.txt / package.json |
 | `activate NAME… [-a]` | write `active` — the list, or `-a` to add to it (II.6), sync |
 | `deactivate NAME…` | take away from `active` (II.6), sync |
+| `snapshot restore` | pick a filesystem snapshot and go back to it (U42) — **the machine half of going back.** Named for its mechanism, not `undo`, because the other half is the manifest history |
+| `history`, `rollback REF` | browse the manifest history, and go to a commit in it (II.13) — **the intent half.** A TUI and a CLI over one mechanism, which is an interface pair and not two vocabularies |
 | `upgrade`, `list`, `profile`, `service`, `repo`, `hold` | as today, all reduced to file edits |
 
 **A user may name a verb (U35).** A `[verbs]` table maps a name to a *sequence* of built-in
@@ -858,6 +860,33 @@ ways to ask *how is this machine doing*, each with its own output shape, and the
 one do I run" was to run several. They are sections of `check` now. **The dividing line the whole
 collapse rests on is `check` looks, `heal` acts** — which is why `heal` survived the collapse and
 `doctor --fix` did not: a command that repairs is not a status command with a flag.
+
+**A verb inherits the vocabulary of its mechanism (U42, V.86).** II.13 says going back has two
+mechanisms — *"Git is your intent. Snapshots are your machine"* — and the command surface says
+which one it is driving before it runs, not after. That is why the snapshot gallery is
+`snapshot restore` and not `undo`: `undo` is the most natural word in the program and it pointed
+at the less likely of the two meanings. **`undo` is retired rather than reassigned**, because a
+word that already meant the wrong thing does not improve by meaning a second one.
+
+**The command count is not the complaint, and a consolidation is checked against the running
+program before it is made.** `uninstall`, `remove-orphans`, `purge-unmanaged`, `unmanage`,
+`reset` and `clean-cache` read like a cluster of synonyms and are not: two of them delete
+software, two delete records, one deletes downloads, and no two can be swapped. II.17's list is
+the only approved deletion; anything beyond it is a question, and a question answered from a
+command list that was never run is how a real capability gets removed to fix an overlap that was
+not there.
+
+**What a run says about itself (U43, V.87).** **A command's answer goes to stdout. Only narration
+goes to the log, and the log is off by default** — `warn` and above. `-v` adds the narration,
+`-vv` adds debug, `-q` leaves only errors, and `-q` beats `-v` when both are given. `RUST_LOG`
+outranks all of it.
+
+The two halves are one rule and the order between them is load-bearing: **a result printed at
+`info!` is a result nobody sees once the default drops.** `sync` on an up-to-date machine, and
+everything `lock` and `unlock` report, were on the log channel with nothing on stdout — silence
+there is worse than noise, because noise is ignorable and silence looks like a crash. **The level
+is read from argv, never from the parsed CLI**: it must be live before the shim hijack, and a
+filter configured before its flag is parsed is a flag that silently does nothing.
 
 **`shell` must be honest about being outside the model:** it writes no module, and **stops
 recording transient packages in the registry** — which is what lets a session's leftovers
@@ -1334,7 +1363,7 @@ So **a provider that cannot perform a live restore must refuse the restore**, an
 the pre-change notice must say which kind of snapshot this machine takes. **No command prints
 "rolled back" on the strength of an exit code** — the sentence is a claim about the machine, and
 it is the one sentence a user cannot check for themselves at the moment they read it. There is
-**one restore implementation**, not one in the provider and another in `undo`.
+**one restore implementation**, not one in the provider and another in `snapshot restore`.
 
 **No commit algebra.** Git covers what's real:
 

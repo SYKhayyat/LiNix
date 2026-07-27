@@ -1,4 +1,4 @@
-# The decision register — all 107, and every one of them ruled
+# The decision register — all 109, and every one of them ruled
 
 **One file, six features. Zero open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -217,6 +217,8 @@ there). It is when the question stopped being open, not when the code landed.
 | **U39** | When a manager installs by one string and removes by another, which one is the declaration? | 2026-07-26 |
 | **U40** | Does a command LiNix runs write to your terminal, or to LiNix? | 2026-07-27 |
 | **U41** | What does a rollback do when the guard refuses one of its compensating removals? | 2026-07-27 |
+| **U42** | Do the overlapping command clusters get consolidated? | 2026-07-27 |
+| **U43** | How much does an ordinary run say about itself? | 2026-07-27 |
 
 ---
 
@@ -1140,6 +1142,81 @@ the transaction **partly applied**, and what LiNix should then do is a product d
 - **A rolled-back removal comes back pinned.** The reinstall carried `options: HashMap::new()`,
   so a package restored after a failed removal came back at whatever is newest — the declared
   pin silently gone.
+
+---
+
+## U42
+
+**Status: ANSWERED — ruled 2026-07-27.**
+
+**In the tree today:** built in the same commit as this ruling. `undo` is gone as a top-level
+command; the gallery it opened is `linix snapshot restore`, beside `snapshot list` and
+`snapshot prune`.
+
+**U42 — Do the overlapping command clusters get consolidated?** A review counted 45 top-level
+commands and named four clusters that overlap "without a clear rule for choosing", the headline
+being that `status` and `prune` are two views of one drift computation and that
+`undo`/`rollback`/`generation` are three vocabularies for restoring prior state.
+
+**Measured against `linix --help` before the ruling, because the description was wrong.** The
+surface is **62 entries, not 45**, and **ten of the thirteen commands named do not exist**:
+`remove`, `prune`, `orphans`, `clean`, `unmanaged`, `status`, `doctor`, `migrate`, `clone`,
+`generation`. Both headline examples are about commands that are not in the program. An audit
+reads what is written; only running it reads what is there — and this one was never run.
+
+**RULED (owner, 2026-07-27): no consolidation. One rename, because the fault was a name.**
+
+- **The removal cluster stays whole. It is not a cluster of synonyms** — each verb does
+  something no other one does: `uninstall` a package; `remove-orphans` what the manager itself
+  calls an orphan; `purge-unmanaged` everything LiNix does not manage; `unmanage` forget a
+  package but keep it installed; `reset` forget everything but keep everything installed;
+  `clean-cache` archives and no packages. Collapsing any two removes a capability, and II.17's
+  deletion list is the only approved removal.
+- **The one real overlap was a name, not a redundancy.** Going back has two mechanisms —
+  filesystem snapshots, and the git manifest history — and `undo` was the *snapshot* one while
+  `history` (a TUI) and `rollback <ref>` (a CLI) are two interfaces onto the *manifest* one.
+  A user wanting to undo their last sync reached for `undo` and got the wrong mechanism.
+- **The gallery is now `linix snapshot restore`.** Its name says which of the two it is, and it
+  sits with the other snapshot verbs. `undo` is not reassigned to anything: a word that meant
+  the wrong thing does not improve by meaning a second thing.
+- **`history` and `rollback` stay as they are.** A TUI and a flag-driven command over one
+  mechanism are an interface pair, not two vocabularies.
+
+**Also fixed under this ruling:** two user-facing messages pointed at `linix doctor`, which is
+not a command. They say `linix check`.
+
+---
+
+## U43
+
+**Status: ANSWERED — ruled 2026-07-27.**
+
+**In the tree today:** built in the same commit as this ruling.
+
+**U43 — How much does an ordinary run say about itself?** The default filter was `info` and
+there are 256 `info!`/`warn!` call sites, so every run printed LiNix narrating its own startup
+above the answer the user asked for — `No state file found at …`, on **every** run, because a
+read-only command never writes the registry it just reported missing.
+
+Three things were true of the flags and only one of them was known: `--verbose` promised
+"debug-level logging" and produced **none** (measured: 0 debug lines, against 5 for
+`RUST_LOG=debug`), because the subscriber was built at `main.rs:41` and clap did not parse until
+`:81`, so `cli.verbose` reached the executor and never reached the filter. `--quiet` did not
+touch the log stream either.
+
+**RULED (owner, 2026-07-27): an ordinary run prints its answer and nothing else.**
+
+- **Default `warn`.** What was on the `info` channel was commentary, not answer.
+- **`-v` is info, `-vv` is debug, `-q` is errors only, and `-q` beats `-v`** when both are
+  given — a run that says both meant the quiet half or it would not have typed it. `RUST_LOG`
+  outranks all of it, unchanged.
+- **The level is read from argv, not from the parsed `Cli`.** It has to be live before the shim
+  hijack, and reading it after clap is exactly why `--verbose` did nothing.
+- **A command's answer goes to stdout; only narration goes to the log.** This is the half that
+  had to land first: `sync` reported `already up to date` at `info!` with nothing on stdout, so
+  dropping the default without moving it would have made a no-op sync silent. Twenty-three
+  lines moved — the whole of what `lock` and `unlock` report, `rebuild`'s skips and completion,
+  `try`'s verdict, `config init`, `heal`'s repairs, the no-op sync and the no-op upgrade.
 
 ---
 

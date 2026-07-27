@@ -15,7 +15,7 @@ pub struct CargoBackendCore {
 impl CargoBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
         Self {
-            executor,
+            executor: executor.with_exit_policy(crate::core::exit_policy::cargo()),
             name: "cargo".to_string(),
         }
     }
@@ -106,10 +106,15 @@ impl Installable for CargoInstallable {
 /// them apart, so a name that reached cargo because no other manager had it can turn out
 /// to install nothing at all. `cargo install` is the first step that knows; say what
 /// happened rather than passing on a bare exit code.
+///
+/// The rewrite stays a `CommandFailed` rather than becoming an `Error::Other`: `Other`
+/// classifies as unknown, unknown retries, and a library crate was therefore installed four
+/// times before anyone was told it has no program in it. A better sentence must not cost the
+/// verdict that goes with it.
 fn library_crate(name: &str, e: Error) -> Error {
     let text = e.to_string();
     if text.contains("no binaries") || text.contains("nothing to install") {
-        return Error::Other(format!(
+        return Error::command_failed_permanently(format!(
             "`cargo:{name}` is a library crate: crates.io has it, but it installs no \
              program. `cargo search` cannot tell a program from a library, so a name can \
              reach cargo and still install nothing — if `{name}` is a command you wanted, \
@@ -306,7 +311,15 @@ mod tests {
             "`cargo` failed (exit 101): error: there is nothing to install in `jq v0.1.0`, \
              because it has no binaries",
         );
-        let said = library_crate("jq", raw).to_string();
+        let rewritten = library_crate("jq", raw);
+        // The sentence is better AND the verdict survives: `Error::Other` would have been
+        // read as unknown, and unknown is retried three more times.
+        assert_eq!(
+            rewritten.retryability(),
+            crate::core::Retryability::Permanent,
+            "a crate with no program in it is not found by trying again"
+        );
+        let said = rewritten.to_string();
         assert!(said.contains("library crate"), "{}", said);
         assert!(said.contains("installs no program"), "{}", said);
         // And why a name can reach cargo and still install nothing — the part cargo's own
@@ -321,9 +334,16 @@ mod tests {
     #[test]
     fn an_unrelated_cargo_failure_is_passed_through_untouched() {
         let raw = Error::command_failed("`cargo` failed (exit 101): linker `cc` not found");
-        let said = library_crate("ripgrep", raw).to_string();
+        let passed = library_crate("ripgrep", raw);
+        // Untouched means untouched: an unclassified failure stays unclassified and keeps
+        // its retries, rather than being swept into the library-crate verdict.
+        assert_eq!(passed.retryability(), crate::core::Retryability::Unknown);
+        let said = passed.to_string();
         assert!(said.contains("linker"), "{}", said);
         assert!(!said.contains("library crate"), "{}", said);
+        // And the message is printed as itself — no "Command execution failed:" in front of a
+        // sentence that already says a command failed.
+        assert!(said.starts_with("`cargo` failed"), "{}", said);
     }
 
     fn spec(name: &str, version: Option<&str>) -> PackageSpec {

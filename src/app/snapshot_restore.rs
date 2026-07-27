@@ -7,7 +7,7 @@ use tokio::fs;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
-pub struct UndoManager {
+pub struct SnapshotRestore {
     snapshot_manager: Arc<SnapshotManager>,
     state: Arc<Mutex<StateRegistry>>,
 }
@@ -31,7 +31,7 @@ const ALLOWED_SNAPSHOT_PREFIXES: &[&str] = &[
 ];
 
 /// Paths `validate_snapshot_path` refuses to read a snapshot **registry** out of — the guard
-/// on the diff step, so a crafted snapshot path cannot make `undo` parse `/etc/shadow` as
+/// on the diff step, so a crafted snapshot path cannot make `snapshot restore` parse `/etc/shadow` as
 /// JSON. It is NOT a global "never touch these" list (the name it used to have, `FORBIDDEN_
 /// PATHS`, was a lie): `execute_restore` rolls the whole filesystem back over `/`, and
 /// therefore over every path here. Adding an entry protects the registry-read path only.
@@ -45,7 +45,7 @@ const REGISTRY_READ_FORBIDDEN_PATHS: &[&str] = &[
     "/sys",
 ];
 
-impl UndoManager {
+impl SnapshotRestore {
     pub fn new(snapshot_manager: Arc<SnapshotManager>, state: Arc<Mutex<StateRegistry>>) -> Self {
         Self {
             snapshot_manager,
@@ -122,7 +122,7 @@ impl UndoManager {
                 return Err(Error::Snapshot(format!(
                     "refusing to read a snapshot registry from '{}': that path is not a place a \
                      LiNix registry can legitimately live, and reading it as JSON is a way to \
-                     turn `undo` into an arbitrary-file reader",
+                     turn `snapshot restore` into an arbitrary-file reader",
                     forbidden
                 )));
             }
@@ -343,7 +343,7 @@ mod tests {
         let current = reg(&[("apt", "curl", "8.4"), ("cargo", "rg", "14.0")]);
         let past = reg(&[("apt", "curl", "8.2"), ("apt", "nano", "7.0")]);
 
-        let diff = UndoManager::calculate_diff(&current, &past);
+        let diff = SnapshotRestore::calculate_diff(&current, &past);
 
         // In current but not past -> rolling back would REMOVE it.
         assert_eq!(diff.added.len(), 1);
@@ -363,7 +363,7 @@ mod tests {
     fn identical_states_produce_an_empty_diff() {
         let a = reg(&[("apt", "curl", "8.4")]);
         let b = reg(&[("apt", "curl", "8.4")]);
-        let diff = UndoManager::calculate_diff(&a, &b);
+        let diff = SnapshotRestore::calculate_diff(&a, &b);
         assert!(diff.added.is_empty() && diff.removed.is_empty() && diff.changed.is_empty());
     }
 }

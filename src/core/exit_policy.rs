@@ -168,6 +168,26 @@ pub fn winget() -> ExitPolicy {
     }
 }
 
+/// crates.io. `cargo install` names the two things that cannot be fixed by trying again:
+/// a crate with no program in it, and a name the registry does not carry.
+pub fn cargo() -> ExitPolicy {
+    ExitPolicy {
+        transient_markers: vec![
+            "network failure",
+            "spurious network error",
+            "failed to fetch",
+            "connection timed out",
+        ],
+        permanent_markers: vec![
+            "no binaries",
+            "nothing to install",
+            "could not find",
+            "does not have these features",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
 /// scoop exits 0 after installing nothing when the manifest does not exist, so a bogus
 /// install would otherwise be trusted. The tail of "Couldn't find manifest for 'x'." is
 /// stable across scoop versions.

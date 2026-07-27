@@ -28,7 +28,7 @@ pub mod services;
 pub mod shim_manager;
 pub mod sync;
 pub mod ui;
-pub mod undo;
+pub mod snapshot_restore;
 pub mod vocab;
 
 pub mod scheduler;
@@ -48,7 +48,7 @@ pub use self::search::UniversalSearch;
 pub use self::shell::EphemeralShell;
 pub use self::shim_manager::ShimManager;
 pub use self::sync::SyncEngine;
-pub use self::undo::UndoManager;
+pub use self::snapshot_restore::SnapshotRestore;
 
 pub const APP_NAME: &str = "linix";
 pub const DEFAULT_CONFIG_NAME: &str = crate::config::PREFERENCES_FILE_NAME;

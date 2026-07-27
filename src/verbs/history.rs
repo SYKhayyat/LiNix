@@ -13,13 +13,16 @@ pub(crate) async fn handle_snapshot(app: &App, cmd: &SnapshotCommand) -> Result<
                     println!(
                         "No snapshot provider on this machine (btrfs, ZFS, Timeshift or Windows \
                          System Restore) — nothing can be listed, and `sync` proceeds without a \
-                         restore point. `linix doctor` says what is available here."
+                         restore point. `linix check` says what is available here."
                     );
                 }
             }
             for s in list {
                 println!("{:<15} {}", s.backend, s.id);
             }
+        }
+        SnapshotCommand::Restore => {
+            return handle_snapshot_restore(app).await;
         }
         SnapshotCommand::Prune { force } => {
             app.prune_snapshots(*force).await?;
@@ -213,8 +216,8 @@ pub(crate) async fn handle_adopt(app: &App) -> Result<()> {
     app.adopter().adopt().await.map_err(|e| e.into())
 }
 
-pub(crate) async fn handle_undo(app: &App) -> Result<()> {
-    app.undo_manager()
+pub(crate) async fn handle_snapshot_restore(app: &App) -> Result<()> {
+    app.snapshot_restore()
         .run_interactive()
         .await
         .map_err(|e| e.into())

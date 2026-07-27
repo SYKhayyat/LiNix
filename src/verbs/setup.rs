@@ -149,7 +149,7 @@ pub(crate) async fn handle_add(app: &App, source: &str, trust: bool, force: bool
             approve_adapters(app).ok();
             approve_generate_commands(app).ok();
             approve_exec_scripts(app).await.ok();
-            info!(
+            println!(
                 "--trust: approved the vendored code ({} hook set(s) + adapters/exec/generate).",
                 approved
             );
@@ -234,7 +234,7 @@ pub(crate) async fn handle_try(app: &App, image: Option<&str>) -> Result<()> {
 
     match rehearsal::verdict(status.code()) {
         Verdict::Valid => {
-            info!("the config resolves on a clean {} machine.", image);
+            println!("the config resolves on a clean {} machine.", image);
             Ok(())
         }
         // The container already printed why on its own stderr; repeating it here would be
@@ -451,7 +451,7 @@ pub(crate) async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> 
             tokio::fs::write(&path, CONFIG_TEMPLATE)
                 .await
                 .with_context(|| format!("Failed to write config to {}", path.display()))?;
-            info!("Wrote commented default preferences to {}", path.display());
+            println!("Wrote commented default preferences to {}", path.display());
         }
     }
     Ok(())
@@ -463,7 +463,7 @@ pub(crate) async fn handle_heal(app: &App) -> Result<()> {
     // made one command both the diagnosis and the treatment — and a command that changes
     // things is one you cannot run to find out whether you want things changed.
     for fixed in repair_environment(app).await {
-        info!("repaired: {}", fixed);
+        println!("repaired: {}", fixed);
     }
     Ok(())
 }
@@ -533,7 +533,7 @@ pub(crate) async fn handle_canary(
         planner.plan(&desired, scope).await?
     };
     if changes.is_empty() {
-        info!("nothing to upgrade.");
+        println!("nothing to upgrade.");
         return Ok(());
     }
     print_flight_plan(app, &changes);

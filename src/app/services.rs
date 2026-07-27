@@ -2,7 +2,7 @@ use crate::app::scheduler::notify::NotificationManager;
 use crate::app::scheduler::SchedulerManager;
 use crate::app::{
     diagnostics::FailureDiagnosticEngine, Adopter, EphemeralShell, LuaHooks, MetricsCollector,
-    ProfileManager, ShimManager, UndoManager,
+    ProfileManager, ShimManager, SnapshotRestore,
 };
 use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::Config;
@@ -36,7 +36,7 @@ pub struct AppServices {
     pub adopter: Adopter,
     pub shell: EphemeralShell,
     pub shim_manager: ShimManager,
-    pub undo_manager: UndoManager,
+    pub snapshot_restore: SnapshotRestore,
     pub profile_manager: ProfileManager,
     pub diagnostics: Arc<FailureDiagnosticEngine>,
 }
@@ -62,7 +62,7 @@ impl AppServices {
                 app.diagnostics.clone(),
             ),
             shim_manager,
-            undo_manager: UndoManager::new(app.snapshot_manager.clone(), app.state.clone()),
+            snapshot_restore: SnapshotRestore::new(app.snapshot_manager.clone(), app.state.clone()),
             profile_manager: ProfileManager::new(
                 app.registry.clone(),
                 app.executor.clone(),

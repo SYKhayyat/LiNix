@@ -65,11 +65,15 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub no_progress: bool,
 
-    /// Enable debug-level logging
-    #[arg(short, long, global = true)]
-    pub verbose: bool,
+    /// Say more about what LiNix is doing: `-v` for progress, `-vv` for debug detail.
+    ///
+    /// An ordinary run prints its answer and nothing else. This turns the running commentary
+    /// back on. `RUST_LOG` outranks it, for anyone who wants per-module control.
+    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    pub verbose: u8,
 
-    /// Quiet mode: suppress the planned-changes list and transaction summary (errors still print)
+    /// Quiet mode: suppress the planned-changes list, the transaction summary and every
+    /// warning. Errors still print, and `-q` beats `-v` if both are given.
     #[arg(short, long, global = true)]
     pub quiet: bool,
 }
@@ -445,9 +449,6 @@ pub enum Commands {
         /// Packages to load into the ephemeral shell
         packages: Vec<String>,
     },
-
-    /// Interactive snapshot gallery and system rollback
-    Undo,
 
     /// Browse your manifest history: commits (left), the packages and config a commit
     /// changed (right), and a shell line (bottom). Roll back from within.
@@ -963,6 +964,13 @@ pub struct SnapshotArgs {
 pub enum SnapshotCommand {
     /// List all system-level snapshots
     List,
+    /// Pick a snapshot from the gallery and put the filesystem back to it.
+    ///
+    /// This is the filesystem half of going back, and it is here rather than at the top level
+    /// under the name `undo` because that name did not say which of the two mechanisms it
+    /// meant. The other half is the manifest history: `linix history` to browse it, `linix
+    /// rollback <ref>` to go to one.
+    Restore,
     /// Prune snapshots based on age and count limits defined in config
     Prune {
         /// Force removal without verification

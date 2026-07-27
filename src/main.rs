@@ -38,10 +38,15 @@ async fn main() -> Result<()> {
     // Logs go to STDERR so that stdout carries only machine-readable payloads. Otherwise
     // `INFO` lines are interleaved with `--json` output on stdout, corrupting it for any
     // consumer (`linix search --json | jq`).
+    //
+    // The level is read straight off argv rather than off the parsed `Cli`, because this has
+    // to be running before the shim hijack a few lines down — and reading it after clap is
+    // exactly why `--verbose` used to do nothing at all.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(log_level_from_argv(&std::env::args().collect::<Vec<_>>()))),
         )
         .init();
 
@@ -244,7 +249,6 @@ pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {
         Commands::CleanCache { all } => handle_clean_cache(app, *all).await,
         Commands::Heal => handle_heal(app).await,
         Commands::Adopt => handle_adopt(app).await,
-        Commands::Undo => handle_undo(app).await,
         Commands::History => handle_history(app).await,
         Commands::Activate { profiles, add } => handle_activate(app, profiles, *add).await,
         Commands::Deactivate { profiles } => handle_deactivate(app, profiles).await,
@@ -393,6 +397,40 @@ pub(crate) fn flag_from_argv(argv: &[String], names: &[&str]) -> Option<String> 
 /// `--config` names the file; otherwise `locate` answers with `--config-dir`,
 /// `$LINIX_CONFIG_DIR`, the settings file, then the default — the one resolution, so the
 /// aliases come out of the file the rest of the run will read (X.6).
+/// How much LiNix says about itself, from argv alone.
+///
+/// The default is `warn`, not `info`: an ordinary run's answer goes to stdout, and what was
+/// left on the `info` channel was LiNix narrating its own startup over the top of it. The
+/// narration is still there for anyone who asks — that is what `-v` is for, and asking is the
+/// difference. `RUST_LOG` outranks all of this; it is checked before this is called.
+///
+/// `--quiet` reaches further than `-v` in the other direction and wins when both are given: a
+/// run that says "be quiet" and "be loud" meant the quiet half, or it would not have typed it.
+fn log_level_from_argv(argv: &[String]) -> &'static str {
+    let mut verbosity = 0u8;
+    for arg in argv.iter().skip(1) {
+        match arg.as_str() {
+            "--quiet" => return "error",
+            "--verbose" => verbosity += 1,
+            // A bundled short run (`-nv`, `-qv`): every flag in it is a letter here. `--`
+            // ends the flags, and anything after it belongs to the command.
+            "--" => break,
+            _ if arg.starts_with('-') && !arg.starts_with("--") => {
+                if arg.contains('q') {
+                    return "error";
+                }
+                verbosity += arg.matches('v').count() as u8;
+            }
+            _ => {}
+        }
+    }
+    match verbosity {
+        0 => "warn",
+        1 => "info",
+        _ => "debug",
+    }
+}
+
 pub(crate) fn preferences_path_from_argv(argv: &[String]) -> Option<std::path::PathBuf> {
     if let Some(p) = flag_from_argv(argv, &["-c", "--config"]) {
         return Some(std::path::PathBuf::from(p));
@@ -674,7 +712,7 @@ pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Co
         Some(cli.dry_run),
         Some(cli.yes),
         None,
-        Some(cli.verbose),
+        Some(cli.verbose > 0),
         Some(cli.allow_mass_removal),
         Some(cli.allow_mass_install),
     )?;
@@ -898,5 +936,101 @@ mod alias_tests {
     fn a_name_that_is_neither_builtin_nor_verb_is_left_alone() {
         let v = verbs(&[("refresh", &["sync"])]);
         assert!(plan_user_verb(&argv(&["linix", "whatever"]), &v, &builtins()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod log_level_tests {
+    use super::log_level_from_argv;
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// The ruling: an ordinary run prints its answer and nothing else.
+    #[test]
+    fn an_ordinary_run_says_nothing_about_itself() {
+        assert_eq!(log_level_from_argv(&argv(&["linix", "list"])), "warn");
+        assert_eq!(log_level_from_argv(&argv(&["linix", "sync"])), "warn");
+    }
+
+    /// The defect this replaced: `--verbose` promised debug logging and delivered none,
+    /// because the level was read after clap had parsed and the subscriber was already built.
+    #[test]
+    fn asking_for_more_gets_more_in_both_spellings() {
+        for one in [&["linix", "-v", "list"], &["linix", "--verbose", "list"]] {
+            assert_eq!(log_level_from_argv(&argv(one)), "info");
+        }
+        assert_eq!(log_level_from_argv(&argv(&["linix", "-vv", "list"])), "debug");
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "-v", "-v", "list"])),
+            "debug"
+        );
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "--verbose", "--verbose", "list"])),
+            "debug"
+        );
+        // Past two there is nothing more to say, and it must not fall back to the default.
+        assert_eq!(log_level_from_argv(&argv(&["linix", "-vvvv", "list"])), "debug");
+    }
+
+    /// A short flag can arrive bundled with its neighbours, and every letter in the bundle
+    /// counts — `-nv` is a dry run that talks.
+    #[test]
+    fn bundled_short_flags_are_read_letter_by_letter() {
+        assert_eq!(log_level_from_argv(&argv(&["linix", "-nv", "sync"])), "info");
+        assert_eq!(log_level_from_argv(&argv(&["linix", "-nvv", "sync"])), "debug");
+        assert_eq!(log_level_from_argv(&argv(&["linix", "-nq", "sync"])), "error");
+    }
+
+    #[test]
+    fn quiet_wins_over_loud_whichever_order_they_come_in() {
+        assert_eq!(log_level_from_argv(&argv(&["linix", "-q", "list"])), "error");
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "-q", "-vv", "list"])),
+            "error"
+        );
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "-vv", "-q", "list"])),
+            "error"
+        );
+    }
+
+    /// Everything after `--` is the command's, not LiNix's. A script named `-v` does not
+    /// turn logging on, and `linix run -- mytool -q` does not silence LiNix.
+    #[test]
+    fn flags_stop_at_the_double_dash() {
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "run", "--", "mytool", "-v"])),
+            "warn"
+        );
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "run", "--", "mytool", "-q"])),
+            "warn"
+        );
+    }
+
+    /// A long flag that merely contains the letters must not be read as one: `--yes` has no
+    /// `v`, but `--dry-run` and `--verbose-something` are the shapes that catch a naive scan.
+    #[test]
+    fn a_long_flag_is_never_read_letter_by_letter() {
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "--dry-run", "--yes", "sync"])),
+            "warn"
+        );
+        assert_eq!(
+            log_level_from_argv(&argv(&["linix", "--allow-mass-removal", "sync"])),
+            "warn"
+        );
+    }
+
+    /// argv[0] is a path, and on this developer's machine it contains a `v` (`Videos`) and on
+    /// plenty of others a `q`. It is never a flag.
+    #[test]
+    fn the_program_path_is_not_a_flag() {
+        assert_eq!(
+            log_level_from_argv(&argv(&["/home/q/Videos/linix", "list"])),
+            "warn"
+        );
     }
 }

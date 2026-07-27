@@ -275,10 +275,10 @@ pub(crate) async fn handle_rebuild(
     }
 
     for skip in &plan.skipped {
-        info!("skipping {} — {}", skip.key, skip.reason);
+        println!("skipping {} — {}", skip.key, skip.reason);
     }
     if plan.is_empty() {
-        info!("nothing to rebuild.");
+        println!("nothing to rebuild.");
         return Ok(());
     }
 
@@ -418,7 +418,7 @@ pub(crate) async fn handle_rebuild(
         }
     }
 
-    info!("rebuild complete.");
+    println!("rebuild complete.");
     Ok(())
 }
 
@@ -435,7 +435,7 @@ pub(crate) async fn handle_sync(app: &App, locked: bool, upgrade: bool, json: bo
     )
     .await?;
     if applied == 0 {
-        info!("already up to date");
+        println!("already up to date");
     }
     Ok(())
 }

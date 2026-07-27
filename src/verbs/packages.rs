@@ -4,7 +4,7 @@ use crate::verbs::prelude::*;
 pub(crate) async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<()> {
     if app.registry.get(backend).is_none() {
         anyhow::bail!(
-            "`{}` is not a package manager on this machine. `linix doctor` lists the ones that are.",
+            "`{}` is not a package manager on this machine. `linix check` lists the ones that are.",
             backend
         );
     }
@@ -276,7 +276,7 @@ pub(crate) async fn suspend_for_session(app: &App, packages: &[String]) -> Resul
                 .lock()
                 .await
                 .suspend(b.name(), &bare_name, version, None)?;
-            info!(
+            println!(
                 "{} suspended; it comes back when this shell exits.",
                 bare_name
             );
