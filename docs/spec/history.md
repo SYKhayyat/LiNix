@@ -62,13 +62,21 @@ of them still open.**
   manager failed for the one reason their names cannot say: there wasn't one. Both branches
   are written now. Three faults this week were the same thing — a file whose header promises
   it mirrors the container harness section for section, and had stopped.
-- **S39, open.** `rollback HEAD`, `activate` and `restore --force` each **exit 1 on macOS**.
-  All three converge, and converging is a no-op on the Windows box where they pass. **First
-  reading was wrong: these are not panics** — the second macOS run found no `panicked at`
-  anywhere, so they are ordinary errors whose backtrace prints because `RUST_BACKTRACE=1` is
-  set in CI. The harness could not show either: `tail -6` of a failure is six stack frames, and
-  a first fix keyed on the word `panicked` therefore showed nothing. `excerpt()` now drops
-  frames and prints what is left. **The three failures are unfixed and undiagnosed.**
+- **S39, closed — and it was never the product.** `rollback HEAD`, `activate` and
+  `restore --force` each exited 1 on macOS. The cause is one line of the harness: section 6
+  installs an unresolvable name on purpose and then deletes the manifest line with
+  `sed -i '/…/d' file 2>/dev/null || true`. **BSD sed reads the argument after `-i` as a backup
+  suffix**, so on macOS the deletion never happened and was silenced twice — by the redirect
+  and by the `|| true`. Every later converge then tried to install a package brew cannot
+  resolve, and LiNix **correctly** refused and said so. The comment directly above that line
+  predicted it in those words. Fixed in both harnesses with the portable read-filter-move the
+  file already used elsewhere, and the removal is now asserted rather than assumed.
+
+  **Worth recording because I got it wrong twice, and both times because the harness would not
+  show its output.** First reading: three panics. There is no `panicked at` anywhere in the
+  run. Second reading: three product bugs in a converge path. The product was right every
+  time. A harness that prints six stack frames instead of one error line does not merely fail
+  to help — it produces confident wrong diagnoses, twice, before anyone reaches the real one.
 
 **One regression, mine, worth writing down because it is the same shape as the bug it came
 from.** The `never_ran` guard made 127 a hard failure in `nok`; `on_path` answers "not found"

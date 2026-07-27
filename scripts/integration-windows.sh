@@ -261,7 +261,18 @@ nok "installing a nonexistent package fails" lx -y install "$BACKEND:linix-no-su
 # exactly as the container one does — left in, it is committed and then reinstalled by the
 # `rollback` in section 9, which fails there instead of here.
 answers "a failed install leaves the model parseable" lx check
-sed -i '/linix-no-such-pkg-zzz/d' "$LINIX_CONFIG_DIR/modules/imperative.txt" 2>/dev/null || true
+# Not `sed -i`: BSD sed reads its next argument as the backup suffix, so on macOS this
+# deleted nothing, and `2>/dev/null || true` swallowed the complaint. The paragraph above
+# then came true exactly as written — the name stayed, and `rollback`, `activate` and
+# `restore --force` each failed converging a package no manager can resolve. Same
+# read-filter-move as undeclare_canary, and the result is asserted rather than hoped for.
+IMPERATIVE="$LINIX_CONFIG_DIR/modules/imperative.txt"
+if [ -f "$IMPERATIVE" ]; then
+    grep -v -F "linix-no-such-pkg-zzz" "$IMPERATIVE" > "$IMPERATIVE.tmp" 2>/dev/null
+    mv "$IMPERATIVE.tmp" "$IMPERATIVE"
+    nok "the unresolvable name is out of the manifest" \
+        grep -q "linix-no-such-pkg-zzz" "$IMPERATIVE"
+fi
 
 # --- 7. Adopt (II.9: Windows managers install no deps, so adopt is exact) --
 echo "[7] Adopt"

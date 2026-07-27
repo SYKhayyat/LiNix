@@ -253,7 +253,18 @@ nok "installing a nonexistent package fails" lx -y install "linix-no-such-pkg-zz
 # model, so one unresolvable line wedges the config until someone hand-edits it.
 ok "a failed install leaves the model parseable" lx check drift
 # Whatever the verdict above, the rest of the run needs a model it can read.
-sed -i '/linix-no-such-pkg-zzz/d' "$LINIX_CONFIG_DIR/modules/imperative.txt" 2>/dev/null || true
+#
+# Not `sed -i`: it works here because every image has GNU sed, and the identical line in
+# the host harness deleted nothing on macOS, where sed reads the next argument as a
+# backup suffix — silently, because `2>/dev/null || true` swallowed it. The same
+# read-filter-move as undeclare_canary works everywhere, and the result is asserted.
+IMPERATIVE="$LINIX_CONFIG_DIR/modules/imperative.txt"
+if [ -f "$IMPERATIVE" ]; then
+    grep -v -F "linix-no-such-pkg-zzz" "$IMPERATIVE" > "$IMPERATIVE.tmp" 2>/dev/null
+    mv "$IMPERATIVE.tmp" "$IMPERATIVE"
+    nok "the unresolvable name is out of the manifest" \
+        grep -q "linix-no-such-pkg-zzz" "$IMPERATIVE"
+fi
 
 # --- 8. Adopt (Part IV proof) ---------------------------------------------
 echo "[8] Adopt"
