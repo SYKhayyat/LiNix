@@ -29,7 +29,7 @@ pub struct DnfBackendCore {
 impl DnfBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
         Self {
-            executor,
+            executor: executor.with_exit_policy(crate::core::exit_policy::dnf()),
             name: "dnf".to_string(),
         }
     }

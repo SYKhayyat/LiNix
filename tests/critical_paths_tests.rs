@@ -156,7 +156,7 @@ async fn test_transaction_rollback_fidelity() {
     // Set response to failure
     kernel.mock_executor.set_response(
         "brew install -- fail-node",
-        Err(Error::CommandFailed("Simulated Network Timeout".into())),
+        Err(Error::command_failed("Simulated Network Timeout")),
     );
 
     let mut graph = petgraph::stable_graph::StableDiGraph::new();

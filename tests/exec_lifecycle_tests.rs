@@ -200,8 +200,8 @@ async fn a_failed_script_is_not_recorded_and_runs_again() {
     let script = kernel.app.config.config_root().join("./fails.sh");
     kernel.mock_executor.set_response(
         &exec_command_for(&script),
-        Err(linix::core::Error::CommandFailed(
-            "the script exited 1".into(),
+        Err(linix::core::Error::command_failed(
+            "the script exited 1",
         )),
     );
 

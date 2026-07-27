@@ -1,5 +1,22 @@
 use thiserror::Error;
 
+/// Whether running the same operation again could produce a different answer.
+///
+/// The retry loop must not decide this by reading the message text: a held `dpkg` lock and a
+/// package name that does not exist arrive as the same `CommandFailed` string, and three
+/// backoff rounds against the second only delay the report. `Unknown` retries, because that
+/// is what every failure did before this distinction existed and a wrong guess in that
+/// direction costs time rather than correctness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retryability {
+    /// A lock someone else holds, a dropped connection, a mirror that timed out.
+    Transient,
+    /// The same command will fail the same way. Retrying cannot help.
+    Permanent,
+    /// Nothing classified it.
+    Unknown,
+}
+
 /// Every variant carries a `String` rather than the source error so the enum stays
 /// `Clone + Send`: a parallel transaction fans one failure out to several waiting tasks.
 #[derive(Debug, Error, Clone)]
@@ -19,8 +36,15 @@ pub enum Error {
     #[error("Backend '{0}' not found or unsupported on this platform")]
     BackendNotFound(String),
 
-    #[error("Command execution failed: {0}")]
-    CommandFailed(String),
+    /// A command ran and did not succeed. `retry` is filled in by whoever classified the
+    /// exit — the backend's [`ExitPolicy`](crate::core::ExitPolicy) for a spawned manager,
+    /// [`Retryability::Unknown`] for everyone else — so the retry loop never has to read the
+    /// message back to decide what to do.
+    #[error("Command execution failed: {message}")]
+    CommandFailed {
+        message: String,
+        retry: Retryability,
+    },
 
     #[error("I/O error: {0}")]
     Io(String),
@@ -93,6 +117,65 @@ pub enum Error {
 
     #[error("{0}")]
     Other(String),
+}
+
+impl Error {
+    /// A command failure nobody has classified. The honest default: the retry loop treats it
+    /// exactly as it treated every failure before classification existed.
+    pub fn command_failed(message: impl Into<String>) -> Self {
+        Error::CommandFailed {
+            message: message.into(),
+            retry: Retryability::Unknown,
+        }
+    }
+
+    /// A command failure that a fresh attempt cannot fix — a binary that is not there, a
+    /// name no repository carries.
+    pub fn command_failed_permanently(message: impl Into<String>) -> Self {
+        Error::CommandFailed {
+            message: message.into(),
+            retry: Retryability::Permanent,
+        }
+    }
+
+    /// Whether the operation that produced this error is worth attempting again.
+    pub fn retryability(&self) -> Retryability {
+        match self {
+            Error::CommandFailed { retry, .. } => *retry,
+
+            // Nothing about the machine changes between attempts for any of these: the name
+            // is wrong, the file is wrong, the platform cannot do it, or LiNix itself said no.
+            Error::BackendNotFound(_)
+            | Error::PackageNotFound(_)
+            | Error::Unresolvable { .. }
+            | Error::Config(_)
+            | Error::Validation(_)
+            | Error::Toml(_)
+            | Error::Json(_)
+            | Error::Unsupported(_)
+            | Error::UnsupportedPlatform(_)
+            | Error::LuaScript(_)
+            | Error::Refused(_)
+            | Error::Differences(_)
+            | Error::Cancelled => Retryability::Permanent,
+
+            // A sudo timestamp does not warm up on its own inside a backoff, and a second
+            // password prompt from a background retry is the H3 fault again.
+            Error::Permission(_) => Retryability::Permanent,
+
+            // The whole point of a rate limit is that the window moves.
+            Error::RateLimit(_) | Error::Http(_) => Retryability::Transient,
+
+            Error::Io(_)
+            | Error::Persist(_)
+            | Error::Snapshot(_)
+            | Error::Journal(_)
+            | Error::Cron(_)
+            | Error::Dialoguer(_)
+            | Error::Transaction(_)
+            | Error::Other(_) => Retryability::Unknown,
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -8,6 +8,7 @@ pub mod error;
 pub mod exec_lock;
 pub mod executor;
 pub mod exit;
+pub mod exit_policy;
 pub mod extras_lock;
 pub mod git;
 pub mod hook_lock;
@@ -27,7 +28,8 @@ pub use argv::{push_names, terminates_options};
 
 pub use cache::{PackageCache, SmartCache};
 
-pub use error::{Error, Result};
+pub use error::{Error, Result, Retryability};
+pub use exit_policy::ExitPolicy;
 
 pub use git::{GitCommit, GitManager};
 

@@ -1,4 +1,4 @@
-use crate::core::Result;
+use crate::core::{Error, Result};
 use governor::clock::DefaultClock;
 use governor::state::{InMemoryState, NotKeyed};
 use governor::{Jitter, Quota, RateLimiter as GovRateLimiter};
@@ -61,8 +61,10 @@ impl RateLimiter {
         match f().await {
             Ok(val) => Ok(val),
             Err(e) => {
-                let err_msg = format!("{:?}", e);
-                if err_msg.contains("429") || err_msg.contains("RateLimit") {
+                // Read off the variant, not off the rendered message: `format!("{:?}")` also
+                // matched any error that happened to contain "429" — a version string, a
+                // package name — and missed a real rate limit whose text said neither.
+                if matches!(e, Error::RateLimit(_)) {
                     warn!(
                         "RateLimiter [{}]: Remote API returned 429 (Too Many Requests). Local limits may need tightening.",
                         self.description

@@ -15,7 +15,7 @@ pub struct BrewBackendCore {
 impl BrewBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
         Self {
-            executor,
+            executor: executor.with_exit_policy(crate::core::exit_policy::brew()),
             name: "brew".to_string(),
         }
     }

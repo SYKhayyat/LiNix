@@ -2,7 +2,6 @@ pub mod archive;
 pub mod command;
 pub mod file;
 pub mod progress;
-pub mod retry;
 pub mod style;
 
 use std::path::PathBuf;
@@ -13,7 +12,6 @@ pub use file::{
     remove_deployed_path, strip_archive_suffixes,
 };
 pub use progress::{create_progress_reporter, ProgressHandle, ProgressReporter};
-pub use retry::{retry, retry_default, RetryConfig};
 
 pub fn safe_data_dir() -> PathBuf {
     // `LINIX_DATA_DIR` overrides the OS data dir outright (used as-is, no `linix` suffix). This

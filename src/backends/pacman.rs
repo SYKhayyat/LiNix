@@ -54,7 +54,7 @@ pub struct PacmanBackendCore {
 impl PacmanBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
         Self {
-            executor,
+            executor: executor.with_exit_policy(crate::core::exit_policy::pacman()),
             name: "pacman".to_string(),
         }
     }

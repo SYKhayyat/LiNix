@@ -1,4 +1,4 @@
-use crate::core::{Error, Result};
+use crate::core::{Error, ExitPolicy, Result};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use fs2::FileExt;
@@ -271,9 +271,15 @@ impl ExecutionLayer for RawExecutor {
             Stdio::null()
         });
 
-        let child = command
-            .spawn()
-            .map_err(|e| Error::CommandFailed(format!("Failed to spawn {}: {}", cmd, e)))?;
+        let child = command.spawn().map_err(|e| {
+            let message = format!("Failed to spawn {}: {}", cmd, e);
+            // A program that is not on PATH does not arrive during a backoff.
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::command_failed_permanently(message)
+            } else {
+                Error::command_failed(message)
+            }
+        })?;
 
         // A mutation can run for minutes. Its progress used to reach the terminal because the
         // handles were inherited — which is exactly what emptied `output.stdout` and broke
@@ -479,6 +485,10 @@ pub struct CommandExecutor {
     reader: Arc<dyn ExecutionLayer>,
     vfs: Arc<DashMap<PathBuf, String>>,
     lock_map: Arc<DashMap<String, Arc<Mutex<()>>>>,
+    /// What this backend's manager means by its exit codes and its complaints. Empty until a
+    /// backend claims one with [`with_exit_policy`](Self::with_exit_policy), which is what
+    /// keeps manager names out of this file.
+    exit_policy: Arc<ExitPolicy>,
 }
 
 impl CommandExecutor {
@@ -497,6 +507,7 @@ impl CommandExecutor {
             reader: Arc::new(RawExecutor::reader()),
             vfs,
             lock_map,
+            exit_policy: Arc::new(ExitPolicy::default()),
         }
     }
 
@@ -515,11 +526,21 @@ impl CommandExecutor {
             inner: layer,
             vfs,
             lock_map,
+            exit_policy: Arc::new(ExitPolicy::default()),
         }
     }
 
     pub fn duplicate(&self) -> Self {
         self.clone()
+    }
+
+    /// Bind this manager's exit conventions to the executor the backend will run on.
+    ///
+    /// Called at registration, beside the rest of that backend's definition, so a manager
+    /// with a new convention is added by declaring one — never by editing this file.
+    pub fn with_exit_policy(mut self, policy: ExitPolicy) -> Self {
+        self.exit_policy = Arc::new(policy);
+        self
     }
 
     pub fn is_root() -> bool {
@@ -600,7 +621,7 @@ impl CommandExecutor {
     /// tolerate a non-zero exit (searches, existence probes) must use `run_output`/`run_raw`.
     pub async fn run(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<StdOutput> {
         let output = self.run_raw(cmd, args, sudo).await?;
-        Self::ensure_status(cmd, output)
+        self.ensure_status(cmd, output)
     }
 
     pub async fn run_output(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<String> {
@@ -693,16 +714,24 @@ impl CommandExecutor {
         let result = self.run_raw(cmd, args, sudo).await;
         let _ = lock_file.unlock();
         // Enforce status only after releasing the lock, so a failed mutation still frees it.
-        Self::ensure_status(cmd, result?)
+        self.ensure_status(cmd, result?)
     }
 
-    /// Classify a finished mutating command as success or failure. A non-zero exit is a
-    /// failure EXCEPT for a few Windows managers that signal benign outcomes with non-zero
-    /// codes (see `is_benign_exit`). Surfaces the captured stderr so logs can explain what
-    /// went wrong.
-    fn ensure_status(cmd: &str, output: StdOutput) -> Result<StdOutput> {
-        let status_ok = output.status.success() || Self::is_benign_exit(cmd, output.status.code());
-        if status_ok && !Self::output_signals_failure(cmd, &output.stdout, &output.stderr) {
+    /// Classify a finished mutating command as success or failure, and — when it failed —
+    /// whether another attempt could go differently.
+    ///
+    /// What a non-zero exit or a zero-exit complaint means belongs to the manager, so it is
+    /// read off this executor's [`ExitPolicy`] rather than matched on the program's name
+    /// here. An executor with no policy is the honest default: every non-zero exit fails and
+    /// nothing is classified, which is what the retry loop already assumed.
+    fn ensure_status(&self, cmd: &str, output: StdOutput) -> Result<StdOutput> {
+        let status_ok =
+            output.status.success() || self.exit_policy.is_benign(output.status.code());
+        if status_ok
+            && !self
+                .exit_policy
+                .signals_failure(&output.stdout, &output.stderr)
+        {
             return Ok(output);
         }
         let code = output
@@ -727,60 +756,12 @@ impl CommandExecutor {
         } else {
             format!("`{}` failed (exit {}): {}", cmd, code, detail)
         };
-        Err(Error::CommandFailed(msg))
-    }
-
-    /// A few managers exit 0 even when they did NOTHING because the target could not be
-    /// found — notably scoop: `scoop install <missing>` prints "Couldn't find manifest for
-    /// 'x'." and still returns 0, so a bogus install would be silently trusted. Scan the
-    /// captured output for such hard-failure markers and treat them as a real failure.
-    fn output_signals_failure(cmd: &str, stdout: &[u8], stderr: &[u8]) -> bool {
-        // Normalize `\` to `/` before taking the stem: a Windows shim path like
-        // `C:\…\scoop.ps1` only splits on `\` when running ON Windows, so on Linux/CI
-        // `Path::file_stem` would keep the whole string and miss the `scoop` rule.
-        let normalized = cmd.replace('\\', "/");
-        let base = std::path::Path::new(&normalized)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(cmd)
-            .to_ascii_lowercase();
-        match base.as_str() {
-            "scoop" => {
-                let mut hay = String::from_utf8_lossy(stdout).into_owned();
-                hay.push_str(&String::from_utf8_lossy(stderr));
-                hay.make_ascii_lowercase();
-                // "Couldn't find manifest for 'x'." — the tail is stable across scoop versions.
-                hay.contains("find manifest for")
-            }
-            _ => false,
-        }
-    }
-
-    /// Some Windows package managers report success — or benign no-ops — with non-zero exit
-    /// codes; treat those as success so mutating ops don't spuriously fail. Every other
-    /// non-zero exit is a real failure now that the write paths enforce status.
-    fn is_benign_exit(cmd: &str, code: Option<i32>) -> bool {
-        let code = match code {
-            Some(c) => c,
-            None => return false, // killed by a signal — never benign
-        };
-        // Match on the basename so path-qualified or sudo-wrapped invocations still resolve.
-        // Normalize `\` to `/` first so a Windows shim path resolves on Linux/CI too.
-        let normalized = cmd.replace('\\', "/");
-        let base = std::path::Path::new(&normalized)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or(cmd)
-            .to_ascii_lowercase();
-        match base.as_str() {
-            // choco surfaces MSI conventions: 1641 reboot initiated, 3010 reboot required,
-            // 1605/1614/1618 already-removed / uninstall-in-progress no-ops.
-            "choco" | "chocolatey" => matches!(code, 1605 | 1614 | 1618 | 1641 | 3010),
-            // winget HRESULT-style "success but noteworthy": no applicable upgrade,
-            // already installed, no installed package found (benign on sweeps).
-            "winget" => matches!(code, -1978335189 | -1978335212 | -1978335215),
-            _ => false,
-        }
+        Err(Error::CommandFailed {
+            message: msg,
+            retry: self
+                .exit_policy
+                .retryability(&output.stdout, &output.stderr),
+        })
     }
 
     pub async fn read_file(&self, path: &Path) -> Result<String> {
@@ -1211,75 +1192,125 @@ mod search_read_tests {
 
 #[cfg(test)]
 mod exit_status_tests {
-    use super::CommandExecutor;
+    use super::{fabricate_status, CommandExecutor};
+    use crate::core::{exit_policy, Error, ExitPolicy, Retryability};
+    use std::process::Output as StdOutput;
+
+    fn finished(code: i32, stdout: &str, stderr: &str) -> StdOutput {
+        StdOutput {
+            status: fabricate_status(code),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    fn executor_for(policy: ExitPolicy) -> CommandExecutor {
+        CommandExecutor::new(true, false).with_exit_policy(policy)
+    }
 
     #[test]
     fn scoop_missing_manifest_is_a_failure_despite_exit_zero() {
-        // scoop prints this to stdout and STILL returns 0 — must be caught as a failure.
-        let out = b"Couldn't find manifest for 'linix-nonexistent-pkg'.\n";
-        assert!(CommandExecutor::output_signals_failure("scoop", out, b""));
-        // path-qualified shim name still resolves to the scoop rule
-        assert!(CommandExecutor::output_signals_failure(
-            r"C:\Users\me\scoop\shims\scoop.ps1",
-            out,
-            b""
-        ));
-        // a normal scoop success must NOT be flagged
-        assert!(!CommandExecutor::output_signals_failure(
-            "scoop",
-            b"'jq' (1.8.2) was installed successfully!\n",
-            b""
-        ));
-        // other managers are unaffected by scoop's marker
-        assert!(!CommandExecutor::output_signals_failure(
-            "apt-get", out, b""
-        ));
+        let scoop = executor_for(exit_policy::scoop());
+        let out = "Couldn't find manifest for 'linix-nonexistent-pkg'.\n";
+        assert!(scoop.ensure_status("scoop", finished(0, out, "")).is_err());
+        assert!(scoop
+            .ensure_status("scoop", finished(0, "'jq' (1.8.2) was installed successfully!\n", ""))
+            .is_ok());
+    }
+
+    /// The marker travels with the backend, not with the program name — so a scoop that
+    /// resolves to `scoop.ps1`, or runs through a shim, is classified the same way, and no
+    /// other manager inherits scoop's marker.
+    #[test]
+    fn a_policy_belongs_to_its_backend_and_not_to_a_program_name() {
+        let out = "Couldn't find manifest for 'nope'.\n";
+        let scoop = executor_for(exit_policy::scoop());
+        assert!(scoop
+            .ensure_status(r"C:\Users\me\scoop\shims\scoop.ps1", finished(0, out, ""))
+            .is_err());
+        let apt = executor_for(exit_policy::apt());
+        assert!(apt.ensure_status("apt-get", finished(0, out, "")).is_ok());
     }
 
     #[test]
     fn ordinary_nonzero_is_never_benign() {
-        // apt/apk/dnf/… have no special codes: any non-zero exit is a real failure.
-        assert!(!CommandExecutor::is_benign_exit("apk", Some(1)));
-        assert!(!CommandExecutor::is_benign_exit("apt-get", Some(100)));
-        assert!(!CommandExecutor::is_benign_exit("dnf", Some(1)));
+        for (policy, cmd, code) in [
+            (exit_policy::apk(), "apk", 1),
+            (exit_policy::apt(), "apt-get", 100),
+            (exit_policy::dnf(), "dnf", 1),
+        ] {
+            assert!(executor_for(policy)
+                .ensure_status(cmd, finished(code, "", "boom"))
+                .is_err());
+        }
     }
 
     #[test]
-    fn choco_msi_reboot_codes_are_benign() {
+    fn choco_msi_reboot_codes_are_benign_and_do_not_leak() {
+        let choco = executor_for(exit_policy::choco());
+        let apk = executor_for(exit_policy::apk());
         for code in [1605, 1614, 1618, 1641, 3010] {
-            assert!(CommandExecutor::is_benign_exit("choco", Some(code)));
+            assert!(choco.ensure_status("choco", finished(code, "", "")).is_ok());
+            assert!(apk.ensure_status("apk", finished(code, "", "")).is_err());
         }
-        // …but a genuine choco failure is not.
-        assert!(!CommandExecutor::is_benign_exit("choco", Some(1)));
+        assert!(choco.ensure_status("choco", finished(1, "", "")).is_err());
     }
 
     #[test]
     fn winget_noteworthy_codes_are_benign() {
-        assert!(CommandExecutor::is_benign_exit("winget", Some(-1978335189)));
-        assert!(CommandExecutor::is_benign_exit("winget", Some(-1978335212)));
-        assert!(!CommandExecutor::is_benign_exit("winget", Some(1)));
+        let winget = executor_for(exit_policy::winget());
+        for code in [-1978335189, -1978335212, -1978335215] {
+            assert!(winget
+                .ensure_status("winget", finished(code, "", ""))
+                .is_ok());
+        }
+        assert!(winget.ensure_status("winget", finished(1, "", "")).is_err());
     }
 
+    /// An executor nobody gave a policy fails every non-zero exit and classifies nothing —
+    /// the behaviour every backend had before policies existed.
     #[test]
-    fn benign_codes_are_scoped_to_their_own_manager() {
-        // 3010 is benign for choco, but must NOT leak to an unrelated manager.
-        assert!(!CommandExecutor::is_benign_exit("apk", Some(3010)));
+    fn an_executor_with_no_policy_classifies_nothing() {
+        let plain = CommandExecutor::new(true, false);
+        assert!(plain.ensure_status("choco", finished(3010, "", "")).is_err());
+        assert!(plain.ensure_status("apt", finished(0, "", "")).is_ok());
+        let err = plain
+            .ensure_status("apt", finished(100, "", "E: Unable to locate package nope"))
+            .expect_err("non-zero must fail");
+        assert_eq!(err.retryability(), Retryability::Unknown);
     }
 
+    /// The point of the whole change: the failure the retry loop reads carries its own
+    /// verdict, so it never has to read the message back.
     #[test]
-    fn allowlist_resolves_path_qualified_and_exe_invocations() {
-        // Forward slashes are recognized as separators on both Windows and Unix, so this
-        // exercises basename + extension stripping portably (the suite may run on Linux CI).
-        assert!(CommandExecutor::is_benign_exit(
-            "/opt/chocolatey/bin/choco.exe",
-            Some(3010)
-        ));
+    fn a_failure_carries_its_retryability() {
+        let apt = executor_for(exit_policy::apt());
+        let permanent = apt
+            .ensure_status("apt", finished(100, "", "E: Unable to locate package nope"))
+            .expect_err("exit 100 is a failure");
+        assert_eq!(permanent.retryability(), Retryability::Permanent);
+
+        let transient = apt
+            .ensure_status(
+                "apt",
+                finished(100, "", "E: Could not get lock /var/lib/dpkg/lock-frontend"),
+            )
+            .expect_err("exit 100 is a failure");
+        assert_eq!(transient.retryability(), Retryability::Transient);
+        assert!(matches!(transient, Error::CommandFailed { .. }));
     }
 
     #[test]
     fn signal_termination_is_never_benign() {
-        // No exit code (killed by signal) is always a failure, even for winget/choco.
-        assert!(!CommandExecutor::is_benign_exit("choco", None));
-        assert!(!CommandExecutor::is_benign_exit("winget", None));
+        let choco = executor_for(exit_policy::choco());
+        let killed = StdOutput {
+            status: fabricate_status(0),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        // `fabricate_status` always yields a code, so exercise the None arm directly.
+        assert!(!exit_policy::choco().is_benign(None));
+        assert!(!exit_policy::winget().is_benign(None));
+        assert!(choco.ensure_status("choco", killed).is_ok());
     }
 }

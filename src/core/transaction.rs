@@ -2,7 +2,7 @@ use crate::app::diagnostics::FailureDiagnosticEngine;
 use crate::app::LuaHooks;
 use crate::backends::BackendRegistry;
 use crate::core::journal::JournalAction;
-use crate::core::{Error, Journal, PackageSpec, Result};
+use crate::core::{Error, Journal, PackageSpec, Result, Retryability};
 use petgraph::graph::NodeIndex;
 use petgraph::stable_graph::StableDiGraph;
 use petgraph::Direction;
@@ -540,7 +540,15 @@ impl Transaction {
                     };
                 }
                 Ok(Err(e)) => {
+                    // A name no repository carries is not found by waiting; three rounds of
+                    // backoff only delay the report and hold the manager's lock while they
+                    // do it. `Unknown` still retries — that is what every failure did before
+                    // this distinction existed, and only a classified verdict overrides it.
+                    let give_up = e.retryability() == Retryability::Permanent;
                     last_error = Some(e);
+                    if give_up {
+                        break;
+                    }
                 }
                 Err(_) => {
                     last_error = Some(Error::Transaction("Node timed out.".into()));

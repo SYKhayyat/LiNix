@@ -140,7 +140,7 @@ async fn test_transaction_atomic_rollback_fidelity() {
         .set_response("brew install -- pkg-a", Ok(DryRunOutput::default().into()));
     kernel.mock_executor.set_response(
         "brew install -- pkg-b",
-        Err(Error::CommandFailed("Network Timeout".into())),
+        Err(Error::command_failed("Network Timeout")),
     );
     kernel.mock_executor.set_response(
         "brew uninstall -- pkg-a",
@@ -205,7 +205,7 @@ async fn rollback_after_failure(
     }
     kernel.mock_executor.set_response(
         "brew install -- pkg-b",
-        Err(Error::CommandFailed("Network Timeout".into())),
+        Err(Error::command_failed("Network Timeout")),
     );
 
     let mut graph = petgraph::stable_graph::StableDiGraph::new();
@@ -315,7 +315,7 @@ async fn an_unreadable_prior_state_is_never_taken_for_absence() {
     let kernel = TestKernel::new().await;
     kernel.mock_executor.set_response(
         "brew info --json=v1 -- pkg-a",
-        Err(Error::CommandFailed("brew is wedged".into())),
+        Err(Error::command_failed("brew is wedged")),
     );
     let (calls, _err) = rollback_after_failure(
         &kernel,
@@ -357,7 +357,7 @@ async fn a_manager_that_cannot_answer_stops_the_plan_rather_than_installing_ever
     let kernel = TestKernel::new().await;
     kernel.mock_executor.set_response(
         "brew info --json=v1 -- pkg-a",
-        Err(Error::CommandFailed("brew is wedged".into())),
+        Err(Error::command_failed("brew is wedged")),
     );
 
     let mut desired: HashMap<String, Vec<linix::core::PackageSpec>> = HashMap::new();
@@ -408,4 +408,143 @@ async fn test_resolver_malformed_input_resiliency() {
             Validator::validate_package_name(&spec.name).ok();
         }
     }
+}
+
+// ============================================================================
+// RETRY IS A DECISION ABOUT THE FAILURE, NOT A COUNT (§7)
+// ============================================================================
+
+/// Backoff long enough to be visible would make these tests sleep; the count is what is
+/// under test, not the delay.
+fn impatient() -> TransactionConfig {
+    TransactionConfig {
+        initial_backoff: std::time::Duration::from_millis(1),
+        max_backoff: std::time::Duration::from_millis(2),
+        auto_rollback: false,
+        ..TransactionConfig::patient()
+    }
+}
+
+/// How many times a single-node transaction actually asked the manager to install.
+async fn attempts_for(kernel: &TestKernel, answer: linix::core::Result<std::process::Output>) -> usize {
+    kernel
+        .mock_executor
+        .set_response("brew install -- pkg-a", answer);
+
+    let mut graph = petgraph::stable_graph::StableDiGraph::new();
+    graph.add_node(GraphAction::Install(create_dummy_spec("pkg-a", "brew", None)));
+
+    let mut tx = Transaction::with_config(
+        graph,
+        kernel.app.registry.clone(),
+        kernel.app.journal.clone(),
+        kernel.app.diagnostics.clone(),
+        kernel.app.config.clone(),
+        impatient(),
+    );
+    let _ = tx.execute().await;
+
+    kernel
+        .mock_executor
+        .get_calls()
+        .await
+        .iter()
+        .filter(|c| c.contains("install -- pkg-a"))
+        .count()
+}
+
+/// The finding: install and remove both got `max_retries: 3` with backoff regardless of
+/// whether the failure was retryable. A name no repository carries was retried like a held
+/// lock, and the report arrived three backoffs late with the manager's lock held throughout.
+#[tokio::test]
+async fn a_permanent_failure_is_attempted_once() {
+    let kernel = TestKernel::new().await;
+    let attempts = attempts_for(&kernel, Err(Error::PackageNotFound("pkg-a".into()))).await;
+    assert_eq!(attempts, 1, "a permanent failure must not be retried");
+}
+
+/// The other half: nothing about the fix may make a transient failure give up early.
+#[tokio::test]
+async fn a_transient_failure_is_retried_to_the_limit() {
+    let kernel = TestKernel::new().await;
+    let attempts = attempts_for(&kernel, Err(Error::RateLimit("try later".into()))).await;
+    assert_eq!(
+        attempts,
+        (impatient().max_retries + 1) as usize,
+        "a transient failure must still use every attempt"
+    );
+}
+
+/// An unclassified failure keeps the behaviour it had before classification existed. A
+/// wrong guess in this direction costs time; the other direction costs a working install.
+#[tokio::test]
+async fn an_unclassified_failure_still_retries() {
+    let kernel = TestKernel::new().await;
+    let attempts = attempts_for(&kernel, Err(Error::command_failed("something nobody named"))).await;
+    assert_eq!(attempts, (impatient().max_retries + 1) as usize);
+}
+
+/// End to end through the backend's own `ExitPolicy`: the manager exits non-zero and says
+/// why, and the verdict is read off that — not off the error's text at the retry loop.
+#[tokio::test]
+async fn a_manager_that_says_the_name_is_wrong_is_believed_the_first_time() {
+    let kernel = TestKernel::new().await;
+    let attempts = attempts_for(
+        &kernel,
+        Ok(DryRunOutput::faulted(
+            "Error: No available formula with the name \"pkg-a\".",
+        )),
+    )
+    .await;
+    assert_eq!(attempts, 1, "brew said the formula does not exist");
+}
+
+/// The twin: the same exit code, a complaint that says the network was the problem.
+#[tokio::test]
+async fn a_manager_that_says_the_network_failed_is_retried() {
+    let kernel = TestKernel::new().await;
+    let attempts = attempts_for(
+        &kernel,
+        Ok(DryRunOutput::faulted("curl: (28) Operation timed out")),
+    )
+    .await;
+    assert_eq!(attempts, (impatient().max_retries + 1) as usize);
+}
+
+/// Removal is the sibling path, and it took the same uniform retry. A protected-package
+/// refusal or a name the manager does not know must not loop either.
+#[tokio::test]
+async fn a_permanent_removal_failure_is_attempted_once() {
+    let kernel = TestKernel::new().await;
+    kernel.mock_executor.set_response(
+        "brew uninstall -- pkg-a",
+        Ok(DryRunOutput::faulted(
+            "Error: No available formula with the name \"pkg-a\".",
+        )),
+    );
+
+    let mut graph = petgraph::stable_graph::StableDiGraph::new();
+    graph.add_node(GraphAction::Remove {
+        name: "pkg-a".into(),
+        backend: "brew".into(),
+    });
+
+    let mut tx = Transaction::with_config(
+        graph,
+        kernel.app.registry.clone(),
+        kernel.app.journal.clone(),
+        kernel.app.diagnostics.clone(),
+        kernel.app.config.clone(),
+        impatient(),
+    );
+    let _ = tx.execute().await;
+
+    let attempts = kernel
+        .mock_executor
+        .get_calls()
+        .await
+        .iter()
+        .filter(|c| c.contains("uninstall -- pkg-a"))
+        .count();
+    assert_eq!(attempts, 1, "a permanent removal failure must not be retried");
 }

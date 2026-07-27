@@ -191,7 +191,9 @@ pub async fn create_default_registry(
 fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "apt".into(),
-        executor: executor.duplicate(),
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::apt()),
         config: ManagerConfig {
             name: "apt".into(),
             binary: None,
@@ -284,7 +286,10 @@ fn register_aur_helper(
 ) {
     let core = Arc::new(GenericBackendCore {
         name: name.into(),
-        executor: executor.duplicate(),
+        // AUR helpers speak pacman's flags, and they speak pacman's complaints too.
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::pacman()),
         config: ManagerConfig {
             name: name.into(),
             binary: None,
@@ -344,7 +349,9 @@ fn register_aur_helper(
 fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "apk".into(),
-        executor: executor.duplicate(),
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::apk()),
         config: ManagerConfig {
             name: "apk".into(),
             binary: None,
@@ -483,7 +490,9 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "winget".into(),
-        executor: executor.duplicate(),
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::winget()),
         config: ManagerConfig {
             name: "winget".into(),
             binary: None,
@@ -554,7 +563,9 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "scoop".into(),
-        executor: executor.duplicate(),
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::scoop()),
         config: ManagerConfig {
             name: "scoop".into(),
             binary: None,
@@ -611,7 +622,9 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "choco".into(),
-        executor: executor.duplicate(),
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::choco()),
         config: ManagerConfig {
             name: "choco".into(),
             binary: None,

@@ -302,10 +302,9 @@ mod tests {
 
     #[test]
     fn a_library_crate_says_why_the_install_did_nothing() {
-        let raw = Error::CommandFailed(
+        let raw = Error::command_failed(
             "`cargo` failed (exit 101): error: there is nothing to install in `jq v0.1.0`, \
-             because it has no binaries"
-                .into(),
+             because it has no binaries",
         );
         let said = library_crate("jq", raw).to_string();
         assert!(said.contains("library crate"), "{}", said);
@@ -321,7 +320,7 @@ mod tests {
 
     #[test]
     fn an_unrelated_cargo_failure_is_passed_through_untouched() {
-        let raw = Error::CommandFailed("`cargo` failed (exit 101): linker `cc` not found".into());
+        let raw = Error::command_failed("`cargo` failed (exit 101): linker `cc` not found");
         let said = library_crate("ripgrep", raw).to_string();
         assert!(said.contains("linker"), "{}", said);
         assert!(!said.contains("library crate"), "{}", said);

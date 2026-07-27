@@ -136,13 +136,13 @@ impl GitManager {
         cmd.arg("-C").arg(&self.root);
         cmd.args(args);
         cmd.output()
-            .map_err(|e| Error::CommandFailed(format!("git {:?} failed to spawn: {}", args, e)))
+            .map_err(|e| Error::command_failed(format!("git {:?} failed to spawn: {}", args, e)))
     }
 
     fn run_checked(&self, args: &[&str]) -> Result<String> {
         let out = self.run(args)?;
         if !out.status.success() {
-            return Err(Error::CommandFailed(format!(
+            return Err(Error::command_failed(format!(
                 "git {:?}: {}",
                 args,
                 String::from_utf8_lossy(&out.stderr).trim()
@@ -204,7 +204,7 @@ impl GitManager {
         let out = self.run(&["commit", "-m", message])?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-            return Err(Error::CommandFailed(format!(
+            return Err(Error::command_failed(format!(
                 "git refused to commit your manifests:\n\n{}\n\n{}",
                 stderr,
                 commit_refusal_hint(&stderr)

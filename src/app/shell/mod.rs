@@ -170,10 +170,10 @@ impl EphemeralShell {
                 .env("LINIX_SESSION_ID", session_owned);
             let mut handle = bwrap
                 .spawn()
-                .map_err(|e| Error::CommandFailed(format!("Sandbox error: {}", e)))?;
+                .map_err(|e| Error::command_failed(format!("Sandbox error: {}", e)))?;
             let _ = handle
                 .wait()
-                .map_err(|e| Error::CommandFailed(e.to_string()))?;
+                .map_err(|e| Error::command_failed(e.to_string()))?;
             Ok::<(), Error>(())
         })
         .await
@@ -218,7 +218,7 @@ impl EphemeralShell {
 
         let mut handle = child
             .spawn()
-            .map_err(|e| Error::CommandFailed(format!("Shell error: {}", e)))?;
+            .map_err(|e| Error::command_failed(format!("Shell error: {}", e)))?;
         let _ = handle.wait().await?;
         Ok(())
     }

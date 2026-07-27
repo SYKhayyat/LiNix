@@ -113,7 +113,7 @@ impl Runner {
         if !status.success() {
             let code = status.code().unwrap_or(-1);
             error!("Environment command failed with exit code {}.", code);
-            return Err(Error::CommandFailed(format!(
+            return Err(Error::command_failed(format!(
                 "Sub-process exited with code {}",
                 code
             )));
@@ -139,13 +139,13 @@ impl Runner {
             .stderr(std::process::Stdio::inherit());
 
         let mut handle = child.spawn().map_err(|e| {
-            Error::CommandFailed(format!("Failed to start binary {}: {}", command, e))
+            Error::command_failed(format!("Failed to start binary {}: {}", command, e))
         })?;
 
         handle
             .wait()
             .await
-            .map_err(|e| Error::CommandFailed(format!("Error during process wait: {}", e)))
+            .map_err(|e| Error::command_failed(format!("Error during process wait: {}", e)))
     }
 
     pub async fn exec_shim(&self, shim_name: &str, args: &[String]) -> Result<()> {
