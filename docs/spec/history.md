@@ -16,6 +16,13 @@ verified against the tree at the commit that last touched this section, not reca
 
 ## Session 2026-07-27 — the push went green, and the nightly half said why that was not enough
 
+> **Closed green.** Run `30237464029` (`945fba0`): **every job passed, including
+> `macos-native`, which had never once completed.** Its final sweep is `pass=263 fail=0
+> soft=6` — 46 registered backends all covered (8 real lifecycles, 38 plan-smokes), 56 of 61
+> subcommands executed for real and the other 5 exempt by name. The `tools` image and Gentoo
+> are green in the same run. **This is the first time every gate this repo has, on every
+> platform it claims, has been green at once.**
+
 **CI run `30228257690` is the first green `main` this repo has had**: all three build/test/clippy
 columns, plus the four fast container integrations. S33 and S34 are confirmed fixed on the
 platforms that reported them, which is the negative S33's own entry said only CI could prove.
