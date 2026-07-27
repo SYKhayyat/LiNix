@@ -13,8 +13,10 @@
 | **H2** repo removal | **DONE** — S44, **and a second fault it uncovered**: apt and apk named a program in the argument position, so `repo add/remove/list` had never worked on either. |
 | **H3** sudo keepalive | **DONE** — `tokio::process`, `-n`, stdin null, behind a guard that aborts on drop. |
 | **H4** version | **HALF WRONG, HALF OPEN.** No hardcoded `v6.0.0` exists in `src/` — `lib.rs` derives `VERSION` from `CARGO_PKG_VERSION`; the banner this review saw came from the stale July binary on disk. `Cargo.toml`'s `version = "0.1.0"` is real and is **the owner's number to pick**. |
-| §7 instability | **PARTLY DONE** — S46 (two `.expect()`ed spawns on the dry-run path) and S47 (`attempt` renamed to `retries`; the arithmetic was right, the name lied). **Uniform retry semantics is not attempted**: telling a retryable failure from a permanent one needs the structured errors §6 asks for. |
-| §6 SOLID, **U1**, **U2**, U3 | **OPEN, deliberately.** U1 removes commands and U2 changes what every run prints — owner rulings. §6 is real and explicitly not a shipping blocker. U3 (`status` is slow) is worth re-measuring now that B1 is fixed. |
+| §7 instability | **DONE** — S46 (two `.expect()`ed spawns on the dry-run path), S47 (`attempt` renamed to `retries`), and **uniform retry semantics, which this table said was not attempted**: `Retryability` on `Error`, `ExitPolicy` per backend, and a retry loop that stops on a permanent failure. A held dpkg lock retries; a name no repository carries is reported at once. |
+| §6 SOLID | **DONE, three of four at the mechanism and one verified already closed.** *Stringly-typed errors:* `CommandFailed` carries a classification; `Error::retryability()` covers all 23 variants; `ratelimiter.rs`'s `contains("429")` — the one live substring branch — reads the variant now. *Open/Closed:* `is_benign_exit`/`output_signals_failure` are gone from the core executor; nine backends declare an `ExitPolicy` at registration. *Liskov (`RepoManager`):* already closed by **S44** — `remove_repo` resolves the URL from the manager's own listing and `reject_unsubstituted` makes silent degradation a hard error; re-verified across all three implementors, not re-fixed. *SRP:* `context.rs` 1,921 → 665 lines across nine facet structs, each holding only what it uses; `App::restore_session_suspensions` deleted as a dead twin of `EphemeralShell`'s. |
+| **U1**, **U2** | **OPEN — owner rulings, now with the measurements the review lacked.** U1's description is substantially wrong: the surface is **62 top-level entries, not 45**, and **6 of the 13 commands it names do not exist** (`remove`, `prune`, `orphans`, `clean`, `unmanaged`, `status`, `doctor`, `migrate`, `clone`, `generation`). Every command in the "removal" cluster does something the others do not. The one real overlap is `undo` / `history` / `rollback`. U2 is confirmed and has a third defect the review did not see: **`--verbose` is dead** — its help promises debug logging and it produces none, because the subscriber is built at `main.rs:41` before clap parses at `:81`. |
+| U3 | **OPEN** — `status` is slow. Worth re-measuring now that B1 is fixed; not investigated this session. |
 
 Verified after the work: `cargo build --all-targets` → `cargo test` → `cargo clippy
 --all-targets --all-features -- -D warnings` clean on **Windows (1,340 tests) and Linux (1,339,
@@ -524,9 +526,43 @@ paths resort to substring matching.
 `rollback` vs `generation` is three vocabularies for restoring prior state. **Stop-and-ask —
 consolidation removes features.**
 
+> **Corrected 2026-07-27, measured against `linix --help` rather than read off the source.** The
+> count is **62**, not 45. Ten of the commands named above **do not exist**: `remove` (it is
+> `uninstall`), `prune` (it is `snapshot prune`), `orphans` (`remove-orphans`), `clean`
+> (`clean-cache`), `unmanaged` (`unmanage`, which is a different thing again), `status` (it is
+> `service status` and `git status`), `doctor` (`check`), `migrate`, `clone`, `generation`. So
+> **"`status` and `prune` are two views of the same drift computation" is a claim about two
+> commands that are not there**, and "three vocabularies" names one verb that never existed.
+>
+> The removal cluster that *does* exist is not redundant — each does something none of the others
+> does: `uninstall` (a package), `remove-orphans` (what the manager itself calls an orphan),
+> `purge-unmanaged` (everything LiNix does not manage), `unmanage` (forget it, keep it installed),
+> `reset` (forget everything, keep everything installed), `clean-cache` (archives, no packages).
+>
+> **The one real overlap is `undo` / `history` / `rollback`**, and it is a naming problem rather
+> than a redundancy: `undo` is the *filesystem snapshot* gallery, while `history` (TUI) and
+> `rollback <ref>` (CLI) are two interfaces onto the *git manifest* history. A user who wants to
+> undo their last sync reaches for `undo` and gets the wrong mechanism.
+
 **U2 — log noise on by default.** Ordinary runs emit `INFO` tracing with ANSI escapes above the
 actual answer (`StateRegistry: No state file found…`, `LiNix Kernel: v6.0.0 kernel initialized
 successfully.`). Stop-and-ask.
+
+> **Measured 2026-07-27.** Confirmed, with corrections and one defect the review did not see.
+> The default filter is `EnvFilter::new("info")` at `main.rs:44`; there are **256 `info!`/`warn!`
+> call sites**. The `StateRegistry` line is real and fires on **every** run, not just the first,
+> because a read-only command never writes the registry it just reported missing. The **kernel
+> banner does not exist** — same stale-binary artefact as H4.
+>
+> **The defect: `--verbose` does nothing.** Its help says "Enable debug-level logging". Measured:
+> `linix --verbose list -b cargo` emits **0** DEBUG lines, `RUST_LOG=debug` emits **5**. The
+> subscriber is built at `main.rs:41`, before clap parses at `main.rs:81`, so `cli.verbose` reaches
+> `CommandExecutor` and never reaches the filter. `--quiet` does not suppress the INFO stream
+> either — it only sets `config.quiet`, which hides the planned-changes list.
+>
+> **Constraint on any ruling that lowers the default:** some INFO lines *are* the answer.
+> `linix sync` on an up-to-date machine prints `already up to date` at `info!` and nothing on
+> stdout. Default to `warn` without first moving those to stdout and a no-op sync goes silent.
 
 **U3 — `status` is slow.** Read-only `linix status` against a single apt backend took **~50-100
 seconds** per run. Worth profiling after B1 is fixed — some of it may be `info()` being called
