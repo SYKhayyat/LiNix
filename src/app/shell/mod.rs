@@ -310,7 +310,7 @@ impl EphemeralShell {
     /// Reinstall packages the user temporarily uninstalled for the lifetime of this
     /// ephemeral shell session (`remove --temp` with no duration). Best-effort: a package the
     /// backend can no longer install is warned about and its suspension dropped, matching
-    /// the timed-restore contract in `App::sweep_due_suspensions`.
+    /// the timed-restore contract in `Leases::sweep_due_suspensions`.
     pub async fn restore_session_suspensions(&self, session_id: &str) -> Result<()> {
         let owned = {
             let state = self.state.lock().await;

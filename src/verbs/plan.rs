@@ -8,7 +8,7 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
     let desired = state.packages.clone();
     // A deleted `service:`/`link:`/`repo:` line is drift a sync will undo (S20), and `status`
     // that reports only packages says "nothing to do" on the run that disables a service.
-    let extras_to_undo = app.extras_drift(&state).await.unwrap_or_default();
+    let extras_to_undo = app.extras().drift(&state).await.unwrap_or_default();
     // `status` reports what a full `sync` would do, so it scopes drift the same way.
     let enabled = app.priority_backends().await;
     let changes = {
@@ -155,7 +155,7 @@ pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
         )
         .await;
         if let Ok(state) = resolver.resolve_model().await {
-            app.print_exec_plan(&state);
+            app.execs().print_plan(&state);
         }
     }
     let created_at = chrono::Utc::now().timestamp();

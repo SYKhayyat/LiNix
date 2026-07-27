@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// The stable identity of an applied extra, `<kind>:<id>`. Parseable back into an undo action
-/// (see `App::reconcile_extras`), and stable across runs so the same declaration always keys
+/// (see `Extras::reconcile`), and stable across runs so the same declaration always keys
 /// the same ledger entry. Returns `None` for statements that are not applied extras (packages,
 /// set-math, `use`) — those are tracked elsewhere or not at all.
 pub fn extra_key(stmt: &Statement) -> Option<String> {

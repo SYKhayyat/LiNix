@@ -707,11 +707,11 @@ pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Co
 pub(crate) async fn perform_maintenance(app: &App) -> Result<()> {
     app.journal.lock().await.cleanup()?;
     // Reclaim expired temporary installs so leases are enforced on every state-changing run.
-    if let Err(e) = app.sweep_expired_leases().await {
+    if let Err(e) = app.leases().sweep_expired().await {
         warn!("Maintenance: lease sweep failed: {}", e);
     }
     // Restore temporary uninstalls whose timer has elapsed (mirror of the lease sweep).
-    if let Err(e) = app.sweep_due_suspensions().await {
+    if let Err(e) = app.leases().sweep_due_suspensions().await {
         warn!("Maintenance: suspension sweep failed: {}", e);
     }
     // Version-control the manifests/config if the user opted in via `linix git init`.

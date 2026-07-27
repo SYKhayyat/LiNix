@@ -143,7 +143,7 @@ async fn scoped_upgrade_is_non_destructive_end_to_end() {
 }
 
 /// II.7 phase 3: a config whose only work is dependent extras (a `service:`, a `link:`, a
-/// `shim:`) still resolves them, and `apply_dependents` walks them without error. The
+/// `shim:`) still resolves them, and `apply` walks them without error. The
 /// dry-run kernel makes this a preview: it touches nothing, so it also proves the dependent
 /// phase does not reach for the real filesystem or `~/.local/bin` when only previewing.
 #[tokio::test]
@@ -181,7 +181,7 @@ async fn dependents_only_config_resolves_and_applies_the_dependent_phase() {
     assert_eq!(state.dependents().count(), 3);
 
     // Previews cleanly (dry-run kernel): resolution -> dependent dispatch, no panic, no touch.
-    kernel.app.apply_dependents(&state).await.unwrap();
+    kernel.app.dependents().apply(&state).await.unwrap();
 }
 
 /// A backend's RepoManager must issue the backend's real "add source" command.

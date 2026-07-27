@@ -62,11 +62,11 @@ async fn a_script_runs_once_then_not_again_until_its_content_changes() {
     // First sync: it runs, and the run is recorded.
     let state = resolve(&kernel).await;
     assert!(state.has_execs(), "the exec: line did not reach the model");
-    kernel.app.apply_execs(&state).await.expect("first run");
+    kernel.app.execs().apply(&state).await.expect("first run");
     assert_eq!(runs_of(&kernel, v1), 1, "the first run was not recorded");
 
     // Second sync: the same content is at its ceiling, so nothing runs.
-    kernel.app.apply_execs(&state).await.expect("second pass");
+    kernel.app.execs().apply(&state).await.expect("second pass");
     assert_eq!(runs_of(&kernel, v1), 1, "the script ran twice");
 
     // One byte changes: a different content, never run, so it runs — and the old row survives.
@@ -74,7 +74,7 @@ async fn a_script_runs_once_then_not_again_until_its_content_changes() {
     declare_exec(&kernel, "exec:./bin/setup.sh", "./bin/setup.sh", v2).await;
     approve(&kernel, "./bin/setup.sh", v2);
     let state = resolve(&kernel).await;
-    kernel.app.apply_execs(&state).await.expect("post-edit run");
+    kernel.app.execs().apply(&state).await.expect("post-edit run");
     assert_eq!(runs_of(&kernel, v2), 1, "the edited script did not run");
     assert_eq!(runs_of(&kernel, v1), 1, "the old content's count was lost");
 }
@@ -90,7 +90,7 @@ async fn runs_always_runs_every_time() {
 
     let state = resolve(&kernel).await;
     for expected in 1..=3 {
-        kernel.app.apply_execs(&state).await.expect("always runs");
+        kernel.app.execs().apply(&state).await.expect("always runs");
         assert_eq!(runs_of(&kernel, body), expected);
     }
 }
@@ -107,7 +107,7 @@ async fn an_unapproved_script_refuses_the_sync_and_never_runs() {
     let state = resolve(&kernel).await;
     let err = kernel
         .app
-        .apply_execs(&state)
+        .execs().apply(&state)
         .await
         .expect_err("an unapproved script must stop the sync");
     let msg = err.to_string();
@@ -130,7 +130,7 @@ async fn a_script_edited_after_approval_is_refused_until_reapproved() {
     std::fs::write(kernel.app.config.config_root().join("./setup.sh"), v2).unwrap();
 
     let state = resolve(&kernel).await;
-    let err = kernel.app.apply_execs(&state).await.expect_err("changed");
+    let err = kernel.app.execs().apply(&state).await.expect_err("changed");
     let msg = err.to_string();
     assert!(msg.contains("changed since you approved"), "{}", msg);
     assert_eq!(runs_of(&kernel, v2), 0, "the tampered content ran");
@@ -161,14 +161,14 @@ async fn a_false_when_runs_nothing_and_keeps_the_count() {
         state.has_execs(),
         "the gated exec: should be present when true"
     );
-    kernel.app.apply_execs(&state).await.expect("runs");
+    kernel.app.execs().apply(&state).await.expect("runs");
     assert_eq!(runs_of(&kernel, body), 1);
 
     // The script "succeeded", so its own condition is now false: the line drops out entirely.
     std::fs::write(root.join("vars"), "enrolled = yes\n").unwrap();
     let state = resolve(&kernel).await;
     assert!(!state.has_execs(), "a false `when` must drop the line");
-    kernel.app.apply_execs(&state).await.expect("no-op");
+    kernel.app.execs().apply(&state).await.expect("no-op");
 
     // The count survives — this is what stops a flapping condition re-running it.
     assert_eq!(runs_of(&kernel, body), 1, "the ledger row was lost");
@@ -208,7 +208,7 @@ async fn a_failed_script_is_not_recorded_and_runs_again() {
     let state = resolve(&kernel).await;
     let err = kernel
         .app
-        .apply_execs(&state)
+        .execs().apply(&state)
         .await
         .expect_err("a failing script must surface, not be swallowed");
     assert!(err.to_string().contains("exited 1"), "{}", err);
@@ -240,7 +240,7 @@ async fn removing_an_exec_runs_the_undo_it_declared() {
     approve(&kernel, "./enrol.sh", body);
 
     let state = resolve(&kernel).await;
-    kernel.app.apply_execs(&state).await.unwrap();
+    kernel.app.execs().apply(&state).await.unwrap();
     assert_eq!(runs_of(&kernel, body), 1);
 
     // The line is deleted — the declaration no longer exists anywhere.
@@ -249,7 +249,7 @@ async fn removing_an_exec_runs_the_undo_it_declared() {
     let state = resolve(&kernel).await;
     assert!(!state.has_execs());
 
-    kernel.app.apply_execs(&state).await.unwrap();
+    kernel.app.execs().apply(&state).await.unwrap();
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(
@@ -275,7 +275,7 @@ async fn removing_an_exec_without_an_undo_runs_nothing() {
     approve(&kernel, "./once.sh", body);
 
     let state = resolve(&kernel).await;
-    kernel.app.apply_execs(&state).await.unwrap();
+    kernel.app.execs().apply(&state).await.unwrap();
     let before = kernel.mock_executor.get_calls().await.len();
 
     std::fs::write(
@@ -284,7 +284,7 @@ async fn removing_an_exec_without_an_undo_runs_nothing() {
     )
     .unwrap();
     let state = resolve(&kernel).await;
-    kernel.app.apply_execs(&state).await.unwrap();
+    kernel.app.execs().apply(&state).await.unwrap();
 
     assert_eq!(
         kernel.mock_executor.get_calls().await.len(),
@@ -313,13 +313,13 @@ async fn a_false_when_does_not_run_the_undo() {
     std::fs::write(root.join("profiles/Main"), "use tools\n").unwrap();
 
     let state = resolve(&kernel).await;
-    kernel.app.apply_execs(&state).await.unwrap();
+    kernel.app.execs().apply(&state).await.unwrap();
     assert_eq!(runs_of(&kernel, body), 1);
 
     // The script succeeded, so its own condition is now false — but the LINE is still there.
     std::fs::write(root.join("vars"), "enrolled = yes\n").unwrap();
     let state = resolve(&kernel).await;
-    kernel.app.apply_execs(&state).await.unwrap();
+    kernel.app.execs().apply(&state).await.unwrap();
 
     let calls = kernel.mock_executor.get_calls().await;
     assert!(

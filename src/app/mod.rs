@@ -1,4 +1,5 @@
 pub mod adopt;
+pub mod apply;
 pub mod bisect;
 pub mod bundle;
 pub mod check;
@@ -11,6 +12,7 @@ pub mod export;
 pub mod fleet;
 pub mod hooks;
 pub mod insight;
+pub mod leases;
 pub mod locate;
 pub mod metrics;
 pub mod module_registry;
@@ -33,6 +35,10 @@ pub mod scheduler;
 pub mod shell;
 
 pub use self::adopt::Adopter;
+pub use self::apply::{
+    Bootstrap, Dependents, Dotfiles, Execs, Extras, Firewall, Repositories, Schedules,
+};
+pub use self::leases::Leases;
 pub use self::context::App;
 pub use self::hooks::LuaHooks;
 pub use self::metrics::MetricsCollector;

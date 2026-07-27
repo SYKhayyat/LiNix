@@ -63,16 +63,16 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     // SEC3, before the first repo is added and before any package is touched: a `link:` line
     // whose `@target` lands outside the home directory is asked about once. A confirmation
     // offered after the file is placed is a notification.
-    app.confirm_outside_home_links(&state)?;
+    app.dotfiles().confirm_outside_home(&state)?;
 
     // Ordering phase 0 (7c): a manager the configuration declares and this machine lacks is
     // offered before anything is planned — a package cannot install through a manager that is
     // not there, and finding that out per-package is a pile of identical failures.
-    app.offer_bootstrap(&state).await?;
+    app.bootstrap().offer(&state).await?;
 
     // Ordering phase 1: repos → refresh indexes. A package from a PPA cannot install until
     // the PPA is added, so this runs before the package plan (not inside it).
-    app.apply_repositories(&state).await?;
+    app.repositories().apply(&state).await?;
 
     // Drift is scoped to the backends this host lists in `priority`: a full sync must not
     // reap a backend you have simply stopped listing.
@@ -95,7 +95,7 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         // Even with no packages/dependents/schedules to apply, an extra may have been
         // *removed* — deleting the last `service:` line is a real change (S20). Reconcile the
         // applied-extras ledger so that undo still happens; it is a cheap no-op otherwise.
-        app.reconcile_extras(&state).await?;
+        app.extras().reconcile(&state).await?;
         return Ok(0);
     }
 
@@ -116,7 +116,7 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     // `!changes.is_empty()` block on purpose: a config whose only work is an `exec:` still has
     // to show it.
     if !opts.json {
-        app.print_exec_plan(&state);
+        app.execs().print_plan(&state);
     }
 
     // Dry-run is preview-only: never prompt, never mutate. (JSON dry-run emits the report.)
@@ -174,21 +174,21 @@ pub(crate) async fn apply_non_package_phases(
     scope: linix::app::sync::guard::GuardScope,
 ) -> Result<()> {
     // Phase 3: the dependent extras, now that every package they lean on is in.
-    app.apply_dependents(state).await?;
+    app.dependents().apply(state).await?;
     // Phase 3b (7n): the dotfiles trees — a tree is a pile of `link:` lines and belongs where
     // they do.
-    app.apply_dotfile_trees(state).await?;
+    app.dotfiles().apply(state).await?;
     // Phase 3c (Part XI): the perimeter. After the packages, because a rule usually exists to
     // let something in that was just installed — and its lockout check runs before any command
     // it would issue, on this path and on the unattended one alike.
-    app.apply_firewall(state, scope_label(scope)).await?;
+    app.firewall().apply(state, scope_label(scope)).await?;
     // Phase 4 (S21): provision the declared schedules onto the OS scheduler.
-    app.apply_schedules(state).await?;
+    app.schedules().apply(state).await?;
     // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and dependents a
     // script is likely to lean on. A verb, so it has no teardown phase of its own.
-    app.apply_execs(state).await?;
+    app.execs().apply(state).await?;
     // Phase 5 (S20): undo extras that were applied before but are no longer declared.
-    app.reconcile_extras(state).await?;
+    app.extras().reconcile(state).await?;
     Ok(())
 }
 

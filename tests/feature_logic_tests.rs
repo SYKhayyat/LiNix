@@ -332,7 +332,7 @@ async fn test_locked_mode_version_conflict_enforcement() {
 // EXTRAS: the teardown ledger
 // ============================================================================
 
-/// An undo that fails must not be forgotten. `reconcile_extras` records what is declared now,
+/// An undo that fails must not be forgotten. `reconcile` records what is declared now,
 /// so a key whose teardown failed used to vanish from `locks/extras.toml` after one warning —
 /// leaving a service or a timer in place that LiNix no longer knows it owns. It stays recorded
 /// until the undo succeeds.
@@ -355,7 +355,7 @@ async fn a_failed_undo_stays_in_the_extras_ledger() {
     let state = linix::model::DesiredState::default();
     kernel
         .app
-        .reconcile_extras(&state)
+        .extras().reconcile(&state)
         .await
         .expect("a failed undo is reported, not fatal");
 
@@ -382,7 +382,7 @@ async fn a_successful_undo_leaves_the_extras_ledger() {
     ledger.save(&path).unwrap();
 
     let state = linix::model::DesiredState::default();
-    kernel.app.reconcile_extras(&state).await.unwrap();
+    kernel.app.extras().reconcile(&state).await.unwrap();
 
     let after = linix::core::ExtrasLedger::load(&path).unwrap();
     assert!(
