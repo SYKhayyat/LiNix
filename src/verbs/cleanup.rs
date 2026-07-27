@@ -101,9 +101,9 @@ pub(crate) fn confirm_orphan_removal(app: &App) -> Result<bool> {
     }
     use std::io::IsTerminal;
     if !std::io::stdin().is_terminal() {
-        anyhow::bail!(
+        return Err(linix::core::Error::Refused(
             "Refusing to remove orphans without confirmation in a non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview."
-        );
+        .to_string()).into());
     }
     Ok(dialoguer::Confirm::new()
         .with_prompt("Remove these packages?")
@@ -203,7 +203,7 @@ pub(crate) async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) ->
     let ratio = managed as f64 / unmanaged.len() as f64;
     if ratio < PURGE_RATIO && !allow_mass_purge {
         let sample: Vec<String> = unmanaged.iter().take(3).map(|p| p.name.clone()).collect();
-        anyhow::bail!(
+        return Err(linix::core::Error::Refused(format!(
             "LiNix manages {} packages.\n\
              This will remove {}, including {}.\n\
              That looks like you haven't adopted this machine yet.\n\
@@ -211,7 +211,8 @@ pub(crate) async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) ->
             managed,
             unmanaged.len(),
             sample.join(", ")
-        );
+        ))
+        .into());
     }
 
     // `max_removals` does not apply: it catches accidents, and this is deliberate. Protection
@@ -259,6 +260,19 @@ pub(crate) async fn handle_purge_unmanaged(app: &App, allow_mass_purge: bool) ->
     };
 
     if !app.config.yes {
+        use std::io::IsTerminal;
+        // The most destructive command in the program, and the only prompt of the eight that
+        // could not say why it stopped. dialoguer answers a closed stdin with `IO error: not a
+        // terminal`, so it did fail safe — and a scripted user got that sentence instead of
+        // the one naming the flag that would have worked.
+        if !std::io::stdin().is_terminal() {
+            return Err(linix::core::Error::Refused(
+                "Refusing to purge unmanaged packages without confirmation in a \
+                 non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview."
+                    .to_string(),
+            )
+            .into());
+        }
         let typed: String = dialoguer::Input::new()
             .with_prompt(format!(
                 "Type the number of packages to remove ({}) to confirm",
@@ -316,14 +330,15 @@ pub(crate) async fn handle_reset(app: &App, force: bool) -> Result<()> {
         || config_root.join("profiles").exists()
         || config_root.join("active").exists();
     if repo_exists && !force {
-        anyhow::bail!(
+        return Err(linix::core::Error::Refused(format!(
             "A config repo still exists at {}.\n\
              Resetting the registry while your files declare packages would leave LiNix \
              believing it manages nothing while the files say otherwise.\n\
              Delete the repo first, or pass --force if you mean to keep the files and forget \
              the registry anyway.",
             config_root.display()
-        );
+        ))
+        .into());
     }
 
     println!(
@@ -336,10 +351,12 @@ pub(crate) async fn handle_reset(app: &App, force: bool) -> Result<()> {
     if !app.config.yes {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() {
-            anyhow::bail!(
+            return Err(linix::core::Error::Refused(
                 "Refusing to reset without confirmation in a non-interactive shell. Re-run \
                  with --yes if you are certain."
-            );
+                    .to_string(),
+            )
+            .into());
         }
         let typed: String = dialoguer::Input::new()
             .with_prompt(format!(

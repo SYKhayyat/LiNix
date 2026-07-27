@@ -142,9 +142,9 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         if opts.confirm && !app.config.yes && !opts.json {
             use std::io::IsTerminal;
             if !std::io::stdin().is_terminal() {
-                anyhow::bail!(
+                return Err(linix::core::Error::Refused(
                     "Refusing to apply changes without confirmation in a non-interactive shell. Re-run with --yes to proceed, or --dry-run to preview."
-                );
+                .to_string()).into());
             }
             let mut preview = TuiPreview::new(&changes, HashMap::new());
             if !preview.run()? {
@@ -303,9 +303,9 @@ pub(crate) async fn handle_rebuild(
     if !app.config.yes {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() {
-            anyhow::bail!(
+            return Err(linix::core::Error::Refused(
                 "Refusing to rebuild without confirmation in a non-interactive shell. Re-run with --yes, or --dry-run to preview."
-            );
+            .to_string()).into());
         }
         let proceed = dialoguer::Confirm::new()
             .with_prompt("Remove and reinstall these packages?")

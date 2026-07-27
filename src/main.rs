@@ -83,10 +83,12 @@ async fn main() -> Result<()> {
     }
 
     let cli = if aliases.is_empty() {
-        Cli::parse()
+        parse_or_exit(Cli::try_parse())
     } else {
         let known = known_subcommands();
-        Cli::parse_from(expand_command_aliases(raw_argv, &aliases, &known))
+        parse_or_exit(Cli::try_parse_from(expand_command_aliases(
+            raw_argv, &aliases, &known,
+        )))
     };
     let mut config = load_and_merge_config(&cli).await?;
     // T4: `watch` runs unattended, so nobody is present to touch a hardware key. Set on the
@@ -121,6 +123,36 @@ async fn main() -> Result<()> {
     // a failure (1). `anyhow`'s default would collapse all three into 1.
     let outcome = dispatch(&app, &cli).await;
     finish(&app, outcome).await
+}
+
+/// Which of the four published codes a clap outcome is (Q3, II.8, V.92).
+///
+/// clap's own convention for a usage error is 2, and II.8 spends 2 on *a read-only command
+/// looked and found work to do* — so a CI job branching on the documented table read a
+/// mistyped subcommand as a drifted machine. A typo has not looked at the machine at all.
+/// Asking for help or a version is an answer and stays 0.
+fn clap_exit_code(kind: clap::error::ErrorKind) -> i32 {
+    use clap::error::ErrorKind;
+    match kind {
+        // Asked for and answered.
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => 0,
+        // `linix` with no subcommand. clap prints help as a courtesy and files it next to the
+        // real thing, but nobody asked for help and no command ran — a script that reaches
+        // here has a bug, and 0 would tell it everything is fine.
+        ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand => linix::core::Exit::Failed.code(),
+        _ => linix::core::Exit::Failed.code(),
+    }
+}
+
+/// Hand clap's own message to the user, then leave with LiNix's code rather than clap's.
+fn parse_or_exit(parsed: Result<Cli, clap::Error>) -> Cli {
+    match parsed {
+        Ok(cli) => cli,
+        Err(e) => {
+            let _ = e.print();
+            std::process::exit(clap_exit_code(e.kind()));
+        }
+    }
 }
 
 /// Turn a command's result into this process's exit code (U21, `core::Exit`).

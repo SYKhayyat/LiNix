@@ -143,6 +143,17 @@ impl FailureDiagnosticEngine {
             self.remediate(&suggestions, registry, state, config)
                 .await?;
         } else {
+            use std::io::IsTerminal;
+            // This prompt installs software. Without the check, a scripted run got dialoguer's
+            // `IO error: not a terminal` — safe, but it names neither what stopped nor the
+            // flag that gets past it, which is the whole of the difference.
+            if !std::io::stdin().is_terminal() {
+                return Err(Error::Refused(
+                    "Refusing to install remediation packages without confirmation in a \
+                     non-interactive shell. Re-run with --yes to proceed."
+                        .to_string(),
+                ));
+            }
             let res = tokio::task::spawn_blocking(move || {
                 Confirm::with_theme(&ColorfulTheme::default())
                     .with_prompt("Would you like to execute remediation now?")

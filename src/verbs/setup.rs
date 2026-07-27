@@ -683,10 +683,12 @@ pub(crate) async fn interactive_init(app: &App, force: bool) -> Result<()> {
     use std::io::IsTerminal;
 
     if !std::io::stdin().is_terminal() {
-        anyhow::bail!(
+        return Err(linix::core::Error::Refused(
             "`init -i` is interactive but stdin is not a terminal. \
              Run `linix init` (non-interactive) or `linix config init` instead."
-        );
+                .to_string(),
+        )
+        .into());
     }
 
     let config_path = app.config.preferences_file.clone();

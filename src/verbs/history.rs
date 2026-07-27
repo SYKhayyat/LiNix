@@ -49,7 +49,7 @@ pub(crate) async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
     // `require_signed_history` is set, because a fresh repo signs nothing.
     let signature = git.signature_of(reference)?;
     if app.config.guard.require_signed_history && !signature.is_verified() {
-        anyhow::bail!(
+        return Err(linix::core::Error::Refused(format!(
             "rollback: refusing to restore {}.\n  \
              - git says it is {}\n\n\
              `require_signed_history` is on, so every commit you roll back to must carry a \
@@ -57,7 +57,8 @@ pub(crate) async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
              or turn the rule off in preferences.toml.",
             reference,
             signature.describe()
-        );
+        ))
+        .into());
     }
 
     // The bail must come before the checkout, not after. `handle_sync` refuses unconfirmed
@@ -66,10 +67,12 @@ pub(crate) async fn handle_rollback(app: &App, reference: &str) -> Result<()> {
     if !app.config.yes {
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() {
-            anyhow::bail!(
+            return Err(linix::core::Error::Refused(
                 "Refusing to roll back without confirmation in a non-interactive shell. \
                  Re-run with --yes to proceed, or --dry-run to preview."
-            );
+                    .to_string(),
+            )
+            .into());
         }
     }
     info!("checking out manifests at {}.", reference);
