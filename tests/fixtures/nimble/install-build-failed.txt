@@ -1,0 +1,148 @@
+    Prompt: No nim version matching any version. Download it now? -> [forced yes]
+      Info: using C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\bin\nim.exe for compilation
+   Building nimjson/nimjson.exe using c backend
+ Nim Output In file included from C:\Users\Administrator\nimcache\nimjson_r\@psystem@sexceptions.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pstd@sprivate@sdigitsutils.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pstd@sassertions.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pstd@sobjectdollar.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@psystem@sdollars.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pstd@swidestrs.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pstd@sexitprocs.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pstd@ssyncio.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@psystem.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@phashes.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pmath.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@palgorithm.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@ptables.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pparseutils.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@punicode.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... Error: execution of an external compiler program 'gcc.exe -c  -w -fmax-errors=3 -mno-ms-bitfields -fno-strict-aliasing -DWIN32_LEAN_AND_MEAN -O3 -fno-ident -fno-math-errno   -IC:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib -IC:\Users\Administrator\.nimble\buildtemp\nimjson-3.3.0-cd500466a07ba18ccc03d4474a040eaa890b1587\src -o C:\Users\Administrator\nimcache\nimjson_r\@psystem@sexceptions.nim.c.o C:\Users\Administrator\nimcache\nimjson_r\@psystem@sexceptions.nim.c' failed with exit code: 1
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pstrutils.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pstreams.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pparsejson.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@plexbase.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+        ... In file included from C:\Users\Administrator\nimcache\nimjson_r\@pjson.nim.c:7:
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:273:35: error: static assertion failed: "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU."
+        ...   273 | #define NIM_STATIC_ASSERT(x, msg) _Static_assert((x), msg)
+        ...       |                                   ^~~~~~~~~~~~~~
+        ... C:\Users\Administrator\.nimble\pkgs2\nim-2.2.10-17ec440fdb89f8903db29a17898af590087d2b64\lib/nimbase.h:561:1: note: in expansion of macro 'NIM_STATIC_ASSERT'
+        ...   561 | NIM_STATIC_ASSERT(sizeof(NI) == sizeof(void*) && NIM_INTBITS == sizeof(NI)*8, "Pointer size mismatch between Nim and C/C++ backend. You probably need to setup the backend compiler for target CPU.");
+        ...       | ^~~~~~~~~~~~~~~~~
+       Tip: 61 messages have been suppressed, use --verbose to show them.
+vnext.nim(1128)          buildFromDir
+
+    Error:  Build failed for the package: nimjson

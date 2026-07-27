@@ -58,7 +58,6 @@ const TERMINATES: &[&str] = &[
     "composer",
     "luarocks",
     "opam",
-    "nimble",
     "mix",
     "cabal",
     "stack", //
@@ -108,6 +107,13 @@ const DOES_NOT_TERMINATE: &[&str] = &[
     // no gem at all and fails with "Please specify at least one gem name" — which is
     // exactly what listing it as terminating did to every `gem` install and removal.
     "gem",
+    // nimble's `--` is RubyGems' `--`, not GNU's: `nimble install --help` says of it "arg
+    // are passed to the binary when it is run … to the Nim compiler". So `nimble install -y
+    // -- nimjson` reaches the compiler as an argument and the build dies with "arguments can
+    // only be given if the '--run' option is selected". Every install of a nimble package
+    // that produces a binary failed this way; a package that only ships a library never
+    // invokes the compiler with arguments, which is why it went unnoticed.
+    "nimble",
     // `code` takes an extension id as the *value* of `--install-extension`, never as a
     // positional, so a `--` in front of it would become the value.
     "code",
@@ -218,6 +224,26 @@ mod tests {
         let mut args = vec!["uninstall".to_string()];
         push_names(&mut args, "gem", ["colorize"]);
         assert_eq!(args, ["uninstall", "colorize"]);
+    }
+
+    /// The same class as `gem`, found the same way — by running it. `nimble --help` says of
+    /// `--`: "arg are passed to the binary when it is run … to the Nim compiler". So
+    /// `nimble install -y -- nimjson` hands `--` to the compiler, which answers "arguments
+    /// can only be given if the '--run' option is selected" and the build fails. Every
+    /// nimble install of a package that produces a binary failed this way.
+    #[test]
+    fn nimble_does_not_terminate_because_its_dash_dash_reaches_the_compiler() {
+        assert!(!terminates_options("nimble"));
+        let mut args = vec!["install".to_string(), "-y".to_string()];
+        push_names(&mut args, "nimble", ["nimjson"]);
+        assert_eq!(
+            args,
+            ["install", "-y", "nimjson"],
+            "`--` reaches the Nim compiler and fails the build"
+        );
+        let mut args = vec!["uninstall".to_string(), "-y".to_string()];
+        push_names(&mut args, "nimble", ["nimjson"]);
+        assert_eq!(args, ["uninstall", "-y", "nimjson"]);
     }
 
     #[test]

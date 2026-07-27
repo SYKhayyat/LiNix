@@ -1,0 +1,1 @@
+ERROR 'linix-no-such-pkg-zzz' isn't installed.

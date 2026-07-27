@@ -1355,7 +1355,9 @@ fn register_nimble(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.list_args = vec!["list".into(), "--installed".into()];
     let core = Arc::new(GenericBackendCore {
         name: "nimble".into(),
-        executor: executor.duplicate(),
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::nimble()),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::nimble_list(o, "nimble"),

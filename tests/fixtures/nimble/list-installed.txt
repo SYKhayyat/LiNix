@@ -1,0 +1,5 @@
+Package list format: 
+{PackageName}
+└── @{Version} ({CheckSum})[Special Versions (if any)] ({InstallPath})
+jsony
+nim

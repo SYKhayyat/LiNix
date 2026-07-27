@@ -1,0 +1,5 @@
+    Looking for linix-no-such-pkg-zzz (any version)
+       Tip: 2 messages have been suppressed, use --verbose to show them.
+nimble.nim(1656)         uninstall
+
+    Error:  Package not found

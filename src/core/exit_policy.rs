@@ -18,6 +18,14 @@ pub struct ExitPolicy {
     pub benign_exits: Vec<i32>,
     /// Text that means the command did nothing, even though it exited 0.
     pub failure_markers: Vec<&'static str>,
+    /// Text that means failure when it *opens a line* — scoop's `ERROR `, nimble's `Error:`.
+    ///
+    /// A manager that prefixes its errors states its own convention, and matching the
+    /// convention catches failures nobody has met yet. Enumerating phrasings instead is how
+    /// scoop came to detect exactly one of its failures: `uninstall` of something that was
+    /// never installed prints `ERROR 'x' isn't installed.`, exits 0, and was reported to the
+    /// user as a success.
+    pub failure_line_prefixes: Vec<&'static str>,
     /// Text that means the failure came from outside the request — a lock, a mirror, a
     /// network. Worth another attempt.
     pub transient_markers: Vec<&'static str>,
@@ -38,11 +46,33 @@ impl ExitPolicy {
 
     /// A manager that exited 0 while refusing to do the work.
     pub fn signals_failure(&self, stdout: &[u8], stderr: &[u8]) -> bool {
-        if self.failure_markers.is_empty() {
+        if self.failure_markers.is_empty() && self.failure_line_prefixes.is_empty() {
             return false;
         }
         let hay = Self::haystack(stdout, stderr);
-        self.failure_markers.iter().any(|m| hay.contains(m))
+        if self.failure_markers.iter().any(|m| hay.contains(m)) {
+            return true;
+        }
+        hay.lines().any(|line| {
+            let opening = Self::opening(line);
+            self.failure_line_prefixes
+                .iter()
+                .any(|p| opening.starts_with(p))
+        })
+    }
+
+    /// What a line says once indentation and any colour escape are out of the way. A manager
+    /// writing to a pipe can still emit SGR sequences — scoop's bucket update does — and an
+    /// error prefix behind one is still an error prefix.
+    fn opening(line: &str) -> &str {
+        let mut rest = line.trim_start();
+        while let Some(after_esc) = rest.strip_prefix('\u{1b}') {
+            match after_esc.find(|c: char| c.is_ascii_alphabetic()) {
+                Some(end) => rest = after_esc[end + 1..].trim_start(),
+                None => return "",
+            }
+        }
+        rest
     }
 
     /// Whether the same command could succeed on another attempt.
@@ -62,6 +92,11 @@ impl ExitPolicy {
 
     fn haystack(stdout: &[u8], stderr: &[u8]) -> String {
         let mut hay = String::from_utf8_lossy(stdout).into_owned();
+        // Without this, a stdout that does not end in a newline welds its last line onto the
+        // first line of stderr, and the joined line opens with neither one's prefix.
+        if !hay.is_empty() && !hay.ends_with('\n') {
+            hay.push('\n');
+        }
         hay.push_str(&String::from_utf8_lossy(stderr));
         hay.make_ascii_lowercase();
         hay
@@ -188,13 +223,38 @@ pub fn cargo() -> ExitPolicy {
     }
 }
 
-/// scoop exits 0 after installing nothing when the manifest does not exist, so a bogus
-/// install would otherwise be trusted. The tail of "Couldn't find manifest for 'x'." is
-/// stable across scoop versions.
+/// scoop exits 0 on every outcome, so its output is the only evidence there is.
+///
+/// `ERROR ` opens every scoop failure, which is what catches the ones nobody has enumerated:
+/// a missing manifest was the single phrasing known here, and `scoop uninstall <not
+/// installed>` — which prints `ERROR 'x' isn't installed.` — was read as success.
 pub fn scoop() -> ExitPolicy {
     ExitPolicy {
         failure_markers: vec!["find manifest for"],
-        permanent_markers: vec!["find manifest for"],
+        failure_line_prefixes: vec!["error "],
+        permanent_markers: vec!["find manifest for", "isn't installed"],
+        transient_markers: vec![
+            "could not resolve host",
+            "the remote name could not be resolved",
+            "unable to connect",
+            "hash check failed",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Nim. `nimble` exits 0 whether it built the program, failed to build it, or never found
+/// it — so a build that produced no binary was reported as a successful install and only the
+/// absence of the binary, two checks later, said otherwise.
+pub fn nimble() -> ExitPolicy {
+    ExitPolicy {
+        failure_line_prefixes: vec!["error:"],
+        permanent_markers: vec![
+            "version not found",
+            "package not found",
+            "build failed for the package",
+        ],
+        transient_markers: vec!["could not download", "connection", "temporary failure"],
         ..ExitPolicy::default()
     }
 }
@@ -306,5 +366,66 @@ mod tests {
         let p = apt();
         let both = b"E: Could not get lock; E: Unable to locate package nope" as &[u8];
         assert_eq!(p.retryability(b"", both), Retryability::Permanent);
+    }
+
+    /// Captured from nimble v0.22.2 on this machine. Every one of these exits **0**.
+    const NIMBLE_BUILD_FAILED: &str =
+        include_str!("../../tests/fixtures/nimble/install-build-failed.txt");
+    const NIMBLE_NOT_FOUND: &str =
+        include_str!("../../tests/fixtures/nimble/install-not-found.txt");
+    const NIMBLE_UNINSTALL_MISSING: &str =
+        include_str!("../../tests/fixtures/nimble/uninstall-not-installed.txt");
+    const NIMBLE_LIST: &str = include_str!("../../tests/fixtures/nimble/list-installed.txt");
+    /// Captured from scoop on this machine. Exits **0** and matches no phrasing marker.
+    const SCOOP_UNINSTALL_MISSING: &str =
+        include_str!("../../tests/fixtures/scoop/uninstall-not-installed.txt");
+
+    /// nimble reports every failure on a line beginning `Error:` and exits 0 regardless, so
+    /// without a policy LiNix called a build that never produced a binary a successful
+    /// install — and then the harness's `list` and on-PATH checks failed, which is the
+    /// product telling the truth downstream about a lie it told upstream.
+    #[test]
+    fn nimble_failures_are_seen_though_every_one_of_them_exits_zero() {
+        let p = nimble();
+        for (case, out) in [
+            ("build failed", NIMBLE_BUILD_FAILED),
+            ("package not found", NIMBLE_NOT_FOUND),
+            ("uninstall missing", NIMBLE_UNINSTALL_MISSING),
+        ] {
+            assert!(
+                p.signals_failure(out.as_bytes(), b""),
+                "nimble failure not detected: {case}"
+            );
+        }
+    }
+
+    /// The other half, and the half that makes the check worth having: a successful command
+    /// must not be read as a failure.
+    #[test]
+    fn a_successful_nimble_listing_is_not_a_failure() {
+        assert!(!nimble().signals_failure(NIMBLE_LIST.as_bytes(), b""));
+    }
+
+    /// The defect this mechanism exists for: scoop's single phrasing marker caught a missing
+    /// manifest and nothing else, so removing something that was never installed reported
+    /// success.
+    #[test]
+    fn scoop_sees_a_failure_that_is_not_a_missing_manifest() {
+        let p = scoop();
+        assert!(
+            p.signals_failure(SCOOP_UNINSTALL_MISSING.as_bytes(), b""),
+            "scoop uninstall of a package that is not installed read as success"
+        );
+        assert!(p.signals_failure(b"Couldn't find manifest for 'nope'.", b""));
+        assert!(!p.signals_failure(b"'jq' (1.7.1) was installed successfully!", b""));
+    }
+
+    /// An error prefix is a line's opening word, not a substring of prose. A package whose
+    /// description mentions errors is not a failed command.
+    #[test]
+    fn a_prefix_marker_anchors_to_a_line_and_does_not_match_prose() {
+        let p = nimble();
+        assert!(!p.signals_failure(b"jsony - a library with no error: handling at all", b""));
+        assert!(p.signals_failure(b"building...\n    Error:  Package not found\n", b""));
     }
 }
