@@ -39,6 +39,9 @@ impl BackendCore for NpmBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("npm")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["npm".into()]
+    }
     fn needs_root(&self) -> bool {
         false
     }

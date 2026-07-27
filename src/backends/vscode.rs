@@ -74,6 +74,9 @@ impl BackendCore for VscodeBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("code")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["code".into()]
+    }
     fn needs_root(&self) -> bool {
         false
     }

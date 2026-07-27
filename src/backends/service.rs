@@ -264,6 +264,16 @@ impl BackendCore for ServiceBackendCore {
         self.detect_init().is_some()
     }
 
+    /// Every init program this OS could have. Any one of them is enough, which is why the
+    /// message names them all rather than claiming which is missing.
+    fn probes(&self) -> Vec<String> {
+        self.providers
+            .iter()
+            .filter(|p| p.applies_to_this_os())
+            .map(|p| p.detect.clone())
+            .collect()
+    }
+
     fn needs_root(&self) -> bool {
         // System service management requires root/administrative privileges.
         true

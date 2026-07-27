@@ -40,6 +40,9 @@ impl BackendCore for PubBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("dart")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["dart".into()]
+    }
     fn needs_root(&self) -> bool {
         false
     }

@@ -42,6 +42,9 @@ impl BackendCore for CondaBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("conda")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["conda".into()]
+    }
     fn needs_root(&self) -> bool {
         false
     }

@@ -39,6 +39,7 @@ pub use transaction::{GraphAction, Transaction, TransactionConfig};
 pub use journal::{ActionStatus, Journal, JournalEntry};
 pub use snapshot::{Snapshot, SnapshotManager, SnapshotProvider};
 
+pub use manager::missing_program;
 pub use manager::{
     BackendCapabilities, BackendCapabilitiesBuilder, BackendCore, Enumerable, HealthReport,
     HealthStatus, Installable, MetadataProvider, Queryable, RepoManager, Searchable, Upgradable,

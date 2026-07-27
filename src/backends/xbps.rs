@@ -79,6 +79,9 @@ impl BackendCore for XbpsBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("xbps-install")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["xbps-install".into()]
+    }
     fn needs_root(&self) -> bool {
         true
     }

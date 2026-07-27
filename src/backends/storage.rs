@@ -67,6 +67,9 @@ impl BackendCore for ZfsBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("zfs")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["zfs".into()]
+    }
     fn needs_root(&self) -> bool {
         true
     }
@@ -199,6 +202,11 @@ impl BackendCore for LvmBackendCore {
     }
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("lvs")
+    }
+    /// `lvs`, not `lvm`. The default message said "Binary for lvm not found in PATH" and named
+    /// a program this backend never looks for.
+    fn probes(&self) -> Vec<String> {
+        vec!["lvs".into()]
     }
     fn needs_root(&self) -> bool {
         true

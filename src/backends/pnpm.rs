@@ -50,6 +50,9 @@ impl BackendCore for PnpmBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("pnpm")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["pnpm".into()]
+    }
     fn needs_root(&self) -> bool {
         false
     }

@@ -33,6 +33,9 @@ impl BackendCore for NixBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("nix")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["nix".into()]
+    }
 
     fn needs_root(&self) -> bool {
         // Nix profiles are managed per-user in the nix store; usually doesn't require sudo.

@@ -312,6 +312,14 @@ impl BackendCore for SettingBackendCore {
     fn is_available(&self) -> bool {
         self.adapter().is_some()
     }
+    /// The settings stores this OS could have; any one of them is enough.
+    fn probes(&self) -> Vec<String> {
+        self.adapters
+            .iter()
+            .filter(|a| a.applies_to_this_os())
+            .map(|a| a.detect.clone())
+            .collect()
+    }
     fn needs_root(&self) -> bool {
         // A desktop setting is per-user, written as the user, never with sudo.
         false

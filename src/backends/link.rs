@@ -359,6 +359,9 @@ impl BackendCore for LinkBackendCore {
     fn is_available(&self) -> bool {
         true
     }
+    fn probes(&self) -> Vec<String> {
+        Vec::new()
+    }
     fn needs_root(&self) -> bool {
         false
     }

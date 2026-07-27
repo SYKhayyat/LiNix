@@ -126,6 +126,9 @@ impl BackendCore for GoBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("go")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["go".into()]
+    }
     fn needs_root(&self) -> bool {
         false
     }

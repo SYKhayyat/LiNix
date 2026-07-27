@@ -8,8 +8,57 @@ pub enum HealthStatus {
     Ok,
     /// Backend is present but requires attention (e.g. out of date, missing optional deps).
     Degraded,
-    /// Backend is unusable (e.g. binary missing, network unreachable).
+    /// It is installed, or `priority` names it, and it cannot work.
     Critical,
+    /// Not installed here, and nothing asked for it (Q2, II.8, V.91).
+    ///
+    /// Never counted as a failure. `25 OK, 0 degraded, 23 critical` on a healthy Windows box
+    /// was fail-loud pointed at something that had not failed — apt and brew are not broken on
+    /// a machine that was never going to have them, and spending the word "critical" on them
+    /// is what makes a real critical unreadable.
+    Absent,
+}
+
+/// The one rendering of "this backend's program is not here" (V.94).
+///
+/// There were two, and a user saw both in one screen: `` `cabal` is not on PATH, so the
+/// `cabal` backend cannot run `` from the generic backend, and `Binary for snap not found in
+/// PATH` from this module's default. The default was also wrong about *what* it probed —
+/// `lvm` says `lvm` and probes `lvs`, `xbps` says `xbps` and probes `xbps-install`, `krew`
+/// says `krew` and probes two programs, `appimage` says `appimage` and probes nothing at all.
+/// So the message is built from [`BackendCore::probes`], which each backend must state.
+pub fn missing_program(backend: &str, programs: &[String]) -> HealthReport {
+    let message = match programs {
+        [] => format!("the `{}` backend cannot run on this machine", backend),
+        [one] => format!("{}, so the `{}` backend cannot run", located(one), backend),
+        // Deliberately says nothing about *how many* of them are needed. `krew` wants both
+        // `kubectl` and `kubectl-krew`; `service` wants any one of several init programs.
+        // Naming every program it looked for is true of both, and asserting a quantifier here
+        // would make one of them wrong — which is the whole defect this message replaced.
+        many => format!(
+            "the `{}` backend could not find the program(s) it needs: {}",
+            backend,
+            many.iter()
+                .map(|p| format!("`{}`", p))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    HealthReport {
+        status: HealthStatus::Absent,
+        message: Some(message),
+    }
+}
+
+/// "not found" rather than "not on PATH": a custom backend's binary may be an absolute path
+/// (U16), and telling someone their `/opt/vendor/thing` is "not on PATH" points them at the
+/// wrong thing to fix.
+fn located(program: &str) -> String {
+    if program.contains(['/', '\\']) {
+        format!("`{}` does not exist or is not executable", program)
+    } else {
+        format!("`{}` is not on PATH", program)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +73,13 @@ pub trait BackendCore: Send + Sync {
 
     fn is_available(&self) -> bool;
 
+    /// The program(s) `is_available` actually looks for.
+    ///
+    /// Stated per backend rather than assumed from the name, because the assumption was wrong
+    /// for four of them and told users to install things that do not exist. Empty means this
+    /// backend probes no external program — it is built in, or gated on the platform.
+    fn probes(&self) -> Vec<String>;
+
     /// System managers (apt, dnf) return true. User managers (cargo, npm, scoop) return
     /// false.
     fn needs_root(&self) -> bool;
@@ -35,10 +91,7 @@ pub trait BackendCore: Send + Sync {
                 message: None,
             })
         } else {
-            Ok(HealthReport {
-                status: HealthStatus::Critical,
-                message: Some(format!("Binary for {} not found in PATH", self.name())),
-            })
+            Ok(missing_program(self.name(), &self.probes()))
         }
     }
 }

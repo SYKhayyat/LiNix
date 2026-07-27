@@ -52,6 +52,9 @@ impl BackendCore for FlatpakBackendCore {
             .available
             .get_or_init(|| self.executor.command_exists_sync("flatpak"))
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["flatpak".into()]
+    }
 
     fn needs_root(&self) -> bool {
         // If the 'user' setting is true, Flatpak does not need root privileges.

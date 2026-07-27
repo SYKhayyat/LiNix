@@ -29,6 +29,9 @@ impl BackendCore for BrewBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("brew")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["brew".into()]
+    }
     fn needs_root(&self) -> bool {
         false
     }

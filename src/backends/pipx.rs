@@ -43,6 +43,9 @@ impl BackendCore for PipxBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("pipx")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["pipx".into()]
+    }
     fn needs_root(&self) -> bool {
         false
     }

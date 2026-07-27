@@ -44,6 +44,9 @@ impl BackendCore for DnfBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("dnf")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["dnf".into()]
+    }
 
     fn needs_root(&self) -> bool {
         true

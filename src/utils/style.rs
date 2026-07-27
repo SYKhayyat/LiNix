@@ -8,6 +8,10 @@ pub const GREEN: &str = "32";
 pub const YELLOW: &str = "33";
 pub const RED: &str = "31";
 pub const BOLD: &str = "1";
+/// For a fact that is not a verdict — a manager the user simply has not installed. Green,
+/// yellow and red are all things to act on, and there are twenty-three of these on a healthy
+/// Windows box.
+pub const DIM: &str = "2";
 
 /// Whether colored output should be produced right now: stdout is a TTY and `NO_COLOR` is unset.
 pub fn color_enabled() -> bool {

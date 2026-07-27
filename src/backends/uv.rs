@@ -50,6 +50,9 @@ impl BackendCore for UvBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("uv")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["uv".into()]
+    }
     fn needs_root(&self) -> bool {
         false
     }

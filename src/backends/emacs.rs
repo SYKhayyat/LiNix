@@ -76,6 +76,9 @@ impl BackendCore for EmacsBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("emacs")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["emacs".into()]
+    }
 
     fn needs_root(&self) -> bool {
         // Emacs packages are typically installed in user-owned ~/.emacs.d/elpa

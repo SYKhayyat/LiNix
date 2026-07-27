@@ -86,6 +86,9 @@ impl BackendCore for BtrfsBackendCore {
     fn is_available(&self) -> bool {
         cfg!(target_os = "linux") && self.executor.command_exists_sync("btrfs")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["btrfs".into()]
+    }
 
     fn needs_root(&self) -> bool {
         // Filesystem level modifications (subvolumes, mounts) require root.

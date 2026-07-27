@@ -210,28 +210,40 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
     }
 
     // health — can each backend run?
-    // `critical` is deliberately not counted here: on any real machine most backends are
-    // critical because that manager simply is not installed, which is the ordinary state and
-    // not something a summary should report as wrong. `check health` lists them.
+    //
+    // This rollup used to skip `critical` entirely, with a comment explaining that most
+    // backends are critical on any real machine because the manager is not installed. That was
+    // true and it was the wrong cure: the rollup said `25 backend(s) ready` while `check
+    // health` called the same machine `23 critical`, and neither number was wrong on its own
+    // terms. Now that "not installed" is `Absent` (Q2), a `critical` is a real one and the
+    // rollup can report it.
     let mut ok = 0usize;
     let mut degraded = 0usize;
+    let mut critical = 0usize;
     for b in app.registry.all() {
         if let Ok(r) = b.core().check_health().await {
             match r.status {
                 linix::core::HealthStatus::Ok => ok += 1,
                 linix::core::HealthStatus::Degraded => degraded += 1,
-                linix::core::HealthStatus::Critical => {}
+                linix::core::HealthStatus::Critical => critical += 1,
+                linix::core::HealthStatus::Absent => {}
             }
         }
     }
-    findings.push(if degraded == 0 {
-        Finding::ok(Section::Health, format!("{} backend(s) ready", ok))
-    } else {
+    findings.push(if critical > 0 {
+        Finding::attention(
+            Section::Health,
+            format!("{} ready, {} cannot run", ok, critical),
+            "linix check health",
+        )
+    } else if degraded > 0 {
         Finding::attention(
             Section::Health,
             format!("{} ready, {} degraded", ok, degraded),
             "linix check health",
         )
+    } else {
+        Finding::ok(Section::Health, format!("{} backend(s) ready", ok))
     });
 
     // security — anything managed with a known advisory.
@@ -578,6 +590,7 @@ pub(crate) fn status_label(s: linix::core::HealthStatus) -> &'static str {
         Ok => "OK",
         Degraded => "WARN",
         Critical => "FAIL",
+        Absent => "absent",
     }
 }
 
@@ -585,11 +598,14 @@ pub(crate) fn status_label(s: linix::core::HealthStatus) -> &'static str {
 /// NO_COLOR. Centralizing color here keeps the doctor output readable without a color crate.
 pub(crate) fn status_label_colored(s: linix::core::HealthStatus) -> String {
     use linix::core::HealthStatus::*;
-    use linix::utils::style::{color_enabled, paint, GREEN, RED, YELLOW};
+    use linix::utils::style::{color_enabled, paint, DIM, GREEN, RED, YELLOW};
     let code = match s {
         Ok => GREEN,
         Degraded => YELLOW,
         Critical => RED,
+        // Not a colour a reader scans for. A manager nobody installed is information, not an
+        // alarm, and painting it red is what made 23 of them shout on a healthy machine.
+        Absent => DIM,
     };
     paint(color_enabled(), code, status_label(s))
 }
@@ -597,19 +613,21 @@ pub(crate) fn status_label_colored(s: linix::core::HealthStatus) -> String {
 /// Count backends by status. Pure — unit tested.
 pub(crate) fn doctor_tally(
     reports: &[(String, linix::core::HealthReport)],
-) -> (usize, usize, usize) {
+) -> (usize, usize, usize, usize) {
     use linix::core::HealthStatus::*;
     let mut ok = 0;
     let mut degraded = 0;
     let mut critical = 0;
+    let mut absent = 0;
     for (_, r) in reports {
         match r.status {
             Ok => ok += 1,
             Degraded => degraded += 1,
             Critical => critical += 1,
+            Absent => absent += 1,
         }
     }
-    (ok, degraded, critical)
+    (ok, degraded, critical, absent)
 }
 
 /// The `health` section of `check`: can each backend actually run, and is the repo intact?
@@ -619,16 +637,84 @@ pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
     use linix::core::{HealthReport, HealthStatus};
 
     // ---- Per-backend health, via each backend's own probe (not a shallow is_available). ----
+    // Absent means "not installed, and nothing asked for it" — so a manager listed in
+    // `priority` is not absent, it is broken. The user named it; LiNix cannot use it. That
+    // second half is what keeps Q2 from being a way to hide real failures: the state depends
+    // on whether the machine was asked for the manager, not only on whether it is there.
+    let wanted = app.priority_backends().await;
     let mut reports: Vec<(String, HealthReport)> = Vec::new();
     for b in app.registry.all() {
-        let report = match b.core().check_health().await {
+        let mut report = match b.core().check_health().await {
             Ok(r) => r,
             Err(e) => HealthReport {
                 status: HealthStatus::Critical,
                 message: Some(format!("health probe errored: {}", e)),
             },
         };
+        if report.status == HealthStatus::Absent && wanted.iter().any(|w| w == b.name()) {
+            report.status = HealthStatus::Critical;
+            report.message = Some(format!(
+                "{} — and `priority` lists it, so LiNix was told to use it",
+                report.message.as_deref().unwrap_or("it cannot run")
+            ));
+        }
         reports.push((b.name().to_string(), report));
+    }
+
+    // A backend that says it is healthy and cannot answer its cheapest real question is
+    // lying, whatever the reason. `psresource` claimed `[READY]` for months on the strength of
+    // PowerShell existing, and every operation then died on a cmdlet that was never there —
+    // a probe can only be as good as the question it asks, and this asks the backend to do its
+    // job instead. It costs one `list` per healthy backend and it is the check that would have
+    // caught psresource without anyone having to think about PowerShell.
+    {
+        use futures::stream::{self, StreamExt};
+        let healthy: Vec<String> = reports
+            .iter()
+            .filter(|(_, r)| r.status == HealthStatus::Ok)
+            .map(|(n, _)| n.clone())
+            .collect();
+        let probed: Vec<(String, Option<String>)> = stream::iter(healthy)
+            .map(|name| {
+                let registry = app.registry.clone();
+                async move {
+                    let Some(b) = registry.get(&name) else {
+                        return (name, None);
+                    };
+                    let Some(q) = b.as_queryable() else {
+                        return (name, None); // nothing to ask; not a claim it failed
+                    };
+                    // Bounded, because `check` is a read-only command and a wedged manager
+                    // must not hold the whole report open.
+                    // 60s, and the number is evidence rather than taste: `list` measured
+                    // 2-7s per backend on this machine, and an earlier 20s cap with eight in
+                    // flight timed out scoop and winget — which take 1.2s each on their own.
+                    // A limit tight enough to fail on contention manufactures the defect it
+                    // claims to find.
+                    let answer = tokio::time::timeout(
+                        std::time::Duration::from_secs(60),
+                        q.list_installed(),
+                    )
+                    .await;
+                    let complaint = match answer {
+                        Ok(Ok(_)) => None,
+                        Ok(Err(e)) => Some(format!("says it is ready but cannot list: {}", e)),
+                        Err(_) => Some("says it is ready but `list` did not answer in 60s".into()),
+                    };
+                    (name, complaint)
+                }
+            })
+            .buffer_unordered(4)
+            .collect()
+            .await;
+
+        for (name, complaint) in probed {
+            let Some(complaint) = complaint else { continue };
+            if let Some((_, r)) = reports.iter_mut().find(|(n, _)| *n == name) {
+                r.status = HealthStatus::Critical;
+                r.message = Some(complaint);
+            }
+        }
     }
 
     // ---- System-level checks. Reported, never repaired: that is `heal`'s job (U9). ----
@@ -727,7 +813,7 @@ pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
         }
     }
 
-    let (ok, degraded, critical) = doctor_tally(&reports);
+    let (ok, degraded, critical, absent) = doctor_tally(&reports);
     if ok == 0 {
         system.push((
             "package managers".into(),
@@ -751,17 +837,18 @@ pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
             serde_json::to_string_pretty(&serde_json::json!({
                 "backends": backends,
                 "system": sys,
-                "summary": { "ok": ok, "degraded": degraded, "critical": critical },
+                "summary": { "ok": ok, "degraded": degraded, "critical": critical, "absent": absent },
             }))?
         );
         return Ok(());
     }
 
     println!(
-        "Backends: {} OK, {} degraded, {} critical (of {} total).",
+        "Backends: {} OK, {} degraded, {} critical, {} not installed (of {} total).",
         ok,
         degraded,
         critical,
+        absent,
         reports.len()
     );
     // Readiness roster: one `[READY] <backend>` line per healthy backend, printed at column 0
@@ -830,8 +917,27 @@ mod doctor_tests {
             ("brew".to_string(), rep(HealthStatus::Ok)),
             ("snap".to_string(), rep(HealthStatus::Degraded)),
             ("nix".to_string(), rep(HealthStatus::Critical)),
+            ("pacman".to_string(), rep(HealthStatus::Absent)),
+            ("dnf".to_string(), rep(HealthStatus::Absent)),
         ];
-        assert_eq!(doctor_tally(&reports), (2, 1, 1));
+        assert_eq!(doctor_tally(&reports), (2, 1, 1, 2));
+    }
+
+    /// The whole point of Q2: a manager nobody installed is not a fault, so it cannot be
+    /// counted as one. Twenty-three of these on an ordinary Windows box read as `23 critical`.
+    #[test]
+    fn a_machine_with_nothing_wrong_has_no_criticals() {
+        let reports: Vec<_> = ["apt", "brew", "pacman", "dnf", "zypper"]
+            .iter()
+            .map(|n| (n.to_string(), rep(HealthStatus::Absent)))
+            .chain(std::iter::once((
+                "scoop".to_string(),
+                rep(HealthStatus::Ok),
+            )))
+            .collect();
+        let (ok, degraded, critical, absent) = doctor_tally(&reports);
+        assert_eq!((ok, degraded, critical), (1, 0, 0));
+        assert_eq!(absent, 5);
     }
 
     #[test]
@@ -839,5 +945,39 @@ mod doctor_tests {
         assert_eq!(status_label(HealthStatus::Ok), "OK");
         assert_eq!(status_label(HealthStatus::Degraded), "WARN");
         assert_eq!(status_label(HealthStatus::Critical), "FAIL");
+        assert_eq!(status_label(HealthStatus::Absent), "absent");
+    }
+
+    /// E18/E19: one condition had two message families and the busier one named the backend
+    /// rather than the program it probed, so `lvm` told you to install `lvm` while looking for
+    /// `lvs`. Both implementations are now one function, and it is told what was probed.
+    #[test]
+    fn a_missing_program_is_named_by_the_program_that_was_probed() {
+        use linix::core::missing_program;
+
+        let r = missing_program("lvm", &["lvs".to_string()]);
+        assert_eq!(r.status, HealthStatus::Absent);
+        let m = r.message.unwrap();
+        assert!(m.contains("`lvs`"), "{m}");
+        assert!(!m.contains("Binary for"), "the old message survived: {m}");
+
+        // An absolute path is not "not on PATH" (U16).
+        let m = missing_program("vendor", &["/opt/vendor/thing".to_string()])
+            .message
+            .unwrap();
+        assert!(m.contains("does not exist or is not executable"), "{m}");
+
+        // Two programs, and no claim about how many of them are needed.
+        let m = missing_program("krew", &["kubectl".into(), "kubectl-krew".into()])
+            .message
+            .unwrap();
+        assert!(
+            m.contains("`kubectl`") && m.contains("`kubectl-krew`"),
+            "{m}"
+        );
+
+        // A backend that probes nothing must not be described as missing a program.
+        let m = missing_program("appimage", &[]).message.unwrap();
+        assert!(!m.contains('`') || m.contains("`appimage`"), "{m}");
     }
 }

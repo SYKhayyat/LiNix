@@ -1,6 +1,6 @@
 use crate::core::{
-    BackendCore, CommandExecutor, Enumerable, Error, HealthReport, HealthStatus, Installable,
-    MetadataProvider, Package, PackageSpec, Queryable, RepoManager, Result, Searchable, Upgradable,
+    BackendCore, CommandExecutor, Enumerable, Error, Installable, MetadataProvider, Package,
+    PackageSpec, Queryable, RepoManager, Result, Searchable, Upgradable,
 };
 use crate::parsers::OutputParser;
 use async_trait::async_trait;
@@ -212,34 +212,18 @@ impl BackendCore for GenericBackendCore {
         self.executor.command_exists_sync(self.binary())
     }
 
+    fn probes(&self) -> Vec<String> {
+        vec![self.binary().to_string()]
+    }
+
     fn needs_root(&self) -> bool {
         self.config.needs_root
     }
 
-    async fn check_health(&self) -> Result<HealthReport> {
-        if !self.is_available() {
-            // "not found" rather than "not on PATH": a custom backend's binary may be an
-            // absolute path (U16), and telling someone their `/opt/vendor/thing` is "not on
-            // PATH" points them at the wrong thing to fix.
-            let b = self.binary();
-            let where_ = if b.contains(['/', '\\']) {
-                format!("`{}` does not exist or is not executable", b)
-            } else {
-                format!("`{}` is not on PATH", b)
-            };
-            return Ok(HealthReport {
-                status: HealthStatus::Critical,
-                message: Some(format!(
-                    "{}, so the `{}` backend cannot run",
-                    where_, self.name
-                )),
-            });
-        }
-        Ok(HealthReport {
-            status: HealthStatus::Ok,
-            message: None,
-        })
-    }
+    // No `check_health` here. This was the better of two implementations of one sentence, and
+    // the way to have one implementation is to have one — so it moved to
+    // `core::manager::missing_program`, which every backend now shares, and this override was
+    // deleted rather than reconciled.
 }
 
 #[async_trait]

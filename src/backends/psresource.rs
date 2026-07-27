@@ -21,6 +21,9 @@ pub struct PsResourceCore {
     pub name: String,
     /// The PowerShell host to invoke: "pwsh" (7+) when present, else "powershell" (5.1).
     pub shell: String,
+    /// Whether the cmdlets this backend is made of actually resolve. Asked once: it costs a
+    /// PowerShell start-up, and `is_available` is called on every registry pass.
+    cmdlets: Arc<std::sync::OnceLock<bool>>,
 }
 
 impl PsResourceCore {
@@ -36,7 +39,38 @@ impl PsResourceCore {
             executor,
             name: "psresource".to_string(),
             shell,
+            cmdlets: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Does `Get-InstalledPSResource` actually resolve in this shell?
+    ///
+    /// The question that was being asked instead was "does PowerShell exist", which on Windows
+    /// is always yes — so `check health` printed `[READY] psresource` and then every operation
+    /// died with *The term 'Get-InstalledPSResource' is not recognized*. PSResourceGet supplies
+    /// those cmdlets and does not ship with Windows PowerShell 5.1.
+    ///
+    /// `krew` had the right shape all along: it probes `kubectl` **and** `kubectl-krew`. A
+    /// backend must probe the thing that has to work, not the thing that hosts it.
+    fn cmdlets_present(&self) -> bool {
+        *self.cmdlets.get_or_init(|| {
+            if !self.executor.command_exists_sync(&self.shell) {
+                return false;
+            }
+            std::process::Command::new(&self.shell)
+                .args([
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "if (Get-Command Get-InstalledPSResource -ErrorAction SilentlyContinue) \
+                     { exit 0 } else { exit 1 }",
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
     }
 
     async fn run_ps(&self, script: &str) -> Result<String> {
@@ -118,10 +152,39 @@ impl BackendCore for PsResourceCore {
         &self.name
     }
     fn is_available(&self) -> bool {
-        self.executor.command_exists_sync(&self.shell)
+        self.cmdlets_present()
+    }
+    /// The module, not the host. Naming `powershell` here would send a Windows user looking
+    /// for a program they already have.
+    fn probes(&self) -> Vec<String> {
+        vec!["Microsoft.PowerShell.PSResourceGet".into()]
     }
     fn needs_root(&self) -> bool {
         false
+    }
+
+    /// The one backend that overrides the shared message, because the thing it is missing is
+    /// not a program: a PowerShell module is not "on PATH", and telling a user to put it there
+    /// is the same species of wrong answer as telling them to install `lvm`. The exception is
+    /// here and stated rather than spread through the renderer as a guess about which names
+    /// look like modules.
+    async fn check_health(&self) -> Result<crate::core::HealthReport> {
+        use crate::core::{HealthReport, HealthStatus};
+        if self.is_available() {
+            return Ok(HealthReport {
+                status: HealthStatus::Ok,
+                message: None,
+            });
+        }
+        Ok(HealthReport {
+            status: HealthStatus::Absent,
+            message: Some(format!(
+                "`{}` has no PSResourceGet cmdlets, so the `psresource` backend cannot run. \
+                 Install it with: {} -Command \"Install-Module Microsoft.PowerShell.PSResourceGet \
+                 -Scope CurrentUser\"",
+                self.shell, self.shell
+            )),
+        })
     }
 }
 

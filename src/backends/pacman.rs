@@ -69,6 +69,9 @@ impl BackendCore for PacmanBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("pacman")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["pacman".into()]
+    }
 
     fn needs_root(&self) -> bool {
         true

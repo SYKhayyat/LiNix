@@ -30,6 +30,9 @@ impl BackendCore for SnapBackendCore {
     fn is_available(&self) -> bool {
         self.executor.command_exists_sync("snap")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["snap".into()]
+    }
 
     fn needs_root(&self) -> bool {
         // Snap operations almost always require administrative privileges.

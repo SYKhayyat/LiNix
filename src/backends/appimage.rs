@@ -93,6 +93,9 @@ impl BackendCore for AppImageBackendCore {
     fn is_available(&self) -> bool {
         cfg!(target_os = "linux")
     }
+    fn probes(&self) -> Vec<String> {
+        Vec::new()
+    }
 
     fn needs_root(&self) -> bool {
         false

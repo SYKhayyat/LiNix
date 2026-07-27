@@ -44,6 +44,9 @@ impl BackendCore for KrewBackendCore {
         self.executor.command_exists_sync("kubectl")
             && self.executor.command_exists_sync("kubectl-krew")
     }
+    fn probes(&self) -> Vec<String> {
+        vec!["kubectl".into(), "kubectl-krew".into()]
+    }
     fn needs_root(&self) -> bool {
         false
     }
