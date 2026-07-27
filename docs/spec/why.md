@@ -1414,3 +1414,107 @@ correct before the shim hijack runs.
 accident.
 
 ---
+
+**V.90 — Why a failed install takes its line back, and why only sometimes.** *(Owner ruling,
+2026-07-27 — Q1.)* `install` writes the line first and syncs second, deliberately (S15):
+backwards, every refusal on the write landed *after* the package was already on the machine, in
+no file, and drift by the next sync. The cost of that ordering is that a failed sync leaves a
+line behind, and **every later command parses the model** — so one line nothing can satisfy
+breaks `sync`, `upgrade`, and every install after it, until someone finds and hand-edits a file
+nothing named.
+
+The code already knew this. The comment above the withdrawal path stated the failure mode in
+the author's own words. What it withdrew on was `Unresolvable` alone — *no backend claims this
+name* — and that is not the case people hit. **A qualified typo (`scoop:definitely-not-real`)
+resolves perfectly well**, because the backend is real; the failure arrives as `CommandFailed`,
+and the line stayed forever even though it could never succeed. A bare `linix install typo` was
+withdrawn correctly the whole time, which is why it went unnoticed.
+
+The missing fact was already computed. Every failure carries a `Retryability`, filled in by the
+backend's own `ExitPolicy`, and scoop's policy already marked this exact failure `Permanent`.
+LiNix classified it as impossible and then kept it anyway.
+
+**Three limits on the widened rule, and each is load-bearing:**
+
+1. **Permanence is read off `CommandFailed`, not off `Error::retryability()`.** That method also
+   returns `Permanent` for `Refused`, `Cancelled`, `Config`, `Validation`, `Permission` and five
+   more. Every one of those is permanent in the retry sense and none of them means the name was
+   wrong. Withdrawing on `retryability()` would delete the line a user just asked for because
+   they answered "no" to a prompt — a worse bug than the wedge, and a silent one.
+2. **Only lines the manager named.** Managers name the package they could not install, so a
+   batch whose manager stopped at the first bad name leaves the rest alone. Guessing which line
+   a message meant is how a correct declaration gets deleted.
+3. **A line kept on purpose says where it is.** The wedge was never only that the line stayed —
+   it was that no message mentioned the file, the line, or `unmanage`. Keeping a line is a
+   design decision; keeping it *silently* is the bug.
+
+**What made this durable is worth more than the fix:** the rule existed in three places and
+nowhere authoritative. `run-in-container.sh` said the line must not be left; `integration-
+windows.sh` said the line stays on purpose and cited `V.7c`, which is about telling a search
+that found nothing from a search that could not run. Neither claim was in Part II. **And both
+harnesses deleted the line themselves before asserting it was gone**, so neither reading was
+ever tested and both printed PASS for months. A rule that lives only in comments is a rule two
+comments can contradict.
+
+**V.91 — Why "not installed" is not "critical".** *(Owner ruling, 2026-07-27 — Q2.)* `check
+health` opened with `Backends: 25 OK, 0 degraded, 23 critical (of 48 total)` on an ordinary
+Windows box with nothing wrong. The 23 were apt, brew, pacman and the rest of Linux — managers
+that machine will never have. It is the first thing a new user sees.
+
+This is fail-loud pointed at something that did not fail. The principle exists so a thing that
+did not work cannot pass silently; a manager nobody asked for did not fail to do anything.
+Spending the word "critical" on it is worse than cosmetic — it makes the real criticals
+unreadable, which is the exact cost of an alarm that is always on.
+
+The tell was that LiNix already disagreed with itself: the `check` rollup printed `ok health 25
+backend(s) ready` while `check health` called the same machine 23-critical. **Two counts of one
+machine, and no rule said which was right.** So `Absent` is a state rather than a filter, and
+both views read one tally — a second way to count is a second answer.
+
+**V.92 — Why a typo is exit 1 and not exit 2.** *(Owner ruling, 2026-07-27 — Q3.)* The readme
+publishes four exit codes and says "the same four everywhere, so a script can branch on them".
+Code `2` means *a read-only command looked and found work to do* — it exists so `linix check` in
+CI can report drift without failing the job. Measured: `linix nosuchcommand`, `linix
+--nosuchflag` and `linix sync --badflag` all exited **2**, because that is clap's convention for
+a usage error and clap exits before LiNix's own mapping runs.
+
+So the one code whose entire purpose is unattended scripting was ambiguous in exactly the
+unattended case: **a CI job following the published table reads a mistyped command name as "the
+machine has drifted"** and acts on it. A fifth code would have fixed the collision and broken
+the property the table is for. `1` is already published, already means "something went wrong",
+and is true — LiNix did not do what was asked.
+
+Ruled alongside it because it is the same contract: **a refusal that exits 1 is a broken
+promise, not a rounding error.** `purge-unmanaged`'s ratio refusal used `anyhow::bail!` rather
+than `Error::Refused`, so it never reached the `Exit::Refused` mapping. `3` is distinct from `1`
+precisely so a script that retries on failure does not retry a refusal. **Neither harness could
+see it**: both assert refusals with `nok`, which accepts any non-zero code and cannot tell 1
+from 3 — an assertion too coarse to detect the thing it is named after.
+
+**V.93 — Why nothing is labelled "experimental".** *(Owner ruling, 2026-07-27 — Q4. The owner
+rejected the recommendation, and the reason is the more important half.)*
+
+The readiness assessment proposed splitting the backends: *supported* for the 22 that have
+passed a real lifecycle against the real tool, *experimental* for the other 30, said so in
+`check health`, in `priority`, and in the readme. It was presented as the single change that
+would stop the defect class regenerating, and it was recommended.
+
+**The ruling was no, and the reason is a rule about this project: it does things; it does not
+cover for not doing them.** A label converts an unfinished job into a permanent disclaimer, and
+a disclaimer nobody has to retire is one nobody does. "Experimental" would have made the honest
+statement of a real gap into the reason the gap could stay — the gap would be *documented*,
+which reads like *handled*, and the 30 untested backends would still be untested a year later
+with a caption explaining why that is fine.
+
+So the coverage is the work, and **missing coverage is a release blocker rather than a caption.**
+LiNix does not go to production until every registered backend has been thoroughly tested and
+reviewed. Nothing about the program changes: `init` still scaffolds every manager it finds,
+because scaffolding fewer is the same disclaimer written as a default.
+
+**This is the general shape and it applies past backends.** Every defect the assessment found
+had a cheap version of this available — soften the check, widen the exemption, note the caveat,
+downgrade the gate to informational — and the codebase's own history is a list of times the
+cheap version was taken and the class survived: a `fmt` gate rated informational, a catch-all
+that softened any install failure to "ecosystem variance", an exemption list nobody validated,
+an assertion that deleted its own evidence. Each of those is a label in a different costume. The
+answer is the same one: **do the thing.**

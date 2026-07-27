@@ -1,4 +1,5 @@
 use crate::verbs::prelude::*;
+use linix::model::Edit;
 
 /// `teleport PKG BACKEND` — move a declared package to another manager, then sync (II.8).
 pub(crate) async fn handle_teleport(app: &App, package: &str, backend: &str) -> Result<()> {
@@ -93,31 +94,115 @@ pub(crate) async fn handle_install(
         return Ok(());
     }
 
+    let mut edits: Vec<Edit> = Vec::with_capacity(lines.len());
     for line in &lines {
-        app.declare(line, into, linix::model::Landing::Imperative)
-            .await?;
+        edits.push(
+            app.declare(line, into, linix::model::Landing::Imperative)
+                .await?,
+        );
     }
 
     // And now the ordinary declarative pipeline makes it true — which is also what puts an
     // imperative install behind the guard for the first time (II.10).
     let synced = handle_sync(app, false, false, json).await;
 
-    // A name no backend claims can never be satisfied by retrying, so leaving it in the file
-    // wedges every later command that parses the model — one typo, and `status` is broken
-    // until someone hand-edits a file. Withdraw it. Only this cause: a sync that failed for
-    // any other reason (the network, a lock, a hook) leaves the line alone, because you did
-    // mean it and retrying is the right move.
     if let Err(e) = &synced {
-        if let Some(linix::core::Error::Unresolvable { name, .. }) = e.downcast_ref() {
-            if app.undeclare(name).await.is_ok_and(|es| !es.is_empty()) {
+        withdraw_what_can_never_succeed(app, e, &edits).await;
+    }
+    synced
+}
+
+/// A line this command just wrote that can never be satisfied, whatever happens next.
+///
+/// Two causes and no others. `Unresolvable` is a name no backend claims, and it carries that
+/// name. `CommandFailed` marked [`Retryability::Permanent`] is the same fact by a different
+/// road: a real manager ran, answered, and will answer identically every time — a typo behind
+/// a real prefix (`scoop:definitely-not-real`) arrives here and not as `Unresolvable`, because
+/// the *backend* resolved perfectly well.
+///
+/// Read off `CommandFailed` and never off [`Error::retryability`], which also calls a refusal,
+/// a cancelled prompt and an unparseable config `Permanent`. Those are permanent in the retry
+/// sense and none of them means the name was wrong; deleting a line because someone answered
+/// "no" to a prompt would be a worse bug than the wedge this exists to prevent.
+fn permanently_failed_message(e: &anyhow::Error) -> Option<&str> {
+    match e.downcast_ref::<linix::core::Error>() {
+        Some(linix::core::Error::CommandFailed {
+            message,
+            retry: linix::core::Retryability::Permanent,
+        }) => Some(message),
+        _ => None,
+    }
+}
+
+/// The name a failed sync says can never be installed, if it says one.
+fn unresolvable_name(e: &anyhow::Error) -> Option<&str> {
+    match e.downcast_ref::<linix::core::Error>() {
+        Some(linix::core::Error::Unresolvable { name, .. }) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Take back the lines that can never be installed, and give the ones deliberately kept a way
+/// out.
+///
+/// Every later command parses the model, so one line nothing can satisfy breaks `sync`,
+/// `upgrade` and every install after it. Withdrawing the impossible ones is half the cure; the
+/// other half is that a line kept on purpose — because the network dropped, or a lock was
+/// held, and retrying is right — now names the file it is in and the command that removes it.
+/// A wedge with an exit is not a wedge.
+async fn withdraw_what_can_never_succeed(app: &App, e: &anyhow::Error, edits: &[Edit]) {
+    let mut withdrawn: Vec<&Edit> = Vec::new();
+
+    if let Some(name) = unresolvable_name(e) {
+        if app.undeclare(name).await.is_ok_and(|es| !es.is_empty()) {
+            warn!(
+                "`{}` was taken back out of your files — nothing can install it.",
+                name
+            );
+            withdrawn.extend(edits.iter().filter(|ed| ed.line.contains(name)));
+        }
+    } else if let Some(message) = permanently_failed_message(e) {
+        // Which of the lines just written did the manager refuse? Managers name the package
+        // they could not install, so the ones this run wrote and this message names are the
+        // ones to take back. A line the message does not name is left alone and told about
+        // below: withdrawing a declaration on a guess is the one outcome worse than keeping it.
+        for edit in edits {
+            let Ok(specs) = app.resolve_spec(&edit.line).await else {
+                continue;
+            };
+            if specs.iter().any(|s| message.contains(&s.name))
+                && app
+                    .undeclare(&edit.line)
+                    .await
+                    .is_ok_and(|es| !es.is_empty())
+            {
                 warn!(
-                    "`{}` was taken back out of your files — nothing can install it.",
-                    name
+                    "`{}` was taken back out of {} — `{}` cannot install it, and trying again \
+                     would fail the same way.",
+                    edit.line,
+                    edit.file.display(),
+                    specs
+                        .first()
+                        .map(|s| s.backend.as_str())
+                        .unwrap_or("that manager")
                 );
+                withdrawn.push(edit);
             }
         }
     }
-    synced
+
+    for edit in edits {
+        if withdrawn.iter().any(|w| w.line == edit.line) {
+            continue;
+        }
+        warn!(
+            "`{}` is still declared in {}, so `sync` will try it again. If you did not mean \
+             it, run `linix unmanage {}`.",
+            edit.line,
+            edit.file.display(),
+            edit.line
+        );
+    }
 }
 
 /// `uninstall PKG… [--temp]` — remove the line from every active module, sync (II.8).
@@ -502,4 +587,113 @@ pub(crate) async fn handle_info(app: &App, package: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use linix::core::{Error, Retryability};
+
+    fn boxed(e: Error) -> anyhow::Error {
+        anyhow::Error::new(e)
+    }
+
+    /// The reported bug: a typo behind a real backend prefix. `scoop` resolves, so this is
+    /// never `Unresolvable`; scoop's own policy calls it permanent, and until that was read
+    /// the line stayed in `modules/imperative.txt` and wedged every later command.
+    #[test]
+    fn a_permanent_command_failure_is_withdrawn() {
+        let e = boxed(Error::CommandFailed {
+            message: "`scoop` failed: Couldn't find manifest for 'definitely-not-real'."
+                .to_string(),
+            retry: Retryability::Permanent,
+        });
+        assert_eq!(
+            permanently_failed_message(&e),
+            Some("`scoop` failed: Couldn't find manifest for 'definitely-not-real'.")
+        );
+    }
+
+    /// The half that must not regress. A dropped network or a held lock means you did mean
+    /// it, and the line stays so a retry works.
+    #[test]
+    fn a_transient_or_unclassified_failure_keeps_the_line() {
+        for retry in [Retryability::Transient, Retryability::Unknown] {
+            let e = boxed(Error::CommandFailed {
+                message: "`apt` failed: Could not get lock /var/lib/dpkg/lock".to_string(),
+                retry,
+            });
+            assert_eq!(
+                permanently_failed_message(&e),
+                None,
+                "withdrew on {retry:?}"
+            );
+        }
+    }
+
+    /// Every other variant that `Error::retryability()` also calls `Permanent`. None of them
+    /// says the name was wrong, and withdrawing on any of them would delete a declaration the
+    /// user still means — the reason this reads `CommandFailed` rather than `retryability()`.
+    #[test]
+    fn no_other_permanent_error_withdraws_a_line() {
+        let others = [
+            Error::Refused("the guard said no".into()),
+            Error::Cancelled,
+            Error::Config("modules/web.txt:3: bad line".into()),
+            Error::Validation("nope".into()),
+            Error::Permission("need root".into()),
+            Error::BackendNotFound("nosuch".into()),
+            Error::PackageNotFound("nosuch".into()),
+            Error::Unsupported("purge".into()),
+            Error::UnsupportedPlatform("aix".into()),
+            Error::Differences("2 changes".into()),
+            Error::LuaScript("boom".into()),
+            Error::Toml("bad".into()),
+            Error::Json("bad".into()),
+        ];
+        for e in others {
+            let label = format!("{e:?}");
+            assert_eq!(
+                Retryability::Permanent,
+                e.retryability(),
+                "{label} is not the case this test guards"
+            );
+            assert_eq!(
+                permanently_failed_message(&boxed(e)),
+                None,
+                "{label} would have withdrawn a line the user still means"
+            );
+        }
+    }
+
+    /// The existing path, kept working: a bare name nothing claims carries its own name.
+    #[test]
+    fn an_unresolvable_name_is_still_recognised_and_carries_itself() {
+        let e = boxed(Error::Unresolvable {
+            name: "linix-no-such-pkg-zzz".into(),
+            message: "no backend claims it".into(),
+        });
+        assert_eq!(unresolvable_name(&e), Some("linix-no-such-pkg-zzz"));
+        assert_eq!(permanently_failed_message(&e), None);
+    }
+
+    /// Both readers must survive the `.context()` wrapping every caller adds, or the fix
+    /// works in a unit test and never once in the program.
+    #[test]
+    fn both_readers_see_through_a_context_chain() {
+        let e = boxed(Error::CommandFailed {
+            message: "`scoop` failed: Couldn't find manifest for 'nope'.".into(),
+            retry: Retryability::Permanent,
+        })
+        .context("while syncing")
+        .context("while installing");
+        assert!(permanently_failed_message(&e).is_some());
+
+        let u = boxed(Error::Unresolvable {
+            name: "zzz".into(),
+            message: "m".into(),
+        })
+        .context("while syncing");
+        assert_eq!(unresolvable_name(&u), Some("zzz"));
+    }
 }

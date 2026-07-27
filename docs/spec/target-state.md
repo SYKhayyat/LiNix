@@ -948,6 +948,46 @@ isn't safe; use a profile."*
 protection, refuse if it touches something protected. **Sync nudges:** *"3 packages are now
 orphaned; run `linix clean`."* Want it automatic? `schedule:tidy@cron=0 3 * * *,run=clean`.
 
+**A failed `install` withdraws the line it just wrote when that line can never succeed** (Q1,
+owner 2026-07-27; V.90). `install` writes first and syncs second (S15), so a failure leaves a
+line behind — and every later command parses the model, so one impossible line breaks `sync`,
+`upgrade` and every install after it.
+
+- **Withdrawn:** `Unresolvable` (no backend claims the name), **or** a `CommandFailed` the
+  backend's own `ExitPolicy` classified `Permanent`. A real manager ran, answered, and will
+  answer the same way every time.
+- **Kept:** everything else. A dropped network, a held lock, a failed hook — you did mean it,
+  and retrying is right.
+- **Permanence is read off `CommandFailed`, never off `Error::retryability()`**, which also
+  calls a refusal, a cancelled prompt and a bad config file `Permanent`. Deleting a
+  declaration because someone answered "no" to a prompt is worse than the wedge.
+- **Only lines the manager named are withdrawn.** In a batch, the rest are kept.
+- **A line kept on purpose names its file and how to remove it:** *"`scoop:foo` is still
+  declared in `modules/imperative.txt`, so `sync` will try it again. If you did not mean it,
+  run `linix unmanage scoop:foo`."* A wedge with an exit is not a wedge.
+
+**`check health` has four states, and "not installed" is one of them** (Q2, owner 2026-07-27;
+V.91). A package manager the user does not have is **absent**, not critical:
+
+| state | means |
+|---|---|
+| **ok** | it is here and it answers |
+| **degraded** | it is here, it answers, something needs attention |
+| **critical** | it is installed, or `priority` names it, and it cannot work |
+| **absent** | it is not installed here and nothing asked for it |
+
+**Absent is never counted as a failure and never decides the verdict.** Fail-loud is about
+failures, and a manager nobody asked for is not one — `25 OK, 0 degraded, 23 critical` on a
+healthy Windows box was the principle applied where there was nothing to report. **The rollup
+and the detail view read the same tally**, because two counts of one machine will disagree.
+
+**A usage error exits 1** (Q3, owner 2026-07-27; V.92). A mistyped subcommand or flag is
+"failed — something went wrong", which is already in the table. It must not exit 2: that means
+*a read-only command found work to do*, and a CI job branching on the published table would
+read a typo as a drifted machine. **Every refusal exits 3** — a refusal raised with a generic
+error instead of `Error::Refused` never reaches the mapping and is a contract violation, not a
+detail.
+
 ## II.9 Adopt
 
 **Adopt takes manually-installed packages only. Never the dependency closure.**

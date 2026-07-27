@@ -1,4 +1,4 @@
-# The decision register — all 109, and every one of them ruled
+# The decision register — all 113, and every one of them ruled
 
 **One file, six features. Zero open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -18,7 +18,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **105** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **111** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -61,8 +61,11 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Nothing here is open.** All 104 are ruled: **102 ANSWERED, 2 PARKED, 0 OPEN** — counted on
-2026-07-26 by reading every entry's own `Status:` line, not by reading this heading.
+**Nothing here is open.** All 113 are ruled: **111 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
+any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
+push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
+contradicted all three.
 
 > **This index was the worst-drifted thing in the spec, and it drifted in the file whose whole
 > job is to stop drift.** Until 2026-07-26 it carried three tables — *Open and blocking — 13*,
@@ -219,6 +222,21 @@ there). It is when the question stopped being open, not when the code landed.
 | **U41** | What does a rollback do when the guard refuses one of its compensating removals? | 2026-07-27 |
 | **U42** | Do the overlapping command clusters get consolidated? | 2026-07-27 |
 | **U43** | How much does an ordinary run say about itself? | 2026-07-27 |
+
+### Q — the production-readiness round (`docs/READINESS-2026-07-27.md`) — 4
+
+*Not a proposal part. These are the questions the readiness assessment forced — behaviour a
+user notices, or a published contract — raised because `CLAUDE.md` requires a ruling for them
+and the answers were in no file. `Q` was picked by checking every other prefix first: the
+review document had reused `U1`–`U3`, which are real register IDs belonging to other questions,
+and that collision is exactly what this namespace exists to avoid.*
+
+| | question | answered |
+|---|---|---|
+| **Q1** | Does a failed install leave its line in the file? — RULED: withdraw it when it can never succeed. | 2026-07-27 |
+| **Q2** | Is a package manager you never installed "critical"? — RULED: no, absent is its own state. | 2026-07-27 |
+| **Q3** | What does a mistyped command exit with? — RULED: 1, and the table stays at four codes. | 2026-07-27 |
+| **Q4** | Are unverified backends labelled "experimental"? — RULED: **no.** They are tested, and nothing ships until they are. | 2026-07-27 |
 
 ---
 
@@ -3059,3 +3077,121 @@ rather than expediently.
 
 ---
 
+
+## Q1
+
+**Status: ANSWERED.**
+
+**Q1 — Does a failed install leave its line in the file?** **RULED 2026-07-27 (owner): withdraw
+it when it can never succeed.**
+
+The two integration harnesses had contradicted each other *in writing* about this for months —
+`run-in-container.sh:252` said "The failure must not be left in the manifest",
+`integration-windows.sh:259` said "a pinned name that a manager could not install is a failed
+sync, not a wrong name, and only a name nothing can resolve is withdrawn" — and neither claim
+was in any spec file. Both harnesses then deleted the line themselves and asserted it was gone,
+so neither reading was ever tested.
+
+The rule: **a line is withdrawn when the sync failed in a way that cannot succeed on a second
+attempt** — `Unresolvable` (no backend claims the name) *or* a `CommandFailed` the backend's own
+`ExitPolicy` classified `Permanent`. Everything else keeps the line, because a dropped network,
+a held lock or a failed hook all mean you did mean it and retrying is right.
+
+Three constraints came with the ruling and are part of it:
+
+1. **Permanence is read off `CommandFailed`, never off `Error::retryability()`.** That method
+   also calls a refusal, a cancelled prompt, a bad config file and an unsupported platform
+   `Permanent` — true about retrying, and none of them says the name was wrong. Deleting a
+   declaration because someone answered "no" to a prompt would be worse than the wedge.
+2. **Only lines the manager actually named are withdrawn.** A batch install whose manager
+   stopped at the first bad name leaves the rest alone; withdrawing on a guess is the one
+   outcome worse than keeping.
+3. **A line kept on purpose says so, names its file, and says how to remove it** —
+   `linix unmanage <line>`. The wedge was never only that the line stayed; it was that nothing
+   told the user which file to open. A wedge with an exit is not a wedge.
+
+The rule is in **II.8**; the reason is in **V.90**.
+
+---
+
+## Q2
+
+**Status: ANSWERED.**
+
+**Q2 — Is a package manager you never installed "critical"?** **RULED 2026-07-27 (owner): no —
+absent is its own state.**
+
+`linix check health` opened with `Backends: 25 OK, 0 degraded, 23 critical (of 48 total)` on an
+ordinary Windows box where nothing was wrong: the 23 were managers the user does not have, like
+apt and brew. Meanwhile the `linix check` rollup said `ok health 25 backend(s) ready`, so the
+summary and the detail view disagreed about the same machine.
+
+The rule: **`HealthStatus::Absent` means the manager is not installed here and nothing asked for
+it. `Critical` means it is installed, or `priority` lists it, and it cannot work.** Absent is
+never counted as a failure and never colours the verdict. Fail-loud is about failures; a
+manager you never asked for is not one.
+
+The rule is in **II.10**; the reason is in **V.91**.
+
+---
+
+## Q3
+
+**Status: ANSWERED.**
+
+**Q3 — What does a mistyped command exit with?** **RULED 2026-07-27 (owner): 1, and the
+published table stays at four codes.**
+
+`readme.md:708` publishes four exit codes and says "a script can branch on them". Measured,
+`linix nosuchcommand`, `linix --nosuchflag` and `linix sync --badflag` all exited **2**, which
+that table defines as "a read-only command looked and found work to do" — so a CI job following
+the documentation read a typo as a drifted machine, defeating the entire purpose of code 2. The
+cause is that clap uses 2 for usage errors and exits before LiNix's own mapping runs.
+
+The rule: **a usage error exits 1.** "Failed — something went wrong" is already in the table and
+is exactly true; LiNix did not do what was asked. No fifth code, because "the same four
+everywhere" is the property the table is for.
+
+Ruled with it, as a straight violation of the same published contract rather than a new
+question: **every refusal exits 3.** `purge-unmanaged`'s ratio refusal exited 1 because it was
+raised with `anyhow::bail!` instead of `Error::Refused`, so it never reached the mapping. The
+harnesses could not see it: they assert refusals with `nok`, which accepts any non-zero code.
+
+The rule is in **II.8**; the reason is in **V.92**.
+
+---
+
+## Q4
+
+**Status: ANSWERED.**
+
+**Q4 — Are unverified backends labelled "experimental"?** **RULED 2026-07-27 (owner): NO. They
+are tested instead, and nothing ships until they are.**
+
+The proposal — from the readiness review, and recommended by its author — was to split the
+backend list into *supported* (has passed a real install → list → binary → remove round-trip in
+an automated gate) and *experimental* (everything else), and to say so in `check health`, in the
+`priority` file `init` writes, and in the readme. 52 backends are registered and 22 have ever
+been run against the real tool; every defect the review found lives in that remainder.
+
+**The owner rejected it, and the reason is the rule:** *this codebase does things; it does not
+cover for not doing them.* A label converts an unfinished job into a permanent disclaimer, and a
+disclaimer nobody has to retire is one nobody does. LiNix does not go to production until every
+registered backend has been thoroughly tested and reviewed — so the work is the coverage, and
+the missing coverage is a **release blocker**, not a caption.
+
+What follows from it, and all of it is binding:
+
+1. **No `experimental` or `supported` label exists** — not in `check health`, not in `priority`,
+   not in the readme. There is nothing to add and nothing to grep for.
+2. **`linix init` keeps scaffolding every manager it finds.** Scaffolding fewer would have been
+   the same disclaimer written as a default.
+3. **A backend with no real lifecycle in an automated gate blocks the release.** That is the
+   thing to fix, and the only thing.
+4. **No new backend is added until the current set passes.** Unchanged by this ruling and
+   reinforced by it.
+
+This one is a rule about the project, not about the program, so it has no Part II entry. Its
+reason is in **V.93**, and the coverage it demands is tracked in `plan.md`.
+
+---

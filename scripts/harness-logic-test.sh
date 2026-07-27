@@ -193,6 +193,19 @@ else
     echo "== subcommands invoked vs subcommands that exist: SKIPPED (set LINIX_BIN to a built binary)"
 fi
 
+# The register's own arithmetic. Two files tracked one number by hand and disagreed four ways
+# at once — `decisions.md` said 109, 107 and 104 in three places, `SPEC.md` said 107. Counting
+# is the fix; checking the count on every push is what stops it coming back.
+echo "== the decision register's counts match the register"
+TOTAL=$((TOTAL + 1))
+if sh "$(dirname "$0")/decision-count.sh" --check >/tmp/dc.out 2>&1; then
+    echo "  ok    every documented decision count matches the register"
+else
+    echo "  BAD   documented decision counts disagree with the register:"
+    sed -n 's/^  BAD   /        /p' /tmp/dc.out
+    BAD=$((BAD + 1))
+fi
+
 echo "--------------------------------------------------------------"
 echo " harness predicates: $((TOTAL - BAD))/$TOTAL ok"
 [ "$BAD" = 0 ] || { echo " FAILED"; exit 1; }

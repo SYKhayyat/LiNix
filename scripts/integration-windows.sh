@@ -256,20 +256,18 @@ fi
 # --- 6. Negative path ------------------------------------------------------
 echo "[6] Negative path"
 nok "installing a nonexistent package fails" lx -y install "$BACKEND:linix-no-such-pkg-zzz"
-# The line stays on purpose: a pinned name that a manager could not install is a failed sync,
-# not a wrong name, and only a name nothing can resolve is withdrawn. So the harness clears it,
-# exactly as the container one does — left in, it is committed and then reinstalled by the
-# `rollback` in section 9, which fails there instead of here.
 answers "a failed install leaves the model parseable" lx check
-# Not `sed -i`: BSD sed reads its next argument as the backup suffix, so on macOS this
-# deleted nothing, and `2>/dev/null || true` swallowed the complaint. The paragraph above
-# then came true exactly as written — the name stayed, and `rollback`, `activate` and
-# `restore --force` each failed converging a package no manager can resolve. Same
-# read-filter-move as undeclare_canary, and the result is asserted rather than hoped for.
+# This asserts the PRODUCT withdrew the line. It used to `grep -v` the name out and then
+# assert it was gone, which tested its own `grep -v` and printed PASS on every run while the
+# product did the opposite — and the scrub was load-bearing, because the line left behind then
+# failed `rollback`, `activate` and `restore --force` later in this same sweep.
+#
+# The name here is QUALIFIED, so the backend resolves and the install fails: by the ruling of
+# 2026-07-27 (Q1) that is withdrawn when the backend's own ExitPolicy calls the failure
+# permanent. If this goes red, $BACKEND has no policy that can tell a wrong name from a
+# dropped network — which is a real gap in that backend, not a reason to put the scrub back.
 IMPERATIVE="$LINIX_CONFIG_DIR/modules/imperative.txt"
 if [ -f "$IMPERATIVE" ]; then
-    grep -v -F "linix-no-such-pkg-zzz" "$IMPERATIVE" > "$IMPERATIVE.tmp" 2>/dev/null
-    mv "$IMPERATIVE.tmp" "$IMPERATIVE"
     nok "the unresolvable name is out of the manifest" \
         grep -q "linix-no-such-pkg-zzz" "$IMPERATIVE"
 fi
