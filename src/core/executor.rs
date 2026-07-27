@@ -25,22 +25,34 @@ pub struct DryRunOutput {
     pub stderr: Vec<u8>,
 }
 
+/// An `ExitStatus` for a process that never ran.
+///
+/// `ExitStatus` has no public constructor, so this used to spawn `/bin/false` or `cmd /C exit 1`
+/// and `.expect()` the result — two panics on a path whose whole point is that nothing runs, on
+/// a host stripped enough not to have them. Both platforms expose the raw form; on Unix the raw
+/// value is a wait status, where the exit code sits in the high byte.
+fn fabricate_status(code: i32) -> std::process::ExitStatus {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(code << 8)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(code as u32)
+    }
+}
+
 impl DryRunOutput {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// A run that exited non-zero and complained — what a manager with no package index
-    /// does. `ExitStatus` cannot be constructed, so a real failing process supplies one.
+    /// A run that exited non-zero and complained — what a manager with no package index does.
     pub fn faulted(stderr: &str) -> StdOutput {
-        let status = if cfg!(windows) {
-            StdCommand::new("cmd").args(["/C", "exit", "1"]).status()
-        } else {
-            StdCommand::new("false").status()
-        }
-        .expect("failed to create dummy status");
         StdOutput {
-            status,
+            status: fabricate_status(1),
             stdout: Vec::new(),
             stderr: stderr.as_bytes().to_vec(),
         }
@@ -49,18 +61,8 @@ impl DryRunOutput {
 
 impl From<DryRunOutput> for StdOutput {
     fn from(dry: DryRunOutput) -> Self {
-        let status = if cfg!(windows) {
-            StdCommand::new("cmd")
-                .args(["/C", "exit", "0"])
-                .status()
-                .expect("failed to create dummy status")
-        } else {
-            StdCommand::new("true")
-                .status()
-                .expect("failed to create dummy status")
-        };
         StdOutput {
-            status,
+            status: fabricate_status(0),
             stdout: dry.stdout,
             stderr: dry.stderr,
         }
@@ -1122,6 +1124,20 @@ mod child_process_tests {
 
     /// `envs()` adds to what the child inherits, so a value LiNix sets must win over the same
     /// name in the environment it was started with.
+    /// The fabricated statuses used to be `/bin/false` and `cmd /C exit 1` with `.expect()` on
+    /// the spawn — a panic on the one path whose premise is that nothing runs.
+    #[test]
+    fn a_fabricated_status_carries_the_code_without_spawning_anything() {
+        let ok: std::process::Output = super::DryRunOutput::new().into();
+        assert!(ok.status.success());
+        assert_eq!(ok.status.code(), Some(0));
+
+        let bad = super::DryRunOutput::faulted("E: no package index");
+        assert!(!bad.status.success());
+        assert_eq!(bad.status.code(), Some(1));
+        assert_eq!(bad.stderr, b"E: no package index");
+    }
+
     #[test]
     fn the_suppression_overrides_a_user_pager() {
         let mut env = HashMap::new();

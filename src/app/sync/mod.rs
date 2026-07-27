@@ -556,7 +556,7 @@ impl<'a> SyncEngine<'a> {
                 res.start_time,
                 res.result.is_ok(),
                 res.result.err().map(|e| e.to_string()),
-                res.attempt,
+                res.retries,
                 res.bytes_downloaded,
             );
         }
