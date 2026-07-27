@@ -525,7 +525,18 @@ impl<'a> ChangePlanner<'a> {
         };
         let installed = match q.info(&spec.name).await {
             Ok(Some(p)) => p,
-            _ => return Ok(true),
+            Ok(None) => return Ok(true),
+            // "I could not ask" is not "it is not installed". Read as absence it schedules an
+            // Install node for every managed package — each one a trivial success that lands in
+            // the transaction's history, so a single later failure rolls back across the whole
+            // set. `search_output` already draws this distinction for the same reason (V.7c).
+            Err(e) => {
+                return Err(Error::Other(format!(
+                    "`{}` could not say whether {} is installed, so LiNix cannot tell what \
+                     needs doing: {}",
+                    spec.backend, spec.name, e
+                )))
+            }
         };
         // A held package that is already installed is frozen: never schedule an upgrade or
         // version change for it, even if a manifest asks for a newer version. (Hold does not

@@ -995,6 +995,25 @@ retries, rolls back, or completes an interrupted operation reinstates what was w
 not delete to get there. `heal()` recovering an interrupted *install* re-runs the install — every
 manager LiNix drives can install over a half-installed state — and **never uninstalls first.**
 
+**A rollback compensates by putting back what was there, and it removes only what it knows it
+added** (owner ruling, 2026-07-27, U41). The transaction records, per node and before the node
+runs, whether the package was already installed and at what version.
+
+- **An `Install` node whose package was already present is compensated by reinstalling the
+  previous version, never by removing.** A `@version=` or `@channel=` change schedules an
+  `Install` for a package that is already there, so removing it turns a failed upgrade into an
+  uninstall.
+- **An `Install` node whose package was genuinely absent is removed — through the guard.** These
+  removals are issued at execution time and never pass the plan-time gate, so this is the only
+  place they can be checked. A guard refusal stops that one removal; the package stays, the
+  rollback reports itself incomplete and names it, and the transaction is left partly applied
+  rather than a protected package deleted.
+- **A prior state the manager could not report is `Unknown`, and `Unknown` is never read as
+  absent.** The package stays and is named. Guessing the other way deletes software this run
+  never installed.
+- **A rolled-back removal comes back at the version it left at**, so a restored package does not
+  silently lose its pin.
+
 **Remove-before-install is a per-backend capability, off by default.** A manager that genuinely
 cannot recover without it declares so, and when it is used **the removal is an ordinary removal**:
 it reaches the guard, it is counted, it appears in the plan and in `--dry-run`, and its failure

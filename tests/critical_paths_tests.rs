@@ -168,6 +168,7 @@ async fn test_transaction_rollback_fidelity() {
         kernel.app.registry.clone(),
         kernel.app.journal.clone(),
         kernel.app.diagnostics.clone(),
+        kernel.app.config.clone(),
         TransactionConfig::default(),
     );
 

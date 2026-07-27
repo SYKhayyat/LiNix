@@ -1,4 +1,4 @@
-# The decision register — all 106, and every one of them ruled
+# The decision register — all 107, and every one of them ruled
 
 **One file, six features. Zero open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -18,7 +18,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **104** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **105** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -216,6 +216,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U38** | Is secret decryption a declared-provider kind, and behind which T-series rulings? | 2026-07-26 |
 | **U39** | When a manager installs by one string and removes by another, which one is the declaration? | 2026-07-26 |
 | **U40** | Does a command LiNix runs write to your terminal, or to LiNix? | 2026-07-27 |
+| **U41** | What does a rollback do when the guard refuses one of its compensating removals? | 2026-07-27 |
 
 ---
 
@@ -1100,6 +1101,45 @@ three OS builds all ran with pipes on every handle, so not one of them could obs
 this. `tests/pty_tests.rs` runs the built binary under `script -qec` against a stub manager on
 `PATH` and asserts that what LiNix printed is what LiNix parsed; it is a named step in CI's fast
 half. Confirmed to fail against the previous behaviour before it was made to pass.
+
+---
+
+## U41
+
+**Status: ANSWERED — ruled 2026-07-27.**
+
+**In the tree today:** built in the same commit as this ruling. `Transaction` records a `Prior`
+per node before the node runs, holds the user's `Config`, and its rollback calls
+`guard::protection_of` before any compensating removal.
+
+**U41 — What does a rollback do when the guard refuses one of its compensating removals?**
+`transaction.rs` contained **zero** references to the guard. `guard::enforce` runs at plan time
+over the planner's `Remove` nodes; a rollback's removals are issued at execution time and never
+passed through it, so `protected_packages` and OS-essential protection did not apply to them —
+in direct contradiction of the project's own rule that every path that removes calls the guard.
+Wiring it in raises the question the wiring cannot answer: a refused compensating removal leaves
+the transaction **partly applied**, and what LiNix should then do is a product decision.
+
+**RULED (owner, 2026-07-27): the guard wins, and the rollback says what it could not undo.**
+
+- **A protected package is not removed, by any path, for any reason.** A refusal is a refusal
+  (V.26); it is not softened because the caller is a recovery path. V.64 already says these
+  paths need the guard *more* than ordinary ones, because they run outside the plan the user
+  read and usually when nobody is watching.
+- **The partly-applied state is reported, never hidden.** `rollback` already returns an error
+  naming every compensating action that failed; a guard refusal joins that list, by name, with
+  the reason. The user is told exactly which package is still installed and why.
+- **What LiNix does not know, it does not delete.** A prior state the manager could not report
+  is `Unknown`, and an `Unknown` is never read as "it was not there". The package stays and is
+  named in the report. Guessing the other way deletes software this run never installed.
+- **An upgrade is compensated by the old version, not by an uninstall.** `spec_is_missing`
+  schedules an `Install` node for a package that is already present when a `@version=` or
+  `@channel=` changes, so compensating every `Install` with `remove()` turned a failed upgrade
+  into an uninstall. Rollback now reinstates the version the package was on; where the manager
+  reported no version, it says so and leaves the package alone rather than removing it.
+- **A rolled-back removal comes back pinned.** The reinstall carried `options: HashMap::new()`,
+  so a package restored after a failed removal came back at whatever is newest — the declared
+  pin silently gone.
 
 ---
 

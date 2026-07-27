@@ -526,11 +526,15 @@ impl<'a> SyncEngine<'a> {
         tx_config.max_concurrent = self.config.max_parallel.max(1);
         tx_config.purge = self.config.remove.purge || self.config.purge_this_run;
 
+        // The engine gets the configuration because its rollback removes, and a removal is
+        // guarded wherever it is issued (V.64) — including here, where the plan-time gate
+        // above cannot see it.
         let tx = Transaction::with_config(
             changes.graph.clone(),
             self.registry.clone(),
             self.journal.clone(),
             self.diagnostics.clone(),
+            Arc::new(self.config.clone()),
             tx_config,
         );
         // Per-package `before_install`/`after_install` hooks fire inside the engine,

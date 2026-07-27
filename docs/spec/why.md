@@ -1299,3 +1299,47 @@ gap with `script -qec` and a stub manager on `PATH`, asserting that what LiNix p
 LiNix parsed, and it was watched failing against the old behaviour before it was made to pass.
 
 ---
+
+**V.85 — Why a rollback needs to know what was there before (U41, S45).** *(Found by the
+production-readiness review, 2026-07-27; ruled and built the same day.)*
+
+`Transaction::rollback` compensated a `GraphAction::Install` by calling `remove()`. That is
+correct only if the package was absent before the transaction — and often it is not.
+`spec_is_missing` returns true for a **version or channel change on an already-installed
+package**, which schedules an `Install` node for software the user already has. One later
+failure anywhere in the graph then uninstalls it. **The compensation for a failed upgrade is the
+old version, not the absence of the package**, and nothing in the engine could tell the two
+apart because nothing recorded which one it was doing.
+
+**The same absence of knowledge is what made it dangerous rather than merely wrong.**
+`needs_change` read *"I could not ask the manager"* as *"it is not installed"*. Under the defect
+in V.84 that condition was universal: `info()` returned nothing for everything, so every managed
+package got an `Install` node, each `apt install <already-present>` succeeded trivially and
+landed in the history, and a single failure rolled back across the whole set. **A mass-uninstall
+reachable from an ordinary interactive `sync`, built out of two independently reasonable
+defaults.** Neither one alone would have done it. That is the argument for the rule rather than
+for either patch: a recovery path may only undo what it can prove it did.
+
+**And the guard was not there at all.** `transaction.rs` carried zero references to it.
+`guard::enforce` runs at plan time over the planner's `Remove` nodes; rollback's removals are
+issued at execution time and passed through nothing, so `protected_packages` and OS-essential
+protection did not apply to them — while II.10 said "every removal path calls it". This is S24's
+lesson repeating in a new place: *a list is an assertion about what is absent, and nothing
+verifies that half.* The enumeration named twelve `GuardScope`s and rollback is not one of them,
+because rollback never asked for a scope.
+
+**What happens when the guard refuses is the part that had to be ruled rather than coded.** A
+refused compensating removal leaves the transaction partly applied, and there is no
+implementation that makes that go away — the choice is only between telling the user and not.
+The guard wins, the package stays, and the rollback returns an error naming it and the reason.
+The alternative — exempting recovery paths so the rollback can always complete — is the shape of
+S24 exactly: a delete that runs where nobody is watching, on the argument that it is only tidying
+up.
+
+**`Prior::Unknown` is the third state that both defects needed and neither had.** Absent, present,
+and *could not tell* are three answers, and the bug in each case was a two-valued type flattening
+the third into the one that removes. It is the same distinction `search_output` already draws
+between "no result" and "could not answer" (V.7c) — written down twice now, in two modules, which
+is the argument for reading V.7c before adding the next boolean about a manager's reply.
+
+---

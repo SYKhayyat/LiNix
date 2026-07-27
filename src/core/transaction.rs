@@ -56,6 +56,24 @@ pub enum GraphAction {
     Remove { name: String, backend: String },
 }
 
+/// What a node's target looked like *before* that node ran.
+///
+/// Rollback compensates by putting this back, so it has to be a fact rather than an
+/// assumption. Compensating an `Install` with a removal is right only when the package was
+/// absent to begin with — and it often is not: a `@version=` or `@channel=` change schedules an
+/// `Install` node for a package that is already there, so removing it uninstalls software the
+/// user had instead of reverting a version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Prior {
+    /// The package was not installed before this node ran.
+    Absent,
+    /// It was installed, at this version when the manager reported one.
+    Present(Option<String>),
+    /// The manager could not be asked, or has no query capability. Nothing is inferred from
+    /// this — "I could not tell" is not "it was not there".
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 pub struct TaskResult {
     pub node_index: NodeIndex,
@@ -66,6 +84,8 @@ pub struct TaskResult {
     pub duration: Duration,
     pub bytes_downloaded: u64,
     pub start_time: chrono::DateTime<chrono::Utc>,
+    /// What this node's target looked like before it ran. Only read by `rollback`.
+    pub prior: Prior,
     pub result: Result<()>,
 }
 
@@ -75,11 +95,17 @@ pub struct Transaction {
     journal: Arc<Mutex<Journal>>,
     diagnostics: Arc<FailureDiagnosticEngine>,
     config: TransactionConfig,
+    /// The user's configuration, for the removal guard. A rollback's compensating removals are
+    /// issued here, at execution time, and never pass the plan-time gate in `sync` — so this is
+    /// the only place they can be checked, and a guard on one path is a guard on nothing.
+    app_config: Arc<crate::config::Config>,
     /// Optional lifecycle hooks. When set, `before_install`/`after_install` fire
     /// per package at the moment it is installed (interleaved with parallel execution).
     hooks: Option<Arc<LuaHooks>>,
     completed_indices: HashSet<NodeIndex>,
-    history: Vec<NodeIndex>,
+    /// Each finished node with what its target looked like before it ran. Rollback walks this
+    /// backwards, and cannot compensate correctly without the second half.
+    history: Vec<(NodeIndex, Prior)>,
     cancellation_token: CancellationToken,
 }
 
@@ -89,12 +115,14 @@ impl Transaction {
         registry: Arc<BackendRegistry>,
         journal: Arc<Mutex<Journal>>,
         diagnostics: Arc<FailureDiagnosticEngine>,
+        app_config: Arc<crate::config::Config>,
     ) -> Self {
         Self::with_config(
             graph,
             registry,
             journal,
             diagnostics,
+            app_config,
             TransactionConfig::default(),
         )
     }
@@ -104,6 +132,7 @@ impl Transaction {
         registry: Arc<BackendRegistry>,
         journal: Arc<Mutex<Journal>>,
         diagnostics: Arc<FailureDiagnosticEngine>,
+        app_config: Arc<crate::config::Config>,
         config: TransactionConfig,
     ) -> Self {
         Self {
@@ -112,6 +141,7 @@ impl Transaction {
             journal,
             diagnostics,
             config,
+            app_config,
             hooks: None,
             completed_indices: HashSet::new(),
             history: Vec::new(),
@@ -240,7 +270,8 @@ impl Transaction {
                     );
                     in_progress.remove(&task_data.node_index);
                     self.completed_indices.insert(task_data.node_index);
-                    self.history.push(task_data.node_index);
+                    self.history
+                        .push((task_data.node_index, task_data.prior.clone()));
                     telemetry_results.push(task_data);
                 } else {
                     let error_msg = task_data
@@ -322,6 +353,7 @@ impl Transaction {
                 duration: Duration::ZERO,
                 bytes_downloaded: 0,
                 start_time: start_time_utc,
+                prior: Prior::Unknown,
                 result: Err(e),
             };
         }
@@ -338,9 +370,20 @@ impl Transaction {
                     duration: Duration::ZERO,
                     bytes_downloaded: 0,
                     start_time: start_time_utc,
+                    prior: Prior::Unknown,
                     result: Err(Error::BackendNotFound(b_name)),
                 }
             }
+        };
+
+        // Read before anything is done to it. Rollback compensates by putting this back, and
+        // "what was there before" is unknowable once the node has run. Skipped entirely when
+        // there is no rollback to feed — it costs a query per node, and a query on this
+        // backend lists everything it has.
+        let prior = if config.auto_rollback {
+            Self::prior_state(&backend_cap, &p_name).await
+        } else {
+            Prior::Unknown
         };
 
         let journal_id = {
@@ -357,6 +400,7 @@ impl Transaction {
                         duration: Duration::ZERO,
                         bytes_downloaded: 0,
                         start_time: start_time_utc,
+                        prior: prior.clone(),
                         result: Err(Error::Journal(format!("WAL error: {}", e))),
                     }
                 }
@@ -381,6 +425,7 @@ impl Transaction {
                         duration: start_instant.elapsed(),
                         bytes_downloaded: 0,
                         start_time: start_time_utc,
+                        prior: prior.clone(),
                         result: Err(Error::Transaction(msg)),
                     };
                 }
@@ -402,6 +447,7 @@ impl Transaction {
                     duration: start_instant.elapsed(),
                     bytes_downloaded: 0,
                     start_time: start_time_utc,
+                    prior: prior.clone(),
                     result: Err(Error::Cancelled),
                 };
             }
@@ -486,6 +532,7 @@ impl Transaction {
                         duration: start_instant.elapsed(),
                         bytes_downloaded: bytes,
                         start_time: start_time_utc,
+                        prior: prior.clone(),
                         result: Ok(()),
                     };
                 }
@@ -511,8 +558,54 @@ impl Transaction {
             duration: start_instant.elapsed(),
             bytes_downloaded: 0,
             start_time: start_time_utc,
+            prior: prior.clone(),
             result: Err(final_err),
         }
+    }
+
+    /// What the package looks like right now, before this node touches it.
+    async fn prior_state(backend_cap: &Arc<crate::core::BackendCapabilities>, name: &str) -> Prior {
+        let Some(q) = backend_cap.as_queryable() else {
+            return Prior::Unknown;
+        };
+        match q.info(name).await {
+            Ok(Some(pkg)) => Prior::Present(pkg.version),
+            Ok(None) => Prior::Absent,
+            // A query that failed is not a package that is absent. Reading it as one is how
+            // a rollback ends up removing software this run never installed.
+            Err(_) => Prior::Unknown,
+        }
+    }
+
+    /// Put one package back the way it was, at the version it was at.
+    async fn reinstate(&self, backend: &str, name: &str, version: &Option<String>) -> Result<()> {
+        let Some(b) = self.registry.get(backend) else {
+            return Err(Error::BackendNotFound(backend.to_string()));
+        };
+        let Some(h) = b.as_installable() else {
+            return Err(Error::Transaction(format!(
+                "backend `{}` cannot install",
+                backend
+            )));
+        };
+        let mut options = HashMap::new();
+        if let Some(v) = version {
+            // Without this the reinstall takes whatever is newest, so a rolled-back removal
+            // silently loses its pin — the package comes back at a version nobody declared.
+            options.insert("version".to_string(), v.clone());
+        }
+        h.install(
+            &[PackageSpec {
+                name: name.to_string(),
+                backend: backend.to_string(),
+                options,
+                requires: vec![],
+                present: true,
+            }],
+            b.sudo_for_write(),
+        )
+        .await
+        .map(|_| ())
     }
 
     async fn rollback(&mut self) -> Result<()> {
@@ -524,12 +617,84 @@ impl Transaction {
         // failed and rolled back, while a package is silently gone. Report every failure by
         // name, and return Err so the caller can say the rollback was incomplete.
         let mut failures: Vec<String> = Vec::new();
-        for &idx in self.history.iter().rev() {
-            let action = &self.graph[idx];
-            match action {
+        let history = self.history.clone();
+
+        // Recovery paths are removal paths, and they need the guard more than ordinary ones
+        // because nobody is watching (V.64). These removals are issued at execution time and
+        // never pass the plan-time gate in `sync`, so this is the only place they can be
+        // checked.
+        let backends: HashSet<String> = history
+            .iter()
+            .filter_map(|(idx, _)| match &self.graph[*idx] {
+                GraphAction::Install(s) => Some(s.backend.clone()),
+                GraphAction::Remove { .. } => None,
+            })
+            .collect();
+        let os_essential =
+            crate::app::sync::guard::essential_names(&self.registry, &backends).await;
+
+        for (idx, prior) in history.iter().rev() {
+            match self.graph[*idx].clone() {
                 GraphAction::Install(spec) => {
-                    if let Some(b) = self.registry.get(&spec.backend) {
-                        if let Some(h) = b.as_installable() {
+                    match prior {
+                        // It was already there. Undoing an upgrade is putting the old version
+                        // back — removing the package uninstalls software the user had, which
+                        // is the opposite of a rollback.
+                        Prior::Present(version) => {
+                            if version.is_none() {
+                                warn!(
+                                    "rollback cannot revert {}:{}: its manager did not report \
+                                     a version before the change, so there is none to go back \
+                                     to. It stays at the version this run installed.",
+                                    spec.backend, spec.name
+                                );
+                                failures.push(format!(
+                                    "{}:{} (left at the new version)",
+                                    spec.backend, spec.name
+                                ));
+                                continue;
+                            }
+                            if let Err(e) = self.reinstate(&spec.backend, &spec.name, version).await
+                            {
+                                error!(
+                                    "rollback could not put {}:{} back to {}: {}",
+                                    spec.backend,
+                                    spec.name,
+                                    version.as_deref().unwrap_or("its previous version"),
+                                    e
+                                );
+                                failures.push(format!(
+                                    "{}:{} (left at the new version)",
+                                    spec.backend, spec.name
+                                ));
+                            }
+                        }
+                        Prior::Absent => {
+                            if let Some(p) = crate::app::sync::guard::protection_of(
+                                &self.app_config,
+                                &spec.backend,
+                                &spec.name,
+                                &os_essential,
+                            ) {
+                                error!(
+                                    "rollback will not remove {}:{} — {}. It stays installed, \
+                                     and this transaction is left partly applied.",
+                                    spec.backend,
+                                    spec.name,
+                                    p.reason()
+                                );
+                                failures.push(format!(
+                                    "{}:{} (protected, left installed)",
+                                    spec.backend, spec.name
+                                ));
+                                continue;
+                            }
+                            let Some(b) = self.registry.get(&spec.backend) else {
+                                continue;
+                            };
+                            let Some(h) = b.as_installable() else {
+                                continue;
+                            };
                             if let Err(e) = h
                                 .remove(std::slice::from_ref(&spec.name), b.sudo_for_write())
                                 .await
@@ -545,27 +710,38 @@ impl Transaction {
                                 ));
                             }
                         }
+                        // Not knowing whether the user already had it is not permission to
+                        // delete it. Say so instead.
+                        Prior::Unknown => {
+                            warn!(
+                                "rollback will not remove {}:{}: LiNix could not tell whether \
+                                 it was already installed before this run, and removing what \
+                                 you may have had is not something you asked for.",
+                                spec.backend, spec.name
+                            );
+                            failures.push(format!(
+                                "{}:{} (left installed — prior state unknown)",
+                                spec.backend, spec.name
+                            ));
+                        }
                     }
                 }
                 GraphAction::Remove { name, backend } => {
-                    if let Some(b) = self.registry.get(backend) {
-                        if let Some(h) = b.as_installable() {
-                            let spec = PackageSpec {
-                                name: name.clone(),
-                                backend: backend.clone(),
-                                options: HashMap::new(),
-                                requires: vec![],
-                                present: true,
-                            };
-                            if let Err(e) = h.install(&[spec], b.sudo_for_write()).await {
-                                error!(
-                                    "rollback could not reinstall {}:{} that this \
-                                     run removed — it is now MISSING: {}",
-                                    backend, name, e
-                                );
-                                failures.push(format!("{}:{} (now missing)", backend, name));
-                            }
-                        }
+                    // Nothing was there to lose.
+                    if prior == &Prior::Absent {
+                        continue;
+                    }
+                    let version = match prior {
+                        Prior::Present(v) => v.clone(),
+                        _ => None,
+                    };
+                    if let Err(e) = self.reinstate(&backend, &name, &version).await {
+                        error!(
+                            "rollback could not reinstall {}:{} that this \
+                             run removed — it is now MISSING: {}",
+                            backend, name, e
+                        );
+                        failures.push(format!("{}:{} (now missing)", backend, name));
                     }
                 }
             }

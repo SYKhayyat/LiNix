@@ -56,6 +56,7 @@ async fn test_dag_execution_order_wiring() {
         kernel.app.registry.clone(),
         kernel.app.journal.clone(),
         kernel.app.diagnostics.clone(),
+        kernel.app.config.clone(),
     );
 
     // 5. Execute closure

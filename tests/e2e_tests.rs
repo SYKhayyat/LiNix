@@ -120,6 +120,7 @@ async fn test_concurrent_transaction_safety_e2e() {
         kernel.app.registry.clone(),
         kernel.app.journal.clone(),
         kernel.app.diagnostics.clone(), // DI
+        kernel.app.config.clone(),
         TransactionConfig::default(),
     );
 
