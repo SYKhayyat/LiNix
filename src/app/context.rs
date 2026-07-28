@@ -462,9 +462,35 @@ impl App {
     }
 
     pub async fn get_info(&self, package_name: &str) -> Result<Option<Package>> {
+        // An explicit `backend:name` narrows the question to one manager. This used to hand
+        // the raw string to every backend, so `linix info cargo:ripgrep` asked each of them
+        // for a package literally named "cargo:ripgrep" — a name none of them has. That is
+        // both the wrong question and the slow one: every manager was probed, and the answer
+        // was always "not found", while `linix search ripgrep` in the same tree found it.
+        //
+        // Split by the one parser (`resolve_spec`, which goes through the grammar), never by
+        // `split_once(':')` here — a second place that decides what a prefix means is the bug
+        // CLAUDE.md names, and C13 records six parsers that had it.
+        if let Ok(specs) = self.resolve_spec(package_name).await {
+            if !specs.is_empty() {
+                for spec in specs {
+                    let Some(backend) = self.registry.get(&spec.backend) else {
+                        continue;
+                    };
+                    let Some(q) = backend.as_queryable() else {
+                        continue;
+                    };
+                    if let Ok(Some(found)) = q.info(&spec.name).await {
+                        return Ok(Some(found));
+                    }
+                }
+                return Ok(None);
+            }
+        }
+
         let backends = self.registry.available();
         let name = package_name.to_string();
-        // A package lives in one backend, but which one is not known until asked, so all are
+        // A bare name lives in one backend and which one is not known until asked, so all are
         // asked at once and the first answer wins. Serial, this waited on every backend that
         // did not have it before reaching the one that did.
         let found = self

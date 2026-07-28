@@ -549,7 +549,16 @@ pub(crate) async fn handle_list(
 
 pub(crate) async fn handle_info(app: &App, package: &str) -> Result<()> {
     let Some(p) = app.get_info(package).await? else {
-        println!("Package '{}' not found in any available backend.", package);
+        // `info` reports on what is INSTALLED. "not found in any available backend" reads as
+        // "no such package", which is a different and usually false claim — `linix search
+        // ripgrep` finds it on crates.io while `info cargo:ripgrep` says this. Say which
+        // question was asked, and name the command that answers the other one.
+        println!(
+            "'{}' is not installed on this machine, so there is nothing to describe.\n  \
+             `linix search {}` looks for it in the managers you use.",
+            package,
+            package.rsplit(':').next().unwrap_or(package)
+        );
         return Ok(());
     };
 
