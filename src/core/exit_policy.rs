@@ -259,6 +259,33 @@ pub fn nimble() -> ExitPolicy {
     }
 }
 
+/// Lua rocks. The order of the marker lists is the whole policy here.
+///
+/// luarocks reports an unreachable rock index as a fact about the *request*: three
+/// `Failed downloading … manifest-5.5` warnings, and then
+/// `Error: No results matching query were found for Lua 5.5` as the summary. Believe the
+/// summary and a rock that exists reads as a rock that never will — and the declaration for
+/// it gets withdrawn, or the harness hard-fails a machine whose only problem is that the
+/// `wget` on its PATH is BusyBox's applet, which rejects the GNU flags luarocks passes.
+///
+/// The summary line is deliberately in neither list. `retryability` checks permanent before
+/// transient, so marking it permanent would beat the download failures printed above it in
+/// the very output where both appear. Left unmatched, a rock that really is absent from a
+/// reachable index answers `Unknown` — which hard-fails, as it should, and withdraws no
+/// declaration. Unknown is the honest answer to "the index was fine and the rock was not
+/// there"; Permanent would be a guess with a deletion attached.
+pub fn luarocks() -> ExitPolicy {
+    ExitPolicy {
+        transient_markers: vec![
+            "failed downloading",
+            "failed searching manifest",
+            "connection refused",
+            "could not resolve host",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
 /// Kubernetes plugins. helm v4 verifies a plugin's signature before installing it and refuses
 /// a source that cannot carry one at all, which no second attempt changes — but the source is
 /// a git host, so the network half stays worth retrying.
@@ -438,6 +465,46 @@ mod tests {
         assert_eq!(
             helm().retryability(b"", b"Error: could not resolve host github.com"),
             Retryability::Transient
+        );
+    }
+
+    const LUAROCKS_MANIFEST_UNREACHABLE: &str =
+        include_str!("../../tests/fixtures/luarocks/install-manifest-unreachable.txt");
+
+    /// luarocks names the wrong cause, and the name it gives is the one that would be acted
+    /// on. Captured from luarocks 3.13.0 on 2026-07-28.
+    ///
+    /// The last line is `No results matching query were found for Lua 5.5` — which reads as
+    /// "this rock does not exist for your Lua", a fact about the request that no retry
+    /// changes. It is not what happened. Three lines above it, all three manifest mirrors
+    /// failed to download; luarocks then searched an empty index and reported the empty
+    /// result. The rock exists and `manifest-5.5.zip` was served fine to `curl` at the same
+    /// moment.
+    ///
+    /// Classifying on the earlier lines rather than the summary is the whole point: read as
+    /// permanent, a widening of `install`'s withdrawal rule would delete the user's
+    /// declaration for a package that is perfectly real, and the harness would hard-fail a
+    /// machine whose only problem is its downloader.
+    #[test]
+    fn a_luarocks_manifest_that_would_not_download_is_transient_not_a_missing_rock() {
+        assert_eq!(
+            luarocks().retryability(b"", LUAROCKS_MANIFEST_UNREACHABLE.as_bytes()),
+            Retryability::Transient,
+            "the summary line was believed over the three download failures above it"
+        );
+    }
+
+    /// And the half that keeps the marker honest: the same summary line on its own — a
+    /// reachable index that really does not carry the rock — is not retried forever. It
+    /// answers `Unknown`, which hard-fails and withdraws nothing.
+    #[test]
+    fn a_luarocks_summary_without_a_download_failure_is_not_retried() {
+        assert_eq!(
+            luarocks().retryability(
+                b"",
+                b"Error: No results matching query were found for Lua 5.4."
+            ),
+            Retryability::Unknown
         );
     }
 

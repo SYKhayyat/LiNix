@@ -1,0 +1,6 @@
+Warning: Failed searching manifest: Failed downloading https://luarocks.org/manifest-5.5 - failed downloading https://luarocks.org/manifest-5.5
+Warning: Failed searching manifest: Failed downloading https://raw.githubusercontent.com/rocks-moonscript-org/moonrocks-mirror/master/manifest-5.5 - failed downloading https://raw.githubusercontent.com/rocks-moonscript-org/moonrocks-mirror/master/manifest-5.5
+Warning: Failed searching manifest: Failed downloading https://loadk.com/luarocks/manifest-5.5 - failed downloading https://loadk.com/luarocks/manifest-5.5
+
+Error: No results matching query were found for Lua 5.5.
+To check if it is available for other Lua versions, use --check-lua-versions.

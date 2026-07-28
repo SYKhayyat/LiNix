@@ -1338,7 +1338,9 @@ fn register_luarocks(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.search_args = vec!["search".into(), "--porcelain".into()];
     let core = Arc::new(GenericBackendCore {
         name: "luarocks".into(),
-        executor: executor.duplicate(),
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::luarocks()),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks"),
