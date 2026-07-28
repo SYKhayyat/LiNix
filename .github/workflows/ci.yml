@@ -191,3 +191,62 @@ jobs:
       run: brew install coreutils
     - name: Native sweep (brew)
       run: LINIX="$PWD/target/release/linix" bash scripts/integration-windows.sh brew wget
+
+  # The native Windows sweep — the gate that found every hard failure in the 2026-07-27
+  # readiness assessment, and which no automated job ran on any platform. `release-check.ps1`
+  # is developer-invoked, so its section 12 (a real install/list/PATH/remove lifecycle for
+  # every user-scoped manager on the host) executed only when somebody remembered to.
+  #
+  # Nightly rather than per-push for the reason the other slow jobs are: it installs and
+  # removes real packages and takes minutes. Nightly is not "when someone presses a button".
+  windows-native:
+    name: Integration (Windows native, nightly)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Build
+      run: cargo build --release
+    - name: Install scoop (the default backend for this sweep)
+      shell: powershell
+      run: |
+        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+        irm get.scoop.sh -outfile install.ps1
+        .\install.ps1 -RunAsAdmin
+        echo "$env:USERPROFILE\scoop\shims" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+    - name: Native sweep (scoop)
+      shell: bash
+      run: LINIX="$PWD/target/release/linix.exe" bash scripts/integration-windows.sh scoop jq
+
+  # Does every subcommand LiNix invokes still exist in the tool it invokes it on?
+  #
+  # `pixi global upgrade-all` was removed upstream and sat in the tree for as long as it did
+  # because a plan-smoke proves an argv was *constructed*, never that it is *correct*. This
+  # asks the managers themselves, so silent upstream drift becomes a named failure. It only
+  # sees managers installed on the runner, and it prints the ones it had to skip.
+  argv-drift:
+    name: Upstream argv drift (nightly)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Ask every installed manager whether it still has these subcommands
+      run: cargo test --release --test argv_drift_tests -- --nocapture
+
+  # A harness is trustworthy because its checks CAN go red, not because they are green. This
+  # replaces `linix` with a binary that does nothing and exits 0: every check that still
+  # passes examined nothing. The survivor count is a ratchet — it may fall, never rise.
+  harness-mutation:
+    name: Harness mutation (can the checks fail?)
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: dtolnay/rust-toolchain@stable
+    - name: Stub the binary and count what still passes
+      run: bash scripts/harness-mutation-test.sh --check
