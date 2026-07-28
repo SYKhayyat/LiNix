@@ -203,11 +203,29 @@ async fn withdraw_what_can_never_succeed(app: &App, e: &anyhow::Error, edits: &[
         .downcast_ref::<linix::core::Error>()
         .is_some_and(|err| matches!(err, linix::core::Error::Refused(_)));
 
+    // The failure was called transient, retried, and came back the same. Telling the user
+    // `sync` will try it again is then a promise the program has already disproved — it did
+    // try again and printed the identical error. The line still stays: the cause can be a
+    // `wget` on the PATH that rejects the flags the manager passes, which is fixable, and a
+    // declaration is not deleted over a broken environment.
+    let exhausted = e
+        .downcast_ref::<linix::core::Error>()
+        .is_some_and(|err| err.retryability() == linix::core::Retryability::Exhausted);
+
     for edit in edits {
         if withdrawn.iter().any(|w| w.line == edit.line) {
             continue;
         }
-        if refused {
+        if exhausted {
+            warn!(
+                "`{}` is still declared in {}, but the failure above repeated on every retry, \
+                 so `sync` will keep failing the same way until its cause is fixed. Read the \
+                 error above, or run `linix unmanage {}`.",
+                edit.line,
+                edit.file.display(),
+                edit.line
+            );
+        } else if refused {
             warn!(
                 "`{}` is still declared in {} — it is kept because the line is the thing to \
                  edit, not the thing to delete. Change it as the refusal above says, or run \

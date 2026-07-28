@@ -15,6 +15,13 @@ pub enum Retryability {
     Permanent,
     /// Nothing classified it.
     Unknown,
+    /// It was called transient, retried, and came back the same. The claim was tested and
+    /// failed — so a further retry is not worth suggesting, but "this can never work" is more
+    /// than was measured: the cause may be a broken `wget` on the PATH, fixable tomorrow.
+    ///
+    /// Kept apart from `Unknown` because the two lead to different sentences. `Unknown` means
+    /// nobody looked; this means somebody did.
+    Exhausted,
 }
 
 /// Every variant carries a `String` rather than the source error so the enum stays

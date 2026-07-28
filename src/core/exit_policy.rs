@@ -274,6 +274,13 @@ pub fn nimble() -> ExitPolicy {
 /// reachable index answers `Unknown` — which hard-fails, as it should, and withdraws no
 /// declaration. Unknown is the honest answer to "the index was fine and the rock was not
 /// there"; Permanent would be a guess with a deletion attached.
+/// **These markers are a hypothesis, and the transaction now tests it.** A failure classified
+/// transient is retried with backoff; if it comes back the same, `falsify_transience` in
+/// `core/transaction.rs` downgrades it to `Retryability::Exhausted` and the user is told the
+/// retry already happened and did not help. So a wrong marker here costs a few seconds of
+/// backoff instead of a permanent lie — which is what this list was before, when
+/// `luarocks install luafilesystem` matched `"failed downloading"` on a machine whose only
+/// problem was its `wget`, and LiNix promised forever that `sync` would try again.
 pub fn luarocks() -> ExitPolicy {
     ExitPolicy {
         transient_markers: vec![

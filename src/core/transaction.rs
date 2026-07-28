@@ -560,7 +560,10 @@ impl Transaction {
             }
         }
 
-        let final_err = last_error.unwrap_or(Error::Transaction("Unknown error".into()));
+        let final_err = falsify_transience(
+            last_error.unwrap_or(Error::Transaction("Unknown error".into())),
+            attempt,
+        );
         let mut j = journal.lock().await;
         let _ = j.record_failure(&journal_id, &format!("{}", final_err));
 
@@ -770,5 +773,98 @@ impl Transaction {
                 failures.join(", ")
             )))
         }
+    }
+}
+
+/// A failure that survived its own retries is not transient, whatever the string said.
+///
+/// `Retryability::Transient` is a claim: *a second attempt could differ*. The container harness
+/// proves that claim the only way it can be proved — it retries once and calls a repeat a
+/// defect. The product asserted it from a substring and never checked, so `luarocks install
+/// luafilesystem` on a machine whose `wget` is a scoop shim matched `"failed downloading"`,
+/// was called transient, and told the user `sync` would try it again. It fails identically
+/// forever; `exit_policy::luarocks`'s own doc comment names that exact cause and classifies it
+/// as the network anyway.
+///
+/// The evidence was already being collected and thrown away. This loop retries a transient
+/// failure with backoff, so by the time it gives up it **has** re-run the command and seen the
+/// same answer. That is the experiment; this records its result. `Unknown` rather than
+/// `Permanent`, because "we tried and it did not differ" is not "this can never work" — the
+/// wget on the PATH could be fixed tomorrow — and `Permanent` is the verdict that withdraws a
+/// declaration (`verbs::packages::permanently_failed_message`). Guessing that hard here would
+/// delete a line over a broken PATH.
+fn falsify_transience(err: Error, attempts: u32) -> Error {
+    if attempts < 2 {
+        return err; // never retried, so nothing was tested
+    }
+    match err {
+        Error::CommandFailed {
+            message,
+            retry: Retryability::Transient,
+        } => Error::CommandFailed {
+            message: format!(
+                "{} (tried {} times; the failure did not change, so a further retry will not \
+                 help — this is not the transient failure its output looks like)",
+                message, attempts
+            ),
+            retry: Retryability::Exhausted,
+        },
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod transience_tests {
+    use super::*;
+
+    fn transient(msg: &str) -> Error {
+        Error::CommandFailed {
+            message: msg.to_string(),
+            retry: Retryability::Transient,
+        }
+    }
+
+    #[test]
+    fn a_transient_failure_that_repeated_stops_calling_itself_transient() {
+        let out = falsify_transience(transient("`luarocks` failed: Failed downloading …"), 3);
+        assert_eq!(out.retryability(), Retryability::Exhausted);
+        assert!(
+            out.to_string().contains("did not change"),
+            "the message must say what was tried: {out}"
+        );
+    }
+
+    #[test]
+    fn a_failure_that_was_never_retried_keeps_its_classification() {
+        // The control. Downgrading on the first attempt would delete the distinction entirely
+        // and make every transient failure Unknown, which is the opposite of the fix.
+        let out = falsify_transience(transient("`apt` failed: Could not get lock"), 1);
+        assert_eq!(out.retryability(), Retryability::Transient);
+        assert!(!out.to_string().contains("did not change"));
+    }
+
+    #[test]
+    fn a_permanent_failure_is_not_touched_by_the_retry_count() {
+        // It never entered the retry loop a second time — `give_up` breaks on Permanent — so
+        // seeing one here at all would mean something else changed. Pinned so it cannot.
+        let e = Error::CommandFailed {
+            message: "`scoop` failed: Couldn't find manifest".into(),
+            retry: Retryability::Permanent,
+        };
+        assert_eq!(
+            falsify_transience(e, 3).retryability(),
+            Retryability::Permanent
+        );
+    }
+
+    #[test]
+    fn an_unknown_failure_is_left_alone() {
+        let e = Error::CommandFailed {
+            message: "`mix` failed: something".into(),
+            retry: Retryability::Unknown,
+        };
+        let out = falsify_transience(e, 3);
+        assert_eq!(out.retryability(), Retryability::Unknown);
+        assert!(!out.to_string().contains("did not change"));
     }
 }

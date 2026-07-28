@@ -1741,3 +1741,34 @@ no rows, and a backend that does not exist returned no rows too, so for half the
 check could not fail. This is the vacuous assertion the whole assessment is about, found inside
 the check written to demonstrate the opposite. The oracle is now itself tested — a nonexistent
 name must be distinguishable from a real one before the 24-of-24 figure means anything.
+
+---
+
+**V.100 — Why a failure that survived its retries stops calling itself transient.**
+`Retryability::Transient` is a claim: *a second attempt could differ*. The container harness
+proves that claim the only way it can be proved — it retries once and calls a repeat a defect.
+The product asserted it from a substring and nothing ever asked whether the substring was
+right.
+
+Measured: `luarocks install luafilesystem` on a machine where `https://luarocks.org/manifest-5.5`
+returns 200 but the `wget` first on PATH is a scoop shim that rejects the flags luarocks passes.
+The output contains "failed downloading", `exit_policy::luarocks` lists that as transient, so
+LiNix kept the declaration and told the user `sync` would try it again. It fails identically
+forever. The policy's own doc comment named that exact cause and classified it as the network
+anyway.
+
+**The evidence was already being collected and thrown away.** The transaction retries a
+transient failure with backoff, so by the time it gives up it has re-run the command — four
+times, here — and seen the same answer. That is the experiment. Nothing recorded its result:
+the final error still carried the classification the first attempt's string match produced.
+
+So the retry count now falsifies the claim, and the verdict has its own name. `Exhausted` is
+kept apart from `Unknown` because the two lead to different sentences — `Unknown` means nobody
+looked, `Exhausted` means somebody did — and apart from `Permanent` because `Permanent` is the
+verdict that *withdraws a declaration*, and "we tried and it did not differ" is not "this can
+never work". The wget on that PATH could be fixed tomorrow. Guessing `Permanent` would delete
+a line over a broken environment, which is a worse bug than the one being fixed.
+
+**What this makes the markers.** They stop being a promise and become a hypothesis with an
+experiment attached: a wrong entry now costs a few seconds of backoff and an honest message,
+instead of a sentence the program repeats forever while its own retries disprove it.

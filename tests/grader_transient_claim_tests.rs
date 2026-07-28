@@ -70,7 +70,26 @@ fn a_failure_called_transient_can_actually_differ_on_a_second_attempt() {
     // failure retryable. That sentence is the claim under test.
     let called_transient = first.contains("is still declared") && first.contains("try it again");
     if !called_transient {
-        eprintln!("this failure was not classified as retryable; nothing to falsify");
+        // Not "nothing to falsify, move on". LiNix declining to call this transient is the
+        // fix, and a test that merely returns here would go green just as readily on a build
+        // that had stopped saying anything at all. So assert the honest alternative: it must
+        // still keep the declaration (the cause is a broken `wget` on the PATH, which is
+        // fixable — deleting the line would be the wrong cure) AND say that retrying will not
+        // help, rather than silently dropping the subject.
+        assert!(
+            first.contains("is still declared"),
+            "the failure was not called transient, but the declaration was not accounted for \
+             either — a line written by `install` must always be reported as kept or \
+             withdrawn:\n{}",
+            tail(&first)
+        );
+        assert!(
+            first.contains("repeated on every retry"),
+            "LiNix stopped promising a retry, but did not say why. `Transient` was falsified \
+             by evidence the program already had — it retried and got the same answer — and \
+             the user needs that sentence, not silence:\n{}",
+            tail(&first)
+        );
         return;
     }
 
