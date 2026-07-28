@@ -62,6 +62,22 @@ impl SnapshotRestore {
             return Ok(());
         }
 
+        // Refused before the gallery is printed, not after: a list of restore points with no
+        // way to choose one reads as a menu that ignored the keypress. The gallery is the
+        // whole command, so there is no non-interactive form of it to fall back to —
+        // `snapshot list` reports and `rollback <id>` acts, and both name themselves here.
+        {
+            use std::io::IsTerminal;
+            if !std::io::stdin().is_terminal() {
+                return Err(Error::Refused(
+                    "Choosing a snapshot needs a terminal, and this shell has none.\n\
+                     `linix snapshot list` prints the same gallery, and `linix rollback <id>` \
+                     restores one by name without asking."
+                        .to_string(),
+                ));
+            }
+        }
+
         // Said before the gallery, not after the confirmation: a list of restore points is
         // read as an offer to restore one.
         if let Some(cap) = self.snapshot_manager.restore_capability() {
