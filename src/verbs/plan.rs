@@ -202,7 +202,10 @@ pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
         if !report.is_empty() {
             println!(
                 "\nWARNING: `linix apply` will refuse this plan.\n{}",
-                report.message(linix::app::sync::guard::GuardScope::Apply)
+                report.message(
+                    linix::app::sync::guard::GuardScope::Apply,
+                    linix::app::sync::guard::RemovalKind::Package,
+                )
             );
         }
     }

@@ -1591,3 +1591,53 @@ installed reports that backend critical, which is the true answer about this mac
 last and still never shadow a built-in. The argument for widening is the same one, but the blast
 radius is not — a wrong `apt` installs the wrong thing, a wrong snapshot provider takes away the
 rollback that was supposed to save you — so that is a separate ruling and has not been made.
+
+---
+
+**V.96 — Why the guard covers a `link:` and a `service:`, not only a package.** *(Owner ruling,
+2026-07-28 — Q7.)* The guard was built against one story: managed state goes wrong, the planner
+schedules every managed package for removal, and the engine carries it out one purge at a time.
+Everything about it — the name `protected_packages`, the count called `max_removals`, the advice
+to run `linix unmanage` — was written in that story's vocabulary. So when the resource teardown
+was added (S20), it was built as the extras' own business and never met the guard, because
+nothing in the guard's vocabulary suggested it was about a symlink.
+
+Measured on 2026-07-28: five `link:` lines deleted from a module, `[guard] max_removals = 1` and
+`protected_packages = ["f3"]` both configured and both confirmed effective by `linix protected`.
+`sync` deleted all five, including `f3`, exited 0, and printed `already up to date`. The preview
+printed `already up to date` too.
+
+**Three failures, and only one of them is the guard.** The removal was invisible — no plan line,
+no preview line, and the teardown was announced at `info!`, below the default filter. It was
+uncounted — the number five never met the limit of one, because the count was never computed.
+And it was unprotected. A user who had done everything the documentation asked, in the file the
+documentation named, got none of it.
+
+**Why "the same rules" and not "just report them".** The alternative was to leave the guard
+packages-only and merely print the teardown first. The blast radius decides it: a `link:` target
+can be a decrypted secret, a `service:` is something running right now, and a `setting:` is a
+system-wide preference. Those are not smaller than a package, and `readme.md` had been promising
+for months that they were covered. The choice was between making the sentence true and deleting
+it, and deleting it would have been the first time this project answered a false claim by
+lowering the claim.
+
+**Two carve-outs, both from the code rather than from taste.** OS-essential does not apply
+because no resource manager publishes such a list, so querying one can only ever return nothing.
+Undeclarability does not apply because it asks "could a package line have held this name?", and
+for a resource the answer is structurally no — `link:/home/u/.vimrc` is not a package line and
+never parses as one. Applying that test to resources marks all six kinds undeclarable and
+refuses every teardown on every machine forever, which is a guard that has stopped being about
+the user's intent. Both carve-outs are pinned by tests, so a later reader cannot mistake them
+for omissions.
+
+**The ceiling counts the command, not the phase.** A sync dropping three packages and three
+links removes six things. Checking each phase's own list separately lets a plan pass a limit of
+five twice while exceeding it once, which is a ceiling that reports success at the moment it
+fails. The package count is threaded into the teardown check for that reason and no other.
+
+**And the enumeration is the real fix.** Both this and V.97's refusal family were found the same
+way — not by reading the sentence that quantifies over the paths, but by counting the paths.
+`readme.md:266` claimed every removal path was guarded; there were eleven paths and nine guards.
+That sentence was true when written and was never re-derived. `tests/removal_guard_enumeration_tests.rs`
+re-derives it on every run, and fails naming the file when the count moves. A rule nothing
+re-counts is a rule with an expiry date nobody wrote down.

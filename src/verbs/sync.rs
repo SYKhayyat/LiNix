@@ -95,11 +95,14 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         // Even with no packages/dependents/schedules to apply, an extra may have been
         // *removed* — deleting the last `service:` line is a real change (S20). Reconcile the
         // applied-extras ledger so that undo still happens; it is a cheap no-op otherwise.
-        app.extras().reconcile(&state).await?;
-        return Ok(0);
+        //
+        // The count is returned rather than dropped: a teardown is work, and reporting `already
+        // up to date` over five deleted files is the summary disagreeing with the machine.
+        return Ok(app.extras().reconcile(&state, opts.scope, 0).await?);
     }
 
     let applied = changes.total_install() + changes.total_remove();
+    let mut removed_packages = changes.total_remove();
 
     if !opts.json && !changes.is_empty() {
         print_flight_plan(app, &changes);
@@ -129,8 +132,9 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         }
         // The same phases a real run would perform, in the same order, from the same list —
         // each honours `dry_run` itself and previews instead of acting.
-        apply_non_package_phases(app, &state, opts.scope).await?;
-        return Ok(applied);
+        let extras_undone =
+            apply_non_package_phases(app, &state, opts.scope, changes.total_remove()).await?;
+        return Ok(applied + extras_undone);
     }
 
     // The package plan runs only when it has something in it — a dependents-only sync skips
@@ -154,15 +158,18 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         }
 
         // Read before the plan is consumed, and used after the sync succeeds: a warning about
-        // a package that failed to install would be answering a question nobody reached.
+        // a package that failed to install would be answering a question nobody reached. The
+        // removal count is read here too — after the TUI may have filtered the plan, so the
+        // extras ceiling counts what is actually being removed, not what was proposed.
         let installed_by = backends_that_installed(&changes);
+        removed_packages = changes.total_remove();
         engine.sync(changes, opts.scope).await?;
         warn_about_unreachable_binaries(&installed_by);
     }
 
-    apply_non_package_phases(app, &state, opts.scope).await?;
+    let extras_undone = apply_non_package_phases(app, &state, opts.scope, removed_packages).await?;
     perform_maintenance(app).await?;
-    Ok(applied)
+    Ok(applied + extras_undone)
 }
 
 /// Which managers this plan installs through, each named once.
@@ -202,7 +209,8 @@ pub(crate) async fn apply_non_package_phases(
     app: &App,
     state: &linix::model::DesiredState,
     scope: linix::app::sync::guard::GuardScope,
-) -> Result<()> {
+    packages_being_removed: usize,
+) -> Result<usize> {
     // Phase 3: the dependent extras, now that every package they lean on is in.
     app.dependents().apply(state).await?;
     // Phase 3b (7n): the dotfiles trees — a tree is a pile of `link:` lines and belongs where
@@ -217,9 +225,14 @@ pub(crate) async fn apply_non_package_phases(
     // Phase 4b (XIII.3): the declared `exec:` scripts, after the packages and dependents a
     // script is likely to lean on. A verb, so it has no teardown phase of its own.
     app.execs().apply(state).await?;
-    // Phase 5 (S20): undo extras that were applied before but are no longer declared.
-    app.extras().reconcile(state).await?;
-    Ok(())
+    // Phase 5 (S20): undo extras that were applied before but are no longer declared. The
+    // package removals already planned are passed in, so `max_removals` is a ceiling on the
+    // command rather than on each phase — a sync dropping three packages and three links
+    // removes six things, and a limit of five has to see six.
+    Ok(app
+        .extras()
+        .reconcile(state, scope, packages_being_removed)
+        .await?)
 }
 
 /// `linix rebuild` — remove and reinstall what is declared, one backend at a time (X.1, K1).

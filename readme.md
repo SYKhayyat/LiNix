@@ -263,8 +263,15 @@ shared file and another host's block is another machine's business.
 ## The removal guard
 
 Drift is derived from managed state, and managed state can be wrong — a mis-scoped manifest, a
-state file from another machine. So **every path that removes anything** goes through one guard,
-which refuses when a removal:
+state file from another machine. So **every path that removes anything** goes through one guard.
+That covers packages *and* the resources a declaration puts in place — a `link:`, `service:`,
+`setting:`, `shim:`, `schedule:` or `repo:` line that leaves your modules is torn down under the
+same rules, and counts against the same limit. The sentence you just read is checked by
+`tests/removal_guard_enumeration_tests.rs`, which counts the removal paths in the source on every
+run; it was written because the sentence was false for the whole resource family until
+2026-07-28, and nothing had re-counted since it was first written.
+
+The guard refuses when a removal:
 
 - exceeds `max_removals` (default 20),
 - touches a protected package — a built-in list, anything you add, **and** the OS's own

@@ -29,6 +29,18 @@ pub(crate) async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
             mgr.add_repo(name, url, b.sudo_for_write()).await?;
         }
         RepoCommand::Remove { name, .. } => {
+            // The imperative twin of the `repo:` teardown in `app/apply/extras.rs`. Guarding
+            // the declarative path and not this one is how a guard comes to cover a resource
+            // on Tuesday and not on Wednesday, depending on which command the user reached
+            // for — the twin-branch shape `spec/history.md` records as S6.
+            linix::app::sync::guard::enforce_extras(
+                &app.config,
+                &app.registry,
+                &[("repo".to_string(), format!("{}:{}", b_name, name))],
+                0,
+                linix::app::sync::guard::GuardScope::Remove,
+            )
+            .await?;
             info!("Repo: Removing {} from {}...", name, b_name);
             mgr.remove_repo(name, b.sudo_for_write()).await?;
         }

@@ -356,7 +356,7 @@ async fn a_failed_undo_stays_in_the_extras_ledger() {
     kernel
         .app
         .extras()
-        .reconcile(&state)
+        .reconcile(&state, linix::app::sync::guard::GuardScope::Sync, 0)
         .await
         .expect("a failed undo is reported, not fatal");
 
@@ -383,7 +383,12 @@ async fn a_successful_undo_leaves_the_extras_ledger() {
     ledger.save(&path).unwrap();
 
     let state = linix::model::DesiredState::default();
-    kernel.app.extras().reconcile(&state).await.unwrap();
+    kernel
+        .app
+        .extras()
+        .reconcile(&state, linix::app::sync::guard::GuardScope::Sync, 0)
+        .await
+        .unwrap();
 
     let after = linix::core::ExtrasLedger::load(&path).unwrap();
     assert!(

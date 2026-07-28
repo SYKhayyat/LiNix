@@ -1,5 +1,5 @@
 use crate::core::{Error, Result};
-use tracing::{info, warn};
+use tracing::warn;
 
 /// Extras holds only what it uses. It is built from an [`App`](crate::app::App) by
 /// `App::extras()` and can be built without one.
@@ -37,7 +37,13 @@ impl Extras<'_> {
         let ledger = ExtrasLedger::load(&path)?;
         Ok(ledger.drift(&declared_extras(state)))
     }
-    pub async fn reconcile(&self, state: &crate::model::DesiredState) -> Result<()> {
+    pub async fn reconcile(
+        &self,
+        state: &crate::model::DesiredState,
+        scope: crate::app::sync::guard::GuardScope,
+        packages_being_removed: usize,
+    ) -> Result<usize> {
+        use crate::app::sync::guard;
         use crate::core::extras_lock::{split_key, ExtrasLedger};
 
         let declared = declared_extras(state);
@@ -49,7 +55,35 @@ impl Extras<'_> {
         // Nothing drifted and the record already matches — no work and, crucially, no write, so
         // an ordinary no-op sync does not churn `locks/extras.toml` on every run.
         if drift.is_empty() && ledger.applied() == &declared {
-            return Ok(());
+            return Ok(0);
+        }
+
+        // Before the first resource is torn down, and before the dry-run branch: a preview that
+        // skipped the guard would report a teardown the real run then refuses, and the two must
+        // never disagree about the same machine.
+        if !drift.is_empty() {
+            guard::enforce_extras(
+                self.config,
+                self.registry,
+                &guard::extra_removal_pairs(&drift),
+                packages_being_removed,
+                scope,
+            )
+            .await?;
+        }
+
+        // Said with `warn!` rather than `info!`: a deletion the user cannot see coming is the
+        // wrong shape, and `info!` is below the default filter, which is why this teardown
+        // could delete five files under a summary reading `already up to date`.
+        for key in &drift {
+            if self.config.dry_run {
+                warn!(
+                    "[DRY-RUN] `{}` is no longer declared — sync would undo it.",
+                    key
+                );
+            } else {
+                warn!("`{}` is no longer declared — undoing it.", key);
+            }
         }
 
         // An undo that failed leaves the extra in place, so its key stays in the ledger and
@@ -61,10 +95,8 @@ impl Extras<'_> {
                 continue;
             };
             if self.config.dry_run {
-                info!("[DRY-RUN] would undo removed extra `{}`", key);
                 continue;
             }
-            info!("`{}` is no longer declared — undoing it.", key);
             if let Err(e) = self.undo_extra(kind, id).await {
                 warn!(
                     "could not undo `{}` ({}); it is still in place and the next sync will \
@@ -84,7 +116,7 @@ impl Extras<'_> {
             ledger.record(recorded);
             ledger.save(&path)?;
         }
-        Ok(())
+        Ok(drift.len())
     }
     /// Execute the undo for one drifted extra, dispatched on its kind (S20). Each arm uses the
     /// same removal path the imperative command would.

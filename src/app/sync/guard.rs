@@ -175,7 +175,11 @@ impl GuardReport {
 
     /// A refusal that says what is wrong and how to proceed. Leads with the count, since
     /// that is the fact that explains the rest.
-    pub fn message(&self, scope: GuardScope) -> String {
+    pub fn message(&self, scope: GuardScope, kind: RemovalKind) -> String {
+        let noun = match kind {
+            RemovalKind::Package => "packages",
+            RemovalKind::Extra => "managed resources",
+        };
         let mut out = format!("{}: refusing this removal.\n", scope.as_str());
 
         if let Some(Objection::TooMany { count, limit }) = self
@@ -184,8 +188,8 @@ impl GuardReport {
             .find(|o| matches!(o, Objection::TooMany { .. }))
         {
             out.push_str(&format!(
-                "  - it removes {} packages, over the limit of {} ([guard] max_removals)\n",
-                count, limit
+                "  - it removes {} {}, over the limit of {} ([guard] max_removals)\n",
+                count, noun, limit
             ));
         }
 
@@ -201,20 +205,39 @@ impl GuardReport {
         }
         if protected.len() > MAX_LISTED {
             out.push_str(&format!(
-                "  - …and {} more protected package(s)\n",
-                protected.len() - MAX_LISTED
+                "  - …and {} more protected {}(s)\n",
+                protected.len() - MAX_LISTED,
+                match kind {
+                    RemovalKind::Package => "package",
+                    RemovalKind::Extra => "resource",
+                }
             ));
         }
 
-        out.push_str(
-            "\nThis usually means managed state has drifted from your manifests — run \
-             `linix plan` and read it before proceeding.\n\n\
-             What to do:\n  \
-             linix protected <pkg>          why a package is guarded\n  \
-             linix unmanage <pkg>           stop managing it WITHOUT uninstalling it\n  \
-             <command> --allow-mass-removal carry out this removal anyway\n  \
-             [guard] unprotected_packages    exempt a package permanently (preferences.toml)",
-        );
+        // The advice has to be executable. `linix unmanage` takes a package line, so offering
+        // it for a `link:` teardown names a command that cannot accept the thing it is about;
+        // for an extra the equivalent act is putting the declaration back.
+        match kind {
+            RemovalKind::Package => out.push_str(
+                "\nThis usually means managed state has drifted from your manifests — run \
+                 `linix plan` and read it before proceeding.\n\n\
+                 What to do:\n  \
+                 linix protected <pkg>          why a package is guarded\n  \
+                 linix unmanage <pkg>           stop managing it WITHOUT uninstalling it\n  \
+                 <command> --allow-mass-removal carry out this removal anyway\n  \
+                 [guard] unprotected_packages    exempt a package permanently (preferences.toml)",
+            ),
+            RemovalKind::Extra => out.push_str(
+                "\nThese are resources a declaration put in place — a `link:`, `service:`, \
+                 `setting:`, `shim:`, `schedule:` or `repo:` line that is no longer in any \
+                 module. `sync` undoes what is no longer declared.\n\n\
+                 What to do:\n  \
+                 linix plan                     see exactly what would be undone\n  \
+                 put the line back              if the deletion was not what you meant\n  \
+                 <command> --allow-mass-removal carry out this teardown anyway\n  \
+                 [guard] unprotected_packages    exempt one permanently (preferences.toml)",
+            ),
+        }
         out
     }
 }
@@ -259,16 +282,81 @@ pub async fn inspect(
     registry: &Arc<BackendRegistry>,
     removals: &[(String, String)],
 ) -> GuardReport {
+    inspect_removals(config, registry, removals, RemovalKind::Package, 0).await
+}
+
+/// What is being taken away. Both kinds answer to `protected_packages`, to OS-essential and
+/// to `max_removals`; they differ in one check and in what a refusal tells you to do.
+///
+/// The distinction exists because [`protection_of`]'s declarability test asks "could a package
+/// line ever have held this name?", and for an extra the answer is structurally no — a
+/// `link:`/`service:`/`setting:` key is not a package line and never parses as one. Running
+/// that test over an extra marks every extra `Undeclarable` and refuses every teardown
+/// forever, which is a guard that has stopped being about the user's intent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemovalKind {
+    Package,
+    /// A `link:`/`service:`/`setting:`/`shim:`/`schedule:`/`repo:` resource leaving the model.
+    Extra,
+}
+
+/// The identities a `protected_packages` rule is matched against for one removal.
+///
+/// A package contributes its name and nothing else. An extra whose identity is a path also
+/// contributes that path's final component, so `protected_packages = ["vimrc"]` protects
+/// `link:/home/u/.vimrc` — a user names the thing, not the absolute path LiNix happens to
+/// key it by, and a rule that only matched the full path would silently protect nothing.
+fn protected_names(kind: RemovalKind, name: &str) -> Vec<&str> {
+    let mut names = vec![name];
+    if kind == RemovalKind::Extra {
+        if let Some(base) = name.rsplit(['/', '\\']).next() {
+            if base != name && !base.is_empty() {
+                names.push(base);
+            }
+        }
+    }
+    names
+}
+
+/// Inspect a removal set of one kind, counting `also_removing` other items already planned
+/// against the same ceiling.
+///
+/// `also_removing` is what makes `max_removals` a property of the *command* rather than of
+/// each phase: a sync that drops three packages and three links removes six things, and a
+/// limit of five must see six. Checking each phase's own list separately is how a ceiling
+/// gets passed twice by a plan that exceeds it once.
+pub async fn inspect_removals(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    removals: &[(String, String)],
+    kind: RemovalKind,
+    also_removing: usize,
+) -> GuardReport {
     let mut report = GuardReport::default();
     if removals.is_empty() {
         return report;
     }
 
-    let backends: HashSet<String> = removals.iter().map(|(b, _)| b.clone()).collect();
-    let os_essential = essential_names(registry, &backends).await;
+    let os_essential = match kind {
+        RemovalKind::Package => {
+            let backends: HashSet<String> = removals.iter().map(|(b, _)| b.clone()).collect();
+            essential_names(registry, &backends).await
+        }
+        // `service`/`link`/`setting` are not package managers and have no essential list to
+        // ask for; querying them would be a round trip that can only return nothing.
+        RemovalKind::Extra => HashSet::new(),
+    };
 
     for (backend, name) in removals {
-        if let Some(p) = protection_of(config, backend, name, &os_essential) {
+        let protection = match kind {
+            RemovalKind::Package => protection_of(config, backend, name, &os_essential),
+            RemovalKind::Extra => protected_names(kind, name).into_iter().find_map(|n| {
+                config
+                    .protection_rule(n)
+                    .map(|r| Protection::Rule(r.to_string()))
+            }),
+        };
+        if let Some(p) = protection {
             report.objections.push(Objection::Protected {
                 key: format!("{}:{}", backend, name),
                 reason: p.reason(),
@@ -276,9 +364,10 @@ pub async fn inspect(
         }
     }
 
-    if config.guard.max_removals > 0 && removals.len() > config.guard.max_removals {
+    let total = removals.len() + also_removing;
+    if config.guard.max_removals > 0 && total > config.guard.max_removals {
         report.objections.push(Objection::TooMany {
-            count: removals.len(),
+            count: total,
             limit: config.guard.max_removals,
         });
     }
@@ -318,7 +407,52 @@ pub async fn enforce(
     if report.is_empty() {
         return Ok(());
     }
-    refuse(report.message(scope))
+    refuse(report.message(scope, RemovalKind::Package))
+}
+
+/// Enforce the guard over the extras a sync is about to undo (`link:`, `service:`, `setting:`,
+/// `shim:`, `schedule:`, `repo:`).
+///
+/// `also_removing` is the number of packages the same command already plans to remove, so the
+/// ceiling is checked once against the whole command rather than once per phase.
+///
+/// This exists because the teardown loop in `app/apply/extras.rs` runs outside the transaction
+/// and therefore outside the plan-time `enforce` that covers packages. Ten call sites can reach
+/// a backend `remove`; that one was the only one no guard stood in front of, and a `link:` whose
+/// target is a decrypted secret is not a smaller loss than a package.
+pub async fn enforce_extras(
+    config: &Config,
+    registry: &Arc<BackendRegistry>,
+    removals: &[(String, String)],
+    also_removing: usize,
+    scope: GuardScope,
+) -> Result<()> {
+    let mut report = inspect_removals(
+        config,
+        registry,
+        removals,
+        RemovalKind::Extra,
+        also_removing,
+    )
+    .await;
+
+    if config.allow_mass_removal {
+        let before = report.objections.len();
+        report
+            .objections
+            .retain(|o| !matches!(o, Objection::TooMany { .. }));
+        if before != report.objections.len() {
+            warn!(
+                "the teardown count for '{}' was allowed by --allow-mass-removal.",
+                scope.as_str()
+            );
+        }
+    }
+
+    if report.is_empty() {
+        return Ok(());
+    }
+    refuse(report.message(scope, RemovalKind::Extra))
 }
 
 /// Turn a refusal into the error every command reports.
@@ -449,7 +583,20 @@ pub async fn enforce_deliberate(
     if report.is_empty() {
         return Ok(());
     }
-    refuse(report.message(scope))
+    refuse(report.message(scope, RemovalKind::Package))
+}
+
+/// Split an extras-ledger key (`link:/home/u/.vimrc`, `repo:apt:ppa:x/y`) into the
+/// `(kind, id)` pair the guard inspects. A key with no `:` cannot name a kind, so it is
+/// carried through under an empty kind rather than dropped — the guard must never silently
+/// stop covering something it could not parse.
+pub fn extra_removal_pairs(keys: &[String]) -> Vec<(String, String)> {
+    keys.iter()
+        .map(|k| match k.split_once(':') {
+            Some((kind, id)) => (kind.to_string(), id.to_string()),
+            None => (String::new(), k.clone()),
+        })
+        .collect()
 }
 
 /// Pull the `(backend, name)` removal pairs out of a planned change set.
@@ -811,6 +958,152 @@ mod tests {
         assert!(inspect_desired(&guard, &desired(&[("apt", "curl", None)])).is_empty());
     }
 
+    /// Every kind the extras teardown can undo, keyed the way the ledger keys it.
+    fn extras(keys: &[&str]) -> Vec<(String, String)> {
+        extra_removal_pairs(&keys.iter().map(|k| k.to_string()).collect::<Vec<_>>())
+    }
+
+    #[tokio::test]
+    async fn no_extra_is_refused_merely_for_not_being_a_package_line() {
+        // The trap this kind exists to avoid: `protection_of`'s declarability test asks whether
+        // a package line could hold the name, and no extras key can — `link:/home/u/.vimrc` is
+        // not a package line and never parses as one. Running that test over extras marks all
+        // six kinds `Undeclarable` and refuses every teardown on every machine forever, which
+        // is a guard that has stopped being about what the user asked for.
+        let reg = Arc::new(BackendRegistry::new());
+        let cfg = config_with(20);
+        let all_six = extras(&[
+            "link:/home/u/.vimrc",
+            "service:nginx",
+            "setting:org.gnome.desktop.interface color-scheme",
+            "shim:rg",
+            "schedule:nightly-sync",
+            "repo:apt:ppa:x/y",
+        ]);
+        let report = inspect_removals(&cfg, &reg, &all_six, RemovalKind::Extra, 0).await;
+        assert!(
+            report.is_empty(),
+            "an ordinary teardown of one of each kind must be allowed: {:?}",
+            report.objections
+        );
+    }
+
+    #[tokio::test]
+    async fn a_protected_name_stops_a_teardown_of_every_kind() {
+        // V.26: protection is a refusal nothing overrides, and the ruling of 2026-07-28 is that
+        // it covers resources as well as packages. One case per kind, because a guard that
+        // holds for `link:` and not for `service:` is the shape this whole finding is about.
+        let reg = Arc::new(BackendRegistry::new());
+        let mut cfg = config_with(0); // count disabled, so only protection can object
+        cfg.guard.protected_packages = vec!["keep".into()];
+
+        for key in [
+            "link:/home/u/keep",
+            r"link:C:\Users\u\keep",
+            "service:keep",
+            "shim:keep",
+            "schedule:keep",
+            "setting:keep",
+        ] {
+            let report = inspect_removals(&cfg, &reg, &extras(&[key]), RemovalKind::Extra, 0).await;
+            assert!(
+                matches!(report.objections.as_slice(), [Objection::Protected { .. }]),
+                "`{}` was not protected by `protected_packages = [\"keep\"]`: {:?}",
+                key,
+                report.objections
+            );
+        }
+
+        // And the control: a name the rule does not match is still removable, or the assertion
+        // above would pass for a guard that refuses everything.
+        let report = inspect_removals(
+            &cfg,
+            &reg,
+            &extras(&["link:/home/u/other"]),
+            RemovalKind::Extra,
+            0,
+        )
+        .await;
+        assert!(report.is_empty(), "{:?}", report.objections);
+    }
+
+    #[tokio::test]
+    async fn the_ceiling_counts_the_whole_command_not_each_phase() {
+        // A sync that drops three packages and three links removes six things. Checking each
+        // phase's own list against `max_removals` lets a plan exceed a limit of five twice
+        // without ever presenting six to the guard.
+        let reg = Arc::new(BackendRegistry::new());
+        let cfg = config_with(5);
+        let three = extras(&["link:/a", "link:/b", "link:/c"]);
+
+        assert!(
+            inspect_removals(&cfg, &reg, &three, RemovalKind::Extra, 0)
+                .await
+                .is_empty(),
+            "three removals under a limit of five must pass on their own"
+        );
+        let report = inspect_removals(&cfg, &reg, &three, RemovalKind::Extra, 3).await;
+        assert!(
+            matches!(
+                report.objections.as_slice(),
+                [Objection::TooMany { count: 6, limit: 5 }]
+            ),
+            "the same three, alongside three package removals, must be counted as six: {:?}",
+            report.objections
+        );
+    }
+
+    #[tokio::test]
+    async fn allow_mass_removal_answers_a_teardown_count_but_never_its_protection() {
+        // The extras half of `allow_mass_removal_answers_the_count_and_nothing_else`, and for
+        // the same reason: the flag means "yes, that many is what I meant", never "yes, delete
+        // the one I told you to keep".
+        let reg = Arc::new(BackendRegistry::new());
+        let mut cfg = config_with(1);
+        cfg.guard.protected_packages = vec!["keep".into()];
+        cfg.allow_mass_removal = true;
+
+        assert!(
+            enforce_extras(
+                &cfg,
+                &reg,
+                &extras(&["link:/a", "link:/b"]),
+                0,
+                GuardScope::Sync
+            )
+            .await
+            .is_ok(),
+            "the flag must let a big-but-ordinary teardown through"
+        );
+        assert!(
+            enforce_extras(&cfg, &reg, &extras(&["link:/keep"]), 0, GuardScope::Sync)
+                .await
+                .is_err(),
+            "nothing overrides protection — not even --allow-mass-removal"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_teardown_refusal_does_not_advise_a_command_that_cannot_take_it() {
+        // `linix unmanage` takes a package line. Offering it for a `link:` teardown names a
+        // command that cannot accept the thing the refusal is about.
+        let reg = Arc::new(BackendRegistry::new());
+        let cfg = config_with(1);
+        let err = enforce_extras(
+            &cfg,
+            &reg,
+            &extras(&["link:/a", "link:/b"]),
+            0,
+            GuardScope::Sync,
+        )
+        .await
+        .expect_err("two removals over a limit of one must be refused");
+        let msg = err.to_string();
+        assert!(msg.contains("managed resources"), "{}", msg);
+        assert!(!msg.contains("linix unmanage"), "{}", msg);
+        assert!(msg.contains("linix plan"), "{}", msg);
+    }
+
     #[test]
     fn refusal_message_leads_with_the_count_and_caps_the_list() {
         let objections = (0..25)
@@ -823,7 +1116,8 @@ mod tests {
                 limit: 20,
             }))
             .collect();
-        let msg = GuardReport { objections }.message(GuardScope::PurgeUnmanaged);
+        let msg =
+            GuardReport { objections }.message(GuardScope::PurgeUnmanaged, RemovalKind::Package);
         let count_line = msg.find("removes 25 packages").expect("count line present");
         let first_pkg = msg.find("apt:pkg0").expect("a package listed");
         assert!(count_line < first_pkg, "the count must lead");

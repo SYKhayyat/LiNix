@@ -1,4 +1,4 @@
-# The decision register — all 115, and every one of them ruled
+# The decision register — all 116, and every one of them ruled
 
 **One file, six features. Zero open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -18,7 +18,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **113** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **114** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Nothing here is open.** All 115 are ruled: **113 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**Nothing here is open.** All 116 are ruled: **114 ANSWERED, 2 PARKED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -3272,5 +3272,45 @@ What is binding:
    separate ruling and has not been made.
 
 The rule is in **II.1** (`adapters/`); the reason is in **V.95**.
+
+---
+
+## Q7
+
+**Status: ANSWERED.**
+
+**Q7 — Does the removal guard cover the resources a declaration puts in place, or only
+packages?** **RULED 2026-07-28 (owner): the resources are guarded the same way.**
+
+Deleting a `link:`, `service:`, `setting:`, `shim:`, `schedule:` or `repo:` line made the next
+`sync` tear that resource down without counting it, without naming it in the plan or the
+`--dry-run` preview, and without consulting `protected_packages`. Measured: five link targets
+deleted — including one the user had protected — with `max_removals = 1` set, reported as
+`already up to date`. `readme.md` had said for months that every path removing anything went
+through one guard. There were eleven such paths and nine guards.
+
+The alternative on the table was to leave the guard packages-only and merely *report* the
+teardown before it happened. It was rejected on blast radius: a `link:` target can be a
+decrypted secret, a `service:` is something running now, a `setting:` is system-wide.
+
+What is binding:
+
+1. **`protected_packages` applies to resources**, matched on the key and also on the final
+   component of a path key — `protected_packages = ["vimrc"]` protects `link:/home/u/.vimrc`.
+2. **`max_removals` counts the whole command**, packages and resources together, not each
+   phase separately.
+3. **OS-essential and undeclarable do not apply.** No resource manager publishes an essential
+   list, and no resource key parses as a package line — applying that second test would refuse
+   every teardown on every machine forever.
+4. **`--allow-mass-removal` answers the count and nothing else**, exactly as it does for
+   packages. Protection stays a refusal (V.26).
+5. **The teardown is announced before it happens**, at a level the default filter shows, and
+   `sync` no longer reports `already up to date` over work it did.
+6. **`linix repo remove` is guarded too** — the imperative twin of the `repo:` teardown. Guarding
+   one and not the other is the twin-branch shape `history.md` records as S6.
+7. **The claim is re-counted, not re-asserted.** `tests/removal_guard_enumeration_tests.rs`
+   enumerates every removal call in `src/` and fails on one no ledger entry accounts for.
+
+The rule is in **II.10**; the reason is in **V.96**.
 
 ---
