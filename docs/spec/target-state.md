@@ -998,6 +998,38 @@ read a typo as a drifted machine. **Every refusal exits 3** — a refusal raised
 error instead of `Error::Refused` never reaches the mapping and is a contract violation, not a
 detail.
 
+## II.8b `--dry-run` performs nothing, and the check is not a habit
+
+**A preview writes no file the run would have written.** Not "each verb remembers to ask" —
+that was the arrangement, and it produced two rounds of the same finding. Round 1 fixed
+`uninstall`, `unmanage`, `module create` and `schedule add`. Round 2 measured `activate`,
+`deactivate`, `lock`, `git init` and `config init` still acting, and `--dry-run activate Work`
+left the machine on Work while printing nothing at all.
+
+So the flag is a property of the run, read where the **write** happens:
+
+- `core::dry_run` holds it, set once in `main` after the config merge and before dispatch;
+- `utils::file::write_config` is the writer every config mutation goes through — `active`, the
+  profile files, `preferences.toml`, and all six ledgers under `locks/`. It reports what it
+  would have written, at a level the default filter shows, because acting silently was the
+  worse half of the defect;
+- `GitManager::init` and `commit_all` carry the same check, because a repository and a commit
+  are the one case where the preview's residue is a permanent artifact rather than a changed
+  file.
+
+**One deliberate exception, and it is named rather than hidden.** `profile show` points `active`
+at a profile, resolves, and puts the file back. That pair is scaffolding for a read, so it
+writes directly through `swap_active_for_read`: honouring the flag there would make the first
+write a no-op and `--dry-run profile show Work` describe whatever was already active — the same
+silent-wrong-answer defect, moved.
+
+**Checked over every subcommand, not over the ones with a bug report.**
+`tests/dry_run_every_verb_tests.rs` snapshots the config directory, runs the command under the
+flag, snapshots again and requires the bytes to match — **and requires the same command without
+the flag to change something**, so a case whose fixture made the command a no-op fails as a
+broken case rather than passing as a clean one. Every name in `--help` is either driven or
+exempted with a reason, and every exemption has to name a command that still exists.
+
 ## II.9 Adopt
 
 **Adopt takes manually-installed packages only. Never the dependency closure.**

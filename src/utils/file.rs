@@ -4,6 +4,26 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
+/// Write a file the user's configuration is made of — `active`, `preferences.toml`, a lock
+/// under `locks/`. **The place `--dry-run` is honoured for config writes**, so a verb gets the
+/// preview by writing through here rather than by remembering to ask.
+///
+/// Returns `true` when the bytes were written and `false` when the run is a preview, so a
+/// caller can phrase its own message either way without asking the flag a second time.
+///
+/// It says what it would have done, at a level the default filter shows: the five verbs this
+/// exists for did not merely act during a preview, they acted *silently*, and of the two that
+/// is the worse half — `--dry-run activate Work` switched the profile and printed nothing at
+/// all.
+pub fn write_config(path: &Path, content: &str) -> Result<bool> {
+    if crate::core::dry_run::active() {
+        tracing::warn!("[DRY-RUN] would write {}", path.display());
+        return Ok(false);
+    }
+    atomic_write(path, content)?;
+    Ok(true)
+}
+
 pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
     let dir = path.parent().ok_or_else(|| {
         let err = std::io::Error::new(

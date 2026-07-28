@@ -4,6 +4,7 @@ pub mod bare_lock;
 pub mod cache;
 pub mod datalock;
 pub mod download;
+pub mod dry_run;
 pub mod error;
 pub mod exec_lock;
 pub mod executor;

@@ -480,12 +480,13 @@ pub(crate) async fn build_and_write_locks(app: &App) -> Result<usize> {
     let path = app.config.config_root().join("locks").join("versions.json");
     // The version pins live in the `locks/` directory (II.6) beside the hook and extras
     // ledgers — not a stray `locks.json` file beside that directory (the old layout).
-    if let Some(dir) = path.parent() {
-        tokio::fs::create_dir_all(dir).await.ok();
+    if !linix::core::dry_run::active() {
+        if let Some(dir) = path.parent() {
+            tokio::fs::create_dir_all(dir).await.ok();
+        }
     }
     let doc = serde_json::json!({ "locks": locks });
-    tokio::fs::write(&path, serde_json::to_string_pretty(&doc)?)
-        .await
+    linix::utils::file::write_config(&path, &serde_json::to_string_pretty(&doc)?)
         .with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(count)
 }

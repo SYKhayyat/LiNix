@@ -445,13 +445,21 @@ pub(crate) async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> 
                 );
                 return Ok(());
             }
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await.ok();
+            if !linix::core::dry_run::active() {
+                if let Some(parent) = path.parent() {
+                    tokio::fs::create_dir_all(parent).await.ok();
+                }
             }
-            tokio::fs::write(&path, CONFIG_TEMPLATE)
-                .await
-                .with_context(|| format!("Failed to write config to {}", path.display()))?;
-            println!("Wrote commented default preferences to {}", path.display());
+            if linix::utils::file::write_config(&path, CONFIG_TEMPLATE)
+                .with_context(|| format!("Failed to write config to {}", path.display()))?
+            {
+                println!("Wrote commented default preferences to {}", path.display());
+            } else {
+                println!(
+                    "[DRY-RUN] would write commented default preferences to {}",
+                    path.display()
+                );
+            }
         }
     }
     Ok(())

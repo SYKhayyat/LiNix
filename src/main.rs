@@ -770,6 +770,13 @@ pub(crate) async fn load_and_merge_config(cli: &Cli) -> Result<linix::config::Co
         Some(cli.allow_mass_removal),
         Some(cli.allow_mass_install),
     )?;
+    // The one place `--dry-run` becomes a property of the process. Set after the config merge
+    // so a `dry_run = true` in `preferences.toml` counts too, and before dispatch so no write
+    // can run ahead of it. Every config write consults this instead of each verb remembering
+    // to — which five verbs did not (`activate`, `deactivate`, `lock`, `git init`,
+    // `config init`), and `--dry-run activate Work` left you on Work without printing a line.
+    linix::core::dry_run::set(config.dry_run);
+
     // A per-run acknowledgement, never a config key (U23): a machine that always bypasses the
     // dotfiles collision check is a machine where the check does not exist.
     if cli.replace_existing {

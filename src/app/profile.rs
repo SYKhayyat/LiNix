@@ -116,7 +116,17 @@ impl ProfileManager {
         let dropped = blocks_in_active(&old);
         let facts = self.facts().await?;
 
-        self.write_active(names).await?;
+        if !self.write_active(names).await? {
+            // Returning here rather than falling through to `sync_now`: with the write
+            // previewed, a sync would converge to the profile that is *still* active and
+            // report a plan for the wrong question.
+            info!(
+                "[DRY-RUN] would set active to {} ({} block(s) would be dropped), then sync.",
+                names.join(", "),
+                dropped.len()
+            );
+            return Ok(());
+        }
         info!("active is now {}.", names.join(", "));
         for b in &dropped {
             info!(
@@ -165,7 +175,10 @@ impl ProfileManager {
             body.push_str(name);
             body.push('\n');
         }
-        tokio::fs::write(&file, body).await.map_err(Error::from)?;
+        if !crate::utils::file::write_config(&file, &body)? {
+            info!("[DRY-RUN] would add {} to active.", added.join(", "));
+            return Ok(());
+        }
 
         let now = self.active_profiles().await?;
         info!(
@@ -225,9 +238,10 @@ impl ProfileManager {
             return Ok(());
         }
 
-        tokio::fs::write(&file, &edit.body)
-            .await
-            .map_err(Error::from)?;
+        if !crate::utils::file::write_config(&file, &edit.body)? {
+            info!("[DRY-RUN] would deactivate {}.", names.join(", "));
+            return Ok(());
+        }
 
         let now = self.active_profiles().await?;
         info!(
@@ -261,14 +275,14 @@ impl ProfileManager {
         self.must_exist(name).await?;
 
         let restore = self.active_profiles().await?;
-        self.write_active(&[name.to_string()]).await?;
+        self.swap_active_for_read(&[name.to_string()]).await?;
         let resolved = StateResolver::new(&self.config, self.registry.clone(), false)
             .await
             .resolve_desired_state()
             .await;
         // Whatever happened, put `active` back: a read-only command must not change what
         // this machine is set to.
-        self.write_active(&restore).await?;
+        self.swap_active_for_read(&restore).await?;
 
         let mut out: Vec<String> = resolved?
             .values()
@@ -292,12 +306,18 @@ impl ProfileManager {
                 path.display()
             )));
         }
+        if crate::core::dry_run::active() {
+            info!(
+                "[DRY-RUN] would create profile '{}' at {}.",
+                name,
+                path.display()
+            );
+            return Ok(());
+        }
         tokio::fs::create_dir_all(self.layout.profiles_dir())
             .await
             .ok();
-        tokio::fs::write(&path, PROFILE_TEMPLATE)
-            .await
-            .map_err(Error::from)?;
+        crate::utils::file::write_config(&path, PROFILE_TEMPLATE)?;
         info!("Created profile '{}' at {}.", name, path.display());
         Ok(())
     }
@@ -319,9 +339,11 @@ impl ProfileManager {
         lines.sort();
         lines.dedup();
 
-        tokio::fs::create_dir_all(self.layout.profiles_dir())
-            .await
-            .ok();
+        if !crate::core::dry_run::active() {
+            tokio::fs::create_dir_all(self.layout.profiles_dir())
+                .await
+                .ok();
+        }
         let path = self.layout.profile_file(name);
         let body = format!(
             "# Profile '{name}' — what this machine wanted when it was saved.\n\
@@ -330,7 +352,15 @@ impl ProfileManager {
              # them. Move them into a module to share them between profiles.\n\n{}\n",
             lines.join("\n")
         );
-        tokio::fs::write(&path, body).await.map_err(Error::from)?;
+        if !crate::utils::file::write_config(&path, &body)? {
+            info!(
+                "[DRY-RUN] would save profile '{}' with {} package(s) to {}.",
+                name,
+                lines.len(),
+                path.display()
+            );
+            return Ok(());
+        }
         info!(
             "Saved profile '{}' with {} package(s) to {}.",
             name,
@@ -374,16 +404,34 @@ impl ProfileManager {
     }
 
     /// `active` is a plain list of profile names and nothing else goes in it (II.6).
-    async fn write_active(&self, active: &[String]) -> Result<()> {
+    /// The one write behind `activate`, `activate -a` and `deactivate`.
+    ///
+    /// It goes through `write_config` rather than `tokio::fs::write` because `active` decides
+    /// which modules are in the model, and therefore what the next `sync` installs and removes.
+    /// A preview of "what would switching to Work do" that leaves you on Work has answered a
+    /// question nobody asked, and until 2026-07-28 it did so without printing a line.
+    async fn write_active(&self, active: &[String]) -> Result<bool> {
+        if !crate::core::dry_run::active() {
+            tokio::fs::create_dir_all(self.layout.config_root())
+                .await
+                .ok();
+        }
+        crate::utils::file::write_config(&self.layout.active_file(), &active_body(active))
+    }
+
+    /// `profile show` answers "what would this profile give me" by pointing `active` at it,
+    /// resolving, and putting the file back. That pair of writes is scaffolding for a read, not
+    /// a change to the machine, so it deliberately does **not** go through the `--dry-run`
+    /// gate: honouring the flag here would make the first write a no-op, the resolve answer
+    /// about whatever was already active, and `linix --dry-run profile show Work` describe the
+    /// wrong profile — silently, which is the defect this whole order is about, moved.
+    ///
+    /// The two calls always come as a pair and the second is unconditional.
+    async fn swap_active_for_read(&self, active: &[String]) -> Result<()> {
         tokio::fs::create_dir_all(self.layout.config_root())
             .await
             .ok();
-        let body = if active.is_empty() {
-            String::new()
-        } else {
-            format!("{}\n", active.join("\n"))
-        };
-        tokio::fs::write(self.layout.active_file(), body)
+        tokio::fs::write(self.layout.active_file(), active_body(active))
             .await
             .map_err(Error::from)
     }
@@ -455,6 +503,15 @@ const PROFILE_TEMPLATE: &str = "\
 #
 # Gather, then narrow, then subtract — subtraction always wins.
 ";
+
+/// `active`'s body for a set of profile names: one per line, and empty when the set is.
+fn active_body(active: &[String]) -> String {
+    if active.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", active.join("\n"))
+    }
+}
 
 #[cfg(test)]
 mod tests {

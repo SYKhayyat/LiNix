@@ -1679,3 +1679,40 @@ different question and calls it the same one. And a refused declaration is **kep
 withdrawn, unlike E1's unresolvable name — LiNix refused the line as written, the refusal names
 what to change, so the line is the thing to edit. What changed there is only the sentence: it no
 longer says `sync` will try again, because it will refuse identically until something changes.
+
+---
+
+**V.98 — Why `--dry-run` stopped being a thing each verb remembers.** The flag was read at the
+top of whichever verb its author thought of, which means the property "a preview performs
+nothing" was never a property of the program — it was a count of how many authors had
+remembered. Two audits found the count, a year apart, and the second one found five more:
+`activate`, `deactivate`, `lock`, `git init`, `config init`.
+
+**The worst of the five is not the one that wrote the most.** `--dry-run activate Work`
+switched the active profile and **printed nothing**. `active` decides which modules are in the
+model, so it decides what the next `sync` installs and removes; a user asking "what would
+switching to Work do" was switched to Work and told nothing had happened. The preview was not
+merely wrong, it was quiet, and quiet is what makes a wrong preview survive.
+
+**Why a process-wide value and not a parameter.** Threading the flag to every write would be the
+same rule with a longer signature: a new call site would still have to be handed it by hand, and
+being handed it by hand is precisely what nine sites failed at. `--dry-run` is parsed once,
+before any command runs, and there is no run in which one write is a preview and another is not.
+So it is a property of the process, set in `main` and read at the write. The default is "write
+for real", because a library embedding this crate that never sets it must not silently perform
+nothing.
+
+**The exception is louder than the rule, on purpose.** `profile show` writes `active` twice — to
+the profile being asked about, then back — because that is how it resolves the answer. Gating
+those writes would make `--dry-run profile show Work` print the wrong profile's contents, which
+is the same class of defect one level down: a preview that silently answers a different
+question. It is written as its own function with its own name, so the next reader sees an
+exception rather than an omission.
+
+**And the check is a gate over every verb, not over the five.** The audit that found these had
+probed 13 of 61 subcommands, so its honest conclusion was "at least five" — a number nobody
+should have to re-derive by hand a third time. The gate snapshots the config directory, previews,
+snapshots again, and demands the bytes match. Its second half matters more: it also runs the
+command *without* the flag and demands that something changed. A dry-run assertion over a
+command that could not have done anything is the vacuous assertion this whole programme exists
+to remove, and it is the exact mistake the grader made on `activate` before catching itself.

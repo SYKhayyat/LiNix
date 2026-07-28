@@ -162,6 +162,16 @@ impl GitManager {
     /// during rollbacks, which would otherwise be committed as manifest content.
     pub fn init(&self) -> Result<()> {
         Self::require()?;
+        // A preview creates no repository and makes no commit. `--dry-run git init` used to do
+        // both, which is the one case in this family where the preview's side effect is a
+        // permanent artifact in the user's config directory rather than a changed file.
+        if crate::core::dry_run::active() {
+            tracing::warn!(
+                "[DRY-RUN] would initialise manifest version control at {} and commit the                  config as it stands.",
+                self.root.display()
+            );
+            return Ok(());
+        }
         std::fs::create_dir_all(&self.root).map_err(Error::from)?;
         if !self.is_repo() {
             self.run_checked(&["init"])?;
@@ -188,6 +198,13 @@ impl GitManager {
     /// `Ok(None)` when there was nothing to commit (a clean tree — not an error). Callers use
     /// the `None` case to stay quiet on no-op runs.
     pub fn commit_all(&self, message: &str) -> Result<Option<String>> {
+        // Every auto-commit after a command comes through here too, so a preview that changed
+        // nothing has nothing to record — and one that would have changed something must not
+        // write the record either.
+        if crate::core::dry_run::active() {
+            tracing::debug!("[DRY-RUN] would commit: {}", message);
+            return Ok(None);
+        }
         if !self.is_repo() {
             return Err(Error::Other(format!(
                 "{} is not a git repo; run `linix git init` first",
