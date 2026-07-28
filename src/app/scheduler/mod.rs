@@ -429,6 +429,186 @@ impl MacLaunchdProvisioner {
     }
 }
 
+/// The five cron fields, with `@`-shorthands already expanded into them.
+///
+/// One expansion, shared. The shorthand table was written out once per provisioner, and the
+/// Windows one simply did not have it — so `@daily` reached `split_whitespace()` as a single
+/// field and came out the other side as the start time `02:@daily`. A table each is a table
+/// that can be missing.
+struct CronFields<'a> {
+    minute: &'a str,
+    hour: &'a str,
+    dom: &'a str,
+    month: &'a str,
+    dow: &'a str,
+}
+
+/// `@weekly` is Monday here, not Sunday, because that is what the systemd and launchd mappings
+/// have always done (`OnCalendar=weekly` is Mon 00:00). Matching vixie-cron instead would move
+/// existing users' schedules by a day on two platforms to fix a third.
+fn parse_cron(cron: &str) -> Option<CronFields<'_>> {
+    let f = |minute, hour, dom, month, dow| {
+        Some(CronFields {
+            minute,
+            hour,
+            dom,
+            month,
+            dow,
+        })
+    };
+    match cron.trim() {
+        "@hourly" => f("0", "*", "*", "*", "*"),
+        "@daily" | "@midnight" => f("0", "0", "*", "*", "*"),
+        "@weekly" => f("0", "0", "*", "*", "1"),
+        "@monthly" => f("0", "0", "1", "*", "*"),
+        "@yearly" | "@annually" => f("0", "0", "1", "1", "*"),
+        other => {
+            let p: Vec<&str> = other.split_whitespace().collect();
+            if p.len() < 5 {
+                return None;
+            }
+            f(p[0], p[1], p[2], p[3], p[4])
+        }
+    }
+}
+
+/// `HH:mm`, which is the only start time Task Scheduler accepts.
+///
+/// The whole reported defect was `format!("{}:{}", hour, min)` on the raw cron fields: `0 3 * * *`
+/// became `3:0` and `schtasks` answered `ERROR: Invalid starttime value.` A time is two digits
+/// and two digits, always.
+fn schtasks_time(hour: &str, minute: &str) -> Option<String> {
+    let h: u8 = hour.parse().ok()?;
+    let m: u8 = minute.parse().ok()?;
+    if h > 23 || m > 59 {
+        return None;
+    }
+    Some(format!("{:02}:{:02}", h, m))
+}
+
+/// cron's day-of-week (0/7 = Sunday) as the day names `/D` takes, comma-separated.
+fn schtasks_days(dow: &str) -> Option<String> {
+    const NAMES: [&str; 7] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+    let name = |n: u8| NAMES.get((n % 7) as usize).copied();
+
+    let mut out: Vec<&str> = Vec::new();
+    for part in dow.split(',') {
+        // `/D` takes a list and no ranges, so a range is expanded rather than passed through.
+        if let Some((a, b)) = part.split_once('-') {
+            let (a, b): (u8, u8) = (a.parse().ok()?, b.parse().ok()?);
+            if a > b || b > 7 {
+                return None;
+            }
+            for n in a..=b {
+                out.push(name(n)?);
+            }
+        } else {
+            out.push(name(part.parse().ok()?)?);
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    out.dedup();
+    Some(out.join(","))
+}
+
+/// The `/SC …` arguments that make Task Scheduler do what a cron line says.
+///
+/// Windows has no cron, so this is a translation and not every sentence has one. Where a cron
+/// cannot be expressed it is **refused by name** rather than widened into the nearest thing
+/// Task Scheduler can do: the defect this replaces silently turned `0 3 * * 1` into a DAILY
+/// task, which ran seven times as often as it was declared to and reported success each time.
+/// A schedule that fires when it should not is worse than one that refuses to be created.
+fn map_cron_to_schtasks(cron: &str) -> std::result::Result<Vec<String>, String> {
+    let s = |v: &str| v.to_string();
+    let cannot = || {
+        format!(
+            "`{}` is a schedule Windows Task Scheduler cannot express. It understands a time of \
+             day, a weekday, a day of the month, or a fixed interval — but not a combination of \
+             an interval with a time window. Split it into separate schedules, or use a cron \
+             this machine can keep.",
+            cron
+        )
+    };
+
+    if cron.trim() == "@reboot" {
+        return Ok(vec![s("/SC"), s("ONSTART")]);
+    }
+
+    let c = parse_cron(cron).ok_or_else(|| {
+        format!(
+            "`{}` is not a cron expression: it needs five fields (minute hour day month weekday) \
+             or one of @reboot, @hourly, @daily, @weekly, @monthly, @yearly.",
+            cron
+        )
+    })?;
+
+    // Sub-hourly. Task Scheduler's MINUTE/HOURLY intervals run around the clock, so they can
+    // carry no other constraint — and pretending otherwise is how a schedule fires at times
+    // nobody asked for.
+    let unconstrained = c.dom == "*" && c.month == "*" && c.dow == "*";
+    if c.minute == "*" || c.minute.starts_with("*/") {
+        if !unconstrained || c.hour != "*" {
+            return Err(cannot());
+        }
+        let mut args = vec![s("/SC"), s("MINUTE")];
+        if let Some(step) = c.minute.strip_prefix("*/") {
+            step.parse::<u16>().map_err(|_| cannot())?;
+            args.extend([s("/MO"), s(step)]);
+        }
+        return Ok(args);
+    }
+    if c.hour == "*" || c.hour.starts_with("*/") {
+        if !unconstrained {
+            return Err(cannot());
+        }
+        let mut args = vec![s("/SC"), s("HOURLY")];
+        if let Some(step) = c.hour.strip_prefix("*/") {
+            step.parse::<u16>().map_err(|_| cannot())?;
+            args.extend([s("/MO"), s(step)]);
+        }
+        // The first run of the hour, which is what the minute field means here.
+        let st = schtasks_time("0", c.minute).ok_or_else(cannot)?;
+        args.extend([s("/ST"), st]);
+        return Ok(args);
+    }
+
+    let st = schtasks_time(c.hour, c.minute).ok_or_else(cannot)?;
+
+    // A weekday beats a day of the month: `/SC WEEKLY` and `/SC MONTHLY` are exclusive, and a
+    // cron naming both is the one shape with no Task Scheduler equivalent.
+    if c.dow != "*" {
+        if c.dom != "*" {
+            return Err(cannot());
+        }
+        let days = schtasks_days(c.dow).ok_or_else(cannot)?;
+        return Ok(vec![s("/SC"), s("WEEKLY"), s("/D"), days, s("/ST"), st]);
+    }
+
+    if c.dom != "*" || c.month != "*" {
+        const MONTHS: [&str; 12] = [
+            "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+        ];
+        let mut args = vec![s("/SC"), s("MONTHLY")];
+        if c.month != "*" {
+            let n: usize = c.month.parse().map_err(|_| cannot())?;
+            let name = MONTHS.get(n.wrapping_sub(1)).ok_or_else(cannot)?;
+            args.extend([s("/M"), s(name)]);
+        }
+        // `/SC MONTHLY` with no `/D` is the 1st, which is also what a bare month means.
+        let day = if c.dom == "*" { "1" } else { c.dom };
+        day.parse::<u8>()
+            .ok()
+            .filter(|d| (1..=31).contains(d))
+            .ok_or_else(cannot)?;
+        args.extend([s("/D"), s(day), s("/ST"), st]);
+        return Ok(args);
+    }
+
+    Ok(vec![s("/SC"), s("DAILY"), s("/ST"), st])
+}
+
 struct WindowsTaskProvisioner;
 
 #[async_trait]
@@ -442,23 +622,32 @@ impl TaskProvisioner for WindowsTaskProvisioner {
         let name = format!("LiNix_{}", config.name);
         let cmd = format!("\"{}\" {}", linix_bin.display(), config.command);
 
-        let (sc, st) = match config.cron.as_str() {
-            "@reboot" => ("ONSTART", String::new()),
-            "@hourly" => ("HOURLY", String::new()),
-            _ => {
-                let parts: Vec<&str> = config.cron.split_whitespace().collect();
-                let hour = parts.get(1).unwrap_or(&"02");
-                let min = parts.first().unwrap_or(&"00");
-                ("DAILY", format!("{}:{}", hour, min))
+        // Refused here, before anything is created: a schedule Task Scheduler cannot express
+        // must not become the nearest one it can. `Refused` and not `Io` — LiNix looked and
+        // declined on purpose, which is exit code 3 (U21), and a script that retries on failure
+        // must not retry this.
+        let schedule = map_cron_to_schtasks(&config.cron)
+            .map_err(|e| Error::Refused(format!("`schedule:{}`: {}", config.name, e)))?;
+
+        let mut args: Vec<&str> = vec!["/Create", "/TN", &name, "/TR", &cmd, "/F"];
+        args.extend(schedule.iter().map(String::as_str));
+
+        // `ERROR: Access is denied.` is what Task Scheduler says when the shell is not
+        // elevated, and on its own it names neither the cause nor the cure — it reads like a
+        // permissions problem with the config. Registering a task needs an administrator here
+        // whatever `/RU` says (measured), so say that instead of forwarding four words.
+        executor.run("schtasks", &args, true).await.map_err(|e| {
+            if e.to_string().to_lowercase().contains("access is denied") {
+                Error::Permission(format!(
+                    "creating the scheduled task `{}` needs an elevated shell — Windows Task \
+                     Scheduler refuses to register one otherwise. Re-run `linix sync` from a \
+                     terminal opened with \"Run as administrator\".",
+                    name
+                ))
+            } else {
+                e
             }
-        };
-
-        let mut args = vec!["/Create", "/TN", &name, "/TR", &cmd, "/SC", sc, "/F"];
-        if !st.is_empty() {
-            args.extend(["/ST", &st]);
-        }
-
-        executor.run("schtasks", &args, true).await?;
+        })?;
         Ok(())
     }
 
@@ -492,7 +681,7 @@ impl TaskProvisioner for WindowsTaskProvisioner {
 }
 #[cfg(test)]
 mod tests {
-    use super::{remove_generated, LinuxSystemdProvisioner};
+    use super::{map_cron_to_schtasks, remove_generated, LinuxSystemdProvisioner};
 
     #[test]
     fn a_generated_file_that_is_already_gone_is_the_wanted_end_state() {
@@ -535,5 +724,132 @@ mod tests {
         assert_eq!(p.map_cron_to_systemd("0 0 * * *"), "*-*-* 00:00:00");
         // @-macros pass through
         assert_eq!(p.map_cron_to_systemd("@daily"), "daily");
+    }
+
+    /// The reported defect: `0 3 * * *` produced `/ST 3:0`, and Task Scheduler answers
+    /// `ERROR: Invalid starttime value.` It wants `HH:mm`, zero-padded. Measured against real
+    /// `schtasks` on 2026-07-28: `/ST 3:0` is rejected at parse time, `/ST 03:00` is accepted
+    /// and reaches the privilege check.
+    #[test]
+    fn schtasks_start_time_is_zero_padded() {
+        assert_eq!(
+            map_cron_to_schtasks("0 3 * * *").unwrap(),
+            vec!["/SC", "DAILY", "/ST", "03:00"]
+        );
+    }
+
+    /// The siblings. Every one of these went through the same two lines that dropped the
+    /// padding, and each produced either a hard error or — worse — a schedule that fires more
+    /// often than it was told to.
+    #[test]
+    fn schtasks_maps_every_shape_a_cron_can_take() {
+        let cases: &[(&str, &[&str])] = &[
+            // `@daily` split on whitespace to ONE field, so the minute came out as the literal
+            // string "@daily" and the time was `02:@daily`.
+            ("@daily", &["/SC", "DAILY", "/ST", "00:00"]),
+            ("@midnight", &["/SC", "DAILY", "/ST", "00:00"]),
+            ("@hourly", &["/SC", "HOURLY", "/ST", "00:00"]),
+            ("@reboot", &["/SC", "ONSTART"]),
+            ("@weekly", &["/SC", "WEEKLY", "/D", "MON", "/ST", "00:00"]),
+            ("@monthly", &["/SC", "MONTHLY", "/D", "1", "/ST", "00:00"]),
+            (
+                "@yearly",
+                &["/SC", "MONTHLY", "/M", "JAN", "/D", "1", "/ST", "00:00"],
+            ),
+            (
+                "@annually",
+                &["/SC", "MONTHLY", "/M", "JAN", "/D", "1", "/ST", "00:00"],
+            ),
+            // A step in the minute field became the time `*:*/15`.
+            ("*/15 * * * *", &["/SC", "MINUTE", "/MO", "15"]),
+            ("* * * * *", &["/SC", "MINUTE"]),
+            // A step in the hour field became `*/6:0`.
+            (
+                "0 */6 * * *",
+                &["/SC", "HOURLY", "/MO", "6", "/ST", "00:00"],
+            ),
+            ("0 * * * *", &["/SC", "HOURLY", "/ST", "00:00"]),
+            // Day-of-week was ignored entirely: this ran EVERY day, seven times as often as
+            // it was declared to, and reported success while doing it.
+            ("0 3 * * 1", &["/SC", "WEEKLY", "/D", "MON", "/ST", "03:00"]),
+            (
+                "30 4 * * 0",
+                &["/SC", "WEEKLY", "/D", "SUN", "/ST", "04:30"],
+            ),
+            (
+                "0 9 * * 1-5",
+                &["/SC", "WEEKLY", "/D", "MON,TUE,WED,THU,FRI", "/ST", "09:00"],
+            ),
+            (
+                "0 9 * * 1,3",
+                &["/SC", "WEEKLY", "/D", "MON,WED", "/ST", "09:00"],
+            ),
+            // Day-of-month was ignored too: monthly became daily.
+            ("30 4 1 * *", &["/SC", "MONTHLY", "/D", "1", "/ST", "04:30"]),
+        ];
+        for (cron, want) in cases {
+            assert_eq!(
+                map_cron_to_schtasks(cron).unwrap_or_else(|e| panic!("{cron}: {e}")),
+                *want,
+                "wrong schtasks args for `{cron}`"
+            );
+        }
+    }
+
+    /// The property, not the cases: whatever a cron says, the time handed to Task Scheduler is
+    /// always `HH:mm`. This is the assertion that would have caught the reported defect without
+    /// anyone thinking of `0 3 * * *` in particular.
+    #[test]
+    fn schtasks_never_emits_a_time_task_scheduler_cannot_read() {
+        for cron in [
+            "0 3 * * *",
+            "@daily",
+            "@weekly",
+            "@monthly",
+            "@yearly",
+            "@hourly",
+            "5 9 * * *",
+            "0 0 * * *",
+            "59 23 * * *",
+            "30 4 1 * *",
+            "0 3 * * 1",
+            "0 */6 * * *",
+            "7 7 7 7 *",
+        ] {
+            let args = map_cron_to_schtasks(cron).unwrap_or_else(|e| panic!("{cron}: {e}"));
+            if let Some(i) = args.iter().position(|a| a == "/ST") {
+                let st = &args[i + 1];
+                let (h, m) = st.split_once(':').unwrap_or_else(|| panic!("{cron}: {st}"));
+                assert!(
+                    h.len() == 2 && m.len() == 2,
+                    "`{cron}` produced /ST {st}, which Task Scheduler rejects"
+                );
+                assert!(
+                    h.chars().chain(m.chars()).all(|c| c.is_ascii_digit()),
+                    "`{cron}` produced /ST {st}, which is not a time"
+                );
+                assert!(
+                    h.parse::<u8>().unwrap() < 24 && m.parse::<u8>().unwrap() < 60,
+                    "`{cron}` produced /ST {st}, which is not a real time"
+                );
+            }
+        }
+    }
+
+    /// A cron Task Scheduler genuinely cannot express is refused by name — it does not quietly
+    /// become DAILY. Running more often than declared is the failure mode this whole fix is
+    /// about, and it must not survive as the error path.
+    #[test]
+    fn a_cron_windows_cannot_express_is_refused_rather_than_widened() {
+        // Every 15 minutes, but only during hour 9. `/SC MINUTE /MO 15` runs all day.
+        let err = map_cron_to_schtasks("*/15 9 * * *").unwrap_err();
+        assert!(
+            err.contains("*/15 9 * * *"),
+            "does not quote the cron: {err}"
+        );
+        assert!(
+            err.to_lowercase().contains("task scheduler"),
+            "does not say which scheduler cannot do it: {err}"
+        );
     }
 }

@@ -124,10 +124,9 @@ fn a_previewed_schedule_add_schedules_nothing() {
         "a preview changed the config repo"
     );
 
-    // The control asserts the file, not the exit code: `schedule add` also provisions the
-    // host scheduler, and on Windows `schtasks` rejects this cron with "Invalid starttime
-    // value". That is a real defect and a separate one — it must not decide whether this
-    // test can tell a preview from an act.
+    // The control asserts the file, not the exit code. `schedule add` also provisions the host
+    // scheduler, and registering a Windows task needs an elevated shell — a fact about the
+    // runner, not about whether this test can tell a preview from an act.
     let (out, _) = fresh.run(&[
         "schedule",
         "add",
