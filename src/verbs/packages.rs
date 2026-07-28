@@ -618,6 +618,9 @@ pub(crate) async fn handle_list(
     json: bool,
     outdated: bool,
 ) -> Result<()> {
+    // A name nothing claims is a typo, and a typo that prints zero rows and exits 0 reads as
+    // "that manager is empty" (Q9).
+    app.require_known_backend(backend)?;
     let list = app.list(backend).await?;
     if outdated {
         let rows = compute_outdated(app, &list).await;

@@ -18,6 +18,10 @@ pub(crate) async fn handle_repo(app: &App, cmd: &RepoCommand) -> Result<()> {
             .unwrap_or_else(|| "apt".into()),
     };
 
+    // Q9: `repo` takes its backend positionally, so a typo landed on `Backend not found` —
+    // true, but it named neither the file to edit nor the spelling to check, and the same
+    // question has one good answer already written for `install`.
+    app.require_known_backend(Some(&b_name))?;
     let b = app.registry.get(&b_name).context("Backend not found")?;
     let mgr = b
         .as_repo_manager()

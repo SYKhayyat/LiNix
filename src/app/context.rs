@@ -469,6 +469,48 @@ impl App {
         )))
     }
 
+    /// Refuse a `--backend` name nothing claims, and say so when a real one is not installed
+    /// here. Returns `true` when the named backend can answer right now.
+    ///
+    /// `install nosuchbackend:foo` refused loudly and named the file to edit; `list -b
+    /// nosuchbackend` printed nothing and exited 0 — which is byte-identical to a real backend
+    /// with nothing installed, so a typo was reported, in the program's own voice, as "that
+    /// manager is empty". Owner ruling 2026-07-28 (Q9): `list` refuses the way `install` does.
+    ///
+    /// The second answer is the one that is easy to miss. `apt` on Windows is a real backend
+    /// that cannot run here, and it produced the same silence as the typo. Those are different
+    /// facts and they now read differently — but only the typo is an error, because a name that
+    /// is genuinely a backend is not a mistake the user made.
+    ///
+    /// The message is `install`'s, deliberately: two spellings of one refusal is how E18's
+    /// family started.
+    pub fn require_known_backend(&self, name: Option<&str>) -> Result<bool> {
+        let Some(name) = name else {
+            return Ok(true);
+        };
+        match self.registry.get(name) {
+            None => Err(Error::Config(format!(
+                "`{}` is not a backend LiNix uses\n  \
+                 add `{}` to your `priority` file, or check the spelling. Not listed means \
+                 LiNix does not use it at all.",
+                name, name
+            ))),
+            Some(b) => {
+                if b.is_available() {
+                    Ok(true)
+                } else {
+                    tracing::warn!(
+                        "`{}` is a manager LiNix knows, but it is not installed on this \
+                         machine — so there is nothing for it to report. `linix check health` \
+                         says which managers are ready here.",
+                        name
+                    );
+                    Ok(false)
+                }
+            }
+        }
+    }
+
     pub async fn list(&self, backend_filter: Option<&str>) -> Result<Vec<Package>> {
         let backends: Vec<_> = self
             .registry

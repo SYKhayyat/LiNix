@@ -97,3 +97,104 @@ fn listing_a_backend_that_does_not_exist_says_so() {
         ctl.lines().next().unwrap_or("").trim(),
     );
 }
+
+/// The family, not the finding. `list` was the one with a reproduction attached; every verb
+/// that takes a backend name answered the same question and had to be checked.
+///
+/// `repo` is the interesting one: it took its backend positionally and answered `Backend not
+/// found` — true, but naming neither the file to edit nor the spelling to check, which is E18's
+/// shape (one condition, two message families) on a different pair of verbs.
+#[test]
+fn every_verb_that_takes_a_backend_name_refuses_one_that_does_not_exist() {
+    let dir = fixture("unknown-backend-family");
+
+    let cases: &[(&str, &[&str])] = &[
+        ("list", &["list", "--backend", "nosuchbackend"]),
+        ("upgrade", &["upgrade", "--backend", "nosuchbackend"]),
+        ("rebuild", &["rebuild", "--backend", "nosuchbackend"]),
+        ("repo list", &["repo", "list", "--backend", "nosuchbackend"]),
+    ];
+
+    let mut silent = Vec::new();
+    for (name, argv) in cases {
+        let (out, rc) = run(&dir, argv);
+        let says_so = out.to_lowercase().contains("not a backend")
+            || out.to_lowercase().contains("check the spelling");
+        if rc == 0 || !says_so {
+            silent.push(format!(
+                "`linix {}` -> rc {rc}, output {:?}",
+                argv.join(" "),
+                out.trim()
+            ));
+        }
+        let _ = name;
+    }
+
+    assert!(
+        silent.is_empty(),
+        "a verb taking a backend name accepted one that does not exist:\n  {}",
+        silent.join("\n  ")
+    );
+}
+
+/// A real backend that is not installed here is a different fact from a typo, and until now
+/// both produced the same silence.
+///
+/// This is the half that is easy to skip: making the typo loud is worth little if "apt, on
+/// Windows" still prints nothing and exits 0, because the user cannot tell which of the two
+/// they are looking at — and the first is their mistake while the second is not.
+#[test]
+fn a_real_backend_that_cannot_run_here_says_that_instead() {
+    let dir = fixture("unknown-backend-absent");
+
+    // A backend registered on every platform LiNix builds for, and installed on very few
+    // machines — so it is registered here and cannot run here. `apt` would NOT do: the
+    // registry is platform-scoped, so on Windows `apt` is not registered at all and is a
+    // genuine typo. That distinction is the finding, so the fixture has to respect it.
+    let absent = "flatpak";
+    let (out, rc) = run(&dir, &["list", "--backend", absent]);
+
+    assert_eq!(
+        rc, 0,
+        "`{absent}` is a real backend, so naming it is not an error — it is a fact about this \
+         machine:\n{out}"
+    );
+    assert!(
+        out.to_lowercase().contains("not installed on this machine"),
+        "`linix list -b {absent}` said nothing about why it had nothing to report. Silence \
+         here is indistinguishable from an empty manager, which is the whole finding.\n{out}"
+    );
+    assert!(
+        !out.to_lowercase().contains("not a backend"),
+        "`{absent}` IS a backend; refusing it as a typo would trade one wrong answer for \
+         another.\n{out}"
+    );
+}
+
+/// Test the oracle. §8.1's A bar is "every `[READY]` backend can answer `list`", and the
+/// grader measured 24 of 24 passing before discovering the check could not fail: a backend
+/// that does not exist answered `list` exactly the way a real empty one did.
+///
+/// So before that measurement means anything again, feed the check something it must reject.
+#[test]
+fn the_can_answer_list_check_can_actually_fail() {
+    let dir = fixture("unknown-backend-oracle");
+
+    let (real_out, real_rc) = run(&dir, &["list", "--backend", "web"]);
+    let (fake_out, fake_rc) = run(&dir, &["list", "--backend", "webb"]);
+
+    assert_ne!(
+        (real_rc, real_out.trim().to_string()),
+        (fake_rc, fake_out.trim().to_string()),
+        "a backend that exists and one that does not are still indistinguishable through \
+         `list`, so 'every READY backend can answer list' remains an assertion that cannot \
+         fail.\n  web  -> rc {real_rc}: {:?}\n  webb -> rc {fake_rc}: {:?}",
+        real_out.trim(),
+        fake_out.trim()
+    );
+    assert_eq!(
+        real_rc, 0,
+        "the control failed: `web` is a real backend:\n{real_out}"
+    );
+    assert_ne!(fake_rc, 0, "the typo was accepted:\n{fake_out}");
+}

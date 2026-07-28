@@ -332,6 +332,10 @@ pub(crate) async fn upgrade_security(app: &App, except: &[String], json: bool) -
 }
 
 pub(crate) async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result<()> {
+    // First, before any mode: `upgrade --backend aptt` used to scope to nothing and report
+    // that everything was up to date (Q9).
+    app.require_known_backend(req.backend)?;
+
     // Canary keeps its own health-gated, scoped path.
     if req.canary {
         return handle_canary(app, req.scope(), req.test).await;

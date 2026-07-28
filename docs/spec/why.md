@@ -1716,3 +1716,28 @@ snapshots again, and demands the bytes match. Its second half matters more: it a
 command *without* the flag and demands that something changed. A dry-run assertion over a
 command that could not have done anything is the vacuous assertion this whole programme exists
 to remove, and it is the exact mistake the grader made on `activate` before catching itself.
+
+---
+
+**V.99 — Why `list` refuses a backend name and `install` was not enough.** *(Owner ruling,
+2026-07-28 — Q9.)* The two verbs are asked the same question — "is this a manager you use?" —
+and gave answers a user cannot reconcile: one refused with a message naming the file to edit,
+the other printed nothing and reported success. The failure is not that `list` was quiet. It is
+that its silence is *already meaningful*: zero rows and exit 0 is what a real, empty manager
+prints, so the typo did not produce an absence of information, it produced **wrong**
+information, in LiNix's own voice.
+
+**The second answer is the one that is easy to skip.** Making the typo loud is worth little if
+`flatpak` on a machine without flatpak still prints nothing, because the user still cannot tell
+which of the two they are looking at — and only one of them is a mistake they made. So a
+registered backend that cannot run here says so and exits 0, and a name nothing claims is an
+error. Two facts, two answers. Refusing both would have traded one wrong answer for another,
+which is why the registry is asked whether the name exists *before* it is asked whether it
+works.
+
+**And it un-disarms a measurement.** The readiness rubric asks that every `[READY]` backend be
+able to answer `list`. That was measured at 24 of 24 and was worthless: 13 of the 24 returned
+no rows, and a backend that does not exist returned no rows too, so for half the subjects the
+check could not fail. This is the vacuous assertion the whole assessment is about, found inside
+the check written to demonstrate the opposite. The oracle is now itself tested — a nonexistent
+name must be distinguishable from a real one before the 24-of-24 figure means anything.
