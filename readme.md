@@ -721,7 +721,15 @@ The same four everywhere, so a script can branch on them:
 | `0` | converged — what you declared is what is there |
 | `1` | failed — something went wrong |
 | `2` | differences — a read-only command looked and found work to do |
-| `3` | refused — the guard said no, and there is no flag for it |
+| `3` | refused — LiNix said no, and there is no flag for it |
+
+**`3` covers every refusal, not only the guard's.** Refusing to download over plain HTTP, to
+install something with no `@sha256`, to write a secret the filesystem cannot protect, to decrypt
+into the git repo, to run an unapproved hook, to overwrite a file LiNix did not create, or to
+place files outside `$HOME` all return `3` — the same code as refusing to remove too many
+packages. Until 2026-07-28 those nine returned `1`, so a script could not tell "I refused" from
+"I broke", and the `on_guard_refusal` hook never fired for any of them. Both halves are now
+checked by `tests/grader_refusal_exit_code_tests.rs` rather than asserted in a comment.
 
 `2` is why `linix check` in CI tells you a machine has drifted without failing the job the way
 an error would, and `3` is distinct from `1` because "I will not do this" is not "this broke".

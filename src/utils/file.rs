@@ -170,7 +170,7 @@ pub async fn deploy_executable(
     recorded: Option<&str>,
 ) -> Result<()> {
     if !is_ours(dest, owned_root, recorded).await {
-        return Err(Error::Validation(format!(
+        return Err(Error::Refused(format!(
             "refusing to deploy `{}`: {} already exists and LiNix did not create it. Move or \
              rename that file yourself if you want it managed here.",
             dest.file_name().unwrap_or_default().to_string_lossy(),

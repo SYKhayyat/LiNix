@@ -1641,3 +1641,41 @@ way — not by reading the sentence that quantifies over the paths, but by count
 That sentence was true when written and was never re-derived. `tests/removal_guard_enumeration_tests.rs`
 re-derives it on every run, and fails naming the file when the count moves. A rule nothing
 re-counts is a rule with an expiry date nobody wrote down.
+
+---
+
+**V.97 — Why a refusal about security returns the same code as a refusal about removal.**
+*(Owner ruling, 2026-07-28 — Q8.)* The exit-code table exists so a script can branch. Its whole
+value is that `1` and `3` answer two different questions: "something went wrong" and "LiNix
+decided not to". For the entire SEC/T series it answered the first when the truth was the
+second, so a CI job could not distinguish "the download was refused because it was plain HTTP"
+from "the network was down" — and those want opposite responses. One is a config to fix, the
+other is a retry.
+
+**How it happened is the whole lesson.** Nobody chose `Validation` over `Refused` for these.
+`Validation` is what you reach for when you are writing a check about a URL, and each of the
+nine was written on its own day by someone thinking about that check and not about the exit
+table three files away. E25 found one of them, in `purge-unmanaged`, and fixed that one. The
+family was never swept, because there was a sentence saying it did not need to be.
+
+**The sentence is the defect.** `main.rs` asserted that the `Error::Refused` arm was the one
+point every refusal in the program passed through. It was true of every refusal the author had
+in mind and false of nine they did not, and because it was written as a guarantee, the next
+person to add a security check had a documented reason not to check. A comment that quantifies
+over paths is a claim with no test attached, and `history.md` already records that shape as
+costing more than the rest combined. It is now a test that enumerates the paths, which is the
+only form of that sentence that stays true.
+
+**The hook is worse than the code.** `on_guard_refusal` exists so a person can be told, without
+watching, that LiNix said no. It fired for a mass removal — which is loud anyway, because the
+command that triggered it is one somebody typed — and stayed silent for an unapproved hook, an
+unverified binary and a secret written where nothing protects it, every one of which happens on
+an unattended run. The hook was loudest where it was least needed.
+
+**Two decisions inside the sweep, both the non-obvious way.** `rehearsal`'s "no container
+runtime" stays a refusal rather than becoming a failure, because 7h's exit condition says it
+refuses and names what is missing: the alternative is rehearsing on the host, which answers a
+different question and calls it the same one. And a refused declaration is **kept** rather than
+withdrawn, unlike E1's unresolvable name — LiNix refused the line as written, the refusal names
+what to change, so the line is the thing to edit. What changed there is only the sentence: it no
+longer says `sync` will try again, because it will refuse identically until something changes.

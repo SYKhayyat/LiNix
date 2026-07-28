@@ -191,17 +191,40 @@ async fn withdraw_what_can_never_succeed(app: &App, e: &anyhow::Error, edits: &[
         }
     }
 
+    // A refusal is kept — deliberately, and for the reason above: LiNix said no to *this line
+    // as written*, not to the name, and the refusal already says what to change (`@allow_http`,
+    // `@sha256=`, a `@target=` outside the repo). Editing the line is the fix, so deleting it
+    // would throw away the thing the user has to edit.
+    //
+    // But it must not be described as a transient failure. "`sync` will try it again" over a
+    // plain-HTTP refusal promises a retry that fails identically forever, which is the sentence
+    // E1 was about, said about a different cause.
+    let refused = e
+        .downcast_ref::<linix::core::Error>()
+        .is_some_and(|err| matches!(err, linix::core::Error::Refused(_)));
+
     for edit in edits {
         if withdrawn.iter().any(|w| w.line == edit.line) {
             continue;
         }
-        warn!(
-            "`{}` is still declared in {}, so `sync` will try it again. If you did not mean \
-             it, run `linix unmanage {}`.",
-            edit.line,
-            edit.file.display(),
-            edit.line
-        );
+        if refused {
+            warn!(
+                "`{}` is still declared in {} — it is kept because the line is the thing to \
+                 edit, not the thing to delete. Change it as the refusal above says, or run \
+                 `linix unmanage {}`. Re-running `sync` unchanged will refuse identically.",
+                edit.line,
+                edit.file.display(),
+                edit.line
+            );
+        } else {
+            warn!(
+                "`{}` is still declared in {}, so `sync` will try it again. If you did not \
+                 mean it, run `linix unmanage {}`.",
+                edit.line,
+                edit.file.display(),
+                edit.line
+            );
+        }
     }
 }
 

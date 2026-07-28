@@ -63,7 +63,7 @@ impl Dotfiles<'_> {
 
         use std::io::IsTerminal;
         if !std::io::stdin().is_terminal() {
-            return Err(Error::Other(format!(
+            return Err(Error::Refused(format!(
                 "refusing to place {} file(s) outside your home directory without \
                  confirmation in a non-interactive shell.\n\n\
                  What to do:\n  \

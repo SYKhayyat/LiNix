@@ -42,7 +42,7 @@ pub fn check_scheme(url: &str, allow_http: bool, what: &str) -> Result<()> {
     if url.starts_with("https://") || allow_http {
         return Ok(());
     }
-    Err(Error::Validation(format!(
+    Err(Error::Refused(format!(
         "refusing to download {} over plain HTTP: {}\n  \
          The file is made executable and put on your PATH, so anyone between you and that \
          host chooses what runs. Use `https://`, or add `@allow_http` to the line if the \
@@ -65,7 +65,7 @@ pub fn check_checksum_declared(spec: &PackageSpec) -> Result<()> {
     if spec.options.contains_key("sha256") || is_unverified(spec) {
         return Ok(());
     }
-    Err(Error::Validation(format!(
+    Err(Error::Refused(format!(
         "refusing to install `{}` unverified: no `@sha256` on the line.\n  \
          The downloaded file is made executable and put on your PATH. Add `@sha256=<hash>`, \
          or `@unverified` to say you accept whatever the host serves. `@allow_http` does not \

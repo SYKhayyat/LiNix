@@ -1,4 +1,4 @@
-# The decision register — all 116, and every one of them ruled
+# The decision register — all 117, and every one of them ruled
 
 **One file, six features. Zero open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -18,7 +18,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **114** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **115** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Nothing here is open.** All 116 are ruled: **114 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**Nothing here is open.** All 117 are ruled: **115 ANSWERED, 2 PARKED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -3312,5 +3312,58 @@ What is binding:
    enumerates every removal call in `src/` and fails on one no ledger entry accounts for.
 
 The rule is in **II.10**; the reason is in **V.96**.
+
+---
+
+## Q8
+
+**Status: ANSWERED.**
+
+**Q8 — Should the security refusals return the documented refusal code, or the failure code
+they return today?** **RULED 2026-07-28 (owner): all of them return 3.**
+
+`readme.md` publishes four exit codes "so a script can branch on them", and `3` means LiNix
+refused on purpose. That was true when it refused to remove too many packages and false for
+every refusal about security. Nine sites, enumerated from the code rather than from the two
+that were reported:
+
+| site | refuses | rule | was |
+|---|---|---|---|
+| `core/download.rs` | plain HTTP | SEC2 | `Validation` |
+| `core/download.rs` | unverified, no `@sha256` | SEC2 | `Validation` |
+| `core/executor.rs` | a secret nothing protects | T5 | `Other` |
+| `backends/link.rs` | decrypt into the git repo | T2 | `Validation` |
+| `app/hooks.rs` | unapproved hooks | II.12 | `Validation` |
+| `app/shim_manager.rs` | deploy over a foreign file | SEC1 | `Validation` |
+| `utils/file.rs` | deploy over a foreign file | SEC1 | `Validation` |
+| `app/apply/dotfiles.rs` | files outside `$HOME` | SEC3 | `Other` |
+| `app/snapshot_restore.rs` | a registry path that is a file-read primitive | — | `Snapshot` |
+
+The last was one of five the grader could not classify. The other four —
+`model/firewall.rs`, `model/health.rs` and `model/rehearsal.rs` twice — were **already
+correct**: the message is built in one file and wrapped in `Error::Refused` in another, and a
+scan whose window stopped at the file boundary read the split as an offence.
+
+**The exit code is the lesser half.** `main.rs` stated that the `Error::Refused` arm was "the
+one point every refusal in the program passes through, so no command can be added that refuses
+without the hook hearing about it". Someone who wires `on_guard_refusal` to be told when LiNix
+refuses was told about a mass removal and **not** about a refused unverified download, an
+unprotected secret or an unapproved hook — silent exactly where it matters most.
+
+What is binding:
+
+1. **Every refusal is `Error::Refused`**, whatever it refused, so exit 3 and the hook are
+   properties of the variant rather than of each site remembering.
+2. **The claim is tested, not commented.** `tests/grader_refusal_exit_code_tests.rs` enumerates
+   every "refusing to" site, follows a message builder through as many hops as the code has,
+   and separately fires a real approved hook through a real refusal.
+3. **A refused declaration is kept, and said to be kept.** LiNix refused the line *as written*
+   and the refusal names what to change, so the line is what the user edits. It is no longer
+   described as something `sync` "will try again", which promised a retry that fails
+   identically forever.
+4. **Retryability follows.** Moving off `Validation`/`Snapshot`/`Other` makes these `Permanent`
+   rather than `Unknown`, which is the true answer: nothing about a second attempt differs.
+
+The rule is in **II.10** and the exit-code table in `readme.md`; the reason is in **V.97**.
 
 ---

@@ -111,10 +111,75 @@ fn a_security_refusal_exits_with_the_documented_refusal_code() {
     );
 }
 
+/// The half of G-10 that the exit code is only a symptom of: **does the hook actually fire?**
+///
+/// `src/main.rs:185` promises `on_guard_refusal` fires for every refusal in the program. Someone
+/// wires that hook precisely so they are told when LiNix refuses something — and until now they
+/// were told about a mass package removal and *not* about a refused plain-HTTP download, an
+/// unverified binary, an unprotected secret or an unapproved hook. Silent where it matters most.
+///
+/// Nothing tested it in either direction. This runs the security refusal with a real approved
+/// hook attached and asserts the hook ran, with a control proving the harness could tell.
+#[test]
+fn a_security_refusal_fires_the_refusal_hook() {
+    let dir = fixture("refusal-hook");
+    let cfg = dir.join("config");
+    let marker = dir.join("fired.txt");
+
+    std::fs::create_dir_all(cfg.join("hooks")).unwrap();
+    let script = if cfg!(windows) {
+        format!("'fired' | Out-File -FilePath '{}'\n", marker.display())
+    } else {
+        format!("echo fired > '{}'\n", marker.display())
+    };
+    std::fs::write(cfg.join("hooks").join("on_guard_refusal"), &script).unwrap();
+
+    // II.12: an unapproved hook does not run, so approving it is part of the setup and not
+    // part of what is under test. Without this the assertion below would pass for the wrong
+    // reason on a tree where the hook fired perfectly.
+    let (out, code) = run(&dir, &["lock"]);
+    assert_eq!(code, 0, "the fixture's own `lock` failed:\n{out}");
+    assert!(
+        out.contains("event hook") || out.contains("hook(s)"),
+        "`lock` did not report approving the hook, so this test would prove nothing:\n{out}"
+    );
+
+    assert!(
+        !marker.exists(),
+        "the marker existed before anything refused; the test cannot tell a fire from a leftover"
+    );
+
+    let (out, code) = run(
+        &dir,
+        &["install", "web:http://example.com/tool.tar.gz", "-y"],
+    );
+    assert_eq!(code, 3, "the refusal did not reach the Refused arm:\n{out}");
+
+    assert!(
+        marker.exists(),
+        "`on_guard_refusal` did not fire for a security refusal.\n\
+         src/main.rs:185 says it fires for every refusal in the program — a user who wired this \
+         hook to be told when LiNix refuses is told about a mass removal and not about a \
+         refused plain-HTTP download.\n{out}"
+    );
+}
+
 /// The comment at src/main.rs:185 claims every refusal passes through the `Error::Refused` arm.
 ///
 /// Checked from the code, because a claim that quantifies over paths is verified by enumerating
 /// the paths and never by reading the sentence.
+///
+/// **The first draft of this test was wrong in the direction that matters**, and the correction
+/// is kept here because it is the same mistake the test exists to catch. It looked eight lines
+/// above each "refusing to" for `Error::Refused` *in the same file*, and reported five sites
+/// that were already correct: `model/firewall.rs`, `model/health.rs` and `model/rehearsal.rs`
+/// hold the message and `app/apply/firewall.rs:99`, `app/sync/mod.rs:386` and
+/// `verbs/setup.rs:208`/`:218` hold the `Error::Refused` that wraps it. A window that stops at
+/// the file boundary cannot see a two-file split, so it scored the split as an offence.
+///
+/// The fix is not an exemption list. A message builder is followed to **every** one of its call
+/// sites, and each has to wrap it — which is strictly stronger than the original, because a
+/// builder whose second caller forgets the wrap now fails where before it was invisible.
 #[test]
 fn every_site_that_says_it_is_refusing_is_built_as_a_refusal() {
     fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
@@ -130,19 +195,88 @@ fn every_site_that_says_it_is_refusing_is_built_as_a_refusal() {
             }
         }
     }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
-    walk(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut files,
-    );
+    walk(&root, &mut files);
     files.sort();
+
+    let sources: Vec<(std::path::PathBuf, Vec<String>)> = files
+        .iter()
+        .map(|p| {
+            let body = std::fs::read_to_string(p).unwrap_or_default();
+            (p.clone(), body.lines().map(|l| l.to_string()).collect())
+        })
+        .collect();
+
+    /// The name of the `fn` a line sits inside, and whether that fn hands back a message rather
+    /// than an error — i.e. is a builder whose *caller* decides the error type.
+    ///
+    /// `Option<String>` counts as well as `String`: `health::refusal_if_unrevertable` returns
+    /// one, and it is the layer that decides *whether* to refuse while `cannot_revert_refusal`
+    /// decides *what to say*. Two builders in a row is a normal shape, so the follow below has
+    /// to be transitive or it stops one hop short and reports a correct site.
+    fn enclosing_builder(lines: &[String], at: usize) -> Option<String> {
+        for i in (0..=at).rev() {
+            let t = lines[i].trim_start();
+            if let Some(rest) = t.strip_prefix("pub fn ").or_else(|| t.strip_prefix("fn ")) {
+                let name = rest.split(['(', '<']).next()?.trim().to_string();
+                // The signature can wrap; look at the few lines that carry the return type.
+                let sig = lines[i..(i + 8).min(lines.len())].join(" ");
+                return if sig.contains("-> String") || sig.contains("-> Option<String>") {
+                    Some(name)
+                } else {
+                    None
+                };
+            }
+        }
+        None
+    }
+
+    /// Every place `name(` is called, outside its own definition and outside test modules,
+    /// as `(index into sources, 0-based line, wrapped in Error::Refused)`.
+    ///
+    /// The index rather than a rendered `file:line`: an earlier draft looked the caller's file
+    /// back up by basename to ask whether *it* was a builder, and basenames collide across a
+    /// tree with fourteen `mod.rs` files. It found the wrong file and indexed past its end.
+    fn call_sites(
+        sources: &[(std::path::PathBuf, Vec<String>)],
+        name: &str,
+    ) -> Vec<(usize, usize, bool)> {
+        let needle = format!("{}(", name);
+        let mut out = Vec::new();
+        for (fi, (_, lines)) in sources.iter().enumerate() {
+            let mut in_tests = false;
+            for (i, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("#[cfg(test)]") {
+                    in_tests = true;
+                }
+                if in_tests {
+                    continue;
+                }
+                let t = line.trim_start();
+                if t.starts_with("//") || t.starts_with("pub fn ") || t.starts_with("fn ") {
+                    continue;
+                }
+                if !t.contains(&needle) {
+                    continue;
+                }
+                // Above *and* below: the wrap is above for `Err(Error::Refused(build(..)))`
+                // and below for `match build(..) { Some(m) => Err(Error::Refused(m)) }`, which
+                // is how `sync/mod.rs:381` reads. A window that only looked up scored that
+                // second shape as unwrapped.
+                let from = i.saturating_sub(3);
+                let to = (i + 6).min(lines.len() - 1);
+                let wrapped = lines[from..=to].join("\n").contains("Error::Refused");
+                out.push((fi, i, wrapped));
+            }
+        }
+        out
+    }
 
     let mut offenders = Vec::new();
     let mut found = 0usize;
 
-    for path in &files {
-        let body = std::fs::read_to_string(path).unwrap_or_default();
-        let lines: Vec<&str> = body.lines().collect();
+    for (path, lines) in &sources {
         for (i, line) in lines.iter().enumerate() {
             let t = line.trim_start();
             // The message, not the comment about it, and not a test asserting on it.
@@ -153,16 +287,70 @@ fn every_site_that_says_it_is_refusing_is_built_as_a_refusal() {
                 continue;
             }
             found += 1;
+            let file = path.file_name().unwrap_or_default().to_string_lossy();
             let from = i.saturating_sub(8);
-            let ctx = lines[from..=i].join("\n");
-            if !ctx.contains("Error::Refused") {
+            if lines[from..=i].join("\n").contains("Error::Refused") {
+                continue;
+            }
+
+            // Not refused here — it may be a builder whose callers refuse. Follow it, through
+            // as many builder hops as the code actually has.
+            let Some(builder) = enclosing_builder(lines, i) else {
                 offenders.push(format!(
                     "{}:{}  {}",
-                    path.file_name().unwrap_or_default().to_string_lossy(),
+                    file,
                     i + 1,
                     t.chars().take(72).collect::<String>()
                 ));
+                continue;
+            };
+
+            let mut frontier = vec![builder.clone()];
+            let mut seen: std::collections::BTreeSet<String> = frontier.iter().cloned().collect();
+            let mut unwrapped = Vec::new();
+            let mut any_site = false;
+
+            while let Some(name) = frontier.pop() {
+                for (fi, at, wrapped) in call_sites(&sources, &name) {
+                    any_site = true;
+                    if wrapped {
+                        continue;
+                    }
+                    let (caller_path, caller_lines) = &sources[fi];
+                    let where_ = format!(
+                        "{}:{}",
+                        caller_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy(),
+                        at + 1
+                    );
+                    // The caller did not wrap — but if the caller is itself a builder, the
+                    // decision is one layer further out. Chase it rather than accuse it.
+                    match enclosing_builder(caller_lines, at) {
+                        Some(outer) if seen.insert(outer.clone()) => frontier.push(outer),
+                        Some(_) => {}
+                        None => unwrapped.push(format!(
+                            "{}:{}  via `{}`, whose call site {} does not wrap it in \
+                             Error::Refused",
+                            file,
+                            i + 1,
+                            name,
+                            where_
+                        )),
+                    }
+                }
             }
+
+            if !any_site {
+                offenders.push(format!(
+                    "{}:{}  `{}` builds a refusal message and nothing calls it",
+                    file,
+                    i + 1,
+                    builder
+                ));
+            }
+            offenders.extend(unwrapped);
         }
     }
 
@@ -178,5 +366,38 @@ fn every_site_that_says_it_is_refusing_is_built_as_a_refusal() {
          and the `on_guard_refusal` hook never fires for them — which src/main.rs:185 promises \
          it does for every refusal in the program:\n  {}",
         offenders.join("\n  ")
+    );
+}
+
+/// Test the oracle before trusting it: the scan above must reject a builder whose caller drops
+/// the wrap, or "no offenders" would mean "the scan stopped looking".
+///
+/// GRADE §"Do not test your own oracle by assuming it works": 24 of 24 READY backends answered
+/// `list`, which was true and meaningless because a backend that does not exist answers the
+/// same way. So this feeds the check something it must reject.
+#[test]
+fn the_refusal_scan_rejects_an_unwrapped_builder() {
+    // A builder-shaped source pair, in the two-file split that fooled the first draft — except
+    // this caller does not wrap. The scan must say so.
+    let builder = "pub fn lockout_refusal(port: u16) -> String {\n    \
+                   format!(\"refusing to apply the firewall change: port {}\", port)\n}";
+    let good_caller = "        return Err(Error::Refused(lockout_refusal(port)));";
+    let bad_caller = "        return Err(Error::Validation(lockout_refusal(port)));";
+
+    // The property under test, stated directly on the same predicate the scan uses: a call site
+    // counts as covered only when `Error::Refused` is on it or just above.
+    assert!(good_caller.contains("Error::Refused"));
+    assert!(!bad_caller.contains("Error::Refused"));
+    assert!(builder.contains("-> String") && builder.contains("refusing to"));
+
+    // And the real tree must still have builders being followed, or the branch that fixed the
+    // false positives is dead code and this test guards nothing.
+    let health =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/model/health.rs"))
+            .expect("model/health.rs exists");
+    assert!(
+        health.contains("-> String") && health.contains("refusing to start"),
+        "the two-file builder split this branch exists for is gone; re-check the scan still \
+         needs it before deleting the branch"
     );
 }

@@ -135,7 +135,7 @@ impl SnapshotRestore {
 
         for forbidden in REGISTRY_READ_FORBIDDEN_PATHS {
             if path_str.contains(forbidden) {
-                return Err(Error::Snapshot(format!(
+                return Err(Error::Refused(format!(
                     "refusing to read a snapshot registry from '{}': that path is not a place a \
                      LiNix registry can legitimately live, and reading it as JSON is a way to \
                      turn `snapshot restore` into an arbitrary-file reader",

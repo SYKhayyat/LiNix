@@ -64,7 +64,7 @@ pub fn refuse_target_in_repo(config: &Config, resolved: &Path) -> Result<()> {
     if !inside {
         return Ok(());
     }
-    Err(Error::Validation(format!(
+    Err(Error::Refused(format!(
         "refusing to decrypt into {} — it is inside the config repo at {}, which git tracks \
          and `sync` commits. A secret that reaches git history has to be rotated, not deleted. \
          Point @target= outside the repo.",

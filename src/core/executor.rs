@@ -391,7 +391,7 @@ impl ExecutionLayer for DryRunExecutor {
 #[cfg(windows)]
 fn restrict_to_owner(path: &Path) -> Result<()> {
     let user = std::env::var("USERNAME").map_err(|_| {
-        Error::Other(
+        Error::Refused(
             "cannot restrict the file: %USERNAME% is unset, so there is no account to grant \
              access to. Refusing to write a secret nothing protects."
                 .into(),

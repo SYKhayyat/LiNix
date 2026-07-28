@@ -182,12 +182,20 @@ pub(crate) async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
             let code = match e.downcast_ref::<linix::core::Error>() {
                 Some(linix::core::Error::Refused(msg)) => {
                     eprintln!("{}", msg);
-                    // `on_guard_refusal` (XIII.13) fires here and nowhere else: this is the
-                    // one point every refusal in the program passes through, so no command
-                    // can be added that refuses without the hook hearing about it. Fired at
-                    // this layer rather than inside the guard because announcing a refusal is
-                    // a side effect, and a side effect inside a decision function runs
-                    // wherever the decision is evaluated — tests included.
+                    // `on_guard_refusal` (XIII.13) fires here and nowhere else. Fired at this
+                    // layer rather than inside the guard because announcing a refusal is a
+                    // side effect, and a side effect inside a decision function runs wherever
+                    // the decision is evaluated — tests included.
+                    //
+                    // This arm used to claim it was "the one point every refusal in the
+                    // program passes through, so no command can be added that refuses without
+                    // the hook hearing about it". That was false for nine sites — every
+                    // security refusal, the whole SEC/T series — which returned 1 and were
+                    // never announced. The claim is now checked rather than asserted:
+                    // `tests/grader_refusal_exit_code_tests.rs` enumerates every site whose
+                    // message says it is refusing and fails on one not built as
+                    // `Error::Refused`, and fires a real hook through a real refusal. A
+                    // sentence that quantifies over paths belongs in a test, not in a comment.
                     linix::app::events::EventHooks::load(&app.config)
                         .fire(
                             linix::model::event::Event::OnGuardRefusal,

@@ -467,7 +467,13 @@ pub async fn enforce_extras(
 /// tests, which call this with a default `Config` whose `config_root()` is the developer's own
 /// `~/.config/linix`. That would have `cargo test` executing the developer's real hooks. The
 /// event is fired once, where `Error::Refused` becomes an exit code (`finish`), which is the
-/// point every refusal in the program funnels through and the layer where effects belong.
+/// layer where effects belong.
+///
+/// **Note what this function is and is not.** It is where every *guard* refusal is built. It is
+/// not where every refusal in the program is built — the SEC/T series constructs its own, and
+/// for nine sites those were `Error::Validation`, so they exited 1 and the hook never heard
+/// them. What makes the promise true is the variant, not this function, and what checks it is
+/// `tests/grader_refusal_exit_code_tests.rs`.
 fn refuse(message: String) -> Result<()> {
     Err(Error::Refused(message))
 }

@@ -51,7 +51,7 @@ impl LuaHooks {
         if refusals.is_empty() {
             return Ok(());
         }
-        Err(Error::Validation(format!(
+        Err(Error::Refused(format!(
             "refusing to sync: {} hook(s) are not approved (II.12).\n\n{}",
             refusals.len(),
             refusals.join("\n\n")

@@ -94,7 +94,7 @@ impl ShimManager {
             // ownership rule `remove_shim` already follows. Redeploying LiNix's own shim is
             // fine (it hashes identical to the linix binary).
             if !Self::is_deployed_shim(&target_path).await {
-                return Err(Error::Validation(format!(
+                return Err(Error::Refused(format!(
                     "refusing to deploy the `{}` shim: {:?} already exists and LiNix did not \
                      create it. Move or rename that file yourself if you want the shim there.",
                     binary_name, target_path
