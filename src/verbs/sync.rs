@@ -153,12 +153,42 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
             changes = preview.get_filtered_changes();
         }
 
+        // Read before the plan is consumed, and used after the sync succeeds: a warning about
+        // a package that failed to install would be answering a question nobody reached.
+        let installed_by = backends_that_installed(&changes);
         engine.sync(changes, opts.scope).await?;
+        warn_about_unreachable_binaries(&installed_by);
     }
 
     apply_non_package_phases(app, &state, opts.scope).await?;
     perform_maintenance(app).await?;
     Ok(applied)
+}
+
+/// Which managers this plan installs through, each named once.
+fn backends_that_installed(changes: &linix::app::sync::planner::SyncChanges) -> Vec<String> {
+    let mut out: Vec<String> = changes
+        .generate_report()
+        .install
+        .into_iter()
+        .map(|e| e.backend)
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// A package that installed and cannot be run is reported as a success (E6c).
+///
+/// Here rather than in each backend, because the fact is about the ecosystem's convention and
+/// eleven copies of it is eleven chances to disagree. Once per manager, not once per package:
+/// installing forty rocks must not print the same paragraph forty times.
+fn warn_about_unreachable_binaries(backends: &[String]) {
+    for be in backends {
+        if let Some(message) = linix::app::reachable::unreachable_warning(be) {
+            warn!("{}", message);
+        }
+    }
 }
 
 /// Everything a sync does after the package plan, in II.7's order.

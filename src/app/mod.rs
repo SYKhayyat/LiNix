@@ -19,6 +19,7 @@ pub mod module_registry;
 pub mod pm_hooks;
 pub mod profile;
 pub mod profile_expr;
+pub mod reachable;
 pub mod rebuild;
 pub mod repl;
 pub mod run;
