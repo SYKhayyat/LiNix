@@ -1,4 +1,4 @@
-# The decision register — all 114, and every one of them ruled
+# The decision register — all 115, and every one of them ruled
 
 **One file, six features. Zero open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -18,7 +18,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **112** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **113** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Nothing here is open.** All 114 are ruled: **112 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**Nothing here is open.** All 115 are ruled: **113 ANSWERED, 2 PARKED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -238,6 +238,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q3** | What does a mistyped command exit with? — RULED: 1, and the table stays at four codes. | 2026-07-27 |
 | **Q4** | Are unverified backends labelled "experimental"? — RULED: **no.** They are tested, and nothing ships until they are. | 2026-07-27 |
 | **Q5** | Does `@unverified` reach past the backends that download? — RULED: **yes** — a manager that verifies a signature itself (`helm`) takes it too. | 2026-07-28 |
+| **Q6** | May a definition in `adapters/backends.toml` take a built-in's name? — RULED: **yes, and only by saying so** — `overrides = true`. | 2026-07-28 |
 
 ---
 
@@ -3238,5 +3239,38 @@ What is binding:
    nothing.
 
 The rule is in **II.2**; the reason is in **V.94**.
+
+---
+
+## Q6
+
+**Status: ANSWERED.**
+
+**Q6 — May a definition in `adapters/backends.toml` take a built-in's name?** **RULED
+2026-07-28 (owner): YES, and only by saying so — it is a key.**
+
+The onboarder registered custom backends last and skipped any name already in use, so a
+definition named `apt` was silently ignored. That kept a pulled config from hijacking `apt` by
+guessing a popular name, and that half stays. But it also meant that when a manager changes its
+CLI under LiNix — helm v4's plugin signatures, pixi's renamed `global upgrade-all`, nimble's
+`--` — the person watching it fail could see the fix and had no way to apply it before a
+release.
+
+What is binding:
+
+1. **`overrides = true` on a definition replaces whatever holds that name**, built-in included.
+   Absent, the collision is skipped with a warning that names the key.
+2. **Two deliberate acts, never one.** The sentence in the definition, and II.12's approval of
+   the file. A name alone changes nothing, which is the security property.
+3. **Announced on every run that loads it**, naming the backend and the program it now runs —
+   not once at approval time.
+4. **`check health` answers for the replacement**, so an override whose binary is absent reports
+   that backend critical. That needed no special case: health probes the definition that won.
+5. **Backends only.** Snapshot providers, init systems and secret stores still never shadow a
+   built-in. Same argument, different blast radius — a wrong `apt` installs the wrong thing, a
+   wrong snapshot provider removes the rollback that was meant to save you. Widening is a
+   separate ruling and has not been made.
+
+The rule is in **II.1** (`adapters/`); the reason is in **V.95**.
 
 ---

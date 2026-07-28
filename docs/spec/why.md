@@ -1560,3 +1560,34 @@ Three properties survive the widening, and each is a test:
 
 The refusal text is the last piece. helm's own advice names `--verify=false`, an argv no
 declaration can write; LiNix now appends the flag a user can actually put on the line.
+
+**V.95 — Why a config file may take `apt` away from the built-in, and why it must say so.**
+*(Owner ruling, 2026-07-28 — Q6.)* The onboarder's rule was absolute: custom backends register
+last and a name already in use is skipped, "so a stray config can't hijack `apt` or `brew`". The
+security half of that is right and stays. The absolute half was wrong, and the reason is the one
+this codebase keeps meeting from the other direction: **the built-in is a snapshot of someone
+else's CLI, and it goes stale.** helm v4 started refusing unsigned plugin sources; pixi renamed
+`global upgrade-all`; nimble's `--` stopped meaning what it meant. Each of those was a day, a
+week or a release where LiNix was simply wrong about a manager and the person in front of the
+machine could see exactly what the fix was and had no way to apply it. `overrides = true` is that
+way.
+
+**The key is the whole design, not a formality.** Without it the two behaviours are
+indistinguishable from the outside: a definition named `apt` either silently replaces the real
+one — which is a supply-chain attack with no attack in it, since a pulled config would only have
+to guess a popular name — or is silently ignored, which is what a person fixing a broken backend
+experiences as "my file does nothing". Requiring the sentence separates them. Taking a built-in's
+name now costs **two deliberate acts**: writing `overrides = true`, and approving the file through
+II.12's ledger, which is the same door every other executable thing in `adapters/` comes through.
+Neither act alone is enough, and neither is a name.
+
+**Loud, and loud every time.** The replacement is announced on every run that loads it, naming
+the backend and the program it now runs — not once at approval, because the run that matters is
+the one where something goes wrong months later and nobody remembers the file. `check health`
+needs no special case: it probes the definition that won, so an override whose binary is not
+installed reports that backend critical, which is the true answer about this machine.
+
+**Scoped to backends on purpose.** Snapshot providers, init systems and secret stores register
+last and still never shadow a built-in. The argument for widening is the same one, but the blast
+radius is not — a wrong `apt` installs the wrong thing, a wrong snapshot provider takes away the
+rollback that was supposed to save you — so that is a separate ruling and has not been made.

@@ -773,8 +773,25 @@ makes every other machine fail on a line it cannot resolve. And because each is 
 commands your repo can run on any machine that clones it, each is approved the way a hook is —
 `linix lock` approves them, and any later edit stops that file loading until you look at the
 change and approve it again. **Each file is approved separately**: approving the backends you
-added is not a review of the settings adapters. Custom definitions load last and can never take
-over a built-in name.
+added is not a review of the settings adapters.
+
+**Overriding a built-in.** Custom definitions load last, and a name that is already taken is
+skipped — being named `apt` is not a way to become `apt`. To replace one on purpose, say so:
+
+```toml
+[[backend]]
+name = "apt"
+overrides = true          # take the name from the built-in
+binary = "apt-fast"
+install_args = ["install", "--assume-yes"]
+```
+
+This is for the day a manager changes its CLI and LiNix has not caught up yet: you can correct
+it on your machines without waiting for a release. It costs two deliberate acts — the
+`overrides = true` line, and `linix lock` approving the file — and neither one alone does
+anything. LiNix says so on every run that loads it, naming the backend and the program it now
+runs, and `check health` then reports on *your* definition: if `apt-fast` is not installed, `apt`
+is critical, because on this machine that is the truth.
 
 Everything you teach LiNix lives in one folder, one file per question:
 

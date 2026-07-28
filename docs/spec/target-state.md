@@ -35,6 +35,16 @@ reading the folder, never a list named in the source** — a named list forgot `
 once, leaving it unapprovable and its rows refused on every sync (V.72), which is why the
 assertion "every adapter file is approvable" is made against the directory rather than a sentence.
 
+**A definition in `adapters/backends.toml` may take a built-in's name, and only by saying so
+(Q6).** Adapters register last, and a name already in use is skipped — being named `apt` is not a
+way to become `apt`. `overrides = true` on the definition replaces whatever holds the name,
+built-in included, because a manager can change its CLI and the person on that machine has to be
+able to correct it that day. **Two deliberate acts, never one:** the sentence in the definition,
+and II.12's approval of the file it is in. LiNix says so on every run that loads it, naming the
+backend and the program it now runs, and `check health` answers for the replacement rather than
+for the built-in it displaced. Snapshot providers, init systems and secret stores are unchanged —
+they still never shadow a built-in.
+
 **LiNix's data** — `$LINIX_DATA_DIR` or the platform data dir. **Never in git. Never in a
 folder LiNix scans.**
 

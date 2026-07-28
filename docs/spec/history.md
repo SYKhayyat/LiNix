@@ -14,6 +14,46 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-28 (later) — the push, what CI said, and Q6
+
+**The 25 unpushed commits went to CI and CI was right to fail.** Four things had been green
+locally for a fortnight and were broken everywhere else:
+
+| what | why it was invisible |
+|---|---|
+| `a_windows_gopath_keeps_its_drive_letter` | asserts a Windows path rule; on Unix a colon *is* the separator, so the assertion is false there and the test had only ever run on Windows |
+| `choco_msi_reboot_codes_are_benign_and_do_not_leak` | a Unix `ExitStatus` cannot hold 1605: `from_raw(code << 8)` reads back as `code & 0xff`, so the fabricated status was 69 |
+| `winget_noteworthy_codes_are_benign` | same, for negative HRESULT-shaped codes |
+| `find_placeholder` | clippy 1.97 on the runner flags a `question_mark` the 1.96 toolchain here does not |
+
+Each is fixed at the cause rather than gated away: the exit-code tests now assert the **policy**,
+which is plain data and true on every platform, and prove the `ensure_status` wiring with a code
+the OS can carry. A third test states the constraint outright — `a_fabricated_status_round_trips_only_what_this_os_can_hold` — so the trap cannot be re-entered
+silently. The GOPATH test is `#[cfg(windows)]` with its Unix half already covered by
+`the_first_entry_of_a_gopath_list_owns_bin`, which runs on both.
+
+Verified on Linux this time, not assumed: `cargo test --lib` under WSL, **1263 passed, 0
+failed**. The clippy lint is the one thing still taken on faith — the runner is a newer toolchain
+than anything available here.
+
+**Q6 — a config file may take a built-in's name, and only by saying so.** The onboarder skipped
+any name already in use, so a definition called `apt` was silently ignored. That kept a pulled
+config from hijacking `apt` by guessing a popular name, and that half stays. What it also did was
+leave the person watching a manager change its CLI — helm v4's signatures, pixi's renamed
+`global upgrade-all`, nimble's `--` — able to see the fix and unable to apply it before a
+release. `overrides = true` is the way, and the key is the design: without it the two behaviours
+are indistinguishable from outside, and a name alone would be a supply-chain attack with no
+attack in it.
+
+Two deliberate acts, never one — the sentence in the definition, and II.12's approval of the
+file. Proved end to end: unapproved, the file registers nothing and says so; approved, `scoop`
+runs `my-scoop`, and `check health` moves that backend to **critical** because `my-scoop` is not
+installed. Health needed no special case — it probes the definition that won, which is the true
+answer about the machine.
+
+Scoped to backends on purpose. Snapshot providers, init systems and secret stores still never
+shadow a built-in: same argument, different blast radius, and that is a ruling nobody has made.
+
 ## Session 2026-07-28 — Q5: `@unverified` reaches past the backends that download
 
 **E11 was not an argv defect, and the review's proposed fix would have been a security
