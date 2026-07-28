@@ -750,10 +750,19 @@ impl CommandExecutor {
                 e
             }
         };
-        let msg = if detail.is_empty() {
-            format!("`{}` failed (exit {})", cmd, code)
+        // A manager that exited 0 and said it failed is not described by its exit code.
+        // "`scoop` failed (exit 0)" is a sentence that argues with itself, and it was the
+        // first thing a user saw after a typo; when the verdict comes from what the command
+        // printed, the message says that instead of quoting a status that means the opposite.
+        let verdict = if output.status.success() {
+            format!("`{}` reported a failure", cmd)
         } else {
-            format!("`{}` failed (exit {}): {}", cmd, code, detail)
+            format!("`{}` failed (exit {})", cmd, code)
+        };
+        let msg = if detail.is_empty() {
+            verdict
+        } else {
+            format!("{}: {}", verdict, detail)
         };
         Err(Error::CommandFailed {
             message: msg,

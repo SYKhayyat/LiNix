@@ -186,7 +186,11 @@ impl Journal {
             entry.finished_at_unix = Some(Utc::now().timestamp());
             entry.error = Some(err.to_string());
             self.flush()?;
-            warn!("Operation {} recorded as Failed in WAL: {}", id, err);
+            // `debug!`, not `warn!`: the user is about to be told this failure once, in their
+            // own words, by whoever is returning the error. Saying it again here — with a
+            // 32-hex operation id and the word WAL in it — is the same sentence a third time
+            // in vocabulary that belongs to the journal, not to the person who typed a typo.
+            debug!("Operation {} recorded as Failed in WAL: {}", id, err);
         } else {
             warn!("Attempted to record failure for unknown operation {}.", id);
         }

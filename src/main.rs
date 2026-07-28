@@ -42,12 +42,27 @@ async fn main() -> Result<()> {
     // The level is read straight off argv rather than off the parsed `Cli`, because this has
     // to be running before the shim hijack a few lines down — and reading it after clap is
     // exactly why `--verbose` used to do nothing at all.
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new(log_level_from_argv(&std::env::args().collect::<Vec<_>>()))
-        }))
-        .init();
+    // A default run prints neither a timestamp nor a module path. `WARN
+    // linix::verbs::packages` and an RFC3339 stamp are addressed to whoever is debugging
+    // LiNix, and the person reading them typed a package name — the sentence is for them, the
+    // provenance is not. Both come back at `-v`, where somebody has asked for the internals.
+    let argv: Vec<String> = std::env::args().collect();
+    let level = log_level_from_argv(&argv);
+    let filter = || EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
+    let verbose = level.contains("debug") || level.contains("trace");
+    if verbose {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(filter())
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(filter())
+            .without_time()
+            .with_target(false)
+            .init();
+    }
 
     // 2. Shim hijack
     if let Some(res) = attempt_shim_hijack().await? {

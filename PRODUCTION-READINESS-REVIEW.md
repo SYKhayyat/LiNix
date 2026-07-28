@@ -1,5 +1,11 @@
 # LiNix — Production Readiness Review & Work Order
 
+> **Note on IDs.** This document's own findings are numbered `PR1`, `PR2`, `PR3`. They were
+> once `U1`-`U3`, which collided with the decision register — `CLAUDE.md` reserves `U*` for
+> register IDs requiring an owner ruling, and the real `U1` is "where does a custom backend
+> definition live" (ruled 2026-07-23). An agent reading this document and then acting on
+> "U1" would have answered the wrong question.
+
 ## STATUS — worked 2026-07-27. An audit nobody retires becomes the next thing nobody believes.
 
 | item | outcome |
@@ -15,8 +21,8 @@
 | **H4** version | **HALF WRONG, HALF OPEN.** No hardcoded `v6.0.0` exists in `src/` — `lib.rs` derives `VERSION` from `CARGO_PKG_VERSION`; the banner this review saw came from the stale July binary on disk. `Cargo.toml`'s `version = "0.1.0"` is real and is **the owner's number to pick**. |
 | §7 instability | **DONE** — S46 (two `.expect()`ed spawns on the dry-run path), S47 (`attempt` renamed to `retries`), and **uniform retry semantics, which this table said was not attempted**: `Retryability` on `Error`, `ExitPolicy` per backend, and a retry loop that stops on a permanent failure. A held dpkg lock retries; a name no repository carries is reported at once. |
 | §6 SOLID | **DONE, three of four at the mechanism and one verified already closed.** *Stringly-typed errors:* `CommandFailed` carries a classification; `Error::retryability()` covers all 23 variants; `ratelimiter.rs`'s `contains("429")` — the one live substring branch — reads the variant now. *Open/Closed:* `is_benign_exit`/`output_signals_failure` are gone from the core executor; nine backends declare an `ExitPolicy` at registration. *Liskov (`RepoManager`):* already closed by **S44** — `remove_repo` resolves the URL from the manager's own listing and `reject_unsubstituted` makes silent degradation a hard error; re-verified across all three implementors, not re-fixed. *SRP:* `context.rs` 1,921 → 665 lines across nine facet structs, each holding only what it uses; `App::restore_session_suspensions` deleted as a dead twin of `EphemeralShell`'s. |
-| **U1**, **U2** | **OPEN — owner rulings, now with the measurements the review lacked.** U1's description is substantially wrong: the surface is **62 top-level entries, not 45**, and **6 of the 13 commands it names do not exist** (`remove`, `prune`, `orphans`, `clean`, `unmanaged`, `status`, `doctor`, `migrate`, `clone`, `generation`). Every command in the "removal" cluster does something the others do not. The one real overlap is `undo` / `history` / `rollback`. U2 is confirmed and has a third defect the review did not see: **`--verbose` is dead** — its help promises debug logging and it produces none, because the subscriber is built at `main.rs:41` before clap parses at `:81`. |
-| U3 | **OPEN** — `status` is slow. Worth re-measuring now that B1 is fixed; not investigated this session. |
+| **PR1**, **PR2** | **OPEN — owner rulings, now with the measurements the review lacked.** PR1's description is substantially wrong: the surface is **62 top-level entries, not 45**, and **6 of the 13 commands it names do not exist** (`remove`, `prune`, `orphans`, `clean`, `unmanaged`, `status`, `doctor`, `migrate`, `clone`, `generation`). Every command in the "removal" cluster does something the others do not. The one real overlap is `undo` / `history` / `rollback`. PR2 is confirmed and has a third defect the review did not see: **`--verbose` is dead** — its help promises debug logging and it produces none, because the subscriber is built at `main.rs:41` before clap parses at `:81`. |
+| PR3 | **OPEN** — `status` is slow. Worth re-measuring now that B1 is fixed; not investigated this session. |
 
 Verified after the work: `cargo build --all-targets` → `cargo test` → `cargo clippy
 --all-targets --all-features -- -D warnings` clean on **Windows (1,340 tests) and Linux (1,339,
@@ -64,8 +70,8 @@ user would notice, (3) anything that removes a feature, (4) anything where Part 
 | **B1, B2** | (2) | Changes what appears on screen for every interactive user. My reading is that this *restores* intended behaviour rather than changing it — but the user-visible delta is large and there is no ruling to point at. **Get a ruling, then write the decisions.md entry in the same commit.** |
 | **B3** (guard on rollback) | (2) | A rollback may now *refuse* to complete. That is a new refusal a user will see. Needs a ruling on what happens when a compensating removal is blocked. |
 | **H4** (version) | (2) | Version numbering is owner territory. Do not pick a number. |
-| **U1** (command surface) | (2)(3) | Consolidating commands removes commands. Do not do this without a ruling. |
-| **U2** (log noise) | (2) | Changing default log level is user-visible. |
+| **PR1** (command surface) | (2)(3) | Consolidating commands removes commands. Do not do this without a ruling. |
+| **PR2** (log noise) | (2) | Changing default log level is user-visible. |
 | B4, H1, H2, H3 | none | Internal correctness. **Build these without asking.** |
 
 ---
@@ -515,7 +521,7 @@ paths resort to substring matching.
 
 ## 8. Unintuitiveness
 
-**U1 — 45 top-level commands**, with clusters that overlap without a clear rule for choosing:
+**PR1 — 45 top-level commands**, with clusters that overlap without a clear rule for choosing:
 
 - *Removal*: `remove`, `prune`, `orphans`, `clean`, `unmanaged`, `purge-unmanaged`
 - *Time travel*: `undo`, `rollback`, `generation`, `snapshot`, `bisect`
@@ -544,7 +550,7 @@ consolidation removes features.**
 > `rollback <ref>` (CLI) are two interfaces onto the *git manifest* history. A user who wants to
 > undo their last sync reaches for `undo` and gets the wrong mechanism.
 
-**U2 — log noise on by default.** Ordinary runs emit `INFO` tracing with ANSI escapes above the
+**PR2 — log noise on by default.** Ordinary runs emit `INFO` tracing with ANSI escapes above the
 actual answer (`StateRegistry: No state file found…`, `LiNix Kernel: v6.0.0 kernel initialized
 successfully.`). Stop-and-ask.
 
@@ -564,7 +570,7 @@ successfully.`). Stop-and-ask.
 > `linix sync` on an up-to-date machine prints `already up to date` at `info!` and nothing on
 > stdout. Default to `warn` without first moving those to stdout and a no-op sync goes silent.
 
-**U3 — `status` is slow.** Read-only `linix status` against a single apt backend took **~50-100
+**PR3 — `status` is slow.** Read-only `linix status` against a single apt backend took **~50-100
 seconds** per run. Worth profiling after B1 is fixed — some of it may be `info()` being called
 per-spec (`planner.rs:497` notes each check is a separate process spawn).
 
@@ -604,7 +610,7 @@ Dependencies matter — B1 changes the conditions under which B3 and H3 are diag
 | 7 | **H2** — repo removal + placeholder guard | — | no |
 | 8 | **H3** — sudo keepalive | B1 | no |
 | 9 | **H4** — version | — | **yes** |
-| 10 | §6 SOLID, U1-U3 | — | **yes** for U1/U2 |
+| 10 | §6 SOLID, PR1-PR3 | — | **yes** for PR1/PR2 |
 
 Start at 1. Items 5-7 are independent of everything else and can proceed in parallel with the
 rulings for 2-4.
@@ -622,4 +628,4 @@ rulings for 2-4.
 | B4, H1, H3 | **Verified by inspection + grep** (`kill_on_drop` absent; `File::create` semantics) |
 | H2 | **Verified by inspection** — template/substitution mismatch is unambiguous |
 | H4 | **Verified** — `--version` output vs `CHANGELOG.md` |
-| U3 | **Measured** on one machine, one backend — not profiled; treat as a symptom, not a diagnosis |
+| PR3 | **Measured** on one machine, one backend — not profiled; treat as a symptom, not a diagnosis |

@@ -150,14 +150,22 @@ impl<'a> StateResolver<'a> {
         let body = match fs::read_to_string(&file).await {
             Ok(b) => b,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // The command that writes this file goes first. This is the first thing a new
+                // user sees, and it used to explain the format by hand and never mention
+                // `linix init` — which exists to do exactly this, detects the managers on the
+                // machine, and is one word long. Explaining how to hand-write a file the
+                // program will write for you is a dead end however well the format is
+                // described.
                 return Err(Error::Config(format!(
                     "no `priority` file at {}.\n  \
-                     `priority` lists the package managers LiNix may use, one per line, best \
-                     first — for example:\n\n    apt\n    cargo\n\n  \
+                     Run `linix init` — it writes this file with the package managers it \
+                     finds on this machine, along with the rest of the repo.\n\n  \
+                     To write it by hand instead: `priority` lists the managers LiNix may \
+                     use, one per line, best first — for example:\n\n    apt\n    cargo\n\n  \
                      Listed means LiNix uses it. Not listed means LiNix does not touch it at \
                      all.",
                     file.display()
-                )))
+                )));
             }
             Err(e) => return Err(Error::from(e)),
         };

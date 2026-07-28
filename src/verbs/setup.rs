@@ -786,7 +786,34 @@ pub(crate) async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
         println!("  kept     {:<10} {}", "priority", priority.display());
     }
 
-    // Something has to be active or nothing is: a module nothing reaches is inert (II.3).
+    // `init --help` promises "a starter module" and `modules/` was created empty, so the one
+    // thing a new user was told to look at did not exist. It carries no package: P5 bans the
+    // default nobody chose, and a machine that installs something because it was scaffolded is
+    // exactly that. What it carries is the shape of a line, in the file where lines go.
+    let starter = layout.module_file(&linix::model::ModuleName::literal("starter"));
+    if !starter.exists() || force {
+        tokio::fs::write(
+            &starter,
+            "# A module is a list of packages, one per line. This one is yours to edit.\n\
+             #\n\
+             # Uncomment a line, then run `linix sync`:\n\
+             #\n\
+             #   jq                 let LiNix pick the manager, best first from `priority`\n\
+             #   cargo:ripgrep      or name the manager yourself\n\
+             #   git@version=2.44   pin a version\n\
+             #\n\
+             # Nothing is installed until a line is here and `linix sync` has run. Deleting a\n\
+             # line and syncing again removes the package.\n",
+        )
+        .await
+        .with_context(|| format!("Failed to write {}", starter.display()))?;
+        println!("  created  {:<10} {}", "module", starter.display());
+    } else {
+        println!("  kept     {:<10} {}", "module", starter.display());
+    }
+
+    // Something has to be active or nothing is: a module nothing reaches is inert (II.3) — so
+    // the starter is wired in here, or writing it would have been theatre.
     let profile = layout.profile_file("Main");
     if !profile.exists() || force {
         tokio::fs::write(
@@ -794,7 +821,9 @@ pub(crate) async fn scaffold_repo(app: &App, force: bool) -> Result<()> {
             "# What this machine is set to. Add `use <module>` lines, or packages directly.\n\
              #\n\
              # Profiles are Capitalized, modules are lowercase — so `(Work | gaming)` tells\n\
-             # you what everything is without extra syntax.\n",
+             # you what everything is without extra syntax.\n\
+             \n\
+             use starter\n",
         )
         .await
         .with_context(|| format!("Failed to write {}", profile.display()))?;

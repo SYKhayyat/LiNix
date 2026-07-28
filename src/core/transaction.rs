@@ -284,7 +284,11 @@ impl Transaction {
                         .map(|e| e.to_string())
                         .unwrap_or_else(|| "Execution Error".into());
 
-                    error!(
+                    // `debug!`, not `error!`. This failure is returned below and printed once,
+                    // as itself, by `main`. Printing it here as well said the same thing twice
+                    // and called the package a "Node" — the DAG's word for it, which no user
+                    // asked about. The suggestions below are the part worth keeping.
+                    debug!(
                         "Node {}:{} FAILED: {}",
                         task_data.backend_name, task_data.package_name, error_msg
                     );
