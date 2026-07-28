@@ -445,6 +445,346 @@ Tiers 1–5 reach **A**. A+ needs test *kinds* this repo does not have. Specifie
 
 ---
 
+# ROUND 2 — added by the Grader, 2026-07-28
+
+Round 1 landed: **27 of the 34 defects are closed and independently reproduced**. The full
+disposition, the coverage ledger and the evidence are in `docs/GRADE-2026-07-28.md`. Read that
+before starting; the numbered findings below are `G-n` in it.
+
+**Grade: B−**, up from C+. The rubric's **B** bar is not met on two of its four clauses.
+
+**The failing tests already exist.** Round 1 asked you to write the test first; for most of what
+follows that is done — `tests/grader_*.rs` are committed and **red**, each watched fail, each
+carrying a control where a control was needed. Your job is to make them pass *by fixing the
+cause*, and to extend them to siblings they do not yet reach. Do not delete a red test to make a
+tier green.
+
+**The one-line diagnosis of this round.** Every finding below is a sentence that quantifies over
+paths and was never re-derived from the code:
+
+| the sentence | where | reality |
+|---|---|---|
+| "every path that removes anything goes through one guard" | `readme.md:266` | 10 sites, **9** guarded |
+| "the one point every refusal in the program passes through" | `src/main.rs:185` | 23 sites, **15** conforming |
+| "`--dry-run` performs nothing" | the flag's whole purpose | 5 verbs still act |
+
+`READINESS` §5.3 named this exact class. It is not a new disease; it is the same one, one layer in.
+
+---
+
+## Tier 1 (round 2) — the safety model is incomplete
+
+### W21 · `G-1` — a removal path with no guard, no count, and no plan line
+
+**Symptom.** With `[guard] max_removals = 1` and `protected_packages = ["f3"]` — confirmed
+effective by `linix protected` — undeclaring five `link:` lines and running `linix sync -y`
+deleted all five target files **including the protected one**, exited 0, and printed
+`already up to date`. `linix --dry-run sync` printed `already up to date` as well.
+
+**Root cause (verified).** `src/app/apply/extras.rs:105` calls `inst.remove(...)` directly for
+`service`/`link`/`setting` (and the sibling arms handle `shim`, `schedule`, `repo`). The word
+`guard` does not appear in that file. The teardown runs outside the transaction, so it is not
+covered by the `guard::enforce` that `sync/mod.rs:141` applies to the package plan.
+
+The `dry_run` check at `extras.rs:66` **is** correct — a preview genuinely performs nothing. The
+defect is that neither the preview nor the real run *reports*, and that nothing is guarded.
+
+**Fix.** Give extras teardown its own `GuardScope`, route it through `guard::enforce`, and fold
+the count into the plan so `max_removals` sees it and `--dry-run` names it. A `link:` whose target
+is a decrypted secret or a live `service:` deserves the same refusal a package gets.
+
+**⚠️ Needs a ruling (0.1)** — *only* on the scope question, in plain words for the owner:
+
+> Today, deleting a `link:`/`service:`/`setting:` line makes `sync` remove that resource without
+> counting it, without listing it, and without checking your protected list. Should those
+> resources be protected by the same `[guard]` rules as packages — meaning a big teardown gets
+> refused the same way a big uninstall does — or should the guard stay packages-only and these
+> just be *reported* before they happen? Recommendation: **guard them the same way.** The blast
+> radius is a user's dotfiles and running services, which is not smaller than a package.
+
+**Test first.** Already red: `tests/grader_extras_guard_tests.rs` (2 tests — one for the guard,
+one for visibility).
+
+**Siblings.** All six extra kinds, not just `link:` — `shim_manager().remove_shim`,
+`scheduler.deprovision`, the `repo` arm, and `service`/`setting`. I verified the other **nine**
+backend-removal call sites *are* guarded and named each in `GRADE` §3 G-1; re-verify rather than
+trust me.
+
+**Acceptance.** The reproduction in `GRADE` §3 G-1, run from a clean config: `sync` must refuse,
+or at minimum list the five removals and count them against `max_removals`, and must never delete
+a protected name.
+
+### W22 · `G-10` — the security refusals exit 1, and the refusal hook never fires ⚠️ needs a ruling (0.1)
+
+**Symptom.**
+
+```
+$ linix install 'web:http://example.com/tool.tar.gz' -y
+Error: Validation error: refusing to download … over plain HTTP
+EXIT=1                                    # readme.md:708 says 3 means refused
+$ linix reset </dev/null
+EXIT=3                                    # correct, same binary
+```
+
+**Root cause (verified).** Eight sites whose own message says *"refusing to…"* are not built as
+`Error::Refused`, so `main.rs:183` never sees them:
+
+| site | refuses | rule |
+|---|---|---|
+| `core/download.rs:46` | plain HTTP | SEC2 |
+| `core/download.rs:69` | unverified, no `@sha256` | SEC2 |
+| `core/executor.rs:396` | a secret nothing protects | T5 |
+| `backends/link.rs:68` | decrypt into the git repo | T2 |
+| `app/hooks.rs:55` | unapproved hooks | II.12 |
+| `app/shim_manager.rs:98`, `utils/file.rs:174` | deploy over a foreign file | SEC1 |
+| `app/apply/dotfiles.rs:67` | files outside `$HOME` | SEC3 |
+
+**The refusals that behave correctly are the ones about removing packages. The ones that do not
+are the entire SEC/T series.**
+
+**The exit code is the lesser half.** `src/main.rs:185` states that the `Error::Refused` arm is
+*"the one point every refusal in the program passes through, so no command can be added that
+refuses without the hook hearing about it."* That is false for all eight: `on_guard_refusal` never
+fires for an unverified download, an unprotected secret, or an unapproved hook. **Delete the
+comment or make it true** — a comment asserting something about paths it never enumerated is the
+mistake `spec/history.md` calls the costliest in this repo.
+
+**It also un-blinds the harness.** `classify_install` keys `refused` on rc=3, so LiNix refusing
+correctly (`github:sharkdp/fd`, target exists and LiNix did not create it) arrives as rc=1 and is
+scored *"a defect, not ecosystem variance"*. `READINESS` §3.4 complained a correct refusal was
+laundered into a soft pass; it is now laundered into a **false hard failure**. Fixing this fixes
+the harness for free — do not patch `classify_install` instead.
+
+**⚠️ Needs a ruling (0.1)** — same reason W12/W17 did: it changes a published contract.
+
+> `readme.md` promises exit 3 means "LiNix refused on purpose". Right now that is true when it
+> refuses to remove too many packages, and false when it refuses to download over plain HTTP or
+> to write a secret nothing protects — those exit 1, the same code as a crash. Should all of them
+> return 3? Recommendation: **yes.** Scripts branch on this, and "I refused" and "I broke" are the
+> two answers that must never be confused.
+
+**Test first.** Already red: `tests/grader_refusal_exit_code_tests.rs` (2 — one behavioural with
+`reset` as control, one enumerating every "refusing to…" site from the code).
+
+**Siblings.** The five sites my scan could not classify — `snapshot_restore.rs:139`,
+`firewall.rs:168`, `health.rs:126`, `rehearsal.rs:47`, `rehearsal.rs:68`. Classify each and say
+which way it went.
+
+**Acceptance.** Every command whose output contains "refusing" exits 3, and
+`on_guard_refusal` fires for each. The enumerating test goes green without its floor being lowered.
+
+---
+
+## Tier 2 (round 2) — `--dry-run` still acts
+
+### W23 · `G-2` — five verbs perform their action during a preview
+
+**Symptom.** Measured on a fresh config, each against a control that runs the same command without
+the flag:
+
+| command | what the preview did |
+|---|---|
+| `--dry-run activate <p>` | switched the active profile · **printed nothing** |
+| `--dry-run deactivate <p>` | emptied `active` · **printed nothing** |
+| `--dry-run lock` | wrote `locks/versions.json` + `locks/hooks.toml` |
+| `--dry-run git init` | created the repo **and committed** |
+| `--dry-run config init` | wrote `preferences.toml` |
+
+**Root cause.** The flag is consulted per-verb. Round 1's W-order fixed `uninstall`, `unmanage`,
+`module create` and `schedule add`; these five were never enumerated. `activate` guards and
+`deactivate`, its twin four lines away, does not — the S6 shape `spec/history.md` already records.
+
+**`activate`/`deactivate` are the serious pair**: they decide which modules are in the model, so
+they decide what the next `sync` installs and removes.
+
+**Fix.** Stop consulting the flag per-verb. Put the check where the *write* happens — one place
+that every verb's config mutation passes through — so a verb added tomorrow cannot forget. That is
+the only version of this fix that stops the class.
+
+**Test first.** Already red: `tests/grader_dry_run_siblings_tests.rs` (5, each with a control).
+
+**Siblings.** Enumerate every config-mutating verb from the code, not from this table. My probe
+covered 13 of the 61 subcommands; the other 48 are unexamined.
+
+**Acceptance.** For every mutating verb: snapshot the config dir, run under `--dry-run`, snapshot
+again, assert byte-identical — and assert the control *did* change it.
+
+---
+
+## Tier 3 (round 2) — argv, and the gate that does not cover it
+
+### W24 · `E11` reopened + `G-8` — the argv-drift gate checks subcommands, not flags
+
+**Symptom.** `E11` is **not closed**. On this Windows host it failed with `plugin already exists`
+(residue from an earlier run) which masked the real argv; in a **fresh** container:
+
+```
+Error: `helm` failed (exit 1): Error: unknown flag: --verify
+```
+
+**Root cause (verified).** `capability.rs:34` — `VERIFIES_ITSELF = [("helm", "--verify=false")]` —
+is emitted unconditionally for `@unverified`. This box runs helm **v4.2.3**, which has the flag;
+the container runs helm 3, which does not. The flag came from helm 4's own error text. So
+`@unverified` works on helm 4 and breaks every helm 3.
+
+**The gate that exists for this cannot see it.** `tests/argv_drift_tests.rs:103` says in its own
+words: *"A token that is a subcommand rather than a flag"*. It verifies **72 subcommands** against
+live tools and **zero flags**. The first flag added after the gate shipped is one a real manager
+rejects, and the gate was green throughout.
+
+**Fix.** Two parts, and the second is the one that matters. (a) Make the helm flag conditional on
+what the installed helm accepts. (b) **Extend the drift gate to flags and operands** — for each
+manager, assert every flag LiNix may pass appears in that manager's help. This is the highest-value
+item in Round 2 for the same reason W12's gate was in Round 1.
+
+**Test first.** A fixture from helm 3's `plugin install --help` (no `--verify`) and one from
+helm 4's (with it); assert LiNix builds a different argv against each.
+
+**Siblings.** Every conditional flag LiNix emits from a capability table, not just `VERIFIES_ITSELF`.
+
+**Acceptance.** `linix install 'helm:secrets@url=…,unverified'` succeeds in the `tools` container.
+
+### W25 · `G-9` — four backends fail a real install, found the first time anyone ran them
+
+From the `tools` image, which I built and ran (**324 pass, 16 fail**). Each failed **twice**, so
+the classifier correctly called them defects, not variance:
+
+| backend | error | reading |
+|---|---|---|
+| `asdf` | `No such plugin: --` | a bare `--` reaches the plugin-name position |
+| `mix` | `Could not find an SCM for dependency :hex` | wrong verb; `hex` installs via `mix local.hex` |
+| `spack` | `Spec ~~zlib has no name` | the version-pin syntax is doubling a `~` |
+| `opam` | `No switch is currently set` (exit 50) | needs an initialised switch; nothing sets one or says so |
+
+Three of four are malformed argv — the same family as W24. `nimble` additionally installs and
+lists correctly while its binary never reaches `PATH` (W4's family, in the container).
+
+**Acceptance.** The `tools` image reaches `fail=0`, or each remaining failure is named in
+`decisions.md` as an environment limitation with a reason.
+
+### W26 · `E7`,`E9` still open — scoop's exit code is still lost
+
+W10 did not land. Measured, same failing command down each branch on this host:
+
+```
+cmd /C …\scoop.cmd install <bad>   -> exit 0     # the branch LiNix takes
+powershell -Command "…; exit $LASTEXITCODE"  -> exit 1     # the branch it never reaches
+```
+
+`which::which("scoop")` returns `scoop.cmd` because the default `PATHEXT` has no `.PS1`, so
+`windows_effective_command` takes the `cmd /C` arm and the careful `.ps1` arm twenty lines above
+is dead code. Every scoop verdict rests on `ExitPolicy` string-matching stdout.
+
+**Prefer the `.ps1` when one sits beside the resolved shim.** Do **not** assume every `.cmd` is
+lossy — measured, `npm.cmd` propagates its exit code correctly, and calling it lossy would be a
+finding manufactured from a file suffix.
+
+**Test first.** Already red: `tests/grader_shim_exit_code_tests.rs` (2; the second *measures* both
+branches rather than inferring from the extension).
+
+### W27 · `E12` / `G-3` — `Transient` is a claim nothing tests
+
+`luarocks install luafilesystem` fails identically three times in a row while
+`curl https://luarocks.org/manifest-5.5` returns **200** — luarocks' own downloader is what fails,
+because the `wget` first on PATH is a scoop shim. `exit_policy::luarocks()` lists
+`"failed downloading"` as transient, so LiNix keeps the declaration and tells the user `sync` will
+try it again. It will fail identically forever.
+
+The policy's doc comment **names this exact cause** and classifies it as the network anyway.
+
+**Fix.** The container harness already knows how to answer this: it retries once and calls a
+repeat a defect. The product asserts the same thing from a string and never tests it. Either make
+`Transient` empirical where it is cheap to be, or stop telling the user a retry will help.
+
+**Test first.** Already red: `tests/grader_transient_claim_tests.rs`.
+
+---
+
+## Tier 4 (round 2) — checkers that examine the wrong thing
+
+### W28 · `G-4` — gate parity compares basenames, not gates
+
+`harness-logic-test.sh:291` greps `ci.yml` for `scripts/*.sh` and asserts each **basename** appears
+in both release scripts. CI runs `harness-mutation-test.sh` **twice** — once bare (Windows
+harness) and once against `run-in-container.sh` with `SURVIVOR_BUDGET=92`. Both release scripts
+run it once. Parity passes because the string appears.
+
+Compounding: the container harness's budget lives only in `ci.yml`, so the script's own documented
+invocation fails on a clean tree (90 survivors against a default of 86).
+
+**Fix.** Compare invocations, not names. Move each harness's budget beside the harness.
+
+**Test first.** Already red: `tests/grader_gate_parity_tests.rs` (2).
+
+### W29 · `G-11` — the coverage audit has a floor for an empty registry and none for collapsed coverage ⚠️ needs a ruling (0.1)
+
+The clean Windows sweep reports `backends: 4 real lifecycle, 12 install-attempted, 44 plan-smoked`
+and `PASS every registered backend got a lifecycle or a plan-smoke`. Four — not because anything
+broke, but because **8 of 15 canaries were already installed on this host** and the harness
+correctly refuses to remove software the user already had.
+
+So **the gate's coverage is inversely proportional to how much the host is used**, and a run with
+4 and a run with 15 are both `PASS`. G2 gave this audit a floor for an empty *registry*; it has
+none for collapsed *lifecycles*.
+
+**⚠️ Ruling needed** because the threshold is a judgement, not a fact:
+
+> On a developer's own machine the sweep really tests about a quarter of what a clean CI runner
+> does, because it skips anything already installed — and it still says PASS. Should it fail when
+> real lifecycles drop below some number, and what number? Recommendation: **a ratchet, like the
+> mutation budget** — record the count per host class, fail when it falls, never when it rises.
+
+**No red test from me**, deliberately: picking the threshold is the owner's call, and a test that
+encodes my guess would be the wrong kind of check.
+
+### W30 · `G-5` — `scripts/grader-red-tests.sh` is a gate nobody runs that cannot go green
+
+131 lines, run by **no** CI job and **neither** release script. Two problems: almost every check is
+a **grep over source text** rather than a behaviour (`G6` passes if the word `is_terminal` appears
+anywhere in a file), and **`G1` can never pass** — it reproduces the buggy `grep -c … || echo 0`
+idiom inline in the test itself, so the file always exits 1. Its `E12` check is also stale against
+the ruling that superseded it.
+
+**Fix.** Delete it, or make its checks behavioural and wire it into the release scripts. A
+permanently-red, un-run file of source greps is worse than nothing: it is the shape of check this
+whole effort exists to remove.
+
+### W31 · `G-7` — `list --backend <typo>` succeeds silently ⚠️ needs a ruling (0.1)
+
+`install` refuses an unknown backend with an excellent message naming the file and the fix. `list`
+answers the same question with exit 0 and no output — for `nosuchbackend`, `aptt`, `APT`, and the
+empty string. That is byte-identical to a real backend with nothing installed.
+
+It also **disarms the rubric's own A-bar check**: "every `[READY]` backend can answer `list`" passes
+for all 24 on this host, but only **11** returned rows; the other 13 cannot be told from a typo. I
+recorded 24/24 before testing my own oracle, and corrected it.
+
+**⚠️ Ruling needed** — user-visible behaviour change:
+
+> `linix list -b aptt` currently prints nothing and succeeds, which reads as "that manager has
+> nothing installed" rather than "there is no such manager". Should it refuse the way `install`
+> does? Recommendation: **yes**, copying `install`'s message verbatim.
+
+**Test first.** Already red: `tests/grader_unknown_backend_tests.rs`.
+
+### W32 · `E26` — still 10 commits CI has never seen
+
+`origin/main` is at `213973a`; HEAD is 10 commits and 1,978 inserted lines ahead, including a
+350-line Windows-cron rewrite. I verified the tree **compiles** on Linux (the ubuntu image build
+runs `cargo build --release` and succeeded); `cargo test` on Linux and anything on macOS remain
+unverified. W8 asked for this in Round 1. Push it.
+
+---
+
+## What Round 2 does *not* change
+
+`E15` (search at 145 s) and `E33` (psresource's truncated error, untestable without PSResourceGet
+installed) are unchanged and unaddressed; W14's latency budgets and W18's supported/experimental
+split are still the two items that would move the grade most. Nothing above supersedes Tier 5 or
+Tier 6 — they remain the path from B to A.
+
+---
+
 ## What NOT to do
 
 - **Do not fix a harness by making it green.** If deleting the scrub in W5 turns a run red, that
@@ -459,6 +799,21 @@ Tiers 1–5 reach **A**. A+ needs test *kinds* this repo does not have. Specifie
 - **Do not check state at the wrong moment.** The harness uninstalls each package immediately
   after listing it; inspecting the machine afterwards proves nothing. Two findings in `READINESS`
   were initially wrong for exactly this reason, and the correction is recorded there.
+- **Do not test a stale artifact** *(added round 2, after it nearly produced four false findings)*.
+  The container images bake `linix` at **build** time — a cached image tests yesterday's binary, so
+  rebuild before believing a container result. `target/release/linix.exe` is **not** rebuilt by
+  `cargo build --all-targets`, and on Windows `cargo build --release` fails with `Access is denied`
+  if any `linix` process is running — it will report the failure and leave the old binary in place.
+  `release-check.ps1` builds release first and is safe; invoking the harness directly is not.
+  **Verify the artifact, not the build log**: run one known reproduction through it first.
+- **Do not run two integration sweeps at once.** Both harnesses use fixed paths
+  (`/tmp/linix-it-win-config`, `/tmp/linix-it-win-state`), so concurrent runs corrupt each other —
+  producing 120-second lock timeouts and `Profile … already exists` failures that look like product
+  defects and are not. Killing a wrapper process does not kill the `bash` script; check with
+  `ps`/`Get-CimInstance` that it is actually gone.
+- **Do not test your own oracle by assuming it works.** "All 24 `[READY]` backends answer `list`"
+  was measured and true and **meaningless**, because a backend that does not exist answers `list`
+  the same way. Before trusting a check you wrote, feed it something it must reject.
 
 ---
 
