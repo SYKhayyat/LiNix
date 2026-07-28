@@ -1,0 +1,4 @@
+Using channels: conda-forge
+Error:   × No packages found matching 'linix-no-such-pkg-zzz'
+  help: Try glob patterns like 'python*' or '*numpy*'
+

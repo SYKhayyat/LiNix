@@ -215,17 +215,45 @@ fn parse_winget_search(output: &str) -> Vec<Package> {
         .collect()
 }
 
+/// Parse `choco search`, in either the machine form (`-r`, `name|version`) or the human one.
+///
+/// It took the first token of every line, so choco's own banner became a package named
+/// `Chocolatey` at version `v2.7.3` and its own summary line `5 packages found.` became a
+/// package named `5` at version `packages`. Both were offered to a user choosing what to
+/// install. `list` had already been given `-r` for a related reason; `search` had not, which
+/// is the twin-path half of the same bug.
 fn parse_choco_search(output: &str) -> Vec<Package> {
     sanitize(output)
         .lines()
         .filter_map(|line| {
-            // Choco search usually returns "name version" on each line
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            let name = parts.first()?;
-            let mut p = Package::new(*name, "choco");
-            if let Some(v) = parts.get(1) {
-                p.version = Some(v.to_string());
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
             }
+            // `-r` output. Unambiguous, and the reason `search` now asks for it.
+            if let Some((name, version)) = line.split_once('|') {
+                let mut p = Package::new(name.trim(), "choco");
+                let v = version.trim();
+                if !v.is_empty() {
+                    p.version = Some(v.to_string());
+                }
+                return Some(p);
+            }
+            // The human form, still parsed so a `-r` that stops working is a wrong answer
+            // rather than an empty one.
+            let mut parts = line.split_whitespace();
+            let name = parts.next()?;
+            let version = parts.next();
+            // choco's own words about itself, not packages: the `Chocolatey v2.7.3` banner,
+            // the `N packages found.` / `N validations performed.` summaries, and the
+            // "did you know" marketing footer.
+            if name.eq_ignore_ascii_case("chocolatey") || name.parse::<u64>().is_ok() {
+                return None;
+            }
+            // A real row's second column is a version. A prose line's is a word.
+            let version = version.filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))?;
+            let mut p = Package::new(name, "choco");
+            p.version = Some(version.to_string());
             Some(p)
         })
         .collect()
@@ -465,5 +493,57 @@ mod tests {
         assert_eq!(res.len(), 2);
         assert_eq!(res[0].name, "git");
         assert_eq!(res[1].version, Some("8.1.2".into()));
+    }
+}
+
+#[cfg(test)]
+mod real_output_tests {
+    use super::*;
+
+    /// Captured from Chocolatey v2.7.3 on this machine.
+    const CHOCO_HUMAN: &str = include_str!("../../tests/fixtures/choco/search-ripgrep.txt");
+    const CHOCO_MACHINE: &str =
+        include_str!("../../tests/fixtures/choco/search-ripgrep-limitoutput.txt");
+    const CHOCO_NOT_FOUND: &str = include_str!("../../tests/fixtures/choco/search-not-found.txt");
+
+    /// choco's own banner and its own summary line were becoming packages: a package named
+    /// `Chocolatey` at version `v2.7.3`, and one named `5` at version `packages`. Neither is a
+    /// package and both were offered to a user choosing what to install.
+    #[test]
+    fn choco_search_yields_packages_and_never_the_banner_or_the_summary() {
+        for (case, out) in [("human", CHOCO_HUMAN), ("machine", CHOCO_MACHINE)] {
+            let names: Vec<String> = parse_choco_search(out)
+                .into_iter()
+                .map(|p| p.name)
+                .collect();
+            assert!(
+                names.iter().any(|n| n == "ripgrep"),
+                "{case}: lost the real package: {names:?}"
+            );
+            assert!(
+                !names.iter().any(|n| n.eq_ignore_ascii_case("chocolatey")),
+                "{case}: the version banner became a package: {names:?}"
+            );
+            assert!(
+                !names.iter().any(|n| n == "5"),
+                "{case}: the `N packages found.` summary became a package: {names:?}"
+            );
+        }
+    }
+
+    /// The version has to survive the fix, or the cure removes the answer with the junk.
+    #[test]
+    fn choco_search_keeps_the_version() {
+        let found = parse_choco_search(CHOCO_MACHINE);
+        let rg = found.iter().find(|p| p.name == "ripgrep").expect("ripgrep");
+        assert_eq!(rg.version.as_deref(), Some("14.1.0"));
+    }
+
+    /// The empty case. `names_only`'s only test used a spack fixture and said nothing about
+    /// the four other managers routed through it; this is the same trap one file over.
+    #[test]
+    fn choco_search_finding_nothing_yields_nothing() {
+        assert!(parse_choco_search(CHOCO_NOT_FOUND).is_empty());
+        assert!(parse_choco_search("").is_empty());
     }
 }

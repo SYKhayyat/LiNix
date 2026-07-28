@@ -1,0 +1,29 @@
+Using channels: conda-forge
+ripgrep-15.2.0-h0de4f61_0 (+ 6 builds)
+--------------------------------------
+
+Name                ripgrep
+Version             15.2.0
+Build               h0de4f61_0
+Size                1.68 MiB
+License             MIT
+Timestamp           2026-07-16 15:58:05 UTC
+Subdir              linux-ppc64le
+File Name           ripgrep-15.2.0-h0de4f61_0.conda
+URL                 https://conda.anaconda.org/conda-forge/linux-ppc64le/ripgrep-15.2.0-h0de4f61_0.conda
+MD5                 848466b97662a3830f47dbad20c2bba9
+SHA256              eb3b312cae7d22915a23f520a4b4b0046e65ddbce4114df058be97b9fd1c6e74
+
+Dependencies:
+ - libgcc >=14
+
+Run exports:
+
+Other Versions (11):
+Version  Build
+15.1.0   h748bcf4_0 (+ 8 builds)
+15.0.0   h1ebd7d5_0 (+ 5 builds)
+14.1.1   ha073cba_1 (+ 9 builds)
+14.1.0   ha073cba_1 (+ 11 builds)
+14.0.3   h517401c_1 (+ 8 builds)
+... and 6 more

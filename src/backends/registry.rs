@@ -643,7 +643,11 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             // `choco list` reports locally-installed packages, all user-requested.
             manual: ManualListing::AllInstalled,
             essential_args: None,
-            search_args: vec!["search".into()],
+            // `-r` (--limit-output) makes search machine-readable `name|version` rows. Without
+            // it choco prints its own `Chocolatey v2.7.3` banner and an `N packages found.`
+            // summary, and both became packages in the results. `list` was given `-r` long
+            // ago, for a related reason; its twin was left alone.
+            search_args: vec!["search".into(), "-r".into()],
             search_binary: None,
             enumerate_args: None,
             enumerate_binary: None,
@@ -1390,7 +1394,7 @@ fn register_pixi(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::pixi_list(o, "pixi"),
-            search_fn: |o| crate::parsers::ecosystem::names_only(o, "pixi"),
+            search_fn: |o| crate::parsers::ecosystem::pixi_search(o, "pixi"),
         }),
     });
     register_generic(reg, core, true, true, true);

@@ -1,0 +1,7 @@
+Chocolatey v2.7.3
+recur 0.2.5 [Approved] Downloads cached for licensed users
+ripgrep 14.1.0 [Approved]
+ripgrep-all 0.10.9 [Approved] Downloads cached for licensed users
+ugrep 7.8.2 [Approved]
+vscode-todo-tree 0.0.226 [Approved]
+5 packages found.

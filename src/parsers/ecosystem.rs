@@ -55,8 +55,14 @@ fn is_empty_result_sentence(line: &str) -> bool {
 }
 
 /// One package name per line, taking the first whitespace token. For managers whose list/
-/// search prints bare identifiers (opam `--short`, spack `list`, pixi `search`, emerge
-/// `qlist -I` atoms). Skips blank lines and table headers.
+/// search prints bare identifiers (opam `--short`, spack `list`, emerge `qlist -I` atoms).
+/// Skips blank lines and table headers.
+///
+/// **Not pixi.** This said "pixi `search`" and was wrong: pixi prints a detail record, and the
+/// first token of each of its lines is a field label, a separator or a bare version number —
+/// 20 of them in one search, measured. `pixi_search` reads the record. The comment naming a
+/// manager this function does not suit is what kept the routing wrong, so the list here is the
+/// list that has been checked against that manager's real output and nothing else.
 pub fn names_only(output: &str, backend: &str) -> Vec<Package> {
     let clean = sanitize(output);
     clean
@@ -495,5 +501,135 @@ nom
         assert_eq!(pkgs[0].name, "hello");
         assert_eq!(pkgs[0].version.as_deref(), Some("2.12"));
         assert_eq!(pkgs[1].name, "emacs");
+    }
+}
+
+/// Parse `pixi search`, which prints a **detail record** rather than a list of names.
+///
+/// It was routed to [`names_only`], documented there as "search prints bare identifiers". Real
+/// pixi output is `Name`/`Version`/`Build`/`Size`/`License`/… field rows plus a build table, so
+/// taking the first token of each line produced 19 junk rows in one search: the field labels
+/// themselves, the `-----` separator, `...`, and bare version numbers from the "Other Versions"
+/// table. The record carries the answer in its `Name` and `Version` fields; this reads those.
+pub fn pixi_search(output: &str, backend: &str) -> Vec<Package> {
+    let clean = sanitize(output);
+    let mut name: Option<String> = None;
+    let mut version: Option<String> = None;
+    for line in clean.lines() {
+        let mut fields = line.split_whitespace();
+        match (fields.next(), fields.next()) {
+            (Some("Name"), Some(v)) if name.is_none() => name = Some(v.to_string()),
+            (Some("Version"), Some(v)) if version.is_none() => version = Some(v.to_string()),
+            _ => {}
+        }
+        if name.is_some() && version.is_some() {
+            break;
+        }
+    }
+    match name {
+        Some(n) => {
+            let mut p = Package::new(n, backend);
+            p.version = version;
+            vec![p]
+        }
+        // "No packages found matching 'x'" is an answer, and an empty one.
+        None => vec![],
+    }
+}
+
+#[cfg(test)]
+mod pixi_real_output_tests {
+    use super::*;
+
+    /// Captured from pixi 0.73 on this machine.
+    const SEARCH: &str = include_str!("../../tests/fixtures/pixi/search-ripgrep.txt");
+    const NOT_FOUND: &str = include_str!("../../tests/fixtures/pixi/search-not-found.txt");
+
+    /// The rule this enforces repo-wide: **a parser is tested against output captured from the
+    /// tool it parses, and from no other tool.** `names_only` serves five managers and its only
+    /// test used a spack fixture — it passed, and said nothing whatever about pixi, which is
+    /// exactly where it was wrong.
+    #[test]
+    fn pixi_search_reads_the_record_and_emits_no_junk() {
+        let found = pixi_search(SEARCH, "pixi");
+        assert_eq!(found.len(), 1, "one search, one package: {found:?}");
+        assert_eq!(found[0].name, "ripgrep");
+        assert_eq!(found[0].version.as_deref(), Some("15.2.0"));
+    }
+
+    /// What the old parser actually produced, asserted so it cannot come back: field labels,
+    /// separators and bare version numbers offered to a user as packages to install.
+    #[test]
+    fn no_field_label_or_separator_is_ever_a_package() {
+        let names: Vec<String> = pixi_search(SEARCH, "pixi")
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        for junk in [
+            "-",
+            "...",
+            "Name",
+            "Version",
+            "Build",
+            "Size",
+            "License",
+            "Timestamp",
+            "Subdir",
+            "URL",
+            "MD5",
+            "SHA256",
+            "Dependencies:",
+            "Using",
+            "15.1.0",
+            "15.0.0",
+        ] {
+            assert!(
+                !names.iter().any(|n| n == junk),
+                "`{junk}` came back: {names:?}"
+            );
+        }
+    }
+
+    /// The red this fix was watched against, kept as evidence rather than as a memory.
+    /// `names_only` is still the right parser for opam, spack and emerge; routing pixi to it
+    /// was the defect, and this says what that cost on real output.
+    #[test]
+    fn names_only_on_pixi_output_is_what_the_bug_looked_like() {
+        let junk: Vec<String> = names_only(SEARCH, "pixi")
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert!(
+            junk.len() > 10,
+            "expected the old parser to emit a pile of junk, got {junk:?}"
+        );
+        // What it really emitted, verbatim: field labels, the separator, the ellipsis, and
+        // six bare version numbers out of the "Other Versions" table.
+        for j in [
+            "SHA256",
+            "Timestamp",
+            "License",
+            "Dependencies:",
+            "-",
+            "...",
+            "15.1.0",
+        ] {
+            assert!(
+                junk.iter().any(|n| n == j),
+                "expected junk `{j}` in {junk:?}"
+            );
+        }
+        assert!(
+            !junk.iter().any(|n| n == "ripgrep"),
+            "the old parser never even produced the right answer: {junk:?}"
+        );
+    }
+
+    /// The not-found case, which is where junk rows come from in three of the four managers
+    /// `names_only` still serves.
+    #[test]
+    fn pixi_finding_nothing_yields_nothing() {
+        assert!(pixi_search(NOT_FOUND, "pixi").is_empty());
+        assert!(pixi_search("", "pixi").is_empty());
     }
 }

@@ -1,0 +1,5 @@
+recur|0.2.5
+ripgrep|14.1.0
+ripgrep-all|0.10.9
+ugrep|7.8.2
+vscode-todo-tree|0.0.226
