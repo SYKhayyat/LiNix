@@ -230,11 +230,45 @@ fn windows_shim_wrap(cmd: &str, resolved: &Path, args: &[String]) -> Option<(Str
 #[cfg(windows)]
 fn windows_effective_command(cmd: &str, args: &[String]) -> (String, Vec<String>) {
     if let Ok(resolved) = which::which(cmd) {
-        if let Some(wrapped) = windows_shim_wrap(cmd, &resolved, args) {
+        if let Some(wrapped) = windows_shim_wrap(cmd, &preferred_shim(&resolved), args) {
             return wrapped;
         }
     }
     (cmd.to_string(), args.to_vec())
+}
+
+/// The shim to actually launch, when a manager ships more than one.
+///
+/// `which::which` honours `PATHEXT`, and the Windows default `PATHEXT` does not list `.PS1`.
+/// scoop ships `scoop.cmd` and `scoop.ps1` side by side, so on a default box `which` returns
+/// the `.cmd`, the `cmd /C` arm below runs it — and **`cmd /C` does not propagate the child's
+/// exit code**. Measured on this host, the same failing install:
+///
+/// ```text
+/// cmd /C ...\scoop.cmd install <bad>   -> exit 0
+/// the `.ps1` branch                    -> exit 1
+/// ```
+///
+/// So the careful PowerShell arm that already knew how to return `$LASTEXITCODE` was dead code
+/// on every default installation, and every scoop verdict fell back to string-matching stdout —
+/// one upstream wording change away from reporting a failed install as a success.
+///
+/// The choice is made on what is on disk, never on `PATHEXT`: a machine's `PATHEXT` is a user
+/// setting, and a correctness property that depends on one is a property that holds on the
+/// developer's box and not the user's.
+#[cfg(windows)]
+fn preferred_shim(resolved: &Path) -> std::path::PathBuf {
+    let ext = resolved
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext == "cmd" || ext == "bat" {
+        let ps1 = resolved.with_extension("ps1");
+        if ps1.is_file() {
+            return ps1;
+        }
+    }
+    resolved.to_path_buf()
 }
 
 /// How LiNix actually launches `cmd` on this platform.

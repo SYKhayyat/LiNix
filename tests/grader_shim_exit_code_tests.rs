@@ -49,16 +49,56 @@ fn a_manager_with_both_shims_is_launched_through_the_one_that_keeps_the_exit_cod
     }
 
     let launch = branch_for("scoop");
-    assert!(
-        !(ext == "cmd" || ext == "bat"),
-        "LiNix launches scoop as `{launch}` because which::which resolved {}.\n\
-         `cmd /C` does not propagate the child's exit code — measured on this host, a failing\n\
-         `scoop install` exits 0 through this branch and 1 through the `.ps1` branch that\n\
-         windows_shim_wrap already implements. A `.ps1` shim exists at {}.\n\
-         Prefer it, or every scoop failure is decided by string-matching stdout.",
+
+    // **Measured, not inferred.** This assertion used to read `which::which("scoop")`'s file
+    // extension — which is the resolver's answer, not LiNix's launch, and the defect was never
+    // in the resolver. `which` still returns `scoop.cmd` after the fix, because `PATHEXT` still
+    // has no `.PS1`; what changed is that LiNix no longer launches what `which` handed it. A
+    // check on the extension would therefore have stayed red over a working program, which is
+    // the mirror image of the checks this file exists to replace.
+    //
+    // So: run a command that genuinely fails, the way LiNix runs it, and require the failure
+    // to survive. `scoop info <name>` is read-only and changes nothing on the machine.
+    let probe: Vec<String> = ["info".to_string(), "linix-no-such-pkg-zzz".to_string()].into();
+    let (prog, argv) = linix::core::executor::effective_command("scoop", &probe);
+    let code = std::process::Command::new(&prog)
+        .args(&argv)
+        .output()
+        .expect("the shim should launch")
+        .status
+        .code()
+        .unwrap_or(-1);
+
+    assert_ne!(
+        code,
+        0,
+        "LiNix launches scoop as `{launch}` and a command that fails came back 0.\n\
+         which::which resolved {} (PATHEXT has no .PS1), and `cmd /C` does not propagate the\n\
+         child's exit code — measured on this host, a failing `scoop install` exits 0 through\n\
+         that branch and 1 through the `.ps1` branch windows_shim_wrap already implements.\n\
+         A `.ps1` shim exists at {}. Prefer it, or every scoop verdict is decided by\n\
+         string-matching stdout.",
         resolved.display(),
         ps1.display(),
     );
+
+    // And the control for the assertion above: a command that succeeds must still say so, or
+    // "non-zero" would be satisfied by a launch that is simply broken.
+    let ok_probe: Vec<String> = ["--version".to_string()].into();
+    let (prog, argv) = linix::core::executor::effective_command("scoop", &ok_probe);
+    let ok_code = std::process::Command::new(&prog)
+        .args(&argv)
+        .output()
+        .expect("the shim should launch")
+        .status
+        .code()
+        .unwrap_or(-1);
+    assert_eq!(
+        ok_code, 0,
+        "`scoop --version` came back {ok_code} through `{launch}` — the launch is broken, so \
+         the failure above proves nothing."
+    );
+    let _ = ext;
 }
 
 /// The same question asked of every manager on the host, so the fix is not scoop-shaped.
