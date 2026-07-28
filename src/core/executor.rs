@@ -237,6 +237,25 @@ fn windows_effective_command(cmd: &str, args: &[String]) -> (String, Vec<String>
     (cmd.to_string(), args.to_vec())
 }
 
+/// How LiNix actually launches `cmd` on this platform.
+///
+/// On Windows a manager is usually a `.cmd`/`.ps1` shim that `Command::new` cannot execute at
+/// all, so the real launch goes through an interpreter. Anything that runs a manager the way
+/// LiNix runs it must come through here — including the argv-drift gate, which asks each
+/// manager about its own subcommands and was skipping every shimmed one on this platform as
+/// "its help could not be read". A gate that launches programs differently from the product is
+/// testing a different program from the one that ships.
+pub fn effective_command(cmd: &str, args: &[String]) -> (String, Vec<String>) {
+    #[cfg(windows)]
+    {
+        windows_effective_command(cmd, args)
+    }
+    #[cfg(not(windows))]
+    {
+        (cmd.to_string(), args.to_vec())
+    }
+}
+
 #[async_trait]
 impl ExecutionLayer for RawExecutor {
     async fn execute(

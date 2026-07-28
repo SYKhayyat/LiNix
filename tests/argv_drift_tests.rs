@@ -17,6 +17,15 @@
 //! Only managers actually installed here can be checked. The rest are reported as skipped, by
 //! name, because a gate that silently covers eight of fifty and prints a pass is the thing
 //! `READINESS` is about.
+//!
+//! A manager that IS installed and cannot be asked is a **failure**, not a skip. That
+//! distinction is the whole difference between a gate and a report: `scoop`, `npm`, `gem`,
+//! `pipx` and `yarn` are all on this machine and were all skipped as "its help could not be
+//! read", because this file launched them with a raw `Command` while LiNix launches them
+//! through an interpreter — they are `.cmd`/`.ps1` shims and `Command::new` cannot execute one.
+//! Five installed managers, silently uncovered, in the gate written to stop exactly that.
+//! Everything here now goes through [`linix::core::executor::effective_command`], the same
+//! function the product uses.
 
 use std::collections::BTreeSet;
 use std::process::Command;
@@ -58,15 +67,15 @@ fn help_cannot_answer(program: &str) -> Option<&'static str> {
 /// So the finding is confirmed by asking the tool. `--help` is the probe because it is the one
 /// argument no package manager acts on: a live subcommand prints its help, a dead one says so.
 fn tool_rejects(program: &str, chain: &[String], tok: &str) -> Option<String> {
-    let mut cmd = Command::new(program);
-    cmd.args(chain).arg(tok).arg("--help");
-    let out = cmd.output().ok()?;
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    )
-    .to_lowercase();
+    // Through `run`, like `help_text`: a shimmed manager that cannot be launched answers
+    // nothing, and nothing contains none of the phrases below — so a raw `Command` here would
+    // silently clear every subcommand of every shimmed manager as "not rejected".
+    let args: Vec<String> = chain
+        .iter()
+        .cloned()
+        .chain([tok.to_string(), "--help".to_string()])
+        .collect();
+    let text = run(program, &args)?.to_lowercase();
     for phrase in [
         "has been removed",
         "unknown command",
@@ -115,35 +124,39 @@ fn on_path(program: &str) -> bool {
     which::which(program).is_ok()
 }
 
+/// Run a manager the way LiNix runs it.
+///
+/// `Command::new("scoop")` cannot launch anything on Windows: `scoop` is a `.ps1`/`.cmd` shim,
+/// and only an interpreter can execute it. `which::which` still finds it, so this gate said
+/// "installed" and then failed to read a word of its help — and skipped it. LiNix's own
+/// executor has always wrapped shims; the gate did not, so it launched a different program
+/// from the one that ships and covered four installed managers less than it claimed.
+fn run(program: &str, args: &[String]) -> Option<String> {
+    let (prog, argv) = linix::core::executor::effective_command(program, args);
+    let out = Command::new(prog).args(&argv).output().ok()?;
+    Some(format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    ))
+}
+
 /// The manager's own help for a subcommand chain, or None if it could not be asked.
 fn help_text(program: &str, chain: &[String]) -> Option<String> {
     for flag in ["--help", "help", "-h"] {
-        let mut cmd = Command::new(program);
-        cmd.args(chain);
-        if flag == "help" {
-            // `go help`, `mix help` — the verb form, which some tools use exclusively.
-            let mut c2 = Command::new(program);
-            c2.arg("help");
-            c2.args(chain);
-            if let Ok(out) = c2.output() {
-                let text = format!(
-                    "{}{}",
-                    String::from_utf8_lossy(&out.stdout),
-                    String::from_utf8_lossy(&out.stderr)
-                );
-                if text.len() > 40 {
-                    return Some(text.to_lowercase());
-                }
-            }
-            continue;
-        }
-        cmd.arg(flag);
-        if let Ok(out) = cmd.output() {
-            let text = format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
+        // `go help`, `mix help` — the verb form, which some tools use exclusively.
+        let args: Vec<String> = if flag == "help" {
+            std::iter::once("help".to_string())
+                .chain(chain.iter().cloned())
+                .collect()
+        } else {
+            chain
+                .iter()
+                .cloned()
+                .chain(std::iter::once(flag.to_string()))
+                .collect()
+        };
+        if let Some(text) = run(program, &args) {
             // A help page is long. A one-line "unknown flag" is not, and must not be mistaken
             // for one that simply does not mention our subcommand.
             if text.len() > 40 {
@@ -215,6 +228,7 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
     );
 
     let mut drifted: Vec<String> = Vec::new();
+    let mut unreadable: Vec<String> = Vec::new();
     let mut checked: BTreeSet<String> = BTreeSet::new();
     let mut skipped: BTreeSet<String> = BTreeSet::new();
 
@@ -240,8 +254,13 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
                 continue;
             }
             let Some(help) = help_text(program, &chain) else {
-                skipped.insert(format!(
-                    "{} {} (its help could not be read)",
+                // NOT a skip. The program is on this machine — `on_path` said so above — so
+                // an unreadable help is this gate failing to ask, not the manager
+                // declining to answer, and every subcommand behind it goes unchecked while
+                // the run still reports a pass. On Windows that was `scoop`, `npm`, `gem` and
+                // `pipx`: four installed managers, silently uncovered.
+                unreadable.push(format!(
+                    "{} {} — installed, but this gate could not read its help",
                     program,
                     chain.join(" ")
                 ));
@@ -278,6 +297,13 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
         eprintln!("  skipped: {s}");
     }
 
+    assert!(
+        unreadable.is_empty(),
+        "these managers are installed here and this gate could not ask them anything, so every          subcommand LiNix runs on them is unverified:
+  {}",
+        unreadable.join("
+  ")
+    );
     assert!(
         drifted.is_empty(),
         "these subcommands no longer exist in the tool LiNix runs them on:\n  {}",
