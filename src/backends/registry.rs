@@ -1380,7 +1380,10 @@ fn register_pixi(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.remove_args = vec!["global".into(), "uninstall".into()];
     cfg.list_args = vec!["global".into(), "list".into()];
     cfg.search_args = vec!["search".into()];
-    cfg.upgrade_args = vec!["global".into(), "upgrade-all".into()];
+    // `global upgrade-all` was removed upstream; pixi 0.73 answers it with "This command has
+    // been removed, please use `pixi global update` instead". A plan-smoke passed it the whole
+    // time, because constructing an argv proves nothing about whether the argv exists.
+    cfg.upgrade_args = vec!["global".into(), "update".into()];
     let core = Arc::new(GenericBackendCore {
         name: "pixi".into(),
         executor: executor.duplicate(),
