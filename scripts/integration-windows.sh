@@ -120,6 +120,16 @@ answers() {
 # reaching its own decision — and reading them as "correctly refused" is how a macOS run
 # where nothing executed still printed passes.
 never_ran() { [ "$1" = 127 ] || [ "$1" = 126 ] || [ "$1" = 124 ]; }
+# Refuse to audit a set that collapsed. A set-containment audit over an EMPTY set passes
+# without examining anything: the `for` runs zero times, the "untouched" string stays empty,
+# and the check reports full coverage. Measured under a do-nothing `linix` stub, the audit
+# printed "0 in --help ... 0 registered" and PASSed both of its meta-checks.
+#
+# The floor detects collapse, not coverage. A real registry is 48 backends on Windows and 56
+# on Ubuntu, and a real `--help` carries ~55 subcommands; anything in single figures means the
+# program under test did not answer, and an audit of an answer nobody gave proves nothing.
+too_few_to_audit() { [ "$2" -lt "$1" ]; }
+
 nok() {
     desc="$1"; shift
     "$@" >/tmp/itw.out 2>&1; rc=$?
@@ -908,7 +918,12 @@ for be in $ALL_BACKENDS; do
     grep -qx "$be" "$LEDGER/be-smoke.u"        && continue
     UNTOUCHED_BE="$UNTOUCHED_BE $be"
 done
-if [ -n "$UNTOUCHED_BE" ]; then
+BE_COUNT=$(echo $ALL_BACKENDS | wc -w)
+if too_few_to_audit 10 "$BE_COUNT"; then
+    FAILC=$((FAILC + 1))
+    FAILED_NAMES="$FAILED_NAMES\n    - coverage: the registry came back empty ($BE_COUNT backend(s)) — nothing was audited"
+    echo "  FAIL  the registry enumerated $BE_COUNT backend(s); an audit over that examines nothing"
+elif [ -n "$UNTOUCHED_BE" ]; then
     FAILC=$((FAILC + 1))
     FAILED_NAMES="$FAILED_NAMES\n    - coverage: backend(s) no lifecycle and no plan-smoke touched:$UNTOUCHED_BE"
     echo "  FAIL  every registered backend is covered — untouched:$UNTOUCHED_BE"
@@ -936,7 +951,12 @@ for c in $HELP_CMDS; do
 done
 echo "        subcommands: $(echo $HELP_CMDS | wc -w) in --help, \
 $(grep -c . "$LEDGER/cmd-real.u") executed, $(echo $EXEMPT_CMDS | wc -w) exempt"
-if [ -n "$UNTOUCHED_CMD" ]; then
+CMD_COUNT=$(echo $HELP_CMDS | wc -w)
+if too_few_to_audit 20 "$CMD_COUNT"; then
+    FAILC=$((FAILC + 1))
+    FAILED_NAMES="$FAILED_NAMES\n    - coverage: --help listed $CMD_COUNT subcommand(s) — nothing was audited"
+    echo "  FAIL  --help listed $CMD_COUNT subcommand(s); an audit over that examines nothing"
+elif [ -n "$UNTOUCHED_CMD" ]; then
     FAILC=$((FAILC + 1))
     FAILED_NAMES="$FAILED_NAMES\n    - coverage: subcommand(s) only ever reached via --help:$UNTOUCHED_CMD"
     echo "  FAIL  every subcommand is executed — only --help'd:$UNTOUCHED_CMD"

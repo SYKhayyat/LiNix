@@ -193,6 +193,53 @@ else
     echo "== subcommands invoked vs subcommands that exist: SKIPPED (set LINIX_BIN to a built binary)"
 fi
 
+# The coverage audit's floor. Both harnesses take `ALL_BACKENDS` and `HELP_CMDS` from the
+# program under test and then assert set-containment — and a `for` over an empty list runs
+# zero times, leaves the "untouched" string empty, and PASSes. Measured under a do-nothing
+# stub: the audit printed "0 in --help … 0 registered" and passed both meta-checks. An audit
+# that enumerates nothing scoring perfect coverage is the exact shape of every finding in this
+# file, applied to the thing that was supposed to find them.
+echo "== a collapsed registry cannot pass the coverage audit"
+for _src in $SOURCES; do
+    TOTAL=$((TOTAL + 1))
+    _body="$(lift too_few_to_audit "$_src")"
+    if [ -z "$_body" ]; then
+        echo "  BAD   $(basename "$_src") has no too_few_to_audit(): its coverage audit has no floor"
+        BAD=$((BAD + 1))
+        continue
+    fi
+    eval "$_body"
+    # 0 and 1 are collapse; a real registry is 48 on Windows and 56 on Ubuntu, and a real
+    # `--help` is ~55 subcommands. Both directions, so a floor of zero cannot pass this.
+    if too_few_to_audit 10 0 && too_few_to_audit 10 1 && ! too_few_to_audit 10 48; then
+        echo "  ok    $(basename "$_src") refuses to audit a registry that came back empty"
+    else
+        echo "  BAD   $(basename "$_src") too_few_to_audit() does not tell collapse from a real registry"
+        BAD=$((BAD + 1))
+    fi
+done
+
+# The mutation gate's own collapse case. `grep -c` prints `0` AND exits 1 when it matches
+# nothing, so `COUNT=$(grep -c … || echo 0)` captured the two-line string "0\n0". Both of the
+# gate's guards then died with "integer expected", `[` returning an error took the else branch
+# of each `if`, and the script fell through to its success message — reporting ok, exiting 0,
+# in exactly the total-collapse case the guards exist to catch. A gate that cannot fail is the
+# thing this whole file is about.
+echo "== the mutation gate fails when the harness produced nothing at all"
+TOTAL=$((TOTAL + 1))
+_mg="$(dirname "$0")/harness-mutation-test.sh"
+_silent="$(mktemp -d)/silent-harness.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$_silent"
+chmod +x "$_silent"
+if bash "$_mg" "$_silent" --check >/tmp/mg.out 2>&1; then
+    echo "  BAD   the mutation gate passed a harness that emitted no checks at all:"
+    sed -n 's/^/        /p' /tmp/mg.out | tail -5
+    BAD=$((BAD + 1))
+else
+    echo "  ok    a harness that emits no checks fails the mutation gate"
+fi
+rm -rf "$(dirname "$_silent")"
+
 # The register's own arithmetic. Two files tracked one number by hand and disagreed four ways
 # at once — `decisions.md` said 109, 107 and 104 in three places, `SPEC.md` said 107. Counting
 # is the fix; checking the count on every push is what stops it coming back.

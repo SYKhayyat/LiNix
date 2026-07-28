@@ -25,7 +25,7 @@ HARNESS="${1:-scripts/integration-windows.sh}"
 case "$HARNESS" in --*) HARNESS="scripts/integration-windows.sh" ;; esac
 CHECK=""
 for a in "$@"; do [ "$a" = "--check" ] && CHECK=1; done
-BUDGET="${SURVIVOR_BUDGET:-88}"
+BUDGET="${SURVIVOR_BUDGET:-86}"
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
@@ -45,8 +45,24 @@ echo "== running $HARNESS against a do-nothing linix"
 LINIX="$STUB" bash "$HARNESS" > "$WORK/out.txt" 2>&1
 echo "   harness exit: $?"
 
-SURVIVORS=$(grep -c "  PASS  " "$WORK/out.txt" 2>/dev/null || echo 0)
-CAUGHT=$(grep -c "  FAIL  " "$WORK/out.txt" 2>/dev/null || echo 0)
+# `grep -c` prints `0` and ALSO exits 1 when it matches nothing, so `$( … || echo 0 )` ran
+# both halves and captured the two-line string "0\n0". Every `[ "$X" -eq … ]` below then died
+# with "integer expected", `[` returning an error took the else branch, and this script fell
+# through to its success message — in exactly the total-collapse case the guards exist for.
+# Assign first, default on failure: one integer, always.
+SURVIVORS=$(grep -c "  PASS  " "$WORK/out.txt" 2>/dev/null) || SURVIVORS=0
+CAUGHT=$(grep -c "  FAIL  " "$WORK/out.txt" 2>/dev/null) || CAUGHT=0
+
+# And a guard that does not depend on the counters being right, because the counters are what
+# went wrong. A number that is not a number is a broken gate, not a zero.
+for _n in "$SURVIVORS" "$CAUGHT"; do
+    case "$_n" in
+        ''|*[!0-9]*)
+            echo " FAILED: counted '$_n', which is not a number. The gate cannot judge this run."
+            exit 2
+            ;;
+    esac
+done
 
 echo "   $CAUGHT check(s) caught the do-nothing binary"
 echo "   $SURVIVORS check(s) passed anyway — each of those examined nothing the stub broke"
@@ -57,6 +73,14 @@ grep "  PASS  " "$WORK/out.txt" | sed 's/^  PASS  /   /' | sort
 if [ -z "$CHECK" ]; then exit 0; fi
 
 echo
+# Told apart on purpose. "Nothing caught it" is a harness full of weak checks; "nothing ran"
+# is a harness that died before its first check, and reporting the second as the first sends
+# whoever reads this looking for assertions to strengthen in a run that had none.
+if [ "$((SURVIVORS + CAUGHT))" -eq 0 ]; then
+    echo " FAILED: the harness emitted no checks at all — it did not run, or it died first."
+    echo "         Its output is above; this gate can say nothing about checks that never ran."
+    exit 1
+fi
 if [ "$CAUGHT" -eq 0 ]; then
     echo " FAILED: not one check noticed that LiNix did nothing at all."
     exit 1
