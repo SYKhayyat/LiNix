@@ -281,6 +281,46 @@ else
 fi
 rm -rf "$(dirname "$_silent")"
 
+# Gate parity: a local gate weaker than CI is a local GO that CI turns into a NO-GO, found
+# after the push instead of before it. E3/E4 was one instance (`cargo fmt` informational
+# locally, fatal in CI); the class is that three files list the gates and nobody diffs them.
+#
+# Derived, not listed. Every `scripts/*.sh` that ci.yml runs must be named by BOTH release
+# scripts, so a gate added to CI tomorrow fails this until it is added locally too — which is
+# the only version of this check that does not go stale the day it is written.
+echo "== every gate CI runs is also run by the local release scripts"
+_ci=".github/workflows/ci.yml"
+_here="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -f "$_here/$_ci" ]; then
+    _gates="$(grep -oE 'scripts/[a-z-]+\.sh' "$_here/$_ci" | sort -u)"
+    _n=0
+    for _g in $_gates; do _n=$((_n + 1)); done
+    TOTAL=$((TOTAL + 1))
+    if [ "$_n" -lt 2 ]; then
+        # The G2 shape again: an audit over an empty list passes without examining anything.
+        echo "  BAD   found $_n gate script(s) in ci.yml — this check has stopped matching it"
+        BAD=$((BAD + 1))
+    else
+        _missing=""
+        for _rc in scripts/release-check.sh scripts/release-check.ps1; do
+            for _g in $_gates; do
+                grep -q "$(basename "$_g")" "$_here/$_rc" 2>/dev/null && continue
+                _missing="$_missing\n        $(basename "$_rc") never runs $(basename "$_g")"
+            done
+        done
+        if [ -z "$_missing" ]; then
+            echo "  ok    both release scripts run all $_n gate script(s) CI runs"
+        else
+            echo "  BAD   a local gate is weaker than CI:"
+            printf "%b\n" "$_missing"
+            BAD=$((BAD + 1))
+        fi
+    fi
+else
+    echo "  BAD   no $_ci to diff the local gates against"
+    TOTAL=$((TOTAL + 1)); BAD=$((BAD + 1))
+fi
+
 # The register's own arithmetic. Two files tracked one number by hand and disagreed four ways
 # at once — `decisions.md` said 109, 107 and 104 in three places, `SPEC.md` said 107. Counting
 # is the fix; checking the count on every push is what stops it coming back.

@@ -91,6 +91,18 @@ if ($null -eq $bashForPredicates) {
     if ($LASTEXITCODE -eq 0) { Pass "harness predicates" } else { Fail "harness predicates FAILED" }
 }
 
+# The same asymmetry one gate over: CI runs the mutation gate on every push and neither release
+# script ran it. A harness is trustworthy because its checks can go red, not because they are
+# green, and this is the only thing that measures that.
+Write-Host "-> scripts/harness-mutation-test.sh --check"
+$bashForMutation = Find-Bash
+if ($null -eq $bashForMutation) {
+    Fail "no real bash found (install Git for Windows): cannot run the mutation gate"
+} else {
+    & $bashForMutation "scripts/harness-mutation-test.sh" "--check"
+    if ($LASTEXITCODE -eq 0) { Pass "harness mutation budget" } else { Fail "harness mutation budget EXCEEDED - checks that examine nothing" }
+}
+
 # ------------------------------------------------------------------ 2. integration
 if ($SkipIntegration) {
     Info "-SkipIntegration: skipped the native Windows sweep (hermetic gates only)"

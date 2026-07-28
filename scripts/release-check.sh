@@ -51,6 +51,22 @@ echo "-> cargo build --release"
 if cargo build --release; then pass "release build succeeds"
 else fail "release build FAILED"; fi
 
+# CI runs both of these and this script ran neither, so a local GO could still be a CI NO-GO —
+# the same asymmetry E3/E4 found in `cargo fmt`, one file over. release-check.ps1 runs the
+# predicates; parity between the two release scripts is asserted by harness-logic-test.sh
+# itself, from ci.yml, so a gate added to CI fails until it is added here too.
+echo "-> scripts/harness-logic-test.sh"
+if LINIX_BIN="$REPO_ROOT/target/release/linix" bash scripts/harness-logic-test.sh; then
+    pass "harness predicates"
+else fail "harness predicates FAILED"; fi
+
+# A harness is trustworthy because its checks can go red, not because they are green. This
+# runs them against a `linix` that does nothing and fails if too many still pass.
+echo "-> scripts/harness-mutation-test.sh --check"
+if bash scripts/harness-mutation-test.sh --check; then
+    pass "harness mutation budget"
+else fail "harness mutation budget EXCEEDED — checks that examine nothing"; fi
+
 # ------------------------------------------------------------------ 2. integration
 if [ "$SKIP_DOCKER" = "1" ]; then
     info "SKIP_DOCKER=1 — skipped the real integration matrix (hermetic gates only)"

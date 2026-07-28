@@ -22,9 +22,21 @@
 set -u
 
 HARNESS="${1:-scripts/integration-windows.sh}"
-case "$HARNESS" in --*) HARNESS="scripts/integration-windows.sh" ;; esac
+case "$HARNESS" in
+    --*) HARNESS="scripts/integration-windows.sh" ;;
+    *)   [ "$#" -gt 0 ] && shift ;;
+esac
 CHECK=""
-for a in "$@"; do [ "$a" = "--check" ] && CHECK=1; done
+# Anything left over is handed to the harness. Without this the container harness could not be
+# mutation-tested at all: it requires `<backend> [package]` and exits on usage before its first
+# check, so the gate measured nothing and the four-distro suite ran every push unexamined.
+HARNESS_ARGS=""
+for a in "$@"; do
+    case "$a" in
+        --check) CHECK=1 ;;
+        *)       HARNESS_ARGS="$HARNESS_ARGS $a" ;;
+    esac
+done
 BUDGET="${SURVIVOR_BUDGET:-86}"
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
@@ -41,8 +53,11 @@ exit 0
 STUBEOF
 chmod +x "$STUB"
 
-echo "== running $HARNESS against a do-nothing linix"
-LINIX="$STUB" bash "$HARNESS" > "$WORK/out.txt" 2>&1
+echo "== running $HARNESS$HARNESS_ARGS against a do-nothing linix"
+# Unquoted on purpose: the harness's own arguments, split as it would receive them on a
+# command line.
+# shellcheck disable=SC2086
+LINIX="$STUB" bash "$HARNESS" $HARNESS_ARGS > "$WORK/out.txt" 2>&1
 echo "   harness exit: $?"
 
 # `grep -c` prints `0` and ALSO exits 1 when it matches nothing, so `$( … || echo 0 )` ran

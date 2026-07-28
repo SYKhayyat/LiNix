@@ -142,6 +142,21 @@ jobs:
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
 
+    # The container harness runs four distros on every push and nothing ever asked whether its
+    # checks CAN fail — the mutation gate was pointed only at the Windows harness. It runs here,
+    # on the ubuntu leg, because this is where the image already exists: a job of its own would
+    # rebuild it for no other reason. The budget is the measured number (92 survivors of 136
+    # checks, 44 caught) and is a ratchet like the other one — it may fall, never rise.
+    - name: Can this harness's checks fail?
+      if: matrix.distro == 'ubuntu'
+      run: |
+        docker run --rm --entrypoint bash \
+          -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
+          -v "$PWD/scripts/harness-mutation-test.sh:/src/scripts/harness-mutation-test.sh:ro" \
+          -e SURVIVOR_BUDGET=92 \
+          linix-it-ubuntu -c \
+          "cd /src && bash scripts/harness-mutation-test.sh docker/integration/run-in-container.sh --check ${{ matrix.backend }} ${{ matrix.pkg }}"
+
   # The source-building images. `tools` is where 18 of the ecosystem managers get a real
   # install → list → remove — the widest live coverage this repo has — and `gentoo` runs
   # Portage in SMOKE_ONLY. Both are too slow to gate every push, so they run nightly and on
