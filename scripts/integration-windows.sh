@@ -145,6 +145,14 @@ grep_ok() {
 }
 soft() { SOFTC=$((SOFTC + 1)); echo "  soft  $1"; }
 
+# A failure recorded directly, when the thing that failed was not a single command call.
+hard() { FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
+    - $1"; echo "  FAIL  $1"; }
+# A refusal is its own outcome. LiNix worked correctly and declined on purpose (exit 3), and
+# scoring that as a failure — or as "ecosystem variance" — says the opposite of what happened.
+refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (LiNix refused, on purpose)"; }
+
+
 # Is NAME runnable right now? `command -v` alone answers from the shell's hash table
 # and keeps naming a path after the file is gone, so a removal check written with it
 # cannot fail. A fresh `sh` has an empty cache and has to look.
@@ -569,20 +577,53 @@ lifecycle() {
     _prepath="$(path_of "$cbin")"
     [ -n "$_prepath" ] && soft "$be: $cbin already resolves to $_prepath — the removal check compares against that, not against absence"
 
-    if ! lx -y install "$be:$cpkg$copts" >/tmp/itw-life.out 2>&1; then
-        soft "$be: install of $cpkg failed (ecosystem/network variance) — the checks after it did not run"
-        tail -4 /tmp/itw-life.out | sed 's/^/        | /'
-        echo "$be" >> "$LEDGER/be-life-partial"
-        # A pinned name a manager could not install stays in the manifest on purpose —
-        # but every later install syncs the WHOLE model, so leaving it made every backend
-        # after this one fail with THIS one's error, and the log showed the same stack
-        # trace under nine different names. Clear it, as section 6 clears its own.
+    # A canary left declared makes every LATER backend sync the whole model and fail with THIS
+    # one's error — nine identical stack traces under nine different names. So each attempt
+    # below clears its own line before the next thing runs.
+    _clear_canary() {
+        $TO "$LINIX" unmanage "$be:$cpkg" >/dev/null 2>&1 || true
         _imp="$LINIX_CONFIG_DIR/modules/imperative.txt"
         if [ -f "$_imp" ]; then
             grep -v -F "$be:$cpkg" "$_imp" > "$_imp.tmp" 2>/dev/null
             mv "$_imp.tmp" "$_imp"
         fi
-        return 0
+    }
+
+    lx -y install "$be:$cpkg$copts" >/tmp/itw-life.out 2>&1
+    lrc=$?
+    if [ "$lrc" -ne 0 ]; then
+        # This used to soften ANY install failure to "ecosystem/network variance" and skip the
+        # backend's whole remaining lifecycle. In one observed run it fired four times and not
+        # once was it the network: `github` was LiNix correctly refusing, `helm` and `luarocks`
+        # were real argv defects. Coverage disappeared exactly where the product was broken and
+        # the run still reported success. Classify instead of assuming.
+        if [ "$lrc" -eq 124 ]; then
+            soft "$be: install of $cpkg hit the build time limit — not a verdict on the backend"
+            tail -4 /tmp/itw-life.out | sed 's/^/        | /'
+            echo "$be" >> "$LEDGER/be-life-partial"; _clear_canary; return 0
+        fi
+        # 3 is a refusal (U21): LiNix declined on purpose and was right to.
+        if [ "$lrc" -eq 3 ]; then
+            refused "$be: install of $cpkg"
+            tail -3 /tmp/itw-life.out | sed 's/^/        | /'
+            echo "$be" >> "$LEDGER/be-life-partial"; _clear_canary; return 0
+        fi
+        # Transience is a claim that a second attempt could differ, so it is tested by making
+        # one. A held lock or a dropped mirror passes now; a wrong name, a bad argv or a broken
+        # build fails identically forever.
+        echo "        (first attempt failed; retrying once to tell a flake from a defect)"
+        _clear_canary
+        lx -y install "$be:$cpkg$copts" >/tmp/itw-life2.out 2>&1
+        lrc2=$?
+        if [ "$lrc2" -ne 0 ]; then
+            hard "$be: install of $cpkg failed twice — a defect, not ecosystem variance (rc=$lrc, $lrc2)"
+            tail -6 /tmp/itw-life2.out | sed 's/^/        | /'
+            echo "$be" >> "$LEDGER/be-life-partial"; _clear_canary; return 1
+        fi
+        # It really was transient, so the lifecycle CONTINUES rather than being skipped —
+        # skipping it is how list, PATH, remove and gone-from-list went unrun for every backend
+        # whose install was flaky.
+        soft "$be: install of $cpkg failed once and succeeded on retry — transient"
     fi
     PASS=$((PASS + 1)); echo "  PASS  $be installed $cpkg for real"
     echo "$be" >> "$LEDGER/be-life"
@@ -750,9 +791,14 @@ ok "completions powershell generates a script" lx completions powershell
 ok "profile list" lx profile list
 ok "profile active" lx profile active
 ok "profile create scaffolds one" lx profile create HarnessProfile
+# "scaffolds" is a claim about the disk and the line above only reads an exit code. Found by
+# running this harness against a `linix` that does nothing and exits 0: both `create` checks
+# and both `show` checks passed, because not one of the four ever looked at a file.
+ok "profile create wrote the profile" test -f "$LINIX_CONFIG_DIR/profiles/HarnessProfile"
 ok "profile show reads it back" lx profile show HarnessProfile
 ok "module list" lx module list
 ok "module create scaffolds one" lx module create harness-module
+ok "module create wrote the module" test -f "$LINIX_CONFIG_DIR/modules/harness-module.txt"
 ok "module show reads it back" lx module show harness-module
 ok "snapshot list" lx snapshot list
 ok "schedule list" lx schedule list
