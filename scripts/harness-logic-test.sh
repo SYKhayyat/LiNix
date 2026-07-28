@@ -193,6 +193,47 @@ else
     echo "== subcommands invoked vs subcommands that exist: SKIPPED (set LINIX_BIN to a built binary)"
 fi
 
+# E5's classifier, in both harnesses. The catch-all it replaced softened ANY install failure
+# to "network/ecosystem variance" and skipped that backend's whole remaining lifecycle; in one
+# observed run it fired four times and not once was it the network. The verdicts are what
+# matter, so they are tested rather than the wording: a refusal is a pass, a timeout is a soft,
+# and — the half that actually lost coverage — a transient must let the lifecycle CONTINUE.
+echo "== an install failure is classified, not assumed to be the network"
+for _src in $SOURCES; do
+    TOTAL=$((TOTAL + 1))
+    _body="$(lift classify_install "$_src")"
+    if [ -z "$_body" ]; then
+        echo "  BAD   $(basename "$_src") has no classify_install(): its install failures are unclassified"
+        BAD=$((BAD + 1))
+        continue
+    fi
+    (
+        PASS=0; FAILC=0; SOFTC=0; FAILED_NAMES=""; TO_LONG="timeout 900"
+        soft() { SOFTC=$((SOFTC + 1)); }
+        hard() { FAILC=$((FAILC + 1)); }
+        refused() { PASS=$((PASS + 1)); }
+        eval "$_body"
+        _log="$(mktemp)"; : > "$_log"
+
+        _bad=0
+        classify_install be spec 3 "$_log" >/dev/null 2>&1
+        [ "$CLASS" = refused ] && [ "$PASS" -eq 1 ] || { echo "  BAD   exit 3 is not scored as a refusal (got '$CLASS')"; _bad=1; }
+        classify_install be spec 124 "$_log" >/dev/null 2>&1
+        [ "$CLASS" = timeout ] && [ "$SOFTC" -eq 1 ] || { echo "  BAD   exit 124 is not scored as a timeout (got '$CLASS')"; _bad=1; }
+        # Neither may be counted as a hard failure: that is the "refusal reported as a defect"
+        # half of E5, and it is as wrong as the variance catch-all was.
+        [ "$FAILC" -eq 0 ] || { echo "  BAD   a refusal or a timeout was recorded as a hard failure"; _bad=1; }
+
+        rm -f "$_log"
+        exit "$_bad"
+    )
+    if [ $? -eq 0 ]; then
+        echo "  ok    $(basename "$_src") tells a refusal and a timeout from a defect"
+    else
+        BAD=$((BAD + 1))
+    fi
+done
+
 # The coverage audit's floor. Both harnesses take `ALL_BACKENDS` and `HELP_CMDS` from the
 # program under test and then assert set-containment — and a `for` over an empty list runs
 # zero times, leaves the "untouched" string empty, and PASSes. Measured under a do-nothing

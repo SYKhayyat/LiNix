@@ -173,6 +173,54 @@ hard() { FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
 # scoring that as a failure — or as "ecosystem variance" — says the opposite of what happened.
 refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (LiNix refused, on purpose)"; }
 
+# Why an install failed — a question, not an assumption (E5).
+#
+# Both harnesses used to soften ANY install failure to "network/ecosystem variance" and skip
+# that backend's whole remaining lifecycle. In one observed run it fired four times and not
+# once was it the network: one was LiNix correctly refusing, two were real argv defects
+# (`helm`, `luarocks`). Coverage disappeared exactly where the product was broken, and the run
+# still reported success.
+#
+# Sets CLASS to one of:
+#   refused    LiNix declined on purpose (exit 3, U21). Its own outcome, not a failure.
+#   timeout    the build ran out of clock (124). The harness's limit, not a verdict.
+#   transient  failed once, succeeded on retry. The caller CONTINUES the lifecycle — skipping
+#              it is how list, PATH, remove and gone-from-list went unrun for every backend
+#              whose install was flaky.
+#   defect     failed twice, identically. Hard.
+#
+# Twinned with scripts/integration-windows.sh's, and lifted out of both by
+# scripts/harness-logic-test.sh so the two cannot drift into disagreeing about a verdict.
+# $5 runs between the two attempts, to clear a declaration the failed attempt left behind.
+classify_install() { # be  install-spec  rc  logfile  [cleanup]
+    _ci_be="$1"; _ci_spec="$2"; _ci_rc="$3"; _ci_log="$4"; _ci_clear="${5:-:}"
+    if [ "$_ci_rc" -eq 124 ]; then
+        soft "$_ci_be: install of $_ci_spec hit the ${TO_LONG##* }s build limit — not a verdict on the backend"
+        tail -4 "$_ci_log" | sed 's/^/        | /'
+        CLASS=timeout; return 0
+    fi
+    if [ "$_ci_rc" -eq 3 ]; then
+        refused "$_ci_be: install of $_ci_spec"
+        tail -3 "$_ci_log" | sed 's/^/        | /'
+        CLASS=refused; return 0
+    fi
+    # Transience is a claim that a second attempt could differ, so it is tested by making one.
+    # A held lock or a dropped mirror passes now; a wrong name, a bad argv or a broken build
+    # fails identically forever. This needs no new signal out of LiNix and cannot be satisfied
+    # by a phrasing that merely sounds like the network.
+    echo "        (first attempt failed; retrying once to tell a flake from a defect)"
+    $_ci_clear
+    lx_slow -y install "$_ci_spec" >/tmp/life2.out 2>&1
+    _ci_rc2=$?
+    if [ "$_ci_rc2" -ne 0 ]; then
+        hard "$_ci_be: install of $_ci_spec failed twice — a defect, not ecosystem variance (rc=$_ci_rc, $_ci_rc2)"
+        tail -6 /tmp/life2.out | sed 's/^/        | /'
+        CLASS=defect; return 0
+    fi
+    soft "$_ci_be: install of $_ci_spec failed once and succeeded on retry — transient"
+    CLASS=transient
+}
+
 
 # SMOKE_ONLY: this image's package manager builds from source (Portage), so a real
 # install→remove lifecycle costs hours. Everything that does not mutate the machine
@@ -724,49 +772,13 @@ lifecycle() {
     lx_slow -y install "$be:$cpkg$copts" >/tmp/life.out 2>&1
     lrc=$?
     if [ "$lrc" -ne 0 ]; then
-        # This used to soften ANY install failure to "ecosystem/network variance" and skip the
-        # backend's whole remaining lifecycle. In one observed run it fired four times and not
-        # once was it the network: one was LiNix correctly refusing, two were real argv defects
-        # (helm, luarocks). So coverage disappeared exactly where the product was broken, and
-        # the run still reported success. Classify instead of assuming.
-        #
-        # 124 is `timeout`'s. A build that ran out of clock is the harness's own limit, not a
-        # verdict on the backend.
-        if [ "$lrc" -eq 124 ]; then
-            soft "$be: install of $cpkg hit the ${TO_LONG##* }s build limit — not a verdict on the backend"
-            tail -4 /tmp/life.out | sed 's/^/        | /'
-            echo "$be" >> "$LEDGER/be-life-partial"
-            undeclare_canary "$be:$cpkg"
-            return 0
-        fi
-        # 3 is a refusal (U21): LiNix declined on purpose and was right to. Not a failure, and
-        # emphatically not variance.
-        if [ "$lrc" -eq 3 ]; then
-            refused "$be: install of $cpkg"
-            tail -3 /tmp/life.out | sed 's/^/        | /'
-            echo "$be" >> "$LEDGER/be-life-partial"
-            undeclare_canary "$be:$cpkg"
-            return 0
-        fi
-        # Transience is a claim that a second attempt could differ, so it is tested by making
-        # one. A held lock or a dropped mirror passes now; a wrong name, a bad argv or a broken
-        # build fails identically forever. This needs no new signal out of LiNix and cannot be
-        # satisfied by a phrasing that merely sounds like the network.
-        echo "        (first attempt failed; retrying once to tell a flake from a defect)"
-        undeclare_canary "$be:$cpkg"
-        lx_slow -y install "$be:$cpkg$copts" >/tmp/life2.out 2>&1
-        lrc2=$?
-        if [ "$lrc2" -ne 0 ]; then
-            hard "$be: install of $cpkg failed twice — a defect, not ecosystem variance (rc=$lrc, $lrc2)"
-            tail -6 /tmp/life2.out | sed 's/^/        | /'
-            echo "$be" >> "$LEDGER/be-life-partial"
-            undeclare_canary "$be:$cpkg"
-            return 1
-        fi
-        # It really was transient. The lifecycle continues from here rather than being skipped:
-        # skipping it is how list, PATH, remove and gone-from-list went unrun for every backend
-        # whose install was flaky.
-        soft "$be: install of $cpkg failed once and succeeded on retry — transient"
+        _canary_clear() { undeclare_canary "$be:$cpkg"; }
+        classify_install "$be" "$be:$cpkg$copts" "$lrc" /tmp/life.out _canary_clear
+        case "$CLASS" in
+            transient) : ;;   # the retry succeeded; the lifecycle below is answerable
+            defect)    echo "$be" >> "$LEDGER/be-life-partial"; undeclare_canary "$be:$cpkg"; return 1 ;;
+            *)         echo "$be" >> "$LEDGER/be-life-partial"; undeclare_canary "$be:$cpkg"; return 0 ;;
+        esac
     fi
     PASS=$((PASS + 1)); echo "  PASS  $be installed $cpkg for real"
     echo "$be" >> "$LEDGER/be-life"

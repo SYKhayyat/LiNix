@@ -162,6 +162,52 @@ hard() { FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
 # scoring that as a failure — or as "ecosystem variance" — says the opposite of what happened.
 refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (LiNix refused, on purpose)"; }
 
+# Why an install failed — a question, not an assumption (E5).
+#
+# Both harnesses used to soften ANY install failure to "network/ecosystem variance" and skip
+# that backend's whole remaining lifecycle. In one observed run it fired four times and not
+# once was it the network: one was LiNix correctly refusing, two were real argv defects
+# (`helm`, `luarocks`). Coverage disappeared exactly where the product was broken, and the run
+# still reported success.
+#
+# Sets CLASS to one of:
+#   refused    LiNix declined on purpose (exit 3, U21). Its own outcome, not a failure.
+#   timeout    the build ran out of time (124). Not a verdict on the backend.
+#   transient  failed once, succeeded on retry. The caller CONTINUES the lifecycle — skipping
+#              it is how list, PATH, remove and gone-from-list went unrun for every backend
+#              whose install was flaky.
+#   defect     failed twice, identically. Hard.
+#
+# $5 runs between the two attempts, for a caller that must clear a declaration the failed
+# attempt left behind. Pass `:` when there is nothing to undo.
+classify_install() { # be  install-spec  rc  logfile  [cleanup]
+    _ci_be="$1"; _ci_spec="$2"; _ci_rc="$3"; _ci_log="$4"; _ci_clear="${5:-:}"
+    if [ "$_ci_rc" -eq 124 ]; then
+        soft "$_ci_be: install of $_ci_spec hit the build time limit — not a verdict on the backend"
+        tail -4 "$_ci_log" | sed 's/^/        | /'
+        CLASS=timeout; return 0
+    fi
+    if [ "$_ci_rc" -eq 3 ]; then
+        refused "$_ci_be: install of $_ci_spec"
+        tail -3 "$_ci_log" | sed 's/^/        | /'
+        CLASS=refused; return 0
+    fi
+    # Transience is a claim that a second attempt could differ, so it is tested by making one.
+    # A held lock or a dropped mirror passes now; a wrong name, a bad argv or a broken build
+    # fails identically forever.
+    echo "        (first attempt failed; retrying once to tell a flake from a defect)"
+    $_ci_clear
+    lx -y install "$_ci_spec" >/tmp/itw-retry.out 2>&1
+    _ci_rc2=$?
+    if [ "$_ci_rc2" -ne 0 ]; then
+        hard "$_ci_be: install of $_ci_spec failed twice — a defect, not ecosystem variance (rc=$_ci_rc, $_ci_rc2)"
+        tail -6 /tmp/itw-retry.out | sed 's/^/        | /'
+        CLASS=defect; return 0
+    fi
+    soft "$_ci_be: install of $_ci_spec failed once and succeeded on retry — transient"
+    CLASS=transient
+}
+
 
 # Is NAME runnable right now? `command -v` alone answers from the shell's hash table
 # and keeps naming a path after the file is gone, so a removal check written with it
@@ -234,7 +280,18 @@ echo "[5] Real lifecycle"
 PKG_WAS_HERE=""
 on_path "$PKG" && PKG_WAS_HERE=1
 
-if ok "install $BACKEND:$PKG" lx -y install "$BACKEND:$PKG"; then
+> /tmp/itw-life0.out
+lx -y install "$BACKEND:$PKG" >/tmp/itw-life0.out 2>&1
+IRC=$?
+CLASS=installed
+[ "$IRC" -ne 0 ] && classify_install "$BACKEND" "$BACKEND:$PKG" "$IRC" /tmp/itw-life0.out
+
+# `transient` continues: the retry inside `classify_install` succeeded, so the package IS on
+# the machine and every check below it is answerable. This is the half of E5 that mattered —
+# the old catch-all skipped list, PATH, second-sync, unmanage and uninstall for any backend
+# whose install hiccuped once.
+if [ "$CLASS" = installed ] || [ "$CLASS" = transient ]; then
+    [ "$CLASS" = installed ] && { PASS=$((PASS + 1)); echo "  PASS  install $BACKEND:$PKG"; }
     echo "$BACKEND" >> "$LEDGER/be-life"
     grep_ok "list shows $PKG" "$PKG" lx list
     ok "$PKG binary is on PATH" on_path "$PKG"
@@ -267,8 +324,10 @@ if ok "install $BACKEND:$PKG" lx -y install "$BACKEND:$PKG"; then
         fi
     fi
 else
+    # A refusal, a timeout or a defect. `classify_install` has already recorded the verdict
+    # with the right severity; the lifecycle below it is genuinely unanswerable, because
+    # nothing was installed to look at.
     echo "$BACKEND" >> "$LEDGER/be-life-partial"
-    soft "install failed (network/ecosystem variance) — skipping the rest of the lifecycle"
 fi
 
 # --- 6. Negative path ------------------------------------------------------
@@ -602,38 +661,14 @@ lifecycle() {
     lx -y install "$be:$cpkg$copts" >/tmp/itw-life.out 2>&1
     lrc=$?
     if [ "$lrc" -ne 0 ]; then
-        # This used to soften ANY install failure to "ecosystem/network variance" and skip the
-        # backend's whole remaining lifecycle. In one observed run it fired four times and not
-        # once was it the network: `github` was LiNix correctly refusing, `helm` and `luarocks`
-        # were real argv defects. Coverage disappeared exactly where the product was broken and
-        # the run still reported success. Classify instead of assuming.
-        if [ "$lrc" -eq 124 ]; then
-            soft "$be: install of $cpkg hit the build time limit — not a verdict on the backend"
-            tail -4 /tmp/itw-life.out | sed 's/^/        | /'
-            echo "$be" >> "$LEDGER/be-life-partial"; _clear_canary; return 0
-        fi
-        # 3 is a refusal (U21): LiNix declined on purpose and was right to.
-        if [ "$lrc" -eq 3 ]; then
-            refused "$be: install of $cpkg"
-            tail -3 /tmp/itw-life.out | sed 's/^/        | /'
-            echo "$be" >> "$LEDGER/be-life-partial"; _clear_canary; return 0
-        fi
-        # Transience is a claim that a second attempt could differ, so it is tested by making
-        # one. A held lock or a dropped mirror passes now; a wrong name, a bad argv or a broken
-        # build fails identically forever.
-        echo "        (first attempt failed; retrying once to tell a flake from a defect)"
-        _clear_canary
-        lx -y install "$be:$cpkg$copts" >/tmp/itw-life2.out 2>&1
-        lrc2=$?
-        if [ "$lrc2" -ne 0 ]; then
-            hard "$be: install of $cpkg failed twice — a defect, not ecosystem variance (rc=$lrc, $lrc2)"
-            tail -6 /tmp/itw-life2.out | sed 's/^/        | /'
-            echo "$be" >> "$LEDGER/be-life-partial"; _clear_canary; return 1
-        fi
-        # It really was transient, so the lifecycle CONTINUES rather than being skipped —
-        # skipping it is how list, PATH, remove and gone-from-list went unrun for every backend
-        # whose install was flaky.
-        soft "$be: install of $cpkg failed once and succeeded on retry — transient"
+        # One classifier, shared with section 5. Two copies of this decision is how section 5
+        # kept the catch-all for a month after section 12 lost it.
+        classify_install "$be" "$be:$cpkg$copts" "$lrc" /tmp/itw-life.out _clear_canary
+        case "$CLASS" in
+            transient) : ;;   # the retry succeeded; the lifecycle below is answerable
+            defect)    echo "$be" >> "$LEDGER/be-life-partial"; _clear_canary; return 1 ;;
+            *)         echo "$be" >> "$LEDGER/be-life-partial"; _clear_canary; return 0 ;;
+        esac
     fi
     PASS=$((PASS + 1)); echo "  PASS  $be installed $cpkg for real"
     echo "$be" >> "$LEDGER/be-life"
