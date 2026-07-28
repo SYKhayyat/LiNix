@@ -18,8 +18,20 @@ const SELECTS_ARTIFACTS: &[&str] = &["github"];
 /// download rules — HTTPS, a checksum, and the two flags that relax them — mean something.
 ///
 /// Every other backend asks a package manager, which has its own signed index; `@allow_http`
-/// or `@unverified` there would be a line that does nothing.
+/// there would be a line that does nothing.
 const DOWNLOADS: &[&str] = &["web", "appimage", "github"];
+
+/// Managers that verify a signature themselves, and the argument that turns it off (Q5).
+///
+/// `@unverified` is not only about LiNix's own `@sha256`: a manager can be the thing doing the
+/// checking, and then the line still needs a way to say "not here". helm v4 verifies plugin
+/// signatures by default and **refuses outright** a source that cannot carry one — a git URL
+/// has no `.prov` file — so without this there is no declaration that installs a helm plugin
+/// at all.
+///
+/// `allow_http` deliberately has no such table. The two flags never imply each other (SEC2),
+/// and helm's plain-HTTP switch addresses OCI registries LiNix does not reach.
+const VERIFIES_ITSELF: &[(&str, &str)] = &[("helm", "--verify=false")];
 
 /// Backends that publish one artifact in several version streams.
 const HAS_CHANNELS: &[&str] = &["snap", "flatpak"];
@@ -67,6 +79,30 @@ pub fn downloads(backend: &str) -> bool {
 
 pub fn download_backends() -> String {
     DOWNLOADS.join(", ")
+}
+
+/// The argument that turns off `backend`'s own signature check, if it has one.
+pub fn unverified_arg(backend: &str) -> Option<&'static str> {
+    VERIFIES_ITSELF
+        .iter()
+        .find(|(b, _)| *b == backend)
+        .map(|(_, a)| *a)
+}
+
+/// Whether `@unverified` says anything on `backend` — LiNix's checksum, or the manager's own
+/// signature check. Wider than [`downloads`], which is `@allow_http`'s set alone.
+pub fn accepts_unverified(backend: &str) -> bool {
+    downloads(backend) || unverified_arg(backend).is_some()
+}
+
+/// The backends `@unverified` is legal on, for a refusal that names them.
+pub fn unverified_backends() -> String {
+    DOWNLOADS
+        .iter()
+        .copied()
+        .chain(VERIFIES_ITSELF.iter().map(|(b, _)| *b))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub fn has_channels(backend: &str) -> bool {

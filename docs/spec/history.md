@@ -14,6 +14,42 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-28 — Q5: `@unverified` reaches past the backends that download
+
+**E11 was not an argv defect, and the review's proposed fix would have been a security
+regression.** helm v4 verifies a plugin's signature before installing it, and a git URL — which
+has no `.prov` beside it — is refused outright, so no declaration could install a helm plugin at
+all. Adding `--verify=false` to helm's install command would have turned verification off for
+every plugin every user installs, which is the global switch `@unverified` exists as a per-line
+flag to prevent.
+
+**Ruled by the owner (Q5): widen the flag.** `@unverified` now means *nothing vouched for these
+bytes* rather than *LiNix skipped its checksum*, and it is legal wherever something otherwise
+would have checked. On `helm:` it becomes `--verify=false`. Recorded in `decisions.md` (Q5),
+`target-state.md` II.2 and `why.md` V.94, in the same commit as the code.
+
+Four properties, each a test written and watched failing first:
+
+- **`@allow_http` did not follow.** The two flags were checked in one loop, which is what made
+  them look like a pair; they are separate branches now. helm's plain-HTTP switch addresses OCI
+  registries LiNix does not reach, so `@allow_http` on `helm:` is still refused, and its hint
+  must not name helm.
+- **Per line, still.** An install batch whose specs disagree becomes two commands.
+- **The advice is actionable.** helm names `--verify=false`, an argv no declaration can write;
+  LiNix appends the flag that can go on the line.
+- **`does not support verification` is Permanent**, not transient — a source that carries no
+  signature never grows one. helm had no `ExitPolicy` at all before this.
+
+**Measured, not assumed** (helm v4.2.3, 2026-07-28): the refusal is in
+`tests/fixtures/helm/plugin-install-unverifiable-source.txt`. Both harnesses' helm canary moved
+from `databus23/helm-diff` to `jkroepke/helm-secrets`, because helm-diff needs `pwsh` in a
+post-install hook and this host has none — it installs the plugin and *then* exits 1, so the
+check would have reported someone else's weather. helm-secrets fails without the flag and
+succeeds with it, which is the property the canary is for.
+
+One thing the flag does not get: the argv-drift gate scores subcommands, not options, so
+`--verify=false` is verified by the measurement above and by nothing automated.
+
 ## Session 2026-07-27 (last) — working `docs/BUILDER.md`, and four owner rulings
 
 `docs/READINESS-2026-07-27.md` indexed 36 defects (`E1`-`E34`) and `docs/BUILDER.md` turned them
@@ -78,7 +114,7 @@ changes (Docker is in WSL; `run-in-container.sh` was edited for E2 and E5 and th
 unexercised); the 23 commits are unpushed so CI has seen none of it; `search` (2m41s) and the
 `check` rollup (10.4s) have no budget; `opam`, `spack` and `emerge` still have no captured
 parser fixture; and whether `@unverified` should extend to helm is a Part II question that needs
-a ruling.
+a ruling. *(That last one was ruled the next day — Q5, at the top of this file.)*
 
 ## Session 2026-07-27 (later) — a production-readiness review, and the blind spot every gate shared
 

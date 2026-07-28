@@ -1,3 +1,4 @@
+use crate::backends::artifact::capability;
 use crate::core::{
     BackendCore, CommandExecutor, Enumerable, Error, Installable, MetadataProvider, Package,
     PackageSpec, Queryable, RepoManager, Result, Searchable, Upgradable,
@@ -297,46 +298,20 @@ impl Installable for GenericInstallable {
             return Ok(());
         }
 
-        let mut final_args: Vec<String> = self.core.config.install_args.clone();
-        let mut names: Vec<String> = Vec::with_capacity(specs.len());
-        // A `Flag` pin puts an option *after* the name it pins (`gem install jq -v 1.6`), so
-        // the terminator cannot precede it — behind `--` that `-v` is a package.
-        let mut trailing_flags = false;
-        for spec in specs {
-            if let Some(key) = &self.core.config.install_source_option {
-                names.push(install_source(&self.core.name, spec, key)?);
-                continue;
-            }
-            // Honor an exact version pin (reproducible/locked installs) using the
-            // backend's native syntax, when both a pin syntax and a concrete version exist.
-            match (spec.options.get("version"), &self.core.config.version_pin) {
-                (Some(ver), Some(pin)) if is_concrete_version(ver) => {
-                    trailing_flags |= matches!(pin, VersionPin::Flag(_));
-                    names.extend(pin.apply(&spec.name, ver));
-                }
-                _ => names.push(spec.name.clone()),
+        // A signature check this manager does is turned off by one line at a time, so specs
+        // that disagree cannot share a command: the flag on a batch would hand one line's
+        // opt-out to the next, which is the global switch `@unverified` is per-line to avoid.
+        if capability::unverified_arg(&self.core.name).is_some() {
+            let (opted, rest): (Vec<PackageSpec>, Vec<PackageSpec>) = specs
+                .iter()
+                .cloned()
+                .partition(crate::core::download::is_unverified);
+            if !opted.is_empty() && !rest.is_empty() {
+                self.install_group(&opted, sudo).await?;
+                return self.install_group(&rest, sudo).await;
             }
         }
-        if trailing_flags {
-            final_args.extend(names);
-        } else {
-            crate::core::argv::push_names(&mut final_args, self.core.binary(), names);
-        }
-
-        let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
-
-        if self.core.config.is_exclusive {
-            self.core
-                .executor
-                .run_exclusive(self.core.binary(), self.core.binary(), &arg_refs, sudo)
-                .await?;
-        } else {
-            self.core
-                .executor
-                .run(self.core.binary(), &arg_refs, sudo)
-                .await?;
-        }
-        Ok(())
+        self.install_group(specs, sudo).await
     }
 
     async fn remove(&self, names: &[String], sudo: bool) -> Result<()> {
@@ -368,6 +343,86 @@ impl Installable for GenericInstallable {
 }
 
 impl GenericInstallable {
+    /// One install command for specs that agree about verification.
+    async fn install_group(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
+        if specs.is_empty() {
+            return Ok(());
+        }
+
+        let mut final_args: Vec<String> = self.core.config.install_args.clone();
+        let mut names: Vec<String> = Vec::with_capacity(specs.len());
+        // A `Flag` pin puts an option *after* the name it pins (`gem install jq -v 1.6`), so
+        // the terminator cannot precede it — behind `--` that `-v` is a package.
+        let mut trailing_flags = false;
+        for spec in specs {
+            if let Some(key) = &self.core.config.install_source_option {
+                names.push(install_source(&self.core.name, spec, key)?);
+                continue;
+            }
+            // Honor an exact version pin (reproducible/locked installs) using the
+            // backend's native syntax, when both a pin syntax and a concrete version exist.
+            match (spec.options.get("version"), &self.core.config.version_pin) {
+                (Some(ver), Some(pin)) if is_concrete_version(ver) => {
+                    trailing_flags |= matches!(pin, VersionPin::Flag(_));
+                    names.extend(pin.apply(&spec.name, ver));
+                }
+                _ => names.push(spec.name.clone()),
+            }
+        }
+        // Before the terminator: behind `--` this is a package name.
+        let opting_out = specs.iter().any(crate::core::download::is_unverified);
+        if opting_out {
+            if let Some(arg) = capability::unverified_arg(&self.core.name) {
+                final_args.push(arg.to_string());
+            }
+        }
+
+        if trailing_flags {
+            final_args.extend(names);
+        } else {
+            crate::core::argv::push_names(&mut final_args, self.core.binary(), names);
+        }
+
+        let arg_refs: Vec<&str> = final_args.iter().map(|s| s.as_str()).collect();
+
+        let outcome = if self.core.config.is_exclusive {
+            self.core
+                .executor
+                .run_exclusive(self.core.binary(), self.core.binary(), &arg_refs, sudo)
+                .await
+        } else {
+            self.core
+                .executor
+                .run(self.core.binary(), &arg_refs, sudo)
+                .await
+        };
+        outcome.map_err(|e| self.explain_verification(e, opting_out))?;
+        Ok(())
+    }
+
+    /// A manager that refuses an unsignable source names its own flag, which no declaration
+    /// can write. Point at the one that can.
+    fn explain_verification(&self, e: crate::core::Error, opting_out: bool) -> crate::core::Error {
+        if opting_out || capability::unverified_arg(&self.core.name).is_none() {
+            return e;
+        }
+        let crate::core::Error::CommandFailed { message, retry } = e else {
+            return e;
+        };
+        if !message.to_lowercase().contains("verification") {
+            return crate::core::Error::CommandFailed { message, retry };
+        }
+        crate::core::Error::CommandFailed {
+            message: format!(
+                "{}\n  {} checks a signature before it installs, and this source carries \
+                 none. Add `@unverified` to the line to accept it as-is.",
+                message.trim_end(),
+                self.core.name
+            ),
+            retry,
+        }
+    }
+
     async fn run_removal(&self, mut args: Vec<String>, names: &[String], sudo: bool) -> Result<()> {
         if names.is_empty() {
             return Ok(());
@@ -1107,6 +1162,141 @@ mod tests {
                 .any(|c| c.contains("plugin uninstall") && c.contains("diff")),
             "remove must send the name: {:?}",
             calls
+        );
+    }
+
+    /// Q5. `@unverified` is what turns off a verification the *manager* does, and it reaches
+    /// the command line as that manager's own flag.
+    #[tokio::test]
+    async fn unverified_becomes_the_managers_own_opt_out_flag() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let inst = GenericInstallable {
+            core: Arc::new(source_option_core(mock.clone(), vfs)),
+        };
+
+        let url = "https://github.com/databus23/helm-diff";
+        inst.install(
+            &[spec_with("diff", &[("url", url), ("unverified", "true")])],
+            false,
+        )
+        .await
+        .unwrap();
+
+        let calls = mock.get_calls().await;
+        assert!(
+            calls.iter().any(|c| c.contains("--verify=false")),
+            "the opt-out must reach the command: {:?}",
+            calls
+        );
+    }
+
+    /// The default is untouched: a line that did not ask keeps the manager's verification on.
+    #[tokio::test]
+    async fn a_line_that_did_not_ask_keeps_verification_on() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let inst = GenericInstallable {
+            core: Arc::new(source_option_core(mock.clone(), vfs)),
+        };
+
+        inst.install(
+            &[spec_with(
+                "diff",
+                &[("url", "https://github.com/databus23/helm-diff")],
+            )],
+            false,
+        )
+        .await
+        .unwrap();
+
+        let calls = mock.get_calls().await;
+        assert!(
+            !calls.iter().any(|c| c.contains("--verify")),
+            "verification must stay on unless the line said otherwise: {:?}",
+            calls
+        );
+    }
+
+    /// One package's opt-out is not another's. A batch where the specs disagree has to become
+    /// two commands, or the flag silently covers a line that never asked for it — which is the
+    /// global-switch failure `@unverified` is per-line to avoid.
+    #[tokio::test]
+    async fn a_mixed_batch_does_not_hand_one_lines_opt_out_to_another() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let inst = GenericInstallable {
+            core: Arc::new(source_option_core(mock.clone(), vfs)),
+        };
+
+        inst.install(
+            &[
+                spec_with("diff", &[("url", "https://example.com/helm-diff")]),
+                spec_with(
+                    "secrets",
+                    &[
+                        ("url", "https://example.com/helm-secrets"),
+                        ("unverified", "true"),
+                    ],
+                ),
+            ],
+            false,
+        )
+        .await
+        .unwrap();
+
+        let calls = mock.get_calls().await;
+        let with_flag: Vec<&String> = calls
+            .iter()
+            .filter(|c| c.contains("--verify=false"))
+            .collect();
+        assert_eq!(
+            with_flag.len(),
+            1,
+            "exactly one of the two asked to skip verification: {:?}",
+            calls
+        );
+        assert!(
+            with_flag[0].contains("helm-secrets") && !with_flag[0].contains("helm-diff"),
+            "the flag went out with the wrong package: {:?}",
+            calls
+        );
+    }
+
+    /// helm's own failure names `--verify=false`, an argv no declaration can write. The advice
+    /// a user can act on is the flag on the line.
+    #[tokio::test]
+    async fn a_verification_failure_names_the_flag_a_declaration_can_write() {
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "helm plugin install -- https://github.com/databus23/helm-diff",
+            Err(crate::core::Error::CommandFailed {
+                message: "Error: plugin source does not support verification. Use --verify=false \
+                          to skip verification"
+                    .into(),
+                retry: crate::core::Retryability::Permanent,
+            }),
+        );
+        let inst = GenericInstallable {
+            core: Arc::new(source_option_core(mock.clone(), vfs)),
+        };
+
+        let msg = inst
+            .install(
+                &[spec_with(
+                    "diff",
+                    &[("url", "https://github.com/databus23/helm-diff")],
+                )],
+                false,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.contains("@unverified"),
+            "the failure must name the flag the line can carry: {}",
+            msg
         );
     }
 

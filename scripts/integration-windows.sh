@@ -448,7 +448,7 @@ canary() {
         luarocks) echo "luafilesystem||full|" ;;
         # A helm plugin installs under the user's own helm data dir and reaches PATH
         # through nothing — it is run as `helm diff` — so no binary is asserted.
-        helm)     echo "diff||full||@url=https://github.com/databus23/helm-diff" ;;
+        helm)     echo "secrets||full||@url=https://github.com/jkroepke/helm-secrets,unverified" ;;
         krew)     echo "ns|kubectl-ns|full|" ;;
         *)        echo "" ;;
     esac
@@ -701,7 +701,7 @@ smoke_pkg() {
         emerge)   echo "app-misc/jq" ;;
         vscode)   echo "ms-python.python" ;;
         flatpak)  echo "org.freedesktop.Platform" ;;
-        helm)     echo "diff@url=https://github.com/databus23/helm-diff" ;;
+        helm)     echo "secrets@url=https://github.com/jkroepke/helm-secrets,unverified" ;;
         web)      echo "https://example.invalid/tool.tar.gz" ;;
         appimage) echo "https://example.invalid/tool.AppImage" ;;
         *)        echo "$PKG" ;;

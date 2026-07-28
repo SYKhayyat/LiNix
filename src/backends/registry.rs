@@ -1462,7 +1462,9 @@ fn register_helm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.list_args = vec!["plugin".into(), "list".into()];
     let core = Arc::new(GenericBackendCore {
         name: "helm".into(),
-        executor: executor.duplicate(),
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::helm()),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "helm"),

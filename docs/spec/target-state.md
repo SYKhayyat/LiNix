@@ -198,7 +198,7 @@ take the else branch — the silent-wrongness this rule closes.
 | `channel` | one version stream. Backends that publish channels only |
 | `sha256` | checksum the resolved artifact must match. Not with `@asset=all` — one hash cannot verify several files |
 | `allow_http` | bare flag: this URL may be `http://`. Downloading backends only (SEC2) |
-| `unverified` | bare flag: no `@sha256` required on this line. Downloading backends only. **Never implied by `allow_http`** — over HTTP the checksum is the only thing left (SEC2) |
+| `unverified` | bare flag: nothing vouches for the bytes on this line. Legal wherever something otherwise would — LiNix's own `@sha256` on a downloading backend, and a manager that verifies a signature itself (`helm`). Refused where the manager's signed index answers anyway. **Never implied by `allow_http`** — over HTTP the checksum is the only thing left (SEC2) |
 | `health` | `port:N`, or a command that must exit 0. A failure **restores the pre-change snapshot** (XIII.5) |
 | `url` | where a `helm:` plugin is installed from. **Required on every `helm:` line** (U39) |
 

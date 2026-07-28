@@ -1,4 +1,4 @@
-# The decision register — all 113, and every one of them ruled
+# The decision register — all 114, and every one of them ruled
 
 **One file, six features. Zero open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -18,7 +18,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **111** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **112** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Nothing here is open.** All 113 are ruled: **111 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**Nothing here is open.** All 114 are ruled: **112 ANSWERED, 2 PARKED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -237,6 +237,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q2** | Is a package manager you never installed "critical"? — RULED: no, absent is its own state. | 2026-07-27 |
 | **Q3** | What does a mistyped command exit with? — RULED: 1, and the table stays at four codes. | 2026-07-27 |
 | **Q4** | Are unverified backends labelled "experimental"? — RULED: **no.** They are tested, and nothing ships until they are. | 2026-07-27 |
+| **Q5** | Does `@unverified` reach past the backends that download? — RULED: **yes** — a manager that verifies a signature itself (`helm`) takes it too. | 2026-07-28 |
 
 ---
 
@@ -3193,5 +3194,49 @@ What follows from it, and all of it is binding:
 
 This one is a rule about the project, not about the program, so it has no Part II entry. Its
 reason is in **V.93**, and the coverage it demands is tracked in `plan.md`.
+
+---
+
+## Q5
+
+**Status: ANSWERED.**
+
+**Q5 — Does `@unverified` reach past the backends that download?** **RULED 2026-07-28 (owner):
+YES — add it.**
+
+The flag was scoped to `web:`, `appimage:` and `github:`, the three places LiNix itself fetches a
+URL and runs the result, and II.2 said so: *"Downloading backends only."* helm broke the framing.
+helm v4 verifies a plugin's signature before installing it, and a source that cannot carry one —
+a git URL, which has no `.prov` beside it — is **refused outright**, not warned about:
+
+```
+Error: plugin source does not support verification. Use --verify=false to skip verification
+```
+
+So `helm:diff@url=https://github.com/databus23/helm-diff` could not be installed by any
+declaration, and the readiness review's reading of this as an argv defect (E11) was wrong: helm
+was correct and LiNix had no way to say the one thing that would let it through.
+
+The rejected repair was to put `--verify=false` in helm's install command. That is a global
+switch — verification off for every helm plugin, every user, invisibly — which is the failure
+`@unverified` is a per-line flag to prevent. A helm-specific flag (`@no_signature`) was also
+rejected: two spellings of one decision.
+
+What is binding:
+
+1. **`@unverified` is legal on `helm:`**, where it becomes `--verify=false`. Without it, helm's
+   verification stands and LiNix passes no flag.
+2. **The rule is "something would otherwise have checked"**, not "LiNix downloads". II.2's option
+   table says that now, and `backends/artifact/capability.rs` holds the one table both the
+   grammar and the install path read.
+3. **`@allow_http` did not follow.** The two never imply each other (SEC2); helm's plain-HTTP
+   switch is for OCI registries LiNix does not reach, so `@allow_http` on `helm:` stays refused.
+4. **Per line, still.** An install batch whose specs disagree about the flag becomes two
+   commands — a shared command would hand one line's opt-out to a line that never asked.
+5. **Visible after the fact.** `status` lists it for as long as the package is installed, and the
+   heading says *installed with* rather than *downloaded with*, since for helm LiNix downloads
+   nothing.
+
+The rule is in **II.2**; the reason is in **V.94**.
 
 ---

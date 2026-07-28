@@ -1,5 +1,24 @@
 use crate::verbs::prelude::*;
 
+/// SEC2: once an install finishes, a verified package and an unverified one are
+/// indistinguishable on disk. `@unverified` is only a real decision if it stays visible after
+/// the fact, so what it bought is listed for as long as the package is installed.
+///
+/// The heading avoids "downloaded": since Q5 the flag also covers a manager that verifies a
+/// signature itself (`helm`), where LiNix downloaded nothing.
+const UNVERIFIED_HEADING: &str = "! installed with `@unverified` — nothing checked the bytes";
+
+/// Every managed package whose install skipped a verification. Reads the recorded option and
+/// never the backend, so a backend that gains the flag is listed without editing this.
+pub(crate) fn unverified_packages(state: &linix::core::StateRegistry) -> Vec<(String, String)> {
+    state
+        .packages
+        .iter()
+        .filter(|p| p.options.get("unverified").is_some_and(|v| v == "true"))
+        .map(|p| (p.backend.clone(), p.name.clone()))
+        .collect()
+}
+
 pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
@@ -24,17 +43,9 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
     let report = changes.generate_report();
     let unmanaged = app.installed_but_unmanaged().await.unwrap_or_default();
 
-    // SEC2: once an install finishes, a checksummed binary and an unchecksummed one are
-    // indistinguishable on disk. `@unverified` is only a real decision if it stays visible
-    // after the fact, so what it bought is listed here for as long as the package is here.
     let unverified: Vec<(String, String)> = {
         let state = app.state.lock().await;
-        state
-            .packages
-            .iter()
-            .filter(|p| p.options.get("unverified").is_some_and(|v| v == "true"))
-            .map(|p| (p.backend.clone(), p.name.clone()))
-            .collect()
+        unverified_packages(&state)
     };
 
     if json {
@@ -90,10 +101,7 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
         }
     }
     if !unverified.is_empty() {
-        println!(
-            "! downloaded with `@unverified` — nothing checked the bytes ({}):",
-            unverified.len()
-        );
+        println!("{} ({}):", UNVERIFIED_HEADING, unverified.len());
         for (backend, name) in &unverified {
             println!("    {}:{}", backend, name);
         }
@@ -836,4 +844,69 @@ pub(crate) async fn handle_unlock(app: &App, names: &[String], list: bool) -> Re
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod unverified_tests {
+    use super::*;
+    use linix::core::state::ManagedPackage;
+
+    fn pkg(backend: &str, name: &str, unverified: bool) -> ManagedPackage {
+        ManagedPackage {
+            name: name.into(),
+            backend: backend.into(),
+            version: None,
+            installed_at: 0,
+            expires_at: None,
+            options: if unverified {
+                [("unverified".to_string(), "true".to_string())]
+                    .into_iter()
+                    .collect()
+            } else {
+                Default::default()
+            },
+            source: None,
+            is_transient: false,
+            session_id: None,
+        }
+    }
+
+    /// Every backend the flag is legal on stays visible after the install — the download ones
+    /// and, since Q5, the manager that verifies a signature itself.
+    #[test]
+    fn what_skipped_a_check_is_listed_whichever_backend_skipped_it() {
+        let state = linix::core::StateRegistry {
+            packages: vec![
+                pkg("helm", "diff", true),
+                pkg("github", "sharkdp/fd", true),
+                pkg("web", "https://example.com/tool", true),
+                pkg("appimage", "https://example.com/x.AppImage", true),
+                pkg("apt", "curl", false),
+                pkg("github", "BurntSushi/ripgrep", false),
+            ],
+            ..Default::default()
+        };
+
+        let listed = unverified_packages(&state);
+        assert_eq!(
+            listed,
+            vec![
+                ("helm".to_string(), "diff".to_string()),
+                ("github".to_string(), "sharkdp/fd".to_string()),
+                ("web".to_string(), "https://example.com/tool".to_string()),
+                (
+                    "appimage".to_string(),
+                    "https://example.com/x.AppImage".to_string()
+                ),
+            ],
+            "the listing must name exactly what skipped a check"
+        );
+    }
+
+    /// helm downloads nothing LiNix can see, so the heading cannot claim it did.
+    #[test]
+    fn the_heading_does_not_claim_linix_downloaded_it() {
+        assert!(!UNVERIFIED_HEADING.contains("downloaded"));
+        assert!(UNVERIFIED_HEADING.contains("@unverified"));
+    }
 }

@@ -1261,22 +1261,36 @@ pub fn validate_artifact_options(
         }
     }
 
-    // SEC2's two opt-outs relax a rule that only exists where LiNix downloads and executes.
-    // On any other backend they are a line that does nothing, which II.2 refuses.
-    for key in ["allow_http", "unverified"] {
-        if !o.contains(key) {
-            continue;
-        }
-        let Some(backend) = backend else { continue };
-        if !capability::downloads(backend) {
+    // SEC2's two opt-outs each relax a rule, and the rules have different reach — which is why
+    // they are checked apart and never as a pair. Plain HTTP is only a question where LiNix
+    // itself fetches a URL; a checksum is a question wherever *something* vouches for the
+    // bytes, and a manager can be that something (Q5). On a backend that verifies nothing
+    // either flag is a line that does nothing, which II.2 refuses.
+    if o.contains("allow_http") {
+        if let Some(backend) = backend.filter(|b| !capability::downloads(b)) {
             return Err(GrammarError::new(
                 origin.clone(),
-                format!("`@{}` is not an option on `{}`", key, backend),
+                format!("`@allow_http` is not an option on `{}`", backend),
             )
             .with_hint(format!(
                 "it relaxes a rule about downloading and running a file, which only {} do. \
-                 Everywhere else the package manager's own index answers for the bytes.",
+                 Everywhere else the package manager chose the URL, not the declaration.",
                 capability::download_backends()
+            )));
+        }
+    }
+
+    if o.contains("unverified") {
+        if let Some(backend) = backend.filter(|b| !capability::accepts_unverified(b)) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`@unverified` is not an option on `{}`", backend),
+            )
+            .with_hint(format!(
+                "it says nothing checked the bytes, which is only a decision where something \
+                 would have: {}. Everywhere else the package manager's own signed index \
+                 answers for them.",
+                capability::unverified_backends()
             )));
         }
     }
@@ -2028,7 +2042,7 @@ mod artifact_option_tests {
     fn known(name: &str) -> bool {
         matches!(
             name,
-            "apt" | "github" | "snap" | "flatpak" | "appimage" | "helm"
+            "apt" | "cargo" | "web" | "github" | "snap" | "flatpak" | "appimage" | "helm"
         )
     }
 
@@ -2192,6 +2206,55 @@ mod artifact_option_tests {
         // No prefix means `priority` decides the backend, so the grammar cannot know yet
         // whether `formats` is legal — refusing here would break every unprefixed line.
         assert!(p("fd@formats=deb").is_ok());
+    }
+
+    /// Q5. `@unverified` is legal wherever *something* verifies bytes and the line can say
+    /// "not here" — LiNix's own checksum on a download, and helm's plugin signature.
+    #[test]
+    fn unverified_is_legal_on_every_backend_that_verifies_something() {
+        for line in [
+            "web:https://example.com/tool@unverified",
+            "appimage:https://example.com/x.AppImage@unverified",
+            "github:sharkdp/fd@unverified",
+            "helm:diff@url=https://github.com/databus23/helm-diff,unverified",
+        ] {
+            assert_eq!(
+                options_of(line).one("unverified"),
+                Some("true"),
+                "`@unverified` was not accepted on `{}`",
+                line
+            );
+        }
+    }
+
+    /// The other half of Q5: it stays refused where nothing verifies anything, because there
+    /// the flag would be a line that does nothing (II.2).
+    #[test]
+    fn unverified_on_a_manager_with_its_own_signed_index_is_still_refused() {
+        for line in ["apt:curl@unverified", "cargo:ripgrep@unverified"] {
+            let err = p(line).unwrap_err();
+            let msg = format!("{}", err);
+            assert!(msg.contains("not an option on"), "{} → {}", line, msg);
+            assert!(
+                err.hint.unwrap().contains("helm"),
+                "the refusal must list helm now that it takes the flag: {}",
+                line
+            );
+        }
+    }
+
+    /// The two flags do not travel together (SEC2). helm downloads a plugin over HTTPS from a
+    /// git host; `--plain-http` is for OCI registries LiNix does not address, so accepting
+    /// `@unverified` there did not also make `@allow_http` mean anything.
+    #[test]
+    fn allow_http_did_not_follow_unverified_onto_helm() {
+        let err = p("helm:diff@url=https://github.com/databus23/helm-diff,allow_http").unwrap_err();
+        let msg = format!("{}", err);
+        assert!(msg.contains("not an option on `helm`"), "{}", msg);
+        assert!(
+            !err.hint.unwrap().contains("helm"),
+            "http's refusal must not name helm as a backend that takes it"
+        );
     }
 }
 

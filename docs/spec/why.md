@@ -1518,3 +1518,45 @@ cheap version was taken and the class survived: a `fmt` gate rated informational
 that softened any install failure to "ecosystem variance", an exemption list nobody validated,
 an assertion that deleted its own evidence. Each of those is a label in a different costume. The
 answer is the same one: **do the thing.**
+
+**V.94 — Why `@unverified` reaches past the backends that download.** *(Owner ruling,
+2026-07-28 — Q5.)* The flag was written for the three backends where LiNix itself fetches a URL,
+makes the result executable and puts it on `PATH`, and it read as a relaxation of *LiNix's*
+checksum rule. That framing turned out to be one case of a wider one: the thing being relaxed is
+not "LiNix checked the bytes", it is **"something checked the bytes"**, and a manager can be that
+something.
+
+helm v4 verifies a plugin's signature before installing it. A plugin source that cannot carry one
+— a git URL, which has no `.prov` file beside it — is not installed with a warning, it is
+**refused outright**:
+
+```
+Error: plugin source does not support verification. Use --verify=false to skip verification
+```
+
+*(Measured against helm v4.2.3 on 2026-07-28; the output is `tests/fixtures/helm/`.)* So before
+this ruling there was no declaration that installed a helm plugin from a git URL at all — and the
+one obvious repair, adding `--verify=false` to helm's install command, is the exact failure SEC2
+is built around: one edit turns signature verification off for every helm plugin every user ever
+installs, invisibly and forever. That is the global "require checksums" switch this design
+refused to have, wearing a different name.
+
+`@unverified` already meant precisely the decision being made, so it says it: on `helm:` the flag
+becomes `--verify=false`, and without it the manager's verification stands. The alternative
+considered and rejected was a helm-specific flag (`@no_signature`): two spellings of one idea, in
+a repo whose recurring failure is two of everything.
+
+Three properties survive the widening, and each is a test:
+
+1. **`allow_http` did not travel with it.** The two flags never imply each other (SEC2), and
+   they are now checked in separate branches rather than the one loop that made them look like a
+   pair. helm's plain-HTTP switch addresses OCI registries LiNix does not reach, so `@allow_http`
+   on `helm:` is still a line that does nothing, and still refused.
+2. **The opt-out stays per line.** A batch whose specs disagree becomes two commands, because a
+   flag on a shared command hands one line's decision to a line that never made it.
+3. **It stays visible afterwards.** `status` lists what skipped a check for as long as it is
+   installed — and the heading no longer says "downloaded", because for helm LiNix downloaded
+   nothing.
+
+The refusal text is the last piece. helm's own advice names `--verify=false`, an argv no
+declaration can write; LiNix now appends the flag a user can actually put on the line.

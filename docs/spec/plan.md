@@ -1130,8 +1130,11 @@ spec carries untrusted URLs and `@`-options to the filesystem with no validation
   This is the same shape as SEC1's decided escape hatch: refuse by default, and the opening is the
   user's to make explicitly. **BUILT 2026-07-21** (the owner opened the pass), in `core/download.rs`
   — one module, so the three backends cannot drift on what "verified" means. `@allow_http` and
-  `@unverified` are in II.2's option table and refused by name on any backend that does not
-  download (`capability::downloads`), because an option nobody reads is a line that does nothing.
+  `@unverified` are in II.2's option table and refused by name on any backend where they would
+  say nothing, because an option nobody reads is a line that does nothing. **Widened 2026-07-28
+  (Q5):** the two are checked apart — `@allow_http` against `capability::downloads`, `@unverified`
+  against `capability::accepts_unverified`, which also holds the managers that verify a signature
+  themselves. helm is the first, and there `@unverified` becomes `--verify=false`.
   appimage gained checksum verification, run **before** the `chmod 0755`, so an unverified file
   never exists as an executable even briefly; on a mismatch the download is deleted rather than
   left on disk. `status` lists every package installed with `@unverified`, for as long as it is

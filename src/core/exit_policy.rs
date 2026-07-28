@@ -259,6 +259,26 @@ pub fn nimble() -> ExitPolicy {
     }
 }
 
+/// Kubernetes plugins. helm v4 verifies a plugin's signature before installing it and refuses
+/// a source that cannot carry one at all, which no second attempt changes — but the source is
+/// a git host, so the network half stays worth retrying.
+pub fn helm() -> ExitPolicy {
+    ExitPolicy {
+        permanent_markers: vec![
+            "does not support verification",
+            "signature verification failed",
+            "plugin already exists",
+        ],
+        transient_markers: vec![
+            "could not resolve host",
+            "connection refused",
+            "i/o timeout",
+            "temporary failure",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,6 +417,28 @@ mod tests {
                 "nimble failure not detected: {case}"
             );
         }
+    }
+
+    const HELM_UNVERIFIABLE: &str =
+        include_str!("../../tests/fixtures/helm/plugin-install-unverifiable-source.txt");
+
+    /// A plugin source that carries no signature never grows one, so retrying is time spent
+    /// reaching the same refusal. Measured against helm v4.2.3 on 2026-07-28.
+    #[test]
+    fn helm_refusing_an_unsignable_source_is_permanent_not_transient() {
+        assert_eq!(
+            helm().retryability(b"", HELM_UNVERIFIABLE.as_bytes()),
+            Retryability::Permanent
+        );
+    }
+
+    /// The network half stays retryable: helm plugins come from a git host.
+    #[test]
+    fn helm_losing_the_network_is_worth_another_attempt() {
+        assert_eq!(
+            helm().retryability(b"", b"Error: could not resolve host github.com"),
+            Retryability::Transient
+        );
     }
 
     /// The other half, and the half that makes the check worth having: a successful command
