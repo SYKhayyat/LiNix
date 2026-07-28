@@ -14,6 +14,72 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-27 (last) — working `docs/BUILDER.md`, and four owner rulings
+
+`docs/READINESS-2026-07-27.md` indexed 36 defects (`E1`-`E34`) and `docs/BUILDER.md` turned them
+into work orders. This session worked them in tier order. **23 commits, unpushed.** Verified on
+Windows only: `cargo build --all-targets`, `cargo test` (23 binaries, 0 failures), `cargo clippy
+--all-targets --all-features -- -D warnings`, `cargo fmt -- --check`, `harness-logic-test.sh`
+35/35. Linux and macOS have compiled none of it.
+
+**Four owner rulings, taken and recorded as `Q1`-`Q4`** (a new register namespace, chosen after
+checking every other prefix for collisions — `PRODUCTION-READINESS-REVIEW.md` had reused `U1`-`U3`,
+which are real register IDs, and that document's labels are now `PR1`-`PR3`):
+
+- **Q1 — a failed install withdraws its line** when the failure can never succeed
+  (`Unresolvable`, or a `CommandFailed` the backend's policy calls `Permanent`). Read off
+  `CommandFailed` and never off `retryability()`, which also calls a refusal and a cancelled
+  prompt permanent. A line kept on purpose now names its file and `linix unmanage`. II.8, V.90.
+- **Q2 — `Absent` is its own health state.** A manager nobody installed is not critical; one
+  named in `priority` still is. The rollup and the detail view read one tally. II.8, V.91.
+- **Q3 — a usage error exits 1, every refusal exits 3.** The published four-code table stays
+  four codes. II.8, V.92.
+- **Q4 — nothing is labelled "experimental".** The owner rejected the review's central
+  recommendation, and the reason is the rule: *this codebase does things; it does not cover for
+  not doing them.* A label turns an unfinished job into a permanent disclaimer. So the coverage
+  is the work, and **missing coverage is a release blocker**. `init` keeps scaffolding every
+  manager it finds. V.93.
+
+**What the measurements corrected in the review**, each verified rather than accepted:
+
+- **E6 was not a parser bug.** `bin_dir` split `go env GOPATH` on `:` as well as `;`, so a
+  Windows drive letter was decapitated and `list` was silently empty. A second, real bug sat
+  behind it: identity came from `mod` rather than `path`, so a program in a module subdirectory
+  could never equal its own declaration.
+- **E6b was LiNix, twice.** `nimble` was listed as honouring `--`; its own help says `--` passes
+  args to the Nim compiler, so **every nimble install of a binary package failed**. And nimble
+  exits 0 on failure with no `ExitPolicy`, so LiNix called a build that produced nothing a
+  success. The harness's two FAILs were right; its PASS was the lie.
+- **E11 and E12 are not LiNix defects, and the review's suggested fixes would have made things
+  worse.** helm v4 verifies plugin signatures by default — adding `--verify=false` would have
+  disabled signature verification for every helm plugin install, against SEC2. luarocks fails
+  because this host has Lua 5.5 and luarocks.org publishes no 5.5 manifest; pinning a version
+  would install rocks for an interpreter the user does not have.
+- **E4 was Windows-only.** `release-check.sh` already rated `fmt` hard.
+
+**Three checks were built, watched passing, and found to be testing nothing.** Each is recorded
+because the pattern is the whole subject: the argv-drift gate passed with `pixi global
+upgrade-all` reintroduced (a bad `perl` edit had landed on `composer`, so the defect was never
+back); the `check health` list-probe reported scoop and winget as unable to answer `list` when
+the 20s cap and eight-way concurrency were mine and they take 1.2s alone; and the latency budget
+claimed a 5s ceiling would catch E14, then passed at 4.34s with the defect restored. The last
+one is now honest about being only a ceiling, and the property is pinned by a test that counts
+commands instead of timing them.
+
+**The mutation experiment, run for real.** A `linix` stubbed to exit 0, against the full Windows
+harness: **88 checks still passed, 30 caught it.** Most survivors are exit-code checks followed
+by an assertion that does look at the effect — that pair is correct. The ones that mattered were
+checks whose name claimed an effect with nothing after them: `profile create scaffolds one` and
+`module create scaffolds one` both passed against a binary that created no file.
+`scripts/harness-mutation-test.sh` makes it repeatable with the survivor count as a ratchet.
+
+**Still open, and named rather than implied:** the container matrix has not run against these
+changes (Docker is in WSL; `run-in-container.sh` was edited for E2 and E5 and those edits are
+unexercised); the 23 commits are unpushed so CI has seen none of it; `search` (2m41s) and the
+`check` rollup (10.4s) have no budget; `opam`, `spack` and `emerge` still have no captured
+parser fixture; and whether `@unverified` should extend to helm is a Part II question that needs
+a ruling.
+
 ## Session 2026-07-27 (later) — a production-readiness review, and the blind spot every gate shared
 
 A full read of the tree (202 files, 72,824 lines, 1,324 tests) against the running binary on
