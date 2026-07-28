@@ -363,6 +363,114 @@ async fn test_semver_constraint_resolution_logic() {
     assert_eq!(spec.options.get("version").unwrap(), ">=7.0.0");
 }
 
+/// A preview writes no manifest — the flagship bug, moved from the machine to the files.
+///
+/// `--dry-run uninstall scoop:sd` printed `remove 1` and deleted the declaration for real,
+/// leaving the package installed and undeclared: drift the next sync would act on, produced
+/// by the command that promises to do nothing. Every writer is asserted here rather than
+/// `undeclare` alone, because the flag was consulted per-verb and each verb that forgot was
+/// its own instance of the same bug.
+#[tokio::test]
+async fn a_preview_writes_no_manifest() {
+    use linix::model::Landing;
+
+    let kernel = TestKernel::new().await;
+    let manifest = kernel.tmp.path().join("modules/imperative.txt");
+
+    kernel
+        .app
+        .declare("cargo:ripgrep", None, Landing::Imperative)
+        .await
+        .expect("the fixture's own declaration must be written for real");
+    let before = std::fs::read_to_string(&manifest).unwrap();
+    assert!(before.contains("cargo:ripgrep"), "fixture wrote nothing");
+
+    let preview = kernel.previewing().await;
+
+    // `uninstall`, the reported case.
+    let planned = preview.undeclare("cargo:ripgrep").await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&manifest).unwrap(),
+        before,
+        "a preview removed the declaration"
+    );
+    assert_eq!(
+        planned.len(),
+        1,
+        "a preview that changes nothing must still say what it would have changed"
+    );
+
+    // `install`, and `uninstall --temp`, which writes an `absent:` line the same way.
+    preview
+        .declare("cargo:fd", None, Landing::Imperative)
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&manifest).unwrap(),
+        before,
+        "a preview added a declaration"
+    );
+
+    // `teleport`, which rewrites the line in place.
+    let moved = preview.retarget("ripgrep", "brew").await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&manifest).unwrap(),
+        before,
+        "a preview rewrote the declaration's backend"
+    );
+    assert_eq!(moved.len(), 1, "a preview must still report the move");
+
+    // The control: without the flag, the same call on the same fixture really does remove
+    // the line. Without this, every assertion above passes on a setup that never reached
+    // the condition.
+    kernel.app.undeclare("cargo:ripgrep").await.unwrap();
+    assert!(
+        !std::fs::read_to_string(&manifest)
+            .unwrap()
+            .contains("cargo:ripgrep"),
+        "the fixture cannot remove the line at all, so it proves nothing about the preview"
+    );
+}
+
+/// The same rule one layer down, where it is enforced: no writer reaches the disk in a
+/// preview, including the ones no verb calls today.
+///
+/// `adopt` writes a whole module through `write_module`, and it is the writer with the most
+/// to lose — it overwrites `modules/adopted.txt` entirely, so a preview that wrote would
+/// destroy the previous adoption rather than add to it.
+#[tokio::test]
+async fn a_previewing_editor_writes_no_file_at_all() {
+    use linix::config::grammar::Origin;
+    use linix::model::{Editor, Target, Writes};
+
+    let kernel = TestKernel::new().await;
+    let layout = kernel.app.config.layout();
+    let vocab = kernel.app.vocabulary().await.unwrap();
+    let facts = kernel.app.host_facts().await.unwrap();
+    let adopted = layout.modules_dir().join("adopted.txt");
+
+    Editor::new(&layout, &vocab, facts.clone(), Writes::ToDisk)
+        .write_module(
+            &Target::parse("adopted", &Origin::argument()).unwrap(),
+            "brew:jq\n",
+        )
+        .expect("the fixture's own write must reach the disk");
+    let before = std::fs::read_to_string(&adopted).unwrap();
+
+    Editor::new(&layout, &vocab, facts, Writes::Planned)
+        .write_module(
+            &Target::parse("adopted", &Origin::argument()).unwrap(),
+            "brew:something-else\n",
+        )
+        .unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&adopted).unwrap(),
+        before,
+        "a previewing editor overwrote the adopted module"
+    );
+}
+
 /// Verifies that the CommandExecutor accurately records file modifications
 /// in the Virtual File System (VFS) during dry-run sessions.
 #[tokio::test]

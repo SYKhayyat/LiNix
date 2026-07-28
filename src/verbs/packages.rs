@@ -229,6 +229,14 @@ pub(crate) async fn handle_uninstall(
         return suspend_for_session(app, packages).await;
     }
 
+    // Dry-run answers "what would this do" without touching your files or the machine. The
+    // answer is built here and not by the sync below, because the sync reads the files — and
+    // in a preview the line is still in them, so a sync-shaped report says "remove 0" about
+    // the very package the command names.
+    if app.config.dry_run {
+        return preview_uninstall(app, packages, json, temp).await;
+    }
+
     let vocab = app.vocabulary().await?;
     let layout = app.config.layout();
     let facts = linix::config::parser::HostFacts::current();
@@ -307,6 +315,78 @@ pub(crate) async fn handle_uninstall(
                 many => format!("`{}` are", many.join("`, `")),
             }
         );
+    }
+    Ok(())
+}
+
+/// What `uninstall` would do, without doing any of it.
+///
+/// The editor is in [`Writes::Planned`](linix::model::Writes) for the whole run, so the calls
+/// below report their edits and write nothing — the same code path a real uninstall takes,
+/// which is what keeps the preview and the act from drifting apart.
+async fn preview_uninstall(
+    app: &App,
+    packages: &[String],
+    json: bool,
+    temp: Option<&Option<String>>,
+) -> Result<()> {
+    let mut planned = Vec::new();
+
+    for pkg in packages {
+        if let Some(Some(dur)) = temp {
+            let at = linix::model::dated::absolute_after(chrono::Utc::now(), dur).with_context(
+                || {
+                    format!(
+                        "Invalid --temp duration '{}'. Use forms like 2h, 30m, 7d.",
+                        dur
+                    )
+                },
+            )?;
+            planned.push(serde_json::json!({
+                "action": "suspend", "package": pkg, "until": at.to_string(),
+            }));
+            continue;
+        }
+        for edit in app.undeclare(pkg).await? {
+            planned.push(serde_json::json!({
+                "action": "undeclare",
+                "package": pkg,
+                "line": edit.line,
+                "file": edit.file.display().to_string(),
+            }));
+        }
+    }
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&planned)?);
+        return Ok(());
+    }
+
+    if planned.is_empty() {
+        println!(
+            "[DRY-RUN] nothing to uninstall — {} not declared in any active file.",
+            match packages {
+                [one] => format!("`{}` is", one),
+                many => format!("`{}` are", many.join("`, `")),
+            }
+        );
+        return Ok(());
+    }
+
+    println!("[DRY-RUN] would make {} change(s):", planned.len());
+    for p in &planned {
+        match p["action"].as_str() {
+            Some("suspend") => println!(
+                "  ~ suspend {} until {}",
+                p["package"].as_str().unwrap_or(""),
+                p["until"].as_str().unwrap_or("")
+            ),
+            _ => println!(
+                "  - {}  (from {}, then removed by the sync that follows)",
+                p["line"].as_str().unwrap_or(""),
+                p["file"].as_str().unwrap_or("")
+            ),
+        }
     }
     Ok(())
 }

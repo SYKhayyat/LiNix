@@ -123,6 +123,23 @@ impl TestKernel {
         }
     }
 
+    /// The same sandbox, previewed: an `App` over these exact files with `--dry-run` set.
+    ///
+    /// A second `App` rather than a mutated one, because `config` is shared by `Arc` and
+    /// flipping the flag in place would flip it for everything already holding a clone.
+    #[allow(dead_code)]
+    pub async fn previewing(&self) -> App {
+        let mut config = (*self.app.config).clone();
+        config.dry_run = true;
+        App::new_with_executor_and_state_path(
+            config,
+            self.app.executor.duplicate(),
+            Some(self.tmp.path().join("registry.json")),
+        )
+        .await
+        .expect("Failed to bootstrap the previewing Test Kernel.")
+    }
+
     #[allow(dead_code)]
     pub async fn assert_called(&self, command_fragment: &str) {
         let calls: Vec<String> = self.mock_executor.get_calls().await;

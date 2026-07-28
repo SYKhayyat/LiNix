@@ -92,26 +92,29 @@ pub(crate) async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> 
         ModuleCommand::Create { name, force } => {
             let path = layout.module_file(&module_name(name)?);
             refuse_overwrite(&path, name, *force)?;
-            tokio::fs::create_dir_all(layout.modules_dir()).await.ok();
-            tokio::fs::write(
+            let body = format!(
+                "# Module: {}\n\
+                 #\n\
+                 # A list of what this module holds, one per line:\n\
+                 #\n\
+                 #   apt:curl\n\
+                 #   ripgrep            (no backend named — LiNix asks each one in\n\
+                 #                       `priority` order, then locks the answer)\n\
+                 #   use base           (bring in another module)\n\
+                 #   absent:apt:nano    (this must NOT exist)\n\
+                 #\n\
+                 # Nothing here happens until a profile reaches it: `use {}`.\n",
+                name, name
+            );
+            let verb = crate::verbs::write_unless_previewing(
+                app,
                 &path,
-                format!(
-                    "# Module: {}\n\
-                     #\n\
-                     # A list of what this module holds, one per line:\n\
-                     #\n\
-                     #   apt:curl\n\
-                     #   ripgrep            (no backend named — LiNix asks each one in\n\
-                     #                       `priority` order, then locks the answer)\n\
-                     #   use base           (bring in another module)\n\
-                     #   absent:apt:nano    (this must NOT exist)\n\
-                     #\n\
-                     # Nothing here happens until a profile reaches it: `use {}`.\n",
-                    name, name
-                ),
+                &body,
+                "Created",
+                "[DRY-RUN] would create",
             )
             .await?;
-            println!("Created {}", path.display());
+            println!("{} {}", verb, path.display());
             println!(
                 "  Add it to a profile with `use {}` — nothing reads a module no profile names.",
                 name
@@ -149,12 +152,19 @@ pub(crate) async fn handle_module(app: &App, cmd: &ModuleCommand) -> Result<()> 
                 );
             }
 
-            tokio::fs::create_dir_all(layout.modules_dir()).await.ok();
-            tokio::fs::write(&path, &body).await?;
+            let verb = crate::verbs::write_unless_previewing(
+                app,
+                &path,
+                &body,
+                "Added",
+                "[DRY-RUN] would add",
+            )
+            .await?;
             let count = module_registry::count_entries(&body);
             println!(
-                "Added module `{}` ({} entries) from {}\n  saved to {}\n  \
+                "{} module `{}` ({} entries) from {}\n  saved to {}\n  \
                  Use it with `use {}` in a profile — nothing reads a module no profile names.",
+                verb,
                 final_name,
                 count,
                 url,
@@ -564,16 +574,30 @@ pub(crate) async fn handle_schedule(app: &App, cmd: &ScheduleCommand) -> Result<
             // Parse what was just written before it is written: a bad cron or an unknown key
             // must be refused at the door, naming the line, not discovered at provision time.
             linix::config::grammar::parse_document(&file, &updated, &known)?;
-            tokio::fs::write(&file, &updated).await?;
-            println!("Added `schedule:{}` to {}.", name, file.display());
+            let verb = crate::verbs::write_unless_previewing(
+                app,
+                &file,
+                &updated,
+                "Added",
+                "[DRY-RUN] would add",
+            )
+            .await?;
+            println!("{} `schedule:{}` to {}.", verb, name, file.display());
         }
         ScheduleCommand::Remove { name } => {
             let Some(updated) = remove_line(&body, name) else {
                 println!("No `schedule:{}` in {}.", name, file.display());
                 return Ok(());
             };
-            tokio::fs::write(&file, &updated).await?;
-            println!("Removed `schedule:{}` from {}.", name, file.display());
+            let verb = crate::verbs::write_unless_previewing(
+                app,
+                &file,
+                &updated,
+                "Removed",
+                "[DRY-RUN] would remove",
+            )
+            .await?;
+            println!("{} `schedule:{}` from {}.", verb, name, file.display());
         }
         ScheduleCommand::List => {
             let doc = linix::config::grammar::parse_document(&file, &body, &known)?;

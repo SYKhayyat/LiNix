@@ -216,10 +216,22 @@ impl Adopter {
                 .await
                 .facts_for_host()
                 .await?;
-        let edit = crate::model::Editor::new(&layout, &vocab, facts)
-            .write_module(&crate::model::Landing::Adopted.target(), &manifest)?;
+        let edit = crate::model::Editor::new(
+            &layout,
+            &vocab,
+            facts,
+            crate::model::Writes::for_run(self.config.dry_run),
+        )
+        .write_module(&crate::model::Landing::Adopted.target(), &manifest)?;
         let manifest_path = edit.file.clone();
-        info!("{}", edit.describe("Wrote"));
+        info!(
+            "{}",
+            edit.describe(if self.config.dry_run {
+                "Would write"
+            } else {
+                "Wrote"
+            })
+        );
 
         {
             let mut state_mut = self.state.lock().await;

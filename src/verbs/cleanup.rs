@@ -438,6 +438,10 @@ pub(crate) async fn handle_unmanage(app: &App, packages: &[String], json: bool) 
         // The line goes too. `forget` means LiNix never touches it again, and a package
         // still declared is a package the next `sync` re-adopts — a command that silently
         // undoes itself.
+        //
+        // Under `--dry-run` this reports the lines and writes none of them: the editor is in
+        // `Writes::Planned`, and the `forget` above stays in memory because the save below is
+        // skipped.
         let dropped = app.undeclare(spec).await?;
 
         results.push(serde_json::json!({
@@ -454,11 +458,19 @@ pub(crate) async fn handle_unmanage(app: &App, packages: &[String], json: bool) 
         }));
     }
 
-    app.state.lock().await.save()?;
+    // The registry is what LiNix believes it manages. A preview that persisted `forget` would
+    // leave the package unmanaged for real while promising it had changed nothing.
+    if !app.config.dry_run {
+        app.state.lock().await.save()?;
+    }
 
     if json {
         println!("{}", serde_json::to_string_pretty(&results)?);
         return Ok(());
+    }
+
+    if app.config.dry_run {
+        println!("[DRY-RUN] would stop managing:");
     }
 
     for r in &results {

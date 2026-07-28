@@ -124,6 +124,29 @@ impl Edit {
     }
 }
 
+/// Whether an editor's writes reach the disk.
+///
+/// Not a flag each verb remembers to check. `--dry-run uninstall` deleted the declaration for
+/// real because the flag was consulted per-verb and this verb did not consult it, so the
+/// decision now lives once, at the only place that opens a file for writing. Every [`Edit`] is
+/// returned either way: a preview that reports nothing is as useless as one that writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Writes {
+    ToDisk,
+    Planned,
+}
+
+impl Writes {
+    /// The one place `--dry-run` becomes an editing mode, so no caller can decide it twice.
+    pub fn for_run(dry_run: bool) -> Self {
+        if dry_run {
+            Writes::Planned
+        } else {
+            Writes::ToDisk
+        }
+    }
+}
+
 /// Edits your files: the other half of P1, where every imperative command is a shortcut for
 /// editing a file and syncing.
 pub struct Editor<'a> {
@@ -133,15 +156,37 @@ pub struct Editor<'a> {
     /// its write has to reach, and a `when $role == travel` block read against no variables
     /// is an unknown key, not a block that does not match (W8).
     facts: HostFacts,
+    writes: Writes,
 }
 
 impl<'a> Editor<'a> {
-    pub fn new(layout: &'a Layout, backends: &'a dyn BackendNames, facts: HostFacts) -> Self {
+    pub fn new(
+        layout: &'a Layout,
+        backends: &'a dyn BackendNames,
+        facts: HostFacts,
+        writes: Writes,
+    ) -> Self {
         Self {
             layout,
             backends,
             facts,
+            writes,
         }
+    }
+
+    /// The only place this module opens a file for writing, so [`Writes::Planned`] is the only
+    /// thing a preview has to get right.
+    ///
+    /// A failed write is an error that names the file. "Permission denied" with no path is a
+    /// message nobody can act on.
+    fn write(&self, path: &std::path::Path, body: &str) -> Result<()> {
+        if self.writes == Writes::Planned {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| io_error(path, &e))?;
+        }
+        std::fs::write(path, body).map_err(|e| io_error(path, &e))
     }
 
     /// Write `line` into `target`, and make sure something reaches it.
@@ -185,7 +230,7 @@ impl<'a> Editor<'a> {
         let created = existing.is_empty();
         let body = self.replace_or_append(&existing, line, created, target);
 
-        write(&path, &body)?;
+        self.write(&path, &body)?;
         if let Some(p) = &wired_into {
             let pf = self.layout.profile_file(p);
             let mut b = std::fs::read_to_string(&pf).unwrap_or_default();
@@ -193,7 +238,7 @@ impl<'a> Editor<'a> {
                 b.push('\n');
             }
             b.push_str(&format!("use {}\n", target.name()));
-            write(&pf, &b)?;
+            self.write(&pf, &b)?;
         }
 
         Ok(Edit {
@@ -218,7 +263,7 @@ impl<'a> Editor<'a> {
         };
 
         let path = target.file(self.layout);
-        write(&path, body)?;
+        self.write(&path, body)?;
         if let Some(p) = &wired_into {
             let pf = self.layout.profile_file(p);
             let mut b = std::fs::read_to_string(&pf).unwrap_or_default();
@@ -226,7 +271,7 @@ impl<'a> Editor<'a> {
                 b.push('\n');
             }
             b.push_str(&format!("use {}\n", target.name()));
-            write(&pf, &b)?;
+            self.write(&pf, &b)?;
         }
 
         Ok(Edit {
@@ -424,7 +469,7 @@ impl<'a> Editor<'a> {
             }
             let mut new_body = out.join("\n");
             new_body.push('\n');
-            write(file, &new_body)?;
+            self.write(file, &new_body)?;
             for line in hit {
                 edits.push(Edit {
                     file: file.clone(),
@@ -479,7 +524,7 @@ impl<'a> Editor<'a> {
             }
             let mut new_body = out.join("\n");
             new_body.push('\n');
-            write(file, &new_body)?;
+            self.write(file, &new_body)?;
         }
         Ok(edits)
     }
@@ -582,15 +627,6 @@ fn rewrite_backend_prefix(raw: &str, new_backend: &str) -> String {
     line
 }
 
-/// A failed write is an error that names the file. "Permission denied" with no path is a
-/// message nobody can act on.
-fn write(path: &std::path::Path, body: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| io_error(path, &e))?;
-    }
-    std::fs::write(path, body).map_err(|e| io_error(path, &e))
-}
-
 fn io_error(path: &std::path::Path, e: &std::io::Error) -> GrammarError {
     GrammarError::new(
         Origin::new(path, 0),
@@ -673,7 +709,8 @@ pub fn inactive_declarations(
     target_pkg: &str,
 ) -> Vec<String> {
     let reached = active_module_files(layout, backends, facts);
-    let editor = Editor::new(layout, backends, facts.clone());
+    // Reads only: it asks which inactive modules declare a package and writes nothing.
+    let editor = Editor::new(layout, backends, facts.clone(), Writes::Planned);
     let wanted = editor.match_key(target_pkg);
 
     let mut out: Vec<String> = Vec::new();
@@ -735,7 +772,7 @@ mod tests {
     }
 
     fn editor(f: &Fx) -> Editor<'_> {
-        Editor::new(&f.layout, &known, facts())
+        Editor::new(&f.layout, &known, facts(), Writes::ToDisk)
     }
 
     fn read(f: &Fx, p: &str) -> String {

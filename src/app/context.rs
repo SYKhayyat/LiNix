@@ -287,6 +287,15 @@ impl App {
             .await
     }
 
+    /// "Added" when the file changed, "Would add" when a preview only says it would.
+    fn edit_verb(&self, done: &'static str, planned: &'static str) -> &'static str {
+        if self.config.dry_run {
+            planned
+        } else {
+            done
+        }
+    }
+
     /// Write a declaration into your files (P1: an imperative command is a shortcut for
     /// editing a file and syncing), and say which file it touched (II.8).
     ///
@@ -305,10 +314,15 @@ impl App {
             Some(name) => crate::model::Target::parse(name, &Origin::argument())?,
             None => landing.target(),
         };
-        let edit = crate::model::Editor::new(&layout, &vocab, self.host_facts().await?)
-            .add(&target, line)
-            .map_err(Error::from)?;
-        info!("{}", edit.describe("Added"));
+        let edit = crate::model::Editor::new(
+            &layout,
+            &vocab,
+            self.host_facts().await?,
+            crate::model::Writes::for_run(self.config.dry_run),
+        )
+        .add(&target, line)
+        .map_err(Error::from)?;
+        info!("{}", edit.describe(self.edit_verb("Added", "Would add")));
         Ok(edit)
     }
 
@@ -321,7 +335,9 @@ impl App {
         let layout = self.config.layout();
         let facts = self.host_facts().await?;
         let files = crate::model::active_module_files(&layout, &vocab, &facts);
-        let editor = crate::model::Editor::new(&layout, &vocab, facts);
+        // Reads only; a `Writes` it never uses is still the honest one to hand it.
+        let editor =
+            crate::model::Editor::new(&layout, &vocab, facts, crate::model::Writes::Planned);
         Ok(editor.declares_in(&files, target))
     }
 
@@ -342,11 +358,16 @@ impl App {
         let layout = self.config.layout();
         let facts = self.host_facts().await?;
         let files = crate::model::active_module_files(&layout, &vocab, &facts);
-        let edits = crate::model::Editor::new(&layout, &vocab, facts)
-            .retarget_backend(&files, target_pkg, new_backend)
-            .map_err(Error::from)?;
+        let edits = crate::model::Editor::new(
+            &layout,
+            &vocab,
+            facts,
+            crate::model::Writes::for_run(self.config.dry_run),
+        )
+        .retarget_backend(&files, target_pkg, new_backend)
+        .map_err(Error::from)?;
         for e in &edits {
-            info!("{}", e.describe("Moved"));
+            info!("{}", e.describe(self.edit_verb("Moved", "Would move")));
         }
         Ok(edits)
     }
@@ -358,11 +379,16 @@ impl App {
         let layout = self.config.layout();
         let facts = self.host_facts().await?;
         let files = crate::model::active_module_files(&layout, &vocab, &facts);
-        let edits = crate::model::Editor::new(&layout, &vocab, facts)
-            .remove_from(&files, target_pkg)
-            .map_err(Error::from)?;
+        let edits = crate::model::Editor::new(
+            &layout,
+            &vocab,
+            facts,
+            crate::model::Writes::for_run(self.config.dry_run),
+        )
+        .remove_from(&files, target_pkg)
+        .map_err(Error::from)?;
         for e in &edits {
-            info!("{}", e.describe("Removed"));
+            info!("{}", e.describe(self.edit_verb("Removed", "Would remove")));
         }
         Ok(edits)
     }
