@@ -357,6 +357,45 @@ else
     BAD=$((BAD + 1))
 fi
 
+# No gate script may sit in `scripts/` with nothing running it (G-5).
+#
+# `grader-red-tests.sh` was 131 lines of source-text greps, run by no CI job and neither
+# release script, and its first check could never pass because it reproduced the very bug it
+# tested inline. It sat there for a day claiming to be the list of what was still wrong. A
+# permanently-red file nobody runs is worse than no file: it is the shape of check this whole
+# effort exists to remove, and it is invisible precisely because nothing runs it.
+#
+# A script is accounted for when CI runs it, a release script runs it, or another gate runs it.
+# Anything else has to be named below as a deliberate non-gate, with what it is instead.
+echo "== every script in scripts/ is run by something, or declared not to be a gate"
+TOTAL=$((TOTAL + 1))
+_orphans=""
+for _s in "$_here"/scripts/*.sh "$_here"/scripts/*.ps1; do
+    [ -f "$_s" ] || continue
+    _b="$(basename "$_s")"
+    case "$_b" in
+        # Not gates. `install.*` is what a user pipes from the web; `release-check.*` are the
+        # top of the chain and are run by a person, which is their whole job.
+        install.sh|install.ps1|release-check.sh|release-check.ps1) continue ;;
+    esac
+    # `-rl`, not `-rql`: `-q` prints nothing, so the pipe that drops the script's own file
+    # would see an empty list and call every script an orphan. (It did, on the first run.)
+    if grep -rl "$_b" "$_here/.github/workflows" "$_here/scripts/release-check.sh" \
+        "$_here/scripts/release-check.ps1" "$_here/scripts/harness-logic-test.sh" 2>/dev/null \
+        | grep -v "/$_b\$" | grep -q .
+    then
+        continue
+    fi
+    _orphans="$_orphans\n        $_b"
+done
+if [ -z "$_orphans" ]; then
+    echo "  ok    no gate script in scripts/ is unreachable from CI or a release script"
+else
+    echo "  BAD   these scripts are run by nothing — delete them or wire them in:"
+    printf "%b\n" "$_orphans"
+    BAD=$((BAD + 1))
+fi
+
 echo "--------------------------------------------------------------"
 echo " harness predicates: $((TOTAL - BAD))/$TOTAL ok"
 [ "$BAD" = 0 ] || { echo " FAILED"; exit 1; }
