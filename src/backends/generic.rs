@@ -695,15 +695,14 @@ fn find_placeholder(s: &str) -> Option<String> {
     let mut rest = s;
     while let Some(open) = rest.find('{') {
         let after = &rest[open + 1..];
-        if let Some(close) = after.find('}') {
-            let inner = &after[..close];
-            if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
-                return Some(format!("{{{}}}", inner));
-            }
-            rest = &after[close..];
-        } else {
-            return None;
+        // An unclosed `{` ends the search: everything after it is one unterminated run, so
+        // there is no later `}` that could close a different placeholder.
+        let close = after.find('}')?;
+        let inner = &after[..close];
+        if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+            return Some(format!("{{{}}}", inner));
         }
+        rest = &after[close..];
     }
     None
 }

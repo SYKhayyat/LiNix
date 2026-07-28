@@ -1256,26 +1256,61 @@ mod exit_status_tests {
         }
     }
 
+    /// A Windows exit code does not survive a Unix `ExitStatus`: `from_raw(code << 8)` reads
+    /// back as `code & 0xff`, so 1605 becomes 69 and -1978335189 becomes something else again.
+    /// These two tests ran green on Windows and red everywhere else for exactly that reason,
+    /// and nothing said so until the first push in 25 commits.
+    ///
+    /// So the policy — which is plain data and true on every platform — is asserted directly,
+    /// and the `ensure_status` wiring around it is proved with a code the OS can carry.
     #[test]
     fn choco_msi_reboot_codes_are_benign_and_do_not_leak() {
-        let choco = executor_for(exit_policy::choco());
-        let apk = executor_for(exit_policy::apk());
+        let choco = exit_policy::choco();
+        let apk = exit_policy::apk();
         for code in [1605, 1614, 1618, 1641, 3010] {
-            assert!(choco.ensure_status("choco", finished(code, "", "")).is_ok());
-            assert!(apk.ensure_status("apk", finished(code, "", "")).is_err());
+            assert!(choco.is_benign(Some(code)), "choco {code} is a reboot code");
+            assert!(
+                !apk.is_benign(Some(code)),
+                "apk borrowed choco's code {code}"
+            );
         }
-        assert!(choco.ensure_status("choco", finished(1, "", "")).is_err());
+        assert!(!choco.is_benign(Some(1)), "1 is a plain choco failure");
+        assert!(
+            !choco.is_benign(None),
+            "a killed command chose no code at all"
+        );
+        assert!(executor_for(exit_policy::choco())
+            .ensure_status("choco", finished(1, "", ""))
+            .is_err());
     }
 
     #[test]
     fn winget_noteworthy_codes_are_benign() {
-        let winget = executor_for(exit_policy::winget());
+        let winget = exit_policy::winget();
         for code in [-1978335189, -1978335212, -1978335215] {
-            assert!(winget
-                .ensure_status("winget", finished(code, "", ""))
-                .is_ok());
+            assert!(winget.is_benign(Some(code)), "winget {code}");
         }
-        assert!(winget.ensure_status("winget", finished(1, "", "")).is_err());
+        assert!(!winget.is_benign(Some(1)));
+        assert!(!winget.is_benign(None));
+        assert!(executor_for(exit_policy::winget())
+            .ensure_status("winget", finished(1, "", ""))
+            .is_err());
+    }
+
+    /// The trap the two tests above fell into, stated once so it cannot be re-entered
+    /// silently: a fabricated status only round-trips codes the running OS can represent.
+    #[test]
+    fn a_fabricated_status_round_trips_only_what_this_os_can_hold() {
+        assert_eq!(finished(1, "", "").status.code(), Some(1));
+        assert_eq!(finished(100, "", "").status.code(), Some(100));
+        #[cfg(unix)]
+        assert_ne!(
+            finished(1605, "", "").status.code(),
+            Some(1605),
+            "a Unix status held a Windows code — the platform note above is stale"
+        );
+        #[cfg(windows)]
+        assert_eq!(finished(1605, "", "").status.code(), Some(1605));
     }
 
     /// An executor nobody gave a policy fails every non-zero exit and classifies nothing —
