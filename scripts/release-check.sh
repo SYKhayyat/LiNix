@@ -67,6 +67,15 @@ if bash scripts/harness-mutation-test.sh --check; then
     pass "harness mutation budget"
 else fail "harness mutation budget EXCEEDED — checks that examine nothing"; fi
 
+# And the OTHER harness (G-4). CI mutation-tests both; this script tested one, and
+# `harness-logic-test.sh` reported parity because it compared basenames. The four-distro
+# harness runs on every push against 136 checks and was measured in exactly one place.
+# Needs no Docker: the harness is shell, and the point is to run it against a stub.
+echo "-> scripts/harness-mutation-test.sh docker/integration/run-in-container.sh --check"
+if bash scripts/harness-mutation-test.sh docker/integration/run-in-container.sh --check apt jq; then
+    pass "container harness mutation budget"
+else fail "container harness mutation budget EXCEEDED — checks that examine nothing"; fi
+
 # ------------------------------------------------------------------ 2. integration
 if [ "$SKIP_DOCKER" = "1" ]; then
     info "SKIP_DOCKER=1 — skipped the real integration matrix (hermetic gates only)"

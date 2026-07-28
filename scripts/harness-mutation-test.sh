@@ -37,7 +37,20 @@ for a in "$@"; do
         *)       HARNESS_ARGS="$HARNESS_ARGS $a" ;;
     esac
 done
-BUDGET="${SURVIVOR_BUDGET:-86}"
+# The budget belongs to the harness, not to whoever calls it.
+#
+# There used to be one default — 86, the Windows harness's measured number — and the container
+# harness's 92 lived only as `-e SURVIVOR_BUDGET=92` in `ci.yml`. So running this script the way
+# the usage block above documents it failed on a clean tree, and the four-distro harness was
+# mutation-tested in exactly one place while `harness-logic-test.sh` reported parity because the
+# basename appeared in both release scripts.
+#
+# Each number is a ratchet in its own right: lower it when a batch is fixed, never raise it.
+case "$HARNESS" in
+    */run-in-container.sh) DEFAULT_BUDGET=92 ;;
+    *)                     DEFAULT_BUDGET=86 ;;
+esac
+BUDGET="${SURVIVOR_BUDGET:-$DEFAULT_BUDGET}"
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT" || exit 2

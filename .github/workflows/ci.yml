@@ -146,14 +146,16 @@ jobs:
     # checks CAN fail — the mutation gate was pointed only at the Windows harness. It runs here,
     # on the ubuntu leg, because this is where the image already exists: a job of its own would
     # rebuild it for no other reason. The budget is the measured number (92 survivors of 136
-    # checks, 44 caught) and is a ratchet like the other one — it may fall, never rise.
+    # checks, 44 caught) and is a ratchet like the other one — it may fall, never rise. It lives
+    # in harness-mutation-test.sh beside the harness it measures, not here: while it was an -e
+    # flag on this one step, the script's own documented invocation failed on a clean tree and
+    # the container harness was mutation-tested in exactly one place.
     - name: Can this harness's checks fail?
       if: matrix.distro == 'ubuntu'
       run: |
         docker run --rm --entrypoint bash \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/harness-mutation-test.sh:/src/scripts/harness-mutation-test.sh:ro" \
-          -e SURVIVOR_BUDGET=92 \
           linix-it-ubuntu -c \
           "cd /src && bash scripts/harness-mutation-test.sh docker/integration/run-in-container.sh --check ${{ matrix.backend }} ${{ matrix.pkg }}"
 

@@ -288,11 +288,24 @@ rm -rf "$(dirname "$_silent")"
 # Derived, not listed. Every `scripts/*.sh` that ci.yml runs must be named by BOTH release
 # scripts, so a gate added to CI tomorrow fails this until it is added locally too — which is
 # the only version of this check that does not go stale the day it is written.
+#
+# **A basename is not a gate** (G-4). This compared basenames until 2026-07-28, and CI runs
+# `harness-mutation-test.sh` twice — once bare, measuring the Windows harness, and once against
+# `docker/integration/run-in-container.sh`, measuring the four-distro one. Both release scripts
+# ran it once. Parity passed, because the string did appear in both files, while the harness
+# that runs on every push against four distros was mutation-tested only in CI. So the unit here
+# is the *invocation*: a gate plus the harness it is pointed at. Two targets are two gates.
 echo "== every gate CI runs is also run by the local release scripts"
 _ci=".github/workflows/ci.yml"
 _here="$(cd "$(dirname "$0")/.." && pwd)"
 if [ -f "$_here/$_ci" ]; then
     _gates="$(grep -oE 'scripts/[a-z-]+\.sh' "$_here/$_ci" | sort -u)"
+    # And the targets: a gate script invoked with a harness path measures that harness, and a
+    # local script that runs the same gate against a different harness is not running the same
+    # gate. Rendered as `<gate>|<target>` pairs so one loop can check both kinds.
+    _targeted="$(grep -oE 'scripts/[a-z-]+\.sh [^"]*(docker/integration/[a-z-]+\.sh|scripts/integration-[a-z]+\.sh)' "$_here/$_ci" \
+        | sed -E 's#^(scripts/[a-z-]+\.sh).*[ ](docker/integration/[a-z-]+\.sh|scripts/integration-[a-z]+\.sh).*#\1|\2#' \
+        | sort -u)"
     _n=0
     for _g in $_gates; do _n=$((_n + 1)); done
     TOTAL=$((TOTAL + 1))
@@ -307,9 +320,19 @@ if [ -f "$_here/$_ci" ]; then
                 grep -q "$(basename "$_g")" "$_here/$_rc" 2>/dev/null && continue
                 _missing="$_missing\n        $(basename "$_rc") never runs $(basename "$_g")"
             done
+            # The targeted invocations: the gate's own line in the local script has to name the
+            # same harness. Grepping the file as a whole would pass on any mention of the path.
+            for _pair in $_targeted; do
+                _gate="${_pair%%|*}"
+                _target="${_pair##*|}"
+                [ "$_gate" = "$_target" ] && continue   # the gate IS that harness
+                grep -F "$(basename "$_gate")" "$_here/$_rc" 2>/dev/null \
+                    | grep -qF "$_target" && continue
+                _missing="$_missing\n        $(basename "$_rc") runs $(basename "$_gate") but never against $_target"
+            done
         done
         if [ -z "$_missing" ]; then
-            echo "  ok    both release scripts run all $_n gate script(s) CI runs"
+            echo "  ok    both release scripts run all $_n gate script(s) CI runs, against the same harnesses"
         else
             echo "  BAD   a local gate is weaker than CI:"
             printf "%b\n" "$_missing"
