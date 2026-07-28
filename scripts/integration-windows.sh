@@ -164,7 +164,7 @@ refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (LiNix refused, on purpose)"; }
 
 # Why an install failed — a question, not an assumption (E5).
 #
-# Both harnesses used to soften ANY install failure to "network/ecosystem variance" and skip
+# Both harnesses used to soften ANY install failure into a claim about the network, and skip
 # that backend's whole remaining lifecycle. In one observed run it fired four times and not
 # once was it the network: one was LiNix correctly refusing, two were real argv defects
 # (`helm`, `luarocks`). Coverage disappeared exactly where the product was broken, and the run
