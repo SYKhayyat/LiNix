@@ -1432,8 +1432,17 @@ fn register_mix(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("mix");
     // Mix archives are installed one by one, on request.
     cfg.manual = ManualListing::AllInstalled;
+    // The version is a bare positional after the name: `mix archive.install hex phx_new 1.6.16`.
+    // Not optional in practice — an archive declares which Elixir it supports, so on Elixir
+    // 1.14 the newest `phx_new` fetches, builds and then refuses to run, and pinning is the
+    // only way to install one at all (measured, `tools` image 2026-07-29).
+    cfg.version_pin = Some(VersionPin::Flag(vec!["{version}".into()]));
     cfg.install_args = vec!["archive.install".into(), "hex".into(), "--force".into()];
-    cfg.remove_args = vec!["archive.uninstall".into()];
+    // `--force` on the removal too, and this is not symmetry for its own sake: measured, a
+    // bare `mix archive.uninstall phx_new` with no terminal prints `Are you sure…? [Yn]`,
+    // takes the empty answer, **exits 0 and leaves the archive installed**. LiNix reported a
+    // removal that did not happen — the scoop-exit-0 shape (E7), one manager over.
+    cfg.remove_args = vec!["archive.uninstall".into(), "--force".into()];
     cfg.list_args = vec!["archive".into()];
     let core = Arc::new(GenericBackendCore {
         name: "mix".into(),
@@ -2202,6 +2211,68 @@ mod tests {
                 );
             }
         }
+    }
+
+
+    /// Both halves of what the `tools` image measured on 2026-07-29, in one place because they
+    /// are one lifecycle: a mix archive that cannot be pinned cannot be installed at all on an
+    /// older Elixir, and a removal without `--force` reports success and removes nothing.
+    ///
+    /// ```text
+    /// $ mix archive.install hex --force phx_new          -> supports only Elixir ~> 1.17 (exit 1)
+    /// $ mix archive.install hex --force phx_new 1.6.16   -> creating /root/.mix/archives/phx_new-1.6.16
+    /// $ mix archive.uninstall phx_new  </dev/null        -> `Are you sure…? [Yn]`, exit 0, STILL INSTALLED
+    /// $ mix archive.uninstall --force -- phx_new         -> gone
+    /// ```
+    ///
+    /// The option terminator is LiNix's, and it was measured rather than assumed: both of the
+    /// commands above were run in that exact shape, because two managers in this tree turned
+    /// out to read `--` as a package name (W25) and mix does not.
+    /// ```
+    #[tokio::test]
+    async fn a_mix_archive_is_pinnable_and_its_removal_does_not_wait_for_an_answer() {
+        use crate::core::executor::MockExecutor;
+        use dashmap::DashMap;
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        let exec =
+            CommandExecutor::with_layer(true, false, mock.clone(), vfs, Arc::new(DashMap::new()));
+        let mut reg = BackendRegistry::new();
+        register_mix(&mut reg, &exec);
+        let mix = reg.get("mix").expect("mix is registered");
+        let inst = mix.as_installable().expect("installs");
+
+        inst.install(
+            &[crate::core::PackageSpec {
+                name: "phx_new".into(),
+                backend: "mix".into(),
+                options: std::collections::HashMap::from([(
+                    "version".to_string(),
+                    "1.6.16".to_string(),
+                )]),
+                ..Default::default()
+            }],
+            false,
+        )
+        .await
+        .unwrap();
+        inst.remove(&["phx_new".to_string()], false).await.unwrap();
+
+        let calls = mock.get_calls().await;
+        assert!(
+            calls
+                .iter()
+                .any(|c| c == "mix archive.install hex --force phx_new 1.6.16"),
+            "the pinned version never reached mix: {:?}",
+            calls
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|c| c == "mix archive.uninstall --force -- phx_new"),
+            "the removal would sit on a prompt and report success: {:?}",
+            calls
+        );
     }
 
     /// Q6, the case the key exists for: a manager changes its CLI, and the person on that

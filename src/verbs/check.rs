@@ -717,6 +717,43 @@ pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
         }
     }
 
+    // And the other way a backend can be here, answer `list`, and install nothing: the setup
+    // it needs was never done (Q11). `opam` passes every probe above with no switch and then
+    // fails every install with `No switch is currently set` — READY, and unable to do the one
+    // thing it is for. Degraded rather than Critical because reads genuinely work and the fix
+    // is one command, which the message carries.
+    //
+    // Manager-level rows only. `asdf`'s prerequisite is a plugin per declared tool, which is a
+    // question about a line rather than about the machine, and `check health` has no lines.
+    {
+        let rows = app.prereqs().rows();
+        let os = std::env::consts::OS;
+        for (name, report) in reports.iter_mut() {
+            if report.status != HealthStatus::Ok {
+                continue;
+            }
+            for row in linix::model::prereq::for_manager(&rows, name, os) {
+                if row.is_per_package() {
+                    continue;
+                }
+                let cmd = row.probe_command("");
+                let Some((program, args)) = cmd.split_first() else {
+                    continue;
+                };
+                let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+                if app.executor.run(program, &refs, false).await.is_ok() {
+                    continue;
+                }
+                report.status = HealthStatus::Degraded;
+                report.message = Some(format!(
+                    "installed, but it needs {} before it can install anything — `{}`",
+                    row.missing_line(""),
+                    row.command_line("")
+                ));
+            }
+        }
+    }
+
     // ---- System-level checks. Reported, never repaired: that is `heal`'s job (U9). ----
     let mut system: Vec<(String, HealthStatus, Option<String>)> = Vec::new();
 

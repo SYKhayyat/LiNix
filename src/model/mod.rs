@@ -5,6 +5,7 @@
 //! (V.2).
 
 pub mod bootstrap;
+pub mod prereq;
 pub mod cache;
 pub mod conflict;
 pub mod cycle;

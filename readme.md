@@ -814,6 +814,28 @@ Everything you teach LiNix lives in one folder, one file per question:
 adapters/backends.toml    how to drive a package manager LiNix does not ship
 adapters/settings.toml    how to read and write a settings store
 adapters/bootstrap.toml   how to obtain a manager this machine does not have
+adapters/prereq.toml      the setup a manager needs before it can install anything
+```
+
+**The last one is for a manager that is installed and still cannot install anything.** `mix`
+needs Hex, `asdf` needs the plugin for the tool you named, `opam` needs a switch — each of them
+fails every install until one command has been run. LiNix ships those three and asks before
+running any of them; `--yes` answers in advance, and a run with no terminal says what it would
+have asked and changes nothing.
+
+```toml
+[[prereq]]
+manager      = "mix"
+missing      = "Hex, the package client `mix archive.install hex …` fetches through"
+probe        = ["mix", "hex.info"]      # exit 0 means it is already there
+run          = ["mix", "local.hex", "--force"]
+
+[[prereq]]
+manager      = "asdf"
+missing      = "asdf's `{name}` plugin"
+probe        = ["asdf", "plugin", "list"]
+probe_output = "{name}"                 # this row reads OUTPUT: `asdf plugin list` exits 0
+run          = ["asdf", "plugin", "add", "{name}"]   # `{name}` = once per declared package
 ```
 
 **Its sibling teaches LiNix a settings store.** `setting:` writes desktop configuration that

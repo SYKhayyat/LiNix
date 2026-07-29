@@ -475,6 +475,59 @@ else
     BAD=$((BAD + 1))
 fi
 
+
+# ---------------------------------------------------------------------------
+# A harness function must be defined ABOVE the first place the script CALLS it.
+#
+# Shell reads top to bottom: a function called before its `f() {` has been evaluated is not a
+# quiet no-op, it is `command not found` on stderr — and the harness keeps going. Measured on
+# CI, 2026-07-29: three PATH helpers were defined beside `assert_binary_gone` at line 617 and
+# called from section 5 at line 329, so one check reported `rc=127` and **one vanished entirely**
+# — no PASS, no FAIL, no count. A check that does not run looks exactly like a check that
+# passed, which is this file's whole subject.
+#
+# Only calls at the top level count. A name used inside another function body is resolved when
+# that body runs, which is after the whole file has been read — `classify_install` calling
+# `refused` is correct however they are ordered, and a checker that cannot tell the difference
+# reports three false positives and gets switched off.
+#
+# Lexical rather than behavioural, deliberately: the stub-binary mutation run only reaches the
+# checks it reaches, and this has to answer for every call site whether that run got there or not.
+echo "== every harness function is defined before the script calls it"
+for _src in $SOURCES; do
+    TOTAL=$((TOTAL + 1))
+    _bad_fns=""
+    for _def in $(grep -nE '^[a-z_][a-z0-9_]*\(\) *\{' "$_src" | sed 's/(.*//' | tr -d ' '); do
+        _line="${_def%%:*}"; _fn="${_def##*:}"
+        _use="$(awk -v fn="$_fn" '
+            /^[a-z_][a-z0-9_]*\(\)[ ]*\{/ { if ($0 !~ /\}/) infn = 1; next }
+            infn && /^\}/ { infn = 0; next }
+            !infn {
+                line = $0
+                sub(/#.*/, "", line)
+                # Quoted text is not a call. `echo "[5] Real lifecycle"` and
+                # `ok "sync commits" …` both name a function inside a description, and reading
+                # those as call sites is how a checker earns its reputation for crying wolf.
+                # Double quotes only: every description in these harnesses is double-quoted,
+                # and the single-quoted text is `sh -c` bodies, which name no functions.
+                gsub(/"[^"]*"/, "", line)
+                if (line ~ "(^|[^-a-zA-Z0-9_])" fn "([^-a-zA-Z0-9_]|$)") { print NR; exit }
+            }
+        ' "$_src")"
+        [ -n "$_use" ] || continue
+        if [ "$_use" -lt "$_line" ]; then
+            _bad_fns="$_bad_fns\n        $_fn: called at line $_use, defined at line $_line"
+        fi
+    done
+    if [ -z "$_bad_fns" ]; then
+        echo "  ok    $(basename "$_src") defines every function above the first call to it"
+    else
+        echo "  BAD   $(basename "$_src") calls functions that do not exist yet at that point:"
+        printf "%b\n" "$_bad_fns"
+        BAD=$((BAD + 1))
+    fi
+done
+
 echo "--------------------------------------------------------------"
 echo " harness predicates: $((TOTAL - BAD))/$TOTAL ok"
 [ "$BAD" = 0 ] || { echo " FAILED"; exit 1; }

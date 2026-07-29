@@ -37,7 +37,7 @@ pub mod shell;
 
 pub use self::adopt::Adopter;
 pub use self::apply::{
-    Bootstrap, Dependents, Dotfiles, Execs, Extras, Firewall, Repositories, Schedules,
+    Bootstrap, Dependents, Dotfiles, Execs, Extras, Firewall, Prereqs, Repositories, Schedules,
 };
 pub use self::context::App;
 pub use self::hooks::LuaHooks;

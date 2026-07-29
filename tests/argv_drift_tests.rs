@@ -49,6 +49,15 @@ fn help_cannot_answer(program: &str) -> Option<&'static str> {
         // --help` tries to query a service literally named `--help`. `core::argv` already
         // records the same fact for the option terminator.
         "sc" => Some("dispatches on argv[1] by hand; it has no help to ask"),
+        // Handed `--help`, these two ACT. Measured in the `tools` image, 2026-07-29:
+        // `mix local.hex --help` offers to install Hex (`Are you sure you want to install
+        // "https://repo.hex.pm/installs/…hex-2.5.1.ez"?`), and `asdf plugin add --help` clones
+        // asdf's whole plugin repository and then reports `plugin --help not found`. This gate
+        // confirms a finding by running `<subcommand> --help`, so asking these is not a read —
+        // and a gate that changes the machine it is auditing is worse than one that skips it.
+        // `mix help <task>` and `asdf plugin list` are the shapes that would answer, and
+        // neither is this gate's shape.
+        "mix" | "asdf" => Some("acts on `--help` instead of printing it; asking would mutate the machine"),
         // A plugin host. `kubectl krew` works through a `kubectl-krew` binary and no
         // `kubectl --help` lists it, so absence from that help means nothing either way.
         // Whether krew is usable is what the krew backend's own `probes()` answers.

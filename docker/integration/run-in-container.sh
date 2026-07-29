@@ -271,6 +271,73 @@ on_path() {
 # Where does NAME resolve, if anywhere. Same fresh-shell rule as on_path.
 path_of() { sh -c 'command -v "$1" 2>/dev/null' _ "$1" || true; }
 
+# The directory an install NAMED as the home of what it just put there, or "" if it named none.
+#
+# LiNix's answer to a bin directory that is not on PATH is a warning naming the directory and
+# the line that would add it (E6c/W4). That sentence is the product's promise, so it is what
+# the checks below read. Matched against the backend that printed it, so one sync that warns
+# about two managers cannot hand one manager's directory to the other.
+named_bin_dir() { # backend install-log
+    [ -f "$2" ] || return 0
+    _nbd_pat="s/.*$1. installs its executables into \\(.*\\), which is not on your PATH.*/\\1/p"
+    _nbd="$(sed -n "$_nbd_pat" "$2" | head -1)"
+    [ -n "$_nbd" ] || return 0
+    cygpath -u "$_nbd" 2>/dev/null || echo "$_nbd"
+}
+
+# Where a name sits when PATH cannot reach it: the file in the directory the install named,
+# or "" when there is no such file. The extensions are Windows's — `cowsay` on a runner is
+# `cowsay.cmd`, and looking only for the bare name reports an installed program as absent.
+off_path_copy() { # backend binary install-log
+    _opd="$(named_bin_dir "$1" "$3")"
+    [ -n "$_opd" ] || return 0
+    for _ope in "" .exe .cmd .bat .ps1; do
+        [ -e "$_opd/$2$_ope" ] && printf '%s\n' "$_opd/$2$_ope" && return 0
+    done
+    return 0
+}
+
+# Is NAME on this machine at all: resolvable, or sitting where its install said it went?
+#
+# `on_path` alone answers "can I type it", which stops being the same question the moment the
+# install is honest about a directory the host has not wired up — and every assertion built on
+# it (survived unmanage, gone after uninstall) was then reading the wrong answer.
+binary_present() { # backend binary install-log
+    on_path "$2" && return 0
+    [ -n "$(off_path_copy "$1" "$2" "$3")" ]
+}
+
+# assert_binary_reachable <backend> <binary> <install-log>
+#
+# An install the user cannot invoke is a failed install reported as a success (E6c). On a clean
+# runner most per-user managers install into a directory nobody's PATH names, so asking PATH
+# alone fails runs where the product did everything it promised and passes runs where it said
+# nothing at all. So the assertion is the promise: the name resolves, OR the install named the
+# directory and the file is in it. Silence plus an unreachable binary is the defect — measured
+# 2026-07-29 on a clean Windows runner, `github` and `yarn` both.
+assert_binary_reachable() { # backend binary install-log
+    _rbe="$1"; _rbin="$2"
+    if on_path "$_rbin"; then
+        PASS=$((PASS + 1)); echo "  PASS  $_rbe: $_rbin is on PATH"; return 0
+    fi
+    _rdir="$(named_bin_dir "$1" "$3")"
+    if [ -z "$_rdir" ]; then
+        FAILC=$((FAILC + 1))
+        FAILED_NAMES="$FAILED_NAMES\n    - $_rbe: $_rbin is not on PATH and nothing said where it went"
+        echo "  FAIL  $_rbe: $_rbin is not on PATH and nothing said where it went"
+        return 1
+    fi
+    if binary_present "$1" "$_rbin" "$3"; then
+        PASS=$((PASS + 1))
+        echo "  PASS  $_rbe: $_rbin is not on PATH, and the install said so, naming $_rdir"
+        return 0
+    fi
+    FAILC=$((FAILC + 1))
+    FAILED_NAMES="$FAILED_NAMES\n    - $_rbe: the install named $_rdir and $_rbin is not in it"
+    echo "  FAIL  $_rbe: the install named $_rdir and $_rbin is not in it"
+    return 1
+}
+
 echo "=============================================================="
 echo " LiNix v7 harness — backend=$BACKEND package=$PKG"
 echo "=============================================================="
@@ -649,7 +716,12 @@ canary() {
         # Haskell executable on Hackage is the difference between a four-minute
         # check and a forty-minute one.
         cabal)    echo "hello|hello|unsupported|" ;;
-        mix)      echo "hex||full|" ;;
+        # `hex` was never installable: measured 2026-07-29, `mix archive.install hex hex`
+        # answers `No package with name hex (from: mix.exs) in registry` even once Hex is
+        # there, so the check could not pass and its failure looked like the Hex defect.
+        # phx_new is pinned because this image's Elixir is 1.14 and the current release
+        # declares `~> 1.17` — the archive fetches, builds, and then refuses to run.
+        mix)      echo "phx_new@version=1.6.16||full|phx_new" ;;
         # A helm plugin has no binary on PATH — it is reached as `helm diff` — so the
         # PATH check is skipped rather than faked. U39: the name is the identity, the
         # URL is install-time data.
@@ -673,7 +745,10 @@ canary() {
         # does not set up. The backend-scoped `list --backend mise` check below is the real
         # presence assertion, and it is the one that caught the `info` bug on 2026-07-24.
         mise)     echo "jq||full|" ;;
-        asdf)     echo "nodejs||full|" ;;
+        # jq and not nodejs: both need `asdf plugin add` first, and jq's plugin downloads a
+        # single binary in seconds where nodejs's fetches a release tarball. Measured end to
+        # end in the tools image on 2026-07-29.
+        asdf)     echo "jq||full|" ;;
         github)   echo "sharkdp/fd|fd|full|fd" ;;
         emacs)    echo "hydra||full|" ;;
         flatpak)  echo "org.freedesktop.Platform||full|" ;;
@@ -714,73 +789,6 @@ removal_leaves_binary() {
         bun) echo "bun's own \`remove -g\` drops the package and keeps its launcher (reproduced against bun directly, with no LiNix involved)" ;;
         *)   echo "" ;;
     esac
-}
-
-# The directory an install NAMED as the home of what it just put there, or "" if it named none.
-#
-# LiNix's answer to a bin directory that is not on PATH is a warning naming the directory and
-# the line that would add it (E6c/W4). That sentence is the product's promise, so it is what
-# the checks below read. Matched against the backend that printed it, so one sync that warns
-# about two managers cannot hand one manager's directory to the other.
-named_bin_dir() { # backend install-log
-    [ -f "$2" ] || return 0
-    _nbd_pat="s/.*$1. installs its executables into \\(.*\\), which is not on your PATH.*/\\1/p"
-    _nbd="$(sed -n "$_nbd_pat" "$2" | head -1)"
-    [ -n "$_nbd" ] || return 0
-    cygpath -u "$_nbd" 2>/dev/null || echo "$_nbd"
-}
-
-# Where a name sits when PATH cannot reach it: the file in the directory the install named,
-# or "" when there is no such file. The extensions are Windows's — `cowsay` on a runner is
-# `cowsay.cmd`, and looking only for the bare name reports an installed program as absent.
-off_path_copy() { # backend binary install-log
-    _opd="$(named_bin_dir "$1" "$3")"
-    [ -n "$_opd" ] || return 0
-    for _ope in "" .exe .cmd .bat .ps1; do
-        [ -e "$_opd/$2$_ope" ] && printf '%s\n' "$_opd/$2$_ope" && return 0
-    done
-    return 0
-}
-
-# Is NAME on this machine at all: resolvable, or sitting where its install said it went?
-#
-# `on_path` alone answers "can I type it", which stops being the same question the moment the
-# install is honest about a directory the host has not wired up — and every assertion built on
-# it (survived unmanage, gone after uninstall) was then reading the wrong answer.
-binary_present() { # backend binary install-log
-    on_path "$2" && return 0
-    [ -n "$(off_path_copy "$1" "$2" "$3")" ]
-}
-
-# assert_binary_reachable <backend> <binary> <install-log>
-#
-# An install the user cannot invoke is a failed install reported as a success (E6c). On a clean
-# runner most per-user managers install into a directory nobody's PATH names, so asking PATH
-# alone fails runs where the product did everything it promised and passes runs where it said
-# nothing at all. So the assertion is the promise: the name resolves, OR the install named the
-# directory and the file is in it. Silence plus an unreachable binary is the defect — measured
-# 2026-07-29 on a clean Windows runner, `github` and `yarn` both.
-assert_binary_reachable() { # backend binary install-log
-    _rbe="$1"; _rbin="$2"
-    if on_path "$_rbin"; then
-        PASS=$((PASS + 1)); echo "  PASS  $_rbe: $_rbin is on PATH"; return 0
-    fi
-    _rdir="$(named_bin_dir "$1" "$3")"
-    if [ -z "$_rdir" ]; then
-        FAILC=$((FAILC + 1))
-        FAILED_NAMES="$FAILED_NAMES\n    - $_rbe: $_rbin is not on PATH and nothing said where it went"
-        echo "  FAIL  $_rbe: $_rbin is not on PATH and nothing said where it went"
-        return 1
-    fi
-    if binary_present "$1" "$_rbin" "$3"; then
-        PASS=$((PASS + 1))
-        echo "  PASS  $_rbe: $_rbin is not on PATH, and the install said so, naming $_rdir"
-        return 0
-    fi
-    FAILC=$((FAILC + 1))
-    FAILED_NAMES="$FAILED_NAMES\n    - $_rbe: the install named $_rdir and $_rbin is not in it"
-    echo "  FAIL  $_rbe: the install named $_rdir and $_rbin is not in it"
-    return 1
 }
 
 # assert_binary_gone <backend> <binary> <what-the-name-resolved-to-before-the-install>

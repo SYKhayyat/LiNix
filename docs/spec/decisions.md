@@ -1,6 +1,6 @@
-# The decision register — all 121, and two of them open
+# The decision register — all 122, and none of them open
 
-**One file, six features. Two open.** Every decision this design forces lives here, with its
+**One file, six features. None open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
 already settled in code could be re-opened by anyone reading the register instead of the tree.
@@ -16,12 +16,12 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **117** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **120** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
-**Three of these five statuses now describe nothing, and they stay.** The categories are not
+**Four of these five statuses now describe nothing, and they stay.** The categories are not
 decoration: *OPEN — blocking* refills the moment a new feature is proposed, and *BUILT, NEVER
 RULED* refills the moment somebody implements a recommendation before it is put to the owner.
 Deleting an empty category is how the next one goes unnoticed.
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Two are open.** All 121 are accounted for: **117 ANSWERED, 2 PARKED, 2 OPEN** — and this line
+**None are open.** All 122 are accounted for: **120 ANSWERED, 2 PARKED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -3403,67 +3403,90 @@ The rule is in **II.8**; the reason is in **V.99**.
 
 ## Q10
 
-**Status: OPEN.**
+**Status: ANSWERED.**
 
-**Q10 — Should the `mix` backend install Hex before installing an archive from it?**
+**Q10 — Should the `mix` backend install Hex before installing an archive from it?** **RULED
+2026-07-29 (owner): yes — and it asks first, with `--yes` as the flag that forces it.** The
+general form of the ruling, given on the same day for all three of Q10, Q11 and Q13: *LiNix
+should ask whether to do that setup for you, with a flag to force it.*
 
-Measured in the `tools` container, 2026-07-28. `mix`'s install is
+Measured in the `tools` container, 2026-07-28 and again 2026-07-29. `mix`'s install is
 `mix archive.install hex <name> --force`, which fetches an archive from hex.pm. That needs Hex
 itself, and mix says so in as many words:
 
 ```
-$ mix archive.install hex --force -- hex
+$ mix archive.install hex --force phx_new 1.6.16
 Could not find Hex, which is needed to build dependency :hex
 Shall I install Hex? (if running non-interactively, use "mix local.hex --force")
-** (Mix) Could not find an SCM for dependency :hex
+** (Mix) Could not find an SCM for dependency :hex from Mix.Local.Installer.MixProject
+$ mix local.hex --force        -> * creating /root/.mix/archives/hex-2.5.1
+$ mix archive.install hex --force phx_new 1.6.16   -> * creating /root/.mix/archives/phx_new-1.6.16
 ```
 
-Running `mix local.hex --force` first makes the next `archive.install` work — verified in the
-same container.
+**What the ruling is, exactly.** LiNix does not install Hex silently and does not merely print
+the command. It says what is missing and what it would run, and runs it if you agree —
+`--yes` agreeing in advance, which is the same flag that already answers the plan. A
+non-interactive run without `--yes` says what it would have asked and changes nothing, because
+an installer that runs because a config file said so and nobody was there to look is the risk
+the II.12 ledger exists for.
 
-**Recommendation: yes, bootstrap it.** LiNix already offers to install a missing *manager*
-before it plans (II.7 phase 0), and Hex is the same shape one level down: a prerequisite of the
-manager's own install path, not a package the user asked for. Installing it silently is what
-`declarative means no asking` implies.
+**Where it lives:** `[[prereq]]` rows, shipped compiled-in
+(`src/app/apply/prereq_builtins.toml`) and extensible per repo through
+`adapters/prereq.toml`, which rides the II.12 ledger like every other `adapters/` file. The
+offer runs in II.7's phase 0, right after the bootstrap offer that gets a missing manager.
 
-**Why this is not built.** It is a behaviour a user would notice — LiNix would run a command
-they did not type, against a package registry — and `CLAUDE.md` reserves that for a ruling. The
-alternative, if the answer is no, is that the `mix` backend refuses with the sentence mix itself
-prints, which is at least actionable.
+Two defects were found underneath this one and fixed with it, neither of them Hex's fault:
 
-Until it is ruled, a `mix:` install fails on a machine without Hex, with mix's own message.
+- **The canary could never have passed.** `mix:hex` was the harness's mix canary, and
+  `mix archive.install hex hex` answers `No package with name hex (from: mix.exs) in registry`
+  even with Hex present. The Hex defect and an impossible canary were reported as one failure.
+- **`mix archive.uninstall` without `--force` prompts**, takes the empty answer from a closed
+  stdin, **exits 0 and leaves the archive installed.** LiNix reported removals that did not
+  happen — the scoop-exit-0 shape (E7), one manager over.
+
+The rule is in **II.7**; the reason is in **V.102**.
 
 ---
 
 ## Q11
 
-**Status: OPEN.**
+**Status: ANSWERED.**
 
-**Q11 — What should `opam:` do on a machine with no opam switch?**
+**Q11 — What should `opam:` do on a machine with no opam switch?** **RULED 2026-07-29 (owner):
+offer to create one, ask first, `--yes` forces it — and `check health` stops calling opam ready
+until there is one.** Same ruling as Q10 and Q13, and the same mechanism.
 
-Measured in the `tools` container, 2026-07-28:
+Measured in the `tools` container:
 
 ```
-$ opam install -y jq
-[ERROR] No switch is currently set. Please use 'opam switch' to set or install a switch
-$ opam switch list
-#  switch  compiler  description        (no rows)
+$ opam switch show     -> [ERROR] No switch is currently set   (exit 50)
+$ opam install -y ocamlfind -> the same error, exit 50
+with a switch:  opam switch show -> `default` (exit 0), and the install succeeds.
 ```
 
-opam is installed and answers, but it has no switch, and every install fails until one exists.
-Nothing in LiNix creates one and nothing says this is why.
+**The compiler is still not chosen for you.** The offered command is
+`opam switch create default ocaml-system` — the compiler the machine already has. It is not a
+version number, because pinning one is choosing for someone: it fixes the compiler for the
+whole account and it is a long build. On a machine with no OCaml at all it fails in four
+seconds with opam's own `unmet availability conditions`, which is the point at which the choice
+really is the user's and they name one. That is what the earlier recommendation ("report it, do
+not create one") was protecting, and asking protects it too.
 
-**Recommendation: report it, do not create one.** A switch pins an OCaml compiler for the whole
-account; choosing one on a user's behalf is a larger decision than installing a package, and the
-wrong choice is slow to undo. `check health` should report `opam` as unusable-with-a-reason
-rather than `[READY]`, and an install should refuse with the `opam switch create` command to
-run — which is the E6c/W11 shape (a backend that reports health and cannot work) applied to a
-state rather than to a missing binary.
+**The health half is built.** A manager that is installed, answers `list`, and cannot install
+anything is reported **degraded** with the reason and the command — not `[READY]`. Degraded
+rather than critical: reads genuinely work and the fix is one line. This is the W11 shape
+(a backend that reports health and cannot work) applied to a *state* rather than to a missing
+binary, and it is checked for manager-level prerequisites only — a per-package one like asdf's
+plugin is a question about a declaration, and `check health` has no declarations.
 
-**Why this is not built.** Both halves change what a user sees — `check health`'s verdict and a
-new refusal — so both need a ruling.
+**The `tools` image was also wrong, and that is fixed here.** Its Dockerfile ran
+`opam switch create default` with no compiler and swallowed the failure with `|| echo "SKIP
+opam init"`, so the image has shipped with no switch since it was written, every opam install
+in it failed, and the nightly job read that as an opam defect. It now installs `ocaml-nox`,
+creates the switch with `ocaml-system`, and asserts `opam switch show` succeeds — a setup step
+nobody checks is a setup step that quietly stops happening.
 
-Until it is ruled, `opam:` installs fail on a switchless machine with opam's own message.
+The rule is in **II.7**; the reason is in **V.102**.
 
 ---
 
@@ -3504,5 +3527,42 @@ What is binding:
    command" shape again.
 
 The rule is in **IV.1**; the reason is in **V.101**.
+
+---
+## Q13
+
+**Status: ANSWERED.**
+
+**Q13 — Should `asdf:` add the plugin a declared tool needs?** **RULED 2026-07-29 (owner): yes,
+asking first, `--yes` forces it.** Raised with Q10 and Q11 as one question, because they are one
+question: *when a manager needs a setup step before it can install anything, does LiNix do it or
+print it?*
+
+Measured in the `tools` container (asdf v0.14.1):
+
+```
+$ asdf install nodejs latest   -> No such plugin: nodejs      (exit 1)
+$ asdf plugin add jq           -> exit 0
+$ asdf install jq latest       -> jq 1.8.2 installed!
+$ asdf plugin add jq           -> `Plugin named jq already added`, exit 0
+```
+
+**This is the row that most needs asking rather than doing, and the owner's ruling gives it
+that.** An asdf plugin is a third-party git repository whose shell scripts asdf then executes;
+it is not a package download. The offer prints the repository-fetching command before it runs.
+
+Two details the mechanism gets from this row specifically:
+
+- **It is per declared tool, not per manager.** The plugin *is* the package name, so the row is
+  offered once per line rather than once per `asdf:`. That is read off the argv (`{name}`), not
+  declared beside it, so a row cannot claim one and be written as the other.
+- **The probe reads output, not an exit code.** `asdf plugin list` exits 0 and prints
+  `No plugins installed`, so an exit-code probe would report every missing plugin as present.
+  One line of the output, trimmed, must equal the name — `jq` must not be answered by `jqx`.
+
+The harness canary moved from `nodejs` to `jq` at the same time: both need the plugin, and jq's
+downloads one binary in seconds where nodejs fetches a release tarball.
+
+The rule is in **II.7**; the reason is in **V.102**.
 
 ---

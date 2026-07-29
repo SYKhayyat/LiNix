@@ -726,6 +726,42 @@ first pass because a `vars` file names no backend.
      rule 5.)*
 7. Produce the desired state.
 
+### II.7a The setup a manager needs before it can install anything
+
+*(Owner ruling, 2026-07-29 — Q10, Q11, Q13.)*
+
+Phase 0 has two halves and they run in this order:
+
+1. **A manager the configuration declares and this machine lacks** is offered, from a
+   `[[bootstrap]]` row (7c).
+2. **A manager that IS here and cannot install anything until something is set up** is offered,
+   from a `[[prereq]]` row. `mix` needs Hex; `asdf` needs the plugin for the tool named on the
+   line; `opam` needs a switch. Each of these made *every* install through that manager fail,
+   with the manager's own message and nothing LiNix could do about it.
+
+**Ask, then do — with `--yes` as the flag that forces it.** LiNix prints what is missing and the
+exact command, and runs it only if you agree. `--yes` agrees in advance, because a run that has
+already answered "apply the plan" has answered this too and a second yes-flag is one more thing
+to pass. A non-interactive run without `--yes` says what it would have asked and changes
+nothing. `--dry-run` says the same and changes nothing.
+
+**A row must be able to tell whether it is needed.** Every row carries a `probe`; a row with
+none would act on every sync. The probe's exit code is the answer, unless the row names
+`probe_output`, in which case one line of the probe's output must equal it — `asdf plugin list`
+exits 0 whatever it says.
+
+**A row whose command names `{name}` is about one declared package**, and is offered once per
+line rather than once per manager. That is read off the argv, not declared beside it.
+
+Rows ship compiled in, and a repo adds its own in `adapters/prereq.toml`, which rides the II.12
+ledger like every other `adapters/` file. The built-in file does not, for the reason
+`snapshot_builtins.toml` does not: gating a first-party compiled-in asset would leave a fresh
+machine unable to install through `mix` until `linix lock` had run.
+
+**`check health` reports a manager whose manager-level prerequisite is unmet as degraded**, with
+the reason and the command — never `[READY]`. Degraded rather than critical because its reads
+genuinely work. Per-package rows are not health's question: it has no declarations to ask about.
+
 ### II.7b Which managers a line will accept
 
 **The problem** (owner ruling, 2026-07-22). `apt:rg` says you want apt's ripgrep, and on a

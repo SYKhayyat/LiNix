@@ -14,6 +14,98 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-29 — what the nightly jobs were saying, and the ruling that closed the register
+
+**Two nightly jobs were red and the seven failures in them were four separate faults.** The
+per-push matrix was green throughout, which is why this took a nightly to surface: `tools` and
+the two native sweeps only run on a schedule or a dispatch.
+
+**1. Four "X is on PATH" failures, and neither half was where it looked.** `github: fd`,
+`go: hello`, `yarn: cowsay` (Windows runner) and `nimble: nimjson` (`tools`) all installed
+correctly and all showed up in `list`.
+
+- The **product** had no answer for two of the directories. `reachable.rs` — the E6c/W4 warning
+  that names a bin directory the machine's PATH does not — had no entry for `github`/`web`/
+  `appimage`, which is **LiNix's own deploy directory**, and it cleared `npm`/`yarn`/`pnpm`/`bun`
+  as "their installer wires that up". CI falsified the second claim for yarn. A constant would
+  have been wrong too: `yarn global bin` reads `…\scoop\apps\yarn\current\global\bin` on the
+  developer's box and `/c/npm/prefix/bin` on the runner, so those four are asked now, and a tool
+  that cannot answer produces no claim rather than a guess.
+- **Three copies of `~/.local/bin` went with it.** `github.rs`, `web.rs` and `appimage.rs` each
+  built that path from `dirs::home_dir()` and ignored `Config::bin_dir` — the field whose own
+  comment says it exists so a sandbox can move it "which is what stops a test writing an
+  executable into the developer's real `~/.local/bin`". A sandboxed run put its shims in the
+  sandbox and its downloads in the developer's home.
+- The **check** asked the host, not the product. W4's ruling is that an unreachable install
+  *warns*; `on_path` fails runs where LiNix did everything it promised, and — the half that
+  matters — passes runs where it said nothing at all, as long as the machine happens to be
+  wired. That is why the developer's box never saw it: `~/go/bin` and `~/.local/bin` are both on
+  PATH here. `assert_binary_reachable` asserts the promise; `binary_present` and a fourth
+  argument to `assert_binary_gone` close the same hole in the survived-unmanage,
+  gone-after-uninstall, dry-run-did-not-install and reinstalled-by-rebuild checks, which had all
+  been reading PATH for "is it on the machine".
+
+**Proven on the runner rather than argued:** all three Windows failures came back as
+`PASS github: fd is not on PATH, and the install said so, naming /c/Users/runneradmin/.local/bin`
+and the same for go and yarn.
+
+**2. The three `tools` failures were one question, and the owner ruled it.** `mix` had no Hex,
+`asdf` had no plugin for the tool it was handed, `opam` had no switch; each made *every* install
+through that manager fail. Q10 and Q11 had been open since 2026-07-28 and asdf joined them as
+Q13. **Ruled 2026-07-29: LiNix asks whether to do the setup for you, with a flag to force it.**
+That is `[[prereq]]` rows — compiled in, extensible per repo through `adapters/prereq.toml` on
+the II.12 ledger — offered in II.7 phase 0 right after the bootstrap offer, with `--yes` as the
+flag. II.7a and V.102 carry it, and **the register is now at zero open for the first time**
+(122 entries: 120 answered, 2 parked).
+
+Every argv in those rows was measured in the `tools` image, and the measuring found two more
+defects that the first one had been hiding:
+
+- **The mix canary could never have passed.** `mix:hex` was it, and `mix archive.install hex hex`
+  answers `No package with name hex (from: mix.exs) in registry` even with Hex present. An
+  impossible canary and a real defect were reported as one failure. It is `phx_new@version=1.6.16`
+  now — pinned, because this image's Elixir is 1.14 and the current release declares `~> 1.17`,
+  which also meant adding the positional version pin `mix` never had.
+- **`mix archive.uninstall` without `--force` prompts**, takes the empty answer from a closed
+  stdin, exits 0 and leaves the archive installed. LiNix reported removals that never happened —
+  E7's shape, one manager over.
+
+**And the `tools` image itself was wrong.** Its Dockerfile ran `opam switch create default` with
+no compiler and swallowed the failure with `|| echo "SKIP opam init"`, so the image has never
+had a switch, every opam install in it failed, and the nightly read that as an opam defect. It
+installs `ocaml-nox`, creates the switch with `ocaml-system`, and asserts `opam switch show`
+succeeds.
+
+**3. A bug I introduced, found the same way — by pushing and reading.** The four new PATH
+helpers were defined beside `assert_binary_gone` at line 617 and called from section 5 at line
+329. Shell reads top to bottom, so those calls were `command not found`: one check reported
+`rc=127` and **one vanished entirely** — no PASS, no FAIL, nothing in the count. The container
+harness had three of them.
+
+That is a class, not an incident, so it has a gate: `harness-logic-test.sh` now checks that every
+harness function is defined above the first place the script *calls* it. Only top-level calls
+count — a name used inside another function body is resolved when that body runs — and quoted
+text is not a call, which took two attempts: the first version reported `echo "[5] Real
+lifecycle"` and `ok "sync commits" …` as call sites. Verified by putting `binary_present` back
+where it was and watching the gate name it.
+
+**4. The drift gate does not get the setup commands, and that is measured rather than assumed.**
+Feeding them in was the obvious move — they are argv LiNix runs on a manager. But the gate
+confirms a finding by running `<subcommand> --help`, and in the `tools` image `mix local.hex
+--help` offers to install Hex while `asdf plugin add --help` clones asdf's entire plugin
+repository. A gate that changes the machine it is auditing is worse than one that skips it, so
+`mix` and `asdf` are exempt *with that measurement written down*, and the rows' argv is verified
+by the nightly lifecycle instead.
+
+**Also true and worth stating: the mutation experiment did not catch the ordering bug**, because
+a `command not found` on stderr does not fail a run and the check it silenced was one the stub
+run never reached. The lexical gate exists for exactly that reason.
+
+Verified here: `cargo build --all-targets`, `cargo test`, `cargo clippy --all-targets
+--all-features -- -D warnings`, `cargo fmt -- --check`, `harness-logic-test.sh` 54/54,
+`decision-count.sh --check`. **Not yet verified:** the `tools` and Windows nightly jobs have not
+run against the prereq work — the run that proved the reachability half predates it.
+
 ## Session 2026-07-28 (later) — the push, what CI said, and Q6
 
 **The 25 unpushed commits went to CI and CI was right to fail.** Four things had been green

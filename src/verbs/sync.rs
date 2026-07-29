@@ -70,6 +70,12 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     // not there, and finding that out per-package is a pile of identical failures.
     app.bootstrap().offer(&state).await?;
 
+    // And the half after it: a manager that IS here and cannot install anything until
+    // something is set up — Hex for `mix`, a plugin for `asdf`, a switch for `opam` (Q10, Q11,
+    // Q13). After the bootstrap, because probing a manager this machine does not have would
+    // ask a question with no answer.
+    app.prereqs().offer(&state).await?;
+
     // Ordering phase 1: repos → refresh indexes. A package from a PPA cannot install until
     // the PPA is added, so this runs before the package plan (not inside it).
     app.repositories().apply(&state).await?;

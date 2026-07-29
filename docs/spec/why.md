@@ -1804,3 +1804,41 @@ that distinction is the finding rather than noise around it.
 **And it goes in both harnesses.** The same audit exists in the native sweep and the container
 sweep, and putting the ratchet in one would be `guard.rs`'s own lesson — a check on one path is a
 check on nothing — repeated in the file that measures the checks.
+
+**V.102 — Why LiNix asks before setting a manager up, and why it does it at all.** *(Owner
+ruling, 2026-07-29 — Q10, Q11, Q13.)* Three managers in the `tools` image failed **every**
+install, and not one of the failures was a LiNix defect: `mix` had no Hex, `asdf` had no plugin
+for the tool it was handed, `opam` had no switch. Each printed an accurate message that the
+person reading the CI log could act on, and LiNix — which knew the command — printed it and
+stopped.
+
+**Doing it silently was the obvious answer and it is the wrong one.** `asdf plugin add` clones a
+third-party git repository whose shell scripts asdf then executes. `opam switch create` builds a
+compiler and pins it for the whole account. Those are not "one more command"; they are the kind
+of thing that must not happen because a config file said so and nobody looked — the same
+sentence II.12's ledger exists for, and the same one `[[bootstrap]]` was already written around.
+
+**Printing it and stopping was the other obvious answer and it is also wrong**, for the reason
+P8 gives: LiNix does the thing, it does not hand you the thing to do. A tool that knows the
+command, is holding the terminal, and asks you to go and type it yourself has chosen the least
+useful of the three options.
+
+So it asks, and `--yes` answers in advance. The flag was not invented for this — it is the one
+that already means "I have decided, proceed" — and a second one would have split the same
+question in two.
+
+**The probe is the part that keeps it from becoming noise.** A row that could not tell whether it
+was needed would offer on every sync, and an offer you see every day is an offer you stop
+reading. It also had to be the *right* probe: `asdf plugin list` exits 0 and prints `No plugins
+installed`, so an exit-code probe reports every missing plugin as present — the shape of the
+`command -v` bug in `CLAUDE.md`, one tool over. And line-exact rather than a substring, so `jq`
+is not answered by `jqx`.
+
+**Two defects were hiding behind the first one**, which is why this entry names them. The mix
+canary was `mix:hex`, and `mix archive.install hex hex` cannot succeed even with Hex present —
+so an impossible canary and a real defect were reported as one failure, and fixing either alone
+would have left the check red and looking fixed. And `mix archive.uninstall` without `--force`
+prompts, takes the empty answer from a closed stdin, exits 0, and leaves the archive installed:
+LiNix reported removals that never happened, which is E7's shape in a manager nobody had looked
+at. A prerequisite that hides two other bugs is the ordinary case, not a surprise: nothing
+downstream of a manager that cannot install anything is ever exercised.

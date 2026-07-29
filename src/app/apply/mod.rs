@@ -10,6 +10,7 @@ pub mod dotfiles;
 pub mod execs;
 pub mod extras;
 pub mod firewall;
+pub mod prereq;
 pub mod repositories;
 pub mod schedules;
 
@@ -19,5 +20,6 @@ pub use dotfiles::Dotfiles;
 pub use execs::Execs;
 pub use extras::Extras;
 pub use firewall::Firewall;
+pub use prereq::Prereqs;
 pub use repositories::Repositories;
 pub use schedules::Schedules;

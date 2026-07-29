@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # unavailable on this release is skipped instead of failing the whole image build. (nimble
 # ships inside the `nim` package; `mix` inside `elixir`; `cabal` in `cabal-install`.) Also
 # emacs (emacs backend), flatpak and dotnet so those backends come up READY.
-RUN for p in php-cli composer golang-go opam lua5.4 luarocks nim \
+RUN for p in php-cli composer golang-go opam ocaml-nox lua5.4 luarocks nim \
              ghc cabal-install haskell-stack elixir \
              emacs-nox flatpak dotnet8; do \
         apt-get install -y --no-install-recommends "$p" || echo "SKIP unavailable apt pkg: $p"; \
@@ -103,7 +103,15 @@ ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:/root/go/bin:/root/.d
 #  - flatpak: add the flathub remote so `flatpak install` has a source
 #  - dart: warm pub so `dart pub global activate` works
 # All best-effort; a step that can't complete just leaves that backend to soft-skip at runtime.
-RUN opam init --disable-sandboxing --bare -y 2>/dev/null && opam switch create default 2>/dev/null || echo "SKIP opam init"
+# `ocaml-system` — the compiler apt installs above — and not the bare `opam switch create
+# default` that was here, which fails: opam wants to know WHICH compiler, and `|| echo SKIP`
+# swallowed the answer. So the image has shipped with no switch, every opam install in it
+# failed with `No switch is currently set`, and the nightly job read that as an opam defect.
+# Asserted rather than best-effort, for the same reason: a setup step nobody checks is a setup
+# step that quietly stops happening.
+RUN opam init --disable-sandboxing --bare -y \
+ && opam switch create default ocaml-system \
+ && opam switch show
 RUN (cabal update || true) 2>/dev/null; echo done
 RUN (nimble -y refresh || true) 2>/dev/null; echo done
 RUN (/opt/spack/bin/spack compiler find || true) 2>/dev/null; echo done

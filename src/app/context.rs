@@ -208,6 +208,14 @@ impl App {
         }
     }
 
+    pub fn prereqs(&self) -> crate::app::Prereqs<'_> {
+        crate::app::Prereqs {
+            config: &self.config,
+            executor: &self.executor,
+            registry: &self.registry,
+        }
+    }
+
     pub fn execs(&self) -> crate::app::Execs<'_> {
         crate::app::Execs {
             config: &self.config,

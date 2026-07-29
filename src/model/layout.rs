@@ -149,6 +149,12 @@ impl Layout {
         self.adapters_dir().join("bootstrap.toml")
     }
 
+    /// `[[prereq]]` — the setup a manager needs before it can install anything (Q10/Q11/Q13).
+    /// LiNix ships rows for the three that were measured; this is where a user adds a fourth.
+    pub fn adapter_prereq_file(&self) -> PathBuf {
+        self.adapters_dir().join("prereq.toml")
+    }
+
     /// `[[init]]` — how to drive an init system LiNix does not ship a built-in for (U36).
     pub fn adapter_init_file(&self) -> PathBuf {
         self.adapters_dir().join("init.toml")

@@ -1,0 +1,59 @@
+# The setup a manager needs before it can install anything (Q10, Q11, Q13).
+#
+# Rows, not Rust, for the reason every other adapter table here is data: the fourth manager
+# with this shape should be a row somebody writes, not a release somebody waits for. A user's
+# own rows live in `adapters/prereq.toml` and are read first, so disagreeing with one of these
+# is writing a row rather than editing LiNix.
+#
+# Every argv below was measured in the `tools` image on 2026-07-29, not read off a manual.
+#
+# `probe` answers "is it already there". Its exit code is the answer unless `probe_output` is
+# set, in which case one line of its output, trimmed, must equal that. `{name}` is the declared
+# package, and a row that mentions it is asked once per line rather than once per manager.
+
+# Measured:
+#   $ mix archive.install hex phx_new 1.6.16 --force
+#   Could not find Hex, which is needed to build dependency :hex
+#   ** (Mix) Could not find an SCM for dependency :hex
+#   $ mix local.hex --force        -> creating /root/.mix/archives/hex-2.5.1
+#   $ mix archive.install hex phx_new 1.6.16 --force  -> installs
+# `mix hex.info` is the probe because it is Hex's own task: without Hex it is
+# `** (Mix) The task "hex.info" could not be found`, exit 1; with it, exit 0.
+[[prereq]]
+manager = "mix"
+missing = "Hex, the package client `mix archive.install hex …` fetches through"
+probe = ["mix", "hex.info"]
+run = ["mix", "local.hex", "--force"]
+
+# Measured:
+#   $ asdf install nodejs latest   -> No such plugin: nodejs        (exit 1)
+#   $ asdf plugin add jq           -> exit 0
+#   $ asdf install jq latest       -> jq 1.8.2 installed!
+# The plugin IS the package name, so this is asked once per declared tool. The probe reads
+# output rather than an exit code: `asdf plugin list` exits 0 and prints `No plugins installed`,
+# so the exit code says "present" for every plugin that is not.
+#
+# This is the row that most needs asking rather than doing: an asdf plugin is a third-party git
+# repository whose shell scripts asdf then runs.
+[[prereq]]
+manager = "asdf"
+missing = "asdf's `{name}` plugin — the definition of what `{name}` means, fetched from asdf's plugin repository"
+probe = ["asdf", "plugin", "list"]
+probe_output = "{name}"
+run = ["asdf", "plugin", "add", "{name}"]
+
+# Measured:
+#   $ opam switch show    -> [ERROR] No switch is currently set   (exit 50)
+#   $ opam install -y ocamlfind -> the same error, exit 50
+#   with a switch:  switch show -> `default`, exit 0, and the install succeeds.
+#
+# `ocaml-system` — the compiler the machine already has — and not a version number, because
+# picking a version is choosing for someone: it pins the compiler for the whole account and it
+# is a long build. On a machine with no OCaml at all this fails in four seconds with opam's own
+# `unmet availability conditions`, which is the point at which the choice is genuinely the
+# user's and they name one.
+[[prereq]]
+manager = "opam"
+missing = "an opam switch — the OCaml compiler every opam install builds against"
+probe = ["opam", "switch", "show"]
+run = ["opam", "switch", "create", "default", "ocaml-system"]
