@@ -383,7 +383,12 @@ impl GenericInstallable {
                     .take_while(|a| !a.starts_with('-'))
                     .cloned()
                     .collect();
-                if crate::core::tool_help::accepts_flag(self.core.binary(), &chain, arg) {
+                // Withheld only on positive evidence that the tool rejects it. `None` — no
+                // such program here, or its help would not run — leaves the capability table
+                // in charge, because a probe that cannot ask has learned nothing.
+                if crate::core::tool_help::accepts_flag(self.core.binary(), &chain, arg)
+                    != Some(false)
+                {
                     final_args.push(arg.to_string());
                 } else {
                     tracing::warn!(
@@ -1183,10 +1188,29 @@ mod tests {
         );
     }
 
+    /// Does the helm on THIS machine, if any, accept the opt-out flag?
+    ///
+    /// The two tests below assert that `@unverified` reaches the command line as helm's own
+    /// flag. Since G-8 that is conditional on what the installed helm documents, so on a
+    /// helm 3 host the premise is false and the right outcome is to say so rather than to
+    /// fail. `None` (no helm here, as on every CI runner) leaves the capability table in
+    /// charge, so the flag is emitted and the assertion holds.
+    fn this_hosts_helm_takes_the_opt_out() -> bool {
+        crate::core::tool_help::accepts_flag(
+            "helm",
+            &["plugin".to_string(), "install".to_string()],
+            "--verify=false",
+        ) != Some(false)
+    }
+
     /// Q5. `@unverified` is what turns off a verification the *manager* does, and it reaches
     /// the command line as that manager's own flag.
     #[tokio::test]
     async fn unverified_becomes_the_managers_own_opt_out_flag() {
+        if !this_hosts_helm_takes_the_opt_out() {
+            eprintln!("this host's helm rejects --verify; the premise of this test is false here");
+            return;
+        }
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         let inst = GenericInstallable {
@@ -1241,6 +1265,10 @@ mod tests {
     /// global-switch failure `@unverified` is per-line to avoid.
     #[tokio::test]
     async fn a_mixed_batch_does_not_hand_one_lines_opt_out_to_another() {
+        if !this_hosts_helm_takes_the_opt_out() {
+            eprintln!("this host's helm rejects --verify; the premise of this test is false here");
+            return;
+        }
         let vfs = Arc::new(DashMap::new());
         let mock = Arc::new(MockExecutor::new(vfs.clone()));
         let inst = GenericInstallable {

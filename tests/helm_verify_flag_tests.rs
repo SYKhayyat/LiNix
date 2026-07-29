@@ -83,13 +83,15 @@ fn the_unverified_flag_is_emitted_only_where_the_tool_takes_it() {
     let v4 = linix::core::tool_help::accepts_flag("helmfake4", &chain, "--verify=false");
     let v3 = linix::core::tool_help::accepts_flag("helmfake3", &chain, "--verify=false");
 
-    assert!(
+    assert_eq!(
         v4,
+        Some(true),
         "helm 4's own `plugin install --help` documents `--verify`, so LiNix must still use it \
          — otherwise this fix would have removed E11's fix instead of conditioning it"
     );
-    assert!(
-        !v3,
+    assert_eq!(
+        v3,
+        Some(false),
         "helm 3's `plugin install --help` has no `--verify`, and LiNix passed it anyway: \
          `Error: unknown flag: --verify`. The flag came from helm 4's error text on one \
          machine and was shipped to every machine."
@@ -115,12 +117,14 @@ fn a_longer_flag_is_not_mistaken_for_the_one_being_asked_about() {
         help.contains("--kube-insecure-skip-tls-verify"),
         "the fixture no longer contains the flag this test is about; re-capture it"
     );
-    assert!(
-        !linix::core::tool_help::accepts_flag("helmfake3b", &chain, "--verify=false"),
+    assert_eq!(
+        linix::core::tool_help::accepts_flag("helmfake3b", &chain, "--verify=false"),
+        Some(false),
         "`--kube-insecure-skip-tls-verify` was read as `--verify`"
     );
-    assert!(
+    assert_eq!(
         linix::core::tool_help::accepts_flag("helmfake3b", &chain, "--kube-context"),
+        Some(true),
         "the control failed: a flag helm 3 really does document was not found, so the \
          assertion above would pass for a probe that always says no"
     );

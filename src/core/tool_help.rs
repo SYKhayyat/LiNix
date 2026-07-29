@@ -20,20 +20,27 @@ use std::sync::{Mutex, OnceLock};
 
 /// Answers already obtained this run. A manager's help does not change while LiNix is running,
 /// and an install of forty plugins must not launch forty help processes.
-fn cache() -> &'static Mutex<HashMap<String, bool>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+fn cache() -> &'static Mutex<HashMap<String, Option<bool>>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Option<bool>>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Does `program <chain…> --help` mention `flag`?
 ///
-/// `false` when the help cannot be read at all. That is the safe direction here: the flag
-/// exists to *relax* a check, so omitting it leaves the manager's own verification on, and a
-/// refusal the user can read beats an `unknown flag` they cannot act on.
+/// **`None` means the tool could not be asked** — it is not on this machine, or its help would
+/// not run — and that is deliberately different from `Some(false)`. The capability table is the
+/// default; this probe exists to *correct* it where there is evidence, never to overrule it
+/// with silence.
+///
+/// The first version returned a bare `bool` and folded "could not ask" into "does not accept".
+/// It passed here, where helm v4 is installed, and broke two unit tests on every CI runner,
+/// which has no helm at all: the argv builder had quietly acquired a dependency on the host.
+/// That is the finding this whole round is about — a check whose answer depends on something
+/// nobody enumerated — committed while fixing it.
 ///
 /// The flag is matched without its `=value` tail, since help text writes `--verify` and the
 /// argv writes `--verify=false`.
-pub fn accepts_flag(program: &str, chain: &[String], flag: &str) -> bool {
+pub fn accepts_flag(program: &str, chain: &[String], flag: &str) -> Option<bool> {
     let name = flag.split('=').next().unwrap_or(flag);
     let key = format!("{} {} {}", program, chain.join(" "), name);
     if let Some(hit) = cache().lock().ok().and_then(|c| c.get(&key).copied()) {
@@ -56,8 +63,7 @@ pub fn accepts_flag(program: &str, chain: &[String], flag: &str) -> bool {
                 String::from_utf8_lossy(&o.stderr)
             );
             mentions_flag(&text, name)
-        })
-        .unwrap_or(false);
+        });
 
     if let Ok(mut c) = cache().lock() {
         c.insert(key, answer);
@@ -107,14 +113,18 @@ mod tests {
     }
 
     #[test]
-    fn a_program_that_does_not_exist_accepts_nothing() {
-        // The safe direction: unreadable help means the flag is not emitted, so the manager's
-        // own verification stays on rather than the install dying on `unknown flag`.
-        assert!(!accepts_flag(
-            "linix-no-such-program-zzz",
-            &["plugin".into(), "install".into()],
-            "--verify=false"
-        ));
+    fn a_program_that_is_not_here_answers_nothing_rather_than_no() {
+        // `None`, not `Some(false)`. A tool that is absent has said nothing about its flags,
+        // and treating silence as a refusal is what broke two unit tests on every CI runner
+        // while passing on the one machine that happened to have helm.
+        assert_eq!(
+            accepts_flag(
+                "linix-no-such-program-zzz",
+                &["plugin".into(), "install".into()],
+                "--verify=false"
+            ),
+            None
+        );
     }
 
     #[test]
