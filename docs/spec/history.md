@@ -101,10 +101,43 @@ by the nightly lifecycle instead.
 a `command not found` on stderr does not fail a run and the check it silenced was one the stub
 run never reached. The lexical gate exists for exactly that reason.
 
+### What the nightly said next, which is the half worth reading
+
+**The Windows sweep went green** — 274 pass, 0 fail — and the `tools` image went from six
+failures to two. mix, asdf and opam each installed for real for the first time: the offers
+fired under `-y`, the switch fix landed, and `opam installed ocamlfind for real` is a line that
+image had never printed. The two that remain are both **new findings from the checks added this
+session**, which is what those checks are for:
+
+- **`opam: ocamlfind is not on PATH and nothing said where it went.`** True, and LiNix's fault:
+  opam installs into the current switch's `bin`, and it expects `eval $(opam env)`, which a
+  declaration cannot do for you. There is no constant to write — `/root/.opam/default/bin` here,
+  something else under another switch — so opam joins the ask-the-tool family with `opam var bin`.
+- **`asdf: jq is gone from list (expected non-zero, got 0)`.** The removal worked; the *parser*
+  was wrong. `asdf list` prints an added plugin whether or not any version of it is installed
+  (`jq` followed by `  No versions installed`), and every unindented line was being read as an
+  installed package. That is permanent phantom drift — `sync` removes the version and finds it
+  again on the next run — and it is the E6 family in a fourth backend. Fixed with fixtures
+  captured from the tool on both sides of an uninstall.
+
+**And one regression I caused and the sweep caught.** Q11's health half demotes a manager whose
+setup is missing, so `mix` stopped being `[READY]` in an image with no Hex — and the sweep builds
+its lifecycle list from `[READY]`, so mix silently dropped to a plan-smoke and the run still said
+PASS. The health verdict is right; the sweep's rule was too narrow. Both harnesses now also
+lifecycle a backend that is degraded *only* because of a setup step LiNix offers to run, since
+`lx -y install` performs that setup — leaving them out tests the offer nowhere.
+
+**A ✅ I wrote that was not earned.** I reported this session's `cargo fmt -- --check` as clean.
+It was not: the diff was in my own verification log, twenty lines below where I stopped reading,
+because I had filtered that log for test results and error lines — neither of which rustfmt
+prints. CI's ubuntu job read the same command's output correctly and failed. Rule 9 says a ✅ is
+earned by a command; this is the narrower version of it — **a filter chosen for one tool's output
+silently answers for every tool behind it.**
+
 Verified here: `cargo build --all-targets`, `cargo test`, `cargo clippy --all-targets
---all-features -- -D warnings`, `cargo fmt -- --check`, `harness-logic-test.sh` 54/54,
-`decision-count.sh --check`. **Not yet verified:** the `tools` and Windows nightly jobs have not
-run against the prereq work — the run that proved the reachability half predates it.
+--all-features -- -D warnings`, `cargo fmt -- --check` (read in full this time),
+`harness-logic-test.sh` 54/54, `decision-count.sh --check`. **Not yet verified:** the nightly has
+not run against the opam/asdf/coverage fixes above.
 
 ## Session 2026-07-28 (later) — the push, what CI said, and Q6
 

@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 /// - **LiNix's own deploy directory** for the artifact backends. It is `[bin_dir]` and nothing
 ///   else, so the sentence this file prints cannot name a directory the deploy did not use.
 /// - **The tool's own answer**, for the managers whose global directory is decided by how they
-///   were installed. `yarn global bin` reads `…\scoop\apps\yarn\current\global\bin` on the
+///   were installed, or by which switch is selected. `yarn global bin` reads `…\scoop\apps\yarn\current\global\bin` on the
 ///   developer's box and `%LOCALAPPDATA%\Yarn\bin` on a clean runner; a constant would be wrong
 ///   on one of them, and was.
 /// - **The ecosystem's convention**, for the managers that have one, with the environment
@@ -77,6 +77,12 @@ async fn asks_the_tool(backend: &str, exec: &CommandExecutor) -> Option<Vec<Path
         "pnpm" => ("pnpm", &["bin", "-g"]),
         "bun" => ("bun", &["pm", "bin", "-g"]),
         "npm" => ("npm", &["prefix", "-g"]),
+        // opam's directory belongs to the current switch, so there is no constant to write:
+        // `/root/.opam/default/bin` here, something else on a machine with another switch
+        // selected, and nothing at all without one. Measured in the `tools` image 2026-07-29,
+        // where `opam install -y ocamlfind` succeeded and `ocamlfind` was on nobody's PATH —
+        // opam expects `eval $(opam env)`, which a declaration cannot do for you.
+        "opam" => ("opam", &["var", "bin"]),
         _ => return None,
     };
     let out = exec.run_output(prog, args, false).await.ok()?;
@@ -314,10 +320,21 @@ mod tests {
     /// And the control: a tool that cannot answer produces no claim. yarn berry has no `global`
     /// subcommand, and a machine may not have yarn at all — inventing a directory there is how
     /// a warning starts naming somewhere the files are not.
+    /// opam's answer is the current switch's, so it cannot be a constant either — and it is
+    /// the one this family was extended for: measured in the `tools` image, `opam install -y
+    /// ocamlfind` succeeded and `ocamlfind` was on nobody's PATH, because opam expects
+    /// `eval $(opam env)` and a declaration cannot do that for you.
+    #[tokio::test]
+    async fn opam_answers_for_the_switch_that_is_selected() {
+        let dir = Path::new(SANDBOX).join(".opam").join("default").join("bin");
+        let (exec, cfg) = mocked(&[("opam var bin", &dir.display().to_string())]);
+        assert_eq!(user_bin_dirs("opam", &cfg, &exec).await, vec![dir]);
+    }
+
     #[tokio::test]
     async fn a_tool_that_cannot_answer_is_not_guessed_at() {
         let (exec, cfg) = mocked(&[]);
-        for be in ["yarn", "pnpm", "bun", "npm"] {
+        for be in ["yarn", "pnpm", "bun", "npm", "opam"] {
             assert!(
                 user_bin_dirs(be, &cfg, &exec).await.is_empty(),
                 "{be} did not answer and something answered for it"

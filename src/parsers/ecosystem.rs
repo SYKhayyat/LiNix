@@ -255,19 +255,35 @@ pub fn mix_archive(output: &str, backend: &str) -> Vec<Package> {
 /// versions of the preceding plugin and are skipped.
 pub fn asdf_list(output: &str, backend: &str) -> Vec<Package> {
     let clean = sanitize(output);
-    clean
-        .lines()
-        .filter(|l| {
-            !l.trim().is_empty() && !l.starts_with([' ', '\t']) && !l.trim_start().starts_with('*')
-        })
-        .filter_map(|l| {
-            let name = l.trim();
-            if is_header_token(name) {
-                return None;
+    let mut out: Vec<Package> = Vec::new();
+    let mut plugin: Option<String> = None;
+
+    // A plugin line is unindented; the versions installed under it are indented beneath it. A
+    // plugin with none still prints — `jq` followed by `  No versions installed` — so the name
+    // alone means "added", not "installed", and reading it as installed is drift `sync` can
+    // never converge: it removes the version and finds it again on the next run.
+    for line in clean.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.starts_with([' ', '\t']) {
+            let version = line.trim();
+            if version.eq_ignore_ascii_case("No versions installed") {
+                continue;
             }
-            Some(Package::new(name, backend))
-        })
-        .collect()
+            if let Some(name) = plugin.take() {
+                out.push(Package::new(&name, backend));
+            }
+            continue;
+        }
+        let name = line.trim();
+        if name.starts_with('*') || is_header_token(name) {
+            plugin = None;
+            continue;
+        }
+        plugin = Some(name.to_string());
+    }
+    out
 }
 
 /// emerge `--search`: package hits are `*  category/pkg` lines.
@@ -418,6 +434,44 @@ mod tests {
         assert_eq!(
             pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
             vec!["nodejs", "python"]
+        );
+    }
+
+    /// A plugin that is ADDED and has nothing installed is not an installed package, and
+    /// `asdf list` prints its name either way. Captured from asdf v0.14.1 in the `tools`
+    /// image, 2026-07-29, on both sides of an `asdf uninstall jq`:
+    ///
+    /// ```text
+    /// $ asdf list          $ asdf uninstall jq && asdf list
+    /// jq                   jq
+    ///   1.8.2                No versions installed
+    /// ```
+    ///
+    /// The sweep found it as `asdf: jq is gone from list (expected non-zero, got 0)`. LiNix
+    /// removed the version correctly and went on reporting it as installed, which is permanent
+    /// phantom drift: `sync` would take it away and put it back forever.
+    #[test]
+    fn asdf_list_does_not_report_a_plugin_with_nothing_installed() {
+        const INSTALLED: &str = include_str!("../../tests/fixtures/asdf/list-installed.txt");
+        const EMPTY_PLUGIN: &str =
+            include_str!("../../tests/fixtures/asdf/list-plugin-without-versions.txt");
+        const NO_PLUGINS: &str = include_str!("../../tests/fixtures/asdf/list-no-plugins.txt");
+
+        assert_eq!(
+            asdf_list(INSTALLED, "asdf")
+                .iter()
+                .map(|p| p.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["jq"],
+            "the control: a plugin WITH a version is installed"
+        );
+        assert!(
+            asdf_list(EMPTY_PLUGIN, "asdf").is_empty(),
+            "a plugin with no versions was reported as an installed package"
+        );
+        assert!(
+            asdf_list(NO_PLUGINS, "asdf").is_empty(),
+            "asdf's own empty-state sentence was read as a package"
         );
     }
 

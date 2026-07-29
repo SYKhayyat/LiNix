@@ -718,6 +718,20 @@ undeclare_canary() {
 }
 
 READY_LIST=$(lx check health 2>/dev/null | grep '^\[READY\]' | awk '{print $2}' | sort)
+
+# And the backends LiNix reports as degraded ONLY because a setup step it offers to run has not
+# been run (Q10/Q11/Q13). They belong in the lifecycle for the same reason they are degraded:
+# `lx -y install` performs that setup, so leaving them out tests the offer nowhere — which is
+# what happened the first night the health check shipped, when `mix` dropped from a real
+# lifecycle to a plan-smoke and the run still said PASS.
+#
+# The sentence is LiNix's own (`src/verbs/check.rs`); if it changes, this must change with it,
+# which is why it is one grep in one place rather than a pattern in each check.
+SETUP_LIST=$(lx check health 2>/dev/null \
+    | grep 'before it can install anything' \
+    | sed -n 's/.*\] *\([A-Za-z0-9_-]*\).*/\1/p' | sort)
+[ -n "$SETUP_LIST" ] && echo "        needs setup, and the sweep exercises it anyway: $(echo $SETUP_LIST | tr '\n' ' ')"
+READY_LIST=$(printf '%s\n%s\n' "$READY_LIST" "$SETUP_LIST" | grep -v '^[[:space:]]*$' | sort -u)
 echo "        READY backends: $(echo $READY_LIST | tr '\n' ' ')"
 
 lifecycle() {
