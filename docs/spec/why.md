@@ -1484,6 +1484,41 @@ harnesses deleted the line themselves before asserting it was gone**, so neither
 ever tested and both printed PASS for months. A rule that lives only in comments is a rule two
 comments can contradict.
 
+**V.90b — Why the resource half of the model is one computation and not five.** *(N-2,
+2026-07-29.)* G-1 listed three failures of the extras family: the teardown was unguarded,
+uncounted and invisible. Round 2 closed the first two at the mechanism and the third looked like
+a reporting detail. It was not. It was the model missing half of itself, and the reason it
+survived a green run is that **every command that could have contradicted the others was asking a
+different question of a different source.**
+
+Measured: `check` reported "the machine matches your files" with three `link:` lines declared and
+nothing on disk, and again after a file LiNix had placed was deleted behind its back. `sync`
+placed those files and printed `already up to date`, because its summary counted packages and the
+apply loop's per-item lines went out at a level below the default filter. `plan` froze
+`{"installs": [], "removals": []}` in both directions while `--dry-run sync` on the same tree
+named all three teardowns — and the guard's refusal text, new in round 2, tells the user to run
+`linix plan` to "see exactly what would be undone".
+
+**The two questions are separate and only one of them has a record.** The extras ledger knows what
+a previous sync put in place, which answers *has this ever been applied?* for all six kinds
+identically. It cannot answer *is it still in effect?* — a `link:` whose target a user deleted is
+recorded as applied and is gone. That half has to ask the machine, and the machine can only be
+asked about some kinds: a `link:` and a `shim:` are file tests, a `setting:` reads back through an
+adapter with no current value. So the answer is three-valued, and the third value is **named**.
+A command whose job is "does the machine match?" may say no, or yes, or *yes except these, which I
+did not look at* — but never the second when it means the third. That is the whole finding in one
+sentence, and it is the same sentence as the `[READY]`-backends-answer-`list` oracle in V.99.
+
+**A found sibling, recorded because it is the same disease in miniature.** `ShimManager` held two
+copies of the `.exe` rule. `create_shim` replaced any extension that was not `exe`; `remove_shim`
+appended one only when there was none. `shim:tool.bat` therefore deployed `tool.exe`, removal went
+looking for `tool.bat`, found nothing, and returned `Ok` — a shim left on PATH under a successful
+teardown. Nobody wrote the second copy wrong; it was written *the same day* and drifted. Giving
+the path one definition was a prerequisite for asking "is this shim in effect", which is how the
+divergence was found at all.
+
+---
+
 **V.91 — Why "not installed" is not "critical".** *(Owner ruling, 2026-07-27 — Q2.)* `check
 health` opened with `Backends: 25 OK, 0 degraded, 23 critical (of 48 total)` on an ordinary
 Windows box with nothing wrong. The 23 were apt, brew, pacman and the rest of Linux — managers

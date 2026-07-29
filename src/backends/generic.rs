@@ -459,16 +459,27 @@ impl GenericInstallable {
                 .run(self.core.binary(), &arg_refs, sudo)
                 .await
         };
-        outcome.map_err(|e| self.explain_verification(e, opting_out))?;
+        // The chain the flag would ride on, for the advice below: `plugin install` for helm.
+        let chain: Vec<String> = final_args
+            .iter()
+            .take_while(|a| !a.starts_with('-'))
+            .cloned()
+            .collect();
+        outcome.map_err(|e| self.explain_verification(e, opting_out, &chain))?;
         Ok(())
     }
 
     /// A manager that refuses an unsignable source names its own flag, which no declaration
-    /// can write. Point at the one that can.
-    fn explain_verification(&self, e: crate::core::Error, opting_out: bool) -> crate::core::Error {
-        if opting_out || capability::unverified_arg(&self.core.name).is_none() {
+    /// can write. Point at the one that can — and only when there is one.
+    fn explain_verification(
+        &self,
+        e: crate::core::Error,
+        opting_out: bool,
+        chain: &[String],
+    ) -> crate::core::Error {
+        let Some(flag) = capability::unverified_arg(&self.core.name) else {
             return e;
-        }
+        };
         let crate::core::Error::CommandFailed {
             message,
             retry,
@@ -477,20 +488,23 @@ impl GenericInstallable {
         else {
             return e;
         };
-        if !message.to_lowercase().contains("verification") {
-            return crate::core::Error::CommandFailed {
-                message,
-                retry,
-                absent_name,
-            };
-        }
+        // Asked, not assumed — the same probe the emission path uses, so the advice and the
+        // argv cannot disagree about whether the flag went out.
+        let withheld =
+            crate::core::tool_help::accepts_flag(self.core.binary(), chain, flag) == Some(false);
+        let note = verification_note(
+            &self.core.name,
+            self.core.binary(),
+            flag,
+            opting_out,
+            withheld,
+            &message,
+        );
         crate::core::Error::CommandFailed {
-            message: format!(
-                "{}\n  {} checks a signature before it installs, and this source carries \
-                 none. Add `@unverified` to the line to accept it as-is.",
-                message.trim_end(),
-                self.core.name
-            ),
+            message: match note {
+                Some(note) => format!("{}\n  {}", message.trim_end(), note),
+                None => message,
+            },
             retry,
             absent_name,
         }
@@ -748,6 +762,126 @@ pub struct GenericRepoManager {
 /// Some backends interpolate repo `{name}`/`{url}` into `sh -c` strings
 /// (e.g. apk/apt). Reject shell metacharacters so a crafted argument cannot break out
 /// of the intended command.
+/// What to add to a manager's own verification refusal, if anything.
+///
+/// Pure, and enumerated over every case by `verification_advice_tests`, because the wrong
+/// sentence here is a message that asks the user for exactly what they already wrote. That is
+/// the user-visible half of N-4: `tool_help::accepts_flag` withholds a flag the installed tool
+/// does not document, and the advice was `Add @unverified to the line` regardless — so a helm
+/// with no way to skip verification answered a refusal by naming a flag it would drop.
+fn verification_note(
+    backend: &str,
+    binary: &str,
+    flag: &str,
+    opting_out: bool,
+    withheld: bool,
+    message: &str,
+) -> Option<String> {
+    if opting_out {
+        // The flag went out and the manager still refused: its own words are the whole story,
+        // and LiNix has nothing to add.
+        if !withheld {
+            return None;
+        }
+        return Some(format!(
+            "the line already says `@unverified`, and this `{}` has no flag that turns its \
+             verification off — `{}` is not in its help, so LiNix did not send it. There is \
+             nothing to add to the line: this version cannot install a source it cannot verify.",
+            binary, flag
+        ));
+    }
+    // Only a refusal *about verification* earns either sentence. A network failure carrying no
+    // such word is not answered with advice about signatures.
+    if !message.to_lowercase().contains("verification") {
+        return None;
+    }
+    if withheld {
+        return Some(format!(
+            "{} checks a signature before it installs, this source carries none, and this \
+             version has no flag that skips the check — `{}` is not in its help. `@unverified` \
+             would not help here.",
+            backend, flag
+        ));
+    }
+    Some(format!(
+        "{} checks a signature before it installs, and this source carries none. Add \
+         `@unverified` to the line to accept it as-is.",
+        backend
+    ))
+}
+
+#[cfg(test)]
+mod verification_advice_tests {
+    use super::verification_note;
+
+    const REFUSAL: &str = "Error: plugin source does not support verification";
+
+    /// Four cases, enumerated, because the interesting one was reachable and unwritten: a tool
+    /// that does not document the flag got the same "Add `@unverified`" advice as one that does,
+    /// and a user who *had* written `@unverified` got no explanation at all (N-4).
+    #[test]
+    fn advice_never_names_a_flag_the_tool_would_drop() {
+        // The line does not opt out, and the tool accepts the flag: name it.
+        let accepted = verification_note("helm", "helm", "--verify=false", false, false, REFUSAL)
+            .expect("a verification refusal earns advice");
+        assert!(
+            accepted.contains("Add `@unverified`"),
+            "the one case where the flag helps must name it: {accepted}"
+        );
+
+        // The line does not opt out, and the tool would drop the flag: do not name it.
+        let withheld = verification_note("helm", "helm", "--verify=false", false, true, REFUSAL)
+            .expect("a verification refusal still earns an explanation");
+        assert!(
+            !withheld.contains("Add `@unverified`"),
+            "advised a flag this tool does not document, which LiNix would withhold: {withheld}"
+        );
+        assert!(
+            withheld.contains("--verify=false") && withheld.contains("not in its help"),
+            "the explanation must say which flag is missing and from where: {withheld}"
+        );
+
+        // The line already opts out and the flag went out: the manager's own words stand.
+        assert_eq!(
+            verification_note("helm", "helm", "--verify=false", true, false, REFUSAL),
+            None,
+            "nothing to add when the flag was sent and the manager refused anyway"
+        );
+
+        // The line already opts out and the flag was withheld: say so, and do not ask for it.
+        let already = verification_note("helm", "helm", "--verify=false", true, true, REFUSAL)
+            .expect("a withheld flag must be explained to someone who asked for it");
+        assert!(
+            already.contains("already says `@unverified`"),
+            "a user who wrote the flag must be told it never went out: {already}"
+        );
+        assert!(
+            !already.contains("Add `@unverified`"),
+            "asked the user for what they already wrote: {already}"
+        );
+    }
+
+    /// And the limit on both: a failure that is not about verification is not answered with
+    /// advice about signatures.
+    #[test]
+    fn an_unrelated_failure_earns_no_verification_advice() {
+        for withheld in [false, true] {
+            assert_eq!(
+                verification_note(
+                    "helm",
+                    "helm",
+                    "--verify=false",
+                    false,
+                    withheld,
+                    "Error: could not resolve host github.com"
+                ),
+                None,
+                "a network failure was answered with advice about signatures (withheld={withheld})"
+            );
+        }
+    }
+}
+
 fn reject_shell_meta(field: &str, value: &str) -> Result<()> {
     if value.chars().any(|c| {
         matches!(

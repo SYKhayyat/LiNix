@@ -14,6 +14,87 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-29 (later) — round 3's six findings, and two rulings that had been half-applied
+
+`docs/GRADE-2026-07-29.md` graded the tree **B** and left nine red tests for six findings. All six
+are closed and every red test is green, at the mechanism rather than the instance. The two the
+grade said to do first (N-1, N-2) were both the same shape: **a fix had gone to the instance that
+had a reproduction attached, and the family was never enumerated from the code.**
+
+**N-1 — E1 came back because withdrawal read the wrong property.** `install` withdrew a wedged
+line when the failure was `CommandFailed { retry: Permanent }`, and that reading is wrong in both
+directions. Only **12 of 48** backends had an `ExitPolicy` at all, so the other 36 could never
+produce that verdict — a mistyped `npm:` package wedged the config while the identical typo behind
+`scoop:` did not, and nothing about npm was special. And permanence is not existence: helm's
+`plugin already exists` is permanent about a name that is plainly there. `ExitPolicy` answers the
+two questions separately now (`absent_markers` vs `permanent_markers`), `Error::NoSuchPackage`
+carries the name for backends that resolve names themselves, and `says_a_name_is_absent()` is the
+one predicate every caller reads. Prose is demoted to picking *which* line in a batch — pixi wraps
+its output through the middle of a package name, which is what a prose-parsing reader looks like
+when it finally meets a manager that formats. Five managers gained a policy (npm, gem, pipx, go,
+pixi), every phrasing captured from the tool on this host and dated in the source; three had
+theirs split (cargo, nimble, scoop) so a real crate with no binary, a wrong version pin and a
+failed *uninstall* stop withdrawing declarations. **36 backends still cannot report a missing
+name, and that is now a derived, ratcheted set** rather than something discovered one backend at a
+time (`tests/absent_marker_coverage_tests.rs`, a set and not a count because 48 backends register
+on Windows and 56 on Ubuntu).
+
+**N-2 — the model was missing half of itself.** `link:`, `service:`, `setting:`, `shim:`,
+`schedule:` and `repo:` were outside the model everywhere except the apply loop. One computation
+(`Extras::changes`) now feeds `check`, `check drift`, `plan`, `apply` and `sync`'s summary; `plan`
+freezes resources in the file and in the hash and `apply` executes them through the one phase
+list. The third value matters as much as the other two: a resource LiNix cannot read back is
+**named**, not assumed converged. Full reasoning in **V.90b**; the rule is in **II**.
+
+**N-3 — `info` answered about the resolver.** `get_info` opened with
+`if let Ok(specs) = resolve_spec(…)` and the error it dropped was the answer. Fixing that closed
+the 83-second wrong answer, and the bare-name half now asks the machine instead of trusting
+`priority` order. **The sibling sweep is the interesting part: Q9 had been half-applied.** It binds
+"every verb taking a backend name" and enumerated the four that take it as a `--backend` flag —
+"checked from the code rather than from the one that was reported" — and the `backend:name` spec
+form was never in that list. Nine verbs took it unchecked, and `hold nosuchbackend:foo`
+*recorded* a hold against a manager that does not exist and answered `Held 1 package(s).` at
+exit 0. The check is derived from `--help` now, with validated exemptions.
+
+**N-4 — the flag-drift gate could not fail on the flag it was built for.** `tool_help::accepts_flag`
+asks the installed tool and withholds a flag its help does not document, so the argv the gate
+inspects has no flag in it *exactly when the table is wrong*. Measured here in both directions: a
+bogus flag planted in `VERIFIES_ITSELF` left the argv-reading gate green. The fix asks the question
+an argv cannot carry — does the installed tool document the flag this table names? — and that
+assertion goes red on the same mutation the old one slept through. The user-visible half went with
+it: the advice was `Add @unverified to the line` regardless, so a helm with no way to skip
+verification answered a refusal by naming a flag it would drop.
+
+**N-5 — a gate reporting its own absence in a voice nothing tallied.** `.dockerignore` excludes
+`scripts/`, so `lifecycle-floor.txt` was in no image and the real-lifecycle ratchet was in force on
+**one host class of five** — the Windows sweep, which has the least coverage, and absent from the
+four distro legs and the `tools` image, which have the most. Both harnesses' `else` branch printed
+a note and incremented neither PASS nor FAILC, so a run with the gate missing looked exactly like a
+run that passed it. Mounted on every leg; the absent case is a counted failure; a new predicate
+asserts every CI leg that mounts the harness mounts the floor.
+
+**N-6 — the local container gate could not run on the development platform.** Four `.sh` files had
+been rewritten to CRLF and dash aborts on `set -u<CR>` after an 18-minute build. `.gitattributes`
+was correct and irrelevant: `eol=lf` governs what checkout writes, not what an editor writes
+afterwards, and nothing checked the working tree.
+
+**What every one of these has in common, and it is worth writing down again.** Five of the six are
+a sentence that quantifies over paths and was verified against the paths the sentence names. N-1
+against the two backends with a reproduction; Q9 against one of its argument's two spellings; the
+drift gate against the argvs it could see; the ratchet against the one host class where its file
+happened to be. `READINESS` §5.3 named this class, round 2's report named it again, and it produced
+six more findings one layer in. **The habit that catches it is not "check the list" — it is asking
+which gates would go red if the thing they name were happening right now**, which is why every fix
+in this session ships with a mutation that proves its check can fail.
+
+**Verified:** `cargo build --all-targets`, `cargo clippy --all-targets --all-features -D warnings`,
+`cargo fmt --check`, the full suite, and `harness-logic-test.sh` at 56/56. The container matrix and
+the `tools` image were **not** re-run this session — the changes to `run-in-container.sh` and
+`ci.yml` are unproven against a real container run, and that is the first thing the next session
+should do.
+
+---
+
 ## Session 2026-07-29 — what the nightly jobs were saying, and the ruling that closed the register
 
 **Two nightly jobs were red and the seven failures in them were four separate faults.** The

@@ -1027,6 +1027,24 @@ line behind — and every later command parses the model, so one impossible line
   elsewhere (*a name does not exist*), unclassified (*`sync` will try it again*). A wedge with
   an exit is not a wedge, and a promise the program has already disproved is not an exit.
 
+**The model is packages *and* resources, and one evaluation yields both** (N-2, 2026-07-29;
+V.90b). `link:`, `service:`, `setting:`, `shim:`, `schedule:` and `repo:` are declarations, so
+every command that answers "does the machine match your files?" has to read them.
+
+- **One computation.** `check`, `check drift`, `plan`, `apply`, `sync`'s summary and the guard
+  read the same value. Five code paths each answering separately is how `check` came to report a
+  match over a declared file that was not on disk while `--dry-run sync` named three teardowns on
+  the same tree.
+- **Two questions, two sources.** *Has this ever been applied?* is the extras ledger's, and the
+  answer is the same for all six kinds. *Is it still in effect?* is the machine's — a resource
+  LiNix placed and a user deleted is drift no record can see.
+- **A resource that cannot be read back is named, not assumed converged.** "The machine matches
+  your files" over something nobody looked at is the failure this rule exists to prevent, so the
+  count and the keys are printed beside the verdict.
+- **`plan` freezes resources and `apply` executes them**, through the same phase list `sync`
+  runs. A plan that omits work `sync` would do is a review that reports nothing to see — and the
+  guard's own refusal text sends the user to `linix plan` to see what would be undone.
+
 **`check health` has four states, and "not installed" is one of them** (Q2, owner 2026-07-27;
 V.91). A package manager the user does not have is **absent**, not critical:
 
