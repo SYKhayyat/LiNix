@@ -22,6 +22,7 @@ pub mod retention;
 pub mod security;
 pub mod snapshot;
 pub mod state;
+pub mod tool_help;
 pub mod transaction;
 pub mod validator;
 

@@ -120,6 +120,38 @@ fn is_subcommand_token(tok: &str) -> bool {
         && tok != "jq"
 }
 
+/// A long flag LiNix passes, as opposed to a short one, an operand or a value.
+///
+/// Long flags only. A short flag (`-y`, `-q`) is rarely documented in a form this can match,
+/// and **a gate with false positives is worse than no gate** — the rule that already shapes
+/// `is_subcommand_token`. `--` alone is the terminator and is handled by the caller.
+fn is_long_flag_token(tok: &str) -> bool {
+    tok.starts_with("--")
+        && tok.len() > 2
+        && tok[2..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic())
+}
+
+/// Does the help document `name` as a flag in its own right?
+///
+/// Not `contains`: `--ca` occurs inside `--ca-file`, and helm 3's help carries
+/// `--kube-insecure-skip-tls-verify`. The match has to end where a flag name cannot continue.
+fn mentions_flag(text: &str, name: &str) -> bool {
+    let mut from = 0;
+    while let Some(at) = text[from..].find(name) {
+        let start = from + at;
+        let end = start + name.len();
+        let next = text[end..].chars().next();
+        if !matches!(next, Some(c) if c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
 fn on_path(program: &str) -> bool {
     which::which(program).is_ok()
 }
@@ -200,6 +232,28 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
         if let Some(i) = backend.as_installable() {
             let _ = i.install(std::slice::from_ref(&spec), false).await;
             let _ = i.remove(&["jq".to_string()], false).await;
+            // And the same install carrying `@unverified`, because that is where the
+            // capability tables add flags — and the first flag this repo added after building
+            // this gate is one helm 3 rejects (G-8). A gate that never drives the option
+            // cannot see the argv the option produces.
+            let mut unverified = spec.clone();
+            unverified
+                .options
+                .insert("unverified".to_string(), "true".to_string());
+            // And the install source, where the backend demands one. helm's install takes a URL
+            // rather than a name (`INSTALLS_FROM_SOURCE`), so without this the call fails before
+            // it builds an argv — and the only helm argvs this gate saw were `plugin list` and
+            // `plugin uninstall`. Measured: with a plainly bogus flag planted in the capability
+            // table, the gate still passed, because the flag's own code path was never driven.
+            if let Some(key) =
+                linix::backends::artifact::capability::install_source_key(backend.name())
+            {
+                unverified.options.insert(
+                    key.to_string(),
+                    "https://example.invalid/linix-drift-probe".to_string(),
+                );
+            }
+            let _ = i.install(std::slice::from_ref(&unverified), false).await;
         }
         if let Some(q) = backend.as_queryable() {
             let _ = q.list_installed().await;
@@ -228,6 +282,7 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
     );
 
     let mut drifted: Vec<String> = Vec::new();
+    let mut flag_drift: Vec<String> = Vec::new();
     let mut unreadable: Vec<String> = Vec::new();
     let mut checked: BTreeSet<String> = BTreeSet::new();
     let mut skipped: BTreeSet<String> = BTreeSet::new();
@@ -249,6 +304,30 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
         for tok in toks {
             if tok == "--" {
                 break;
+            }
+            // G-8: flags, not only subcommands. `--verify=false` was emitted unconditionally
+            // for helm and helm 3 answers `unknown flag: --verify`; this gate was green
+            // throughout, because it said in its own words that it examined "a token that is
+            // a subcommand rather than a flag". 72 subcommands verified, zero flags.
+            if is_long_flag_token(tok) {
+                let name = tok.split('=').next().unwrap_or(tok);
+                let shown = format!("{} {} {}", program, chain.join(" "), name);
+                match help_text(program, &chain) {
+                    None => unreadable.push(format!(
+                        "{} {} — installed, but this gate could not read its help",
+                        program,
+                        chain.join(" ")
+                    )),
+                    Some(help) if mentions_flag(&help, name) => {
+                        checked.insert(shown);
+                    }
+                    Some(_) => flag_drift.push(format!(
+                        "`{shown}` — LiNix passes it and `{} {} --help` does not document it",
+                        program,
+                        chain.join(" ")
+                    )),
+                }
+                continue;
             }
             if !is_subcommand_token(tok) {
                 continue;
@@ -308,6 +387,14 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
         drifted.is_empty(),
         "these subcommands no longer exist in the tool LiNix runs them on:\n  {}",
         drifted.join("\n  ")
+    );
+    assert!(
+        flag_drift.is_empty(),
+        "these flags are passed by LiNix and not documented by the tool it passes them to:\n  \
+         {}\n\n\
+         This is the dimension the gate did not cover until 2026-07-28, and the first flag \
+         added after it shipped — helm's `--verify=false` — is one that helm 3 rejects.",
+        flag_drift.join("\n  ")
     );
     assert!(
         checked.len() >= 5,

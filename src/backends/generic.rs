@@ -373,7 +373,26 @@ impl GenericInstallable {
         let opting_out = specs.iter().any(crate::core::download::is_unverified);
         if opting_out {
             if let Some(arg) = capability::unverified_arg(&self.core.name) {
-                final_args.push(arg.to_string());
+                // Asked, not assumed (G-8). `--verify=false` is helm 4's flag; helm 3 rejects
+                // it with `unknown flag: --verify`, so emitting it unconditionally traded
+                // E11's argv defect for another one on every helm 3 in existence. The
+                // subcommand chain is the non-flag prefix of what has been built so far —
+                // `plugin install` for helm — because that is the help that documents it.
+                let chain: Vec<String> = final_args
+                    .iter()
+                    .take_while(|a| !a.starts_with('-'))
+                    .cloned()
+                    .collect();
+                if crate::core::tool_help::accepts_flag(self.core.binary(), &chain, arg) {
+                    final_args.push(arg.to_string());
+                } else {
+                    tracing::warn!(
+                        "`{}` does not accept `{}`, so `@unverified` cannot turn its own                          verification off here. The install will be subject to it; if it                          refuses the source, this version of `{}` has no way to skip that.",
+                        self.core.binary(),
+                        arg,
+                        self.core.binary()
+                    );
+                }
             }
         }
 

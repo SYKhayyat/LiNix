@@ -1,0 +1,26 @@
+This command allows you to install a plugin from a url to a VCS repo or a local path.
+
+Usage:
+  helm plugin install [options] <path|url> [flags]
+
+Flags:
+  -h, --help            help for install
+      --version string  specify a version constraint. If this is not specified, the latest version is installed
+
+Global Flags:
+      --burst-limit int                 client-side default throttling limit (default 100)
+      --debug                           enable verbose output
+      --kube-apiserver string           the address and the port for the Kubernetes API server
+      --kube-as-group stringArray       group to impersonate for the operation
+      --kube-as-user string             username to impersonate for the operation
+      --kube-ca-file string             the certificate authority file for the Kubernetes API server connection
+      --kube-context string             name of the kubeconfig context to use
+      --kube-insecure-skip-tls-verify   if true, the Kubernetes API server's certificate will not be checked for validity
+      --kube-tls-server-name string     server name to use for Kubernetes API server certificate validation
+      --kube-token string               bearer token used for authentication
+      --kubeconfig string               path to the kubeconfig file
+  -n, --namespace string                namespace scope for this request
+      --qps float32                     queries per second used when communicating with the Kubernetes API
+      --registry-config string          path to the registry config file
+      --repository-cache string         path to the file containing cached repository indexes
+      --repository-config string        path to the file containing repository names and URLs
