@@ -27,7 +27,12 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
     let desired = state.packages.clone();
     // A deleted `service:`/`link:`/`repo:` line is drift a sync will undo (S20), and `status`
     // that reports only packages says "nothing to do" on the run that disables a service.
-    let extras_to_undo = app.extras().drift(&state).await.unwrap_or_default();
+    //
+    // Both directions, because this view had only the teardown half — the same one-sided
+    // reading as `check`'s summary (N-2). A declared resource that has never been applied is
+    // work `sync` will do, and `status` calling that "nothing to do" is the identical defect
+    // one command over.
+    let resources = app.extras().changes(&state).await.unwrap_or_default();
     // `status` reports what a full `sync` would do, so it scopes drift the same way.
     let enabled = app.priority_backends().await;
     let changes = {
@@ -54,7 +59,9 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
             "to_remove": report.remove,
             "unmanaged": unmanaged.iter().map(|p| serde_json::json!({"backend": p.backend, "name": p.name})).collect::<Vec<_>>(),
             "unverified": unverified.iter().map(|(b, n)| serde_json::json!({"backend": b, "name": n})).collect::<Vec<_>>(),
-            "extras_to_undo": extras_to_undo,
+            "resources_to_place": resources.place,
+            "resources_to_undo": resources.undo,
+            "resources_unverifiable": resources.unverifiable,
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
@@ -64,7 +71,7 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
         && report.remove.is_empty()
         && unmanaged.is_empty()
         && unverified.is_empty()
-        && extras_to_undo.is_empty()
+        && resources.is_empty()
     {
         println!(
             "System matches your manifests; nothing to install, no drift, no unmanaged packages."
@@ -106,12 +113,32 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
             println!("    {}:{}", backend, name);
         }
     }
-    if !extras_to_undo.is_empty() {
+    if !resources.place.is_empty() {
+        println!(
+            "+ declared and not in effect — `sync` would place ({}):",
+            resources.place.len()
+        );
+        for key in &resources.place {
+            println!("    {}", key);
+        }
+    }
+    if !resources.undo.is_empty() {
         println!(
             "- no longer declared — `sync` would undo ({}):",
-            extras_to_undo.len()
+            resources.undo.len()
         );
-        for key in &extras_to_undo {
+        for key in &resources.undo {
+            println!("    {}", key);
+        }
+    }
+    if !resources.unverifiable.is_empty() {
+        // Said out loud on this view too: these are resources LiNix cannot read back, so
+        // "nothing to do" about them is an assumption and not a measurement.
+        println!(
+            "? could not be read back — assumed in place ({}):",
+            resources.unverifiable.len()
+        );
+        for key in &resources.unverifiable {
             println!("    {}", key);
         }
     }
@@ -126,10 +153,22 @@ pub(crate) async fn handle_status(app: &App, json: bool) -> Result<()> {
 /// `frozen_vars` is `Some` only when applying a saved plan: the model resolves against the plan's
 /// own variables instead of running the provider again, so a clock/shell/network variable does
 /// not read differently at apply time than it did when the plan was captured (IX.6).
+/// Everything one resolution produces, so `plan` and `apply` read the same model rather than
+/// resolving it twice and comparing the halves they each happened to compute.
+pub(crate) struct FullChanges {
+    pub changes: linix::app::sync::SyncChanges,
+    /// The resource half (N-2). `plan` froze only the package half, so a plan over three
+    /// unapplied `link:` lines was an empty file and `apply` of it did nothing.
+    pub resources: linix::app::apply::ResourceChanges,
+    /// The resolved model itself — `apply` needs it to run the non-package phases, and its
+    /// `vars` are what a plan freezes.
+    pub state: linix::model::DesiredState,
+}
+
 pub(crate) async fn compute_full_changes(
     app: &App,
     frozen_vars: Option<linix::model::vars::Vars>,
-) -> Result<(linix::app::sync::SyncChanges, linix::model::vars::Vars)> {
+) -> Result<FullChanges> {
     let resolver =
         linix::app::sync::resolver::StateResolver::new(&app.config, app.registry.clone(), false)
             .await;
@@ -139,51 +178,67 @@ pub(crate) async fn compute_full_changes(
     };
     let state = resolver.resolve_model().await?;
     enforce_policy(app, &state.packages).await?;
-    let state_guard = app.state.lock().await;
-    let planner = linix::app::sync::planner::ChangePlanner::new(
-        app.registry.clone(),
-        &state_guard,
-        &app.config,
-    );
-    let changes = planner.plan(&state.packages, None).await?;
-    Ok((changes, state.vars))
+    let resources = app.extras().changes(&state).await?;
+    let changes = {
+        let state_guard = app.state.lock().await;
+        let planner = linix::app::sync::planner::ChangePlanner::new(
+            app.registry.clone(),
+            &state_guard,
+            &app.config,
+        );
+        planner.plan(&state.packages, None).await?
+    };
+    Ok(FullChanges {
+        changes,
+        resources,
+        state,
+    })
 }
 
 pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
-    let (changes, vars) = compute_full_changes(app, None).await?;
+    let full = compute_full_changes(app, None).await?;
     // XIII.3's exit condition names `plan`: a script's hash, its run count and the decision
-    // that follows are printed here, before anything happens. `plan` resolves the model a
-    // second time rather than threading it out of `compute_full_changes`, which is a cheap
-    // parse against the benefit of leaving that function's seam alone.
-    {
-        let resolver = linix::app::sync::resolver::StateResolver::new(
-            &app.config,
-            app.registry.clone(),
-            false,
-        )
-        .await;
-        if let Ok(state) = resolver.resolve_model().await {
-            app.execs().print_plan(&state);
-        }
-    }
+    // that follows are printed here, before anything happens. Read off the resolution
+    // `compute_full_changes` already did — it used to resolve the model a second time for
+    // this, which is one model resolved twice and free to disagree with itself.
+    app.execs().print_plan(&full.state);
     let created_at = chrono::Utc::now().timestamp();
-    let mut plan = linix::app::sync::SavedPlan::from_changes(&changes, Some(created_at));
+    let mut plan =
+        linix::app::sync::SavedPlan::from_changes(&full.changes, &full.resources, Some(created_at));
     // Freeze the resolved variables so `apply` reproduces this exact resolution (IX.6).
-    plan.vars = vars;
+    plan.vars = full.state.vars.clone();
     tokio::fs::write(out, serde_json::to_string_pretty(&plan)?).await?;
     if plan.is_empty() {
         println!(
             "Wrote plan to {} — system already matches desired state (no changes).",
             out
         );
+        // Not silence: `check` says the same thing in the same breath, and a resource LiNix
+        // cannot read back is a limit on what "already matches" means here.
+        if !full.resources.unverifiable.is_empty() {
+            println!(
+                "  ({} resource(s) could not be read back and are assumed in place: {})",
+                full.resources.unverifiable.len(),
+                full.resources.unverifiable.join(", ")
+            );
+        }
     } else {
         println!(
-            "Wrote plan to {} — {} install(s), {} removal(s).\nReview it, then run `linix apply {}`.",
+            "Wrote plan to {} — {} install(s), {} removal(s), {} resource(s) to place, {} to \
+             undo.\nReview it, then run `linix apply {}`.",
             out,
             plan.installs.len(),
             plan.removals.len(),
+            plan.resources.place.len(),
+            plan.resources.undo.len(),
             out
         );
+        for key in &plan.resources.place {
+            println!("  + {}", key);
+        }
+        for key in &plan.resources.undo {
+            println!("  - {} (no longer declared)", key);
+        }
         // W13, on the path where it matters most: `plan` is read before anything is touched,
         // so a removal a `vars` edit caused has to be explained here too, not only at sync.
         if !plan.removals.is_empty() {
@@ -192,11 +247,18 @@ pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
         // Writing a plan changes nothing, so this warns rather than refuses — but say it
         // here, where there is still time to fix the manifest, rather than letting the
         // refusal be a surprise at apply time.
-        let removal_pairs: Vec<(String, String)> = plan
+        // Resources are counted with the packages, because the guard counts them together: a
+        // sync dropping three packages and three links removes six things, and a limit of five
+        // has to see six. Warning about only the packages here would preview a refusal
+        // smaller than the one `apply` performs.
+        let mut removal_pairs: Vec<(String, String)> = plan
             .removals
             .iter()
             .map(|r| (r.backend.clone(), r.name.clone()))
             .collect();
+        removal_pairs.extend(linix::app::sync::guard::extra_removal_pairs(
+            &plan.resources.undo,
+        ));
         let report =
             linix::app::sync::guard::inspect(&app.config, &app.registry, &removal_pairs).await;
         if !report.is_empty() {
@@ -288,11 +350,14 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
     // Drift detection, and the `[guard]` gate: `compute_full_changes` runs `enforce_policy`,
     // so an `Err` here is a refusal and must not be swallowed. Applying a captured plan to a
     // machine whose manifests no longer resolve is the case this stops.
+    //
+    // Resolve against the plan's frozen variables, so a clock/shell/network variable does not
+    // read differently now and trip a drift warning for a change nobody made (IX.6). The
+    // resolved model is kept: the resource phases below run against it, so `apply` executes
+    // the same model it just checked rather than resolving a third one.
+    let now = compute_full_changes(app, Some(plan.vars.clone())).await?;
     {
-        // Resolve against the plan's frozen variables, so a clock/shell/network variable does
-        // not read differently now and trip a drift warning for a change nobody made (IX.6).
-        let (now_changes, _) = compute_full_changes(app, Some(plan.vars.clone())).await?;
-        let current = linix::app::sync::SavedPlan::from_changes(&now_changes, None);
+        let current = linix::app::sync::SavedPlan::from_changes(&now.changes, &now.resources, None);
         if current.desired_hash != plan.desired_hash {
             if yes {
                 warn!("apply: system has drifted from the captured plan; applying anyway (--yes).");
@@ -328,9 +393,12 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
 
     if app.config.dry_run {
         println!(
-            "[DRY-RUN] would install {} and remove {} package(s).",
+            "[DRY-RUN] would install {} and remove {} package(s), place {} and undo {} \
+             resource(s).",
             plan.installs.len(),
-            plan.removals.len()
+            plan.removals.len(),
+            plan.resources.place.len(),
+            plan.resources.undo.len()
         );
         return Ok(());
     }
@@ -439,9 +507,27 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
     }
 
     app.state.lock().await.save()?;
+
+    // The resource half, through the same phase list `sync` runs (N-2). Not a second
+    // implementation: `apply_non_package_phases` is the one list, and the comment above it
+    // records what four separate copies of it already cost. It carries its own guard for the
+    // teardown, and the package removals just performed are passed in so `max_removals` is a
+    // ceiling on the command rather than on each phase.
+    let resources = if plan.resources.is_empty() {
+        0
+    } else {
+        crate::verbs::sync::apply_non_package_phases(
+            app,
+            &now.state,
+            linix::app::sync::guard::GuardScope::Apply,
+            removed,
+        )
+        .await?
+    };
+
     println!(
-        "Applied plan: {} installed, {} removed.",
-        installed, removed
+        "Applied plan: {} installed, {} removed, {} resource(s) reconciled.",
+        installed, removed, resources
     );
     perform_maintenance(app).await
 }

@@ -18,7 +18,7 @@ pub use bootstrap::Bootstrap;
 pub use dependents::Dependents;
 pub use dotfiles::Dotfiles;
 pub use execs::Execs;
-pub use extras::Extras;
+pub use extras::{Extras, ResourceChanges};
 pub use firewall::Firewall;
 pub use prereq::Prereqs;
 pub use repositories::Repositories;

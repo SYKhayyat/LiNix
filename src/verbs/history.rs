@@ -330,12 +330,13 @@ pub(crate) async fn handle_bundle(
     // Freeze a plan so the target can review/apply it offline. Computed up front so it can be
     // written into the bundle (and captured inside the archive) by create_bundle.
     let plan_json = match compute_full_changes(app, None).await {
-        Ok((changes, vars)) => {
+        Ok(full) => {
             let mut plan = linix::app::sync::SavedPlan::from_changes(
-                &changes,
+                &full.changes,
+                &full.resources,
                 Some(chrono::Utc::now().timestamp()),
             );
-            plan.vars = vars;
+            plan.vars = full.state.vars;
             Some(serde_json::to_string_pretty(&plan)?)
         }
         Err(_) => None,

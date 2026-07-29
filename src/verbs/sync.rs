@@ -103,8 +103,12 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         // applied-extras ledger so that undo still happens; it is a cheap no-op otherwise.
         //
         // The count is returned rather than dropped: a teardown is work, and reporting `already
-        // up to date` over five deleted files is the summary disagreeing with the machine.
-        return Ok(app.extras().reconcile(&state, opts.scope, 0).await?);
+        // up to date` over five deleted files is the summary disagreeing with the machine. The
+        // placement half is counted here too — `has_non_package_work` does not see a `repo:`
+        // line, so this path can still have a resource to put in place.
+        let resources = app.extras().changes(&state).await?;
+        let undone = app.extras().reconcile(&state, opts.scope, 0).await?;
+        return Ok(resources.place.len() + undone);
     }
 
     let applied = changes.total_install() + changes.total_remove();
@@ -219,6 +223,12 @@ pub(crate) async fn apply_non_package_phases(
     scope: linix::app::sync::guard::GuardScope,
     packages_being_removed: usize,
 ) -> Result<usize> {
+    // Asked before the first phase runs, because afterwards the answer is zero: the resources
+    // are in effect, `changes()` correctly reports nothing to do, and a summary reading that
+    // back is how `sync` placed three files and printed `already up to date` (N-2). The
+    // teardown half is counted from what `reconcile` actually attempted, below.
+    let resources = app.extras().changes(state).await?;
+
     // Phase 3: the dependent extras, now that every package they lean on is in.
     app.dependents().apply(state).await?;
     // Phase 3b (7n): the dotfiles trees — a tree is a pile of `link:` lines and belongs where
@@ -237,10 +247,11 @@ pub(crate) async fn apply_non_package_phases(
     // package removals already planned are passed in, so `max_removals` is a ceiling on the
     // command rather than on each phase — a sync dropping three packages and three links
     // removes six things, and a limit of five has to see six.
-    Ok(app
+    let undone = app
         .extras()
         .reconcile(state, scope, packages_being_removed)
-        .await?)
+        .await?;
+    Ok(resources.place.len() + undone)
 }
 
 /// `linix rebuild` — remove and reinstall what is declared, one backend at a time (X.1, K1).

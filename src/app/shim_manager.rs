@@ -63,21 +63,36 @@ impl ShimManager {
         }
     }
 
-    pub async fn create_shim(&self, binary_name: &str) -> Result<()> {
+    /// Where a shim for this name lives. One definition, because a second copy of the `.exe`
+    /// rule is a second copy that can disagree — and the caller that asks "is this shim in
+    /// effect?" has to look at exactly the path `create_shim` writes.
+    pub fn shim_path(&self, binary_name: &str) -> PathBuf {
         #[allow(unused_mut)] // mutated only under cfg(windows)
-        let mut target_path = self.bin_dir.join(binary_name);
+        let mut path = self.bin_dir.join(binary_name);
+        #[cfg(windows)]
+        {
+            if path.extension().is_none_or(|ext| ext != "exe") {
+                path.set_extension("exe");
+            }
+        }
+        path
+    }
+
+    /// Whether a `shim:` declaration is in effect on this machine right now.
+    ///
+    /// Asks the disk, not the ledger. A shim recorded as applied and then deleted by hand is
+    /// exactly the drift `check` is for, and the record cannot see it.
+    pub async fn is_in_effect(&self, binary_name: &str) -> bool {
+        Self::is_deployed_shim(&self.shim_path(binary_name)).await
+    }
+
+    pub async fn create_shim(&self, binary_name: &str) -> Result<()> {
+        let target_path = self.shim_path(binary_name);
 
         // A "linix" shim would overwrite linix itself with itself — and on the copy path,
         // truncate the running binary.
         if binary_name == "linix" {
             return Ok(());
-        }
-
-        #[cfg(windows)]
-        {
-            if target_path.extension().is_none_or(|ext| ext != "exe") {
-                target_path.set_extension("exe");
-            }
         }
 
         let current_exe = tokio::task::spawn_blocking(std::env::current_exe)
@@ -137,15 +152,11 @@ impl ShimManager {
     }
 
     pub async fn remove_shim(&self, binary_name: &str) -> Result<()> {
-        #[allow(unused_mut)] // mutated only under cfg(windows)
-        let mut target_path = self.bin_dir.join(binary_name);
-
-        #[cfg(windows)]
-        {
-            if target_path.extension().is_none() {
-                target_path.set_extension("exe");
-            }
-        }
+        // Was its own copy of the `.exe` rule, and the copy had drifted: it appended the
+        // extension only when there was none, while `create_shim` replaced any extension that
+        // was not `exe`. So `shim:tool.bat` deployed `tool.exe` and removal went looking for
+        // `tool.bat`, leaving the shim behind and reporting success.
+        let target_path = self.shim_path(binary_name);
 
         let present =
             tokio::fs::try_exists(&target_path).await.unwrap_or(false) || target_path.is_symlink();
@@ -229,6 +240,43 @@ mod tests {
             "sync deleted a file LiNix never created: {:?}",
             victim
         );
+    }
+
+    /// Deploy and remove must agree about where a shim lives, for every name, or removal
+    /// reports success over a shim that is still on PATH.
+    ///
+    /// They did not. `create_shim` replaced any extension that was not `exe`; `remove_shim`
+    /// appended one only when there was none. So `shim:tool.bat` deployed `tool.exe` and
+    /// removal looked for `tool.bat`, found nothing, and returned `Ok`. Found while giving the
+    /// path rule one definition so drift-reporting could ask about it — the two copies had
+    /// already diverged.
+    #[tokio::test]
+    async fn deploy_and_remove_agree_on_where_a_shim_lives() {
+        for name in ["tool", "tool.bat", "tool.cmd", "tool.exe"] {
+            let tmp = tempdir().unwrap();
+            let bin = tmp.path().join("bin");
+            let mgr = ShimManager::with_bin_dir(bin.clone()).await.unwrap();
+
+            mgr.create_shim(name).await.unwrap();
+            let deployed = mgr.shim_path(name);
+            assert!(
+                deployed.exists(),
+                "`{name}` was not deployed where `shim_path` says it goes: {deployed:?}"
+            );
+            assert!(
+                mgr.is_in_effect(name).await,
+                "`{name}` is deployed and does not report itself in effect, so drift \
+                 reporting would call a placed shim missing"
+            );
+
+            mgr.remove_shim(name).await.unwrap();
+            assert!(
+                !deployed.exists(),
+                "`{name}` survived removal at {deployed:?} — removal looked somewhere else and \
+                 returned Ok"
+            );
+            assert!(!mgr.is_in_effect(name).await);
+        }
     }
 
     /// S4: the create path had the same blind spot the remove path used to — it deleted

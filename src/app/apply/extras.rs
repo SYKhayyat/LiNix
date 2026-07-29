@@ -10,11 +10,106 @@ pub struct Extras<'a> {
     pub(crate) scheduler: &'a std::sync::Arc<crate::app::scheduler::SchedulerManager>,
 }
 
+/// What a sync would do to the resources a module declares — `link:`, `service:`, `setting:`,
+/// `shim:`, `schedule:` and `repo:`, everything that is not a package.
+///
+/// **One computation, because five code paths answering separately is what N-2 was.** `sync`
+/// placed three files under a summary reading `already up to date`; `check drift` reported that
+/// the machine matched while a declared `link:` was missing from it, and again after one LiNix
+/// had placed was deleted behind its back; `plan` froze an empty plan in both directions while
+/// `--dry-run sync` on the same tree named three teardowns — and the guard's own refusal text
+/// sent the user to `linix plan` to "see exactly what would be undone", where they saw nothing.
+///
+/// The package half has had this since II.7. This is its other half, and every reader of it —
+/// `check`, `plan`, `apply`, `sync`'s summary — now reads this one value.
+#[derive(Debug, Default, Clone)]
+pub struct ResourceChanges {
+    /// Declared and not in effect: never applied, or applied and since lost.
+    pub place: Vec<String>,
+    /// Applied last time and declared nowhere now. The teardown round 2 made safe.
+    pub undo: Vec<String>,
+    /// Recorded as applied, for a kind whose current state this machine cannot be asked
+    /// about. Named rather than assumed converged — a resource nobody can check is a bound on
+    /// what `check` means, and an unstated bound is the thing this whole assessment is about.
+    pub unverifiable: Vec<String>,
+}
+
+impl ResourceChanges {
+    /// Whether a sync would touch any resource. `unverifiable` is deliberately not work: it is
+    /// what LiNix cannot see, and treating "I cannot tell" as "there is drift" would make
+    /// `check` permanently red on any machine declaring a `setting:`.
+    pub fn is_empty(&self) -> bool {
+        self.place.is_empty() && self.undo.is_empty()
+    }
+
+    pub fn total(&self) -> usize {
+        self.place.len() + self.undo.len()
+    }
+
+    /// One line for a summary that also counts packages.
+    pub fn summary(&self) -> String {
+        format!("{} to place, {} to undo", self.place.len(), self.undo.len())
+    }
+}
+
 impl Extras<'_> {
     /// The shim directory's manager. Built from the same field `App` builds it from; a shim
     /// is a file on disk, so nothing else is needed to reach one.
     async fn shim_manager(&self) -> Result<crate::app::ShimManager> {
         crate::app::ShimManager::with_bin_dir(self.config.bin_dir.clone()).await
+    }
+
+    /// The resource half of the plan: what would be placed, what would be undone.
+    ///
+    /// Two questions, and they are answered by two different sources on purpose. *Has this ever
+    /// been applied?* is the ledger's to answer — it is the only record of what a previous sync
+    /// put in place. *Is it still in effect?* is the machine's, because a file LiNix placed and
+    /// a user then deleted is drift the record cannot see, and that was half of N-2's
+    /// reproduction.
+    pub async fn changes(&self, state: &crate::model::DesiredState) -> Result<ResourceChanges> {
+        use crate::core::extras_lock::ExtrasLedger;
+
+        let declared = declared_extras(state);
+        let path = ExtrasLedger::path_in(&self.config.config_root().join("locks"));
+        let ledger = ExtrasLedger::load(&path)?;
+
+        let mut changes = ResourceChanges {
+            undo: ledger.drift(&declared),
+            ..Default::default()
+        };
+        for key in &declared {
+            if !ledger.applied().contains(key) {
+                // Never applied. `sync` will place it, whatever the machine looks like — so
+                // this needs no probe and is the same answer for all six kinds.
+                changes.place.push(key.clone());
+                continue;
+            }
+            match self.in_effect(key).await {
+                Some(true) => {}
+                Some(false) => changes.place.push(key.clone()),
+                None => changes.unverifiable.push(key.clone()),
+            }
+        }
+        Ok(changes)
+    }
+
+    /// Whether a resource recorded as applied is still in effect on this machine.
+    ///
+    /// `None` means LiNix cannot ask — not that the answer is yes. A `setting:` reads back
+    /// through an adapter that does not report a current value, and a `service:` state costs a
+    /// process launch per line; those are named in `unverifiable` instead of being guessed,
+    /// because the whole finding here is a command that answered "the machine matches" about
+    /// something it never looked at.
+    async fn in_effect(&self, key: &str) -> Option<bool> {
+        use crate::core::extras_lock::split_key;
+        let (kind, id) = split_key(key)?;
+        match kind {
+            // The ledger keys a link by its resolved destination — exactly so the teardown can
+            // find what was written — which makes the probe a file test on the key itself.
+            "link" => Some(std::path::Path::new(id).exists()),
+            "shim" => Some(self.shim_manager().await.ok()?.is_in_effect(id).await),
+            _ => None,
+        }
     }
 
     /// Undo the extras that were applied but are no longer declared (S20). Extras had no
@@ -27,16 +122,6 @@ impl Extras<'_> {
     /// Best-effort per item: a backend that cannot undo one extra must not block the rest, so
     /// each failure warns and the run continues. The ledger is still updated to the declared
     /// set — a drifted extra we could not undo is reported, not retried forever.
-    /// The extras a sync would undo: applied last time, declared nowhere now. `status` and
-    /// `reconcile` ask the same question, so they ask it in the same place — a preview
-    /// computed a second way is a preview free to disagree with the run.
-    pub async fn drift(&self, state: &crate::model::DesiredState) -> Result<Vec<String>> {
-        use crate::core::extras_lock::ExtrasLedger;
-
-        let path = ExtrasLedger::path_in(&self.config.config_root().join("locks"));
-        let ledger = ExtrasLedger::load(&path)?;
-        Ok(ledger.drift(&declared_extras(state)))
-    }
     pub async fn reconcile(
         &self,
         state: &crate::model::DesiredState,

@@ -147,21 +147,39 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
                 .plan(&state.packages, None)
                 .await
         };
-        match changes {
-            Ok(c) if c.is_empty() => findings.push(Finding::ok(
-                Section::Drift,
-                "the machine matches your files",
-            )),
-            Ok(c) => findings.push(Finding::attention(
+        // N-2: the model is packages *and* resources. Asking only the package planner is how
+        // `check` came to report that the machine matched while a declared `link:` was not on
+        // disk — and again after one LiNix had placed was deleted behind its back.
+        let resources = app.extras().changes(state).await;
+        match (changes, resources) {
+            (Ok(c), Ok(r)) if c.is_empty() && r.is_empty() => {
+                findings.push(Finding::ok(
+                    Section::Drift,
+                    match r.unverifiable.len() {
+                        0 => "the machine matches your files".to_string(),
+                        // Not "it matches": LiNix looked at the packages and at every resource
+                        // it can read back, and these it cannot. Saying so is the difference
+                        // between a converged machine and an unexamined one.
+                        n => format!(
+                            "the machine matches your files, except {} resource(s) LiNix \
+                             cannot read back ({})",
+                            n,
+                            r.unverifiable.join(", ")
+                        ),
+                    },
+                ));
+            }
+            (Ok(c), Ok(r)) => findings.push(Finding::attention(
                 Section::Drift,
                 format!(
-                    "{} to install, {} to remove",
+                    "{} to install, {} to remove, {}",
                     c.total_install(),
-                    c.total_remove()
+                    c.total_remove(),
+                    r.summary()
                 ),
                 "linix sync",
             )),
-            Err(e) => findings.push(Finding::attention(
+            (Err(e), _) | (_, Err(e)) => findings.push(Finding::attention(
                 Section::Drift,
                 format!("could not be planned — {}", e),
                 "linix check drift",
