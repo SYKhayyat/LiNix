@@ -469,11 +469,20 @@ impl GenericInstallable {
         if opting_out || capability::unverified_arg(&self.core.name).is_none() {
             return e;
         }
-        let crate::core::Error::CommandFailed { message, retry } = e else {
+        let crate::core::Error::CommandFailed {
+            message,
+            retry,
+            absent_name,
+        } = e
+        else {
             return e;
         };
         if !message.to_lowercase().contains("verification") {
-            return crate::core::Error::CommandFailed { message, retry };
+            return crate::core::Error::CommandFailed {
+                message,
+                retry,
+                absent_name,
+            };
         }
         crate::core::Error::CommandFailed {
             message: format!(
@@ -483,6 +492,7 @@ impl GenericInstallable {
                 self.core.name
             ),
             retry,
+            absent_name,
         }
     }
 
@@ -1401,6 +1411,9 @@ mod tests {
                           to skip verification"
                     .into(),
                 retry: crate::core::Retryability::Permanent,
+                // Permanent and the plugin's name is fine — the fixture for the distinction
+                // `absent_name` exists to draw.
+                absent_name: false,
             }),
         );
         let inst = GenericInstallable {

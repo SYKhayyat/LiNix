@@ -464,7 +464,14 @@ async fn attempts_for(
 #[tokio::test]
 async fn a_permanent_failure_is_attempted_once() {
     let kernel = TestKernel::new().await;
-    let attempts = attempts_for(&kernel, Err(Error::PackageNotFound("pkg-a".into()))).await;
+    let attempts = attempts_for(
+        &kernel,
+        Err(Error::NoSuchPackage {
+            name: "pkg-a".into(),
+            message: "no repository carries it".into(),
+        }),
+    )
+    .await;
     assert_eq!(attempts, 1, "a permanent failure must not be retried");
 }
 

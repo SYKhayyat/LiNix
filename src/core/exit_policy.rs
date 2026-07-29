@@ -31,6 +31,21 @@ pub struct ExitPolicy {
     pub transient_markers: Vec<&'static str>,
     /// Text that means the request itself is wrong. A second attempt reproduces it.
     pub permanent_markers: Vec<&'static str>,
+    /// Text that means this manager looked the name up and it is not there.
+    ///
+    /// A different question from `permanent_markers`, and the distinction is the whole point.
+    /// `Permanent` answers *would another attempt differ?*; this answers *does the name
+    /// exist?* helm's `plugin already exists` is permanent and the name plainly exists, so
+    /// withdrawing a declaration on permanence alone deletes a line whose package is
+    /// installed. Only this list withdraws a declaration, and matching one implies
+    /// `Permanent` — a name that is not there will not be there on the next attempt.
+    ///
+    /// A manager with an empty list here can never wedge a config *less*: an unclassified
+    /// failure keeps the line, which is the safe direction. It is also the direction that
+    /// left E1 alive on every manager that had no policy at all, so the count of managers
+    /// with no entry is ratcheted by `absent_marker_coverage_tests.rs` rather than left to
+    /// be discovered one backend at a time.
+    pub absent_markers: Vec<&'static str>,
 }
 
 impl ExitPolicy {
@@ -75,12 +90,34 @@ impl ExitPolicy {
         rest
     }
 
+    /// Whether this manager said the name it was given does not exist.
+    ///
+    /// The fact `install` reads to take a line back out of the manifest. It is answered from
+    /// the manager's own declared phrasings rather than from the shape of an error value:
+    /// reading `CommandFailed { retry: Permanent }` recognised the two managers whose failure
+    /// happened to be classified and left the config wedged on every other one (N-1).
+    pub fn names_an_absent_package(&self, stdout: &[u8], stderr: &[u8]) -> bool {
+        if self.absent_markers.is_empty() {
+            return false;
+        }
+        let hay = Self::haystack(stdout, stderr);
+        self.absent_markers.iter().any(|m| hay.contains(m))
+    }
+
     /// Whether the same command could succeed on another attempt.
     pub fn retryability(&self, stdout: &[u8], stderr: &[u8]) -> Retryability {
-        if self.permanent_markers.is_empty() && self.transient_markers.is_empty() {
+        if self.permanent_markers.is_empty()
+            && self.transient_markers.is_empty()
+            && self.absent_markers.is_empty()
+        {
             return Retryability::Unknown;
         }
         let hay = Self::haystack(stdout, stderr);
+        // A name that is not there now will not be there on the next attempt, so an absent
+        // marker settles retryability too and does not need repeating in `permanent_markers`.
+        if self.absent_markers.iter().any(|m| hay.contains(m)) {
+            return Retryability::Permanent;
+        }
         if self.permanent_markers.iter().any(|m| hay.contains(m)) {
             return Retryability::Permanent;
         }
@@ -117,7 +154,7 @@ pub fn apt() -> ExitPolicy {
             "could not connect",
             "failed to fetch",
         ],
-        permanent_markers: vec![
+        absent_markers: vec![
             "unable to locate package",
             "has no installation candidate",
             "couldn't find any package by",
@@ -136,7 +173,7 @@ pub fn dnf() -> ExitPolicy {
             "curl error",
             "connection timed out",
         ],
-        permanent_markers: vec!["no match for argument", "unable to find a match"],
+        absent_markers: vec!["no match for argument", "unable to find a match"],
         ..ExitPolicy::default()
     }
 }
@@ -150,7 +187,7 @@ pub fn pacman() -> ExitPolicy {
             "unable to lock database",
             "connection timed out",
         ],
-        permanent_markers: vec!["target not found", "could not find or read package"],
+        absent_markers: vec!["target not found", "could not find or read package"],
         ..ExitPolicy::default()
     }
 }
@@ -164,7 +201,7 @@ pub fn apk() -> ExitPolicy {
             "could not connect",
             "operation not permitted (try running as root)",
         ],
-        permanent_markers: vec!["unable to select packages", "no such package"],
+        absent_markers: vec!["unable to select packages", "no such package"],
         ..ExitPolicy::default()
     }
 }
@@ -178,7 +215,7 @@ pub fn brew() -> ExitPolicy {
             "operation timed out",
             "could not resolve host",
         ],
-        permanent_markers: vec!["no available formula", "no formulae or casks found"],
+        absent_markers: vec!["no available formula", "no formulae or casks found"],
         ..ExitPolicy::default()
     }
 }
@@ -188,7 +225,7 @@ pub fn brew() -> ExitPolicy {
 pub fn choco() -> ExitPolicy {
     ExitPolicy {
         benign_exits: vec![1605, 1614, 1618, 1641, 3010],
-        permanent_markers: vec!["the package was not found with the source"],
+        absent_markers: vec!["the package was not found with the source"],
         ..ExitPolicy::default()
     }
 }
@@ -198,7 +235,7 @@ pub fn choco() -> ExitPolicy {
 pub fn winget() -> ExitPolicy {
     ExitPolicy {
         benign_exits: vec![-1978335189, -1978335212, -1978335215],
-        permanent_markers: vec!["no package found matching input criteria"],
+        absent_markers: vec!["no package found matching input criteria"],
         ..ExitPolicy::default()
     }
 }
@@ -213,12 +250,16 @@ pub fn cargo() -> ExitPolicy {
             "failed to fetch",
             "connection timed out",
         ],
+        // A crate with no program in it and a crate the registry does not carry are both
+        // permanent and only the second one is *absent*. Withdrawing `cargo:some-library`
+        // because it ships no binary would delete a line whose crate exists and is spelled
+        // correctly; the fix there is the user's to make.
         permanent_markers: vec![
             "no binaries",
             "nothing to install",
-            "could not find",
             "does not have these features",
         ],
+        absent_markers: vec!["could not find"],
         ..ExitPolicy::default()
     }
 }
@@ -232,7 +273,11 @@ pub fn scoop() -> ExitPolicy {
     ExitPolicy {
         failure_markers: vec!["find manifest for"],
         failure_line_prefixes: vec!["error "],
-        permanent_markers: vec!["find manifest for", "isn't installed"],
+        // `isn't installed` is scoop refusing to *remove* something absent from the machine,
+        // which says nothing about whether the bucket carries the name — so it is permanent
+        // and not absent, and a failed uninstall never withdraws the declaration.
+        permanent_markers: vec!["isn't installed"],
+        absent_markers: vec!["find manifest for"],
         transient_markers: vec![
             "could not resolve host",
             "the remote name could not be resolved",
@@ -249,11 +294,11 @@ pub fn scoop() -> ExitPolicy {
 pub fn nimble() -> ExitPolicy {
     ExitPolicy {
         failure_line_prefixes: vec!["error:"],
-        permanent_markers: vec![
-            "version not found",
-            "package not found",
-            "build failed for the package",
-        ],
+        // A version nimble does not have and a build that failed are both about a package
+        // that exists: the line carries a `@version=` to correct or a toolchain to fix, and
+        // deleting it would throw away the thing the user has to edit.
+        permanent_markers: vec!["version not found", "build failed for the package"],
+        absent_markers: vec!["package not found"],
         transient_markers: vec!["could not download", "connection", "temporary failure"],
         ..ExitPolicy::default()
     }
@@ -311,6 +356,141 @@ pub fn helm() -> ExitPolicy {
         ],
         ..ExitPolicy::default()
     }
+}
+
+/// npm. Measured on this host 2026-07-29: `npm install -g <absent>` prints
+/// `npm error code E404` and `404 Not Found - GET https://registry.npmjs.org/<name>`.
+///
+/// npm had no policy at all until N-1, which is why a mistyped npm package wedged the config
+/// while the same typo behind `scoop:` did not — the withdrawal read a classification npm
+/// never produced. Nothing about npm was special; it was one of the 36 backends with no
+/// policy, and it was the one the grader happened to type.
+pub fn npm() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["404 not found", "is not in this registry"],
+        transient_markers: vec![
+            "etimedout",
+            "enotfound",
+            "econnreset",
+            "network",
+            "rate limit",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// RubyGems. Measured 2026-07-29: `gem install <absent>` exits 2 with
+/// `ERROR:  Could not find a valid gem 'x' (>= 0) in any repository`.
+pub fn gem() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["could not find a valid gem"],
+        transient_markers: vec![
+            "timed out",
+            "could not resolve host",
+            "connection refused",
+            "too many connection resets",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// pipx and pip. Measured 2026-07-29: pipx relays pip's own summary,
+/// `ERROR: No matching distribution found for <name>`, and exits 1.
+///
+/// `could not find a version that satisfies` is deliberately absent from both lists: pip
+/// prints it for a name that does not exist *and* for a version pin nothing satisfies, and
+/// only the first is a reason to withdraw a line.
+pub fn pipx() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["no matching distribution found"],
+        transient_markers: vec![
+            "read timed out",
+            "temporary failure in name resolution",
+            "connection broken",
+            "retrying",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Go modules. Measured 2026-07-29: `go install github.com/<absent>@latest` reports
+/// `remote: Repository not found` and `fatal: repository … not found` through git.
+///
+/// `no matching versions for query` is the same fact for a repo that exists without the
+/// requested tag; it is not in the absent list, because the tag is the part of the line the
+/// user edits.
+pub fn go() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["repository not found", "unknown revision"],
+        transient_markers: vec![
+            "i/o timeout",
+            "connection reset",
+            "could not resolve host",
+            "proxyconnect",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// pixi. Measured 2026-07-29: `pixi global install <absent>` prints
+/// `No candidates were found for <name>` and exits 1.
+///
+/// pixi wraps that line at the terminal width and will break it *inside* the package name,
+/// which is why the name is never recovered from this text — see
+/// `absent_name_in_message` in `verbs/packages.rs`.
+pub fn pixi() -> ExitPolicy {
+    ExitPolicy {
+        absent_markers: vec!["no candidates were found for"],
+        transient_markers: vec![
+            "failed to fetch",
+            "operation timed out",
+            "could not resolve host",
+        ],
+        ..ExitPolicy::default()
+    }
+}
+
+/// Every manager whose conventions this program knows, in one table.
+///
+/// Each registration site reads its own name out of here instead of naming a function, so
+/// *which managers have a policy* is a question with one answer rather than one answer per
+/// registration site — and `tests/absent_marker_coverage_tests.rs` can ask it. npm had no
+/// policy at all through three rounds of assessment: nothing was wrong with npm, and nothing
+/// anywhere counted the managers that could not tell LiNix a name was missing.
+///
+/// An unknown name yields the default policy, which classifies nothing. That is the safe
+/// direction — an unclassified failure keeps the declaration — and it is not a silent one: a
+/// manager missing from this table is a manager the coverage test names.
+pub fn for_manager(name: &str) -> ExitPolicy {
+    match name {
+        "apt" => apt(),
+        "dnf" | "yum" => dnf(),
+        "pacman" => pacman(),
+        "apk" => apk(),
+        "brew" => brew(),
+        "choco" => choco(),
+        "winget" => winget(),
+        "cargo" => cargo(),
+        "scoop" => scoop(),
+        "nimble" => nimble(),
+        "luarocks" => luarocks(),
+        "helm" => helm(),
+        "npm" => npm(),
+        "gem" => gem(),
+        "pipx" => pipx(),
+        "go" => go(),
+        "pixi" => pixi(),
+        _ => ExitPolicy::default(),
+    }
+}
+
+/// Whether this manager can tell LiNix that a name does not exist.
+///
+/// The one the coverage ratchet counts, because it is the one a wedged config turns on: a
+/// manager that cannot say "no such package" leaves the line in `modules/imperative.txt` and
+/// every later command fails on it.
+pub fn classifies_absent_names(name: &str) -> bool {
+    !for_manager(name).absent_markers.is_empty()
 }
 
 #[cfg(test)]

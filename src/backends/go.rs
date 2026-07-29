@@ -28,7 +28,7 @@ pub struct GoBackendCore {
 impl GoBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
         Self {
-            executor,
+            executor: executor.with_exit_policy(crate::core::exit_policy::for_manager("go")),
             name: "go".to_string(),
         }
     }

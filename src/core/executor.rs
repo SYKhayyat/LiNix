@@ -822,6 +822,12 @@ impl CommandExecutor {
             retry: self
                 .exit_policy
                 .retryability(&output.stdout, &output.stderr),
+            // Asked of the raw output, here, because this is the last place it exists: the
+            // message keeps whichever stream was non-empty, so a marker on the other one is
+            // gone by the time any caller sees it.
+            absent_name: self
+                .exit_policy
+                .names_an_absent_package(&output.stdout, &output.stderr),
         })
     }
 

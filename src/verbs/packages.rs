@@ -112,26 +112,58 @@ pub(crate) async fn handle_install(
     synced
 }
 
-/// A line this command just wrote that can never be satisfied, whatever happens next.
+/// Whether a failed sync says the name it was given does not exist.
 ///
-/// Two causes and no others. `Unresolvable` is a name no backend claims, and it carries that
-/// name. `CommandFailed` marked [`Retryability::Permanent`] is the same fact by a different
-/// road: a real manager ran, answered, and will answer identically every time — a typo behind
-/// a real prefix (`scoop:definitely-not-real`) arrives here and not as `Unresolvable`, because
-/// the *backend* resolved perfectly well.
+/// One question, asked of a property rather than of prose. It was `CommandFailed` marked
+/// [`Retryability::Permanent`] until N-1, and that reading was wrong in both directions:
+/// permanence is not existence (helm's `plugin already exists` is permanent about a name that
+/// is plainly there), and the 36 backends with no [`ExitPolicy`] never answered `Permanent` at
+/// all, so a mistyped `npm:` package wedged the config while the same typo behind `scoop:`
+/// did not. The backends decide this now — from their own declared phrasings, or by saying so
+/// directly — and this reads their answer.
+fn says_a_name_is_absent(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<linix::core::Error>()
+        .is_some_and(|err| err.says_a_name_is_absent())
+}
+
+/// A spawned manager's own words, when its policy recognised them as "no such name".
 ///
-/// Read off `CommandFailed` and never off [`Error::retryability`], which also calls a refusal,
-/// a cancelled prompt and an unparseable config `Permanent`. Those are permanent in the retry
-/// sense and none of them means the name was wrong; deleting a line because someone answered
-/// "no" to a prompt would be a worse bug than the wedge this exists to prevent.
-fn permanently_failed_message(e: &anyhow::Error) -> Option<&str> {
+/// The message is *not* what establishes the fact — `says_a_name_is_absent` did that. It is
+/// read only to pick which of the lines this command wrote the manager was talking about,
+/// which is a question the fact cannot answer and the edits can.
+fn absent_command_message(e: &anyhow::Error) -> Option<&str> {
     match e.downcast_ref::<linix::core::Error>() {
         Some(linix::core::Error::CommandFailed {
             message,
-            retry: linix::core::Retryability::Permanent,
+            absent_name: true,
+            ..
         }) => Some(message),
         _ => None,
     }
+}
+
+/// The name a name-resolving backend says is not there — a git host, an index, an API. Those
+/// backends looked one name up and know which, so nothing has to be inferred from their text.
+fn backend_absent_name(e: &anyhow::Error) -> Option<&str> {
+    match e.downcast_ref::<linix::core::Error>() {
+        Some(err @ linix::core::Error::NoSuchPackage { .. }) => err.absent_name(),
+        _ => None,
+    }
+}
+
+/// Whether a manager's output is talking about this package.
+///
+/// Managers wrap their output at the terminal width and pixi breaks lines *inside* a package
+/// name (`No candidates were found for linix-\n      no-such-pkg-zzz`), so a name that is
+/// plainly there reads as a name nobody mentioned. Comparing with the whitespace taken out
+/// recovers it. This decides *which* line, never *whether* — a wrong answer here keeps a
+/// declaration that could have been withdrawn, which is the safe direction.
+fn mentions_package(message: &str, name: &str) -> bool {
+    if message.contains(name) {
+        return true;
+    }
+    let squeeze = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    squeeze(message).contains(&squeeze(name))
 }
 
 /// The name a failed sync says can never be installed, if it says one.
@@ -154,6 +186,8 @@ async fn withdraw_what_can_never_succeed(app: &App, e: &anyhow::Error, edits: &[
     let mut withdrawn: Vec<&Edit> = Vec::new();
 
     if let Some(name) = unresolvable_name(e) {
+        // `Unresolvable` carries the name as the user wrote it, so the model takes it back
+        // directly and no line has to be identified.
         if app.undeclare(name).await.is_ok_and(|es| !es.is_empty()) {
             warn!(
                 "`{}` was taken back out of your files — nothing can install it.",
@@ -161,24 +195,35 @@ async fn withdraw_what_can_never_succeed(app: &App, e: &anyhow::Error, edits: &[
             );
             withdrawn.extend(edits.iter().filter(|ed| ed.line.contains(name)));
         }
-    } else if let Some(message) = permanently_failed_message(e) {
-        // Which of the lines just written did the manager refuse? Managers name the package
-        // they could not install, so the ones this run wrote and this message names are the
-        // ones to take back. A line the message does not name is left alone and told about
-        // below: withdrawing a declaration on a guess is the one outcome worse than keeping it.
+    } else if says_a_name_is_absent(e) {
+        // A backend has determined that a name it was handed is not there. Which of the lines
+        // this command just wrote is that about? Two ways to know, and neither is "the error
+        // sounded permanent": the backend says which name it looked up, or — for a spawned
+        // manager, which reports about a whole command — the manager's output mentions it.
+        //
+        // A line nothing identifies is left alone and told about below. Withdrawing on a
+        // guess is the one outcome worse than keeping a line: a `sync` that fails on a
+        // pre-existing wedge would otherwise delete the good declaration just written.
+        let named = backend_absent_name(e);
+        let message = absent_command_message(e);
         for edit in edits {
             let Ok(specs) = app.resolve_spec(&edit.line).await else {
                 continue;
             };
-            if specs.iter().any(|s| message.contains(&s.name))
+            let is_this_line = match (named, message) {
+                (Some(n), _) => specs.iter().any(|s| s.name == n),
+                (None, Some(m)) => specs.iter().any(|s| mentions_package(m, &s.name)),
+                (None, None) => false,
+            };
+            if is_this_line
                 && app
                     .undeclare(&edit.line)
                     .await
                     .is_ok_and(|es| !es.is_empty())
             {
                 warn!(
-                    "`{}` was taken back out of {} — `{}` cannot install it, and trying again \
-                     would fail the same way.",
+                    "`{}` was taken back out of {} — `{}` has no such package, and trying \
+                     again would fail the same way.",
                     edit.line,
                     edit.file.display(),
                     specs
@@ -191,58 +236,89 @@ async fn withdraw_what_can_never_succeed(app: &App, e: &anyhow::Error, edits: &[
         }
     }
 
-    // A refusal is kept — deliberately, and for the reason above: LiNix said no to *this line
-    // as written*, not to the name, and the refusal already says what to change (`@allow_http`,
-    // `@sha256=`, a `@target=` outside the repo). Editing the line is the fix, so deleting it
-    // would throw away the thing the user has to edit.
-    //
-    // But it must not be described as a transient failure. "`sync` will try it again" over a
-    // plain-HTTP refusal promises a retry that fails identically forever, which is the sentence
-    // E1 was about, said about a different cause.
-    let refused = e
-        .downcast_ref::<linix::core::Error>()
-        .is_some_and(|err| matches!(err, linix::core::Error::Refused(_)));
-
-    // The failure was called transient, retried, and came back the same. Telling the user
-    // `sync` will try it again is then a promise the program has already disproved — it did
-    // try again and printed the identical error. The line still stays: the cause can be a
-    // `wget` on the PATH that rejects the flags the manager passes, which is fixable, and a
-    // declaration is not deleted over a broken environment.
-    let exhausted = e
-        .downcast_ref::<linix::core::Error>()
-        .is_some_and(|err| err.retryability() == linix::core::Retryability::Exhausted);
-
+    let why = why_kept(e);
     for edit in edits {
         if withdrawn.iter().any(|w| w.line == edit.line) {
             continue;
         }
-        if exhausted {
-            warn!(
-                "`{}` is still declared in {}, but the failure above repeated on every retry, \
-                 so `sync` will keep failing the same way until its cause is fixed. Read the \
-                 error above, or run `linix unmanage {}`.",
-                edit.line,
-                edit.file.display(),
-                edit.line
-            );
-        } else if refused {
-            warn!(
-                "`{}` is still declared in {} — it is kept because the line is the thing to \
-                 edit, not the thing to delete. Change it as the refusal above says, or run \
-                 `linix unmanage {}`. Re-running `sync` unchanged will refuse identically.",
-                edit.line,
-                edit.file.display(),
-                edit.line
-            );
-        } else {
-            warn!(
-                "`{}` is still declared in {}, so `sync` will try it again. If you did not \
-                 mean it, run `linix unmanage {}`.",
-                edit.line,
-                edit.file.display(),
-                edit.line
-            );
-        }
+        warn!("{}", kept_line_advice(why, &edit.line, &edit.file));
+    }
+}
+
+/// Why a line this command wrote is still in the file after the sync failed.
+///
+/// Named rather than decided at the moment of printing. E1's wording half was one `else`
+/// covering four different situations and it promised a retry for all of them; a promise the
+/// program has already disproved is the sentence this whole finding is about, so which
+/// situations exist has to be something a test can enumerate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WhyKept {
+    /// LiNix said no to *this line as written* — plain HTTP, no `@sha256=`, a `@target=`
+    /// inside the repo. The refusal already says what to change, and the line is the thing
+    /// the user edits, so deleting it would throw away the fix.
+    Refused,
+    /// It was called transient, retried, and came back identical. The retry already happened;
+    /// saying another one will help is a promise the program disproved a second ago. The line
+    /// still stays: the cause can be a `wget` on the PATH that rejects the flags the manager
+    /// passes, and a declaration is not deleted over a broken environment.
+    Exhausted,
+    /// A name is absent and nothing tied it to this line — the manager reported about a
+    /// command covering several, or wrapped its output through the middle of the name.
+    NameAbsentElsewhere,
+    /// Nothing classified it. The only case where another attempt is worth suggesting, and
+    /// the honest reason is that nobody looked rather than that it will work.
+    Unclassified,
+}
+
+fn why_kept(e: &anyhow::Error) -> WhyKept {
+    let Some(err) = e.downcast_ref::<linix::core::Error>() else {
+        return WhyKept::Unclassified;
+    };
+    if matches!(err, linix::core::Error::Refused(_)) {
+        return WhyKept::Refused;
+    }
+    if err.retryability() == linix::core::Retryability::Exhausted {
+        return WhyKept::Exhausted;
+    }
+    if err.says_a_name_is_absent() {
+        return WhyKept::NameAbsentElsewhere;
+    }
+    WhyKept::Unclassified
+}
+
+/// What to tell a user about a line that stayed.
+///
+/// Every branch names the file the line is in and the command that removes it — a wedge with
+/// an exit is not a wedge — and only [`WhyKept::Unclassified`] may suggest that `sync` trying
+/// again could work, because it is the only one where LiNix has not already been shown
+/// otherwise.
+fn kept_line_advice(why: WhyKept, line: &str, file: &std::path::Path) -> String {
+    let where_it_is = format!("`{}` is still declared in {}", line, file.display());
+    match why {
+        WhyKept::Exhausted => format!(
+            "{}, but the failure above repeated on every retry, so `sync` will keep failing \
+             the same way until its cause is fixed. Read the error above, or run \
+             `linix unmanage {}`.",
+            where_it_is, line
+        ),
+        WhyKept::Refused => format!(
+            "{} — it is kept because the line is the thing to edit, not the thing to delete. \
+             Change it as the refusal above says, or run `linix unmanage {}`. Re-running \
+             `sync` unchanged will refuse identically.",
+            where_it_is, line
+        ),
+        WhyKept::NameAbsentElsewhere => format!(
+            "{}, and the failure above says a package name does not exist. `sync` will keep \
+             failing the same way until the line naming it is corrected or removed with \
+             `linix unmanage {}`.",
+            where_it_is, line
+        ),
+        WhyKept::Unclassified => format!(
+            "{}, so `sync` will try it again. Nothing classified the failure above, so if it \
+             repeats unchanged the cause is not a passing one — run `linix unmanage {}` if you \
+             did not mean it.",
+            where_it_is, line
+        ),
     }
 }
 
@@ -725,6 +801,7 @@ pub(crate) async fn handle_info(app: &App, package: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use linix::core::exit_policy;
     use linix::core::{Error, Retryability};
 
     fn boxed(e: Error) -> anyhow::Error {
@@ -732,17 +809,17 @@ mod tests {
     }
 
     /// The reported bug: a typo behind a real backend prefix. `scoop` resolves, so this is
-    /// never `Unresolvable`; scoop's own policy calls it permanent, and until that was read
-    /// the line stayed in `modules/imperative.txt` and wedged every later command.
+    /// never `Unresolvable`; scoop's own policy says its output means the name is not there,
+    /// and until that was read the line stayed in `modules/imperative.txt` and wedged every
+    /// later command.
     #[test]
-    fn a_permanent_command_failure_is_withdrawn() {
-        let e = boxed(Error::CommandFailed {
-            message: "`scoop` failed: Couldn't find manifest for 'definitely-not-real'."
-                .to_string(),
-            retry: Retryability::Permanent,
-        });
+    fn a_failure_that_says_the_name_is_absent_is_withdrawn() {
+        let e = boxed(Error::command_failed_absent(
+            "`scoop` failed: Couldn't find manifest for 'definitely-not-real'.",
+        ));
+        assert!(says_a_name_is_absent(&e));
         assert_eq!(
-            permanently_failed_message(&e),
+            absent_command_message(&e),
             Some("`scoop` failed: Couldn't find manifest for 'definitely-not-real'.")
         );
     }
@@ -755,18 +832,50 @@ mod tests {
             let e = boxed(Error::CommandFailed {
                 message: "`apt` failed: Could not get lock /var/lib/dpkg/lock".to_string(),
                 retry,
+                absent_name: false,
             });
+            assert!(!says_a_name_is_absent(&e), "withdrew on {retry:?}");
+            assert_eq!(absent_command_message(&e), None, "withdrew on {retry:?}");
+        }
+    }
+
+    /// **The distinction N-1 was about.** A command failure can be permanent and be about a
+    /// name that plainly exists. Reading permanence as absence withdrew declarations for
+    /// packages that were installed; reading it as the *only* road to absence left every
+    /// manager with no policy wedging the config.
+    #[test]
+    fn a_permanent_failure_about_a_name_that_exists_never_withdraws() {
+        let cases = [
+            // helm refusing an unsignable plugin source, and refusing one already installed.
+            ("plugin already exists", exit_policy::helm()),
+            (
+                "plugin source does not support verification",
+                exit_policy::helm(),
+            ),
+            // A crate that is real and simply ships no program.
+            ("error: there are no binaries", exit_policy::cargo()),
+            // nimble: the package exists, the `@version=` on the line does not.
+            ("Error: Version not found", exit_policy::nimble()),
+            // scoop declining to remove what is not on the machine says nothing about the
+            // bucket, and a failed uninstall must never delete the declaration.
+            ("ERROR 'jq' isn't installed.", exit_policy::scoop()),
+        ];
+        for (output, policy) in cases {
             assert_eq!(
-                permanently_failed_message(&e),
-                None,
-                "withdrew on {retry:?}"
+                policy.retryability(output.as_bytes(), b""),
+                Retryability::Permanent,
+                "not permanent, so this case does not test the distinction: {output}"
+            );
+            assert!(
+                !policy.names_an_absent_package(output.as_bytes(), b""),
+                "read as a missing name, so a declaration would be withdrawn over: {output}"
             );
         }
     }
 
     /// Every other variant that `Error::retryability()` also calls `Permanent`. None of them
     /// says the name was wrong, and withdrawing on any of them would delete a declaration the
-    /// user still means — the reason this reads `CommandFailed` rather than `retryability()`.
+    /// user still means — the reason this reads a property and not `retryability()`.
     #[test]
     fn no_other_permanent_error_withdraws_a_line() {
         let others = [
@@ -776,7 +885,6 @@ mod tests {
             Error::Validation("nope".into()),
             Error::Permission("need root".into()),
             Error::BackendNotFound("nosuch".into()),
-            Error::PackageNotFound("nosuch".into()),
             Error::Unsupported("purge".into()),
             Error::UnsupportedPlatform("aix".into()),
             Error::Differences("2 changes".into()),
@@ -791,12 +899,40 @@ mod tests {
                 e.retryability(),
                 "{label} is not the case this test guards"
             );
-            assert_eq!(
-                permanently_failed_message(&boxed(e)),
-                None,
+            assert!(
+                !says_a_name_is_absent(&boxed(e)),
                 "{label} would have withdrawn a line the user still means"
             );
         }
+    }
+
+    /// The two variants that *do* withdraw, and the reason each is safe to: both carry the
+    /// name they looked up, so nothing is inferred from a sentence.
+    #[test]
+    fn the_variants_that_withdraw_carry_the_name_they_looked_up() {
+        let no_such = Error::NoSuchPackage {
+            name: "linix-zzz-nope/nope".into(),
+            message: "the repo has no published release".into(),
+        };
+        assert!(says_a_name_is_absent(&boxed(no_such.clone())));
+        assert_eq!(no_such.absent_name(), Some("linix-zzz-nope/nope"));
+        assert_eq!(
+            backend_absent_name(&boxed(no_such)),
+            Some("linix-zzz-nope/nope")
+        );
+
+        let unresolvable = Error::Unresolvable {
+            name: "linix-no-such-pkg-zzz".into(),
+            message: "no backend claims it".into(),
+        };
+        assert!(says_a_name_is_absent(&boxed(unresolvable.clone())));
+        assert_eq!(unresolvable.absent_name(), Some("linix-no-such-pkg-zzz"));
+        // A spawned manager's failure is the one that does *not* know which name, which is
+        // why the edits are consulted for that case and only that case.
+        assert_eq!(
+            backend_absent_name(&boxed(Error::command_failed_absent("`npm` failed: 404"))),
+            None
+        );
     }
 
     /// The existing path, kept working: a bare name nothing claims carries its own name.
@@ -807,20 +943,20 @@ mod tests {
             message: "no backend claims it".into(),
         });
         assert_eq!(unresolvable_name(&e), Some("linix-no-such-pkg-zzz"));
-        assert_eq!(permanently_failed_message(&e), None);
+        assert_eq!(absent_command_message(&e), None);
     }
 
-    /// Both readers must survive the `.context()` wrapping every caller adds, or the fix
+    /// Every reader must survive the `.context()` wrapping every caller adds, or the fix
     /// works in a unit test and never once in the program.
     #[test]
-    fn both_readers_see_through_a_context_chain() {
-        let e = boxed(Error::CommandFailed {
-            message: "`scoop` failed: Couldn't find manifest for 'nope'.".into(),
-            retry: Retryability::Permanent,
-        })
+    fn every_reader_sees_through_a_context_chain() {
+        let e = boxed(Error::command_failed_absent(
+            "`scoop` failed: Couldn't find manifest for 'nope'.",
+        ))
         .context("while syncing")
         .context("while installing");
-        assert!(permanently_failed_message(&e).is_some());
+        assert!(says_a_name_is_absent(&e));
+        assert!(absent_command_message(&e).is_some());
 
         let u = boxed(Error::Unresolvable {
             name: "zzz".into(),
@@ -828,5 +964,130 @@ mod tests {
         })
         .context("while syncing");
         assert_eq!(unresolvable_name(&u), Some("zzz"));
+        assert!(says_a_name_is_absent(&u));
+
+        let n = boxed(Error::NoSuchPackage {
+            name: "owner/repo".into(),
+            message: "no release".into(),
+        })
+        .context("while syncing");
+        assert_eq!(backend_absent_name(&n), Some("owner/repo"));
+    }
+
+    /// The retry loop must not launder the fact. A failure that travels through
+    /// `falsify_transience` and back is still about a name that is not there.
+    #[test]
+    fn the_absent_fact_survives_the_retry_classifier() {
+        let e = boxed(Error::command_failed_absent("`npm` failed: 404 Not Found"));
+        assert!(says_a_name_is_absent(&e));
+        assert_eq!(
+            e.downcast_ref::<Error>().map(|x| x.retryability()),
+            Some(Retryability::Permanent),
+            "an absent name is not worth retrying, so it never enters the loop"
+        );
+    }
+
+    /// pixi wraps its output inside the package name. Attribution has to survive that, or a
+    /// line whose name is plainly in the output reads as one nobody mentioned. Captured from
+    /// pixi on this host, 2026-07-29.
+    #[test]
+    fn a_name_wrapped_across_lines_is_still_recognised_as_mentioned() {
+        let wrapped = "  × failed to solve the environment\n  ╰─▶ Cannot solve the request \
+                       because of: No candidates were found for linix-\n      \
+                       no-such-pkg-zzz *.\n";
+        assert!(
+            !wrapped.contains("linix-no-such-pkg-zzz"),
+            "the fixture no longer wraps, so it cannot test the wrap"
+        );
+        assert!(mentions_package(wrapped, "linix-no-such-pkg-zzz"));
+        assert!(!mentions_package(wrapped, "some-other-package"));
+    }
+
+    /// Every reason a line can stay, and the sentence each one earns. Enumerated from the
+    /// enum rather than sampled on a host, because the wording half of E1 came back by
+    /// growing a fourth situation that the single `else` covering the other three still
+    /// answered with "`sync` will try it again".
+    #[test]
+    fn only_an_unclassified_failure_may_suggest_that_a_retry_could_work() {
+        let file = std::path::Path::new("modules/imperative.txt");
+        for why in [
+            WhyKept::Refused,
+            WhyKept::Exhausted,
+            WhyKept::NameAbsentElsewhere,
+            WhyKept::Unclassified,
+        ] {
+            let advice = kept_line_advice(why, "npm:cowsay", file);
+            // Every branch, without exception: where the line is, and the way out of it.
+            assert!(
+                advice.contains("modules/imperative.txt"),
+                "{why:?} does not name the file the line is in: {advice}"
+            );
+            assert!(
+                advice.contains("linix unmanage npm:cowsay"),
+                "{why:?} does not name the command that removes it: {advice}"
+            );
+            let promises_a_retry = advice.contains("`sync` will try it again");
+            assert_eq!(
+                promises_a_retry,
+                why == WhyKept::Unclassified,
+                "{why:?} earns the wrong sentence — only an unclassified failure may suggest \
+                 that trying again could work, because every other case has already been \
+                 shown otherwise: {advice}"
+            );
+        }
+    }
+
+    /// And the classifier that feeds it. A failure whose name is absent must not be read as
+    /// unclassified, which is what left `github:` printing the forbidden sentence.
+    #[test]
+    fn each_failure_is_classified_as_the_reason_its_line_stayed() {
+        let cases = [
+            (boxed(Error::Refused("plain HTTP".into())), WhyKept::Refused),
+            (
+                boxed(Error::CommandFailed {
+                    message: "`luarocks` failed: failed downloading (tried 4 times)".into(),
+                    retry: Retryability::Exhausted,
+                    absent_name: false,
+                }),
+                WhyKept::Exhausted,
+            ),
+            (
+                boxed(Error::command_failed_absent("`npm` failed: 404 Not Found")),
+                WhyKept::NameAbsentElsewhere,
+            ),
+            (
+                boxed(Error::NoSuchPackage {
+                    name: "owner/repo".into(),
+                    message: "no published release".into(),
+                }),
+                WhyKept::NameAbsentElsewhere,
+            ),
+            (
+                boxed(Error::command_failed("`mix` failed: something")),
+                WhyKept::Unclassified,
+            ),
+            (
+                boxed(Error::CommandFailed {
+                    message: "`apt` failed: Could not get lock".into(),
+                    retry: Retryability::Transient,
+                    absent_name: false,
+                }),
+                WhyKept::Unclassified,
+            ),
+        ];
+        for (e, expected) in cases {
+            assert_eq!(why_kept(&e), expected, "misclassified: {e}");
+        }
+    }
+
+    /// And the half that keeps attribution honest: a manager talking about one package is not
+    /// talking about another. This is what stops a `sync` that failed on a pre-existing wedge
+    /// from withdrawing the good line the command just wrote.
+    #[test]
+    fn attribution_does_not_spread_to_a_line_the_manager_never_named() {
+        let message = "`npm` failed (exit 1): 404 Not Found - GET \
+                       https://registry.npmjs.org/linix-no-such-pkg-zzz-9";
+        assert!(mentions_package(message, "linix-no-such-pkg-zzz-9"));
+        assert!(!mentions_package(message, "cowsay"));
     }
 }

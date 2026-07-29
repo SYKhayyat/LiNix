@@ -180,26 +180,63 @@ fn a_name_no_backend_can_install_is_never_left_in_the_manifest() {
 }
 
 /// The second half: what the user is told about the line that stayed.
+///
+/// **This test's case was changed by the builder, on the instruction its own control carried.**
+/// It was written against `github:linix-zzz-nope/nope`, asserting the line was kept and then
+/// that the kept line was mis-described — and its control said, in as many words, "that would
+/// mean the first test in this file is fixed and this one needs a new case". It is. github
+/// withdraws now, so there is no kept line there to describe, and the two tests in this file
+/// asked for opposite things about one declaration.
+///
+/// The invariant is unchanged and is the one that matters: **a line LiNix keeps on purpose is
+/// never described as something `sync` will retry.** What changed is the case it is asked
+/// about — a refusal, which is the situation where keeping the line is the *design* (the line
+/// is the thing the user edits) and where the forbidden sentence would therefore be a promise
+/// that can never come true. Both cases below need no network and no manager, so this asserts
+/// the product rather than the weather.
+///
+/// The classification half of the same invariant is enumerated over every reason a line can
+/// stay in `src/verbs/packages.rs`'s `only_an_unclassified_failure_may_suggest_that_a_retry_
+/// could_work`, and that enumeration was mutation-checked: swapping one branch's sentence for
+/// the forbidden one turns it red.
 #[test]
 fn a_kept_line_is_not_described_as_something_sync_will_retry() {
-    let Some((out, manifest, _)) = probe(
-        "grade2-wedge-wording",
-        "github",
-        "github:linix-zzz-nope/nope",
-    ) else {
-        panic!("`github` is not READY on this machine; run this on a host where it is.");
-    };
-    assert!(
-        manifest.contains("linix-zzz-nope/nope"),
-        "the control failed — the line was withdrawn, so there is no kept line to describe. \
-         That would mean the first test in this file is fixed and this one needs a new case.\
-         \n{out}"
-    );
-    assert!(
-        !out.contains("`sync` will try it again"),
-        "the repo has no published release and never will within this run, and LiNix tells the \
-         user `sync` will try it again. `src/verbs/packages.rs` writes the rule itself: a kept \
-         line must not be described as a transient failure, because that promises a retry which \
-         fails identically forever.\n{out}"
-    );
+    // SEC2: plain HTTP, and HTTPS with no `@sha256=`, are refused before anything is fetched.
+    // The declaration stays because editing it is the fix.
+    let cases = [
+        ("plain HTTP", "web:http://example.invalid/tool.tar.gz"),
+        (
+            "unverified HTTPS",
+            "web:https://example.invalid/tool.tar.gz",
+        ),
+    ];
+
+    for (label, decl) in cases {
+        let f = Fixture::new(&format!("grade2-wedge-wording-{}", label.replace(' ', "-")));
+        let (out, code) = f.run(&["install", decl, "-y"]);
+        assert_ne!(code, 0, "`install {decl}` ({label}) succeeded:\n{out}");
+
+        // Control: the line really is kept, so there is something to describe. Without this a
+        // green run could mean the refusal withdrew it and the wording never printed.
+        assert!(
+            f.imperative().contains(decl),
+            "the control failed — `{decl}` ({label}) was not kept, so this test has no kept \
+             line to examine. A refusal keeps the line deliberately: the refusal says what to \
+             change and the line is what the user changes.\n{out}"
+        );
+
+        assert!(
+            !out.contains("`sync` will try it again"),
+            "`{decl}` ({label}) is refused for what the line says, so re-running `sync` \
+             unchanged refuses identically — and LiNix tells the user `sync` will try it \
+             again. `src/verbs/packages.rs` writes the rule itself: a kept line must not be \
+             described as a transient failure, because that promises a retry which fails \
+             identically forever.\n{out}"
+        );
+        assert!(
+            out.contains("linix unmanage"),
+            "a kept line must name the way out of it — a wedge with an exit is not a \
+             wedge:\n{out}"
+        );
+    }
 }

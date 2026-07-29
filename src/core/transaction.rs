@@ -790,9 +790,9 @@ impl Transaction {
 /// failure with backoff, so by the time it gives up it **has** re-run the command and seen the
 /// same answer. That is the experiment; this records its result. `Unknown` rather than
 /// `Permanent`, because "we tried and it did not differ" is not "this can never work" — the
-/// wget on the PATH could be fixed tomorrow — and `Permanent` is the verdict that withdraws a
-/// declaration (`verbs::packages::permanently_failed_message`). Guessing that hard here would
-/// delete a line over a broken PATH.
+/// wget on the PATH could be fixed tomorrow. Withdrawing a declaration is not this function's
+/// to trigger either way: that reads `Error::says_a_name_is_absent`, and no amount of repeating
+/// turns "the download failed" into "the rock does not exist".
 fn falsify_transience(err: Error, attempts: u32) -> Error {
     if attempts < 2 {
         return err; // never retried, so nothing was tested
@@ -801,6 +801,7 @@ fn falsify_transience(err: Error, attempts: u32) -> Error {
         Error::CommandFailed {
             message,
             retry: Retryability::Transient,
+            absent_name,
         } => Error::CommandFailed {
             message: format!(
                 "{} (tried {} times; the failure did not change, so a further retry will not \
@@ -808,6 +809,10 @@ fn falsify_transience(err: Error, attempts: u32) -> Error {
                 message, attempts
             ),
             retry: Retryability::Exhausted,
+            // Carried, not recomputed. Nothing here re-reads the manager's output, so
+            // dropping the flag would turn "the name is not there" into "something failed
+            // repeatedly" purely by passing through the retry loop.
+            absent_name,
         },
         other => other,
     }
@@ -821,6 +826,7 @@ mod transience_tests {
         Error::CommandFailed {
             message: msg.to_string(),
             retry: Retryability::Transient,
+            absent_name: false,
         }
     }
 
@@ -850,6 +856,7 @@ mod transience_tests {
         let e = Error::CommandFailed {
             message: "`scoop` failed: Couldn't find manifest".into(),
             retry: Retryability::Permanent,
+            absent_name: true,
         };
         assert_eq!(
             falsify_transience(e, 3).retryability(),
@@ -862,6 +869,7 @@ mod transience_tests {
         let e = Error::CommandFailed {
             message: "`mix` failed: something".into(),
             retry: Retryability::Unknown,
+            absent_name: false,
         };
         let out = falsify_transience(e, 3);
         assert_eq!(out.retryability(), Retryability::Unknown);

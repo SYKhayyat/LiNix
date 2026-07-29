@@ -16,7 +16,7 @@ pub struct PipxBackendCore {
 impl PipxBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
         Self {
-            executor,
+            executor: executor.with_exit_policy(crate::core::exit_policy::for_manager("pipx")),
             name: "pipx".to_string(),
         }
     }

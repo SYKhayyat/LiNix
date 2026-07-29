@@ -54,6 +54,15 @@ pub enum Error {
     CommandFailed {
         message: String,
         retry: Retryability,
+        /// The manager's own words say the name it was handed is not there.
+        ///
+        /// Deliberately not derived from `retry`. `Permanent` answers *would another attempt
+        /// differ?* and this answers *does the name exist?*, and reading the first as the
+        /// second is N-1: `install` withdrew a wedged line for the two managers whose
+        /// failure happened to be classified `Permanent` and left it in for every manager
+        /// that had no policy — while helm's `plugin already exists` is `Permanent` about a
+        /// name that plainly exists and must never withdraw anything.
+        absent_name: bool,
     },
 
     #[error("I/O error: {0}")]
@@ -74,8 +83,13 @@ pub enum Error {
     #[error("TOML processing error: {0}")]
     Toml(String),
 
-    #[error("Package '{0}' was not found in the target repository")]
-    PackageNotFound(String),
+    /// A backend that resolves names itself — a git host, an index, an API — looked this one
+    /// up and it is not there. It carries the name rather than describing it, because the
+    /// caller that has to withdraw the declaration must not go looking for a package name in
+    /// a sentence: `pixi` wraps its output mid-name, and the two managers whose prose did
+    /// name the package are exactly the two where E1 looked fixed.
+    #[error("Package '{name}' was not found: {message}")]
+    NoSuchPackage { name: String, message: String },
 
     #[error("Operation was cancelled by the user")]
     Cancelled,
@@ -136,15 +150,50 @@ impl Error {
         Error::CommandFailed {
             message: message.into(),
             retry: Retryability::Unknown,
+            absent_name: false,
         }
     }
 
     /// A command failure that a fresh attempt cannot fix — a binary that is not there, a
-    /// name no repository carries.
+    /// version pin nothing satisfies, a source that cannot be verified. Permanent says only
+    /// that; use [`Error::command_failed_absent`] when the manager said the *name* is absent.
     pub fn command_failed_permanently(message: impl Into<String>) -> Self {
         Error::CommandFailed {
             message: message.into(),
             retry: Retryability::Permanent,
+            absent_name: false,
+        }
+    }
+
+    /// A command failure whose output says the name is not there. The one command failure
+    /// that withdraws a declaration.
+    pub fn command_failed_absent(message: impl Into<String>) -> Self {
+        Error::CommandFailed {
+            message: message.into(),
+            retry: Retryability::Permanent,
+            absent_name: true,
+        }
+    }
+
+    /// Whether this failure says the name it was given does not exist anywhere it looked.
+    ///
+    /// The single predicate every caller reads. Two roads reach it — a manager's declared
+    /// phrasings via [`ExitPolicy`](crate::core::ExitPolicy), and a name-resolving backend
+    /// saying so directly — because only the second kind knows the name it looked up. What
+    /// matters is that neither road is *prose the caller parses*, which is what N-1 was.
+    pub fn says_a_name_is_absent(&self) -> bool {
+        match self {
+            Error::CommandFailed { absent_name, .. } => *absent_name,
+            Error::NoSuchPackage { .. } | Error::Unresolvable { .. } => true,
+            _ => false,
+        }
+    }
+
+    /// The name this failure says is absent, when the failure knows which one it was.
+    pub fn absent_name(&self) -> Option<&str> {
+        match self {
+            Error::NoSuchPackage { name, .. } | Error::Unresolvable { name, .. } => Some(name),
+            _ => None,
         }
     }
 
@@ -156,7 +205,7 @@ impl Error {
             // Nothing about the machine changes between attempts for any of these: the name
             // is wrong, the file is wrong, the platform cannot do it, or LiNix itself said no.
             Error::BackendNotFound(_)
-            | Error::PackageNotFound(_)
+            | Error::NoSuchPackage { .. }
             | Error::Unresolvable { .. }
             | Error::Config(_)
             | Error::Validation(_)

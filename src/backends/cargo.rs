@@ -15,7 +15,7 @@ pub struct CargoBackendCore {
 impl CargoBackendCore {
     pub fn new(executor: CommandExecutor) -> Self {
         Self {
-            executor: executor.with_exit_policy(crate::core::exit_policy::cargo()),
+            executor: executor.with_exit_policy(crate::core::exit_policy::for_manager("cargo")),
             name: "cargo".to_string(),
         }
     }

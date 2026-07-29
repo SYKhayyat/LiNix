@@ -193,7 +193,7 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         name: "apt".into(),
         executor: executor
             .duplicate()
-            .with_exit_policy(crate::core::exit_policy::apt()),
+            .with_exit_policy(crate::core::exit_policy::for_manager("apt")),
         config: ManagerConfig {
             name: "apt".into(),
             binary: None,
@@ -289,7 +289,7 @@ fn register_aur_helper(
         // AUR helpers speak pacman's flags, and they speak pacman's complaints too.
         executor: executor
             .duplicate()
-            .with_exit_policy(crate::core::exit_policy::pacman()),
+            .with_exit_policy(crate::core::exit_policy::for_manager("pacman")),
         config: ManagerConfig {
             name: name.into(),
             binary: None,
@@ -351,7 +351,7 @@ fn register_apk(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         name: "apk".into(),
         executor: executor
             .duplicate()
-            .with_exit_policy(crate::core::exit_policy::apk()),
+            .with_exit_policy(crate::core::exit_policy::for_manager("apk")),
         config: ManagerConfig {
             name: "apk".into(),
             binary: None,
@@ -492,7 +492,7 @@ fn register_winget(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         name: "winget".into(),
         executor: executor
             .duplicate()
-            .with_exit_policy(crate::core::exit_policy::winget()),
+            .with_exit_policy(crate::core::exit_policy::for_manager("winget")),
         config: ManagerConfig {
             name: "winget".into(),
             binary: None,
@@ -565,7 +565,7 @@ fn register_scoop(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         name: "scoop".into(),
         executor: executor
             .duplicate()
-            .with_exit_policy(crate::core::exit_policy::scoop()),
+            .with_exit_policy(crate::core::exit_policy::for_manager("scoop")),
         config: ManagerConfig {
             name: "scoop".into(),
             binary: None,
@@ -624,7 +624,7 @@ fn register_choco(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         name: "choco".into(),
         executor: executor
             .duplicate()
-            .with_exit_policy(crate::core::exit_policy::choco()),
+            .with_exit_policy(crate::core::exit_policy::for_manager("choco")),
         config: ManagerConfig {
             name: "choco".into(),
             binary: None,
@@ -804,7 +804,9 @@ fn register_pip(reg: &mut BackendRegistry, executor: &CommandExecutor) {
 fn register_gem(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let core = Arc::new(GenericBackendCore {
         name: "gem".into(),
-        executor: executor.duplicate(),
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::for_manager("gem")),
         config: ManagerConfig {
             name: "gem".into(),
             binary: None,
@@ -1340,7 +1342,7 @@ fn register_luarocks(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         name: "luarocks".into(),
         executor: executor
             .duplicate()
-            .with_exit_policy(crate::core::exit_policy::luarocks()),
+            .with_exit_policy(crate::core::exit_policy::for_manager("luarocks")),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "luarocks"),
@@ -1363,7 +1365,7 @@ fn register_nimble(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         name: "nimble".into(),
         executor: executor
             .duplicate()
-            .with_exit_policy(crate::core::exit_policy::nimble()),
+            .with_exit_policy(crate::core::exit_policy::for_manager("nimble")),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::nimble_list(o, "nimble"),
@@ -1392,7 +1394,9 @@ fn register_pixi(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     cfg.upgrade_args = vec!["global".into(), "update".into()];
     let core = Arc::new(GenericBackendCore {
         name: "pixi".into(),
-        executor: executor.duplicate(),
+        executor: executor
+            .duplicate()
+            .with_exit_policy(crate::core::exit_policy::for_manager("pixi")),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::pixi_list(o, "pixi"),
@@ -1475,7 +1479,7 @@ fn register_helm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
         name: "helm".into(),
         executor: executor
             .duplicate()
-            .with_exit_policy(crate::core::exit_policy::helm()),
+            .with_exit_policy(crate::core::exit_policy::for_manager("helm")),
         config: cfg,
         parser: Arc::new(LambdaParser {
             installed_fn: |o| crate::parsers::ecosystem::ws_name_version(o, "helm"),

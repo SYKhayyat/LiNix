@@ -238,9 +238,13 @@ impl GithubBackendCore {
             // Filtering the full list here would be a second definition of the same thing,
             // free to drift from theirs.
             let url = format!("https://api.github.com/repos/{}/releases/latest", repo);
-            return self.release_at(&url).await?.ok_or_else(|| {
-                Error::PackageNotFound(format!("{}: the repo has no published release", repo))
-            });
+            return self
+                .release_at(&url)
+                .await?
+                .ok_or_else(|| Error::NoSuchPackage {
+                    name: repo.to_string(),
+                    message: format!("{}: the repo has no published release", repo),
+                });
         };
 
         let [bare, prefixed] = tag_spellings(pin);
@@ -354,9 +358,12 @@ fn one_release(
             repo, pin, b.version, p.version
         ))),
         (Some(r), None) | (None, Some(r)) => Ok(r),
+        // Not `NoSuchPackage`: the repo is there and the `@version=` on the line is what
+        // names nothing, so the line is the thing to correct rather than to withdraw — the
+        // same reading as the ambiguity above it, which has always been a `Validation`.
         (None, None) => {
             let [bare, prefixed] = tag_spellings(pin);
-            Err(Error::PackageNotFound(format!(
+            Err(Error::Validation(format!(
                 "{}: no release tagged `{}` or `{}`",
                 repo, bare, prefixed
             )))
@@ -521,7 +528,10 @@ impl Installable for GithubInstallable {
                 },
                 &offered,
             )
-            .map_err(|e| Error::PackageNotFound(e.to_string()))?;
+            // The release exists and offers nothing for *this* platform, which is a fact about
+            // this machine and not about the name — a declaration that installs on Linux must
+            // not be withdrawn because the Windows runner found no asset.
+            .map_err(|e| Error::Validation(e.to_string()))?;
 
             // A tie-break is a guess, and a guess nobody sees is the one that drifts.
             if selection.was_ambiguous() {
@@ -762,7 +772,9 @@ impl Installable for GithubInstallable {
 
                 let discovered =
                     artifact::find_executable(&listing, &spec.name, wanted.bin.as_deref())
-                        .map_err(|e| Error::PackageNotFound(e.to_string()))?;
+                        // An archive that carries no program LiNix can find is a `@bin=` the
+                        // user can supply, not a name that does not exist.
+                        .map_err(|e| Error::Validation(e.to_string()))?;
 
                 // One artifact is deployed under the repo's name, as it always has been.
                 // Several cannot be — so each keeps the name of the program inside it, and
