@@ -21,7 +21,12 @@
 //!     $ linix info nosuchbackend:foo
 //!     'nosuchbackend:foo' is not installed on this machine, so there is nothing to describe.
 //!       `linix search foo` looks for it in the managers you use.
-//!     rc=0                                             83 522 ms, twice, reproducibly
+//!     rc=0                              5 523 – 83 522 ms, measured repeatedly across a day
+//!
+//! The spread is the network, not the build: two consecutive debug runs agreed at 82.5 s and
+//! 83.5 s, and later runs of the same command on the same host ranged down to 5.5 s. The stable
+//! fact is the shape — `install` refuses without asking anything, and `info` asks every manager
+//! on the machine for a package none of them can have. Only the shape is asserted below.
 //!
 //! `list -b <typo>` was G-7 and it was fixed — `require_known_backend` is called there and the
 //! `--backend` flag family (`rebuild`, `upgrade`, `repo list`) was swept with it. The
@@ -130,13 +135,15 @@ fn info_refuses_an_unknown_backend_prefix_the_way_install_does() {
          successful lookup.\n{out}"
     );
 
-    // The cost of not asking: an unresolvable string is handed to every available backend, so
-    // the wrong answer is also the slowest one in the program. 83.5 s measured, twice.
-    assert!(
-        info_ms < 10_000,
-        "`info nosuchbackend:foo` took {info_ms} ms while `install` refused the same string in \
-         {install_ms} ms. The whole cost is asking every manager on the machine for a package \
-         named `nosuchbackend:foo`, which none of them can have."
+    // The cost of not asking, reported and deliberately NOT asserted on. An unresolvable string
+    // is handed to every available backend, so the wrong answer is also the slow one: measured
+    // between 5.5 s and 83.5 s across a day on this host, against `install`'s ~0.2 s, which is
+    // stable because it never reaches the network. A threshold over a number that moves by 10×
+    // with the weather is an assertion that passes or fails by luck — the mirror of one that
+    // cannot fail — so this prints and the assertions above are what decide the test.
+    eprintln!(
+        "timing (not asserted): info {info_ms} ms vs install {install_ms} ms for the same \
+         unknown backend"
     );
 }
 
