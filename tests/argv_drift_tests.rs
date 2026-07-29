@@ -57,7 +57,9 @@ fn help_cannot_answer(program: &str) -> Option<&'static str> {
         // and a gate that changes the machine it is auditing is worse than one that skips it.
         // `mix help <task>` and `asdf plugin list` are the shapes that would answer, and
         // neither is this gate's shape.
-        "mix" | "asdf" => Some("acts on `--help` instead of printing it; asking would mutate the machine"),
+        "mix" | "asdf" => {
+            Some("acts on `--help` instead of printing it; asking would mutate the machine")
+        }
         // A plugin host. `kubectl krew` works through a `kubectl-krew` binary and no
         // `kubectl --help` lists it, so absence from that help means nothing either way.
         // Whether krew is usable is what the krew backend's own `probes()` answers.

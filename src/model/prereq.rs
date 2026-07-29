@@ -186,7 +186,12 @@ mod tests {
     #[test]
     fn a_row_is_per_package_when_its_command_names_the_package() {
         let asdf = PrereqDef {
-            run: vec!["asdf".into(), "plugin".into(), "add".into(), "{name}".into()],
+            run: vec![
+                "asdf".into(),
+                "plugin".into(),
+                "add".into(),
+                "{name}".into(),
+            ],
             ..row("asdf", &[])
         };
         assert!(asdf.is_per_package());

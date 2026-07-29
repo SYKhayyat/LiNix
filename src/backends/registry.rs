@@ -2213,7 +2213,6 @@ mod tests {
         }
     }
 
-
     /// Both halves of what the `tools` image measured on 2026-07-29, in one place because they
     /// are one lifecycle: a mix archive that cannot be pinned cannot be installed at all on an
     /// older Elixir, and a removal without `--force` reports success and removes nothing.

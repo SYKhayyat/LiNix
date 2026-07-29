@@ -5,7 +5,6 @@
 //! (V.2).
 
 pub mod bootstrap;
-pub mod prereq;
 pub mod cache;
 pub mod conflict;
 pub mod cycle;
@@ -21,6 +20,7 @@ pub mod introduced;
 pub mod kernel;
 pub mod layout;
 pub mod modules;
+pub mod prereq;
 pub mod priority;
 pub mod profiles;
 pub mod rehearsal;

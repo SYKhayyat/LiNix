@@ -152,7 +152,10 @@ impl Prereqs<'_> {
                 .interact()
                 .unwrap_or(false);
             if !proceed {
-                println!("Left it alone. `{}` installs will fail until it is set up.", manager);
+                println!(
+                    "Left it alone. `{}` installs will fail until it is set up.",
+                    manager
+                );
                 return;
             }
         }
