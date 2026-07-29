@@ -1530,7 +1530,13 @@ fn register_asdf(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     let mut cfg = base_config("asdf");
     // asdf lists the tool versions someone explicitly installed; it has no dep concept.
     cfg.manual = ManualListing::AllInstalled;
-    cfg.version_pin = Some(VersionPin::Flag(vec!["{version}".into()]));
+    // asdf refuses to install without a version, so an unpinned line asks for `latest`.
+    // Removal needs none: measured, `asdf uninstall nodejs` returns 0 and the version leaves
+    // `asdf list`.
+    cfg.version_pin = Some(VersionPin::RequiredFlag {
+        args: vec!["{version}".into()],
+        unpinned: "latest".into(),
+    });
     cfg.install_args = vec!["install".into()];
     cfg.remove_args = vec!["uninstall".into()];
     cfg.list_args = vec!["list".into()];

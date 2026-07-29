@@ -18,6 +18,24 @@ pub enum VersionPin {
     /// The bare name followed by flag args, e.g. winget/choco `--version {version}`,
     /// gem `-v {version}`.
     Flag(Vec<String>),
+    /// Like [`Flag`](VersionPin::Flag), for a manager that **refuses to install without a
+    /// version at all**, carrying what to ask for when the line pins none.
+    ///
+    /// asdf is the one: `asdf install nodejs` answers `No versions specified for nodejs in
+    /// config files or environment`, because it expects a `.tool-versions` file to have named
+    /// one; `asdf install nodejs latest` installs. Measured in the `tools` image, where it was
+    /// hidden behind the `--` defect until that was fixed.
+    ///
+    /// A variant rather than a config field because it is a property of *how this manager
+    /// spells a version*, which is what this enum is, and because luarocks shares the
+    /// positional shape without sharing the requirement — an unpinned `luarocks install`
+    /// resolves the newest itself. One backend needing it is not a reason to give thirty
+    /// initialisers a field they will all leave `None`.
+    RequiredFlag {
+        args: Vec<String>,
+        /// What "no version named" means to this manager.
+        unpinned: String,
+    },
 }
 
 impl VersionPin {
@@ -27,7 +45,7 @@ impl VersionPin {
             VersionPin::Inline(tmpl) => {
                 vec![tmpl.replace("{name}", name).replace("{version}", version)]
             }
-            VersionPin::Flag(flags) => {
+            VersionPin::Flag(flags) | VersionPin::RequiredFlag { args: flags, .. } => {
                 let mut out = vec![name.to_string()];
                 out.extend(
                     flags
@@ -36,6 +54,17 @@ impl VersionPin {
                 );
                 out
             }
+        }
+    }
+
+    /// What this manager should be asked for when the declaration names no version.
+    ///
+    /// `None` for every ordinary manager: "no version" means "whatever is current", and that
+    /// is what an unadorned install already does.
+    fn unpinned(&self) -> Option<&str> {
+        match self {
+            VersionPin::RequiredFlag { unpinned, .. } => Some(unpinned),
+            _ => None,
         }
     }
 }
@@ -363,8 +392,18 @@ impl GenericInstallable {
             // backend's native syntax, when both a pin syntax and a concrete version exist.
             match (spec.options.get("version"), &self.core.config.version_pin) {
                 (Some(ver), Some(pin)) if is_concrete_version(ver) => {
-                    trailing_flags |= matches!(pin, VersionPin::Flag(_));
+                    trailing_flags |=
+                        matches!(pin, VersionPin::Flag(_) | VersionPin::RequiredFlag { .. });
                     names.extend(pin.apply(&spec.name, ver));
+                }
+                // A manager that will not install without a version gets the one it accepts
+                // for "current". Without this, `asdf:nodejs` builds `asdf install nodejs` and
+                // asdf rejects it — an argv LiNix constructs perfectly and the tool refuses,
+                // which is E13's family.
+                (_, Some(pin)) if pin.unpinned().is_some() => {
+                    let fallback = pin.unpinned().unwrap_or_default().to_string();
+                    trailing_flags |= true;
+                    names.extend(pin.apply(&spec.name, &fallback));
                 }
                 _ => names.push(spec.name.clone()),
             }
@@ -1230,6 +1269,46 @@ mod tests {
             calls.iter().any(|c| c.contains("--verify=false")),
             "the opt-out must reach the command: {:?}",
             calls
+        );
+    }
+
+    /// A manager that refuses to install without a version gets one, and the right one.
+    ///
+    /// Measured in the `tools` image on 2026-07-29, after the `--` fix stopped masking it:
+    ///
+    /// ```text
+    /// $ asdf install nodejs           -> No versions specified for nodejs in config files or environment
+    /// $ asdf install nodejs latest    -> Installed node-v26.5.0-linux-x64
+    /// ```
+    ///
+    /// The pinned case must keep working too, or this trades one broken argv for another —
+    /// which is exactly what E11's fix did, and why it came back as G-8.
+    #[tokio::test]
+    async fn a_manager_that_demands_a_version_is_given_one() {
+        let unpinned = VersionPin::RequiredFlag {
+            args: vec!["{version}".into()],
+            unpinned: "latest".into(),
+        };
+        assert_eq!(
+            unpinned.apply("nodejs", "latest"),
+            vec!["nodejs".to_string(), "latest".to_string()],
+            "an unpinned line must still name a version"
+        );
+        assert_eq!(
+            unpinned.apply("nodejs", "20.1.0"),
+            vec!["nodejs".to_string(), "20.1.0".to_string()],
+            "and a pinned one must reach the tool unchanged"
+        );
+        assert_eq!(unpinned.unpinned(), Some("latest"));
+
+        // The control: the ordinary positional pin is unchanged and asks for nothing when the
+        // line pins nothing. luarocks shares asdf's shape and resolves the newest itself, so
+        // giving it a fallback would put a token on its command line that nobody asked for.
+        let ordinary = VersionPin::Flag(vec!["{version}".into()]);
+        assert_eq!(ordinary.unpinned(), None);
+        assert_eq!(
+            ordinary.apply("luafilesystem", "1.8.0"),
+            vec!["luafilesystem".to_string(), "1.8.0".to_string()]
         );
     }
 

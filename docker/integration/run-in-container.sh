@@ -84,12 +84,24 @@ FAILED_NAMES=""
 # `__mh_execute_header`, because the release binary carries no symbols — and the one line
 # that says what went wrong scrolls off the top. A frame is never the reason a check
 # failed, so the backtrace is dropped and what remains is the message.
-excerpt() {
-    _kept="$(grep -vE '^[[:space:]]*[0-9]+:|^[[:space:]]*at |^stack backtrace:|^note: [A-Z]?[a-z]* ?run with' /tmp/it.out)"
+#
+# **It takes the log as an argument, and that is the point** (2026-07-29). It used to read
+# `/tmp/it.out` and nothing else, so every site reporting a *different* log fell back to a raw
+# `tail` with no filtering — including `classify_install`'s retry, which is the one that reports
+# a confirmed defect. Measured on a real macOS run of the twin harness:
+#
+#     FAIL  github: install of github:sharkdp/fd failed twice — a defect, not ecosystem variance
+#           |    3: __mh_execute_header
+#           |    4: __mh_execute_header       (six frames, no message, nothing to act on)
+#
+# The cure was already written here and had reached one of its four callers.
+excerpt() { # [logfile] [lines]
+    _ex_log="${1:-/tmp/it.out}"; _ex_n="${2:-8}"
+    _kept="$(grep -vE '^[[:space:]]*[0-9]+:|^[[:space:]]*at |^stack backtrace:|^note: [A-Z]?[a-z]* ?run with' "$_ex_log")"
     if [ -n "$_kept" ]; then
-        printf '%s\n' "$_kept" | tail -8 | sed 's/^/        | /'
+        printf '%s\n' "$_kept" | tail -"$_ex_n" | sed 's/^/        | /'
     else
-        tail -6 /tmp/it.out | sed 's/^/        | /'
+        tail -"$_ex_n" "$_ex_log" | sed 's/^/        | /'
     fi
 }
 # ok "desc" cmd...   — passes when cmd exits 0.
@@ -196,12 +208,12 @@ classify_install() { # be  install-spec  rc  logfile  [cleanup]
     _ci_be="$1"; _ci_spec="$2"; _ci_rc="$3"; _ci_log="$4"; _ci_clear="${5:-:}"
     if [ "$_ci_rc" -eq 124 ]; then
         soft "$_ci_be: install of $_ci_spec hit the ${TO_LONG##* }s build limit — not a verdict on the backend"
-        tail -4 "$_ci_log" | sed 's/^/        | /'
+        excerpt "$_ci_log" 4
         CLASS=timeout; return 0
     fi
     if [ "$_ci_rc" -eq 3 ]; then
         refused "$_ci_be: install of $_ci_spec"
-        tail -3 "$_ci_log" | sed 's/^/        | /'
+        excerpt "$_ci_log" 3
         CLASS=refused; return 0
     fi
     # Transience is a claim that a second attempt could differ, so it is tested by making one.
@@ -214,7 +226,7 @@ classify_install() { # be  install-spec  rc  logfile  [cleanup]
     _ci_rc2=$?
     if [ "$_ci_rc2" -ne 0 ]; then
         hard "$_ci_be: install of $_ci_spec failed twice — a defect, not ecosystem variance (rc=$_ci_rc, $_ci_rc2)"
-        tail -6 /tmp/life2.out | sed 's/^/        | /'
+        excerpt /tmp/life2.out 6
         CLASS=defect; return 0
     fi
     soft "$_ci_be: install of $_ci_spec failed once and succeeded on retry — transient"
@@ -938,7 +950,7 @@ if printf ':help\n:vars\n:quit\n' | lx repl >/tmp/it.out 2>&1; then
     PASS=$((PASS + 1)); echo "  PASS  repl evaluates a piped session and exits on EOF (U34)"
 else
     FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - repl piped session failed"
-    echo "  FAIL  repl piped session"; tail -4 /tmp/it.out | sed 's/^/        | /'
+    echo "  FAIL  repl piped session"; excerpt /tmp/it.out 4
 fi
 # A container has no container runtime, which is exactly `try`'s refusal path —
 # and the one a developer's own machine (which has docker) can never exercise.
