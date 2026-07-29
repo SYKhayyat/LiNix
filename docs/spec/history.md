@@ -134,10 +134,45 @@ prints. CI's ubuntu job read the same command's output correctly and failed. Rul
 earned by a command; this is the narrower version of it — **a filter chosen for one tool's output
 silently answers for every tool behind it.**
 
-Verified here: `cargo build --all-targets`, `cargo test`, `cargo clippy --all-targets
---all-features -- -D warnings`, `cargo fmt -- --check` (read in full this time),
-`harness-logic-test.sh` 54/54, `decision-count.sh --check`. **Not yet verified:** the nightly has
-not run against the opam/asdf/coverage fixes above.
+### The run that closed it — every job green, and mix's first real lifecycle
+
+Run `30465017776`, dispatched against the fixes above. **Sixteen jobs, all green**, which this
+branch had not managed once this round:
+
+| sweep | result |
+|---|---|
+| `tools` (container) | `pass=352 fail=0 soft=9` — **25 real lifecycles**, up from 4 failures a run ago |
+| Windows native | `pass=275 fail=0 soft=13`, 10 real lifecycles |
+| macOS native | `pass=265 fail=0 soft=6` |
+| ubuntu / fedora / alpine / arch / gentoo | green |
+| argv drift ×3, mutation, build/test/clippy/fmt ×3 | green |
+
+**`mix` ran a real install → list → remove for the first time in this project's history**, and
+it did it as `mix:phx_new@version=1.6.16` on an image whose Hex the sweep itself installed
+through the offer. The line above it in the log is the one worth keeping:
+
+    needs setup, and the sweep exercises it anyway: mix
+
+— the coverage rule catching precisely the case that health had, correctly, taken away.
+
+`opam: ocamlfind is not on PATH, and the install said so, naming /root/.opam/default/bin` is the
+other one: a check that used to fail because the product was silent now passes because it is not.
+
+Verified here before that run: `cargo build --all-targets`, `cargo test` (35 binaries),
+`cargo clippy --all-targets --all-features -- -D warnings`, `cargo fmt -- --check` (read in full
+this time), `harness-logic-test.sh` 54/54, `decision-count.sh --check`.
+
+### Two latency claims, measured against this tree rather than quoted
+
+`READINESS` E14 and E15 are cited in the round-2 brief as the items that would move the grade
+most. One of them is already gone and the brief did not know:
+
+- **`linix info cargo:ripgrep` — 0.131s**, and correct (`Backend: cargo`, `Version: 15.2.0`).
+  E14's 98-second wrong answer is fixed; round 1's work did it.
+- **`linix search ripgrep` — 1m12.7s**, 103 rows. **E15 is live.** Debug build, but the time is
+  network-bound across ~20 registries rather than CPU, so a release build does not explain it.
+  Nothing measures it: `search` still has no latency budget, which is how a 145-second read-only
+  command shipped in the first place.
 
 ## Session 2026-07-28 (later) — the push, what CI said, and Q6
 
