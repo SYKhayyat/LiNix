@@ -24,6 +24,9 @@ pub struct AppImageBackendCore {
     pub clean_cache_on_remove: bool,
     pub cache_dirs: Vec<PathBuf>,
     pub install_dir: PathBuf,
+    /// Where the `.AppImage` is linked from — `[bin_dir]`, the same directory the shims use and
+    /// the one a sandboxed config moves (2026-07-29; it was built from `dirs::home_dir()` here).
+    pub bin_dir: PathBuf,
     pub state_file: PathBuf,
 }
 
@@ -31,6 +34,7 @@ impl AppImageBackendCore {
     pub fn new(
         executor: CommandExecutor,
         install_dir: PathBuf,
+        bin_dir: PathBuf,
         confine_bin: bool,
         clean_cache_on_remove: bool,
         cache_dirs: Vec<PathBuf>,
@@ -43,6 +47,7 @@ impl AppImageBackendCore {
             clean_cache_on_remove,
             cache_dirs,
             install_dir,
+            bin_dir,
             state_file: state,
         }
     }
@@ -54,15 +59,10 @@ impl AppImageBackendCore {
         {
             tokio::fs::create_dir_all(&self.install_dir).await?;
         }
-        let bin_dir = dirs::home_dir()
-            .ok_or_else(|| Error::Other("Could not locate home directory".into()))?
-            .join(".local")
-            .join("bin");
-
-        if !tokio::fs::try_exists(&bin_dir).await.unwrap_or(false) {
-            tokio::fs::create_dir_all(&bin_dir).await?;
+        if !tokio::fs::try_exists(&self.bin_dir).await.unwrap_or(false) {
+            tokio::fs::create_dir_all(&self.bin_dir).await?;
         }
-        Ok(bin_dir)
+        Ok(self.bin_dir.clone())
     }
 
     async fn load_state(&self) -> HashMap<String, AppImageState> {
@@ -292,6 +292,7 @@ pub fn register(
     let core = Arc::new(AppImageBackendCore::new(
         exec.duplicate(),
         cfg.appimage_dir.clone(),
+        cfg.bin_dir.clone(),
         cfg.guard.confine_bin,
         cfg.clean_cache_on_remove,
         cfg.cache_dirs.clone(),

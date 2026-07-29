@@ -6,6 +6,7 @@ use tracing::{info, warn};
 pub struct Dependents<'a> {
     pub(crate) config: &'a std::sync::Arc<crate::config::Config>,
     pub(crate) registry: &'a std::sync::Arc<crate::backends::BackendRegistry>,
+    pub(crate) executor: &'a crate::core::CommandExecutor,
 }
 
 impl Dependents<'_> {
@@ -56,6 +57,18 @@ impl Dependents<'_> {
                     }
                     info!("deploying `{}` ({})", name, origin);
                     self.shim_manager().await?.create_shim(name).await?;
+                    // A shim in a directory nobody's PATH names is a file, not a command —
+                    // the same event as E6c's install, and it needs saying here too because
+                    // `shim:` never reaches the package plan that says it there.
+                    if let Some(msg) = crate::app::reachable::unreachable_warning(
+                        "shim",
+                        self.config,
+                        self.executor,
+                    )
+                    .await
+                    {
+                        warn!("{}", msg);
+                    }
                 }
                 Statement::Service(name, opts) => {
                     let Some(b) = self.registry.get("service") else {

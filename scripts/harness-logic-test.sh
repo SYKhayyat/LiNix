@@ -52,7 +52,7 @@ run_against() {
     FAKE=""; FAKE_NAME="hello"
     path_of() { case "$1" in "$FAKE_NAME") echo "$FAKE" ;; *) echo "" ;; esac; }
 
-    for _fn in never_ran assert_binary_gone on_path; do
+    for _fn in never_ran assert_binary_gone on_path named_bin_dir off_path_copy binary_present assert_binary_reachable; do
         _body="$(lift "$_fn" "$SRC")"
         if [ -z "$_body" ]; then
             echo "  FATAL: could not lift $_fn() from this harness"
@@ -131,6 +131,85 @@ run_against() {
     TOTAL=$((TOTAL + 1))
     if on_path sh; then echo "  ok    on_path still finds a name that is there"
     else echo "  BAD   on_path could not find sh"; BAD=$((BAD + 1)); fi
+
+    # ---- E6c/W4: "the binary is reachable" is a claim about the PRODUCT ------
+    #
+    # `on_path` alone asks the HOST. On a clean runner ~/go/bin, ~/.local/bin and yarn's
+    # global directory are on nobody's PATH, so the old check failed three backends that
+    # had done nothing wrong — and it would have passed all three had the machine happened
+    # to be wired, which is the half that matters: an install that says NOTHING about an
+    # unreachable binary is the defect (github and yarn, measured 2026-07-29).
+    _rd="${TMPDIR:-/tmp}/linix-reach-$$"
+    rm -rf "$_rd"; mkdir -p "$_rd"
+    _rbin=linix-reach-zzz
+    _rlog="$_rd/install.log"
+    printf '%s\n' "  WARN linix::verbs::sync: \`go\` installs its executables into $_rd, which is not on your PATH — so what it just installed will answer \"command not found\"." > "$_rlog"
+
+    outcome() { # label want cmd...
+        _olabel="$1"; _owant="$2"; shift 2
+        TOTAL=$((TOTAL + 1))
+        _op0=$PASS; _of0=$FAILC; _os0=$SOFTC
+        "$@" >/dev/null 2>&1
+        if   [ "$PASS"  -gt "$_op0" ]; then _ogot=pass
+        elif [ "$FAILC" -gt "$_of0" ]; then _ogot=fail
+        elif [ "$SOFTC" -gt "$_os0" ]; then _ogot=soft
+        else _ogot=none; fi
+        if [ "$_ogot" = "$_owant" ]; then
+            echo "  ok    $_olabel -> $_ogot"
+        else
+            echo "  BAD   $_olabel -> $_ogot (wanted $_owant)"; BAD=$((BAD + 1))
+        fi
+    }
+
+    # The defect this check exists for: installed, unreachable, and nothing said so.
+    outcome "unreachable and unexplained" fail assert_binary_reachable go "$_rbin" "$_rd/no-such.log"
+
+    # LiNix warned and the file is where it said: the product kept its promise, and the
+    # host's PATH is not the product's to fix.
+    : > "$_rd/$_rbin"
+    outcome "unreachable, explained, and there" pass assert_binary_reachable go "$_rbin" "$_rlog"
+
+    # Warned about a directory the binary is NOT in — the install claimed something untrue.
+    rm -f "$_rd/$_rbin"
+    outcome "explained and not there" fail assert_binary_reachable go "$_rbin" "$_rlog"
+
+    # A Windows install writes cowsay.cmd, not cowsay. Looking only for the bare name reports
+    # an installed program as missing.
+    : > "$_rd/$_rbin.cmd"
+    outcome "the platform's extension counts" pass assert_binary_reachable go "$_rbin" "$_rlog"
+    rm -f "$_rd/$_rbin.cmd"
+
+    # The warning belongs to the backend that printed it. One sync can warn about two
+    # managers, and handing yarn's directory to go would answer for the wrong install.
+    TOTAL=$((TOTAL + 1))
+    if [ -z "$(named_bin_dir yarn "$_rlog")" ]; then
+        echo "  ok    a directory is read only for the backend that named it"
+    else
+        echo "  BAD   named_bin_dir handed go's directory to yarn"; BAD=$((BAD + 1))
+    fi
+
+    # And the removal half. A binary that was never on PATH is "gone" by PATH before the
+    # removal runs, so the old three-argument check passed while the file was still there.
+    : > "$_rd/$_rbin"
+    _be=go; _bin="$_rbin"; _was=""; FAKE=""
+    TOTAL=$((TOTAL + 1))
+    _p0=$PASS; _f0=$FAILC
+    assert_binary_gone go "$_rbin" "" "$_rlog" >/dev/null 2>&1
+    if [ "$FAILC" -gt "$_f0" ]; then
+        echo "  ok    a leftover off PATH is still a leftover -> fail"
+    else
+        echo "  BAD   a leftover in the directory the install named passed as removed"; BAD=$((BAD + 1))
+    fi
+    rm -f "$_rd/$_rbin"
+    TOTAL=$((TOTAL + 1))
+    _f0=$FAILC
+    assert_binary_gone go "$_rbin" "" "$_rlog" >/dev/null 2>&1
+    if [ "$FAILC" -eq "$_f0" ]; then
+        echo "  ok    a removal that really removed it still passes"
+    else
+        echo "  BAD   a clean removal was scored as a leftover"; BAD=$((BAD + 1))
+    fi
+    rm -rf "$_rd"
 }
 
 for src in $SOURCES; do run_against "$src"; done

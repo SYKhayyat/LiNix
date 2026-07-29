@@ -174,6 +174,7 @@ impl App {
         crate::app::Dependents {
             config: &self.config,
             registry: &self.registry,
+            executor: &self.executor,
         }
     }
 

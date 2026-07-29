@@ -306,7 +306,10 @@ grep_ok "protected includes a system essential" "linix\|libc\|systemd\|kernel\|b
 echo "[3] Dry-run safety"
 ok "sync --dry-run does not error" lx --dry-run sync
 ok "a dry-run install shows a plan" lx --dry-run install "$PKG"
-nok "dry-run did NOT actually install $PKG" on_path "$PKG"
+# Asked of the machine, not of PATH: a preview that installed into a directory the host has
+# not wired up is exactly as much of a defect, and `on_path` would report it as clean.
+cp /tmp/it.out /tmp/it-dryrun.out 2>/dev/null || true
+nok "dry-run did NOT actually install $PKG" binary_present "$BACKEND" "$PKG" /tmp/it-dryrun.out
 
 # --- 4. The guard's ratio rule, on an UNADOPTED machine -------------------
 # IV.1: this is the only state in which the check tests anything. After `adopt`
@@ -326,8 +329,11 @@ if [ -n "$SMOKE" ]; then
     skip_smoke "install $PKG, and the list/PATH checks that read its result"
 else
     ok "install $PKG" lx -y install "$PKG"
+    # `ok` leaves the install's output in /tmp/it.out and the next check overwrites it; the
+    # reachability assertion reads what the install SAID, so it gets its own copy.
+    cp /tmp/it.out /tmp/it-life0.out 2>/dev/null || true
     grep_ok "list shows $PKG" "$PKG" lx list
-    ok "$PKG binary is on PATH" on_path "$PKG"
+    assert_binary_reachable "$BACKEND" "$PKG" /tmp/it-life0.out
     echo "$BACKEND" >> "$LEDGER/be-life"
 fi
 
@@ -369,6 +375,9 @@ ok "adopt takes manual packages" lx -y adopt
 # the adoption manifest is the only file that records what adopt decided.
 if [ "$BACKEND" = "apt" ] || [ "$BACKEND" = "dnf" ] || [ "$BACKEND" = "pacman" ]; then
     if command -v python3 >/dev/null 2>&1; then
+        # `on_path`, not `binary_present`: python3 is the image's own, installed by apt into
+        # /usr/bin before this harness ran, so there is no install of ours to have named a
+        # directory for.
         ok "python3 still installed after adopt" on_path python3
     else
         soft "python3 not on this image — cannot check the survival proof"
@@ -436,7 +445,7 @@ if [ -n "$SMOKE" ]; then
     skip_smoke "uninstall $PKG (nothing was installed to remove)"
 else
     ok "uninstall $PKG" lx -y uninstall "$PKG"
-    nok "$PKG binary gone after uninstall" on_path "$PKG"
+    nok "$PKG binary gone after uninstall" binary_present "$BACKEND" "$PKG" /tmp/it-life0.out
 fi
 
 # --- 11. Git-backed history (Phase 4 / v7) --------------------------------
@@ -494,7 +503,8 @@ ok "there is history for a rebuild to leave alone" test "$BEFORE_COMMITS" -ge 1
 # Scoped to $PKG, not --all: the machine was adopted in section 8, so `--all`
 # would churn every manual package on the image to prove a claim about one.
 ok "rebuild $PKG runs" lx_slow -y rebuild "$PKG"
-ok "$PKG is reinstalled, not left removed" on_path "$PKG"
+cp /tmp/it.out /tmp/it-rebuild.out 2>/dev/null || true
+ok "$PKG is reinstalled, not left removed" binary_present "$BACKEND" "$PKG" /tmp/it-rebuild.out
 AFTER_COMMITS=$(commits)
 echo "        commits before=$BEFORE_COMMITS after=$AFTER_COMMITS"
 ok "rebuild wrote no git commit (K14)" test "$BEFORE_COMMITS" = "$AFTER_COMMITS"
@@ -706,6 +716,73 @@ removal_leaves_binary() {
     esac
 }
 
+# The directory an install NAMED as the home of what it just put there, or "" if it named none.
+#
+# LiNix's answer to a bin directory that is not on PATH is a warning naming the directory and
+# the line that would add it (E6c/W4). That sentence is the product's promise, so it is what
+# the checks below read. Matched against the backend that printed it, so one sync that warns
+# about two managers cannot hand one manager's directory to the other.
+named_bin_dir() { # backend install-log
+    [ -f "$2" ] || return 0
+    _nbd_pat="s/.*$1. installs its executables into \\(.*\\), which is not on your PATH.*/\\1/p"
+    _nbd="$(sed -n "$_nbd_pat" "$2" | head -1)"
+    [ -n "$_nbd" ] || return 0
+    cygpath -u "$_nbd" 2>/dev/null || echo "$_nbd"
+}
+
+# Where a name sits when PATH cannot reach it: the file in the directory the install named,
+# or "" when there is no such file. The extensions are Windows's — `cowsay` on a runner is
+# `cowsay.cmd`, and looking only for the bare name reports an installed program as absent.
+off_path_copy() { # backend binary install-log
+    _opd="$(named_bin_dir "$1" "$3")"
+    [ -n "$_opd" ] || return 0
+    for _ope in "" .exe .cmd .bat .ps1; do
+        [ -e "$_opd/$2$_ope" ] && printf '%s\n' "$_opd/$2$_ope" && return 0
+    done
+    return 0
+}
+
+# Is NAME on this machine at all: resolvable, or sitting where its install said it went?
+#
+# `on_path` alone answers "can I type it", which stops being the same question the moment the
+# install is honest about a directory the host has not wired up — and every assertion built on
+# it (survived unmanage, gone after uninstall) was then reading the wrong answer.
+binary_present() { # backend binary install-log
+    on_path "$2" && return 0
+    [ -n "$(off_path_copy "$1" "$2" "$3")" ]
+}
+
+# assert_binary_reachable <backend> <binary> <install-log>
+#
+# An install the user cannot invoke is a failed install reported as a success (E6c). On a clean
+# runner most per-user managers install into a directory nobody's PATH names, so asking PATH
+# alone fails runs where the product did everything it promised and passes runs where it said
+# nothing at all. So the assertion is the promise: the name resolves, OR the install named the
+# directory and the file is in it. Silence plus an unreachable binary is the defect — measured
+# 2026-07-29 on a clean Windows runner, `github` and `yarn` both.
+assert_binary_reachable() { # backend binary install-log
+    _rbe="$1"; _rbin="$2"
+    if on_path "$_rbin"; then
+        PASS=$((PASS + 1)); echo "  PASS  $_rbe: $_rbin is on PATH"; return 0
+    fi
+    _rdir="$(named_bin_dir "$1" "$3")"
+    if [ -z "$_rdir" ]; then
+        FAILC=$((FAILC + 1))
+        FAILED_NAMES="$FAILED_NAMES\n    - $_rbe: $_rbin is not on PATH and nothing said where it went"
+        echo "  FAIL  $_rbe: $_rbin is not on PATH and nothing said where it went"
+        return 1
+    fi
+    if binary_present "$1" "$_rbin" "$3"; then
+        PASS=$((PASS + 1))
+        echo "  PASS  $_rbe: $_rbin is not on PATH, and the install said so, naming $_rdir"
+        return 0
+    fi
+    FAILC=$((FAILC + 1))
+    FAILED_NAMES="$FAILED_NAMES\n    - $_rbe: the install named $_rdir and $_rbin is not in it"
+    echo "  FAIL  $_rbe: the install named $_rdir and $_rbin is not in it"
+    return 1
+}
+
 # assert_binary_gone <backend> <binary> <what-the-name-resolved-to-before-the-install>
 #
 # The question is "did this backend's install get undone", NOT "does this name resolve".
@@ -720,18 +797,22 @@ removal_leaves_binary() {
 assert_binary_gone() {
     _be="$1"; _bin="$2"; _was="$3"
     _now="$(path_of "$_bin")"
+    # A binary that was never on PATH is "gone" by PATH from the moment it was installed, so
+    # this check answered yes before the removal ran. Where the install SAID the file went is
+    # the only place that can tell, and it is the fourth argument.
+    [ -n "$_now" ] || _now="$(off_path_copy "$_be" "$_bin" "${4:-}")"
     if [ "$_now" = "$_was" ]; then
         if [ -n "$_now" ]; then
             PASS=$((PASS + 1))
             echo "  PASS  $_be: $_bin is back to the pre-install $_now (not this backend's copy)"
         else
-            PASS=$((PASS + 1)); echo "  PASS  $_be: $_bin is off PATH"
+            PASS=$((PASS + 1)); echo "  PASS  $_be: $_bin is gone"
         fi
         return 0
     fi
     _known="$(removal_leaves_binary "$_be")"
     if [ -n "$_known" ]; then
-        soft "$_be: $_bin is still on PATH after removal — $_known"
+        soft "$_be: $_bin is still there after removal — $_known"
         return 0
     fi
     FAILC=$((FAILC + 1))
@@ -816,7 +897,7 @@ lifecycle() {
     else
         grep_ok "$be: list shows $ctok" "$ctok" lx list --backend "$be"
     fi
-    [ -n "$cbin" ] && ok "$be: $cbin is on PATH" on_path "$cbin"
+    [ -n "$cbin" ] && assert_binary_reachable "$be" "$cbin" /tmp/life.out
 
     if [ "$cmode" = "unsupported" ]; then
         # A manager with no uninstall verb must say so. Reporting success would
@@ -832,7 +913,7 @@ lifecycle() {
     ok "$be: uninstall $cpkg" lx_slow -y uninstall "$be:$cpkg"
     [ -n "$_nolist" ] || nok "$be: $ctok is gone from list" sh -c \
         "$LINIX list --backend '$be' 2>/dev/null | grep -q '$ctok'"
-    [ -n "$cbin" ] && assert_binary_gone "$be" "$cbin" "$_prepath"
+    [ -n "$cbin" ] && assert_binary_gone "$be" "$cbin" "$_prepath" /tmp/life.out
     # A successful uninstall already removed the line; this covers the run where it
     # reported success and did not, which is the whole point of asserting the rest.
     undeclare_canary "$be:$cpkg"
@@ -1027,7 +1108,7 @@ ok "unmanage forgets a package without uninstalling it" lx unmanage "$PKG"
 if [ -n "$SMOKE" ]; then
     skip_smoke "the proof that unmanage left the package behind (nothing was installed)"
 else
-    ok "$PKG is still installed after unmanage" on_path "$PKG"
+    ok "$PKG is still installed after unmanage" binary_present "$BACKEND" "$PKG" /tmp/it-life0.out
 fi
 # The command runs either way; only reaching OSV.dev is optional, so a network
 # failure is soft — and `ok` is not used, because it would count the failure too.

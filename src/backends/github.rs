@@ -70,12 +70,17 @@ pub struct GithubBackendCore {
     pub name: String,
     pub client: reqwest::Client,
     pub install_dir: PathBuf,
+    /// Where the executable is deployed — `[bin_dir]`, the one LiNix's shims use and the one a
+    /// sandboxed config moves. Built here from `dirs::home_dir()` until 2026-07-29, which put a
+    /// test's downloads in the developer's real `~/.local/bin` and let the reachability warning
+    /// name a directory this deploy had not used.
+    pub bin_dir: PathBuf,
     pub state_file: PathBuf,
     /// `locks/github.toml` — what each declaration resolved to, in the config repo (VIII.2).
     /// Separate from `state_file`, which is LiNix's own bookkeeping and is not in git.
     pub locks_file: PathBuf,
     pub rate_limiter: RateLimiter,
-    /// `[guard] confine_bin`: whether the deployed name may reach outside `~/.local/bin` (SEC1).
+    /// `[guard] confine_bin`: whether the deployed name may reach outside `bin_dir` (SEC1).
     pub confine_bin: bool,
     /// K4: also clean each fetched asset from the cache locations on removal.
     pub clean_cache_on_remove: bool,
@@ -136,6 +141,7 @@ impl GithubBackendCore {
     pub fn new(
         executor: CommandExecutor,
         install_dir: PathBuf,
+        bin_dir: PathBuf,
         locks_file: PathBuf,
         confine_bin: bool,
         clean_cache_on_remove: bool,
@@ -159,6 +165,7 @@ impl GithubBackendCore {
             client: crate::core::download::client(false, "linix-manager")
                 .unwrap_or_else(|_| reqwest::Client::new()),
             install_dir,
+            bin_dir,
             state_file,
             locks_file,
             rate_limiter,
@@ -686,10 +693,7 @@ impl Installable for GithubInstallable {
                 .map_err(Error::from)?;
 
             let repo_name = spec.name.split('/').next_back().unwrap_or(&spec.name);
-            let bin_dir = dirs::home_dir()
-                .ok_or_else(|| Error::Other("Home directory not found".into()))?
-                .join(".local")
-                .join("bin");
+            let bin_dir = self.core.bin_dir.clone();
             let previous: Vec<String> = state
                 .get(&spec.name)
                 .map(|s| {
@@ -1025,6 +1029,7 @@ pub fn register(
     let core = Arc::new(GithubBackendCore::new(
         exec.duplicate(),
         cfg.github_dir.clone(),
+        cfg.bin_dir.clone(),
         cfg.layout().lock_file("github"),
         cfg.guard.confine_bin,
         cfg.clean_cache_on_remove,

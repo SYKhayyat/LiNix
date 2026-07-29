@@ -33,26 +33,10 @@ impl GoBackendCore {
         }
     }
 
-    /// Resolve the directory Go installs binaries into: `$GOBIN`, else `$(go env
-    /// GOPATH)/bin`, else `~/go/bin`.
     async fn bin_dir(&self) -> Result<PathBuf> {
-        if let Ok(gobin) = std::env::var("GOBIN") {
-            if !gobin.trim().is_empty() {
-                return Ok(PathBuf::from(gobin));
-            }
-        }
-        if let Ok(gopath) = self
-            .executor
-            .run_output("go", &["env", "GOPATH"], false)
+        install_bin_dir(&self.executor)
             .await
-        {
-            if let Some(bin) = gopath_bin(&gopath) {
-                return Ok(bin);
-            }
-        }
-        let home = dirs::home_dir()
-            .ok_or_else(|| Error::Other("Could not determine home directory for Go".into()))?;
-        Ok(home.join("go").join("bin"))
+            .ok_or_else(|| Error::Other("Could not determine home directory for Go".into()))
     }
 
     /// The on-disk binary name for a module/spec: the last path segment, minus any
@@ -66,6 +50,27 @@ impl GoBackendCore {
             base.to_string()
         }
     }
+}
+
+/// The directory `go install` puts a binary in: `$GOBIN`, else `$(go env GOPATH)/bin`, else
+/// `~/go/bin`.
+///
+/// Free rather than a method because the post-install reachability check asks the same
+/// question, and a second reading of `GOPATH` there would be a second answer. `go env` rather
+/// than the environment variable alone: a `GOPATH` set in go's own env file is invisible to
+/// the process and decides where the binary lands anyway.
+pub(crate) async fn install_bin_dir(executor: &CommandExecutor) -> Option<PathBuf> {
+    if let Ok(gobin) = std::env::var("GOBIN") {
+        if !gobin.trim().is_empty() {
+            return Some(PathBuf::from(gobin));
+        }
+    }
+    if let Ok(gopath) = executor.run_output("go", &["env", "GOPATH"], false).await {
+        if let Some(bin) = gopath_bin(&gopath) {
+            return Some(bin);
+        }
+    }
+    Some(dirs::home_dir()?.join("go").join("bin"))
 }
 
 /// The `bin` directory belonging to the first entry of a `go env GOPATH` reading.

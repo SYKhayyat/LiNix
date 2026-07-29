@@ -164,7 +164,7 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
         let installed_by = backends_that_installed(&changes);
         removed_packages = changes.total_remove();
         engine.sync(changes, opts.scope).await?;
-        warn_about_unreachable_binaries(&installed_by);
+        warn_about_unreachable_binaries(app, &installed_by).await;
     }
 
     let extras_undone = apply_non_package_phases(app, &state, opts.scope, removed_packages).await?;
@@ -190,9 +190,11 @@ fn backends_that_installed(changes: &linix::app::sync::planner::SyncChanges) -> 
 /// Here rather than in each backend, because the fact is about the ecosystem's convention and
 /// eleven copies of it is eleven chances to disagree. Once per manager, not once per package:
 /// installing forty rocks must not print the same paragraph forty times.
-fn warn_about_unreachable_binaries(backends: &[String]) {
+async fn warn_about_unreachable_binaries(app: &App, backends: &[String]) {
     for be in backends {
-        if let Some(message) = linix::app::reachable::unreachable_warning(be) {
+        if let Some(message) =
+            linix::app::reachable::unreachable_warning(be, &app.config, &app.executor).await
+        {
             warn!("{}", message);
         }
     }
