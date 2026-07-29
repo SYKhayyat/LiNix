@@ -428,6 +428,10 @@ pub(crate) async fn handle_restore(app: &App, dir: &str, force: bool) -> Result<
 }
 
 pub(crate) async fn handle_why(app: &App, package: &str, json: bool) -> Result<()> {
+    // Q9: `why nosuchbackend:foo` reported it "not under LiNix management" at exit 0 — true of
+    // the string and useless, because the manager is the part that does not exist.
+    app.require_known_spec_backends(std::slice::from_ref(&package.to_string()))
+        .await?;
     linix::app::insight::why(app, package, json)
         .await
         .map_err(|e| e.into())

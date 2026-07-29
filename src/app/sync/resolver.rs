@@ -957,6 +957,33 @@ impl<'a> StateResolver<'a> {
         Ok(())
     }
 
+    /// The backend a declaration *names*, if it names one: `Some("cargo")` for `cargo:ripgrep`,
+    /// `None` for a bare `ripgrep`.
+    ///
+    /// Through the same parser [`Self::parse_and_probe_spec`] uses, never a `split_once(':')` —
+    /// a second place that decides what a prefix means is the bug `CLAUDE.md` names and C13
+    /// records six times over.
+    ///
+    /// Callers need this to tell *the user named a manager* from *LiNix picked one*, which are
+    /// different questions with different right answers. `info ripgrep` reported a package the
+    /// machine has as absent because `priority` picked `choco`, `choco` had nothing, and the
+    /// answer from the manager that did have it was never asked for (N-3).
+    pub async fn declared_backend(&self, line: &str) -> Result<Option<String>> {
+        let facts = self.facts_for_host().await?;
+        let priority = self.priority(&facts).await?;
+        let known = self.vocab(&priority);
+        let stmt = statement::parse(&Origin::argument(), line.trim(), &known)?;
+        let decl = match stmt {
+            Statement::Package(d) | Statement::Absent(d) => d,
+            _ => return Ok(None),
+        };
+        // An alias is a name for a backend, so resolve it here or a caller checking the answer
+        // against the registry would reject a spelling the rest of the program accepts.
+        Ok(decl
+            .backend
+            .map(|b| self.config.aliases.get(&b).cloned().unwrap_or(b)))
+    }
+
     pub async fn parse_and_probe_spec(&self, line: &str) -> Result<PackageSpec> {
         let facts = self.facts_for_host().await?;
         let priority = self.priority(&facts).await?;

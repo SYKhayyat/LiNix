@@ -3391,6 +3391,19 @@ What is binding:
 
 1. **Every verb taking a backend name refuses an unknown one** — `list`, `upgrade`, `rebuild`
    and `repo`, checked from the code rather than from the one that was reported.
+   **Completed 2026-07-29 for the `backend:name` form, which that enumeration missed.** The four
+   verbs named above take the backend as a `--backend` flag; the same ruling applies to the verbs
+   that take it as a prefix on a package spec, and none of them checked it. Measured after Q9
+   shipped: `hold nosuchbackend:foo` **recorded a hold** against a manager that does not exist
+   and answered `Held 1 package(s).` at exit 0; `unhold`, `unmanage`, `why`, `upgrade`, `rebuild`,
+   `unlock` and `info` each answered a true sentence about the wrong thing at exit 0, and
+   `uninstall` blamed the user's modules for a line they never wrote. Every one of those answers
+   is byte-identical to what a correctly-spelled name gets when there is nothing to do, which is
+   the same indistinguishability that made `list -b <typo>` a defect. All nine refuse now,
+   through `App::require_known_spec_backends`, with the one message.
+   *Enumerating a rule over "verbs that take a backend name" and then checking the four that
+   take it one way is the shape this register keeps recording: the clause says "from the code",
+   and the code has two spellings of the argument.*
 2. **One message**, `install`'s, naming the `priority` file and the spelling. Two spellings of
    one refusal is how E18's family started.
 3. **A real backend that cannot run here is a different answer.** `flatpak` on a machine

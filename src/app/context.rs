@@ -404,10 +404,36 @@ impl App {
 
     #[instrument(skip(self))]
     pub async fn resolve_spec(&self, spec_str: &str) -> Result<Vec<PackageSpec>> {
-        StateResolver::new(&self.config, self.registry.clone(), false)
-            .await
-            .resolve_spec(spec_str)
-            .await
+        self.resolver().await.resolve_spec(spec_str).await
+    }
+
+    /// A resolver over this app's config and registry. One construction, so a caller that needs
+    /// two answers from the model does not build two resolvers that can disagree.
+    pub async fn resolver(&self) -> StateResolver<'_> {
+        StateResolver::new(&self.config, self.registry.clone(), false).await
+    }
+
+    /// The backend a `backend:name` string names, if it names one. `None` for a bare name.
+    pub async fn declared_backend(&self, spec_str: &str) -> Result<Option<String>> {
+        self.resolver().await.declared_backend(spec_str).await
+    }
+
+    /// Refuse a `backend:name` argument whose prefix is not a backend (Q9).
+    ///
+    /// Q9 ruled that every verb taking a backend name refuses an unknown one, and listed the
+    /// four that take it as a `--backend` flag — "checked from the code rather than from the one
+    /// that was reported". The `backend:name` *spec* form was not in that enumeration, so the
+    /// ruling was applied to half its surface: `linix hold nosuchbackend:foo` recorded a hold
+    /// against a manager that does not exist and answered `Held 1 package(s).` at exit 0.
+    ///
+    /// A real backend that cannot run here is a different answer and stays exit 0 — Q9 clause 3,
+    /// and `require_known_backend` is where that distinction lives.
+    pub async fn require_known_spec_backends(&self, specs: &[String]) -> Result<()> {
+        for spec in specs {
+            let named = self.declared_backend(spec).await?;
+            self.require_known_backend(named.as_deref())?;
+        }
+        Ok(())
     }
 
     /// Refresh every backend's metadata, and do not let one stop the rest.
@@ -548,28 +574,58 @@ impl App {
         // Split by the one parser (`resolve_spec`, which goes through the grammar), never by
         // `split_once(':')` here — a second place that decides what a prefix means is the bug
         // CLAUDE.md names, and C13 records six parsers that had it.
-        if let Ok(specs) = self.resolve_spec(package_name).await {
-            if !specs.is_empty() {
-                for spec in specs {
-                    let Some(backend) = self.registry.get(&spec.backend) else {
-                        continue;
-                    };
-                    let Some(q) = backend.as_queryable() else {
-                        continue;
-                    };
-                    if let Ok(Some(found)) = q.info(&spec.name).await {
-                        return Ok(Some(found));
-                    }
-                }
-                return Ok(None);
+        // Does the string name a manager, and is it one? Asked first, and refused with the
+        // sentence `install` and `list --backend` already use — from the same function, so
+        // there is one answer to one question. `info nosuchbackend:foo` used to reach the
+        // fan-out below and ask every manager on the machine for a package literally named
+        // `nosuchbackend:foo`: the wrong answer ("not installed" — the *manager* does not
+        // exist), arrived at slowly, at exit 0 (N-3).
+        // Note the `?`. The grammar is what rejects an unknown prefix — `parse_prefix` writes
+        // the sentence — and every version of this bug has been someone dropping that error on
+        // the floor: `get_info` had `if let Ok(specs) = resolve_spec(…)`, and the refusal it
+        // discarded was the answer.
+        let named_backend = self.declared_backend(package_name).await?;
+        // The registry's half of the same question: a name `priority` lists and this build has
+        // no backend for.
+        self.require_known_backend(named_backend.as_deref())?;
+
+        // A resolution failure is not an error here: `info` answers about the machine, and a
+        // name no manager *carries* can still be installed on it. Only the prefix check above
+        // is fatal.
+        let specs = self.resolve_spec(package_name).await.unwrap_or_default();
+        for spec in &specs {
+            let Some(backend) = self.registry.get(&spec.backend) else {
+                continue;
+            };
+            let Some(q) = backend.as_queryable() else {
+                continue;
+            };
+            if let Ok(Some(found)) = q.info(&spec.name).await {
+                return Ok(Some(found));
             }
         }
 
+        // The user named the manager, and it does not have it. Asking a different one would
+        // answer a question nobody asked — `info cargo:ripgrep` must never report the choco
+        // copy.
+        if named_backend.is_some() {
+            return Ok(None);
+        }
+
+        // A bare name: *which* manager has it installed is a fact about this machine, and
+        // `priority` order is not that fact. The resolver picks by priority, so `info hexyl`
+        // asked `choco` (first in `priority`, and it carries the name), choco had nothing
+        // installed, and LiNix reported a package the user has under `cargo` as absent — while
+        // `list` reported it present. Two read commands must never contradict each other about
+        // the machine.
+        //
+        // Asked of every backend at once, and the first answer wins. Serial, this waited on
+        // every manager that did not have it before reaching the one that did.
+        let name = specs
+            .first()
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| package_name.to_string());
         let backends = self.registry.available();
-        let name = package_name.to_string();
-        // A bare name lives in one backend and which one is not known until asked, so all are
-        // asked at once and the first answer wins. Serial, this waited on every backend that
-        // did not have it before reaching the one that did.
         let found = self
             .query_backends_concurrently(backends, move |q| {
                 let name = name.clone();

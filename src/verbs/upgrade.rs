@@ -335,6 +335,10 @@ pub(crate) async fn handle_upgrade(app: &App, req: UpgradeRequest<'_>) -> Result
     // First, before any mode: `upgrade --backend aptt` used to scope to nothing and report
     // that everything was up to date (Q9).
     app.require_known_backend(req.backend)?;
+    // And the same ruling on the form it takes positionally, which that enumeration missed:
+    // `upgrade nosuchbackend:foo` answered "not a managed package — skipping" at exit 0.
+    app.require_known_spec_backends(req.packages).await?;
+    app.require_known_spec_backends(req.except).await?;
 
     // Canary keeps its own health-gated, scoped path.
     if req.canary {

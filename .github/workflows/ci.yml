@@ -140,6 +140,7 @@ jobs:
       run: |
         docker run --rm \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
+          -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
 
     # The container harness runs four distros on every push and nothing ever asked whether its
@@ -155,6 +156,7 @@ jobs:
       run: |
         docker run --rm --entrypoint bash \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
+          -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           -v "$PWD/scripts/harness-mutation-test.sh:/src/scripts/harness-mutation-test.sh:ro" \
           linix-it-ubuntu -c \
           "cd /src && bash scripts/harness-mutation-test.sh docker/integration/run-in-container.sh --check ${{ matrix.backend }} ${{ matrix.pkg }}"
@@ -182,6 +184,7 @@ jobs:
       run: |
         docker run --rm ${{ matrix.smoke }} \
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
+          -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
 
   # macOS, run rather than compiled. A Darwin build passing `cargo test` says the code

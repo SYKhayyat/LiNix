@@ -999,18 +999,33 @@ owner 2026-07-27; V.90). `install` writes first and syncs second (S15), so a fai
 line behind — and every later command parses the model, so one impossible line breaks `sync`,
 `upgrade` and every install after it.
 
-- **Withdrawn:** `Unresolvable` (no backend claims the name), **or** a `CommandFailed` the
-  backend's own `ExitPolicy` classified `Permanent`. A real manager ran, answered, and will
-  answer the same way every time.
+- **Withdrawn:** a failure that says **the name is not there** — `Error::says_a_name_is_absent()`.
+  Three roads reach it: `Unresolvable` (no backend claims the name), `NoSuchPackage` from a
+  backend that resolves names itself and knows which one it looked up, and a `CommandFailed`
+  whose output matched that manager's own `absent_markers`.
 - **Kept:** everything else. A dropped network, a held lock, a failed hook — you did mean it,
   and retrying is right.
-- **Permanence is read off `CommandFailed`, never off `Error::retryability()`**, which also
-  calls a refusal, a cancelled prompt and a bad config file `Permanent`. Deleting a
-  declaration because someone answered "no" to a prompt is worse than the wedge.
-- **Only lines the manager named are withdrawn.** In a batch, the rest are kept.
-- **A line kept on purpose names its file and how to remove it:** *"`scoop:foo` is still
-  declared in `modules/imperative.txt`, so `sync` will try it again. If you did not mean it,
-  run `linix unmanage scoop:foo`."* A wedge with an exit is not a wedge.
+- **Absence is not permanence, and withdrawal reads absence** (N-1, 2026-07-29; V.90). It used
+  to read `CommandFailed { retry: Permanent }`, which is wrong in both directions: helm's
+  `plugin already exists` is permanent about a name that is plainly there, and the 36 backends
+  with no `ExitPolicy` could not answer `Permanent` at all — so the same typo wedged the config
+  behind `npm:` and did not behind `scoop:`. `ExitPolicy` therefore answers two questions
+  separately: `permanent_markers` for *would another attempt differ?* and `absent_markers` for
+  *does the name exist?* Matching an absent marker implies permanence; the reverse never holds.
+- **Never off `Error::retryability()`**, which also calls a refusal, a cancelled prompt and a
+  bad config file `Permanent`. Deleting a declaration because someone answered "no" to a prompt
+  is worse than the wedge.
+- **Only lines the failure can be attributed to are withdrawn.** In a batch, the rest are kept.
+  Attribution is the *one* thing a message may be read for — which of the lines this command
+  wrote the manager was talking about — and never whether the name exists.
+- **A backend with no `absent_markers` is a bound, not a bug.** An unclassified failure keeps
+  the line, which is the safe direction; what is forbidden is the bound being *unstated*, so the
+  set is derived from the registry and ratcheted.
+- **A line kept on purpose names its file and how to remove it, and only an unclassified
+  failure may suggest that trying again could work.** Each reason a line stays earns its own
+  sentence: refused (*edit the line*), exhausted (*it already repeated*), a name absent
+  elsewhere (*a name does not exist*), unclassified (*`sync` will try it again*). A wedge with
+  an exit is not a wedge, and a promise the program has already disproved is not an exit.
 
 **`check health` has four states, and "not installed" is one of them** (Q2, owner 2026-07-27;
 V.91). A package manager the user does not have is **absent**, not critical:

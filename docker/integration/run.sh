@@ -17,6 +17,37 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || (cd "$(dirname "$0")/.
 cd "$REPO_ROOT" || { echo "cannot cd to repo root ($REPO_ROOT)"; exit 1; }
 echo "repo root: $REPO_ROOT"
 
+# Before the 18-minute image build: a CRLF shell script is bind-mounted into the container and
+# read by dash, which parses `set -u<CR>` and aborts with `set: Illegal option -` before a single
+# check runs. The committed blobs are LF and `.gitattributes` pins `*.sh text eol=lf`, so CI never
+# sees this — but eol=lf governs what *checkout* writes, not what an editor writes afterwards, and
+# on 2026-07-29 four scripts in this working tree had been rewritten to CRLF. The whole local
+# container gate was unavailable on the machine this project is developed on, and the failure
+# named a shell option rather than a line ending (N-6).
+crlf=""
+for f in docker/integration/run-in-container.sh docker/integration/*.sh scripts/*.sh; do
+    [ -f "$f" ] || continue
+    # `grep -c` on a binary-ish match: any CR before a newline is the fault.
+    if head -c 65536 "$f" | grep -q $'\r'; then
+        crlf="$crlf $f"
+    fi
+done
+if [ -n "$crlf" ]; then
+    echo "FATAL: these shell scripts have CRLF line endings in your working tree:"
+    for f in $crlf; do echo "    $f"; done
+    cat <<'EOM'
+
+dash inside the container reads `set -u<CR>` and aborts before running any check, reporting
+`set: Illegal option -`. Git stores these files with LF; something in this working tree rewrote
+them. Fix, from the repo root:
+
+    sed -i 's/\r$//' <the files above>          # or: git add --renormalize . && git checkout -- .
+
+Then re-run. Nothing was built, so this costs you nothing but the fix.
+EOM
+    exit 1
+fi
+
 PKG="${1:-jq}"
 # `tools` is a broad cross-platform image whose expansion backends (composer, go, opam,
 # luarocks, nimble, cabal, stack, mix, helm, krew, asdf, pixi, spack) each get a REAL
@@ -50,6 +81,13 @@ for d in $DISTROS; do
     echo "############### RUN $d ($be) ###############"
     # Mount the current test script so edits to it don't require an image rebuild.
     SCRIPT_MOUNT="$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro"
+    # The real-lifecycle ratchet's floor (G-11). `.dockerignore` excludes `scripts/` so that
+    # editing a host script never busts the image's cargo cache, which means the floor file was
+    # in no image and the ratchet was in force on exactly one host class of five — the leg with
+    # the least coverage, and absent from the four-distro gate and the `tools` image, which
+    # carry the most (N-5). Mounted rather than copied, for the same cache reason and following
+    # the pattern CI already uses for `harness-mutation-test.sh`.
+    FLOOR_MOUNT="$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro"
     # Forward the run-mode toggle into the container: SMOKE_ONLY=1 skips real mutation
     # (discovery and plan-smoke only), for a source-building image like gentoo. gentoo is
     # ALWAYS smoke-only — a real emerge install→remove builds from source and costs hours — so a
@@ -60,7 +98,7 @@ for d in $DISTROS; do
     [ "$d" = gentoo ] && smoke=1
     [ -n "$smoke" ] && ENVFLAGS="$ENVFLAGS -e SMOKE_ONLY=$smoke"
     # shellcheck disable=SC2086
-    if docker run --rm $ENVFLAGS -v "$SCRIPT_MOUNT" "linix-it-$d" "$be" "$PKG"; then
+    if docker run --rm $ENVFLAGS -v "$SCRIPT_MOUNT" -v "$FLOOR_MOUNT" "linix-it-$d" "$be" "$PKG"; then
         summary="${summary}\n  ${d} (${be}): PASS"
     else
         summary="${summary}\n  ${d} (${be}): FAIL"; overall=1

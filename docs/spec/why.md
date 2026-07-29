@@ -1441,6 +1441,34 @@ LiNix classified it as impossible and then kept it anyway.
    more. Every one of those is permanent in the retry sense and none of them means the name was
    wrong. Withdrawing on `retryability()` would delete the line a user just asked for because
    they answered "no" to a prompt — a worse bug than the wedge, and a silent one.
+
+**And then permanence turned out to be the wrong question (N-1, 2026-07-29).** The rule above is
+still right about what it forbids and was wrong about what it permits. Reading
+`CommandFailed { retry: Permanent }` as "this name cannot exist" fails in both directions:
+
+- **Too narrow.** Only 12 of 48 backends had an `ExitPolicy` at all. The other 36 answered
+  `Unknown` to everything, so they could never produce the verdict withdrawal was looking for —
+  and a mistyped `npm:` package wedged the config while the identical typo behind `scoop:` did
+  not. Nothing about npm was special; it was one of the 36, and it was the one that got typed.
+  The rule was verified against the two backends that had a reproduction attached, which is the
+  habit this whole register exists to break.
+- **Too wide.** helm's `plugin already exists` is permanent about a name that is plainly there,
+  and `cargo`'s `no binaries` is a real crate that simply ships no program. Withdrawing on
+  either deletes a declaration whose package exists — the same class of harm as the wedge, in
+  the other direction.
+
+So the two questions are separated in the data: `permanent_markers` answers *would another
+attempt differ?*, `absent_markers` answers *does the name exist?*, and only the second withdraws.
+Absence implies permanence and permanence implies nothing. Backends that resolve names
+themselves — a git host, an index — return `NoSuchPackage` carrying the name they looked up, so
+nothing has to be recovered from prose; `pixi` wraps its output through the middle of a package
+name, which is what a prose-parsing reader looks like when it finally meets a manager that
+formats.
+
+**The message keeps exactly one job.** Not "does the name exist" — a property answers that — but
+"which of the lines this command just wrote was the manager talking about", which no property
+can answer for a batch. A wrong answer there keeps a declaration that could have been withdrawn,
+which is the safe direction; a wrong answer to the first would delete one.
 2. **Only lines the manager named.** Managers name the package they could not install, so a
    batch whose manager stopped at the first bad name leaves the rest alone. Guessing which line
    a message meant is how a correct declaration gets deleted.
@@ -1741,6 +1769,15 @@ no rows, and a backend that does not exist returned no rows too, so for half the
 check could not fail. This is the vacuous assertion the whole assessment is about, found inside
 the check written to demonstrate the opposite. The oracle is now itself tested — a nonexistent
 name must be distinguishable from a real one before the 24-of-24 figure means anything.
+
+**And the ruling's own enumeration was half of one (2026-07-29).** Q9 binds "every verb taking a
+backend name" and listed `list`, `upgrade`, `rebuild` and `repo` — the four that take it as a
+`--backend` flag. A backend name has a second spelling, the `backend:` prefix on a package spec,
+and nine verbs took it without checking: `hold` went as far as *recording* a hold under a manager
+that does not exist and reporting success. The rule was right and its coverage was decided by
+which spelling the reporter happened to type, which is why the check for it is now derived from
+`--help` rather than written as a list — `tests/unknown_backend_family_tests.rs`, whose
+exemptions are themselves asserted to exist so they cannot become E29's `undo`.
 
 ---
 

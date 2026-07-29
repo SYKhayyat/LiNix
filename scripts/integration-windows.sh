@@ -1121,7 +1121,16 @@ if [ -f "$FLOOR_FILE" ]; then
         [ "$LIFECYCLES" -gt "$FLOOR" ] &&             echo "        ratchet up:  sed -i 's/^$HOST_CLASS .*/$HOST_CLASS $LIFECYCLES/' $FLOOR_FILE"
     fi
 else
-    echo "        (no $FLOOR_FILE — the real-lifecycle ratchet is not in force)"
+    # The twin of the container harness's branch, and it was silent in the same way: one line,
+    # tallied nowhere, so a run with the ratchet missing was indistinguishable from a run that
+    # passed it (N-5). Here the file sits next to this script, so absence means someone deleted
+    # or moved it — which is exactly when a gate must not go quiet.
+    FAILC=$((FAILC + 1))
+    FAILED_NAMES="$FAILED_NAMES
+    - coverage: the real-lifecycle ratchet is not in force ($FLOOR_FILE is missing)"
+    echo "  FAIL  real-lifecycle ratchet: $FLOOR_FILE is missing, so nothing checked whether"
+    echo "        coverage collapsed. $LIFECYCLES real lifecycle(s) this run, unmeasured against"
+    echo "        $HOST_CLASS."
 fi
 
 EXEMPT_CMDS="shell history bisect fleet"

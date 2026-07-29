@@ -889,6 +889,9 @@ pub(crate) fn approve_vars_provider(app: &App) -> Result<Option<String>> {
 }
 
 pub(crate) async fn handle_unlock(app: &App, names: &[String], list: bool) -> Result<()> {
+    // Q9: an unknown prefix reported "was not frozen on this host — nothing to unlock", which
+    // is what a real name that is not frozen also reports.
+    app.require_known_spec_backends(names).await?;
     let path = linix::core::BareLock::path_in(&app.config.config_root().join("locks"));
     let mut lock = linix::core::BareLock::load(&path)?;
 

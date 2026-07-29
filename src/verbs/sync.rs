@@ -268,6 +268,9 @@ pub(crate) async fn handle_rebuild(
     // Before the warning about rebuilding everything: `rebuild --backend aptt` scoped to a
     // manager that does not exist, found nothing to rebuild, and said it had succeeded (Q9).
     app.require_known_backend(backend)?;
+    // The positional form of the same ruling: `rebuild nosuchbackend:foo` answered
+    // "skipping — not declared in any active module" at exit 0.
+    app.require_known_spec_backends(packages).await?;
 
     // K2 (ruled 2026-07-24): a bare `rebuild` WARNS and rebuilds everything, rather than
     // refusing. The default is `--all`, but because the failure mode is software missing from a

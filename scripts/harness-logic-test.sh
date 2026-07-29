@@ -528,6 +528,67 @@ for _src in $SOURCES; do
     fi
 done
 
+# ----------------------------------------------------------------------------
+# Every container leg that runs the harness must also mount the ratchet's floor file.
+#
+# `.dockerignore` excludes `scripts/`, deliberately — editing a host script must not bust the
+# image's cargo cache — so `scripts/lifecycle-floor.txt` is in no image and reaches a container
+# only by being mounted. It was not, on any leg. The ratchet was in force on one host class of
+# five: the Windows sweep, which has the least coverage, and absent from the four distro legs and
+# the `tools` image, which have the most. Every one of those runs was green (N-5).
+#
+# This asks the question that would have caught it: for each `docker run` that mounts the
+# harness, is the floor mounted too?
+echo "== every container leg that runs the harness mounts the lifecycle floor"
+TOTAL=$((TOTAL + 1))
+_ci="$(cd "$(dirname "$0")/.." && pwd)/.github/workflows/ci.yml"
+if [ ! -r "$_ci" ]; then
+    echo "  BAD   cannot read $_ci"
+    BAD=$((BAD + 1))
+else
+    # Count the harness mounts and the floor mounts. They travel together or the gate is inert
+    # on the difference.
+    _harness_mounts=$(grep -c "run-in-container.sh:/src/docker/integration/run-in-container.sh" "$_ci")
+    _floor_mounts=$(grep -c "lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt" "$_ci")
+    if [ "$_harness_mounts" = "$_floor_mounts" ] && [ "$_harness_mounts" -gt 0 ]; then
+        echo "  ok    all $_harness_mounts container leg(s) mount the floor file"
+    else
+        echo "  BAD   $_harness_mounts container leg(s) mount the harness, $_floor_mounts mount the floor"
+        echo "        A leg without the floor runs the ratchet's else branch, which measures nothing."
+        BAD=$((BAD + 1))
+    fi
+fi
+
+# ----------------------------------------------------------------------------
+# Every shell script this repo runs must have LF endings, in the working tree.
+#
+# Not a style rule. `run.sh` bind-mounts the host's copy of the harness into the container,
+# where /bin/sh is dash; dash reads `set -u<CR>`, aborts with `set: Illegal option -`, and no
+# check runs. `.gitattributes` pins `*.sh text eol=lf` and the committed blobs are LF, so CI is
+# unaffected and nothing here ever fired — eol=lf governs what checkout writes, not what an
+# editor writes afterwards. On 2026-07-29 four scripts in the development working tree were CRLF
+# and the entire local container gate was silently unavailable (N-6).
+#
+# Checked here because both release scripts already run this gate, so it needs no new wiring and
+# cannot fall out of the CI/local parity check one section up.
+TOTAL=$((TOTAL + 1))
+_root="$(cd "$(dirname "$0")/.." && pwd)"
+_crlf=""
+for _f in "$_root"/scripts/*.sh "$_root"/docker/integration/*.sh; do
+    [ -f "$_f" ] || continue
+    if head -c 65536 "$_f" | grep -q "$(printf '\r')"; then
+        _crlf="$_crlf $(basename "$_f")"
+    fi
+done
+if [ -z "$_crlf" ]; then
+    echo "  ok    every shell script has LF endings (dash aborts on CRLF before any check runs)"
+else
+    echo "  BAD   CRLF line endings in the working tree — dash cannot run these:"
+    for _f in $_crlf; do echo "        $_f"; done
+    echo "        fix: sed -i 's/\\r\$//' on each, or git add --renormalize . && git checkout -- ."
+    BAD=$((BAD + 1))
+fi
+
 echo "--------------------------------------------------------------"
 echo " harness predicates: $((TOTAL - BAD))/$TOTAL ok"
 [ "$BAD" = 0 ] || { echo " FAILED"; exit 1; }

@@ -333,6 +333,10 @@ pub(crate) async fn handle_uninstall(
     json: bool,
     temp: Option<&Option<String>>,
 ) -> Result<()> {
+    // Q9: `uninstall nosuchbackend:foo` warned that it "is not declared in any active file" —
+    // true, and it names the wrong thing. The manager is what does not exist, and the message
+    // sent the user looking through their modules for a line they never wrote.
+    app.require_known_spec_backends(packages).await?;
     // Bare `--temp` restores when a `linix shell` session ends. That is the ephemeral shell's
     // business and it is outside the model by design (II.8), so it never touches a file.
     if let Some(None) = temp {
@@ -574,6 +578,9 @@ pub(crate) async fn suspend_for_session(app: &App, packages: &[String]) -> Resul
 }
 
 pub(crate) async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
+    // Q9, before a hold is recorded: `hold nosuchbackend:foo` wrote the hold and answered
+    // `Held 1 package(s).` at exit 0, against a manager that does not exist.
+    app.require_known_spec_backends(packages).await?;
     if packages.is_empty() {
         let state = app.state.lock().await;
         let held = state.list_held();
@@ -605,6 +612,7 @@ pub(crate) async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
 }
 
 pub(crate) async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> {
+    app.require_known_spec_backends(packages).await?;
     let mut n = 0usize;
     {
         let mut state = app.state.lock().await;

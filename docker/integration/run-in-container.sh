@@ -1270,7 +1270,17 @@ if [ -f "$FLOOR_FILE" ]; then
         [ "$LIFECYCLES" -gt "$FLOOR" ] &&             echo "        ratchet up:  sed -i 's/^$HOST_CLASS .*/$HOST_CLASS $LIFECYCLES/' $FLOOR_FILE"
     fi
 else
-    echo "        (no $FLOOR_FILE — the real-lifecycle ratchet is not in force)"
+    # A counted failure, not a note. This branch printed one line and incremented neither PASS
+    # nor FAILC, so the ratchet was absent from all four distro legs and the `tools` image and
+    # every one of those runs was green — the gate reporting its own absence in a voice nothing
+    # tallies (N-5). `.dockerignore` excludes `scripts/`, so the file reaches a container only by
+    # being mounted; `run.sh` and every `docker run` in `ci.yml` mount it now.
+    FAILC=$((FAILC + 1))
+    FAILED_NAMES="$FAILED_NAMES
+    - coverage: the real-lifecycle ratchet is not in force ($FLOOR_FILE is not in this container)"
+    echo "  FAIL  real-lifecycle ratchet: $FLOOR_FILE is not here, so nothing checked whether"
+    echo "        coverage collapsed. $LIFECYCLES real lifecycle(s) this run, unmeasured against"
+    echo "        $HOST_CLASS. Mount it:  -v \"\$PWD/scripts/lifecycle-floor.txt:$FLOOR_FILE:ro\""
 fi
 
 # Commands that cannot be executed in a container, each with the reason. Anything

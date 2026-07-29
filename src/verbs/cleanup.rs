@@ -410,6 +410,11 @@ pub(crate) async fn handle_reset(app: &App, force: bool) -> Result<()> {
 /// only the first would be undone by the next `sync`, which would see the declaration and
 /// re-adopt it.
 pub(crate) async fn handle_unmanage(app: &App, packages: &[String], json: bool) -> Result<()> {
+    // Q9: `unmanage nosuchbackend:foo` answered "not managed and not declared — nothing to
+    // forget" at exit 0, which is what a correctly-spelled name that is genuinely unmanaged
+    // also gets. `split_removal_target` below asks the registry about the prefix and falls back
+    // to treating the whole string as a name, so a typo reads as a package nobody manages.
+    app.require_known_spec_backends(packages).await?;
     let mut results = Vec::new();
 
     for spec in packages {
