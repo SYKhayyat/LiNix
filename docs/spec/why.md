@@ -1772,3 +1772,35 @@ a line over a broken environment, which is a worse bug than the one being fixed.
 **What this makes the markers.** They stop being a promise and become a hypothesis with an
 experiment attached: a wrong entry now costs a few seconds of backoff and an honest message,
 instead of a sentence the program repeats forever while its own retries disprove it.
+
+---
+
+**V.101 — Why the sweep has a floor that moves.** *(Owner ruling, 2026-07-28 — Q12; the owner
+ruled the shape and left the number to the builder, so the mechanism is one that needs no
+number.)* The coverage audit was written to answer "is any backend untouched?", and it answers
+that well. It was then read as if it answered "is this run as good as our runs usually are?",
+which it never did: a plan-smoke satisfies it, and a plan-smoke proves an argv was *constructed*.
+
+The measurement that exposed it: a clean Windows sweep, nothing broken, `4 real lifecycle, 12
+install-attempted, 44 plan-smoked`, `PASS`. Four, because 8 of 15 canaries were already
+installed on that host and the harness refuses — correctly — to remove software the user already
+had. So the better-used the machine, the less the gate tests, and the gate says the same word
+either way.
+
+**A threshold was the obvious fix and it is the wrong one.** Whatever number you pick is right
+for one machine on one day. Pick CI's and every developer's box is red; pick a developer's and
+CI can silently halve its coverage. Both failures end the same way — someone stops reading the
+line. A ratchet asks a question that has an answer on every machine: *did this host class do
+worse than it has done before?* Nobody has to guess, and the only way to make it green
+dishonestly is to edit a number in a committed file, which is a line in a diff someone reviews.
+
+**The class had to be got right, and the first attempt was not.** `uname -s` under git-bash is
+`MINGW64_NT-10.0-26200`. Keyed on that, every Windows update would mint a new host class with no
+record and a free pass — a ratchet that resets itself is a ratchet in name. The OS token is
+normalised to `windows`/`linux`/`darwin`, the container's distro is part of the key because
+ubuntu and the `tools` image are not comparable runs, and `ci` is separate from `local` because
+that distinction is the finding rather than noise around it.
+
+**And it goes in both harnesses.** The same audit exists in the native sweep and the container
+sweep, and putting the ratchet in one would be `guard.rs`'s own lesson — a check on one path is a
+check on nothing — repeated in the file that measures the checks.

@@ -1800,6 +1800,20 @@ touched** — outside a named exempt set. This is what makes a backend added nex
 audit until it is covered, and it is the only mechanism that can: a fixed list of checks cannot
 notice what is missing from it.
 
+**And the audit accepts a plan-smoke, so it needs a second floor** *(owner ruling, 2026-07-28 —
+Q12)*. "Every backend got a lifecycle **or** a plan-smoke" is satisfied by a run that did almost
+no real lifecycles. Measured on a clean Windows sweep with nothing broken: `4 real lifecycle,
+12 install-attempted, 44 plan-smoked`, `PASS` — four, because 8 of 15 canaries were already
+installed on that host and the harness refuses, correctly, to remove software the user already
+had. The better-used the machine, the less the gate tests, and it says the same word either way.
+
+So both harnesses carry a **ratchet on the real-lifecycle count**, keyed by host class
+(`<harness>-<os>[-<distro>]-<ci|local>`), recorded in `scripts/lifecycle-floor.txt`. It may
+rise; a run that falls below the recorded number fails. Not a fixed threshold: the honest number
+varies by host, so any number picked once is red on somebody's machine and blind on somebody
+else's, and both endings are a line people stop reading. A ratchet needs no guess, and the only
+way to make it green dishonestly is to edit a committed number, which is visible in a diff.
+
 **An image tests what it claims or drops the claim.** The `tools` image exists to give the
 ecosystem managers — composer, opam, luarocks, nimble, cabal, stack, mix, helm, krew, pixi,
 spack, go, dotnet, pub — a real install → list → remove against the real manager. Until it does,

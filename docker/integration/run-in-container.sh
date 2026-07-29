@@ -1104,6 +1104,47 @@ else
     PASS=$((PASS + 1)); echo "  PASS  every registered backend got a lifecycle or a plan-smoke"
 fi
 
+# --- the real-lifecycle ratchet (G-11) ------------------------------------
+# The audit above accepts a plan-smoke as coverage, so a run with 4 real lifecycles and a run
+# with 15 both PASS. This asks the other question: did THIS host class do worse than it has
+# done before? The floor lives in `scripts/lifecycle-floor.txt` beside the reasoning.
+LIFECYCLES=$(grep -c . "$LEDGER/be-life.u")
+# A stable key. `uname -s` on git-bash is `MINGW64_NT-10.0-26200` — a Windows build number,
+# so keying on it would mint a fresh host class (and a free pass) at every OS update.
+case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*|Windows*) HOST_OS=windows ;;
+    Darwin*)                       HOST_OS=darwin ;;
+    Linux*)                        HOST_OS=linux ;;
+    *)                             HOST_OS=unknown ;;
+esac
+# Inside a container the distro is what decides which managers exist, so it is part of the
+# class: ubuntu and the `tools` image are not comparable runs.
+HOST_FLAVOUR=""
+[ -r /etc/os-release ] && HOST_FLAVOUR="-$(. /etc/os-release 2>/dev/null; echo "${ID:-}")"
+HOST_CLASS="container-${HOST_OS}${HOST_FLAVOUR}-$([ -n "${CI:-}" ] && echo ci || echo local)"
+FLOOR_FILE="/src/scripts/lifecycle-floor.txt"
+if [ -f "$FLOOR_FILE" ]; then
+    FLOOR=$(grep -E "^${HOST_CLASS} " "$FLOOR_FILE" 2>/dev/null | awk '{print $2}' | head -1)
+    if [ -z "$FLOOR" ]; then
+        PASS=$((PASS + 1))
+        echo "  PASS  real-lifecycle ratchet: no record for $HOST_CLASS yet — this run sets it"
+        echo "        add to $FLOOR_FILE:  $HOST_CLASS $LIFECYCLES"
+    elif [ "$LIFECYCLES" -lt "$FLOOR" ]; then
+        FAILC=$((FAILC + 1))
+        FAILED_NAMES="$FAILED_NAMES
+    - coverage: $LIFECYCLES real lifecycle(s) on $HOST_CLASS, below the recorded $FLOOR"
+        echo "  FAIL  real-lifecycle ratchet: $LIFECYCLES, and $HOST_CLASS has done $FLOOR before"
+        echo "        Something stopped running. A plan-smoke satisfies the audit above, so this"
+        echo "        is the only check that notices coverage collapsing rather than breaking."
+    else
+        PASS=$((PASS + 1))
+        echo "  PASS  real-lifecycle ratchet: $LIFECYCLES >= $FLOOR recorded for $HOST_CLASS"
+        [ "$LIFECYCLES" -gt "$FLOOR" ] &&             echo "        ratchet up:  sed -i 's/^$HOST_CLASS .*/$HOST_CLASS $LIFECYCLES/' $FLOOR_FILE"
+    fi
+else
+    echo "        (no $FLOOR_FILE — the real-lifecycle ratchet is not in force)"
+fi
+
 # Commands that cannot be executed in a container, each with the reason. Anything
 # not on this list must have been RUN — `--help` does not count.
 EXEMPT_CMDS="shell history bisect fleet"

@@ -1,4 +1,4 @@
-# The decision register — all 120, and two of them open
+# The decision register — all 121, and two of them open
 
 **One file, six features. Two open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -18,7 +18,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **116** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **117** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Two are open.** All 120 are accounted for: **116 ANSWERED, 2 PARKED, 2 OPEN** — and this line
+**Two are open.** All 121 are accounted for: **117 ANSWERED, 2 PARKED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -3464,5 +3464,45 @@ state rather than to a missing binary.
 new refusal — so both need a ruling.
 
 Until it is ruled, `opam:` installs fail on a switchless machine with opam's own message.
+
+---
+
+## Q12
+
+**Status: ANSWERED.**
+
+**Q12 — Should the integration sweep fail when its real coverage collapses, and against what
+number?** **RULED 2026-07-28 (owner, deferring the threshold to the builder): a ratchet per host
+class — record the count, fail when it falls, never when it rises.**
+
+The coverage audit asks whether every registered backend got a lifecycle **or** a plan-smoke,
+and a plan-smoke satisfies it. So a run with 4 real lifecycles and a run with 15 both PASS. The
+clean Windows sweep reported 4 — not because anything broke, but because 8 of 15 canaries were
+already installed on that host and the harness correctly refuses to remove software the user
+already had. **The gate's coverage is inversely proportional to how much the machine is used,
+and nothing noticed.**
+
+G2 gave this audit a floor for an empty *registry*. It had none for collapsed *lifecycles*.
+
+What is binding:
+
+1. **A ratchet, not a threshold.** The honest number varies by host, and a number guessed once
+   is the kind of constant this repo keeps rediscovering was wrong. A ratchet needs no guess: it
+   only asserts "this host class did better before, so it can again".
+2. **The host class is `<harness>-<os>[-<distro>]-<ci|local>`.** `ci` and `local` are separate
+   deliberately — that *is* the difference the finding is about, and holding a developer's box
+   to a clean runner's number would make the gate red on every machine that has been used, which
+   is how a gate learns to be ignored. The distro is in the key because ubuntu and the `tools`
+   image are not comparable runs.
+3. **The OS token is normalised.** `uname -s` under git-bash is `MINGW64_NT-10.0-26200`; keying
+   on it would mint a fresh host class, and a free pass, at every Windows update.
+4. **An unrecorded host class is recorded, not failed.** A gate that fails the first time it
+   sees a new platform is a gate that stops people adding platforms.
+5. **The numbers live in `scripts/lifecycle-floor.txt`**, with the reasoning beside them, so
+   lowering one is a visible line in a diff — the single edit the mechanism exists to expose.
+6. **Both harnesses carry it**, native and container. A ratchet on one is the "guard on one
+   command" shape again.
+
+The rule is in **IV.1**; the reason is in **V.101**.
 
 ---

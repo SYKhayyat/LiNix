@@ -1,0 +1,27 @@
+# How many backends completed a real install -> list -> binary -> remove round-trip, per
+# host class. A ratchet: it may rise, and a run that falls below the recorded number fails.
+#
+# WHY THIS EXISTS (G-11, owner ruling 2026-07-28 — Q12). The coverage audit asks "did every
+# registered backend get a lifecycle OR a plan-smoke", and a plan-smoke satisfies it. So a run
+# with 4 real lifecycles and a run with 15 both PASS. The clean Windows sweep reported 4 — not
+# because anything broke, but because 8 of 15 canaries were already installed on that host and
+# the harness correctly refuses to remove software the user already had. **The gate's coverage
+# is therefore inversely proportional to how much the machine is used, and it never noticed.**
+#
+# A fixed threshold was rejected: the honest number varies by host, and a number guessed once
+# is the kind of constant this repo keeps discovering was wrong. A ratchet needs no guess. It
+# only ever asserts "this host class did better than this before, so it can again".
+#
+# HOST CLASS is `<harness>-<os>-<ci|local>`. `ci` and `local` are separate on purpose: that IS
+# the difference the finding is about — a clean runner installs the canaries, a developer's box
+# already has half of them. Holding a developer to CI's number would make the gate red on every
+# machine that has ever been used, which is how a gate learns to be ignored.
+#
+# TO RAISE ONE: run the sweep, read the number it prints, edit the line, commit it. The harness
+# prints the exact edit when a run exceeds the record. Never lower a line to get green — that is
+# the one edit this file exists to make visible in a diff.
+#
+# A host class with no line here is recorded on its first run rather than failed: a gate that
+# fails the first time it sees a new platform is a gate that stops people adding platforms.
+
+windows-native-windows-local 4
