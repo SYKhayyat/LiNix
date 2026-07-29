@@ -71,8 +71,21 @@ lx_slow() { record_argv "$@"; $TO_LONG "$LINIX" "$@"; }
 
 # LiNix commits as you (II.13) and injects no identity of its own, so git needs
 # to know who that is. A bare container has no identity and every commit fails.
-git config --global user.name "LiNix Integration" >/dev/null 2>&1 || true
-git config --global user.email "integration@linix.invalid" >/dev/null 2>&1 || true
+# An identity for the `git init` section, as environment rather than as `git config --global`.
+#
+# This script is written for a disposable container, where a global write is harmless. It is
+# not only run there: `scripts/harness-mutation-test.sh` executes it on the host to measure
+# whether its checks can fail, and both release scripts now do that — so on 2026-07-28 this
+# pair silently replaced a developer's real git identity, and thirteen commits went out
+# authored `LiNix Integration <integration@linix.invalid>` instead of by their author.
+#
+# `GIT_AUTHOR_*`/`GIT_COMMITTER_*` are per-process: they cover this run and touch nothing the
+# user owns. And they are set only when git has no identity, so a machine that has one keeps
+# it — what the harness exercises is then what its owner actually runs.
+if ! git config user.email >/dev/null 2>&1; then
+    export GIT_AUTHOR_NAME="LiNix Integration" GIT_AUTHOR_EMAIL="integration@linix.invalid"
+    export GIT_COMMITTER_NAME="LiNix Integration" GIT_COMMITTER_EMAIL="integration@linix.invalid"
+fi
 
 PASS=0
 FAILC=0

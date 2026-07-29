@@ -80,6 +80,23 @@ lx() { record_argv "$@"; $TO "$LINIX" "$@"; }
 
 PASS=0; FAILC=0; SOFTC=0; FAILED_NAMES=""
 
+# An identity for section 9's `git init`, when this machine has none.
+#
+# **Per-process, never `git config --global`.** This harness runs on a real machine — that is
+# its whole point — so writing a global identity would replace the owner's. The container twin
+# did exactly that once it started being run on the host, and thirteen commits went out under
+# the wrong name before anyone noticed (2026-07-28).
+#
+# Only when git has no identity, so a developer's own is left alone. Without it, a clean CI
+# runner fails `git init` with `unable to auto-detect email address` — LiNix's message is
+# right and there is nobody there to act on it — and `diff` and `rollback` never run, which
+# then fails the coverage audit for a reason that has nothing to do with them.
+if ! git config user.email >/dev/null 2>&1; then
+    export GIT_AUTHOR_NAME="LiNix Integration" GIT_AUTHOR_EMAIL="integration@linix.invalid"
+    export GIT_COMMITTER_NAME="LiNix Integration" GIT_COMMITTER_EMAIL="integration@linix.invalid"
+fi
+
+
 # What a failing command actually said. `tail` alone is not that: RUST_BACKTRACE is on in
 # CI, so the last lines of a failure are stack frames — on macOS, a column of identical
 # `__mh_execute_header`, because the release binary carries no symbols — and the one line
