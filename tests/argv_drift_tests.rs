@@ -86,6 +86,14 @@ fn tool_rejects(program: &str, chain: &[String], tok: &str) -> Option<String> {
         "no such command",
         "unknown subcommand",
         "did you mean",
+        // The flag half (G-8). Same rule, same reason: absence from `--help` is a signal and
+        // the tool's own rejection is the verdict.
+        "unknown flag",
+        "unknown option",
+        "unrecognized option",
+        "unrecognised option",
+        "invalid option",
+        "unknown shorthand flag",
     ] {
         if text.contains(phrase) {
             return Some(
@@ -321,11 +329,22 @@ async fn every_subcommand_linix_invokes_still_exists_upstream() {
                     Some(help) if mentions_flag(&help, name) => {
                         checked.insert(shown);
                     }
-                    Some(_) => flag_drift.push(format!(
-                        "`{shown}` — LiNix passes it and `{} {} --help` does not document it",
-                        program,
-                        chain.join(" ")
-                    )),
+                    // Absent from the help is not the same as rejected — the rule this file
+                    // already applies to subcommands, and the first CI run of the flag half
+                    // proved it applies here too: `composer global show --format`,
+                    // `composer global search --format` and `systemctl list-units --no-legend`
+                    // are all real flags their tools accept and their `--help` does not list.
+                    // Three false positives in the gate's first outing is precisely what
+                    // `is_subcommand_token`'s doc comment warns turns a gate into noise.
+                    Some(_) => match tool_rejects(program, &chain, name) {
+                        Some(said) => flag_drift.push(format!("`{shown}` — the tool says: {said}")),
+                        None => {
+                            skipped.insert(format!(
+                                "{shown} (undocumented in its own help, but the tool still                                  accepts it)"
+                            ));
+                            checked.insert(shown);
+                        }
+                    },
                 }
                 continue;
             }
