@@ -66,8 +66,6 @@ const TERMINATES: &[&str] = &[
     "micromamba",
     "uv",
     "pixi",
-    "spack",
-    "asdf",
     "mise", //
     "brew",
     "port",
@@ -114,6 +112,16 @@ const DOES_NOT_TERMINATE: &[&str] = &[
     // that produces a binary failed this way; a package that only ships a library never
     // invokes the compiler with arguments, which is why it went unnoticed.
     "nimble",
+    // asdf dispatches on `$1` as the plugin name — measured in the `tools` image, `asdf
+    // install -- jq` answers `No such plugin: --`, and `asdf install jq latest` installs it.
+    // It was listed as terminating without anyone asking it, which is the thing the header
+    // of this file warns about, done to this file.
+    "asdf",
+    // spack reads `--` into the spec it is given: `spack spec -- zlib` dies with `string
+    // index out of range`, `spack find -- <name>` reports `No package matches the query: --
+    // <name>`, and both work without it. The grader saw the same parser mangle it into
+    // `Spec ~~zlib has no name`.
+    "spack",
     // `code` takes an extension id as the *value* of `--install-extension`, never as a
     // positional, so a `--` in front of it would become the value.
     "code",
@@ -177,6 +185,29 @@ mod tests {
         assert!(!terminates_options("winget"));
         assert!(!terminates_options("scoop"));
         assert!(!terminates_options("choco"));
+    }
+
+    /// Measured in the `tools` container on 2026-07-28, not inferred from a family resemblance.
+    ///
+    /// Both were in `TERMINATES` and neither had been asked. asdf answered `No such plugin:
+    /// --`; spack answered `No package matches the query: -- <name>` and, on a spec, `string
+    /// index out of range`. The grader saw the second one arrive as `Spec ~~zlib has no name`
+    /// after a real install, which is the same parser and a less legible message.
+    ///
+    /// The header of this file already states the rule this broke: the default is "does not
+    /// terminate", and a manager joins the terminating set **when someone has checked its
+    /// argument parser**. Two joined without that, and a `--` a manager reads as a package
+    /// name turns every install through it into a failure.
+    #[test]
+    fn a_manager_that_reads_the_terminator_as_a_name_is_not_listed_as_terminating() {
+        assert!(!terminates_options("asdf"));
+        assert!(!terminates_options("spack"));
+        // The controls: the ones measured in the same sweep that DO honour it stay listed, so
+        // this is not a test that would pass if the table were simply emptied.
+        assert!(terminates_options("cargo"));
+        assert!(terminates_options("npm"));
+        assert!(terminates_options("pipx"));
+        assert!(terminates_options("luarocks"));
     }
 
     #[test]

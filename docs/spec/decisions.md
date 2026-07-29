@@ -1,6 +1,6 @@
-# The decision register — all 118, and every one of them ruled
+# The decision register — all 120, and two of them open
 
-**One file, six features. Zero open.** Every decision this design forces lives here, with its
+**One file, six features. Two open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
 already settled in code could be re-opened by anyone reading the register instead of the tree.
@@ -16,7 +16,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **116** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Nothing here is open.** All 118 are ruled: **116 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**Two are open.** All 120 are accounted for: **116 ANSWERED, 2 PARKED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -3398,5 +3398,71 @@ What is binding:
    0. Both used to be the same silence, and only one of them is the user's mistake.
 
 The rule is in **II.8**; the reason is in **V.99**.
+
+---
+
+## Q10
+
+**Status: OPEN.**
+
+**Q10 — Should the `mix` backend install Hex before installing an archive from it?**
+
+Measured in the `tools` container, 2026-07-28. `mix`'s install is
+`mix archive.install hex <name> --force`, which fetches an archive from hex.pm. That needs Hex
+itself, and mix says so in as many words:
+
+```
+$ mix archive.install hex --force -- hex
+Could not find Hex, which is needed to build dependency :hex
+Shall I install Hex? (if running non-interactively, use "mix local.hex --force")
+** (Mix) Could not find an SCM for dependency :hex
+```
+
+Running `mix local.hex --force` first makes the next `archive.install` work — verified in the
+same container.
+
+**Recommendation: yes, bootstrap it.** LiNix already offers to install a missing *manager*
+before it plans (II.7 phase 0), and Hex is the same shape one level down: a prerequisite of the
+manager's own install path, not a package the user asked for. Installing it silently is what
+`declarative means no asking` implies.
+
+**Why this is not built.** It is a behaviour a user would notice — LiNix would run a command
+they did not type, against a package registry — and `CLAUDE.md` reserves that for a ruling. The
+alternative, if the answer is no, is that the `mix` backend refuses with the sentence mix itself
+prints, which is at least actionable.
+
+Until it is ruled, a `mix:` install fails on a machine without Hex, with mix's own message.
+
+---
+
+## Q11
+
+**Status: OPEN.**
+
+**Q11 — What should `opam:` do on a machine with no opam switch?**
+
+Measured in the `tools` container, 2026-07-28:
+
+```
+$ opam install -y jq
+[ERROR] No switch is currently set. Please use 'opam switch' to set or install a switch
+$ opam switch list
+#  switch  compiler  description        (no rows)
+```
+
+opam is installed and answers, but it has no switch, and every install fails until one exists.
+Nothing in LiNix creates one and nothing says this is why.
+
+**Recommendation: report it, do not create one.** A switch pins an OCaml compiler for the whole
+account; choosing one on a user's behalf is a larger decision than installing a package, and the
+wrong choice is slow to undo. `check health` should report `opam` as unusable-with-a-reason
+rather than `[READY]`, and an install should refuse with the `opam switch create` command to
+run — which is the E6c/W11 shape (a backend that reports health and cannot work) applied to a
+state rather than to a missing binary.
+
+**Why this is not built.** Both halves change what a user sees — `check health`'s verdict and a
+new refusal — so both need a ruling.
+
+Until it is ruled, `opam:` installs fail on a switchless machine with opam's own message.
 
 ---
