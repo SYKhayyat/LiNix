@@ -219,11 +219,51 @@ pub(crate) async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
                     }
                     Exit::Differences
                 }
-                _ => return Err(e),
+                _ => {
+                    // R-3's other half. LiNix classifies every failure it can — a rate limit
+                    // is `Transient` and says why — and nothing downstream could see the
+                    // answer. The sweep harness therefore tested transience by RETRYING THE
+                    // INSTALL IMMEDIATELY, which cannot succeed inside a 1236-second rate-limit
+                    // window: it scored `defect`, the macOS leg went red, and the real-lifecycle
+                    // ratchet fell 8 -> 7 and went red behind it. Two red CI jobs over a
+                    // classification the program had already made.
+                    //
+                    // One stable line, on failure only, on stderr, in a shape a script can read
+                    // without grepping an English sentence — the token is pinned by
+                    // `tests/failure_class_line_tests.rs` precisely so the wording above it
+                    // stays free to change.
+                    print_failure_class(&e);
+                    return Err(e);
+                }
             };
             std::process::exit(code.code());
         }
     }
+}
+
+/// The one machine-readable line: what LiNix thinks the failure it is about to report *is*.
+///
+/// `retryability()` already answers this and only two places consulted it. A caller that has to
+/// re-derive the answer by running the command again is not reading the classification, it is
+/// guessing at it — and an immediate retry is a guess that is wrong for exactly the failures the
+/// classification gets right.
+///
+/// The vocabulary is `Retryability`'s own, so a variant added there and not handled here is a
+/// compile error rather than a silently missing token.
+fn print_failure_class(e: &anyhow::Error) {
+    use linix::core::Retryability;
+    let class = match e
+        .downcast_ref::<linix::core::Error>()
+        .map(|x| x.retryability())
+    {
+        Some(Retryability::Transient) => "transient",
+        Some(Retryability::Permanent) => "permanent",
+        Some(Retryability::Exhausted) => "exhausted",
+        // No LiNix error at all, or one nothing classified: the same answer either way, and it
+        // is the honest one — nobody looked.
+        Some(Retryability::Unknown) | None => "unknown",
+    };
+    eprintln!("linix-failure-class: {class}");
 }
 
 pub(crate) async fn dispatch(app: &App, cli: &Cli) -> Result<()> {

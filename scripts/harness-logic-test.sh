@@ -36,9 +36,15 @@ lift() {
         $0 ~ "^" fn "\\(\\) \\{" { inside = 1 }
         inside { print; n++ }
         inside && /\}[[:space:]]*$/ && (n > 1 || /\{.*\}/) { exit }
-        n > 40 { exit 1 }
+        n > 60 { exit 1 }
     ' "$_file"
 }
+# The cap is a runaway guard — a malformed function must not slurp the rest of the file — and
+# not a size limit on harness functions. It was 40, and `classify_install` grew to 43 when it
+# stopped re-deriving transience by retrying and started reading `linix-failure-class:`. A
+# truncated lift is a `syntax error: unexpected end of file` and then `CLASS: unbound variable`,
+# which reads as the harness being broken rather than this file's awk being short: worth
+# knowing, because the first instinct was to shrink the function to fit the test measuring it.
 
 run_against() {
     SRC="$1"
@@ -303,11 +309,45 @@ for _src in $SOURCES; do
         # half of E5, and it is as wrong as the variance catch-all was.
         [ "$FAILC" -eq 0 ] || { echo "  BAD   a refusal or a timeout was recorded as a hard failure"; _bad=1; }
 
+        # R-3, both directions. The classifier reads `linix-failure-class:` instead of retrying
+        # the install to guess at it, and the two branches fail in opposite ways: a permanent
+        # failure retried is a minute wasted per backend, and a transient one scored a defect is
+        # a red CI leg over a rate-limit window that has since moved.
+        LEDGER="$(mktemp -d)"; : > "$LEDGER/be-life-unmeasured"
+        lx() { echo "the retry must not be reached"; return 1; }
+        lx_slow() { lx "$@"; }
+
+        FAILC=0; SOFTC=0; PASS=0
+        printf 'linix-failure-class: permanent\n' > "$_log"
+        # To a file, not a `$( )`: command substitution runs in a subshell, so `CLASS` set
+        # inside it never reaches this scope and the assertion below reads the PREVIOUS call's
+        # answer. It did, and reported `timeout`.
+        _out="$(mktemp)"
+        classify_install be spec 1 "$_log" > "$_out" 2>&1
+        [ "$CLASS" = defect ] || { echo "  BAD   a permanent failure is not a defect (got '$CLASS')"; _bad=1; }
+        grep -q retrying "$_out" && { echo "  BAD   a permanent failure was retried anyway"; _bad=1; }
+        rm -f "$_out"
+
+        FAILC=0; SOFTC=0
+        printf 'linix-failure-class: transient\n' > "$_log"
+        classify_install be spec 1 "$_log" >/dev/null 2>&1
+        [ "$CLASS" = exhausted ] || { echo "  BAD   a transient failure that did not clear is not exhausted (got '$CLASS')"; _bad=1; }
+        [ "$FAILC" -eq 0 ] || { echo "  BAD   a transient failure that did not clear was scored a hard failure — this is the red macOS leg"; _bad=1; }
+        grep -qx be "$LEDGER/be-life-unmeasured" || { echo "  BAD   an unmeasurable lifecycle was not recorded, so the ratchet cannot excuse it by name"; _bad=1; }
+
+        # And a failure with no class at all is a defect, not a free pass: its absence means the
+        # binary under test predates the line, so the run is not measuring the tree it claims to.
+        FAILC=0
+        : > "$_log"
+        classify_install be spec 1 "$_log" >/dev/null 2>&1
+        [ "$CLASS" = defect ] && [ "$FAILC" -eq 1 ] || { echo "  BAD   a failure with no class line was not scored a defect (got '$CLASS')"; _bad=1; }
+
+        rm -rf "$LEDGER"
         rm -f "$_log"
         exit "$_bad"
     )
     if [ $? -eq 0 ]; then
-        echo "  ok    $(basename "$_src") tells a refusal and a timeout from a defect"
+        echo "  ok    $(basename "$_src") tells a refusal, a timeout, a defect and an unmeasurable apart"
     else
         BAD=$((BAD + 1))
     fi

@@ -38,7 +38,7 @@ mkdir -p "$LINIX_CONFIG_DIR" "$LINIX_DATA_DIR"
 LEDGER="${TMPDIR:-/tmp}/linix-it-win-ledger"
 rm -rf "$LEDGER" 2>/dev/null; mkdir -p "$LEDGER"
 : > "$LEDGER/cmd-real"; : > "$LEDGER/cmd-help"
-: > "$LEDGER/be-life"; : > "$LEDGER/be-life-partial"; : > "$LEDGER/be-smoke"
+: > "$LEDGER/be-life"; : > "$LEDGER/be-life-partial"; : > "$LEDGER/be-life-unmeasured"; : > "$LEDGER/be-smoke"
 
 record_argv() {
     _sub=""; _skip=""
@@ -206,8 +206,34 @@ refused() { PASS=$((PASS + 1)); echo "  PASS  $1 (LiNix refused, on purpose)"; }
 #   transient  failed once, succeeded on retry. The caller CONTINUES the lifecycle — skipping
 #              it is how list, PATH, remove and gone-from-list went unrun for every backend
 #              whose install was flaky.
-#   defect     failed twice, identically. Hard.
+#   exhausted  LiNix classed the failure passing and it did not pass in this window — a rate
+#              limit with 20 minutes left on it. SOFT, and recorded as a lifecycle this run
+#              could not measure, which is not the same fact as a lifecycle that got worse.
+#   defect     failed permanently, or failed twice with nothing classifying it. Hard.
 #
+#
+# TRANSIENCE IS READ, NOT RE-DERIVED (R-3). It is a claim that a second attempt could differ,
+# and LiNix already answers it — `Retryability`, from the backend's own exit policy. Until
+# 2026-07-30 nothing downstream could see that answer, so this function re-derived it by
+# RETRYING THE INSTALL IMMEDIATELY. That proxy is wrong for exactly the failures the
+# classification gets right: a GitHub rate limit with 1236 seconds left on the window cannot
+# succeed one second later, so it scored `defect`, the macOS leg went red, and the
+# real-lifecycle ratchet fell 8 -> 7 and went red behind it. Two red jobs over an answer the
+# program had already computed.
+#
+# So `linix-failure-class:` is read, and the retry is kept only where it still adds evidence:
+#
+#   permanent  -> a defect now. Retrying a 404 to confirm it is still a 404 costs a minute and
+#                 tells nobody anything.
+#   transient  -> retry ONCE, because "a second attempt could differ" is worth testing where
+#                 testing it is cheap. A repeat is NOT a defect: it is exhausted, which is what
+#                 `Retryability::Exhausted` means — the claim was tested and did not hold, and
+#                 "this can never work" is more than was measured.
+#   unknown    -> retry once and treat a repeat as a defect. Nothing classified it, so here the
+#                 retry IS the evidence.
+#
+# A missing class line is a defect too: every failing command emits one, so its absence means
+# the binary under test is not the tree that was built.
 # $5 runs between the two attempts, for a caller that must clear a declaration the failed
 # attempt left behind. Pass `:` when there is nothing to undo.
 classify_install() { # be  install-spec  rc  logfile  [cleanup]
@@ -222,20 +248,36 @@ classify_install() { # be  install-spec  rc  logfile  [cleanup]
         excerpt "$_ci_log" 3
         CLASS=refused; return 0
     fi
-    # Transience is a claim that a second attempt could differ, so it is tested by making one.
-    # A held lock or a dropped mirror passes now; a wrong name, a bad argv or a broken build
-    # fails identically forever.
-    echo "        (first attempt failed; retrying once to tell a flake from a defect)"
+    _ci_class="$(sed -n 's/^linix-failure-class: //p' "$_ci_log" | tail -1)"
+    if [ -z "$_ci_class" ]; then
+        hard "$_ci_be: install of $_ci_spec failed and printed no failure class (rc=$_ci_rc)"
+        excerpt "$_ci_log" 6
+        CLASS=defect; return 0
+    fi
+    if [ "$_ci_class" = permanent ]; then
+        hard "$_ci_be: install of $_ci_spec failed permanently — a defect, not ecosystem variance (rc=$_ci_rc)"
+        excerpt "$_ci_log" 6
+        CLASS=defect; return 0
+    fi
+    echo "        (first attempt failed, class=$_ci_class; retrying once)"
     $_ci_clear
     lx -y install "$_ci_spec" >/tmp/itw-retry.out 2>&1
     _ci_rc2=$?
-    if [ "$_ci_rc2" -ne 0 ]; then
-        hard "$_ci_be: install of $_ci_spec failed twice — a defect, not ecosystem variance (rc=$_ci_rc, $_ci_rc2)"
-        excerpt /tmp/itw-retry.out 6
-        CLASS=defect; return 0
+    if [ "$_ci_rc2" -eq 0 ]; then
+        soft "$_ci_be: install of $_ci_spec failed once and succeeded on retry — transient"
+        CLASS=transient; return 0
     fi
-    soft "$_ci_be: install of $_ci_spec failed once and succeeded on retry — transient"
-    CLASS=transient
+    if [ "$_ci_class" = transient ]; then
+        soft "$_ci_be: install of $_ci_spec is classed transient and did not clear on a retry — exhausted, not a defect (rc=$_ci_rc, $_ci_rc2)"
+        excerpt /tmp/itw-retry.out 6
+        # Recorded so the ratchet can tell a lifecycle it could not MEASURE from one that got
+        # worse. Without this a rate limit ratchets a platform's coverage down permanently.
+        echo "$_ci_be" >> "$LEDGER/be-life-unmeasured"
+        CLASS=exhausted; return 0
+    fi
+    hard "$_ci_be: install of $_ci_spec failed twice, unclassified — a defect, not ecosystem variance (rc=$_ci_rc, $_ci_rc2)"
+    excerpt /tmp/itw-retry.out 6
+    CLASS=defect
 }
 
 
@@ -1088,6 +1130,19 @@ fi
 # with 15 both PASS. This asks the other question: did THIS host class do worse than it has
 # done before? The floor lives in `scripts/lifecycle-floor.txt` beside the reasoning.
 LIFECYCLES=$(grep -c . "$LEDGER/be-life.u")
+# Backends whose lifecycle this run could not MEASURE, because the install failed for a reason
+# LiNix itself classified as passing and a retry did not clear (a rate-limit window, a held
+# lock). That is not the same fact as "this host did fewer lifecycles", and the ratchet must not
+# confuse them: a GitHub rate limit on the macOS leg dropped the count 8 -> 7 and turned this
+# gate red, and the obvious repair — lowering the floor to 7 — would have ratcheted a
+# platform's coverage down permanently over a window that had already moved (R-3).
+#
+# Excused only for a class LiNix computed, and only BY NAME, printed below. A backend that
+# genuinely broke is classed `permanent` or `unknown`, is scored a defect, and is not in here —
+# so a real collapse still fails this check.
+sort -u "$LEDGER/be-life-unmeasured" > "$LEDGER/be-life-unmeasured.u" 2>/dev/null || : > "$LEDGER/be-life-unmeasured.u"
+UNMEASURED=$(grep -c . "$LEDGER/be-life-unmeasured.u")
+MEASURABLE=$((LIFECYCLES + UNMEASURED))
 # A stable key. `uname -s` on git-bash is `MINGW64_NT-10.0-26200` — a Windows build number,
 # so keying on it would mint a fresh host class (and a free pass) at every OS update.
 case "$(uname -s 2>/dev/null)" in
@@ -1111,13 +1166,24 @@ if [ -f "$FLOOR_FILE" ]; then
         # floor at all.
         soft "real-lifecycle ratchet: no record for $HOST_CLASS yet, so nothing was compared"
         echo "        add to $FLOOR_FILE:  $HOST_CLASS $LIFECYCLES"
-    elif [ "$LIFECYCLES" -lt "$FLOOR" ]; then
+    elif [ "$MEASURABLE" -lt "$FLOOR" ]; then
         FAILC=$((FAILC + 1))
         FAILED_NAMES="$FAILED_NAMES
     - coverage: $LIFECYCLES real lifecycle(s) on $HOST_CLASS, below the recorded $FLOOR"
         echo "  FAIL  real-lifecycle ratchet: $LIFECYCLES, and $HOST_CLASS has done $FLOOR before"
         echo "        Something stopped running. A plan-smoke satisfies the audit above, so this"
         echo "        is the only check that notices coverage collapsing rather than breaking."
+        [ "$UNMEASURED" -gt 0 ] && echo "        ($UNMEASURED excused as unmeasurable, and it was still not enough.)"
+    elif [ "$LIFECYCLES" -lt "$FLOOR" ]; then
+        # Short of the floor, and the shortfall is exactly the backends nothing could measure.
+        # Reported at full volume and never silently: a run that excuses coverage has to say so,
+        # or "silent truncation reads as covered everything when it did not".
+        soft "real-lifecycle ratchet: $LIFECYCLES of $FLOOR on $HOST_CLASS, and $UNMEASURED backend(s) could not be measured this run"
+        echo "        unmeasurable: $(tr '
+' ' ' < "$LEDGER/be-life-unmeasured.u")"
+        echo "        Each failed a real install for a reason LiNix classed as passing, and did"
+        echo "        not clear on a retry — a rate-limit window, a held lock. The floor is NOT"
+        echo "        lowered for these: the next run on a clear window measures them again."
     else
         PASS=$((PASS + 1))
         echo "  PASS  real-lifecycle ratchet: $LIFECYCLES >= $FLOOR recorded for $HOST_CLASS"
