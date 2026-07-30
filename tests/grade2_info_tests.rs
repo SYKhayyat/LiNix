@@ -193,3 +193,75 @@ fn info_agrees_with_list_about_what_is_installed() {
          consulted, and the user is told a package they have is absent.\n{out}"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// BUILDER round 6, W37 / R-4. The test above takes the FIRST row `list` prints, so which
+// backend it examines is whatever that host happens to list first. On macOS that was a
+// launchd agent and it went red; on Windows it is a package and the same defect was invisible.
+//
+// One row per backend, so the platform decides how much is covered and never which half.
+// ---------------------------------------------------------------------------------------
+
+/// Every backend `list` reports at least one row for, with the first row's name.
+fn one_row_per_backend(listing: &str) -> Vec<(String, String)> {
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for line in listing.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 2 || cols[0].starts_with('-') {
+            continue;
+        }
+        if !seen.iter().any(|(b, _)| b == cols[0]) {
+            seen.push((cols[0].to_string(), cols[1].to_string()));
+        }
+    }
+    seen
+}
+
+#[test]
+fn info_agrees_with_list_about_every_backend_not_only_the_first() {
+    let f = Fixture::new("grade2-info-every-backend");
+
+    let (listing, code) = f.run(&["list"]);
+    assert_eq!(code, 0, "`list` failed:\n{listing}");
+
+    let rows = one_row_per_backend(&listing);
+    assert!(
+        !rows.is_empty(),
+        "`linix list` reported nothing at all, so there is nothing to cross-examine `info` \
+         about:\n{listing}"
+    );
+
+    let mut denied = Vec::new();
+    for (backend, name) in &rows {
+        let qualified = format!("{backend}:{name}");
+        let (out, code) = f.run(&["info", &qualified]);
+        if code != 0 {
+            denied.push(format!(
+                "`info {qualified}` exited {code}:\n      {}",
+                out.trim()
+            ));
+            continue;
+        }
+        if out.contains("is not installed on this machine") {
+            denied.push(format!(
+                "`info {qualified}` denies a row `list` just printed under `{backend}`"
+            ));
+        }
+    }
+
+    assert!(
+        denied.is_empty(),
+        "{} of {} backend(s) contradict their own listing:\n  {}\n\n\
+         `service`, `link` and `setting` are each a grammar prefix AND a registered backend, so \
+         a string copied out of a listing parses as a typed resource statement rather than as \
+         `backend:name` — and everything downstream understood only packages. A `list` that \
+         disagrees with the machine breaks the one thing it promises.\n\nbackends examined: {}",
+        denied.len(),
+        rows.len(),
+        denied.join("\n  "),
+        rows.iter()
+            .map(|(b, _)| b.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}

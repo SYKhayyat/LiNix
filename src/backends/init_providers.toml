@@ -75,6 +75,13 @@ disable = [["sc", "config", "{name}", "start=", "disabled"]]
 start   = [["sc", "start", "{name}"]]
 stop    = [["sc", "stop", "{name}"]]
 restart = [["sc", "stop", "{name}"], ["sc", "start", "{name}"]]
-list = ["sc", "query", "type=", "service", "state=", "active"]
+# `state= active` is what sc's own documentation says and what this box rejects:
+#   sc query type= service state= active   ->  ERROR: Invalid state= field   (exit 0)
+#   sc query type= service                 ->  156 services
+# Measured on Windows 11 26200. `sc query` already answers about ACTIVE services by default,
+# so the rejected argument was asking for the behaviour it already had — and because `sc`
+# exits 0 while printing `ERROR:`, `linix list -b service` returned an empty list rather than
+# a failure, on every Windows machine, since this row was written.
+list = ["sc", "query", "type=", "service"]
 list_pattern = 'SERVICE_NAME:\s+(\S+)'
 status = ["sc", "qc", "{name}"]
