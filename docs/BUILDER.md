@@ -6,7 +6,7 @@ document, in tier order. Everything you need is here or named here.
 **Where the grade stands: C+ when this document was written, B− after round 5** — the ledger of
 how it moved is one file per round, `docs/GRADE-*.md`, newest last. **Start from the newest**:
 its §2 says which older orders are closed (do not re-open those) and its §3 is the specification
-for the newest tier at the bottom of this document. Round 6's orders are `W33`–`W42`.
+for the newest tier at the bottom of this document. Round 6's orders are `W33`–`W43`.
 
 You are working in the LiNix repo at the path given to you. Start by reading, in this order:
 
@@ -65,7 +65,7 @@ document about checks that name the wrong thing.)*
 | **W22** (refusal exit codes and the hook) | Same published contract as W17, on the security refusals. |
 | **W29** (coverage ratchet threshold) | Ruled as `Q12`; the threshold was delegated to the builder. |
 | **W31** (`--backend <typo>`) | Changes what a mistyped flag does, which scripts may depend on. |
-| **W33** (a bare keyword as a package) | **Open as `Q16`** with four options and a stated lean. It changes what a user sees and may remove the ability to declare a package by a bare name. |
+| **W33** (a bare keyword as a package) | ✅ **Ruled 2026-07-30 as `Q16`** — refuse the bare word; `list:NAME` still means the package. Build it. |
 
 Everything else in this brief is internal correctness. **Build it without asking.**
 
@@ -818,7 +818,7 @@ that was fixed at the reported instance and left live one layer over.
 
 ## Tier 1 (round 6) — a typo installs software
 
-### W33 · `R-1` / **`Q16`** — a bare grammar keyword is a package name ⚠️ **needs a ruling (0.1)**
+### W33 · `R-1` / **`Q16`** — a bare grammar keyword is a package name ✅ **ruled 2026-07-30**
 
 A module containing the single word `link` — which is what a half-typed
 `link:SRC @target=DEST` line looks like — declares a package. `linix eval` reports
@@ -831,10 +831,24 @@ resolves to a **real** backend holding a real package of that name: `when`→`ca
 valid package line, and with their punctuation the same words refuse correctly and legibly
 (`link:`, `when linux {` all exit 1 with a located error). It is an ambiguity in the language.
 
-**Do not build this without a ruling.** `Q16` is open in the register with four options
-((a) reserve, (b) warn, (c) require a backend for a colliding name, (d) leave it) and the
-grader's lean, (c). It changes what a user sees and it can remove the ability to declare a
-package by a bare name — both are §0.1 items.
+**RULED (owner, 2026-07-30): refuse the bare word, and keep every package reachable.** A line
+containing only a keyword is a parse error naming both ways to mean it:
+
+```
+modules/dev.txt:4: `link` is a keyword, not a package name
+  to link a file:                      link:/path/to/source @target=…
+  to install a package by that name:   list:link   (or pin one: cargo:link)
+```
+
+**No new syntax, and no quoting.** A bare `NAME` is already defined in II.2 as short for
+`list:NAME`, so `list:link` means precisely what the bare form used to — the escape hatch the
+owner asked for already existed. Quoting was considered and rejected: **V.10** rejected it because
+`"` needs `\"` needs `\` needs a newline rule, and nothing here disturbs that. The ruling adds
+a refusal and removes nothing.
+
+It binds the bare **word**, not the prefix — `link:` with its colon and nothing after it was
+already a legible refusal and stays exactly as it is. The rule is in **II.2**, the reason in
+**V.103**.
 
 **Test first.** Already red: `tests/grade4_keyword_is_not_a_package_tests.rs` (2 red, 1 green
 control). It reads `known_prefixes()` rather than a copied list, so a prefix added later is
@@ -1060,7 +1074,11 @@ an upper bound, not a norm.
 It is green on Windows (1542 tests, 49 targets) and red on Linux and macOS. Three targets, three
 causes, and they need three different things:
 
-- `grade2_flag_drift_blindspot_tests` — red pending **`Q14`**. Not yours to fix; get the ruling.
+- `grade2_flag_drift_blindspot_tests` — **`Q14` is ruled** (2026-07-30): helm 3 does not verify
+  plugins at all, so `@unverified` there is accepted in silence and no flag is built. The test
+  asserts the one-directional version and is red for a reason that was never drift. **Replace it**
+  with the two-directional assertion — a flag where the tool verifies, none and no warning where it
+  does not — which can go red on either helm version. Do not skip it.
 - `grade3_resource_idempotency_tests` — **already repaired** by the grader, in the commit before
   this document. Green on both platforms now.
 - `grade2_info_tests` — W37, a real defect.
@@ -1068,6 +1086,38 @@ causes, and they need three different things:
 Not because green is the goal — this whole document's premise is that green is a floor — but
 because a suite red for three unrelated reasons teaches everyone to stop reading it, and one of
 those reasons is a live defect currently indistinguishable from the two that are not.
+
+### W43 · **`Q15`** — `bundle` and `export` honour `--dry-run`; `plan` does not ✅ **ruled 2026-07-30**
+
+`linix --dry-run bundle --out X` writes all nine files and prints *"Bundle written to X"* with no
+marker — a preview that manufactured the artifact it was asked to describe, and said so in the past
+tense. `--dry-run plan` writes `linix-plan.json`, the same as `plan`.
+
+**RULED (owner, 2026-07-30): split them, and `export` goes with `bundle`.** The line is not *did
+the user name the path* — they name it for `bundle` too — but **is the file the preview or the
+result**:
+
+- **`bundle` and `export` honour the flag.** They print what they would write and to where, with
+  the `[DRY-RUN]` marker, and write nothing. Their product outlives the run and can be carried to
+  another machine; one made by a preview is indistinguishable from one made deliberately.
+- **`plan` is exempt, and it is the whole exemption.** Its file *is* the preview. A `--dry-run plan`
+  that wrote nothing would be a command with no output.
+
+**`export` was never measured** — the grader's fixture had no package to export, so neither run
+wrote anything and there was no control. It is ruled with `bundle` on the reasoning, not on a
+measurement. **Measure it before you build it**, and if it turns out to behave differently from
+`bundle` say so rather than assuming this order was right.
+
+**Test first.** Extend `tests/dry_run_every_verb_tests.rs` rather than adding a file: `bundle` and
+`export` become driven cases instead of exemptions, and `plan`'s exemption changes from *"writes to
+a path the user names"* — which was the unruled guess — to the ruled reason, that its file is the
+preview. Note the existing rule in that file: an exemption says what the fixture cannot supply,
+never what the instrument cannot see.
+
+**Siblings.** Every verb currently exempted there for writing to a user-named path. `sbom` takes no
+output flag and prints to stdout, so it is not in this family — confirm that rather than assume it.
+
+The rule is in **II.8b**; the reason is in **V.105**.
 
 ---
 
@@ -1080,8 +1130,11 @@ refactor any of it while fixing W36**, which is entirely about what `heal` print
 
 Still untouched and still the two items that would move the grade most: **W18**'s
 supported/experimental split, and real lifecycles for the 24 of 56 backends that have never had
-one. `Q15` (does a command whose product is a file honour `--dry-run`) remains open with data in
-the register and no ruling.
+one.
+
+**The register is at zero open.** `Q14`, `Q15` and `Q16` were all ruled on 2026-07-30 and are
+built into W33, W35/W42 and W43 above — so nothing in this document is waiting on the owner, and
+three of the ⚠️ rows in §0.1 that predate round 6 still are.
 
 ---
 

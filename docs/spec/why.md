@@ -1949,3 +1949,58 @@ prompts, takes the empty answer from a closed stdin, exits 0, and leaves the arc
 LiNix reported removals that never happened, which is E7's shape in a manager nobody had looked
 at. A prerequisite that hides two other bugs is the ordinary case, not a surprise: nothing
 downstream of a manager that cannot install anything is ever exercised.
+
+**V.103 — Why a bare keyword is a parse error, and why nothing was quoted to fix it.** *(Owner
+ruling, 2026-07-30 — Q16.)* Thirteen of the fourteen words that introduce a statement are also
+real package names in real indexes: `cargo:link`, `cargo:when`, `pip:absent`, `scoop:shim`,
+`gem:if`, `npm:else`. A package name is one bare word (II.2), so `link` on its own was a valid
+package line — and the most likely typo in the whole format, a resource prefix typed without its
+colon, therefore declared a package, resolved it against a live index, and got `linix check` to
+recommend the `sync` that installs it. Every preview in the program agreed, because the model
+genuinely contained it; **no gate downstream of the parser can catch a model that is wrong in a
+well-formed way.** A typo that stops costs a user ten seconds. A typo that installs software
+costs them a machine they no longer recognise, and the count guard never fires because it is one
+package.
+
+The owner asked for a way to still mean the package, and the answer was that the language
+already had one: a bare `NAME` is *defined* as short for `list:NAME`, so `list:link` says
+precisely what the bare form used to and needs no new grammar. **Quoting was considered and
+rejected, because V.10 already rejected it for the reason that still holds** — `"` needs `\"`
+needs `\` needs a newline rule, and a language that has to explain its escaping is not the
+language this one is trying to be. The ruling adds a refusal and removes nothing.
+
+**V.104 — Why `@unverified` is silent on a tool that does not verify.** *(Owner ruling,
+2026-07-30 — Q14.)* helm 3.21.3 does not verify plugins at all: `helm plugin install --help`
+documents `--help` and `--version` and nothing else — no `--verify`, no `--keyring`, no
+provenance. It verifies *charts*; helm 4 added plugin verification, which is where
+`--verify=false` came from. So on helm 3 the state `@unverified` asks for is the state the
+machine is already in.
+
+That distinction is the whole entry. **"Accepted and does nothing" is a defect; "accepted and
+already true" is a correct no-op**, and reading the second as the first would have refused a
+correct line and removed the only way to install a helm plugin on helm 3 — the capability Q5's
+ruling existed to create. The register had this filed under the wrong diagnosis for a week
+because nobody had run `helm plugin install --help` on a helm 3.
+
+It is silent rather than warned for the reason every other rule here is: a warning on a run that
+did the right thing teaches people that warnings are noise, and the next one that matters is
+read the same way. And it is what makes the capability table testable — the assertion is
+two-directional, *a flag where the tool verifies and none where it does not*, which can go red on
+either version. The gate it replaces could only be written on a helm 4 host, and was red on helm
+3 for a reason that was never drift.
+
+**V.105 — Why a preview does not write the file it was told to write, except `plan`.** *(Owner
+ruling, 2026-07-30 — Q15.)* The tempting line is "the user named the path, so nothing was
+surprised" — and it is wrong for `bundle`, because the artifact outlives the run. A restore
+bundle exists to be carried to another machine and unpacked there; one produced by a preview is
+indistinguishable from one produced deliberately, and the next person to find it has no way to
+know it was a rehearsal. `--dry-run bundle` printed *"Bundle written to X"* over nine real files,
+which is the same past-tense-about-a-write-that-did-not-happen defect as B-1 with the sign
+flipped: it happened, and said so, under a flag that promises it did not.
+
+`plan` is exempt because **its file is the preview, not the result.** `--dry-run plan` that wrote
+nothing would be a command with no output — the flag would turn the command off rather than make
+it safe. The line the rule draws is therefore not "did the user name the destination" but
+"**is the file the description or the thing described**", and that reading is why `export` lands
+with `bundle`: a Brewfile is something you hand to brew, not something you read to find out what
+LiNix would do.

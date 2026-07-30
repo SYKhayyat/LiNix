@@ -121,6 +121,32 @@ else** if it does not (U3) — LiNix does not invent an inverse for a script tha
 `use` takes **a name. Never a path, never a URL.** A file from the internet is a fetch step
 that puts a module on disk; then you `use` it by name like everything else.
 
+### A bare word that is a keyword is not a package (Q16, ruled 2026-07-30)
+
+`link`, `service`, `setting`, `shim`, `schedule`, `repo`, `absent`, `when`, `if`, `else`, `end`,
+`import` and `include`, written alone on a line, are **a parse error** naming the two ways to
+mean them:
+
+```
+modules/dev.txt:4: `link` is a keyword, not a package name
+  to link a file:            link:/path/to/source @target=…
+  to install a package by that name:   list:link   (or pin one: cargo:link)
+```
+
+Every one of those words is a real package in a real index — `cargo:link`, `pip:absent`,
+`scoop:shim`, `gem:if`, `npm:else` — so before this ruling a half-typed `link:` line declared a
+package, resolved it, and `linix check` recommended the `sync` that would install it. A typo
+that installs software is worse than a typo that stops.
+
+**The escape hatch already existed and needed no new syntax.** A bare `NAME` is defined above as
+short for `list:NAME`; writing `list:link` says *"a package called `link`, resolved through
+`priority`"* and means exactly what the bare form used to. **No quoting is introduced** — V.10
+rejected quotes because `"` needs `\"` needs `\\` needs a newline rule, and that reasoning is
+untouched by this.
+
+The rule binds the *word*, not the prefix: `link:` with its colon and nothing after it was
+already a legible refusal and stays one.
+
 ### Options — two forms
 
 **Short form.** `@key=value,key2=value2`.
@@ -208,9 +234,35 @@ take the else branch — the silent-wrongness this rule closes.
 | `channel` | one version stream. Backends that publish channels only |
 | `sha256` | checksum the resolved artifact must match. Not with `@asset=all` — one hash cannot verify several files |
 | `allow_http` | bare flag: this URL may be `http://`. Downloading backends only (SEC2) |
-| `unverified` | bare flag: nothing vouches for the bytes on this line. Legal wherever something otherwise would — LiNix's own `@sha256` on a downloading backend, and a manager that verifies a signature itself (`helm`). Refused where the manager's signed index answers anyway. **Never implied by `allow_http`** — over HTTP the checksum is the only thing left (SEC2) |
+| `unverified` | bare flag: nothing vouches for the bytes on this line. Legal wherever something otherwise would — LiNix's own `@sha256` on a downloading backend, and a manager that verifies a signature itself (`helm`). Refused where the manager's signed index answers anyway. **Never implied by `allow_http`** — over HTTP the checksum is the only thing left (SEC2). **On a tool that does not verify at all, it is accepted in silence (Q14)** — see below |
 | `health` | `port:N`, or a command that must exit 0. A failure **restores the pre-change snapshot** (XIII.5) |
 | `url` | where a `helm:` plugin is installed from. **Required on every `helm:` line** (U39) |
+
+#### `@unverified` on a tool that does not verify (Q16's sibling — Q14, ruled 2026-07-30)
+
+`@unverified` means *"I accept a source nothing vouches for."* On a manager that verifies, LiNix
+emits that manager's opt-out flag. **On a manager that does not verify at all, the state the
+line asks for is already the state the machine is in, so the line is accepted, no flag is built,
+and nothing is said.**
+
+Measured, and it is the ordinary case rather than the exotic one: helm 3.21.3's
+`helm plugin install --help` documents exactly two flags, `--help` and `--version`. There is no
+`--verify`, no `--keyring`, no provenance — helm 3 verifies *charts* (`helm install --verify`
+exists) and does not verify *plugins*. Helm 4 added plugin verification, which is where
+`--verify=false` comes from.
+
+So the earlier reading — *"accepted, and does nothing"*, the class this register keeps closing —
+was the wrong diagnosis. It is **accepted, and already true**, and refusing the line would
+reject correct configuration and take away the only way to install a helm plugin on helm 3.
+
+**What this must not become is a warning.** Withholding a flag the tool never had is not an
+event; a `warn!` there teaches people that a working run has a problem in it.
+
+**And it is what makes the drift gate possible rather than impossible.** The capability table is
+asserted against what the installed tool *does*, in both directions: where the tool verifies,
+`@unverified` must put a flag in the argv; where it does not, the argv must carry none and the
+run must be quiet. A gate written as "the flag is always present" is red on helm 3 for a reason
+that is not drift, which is exactly what it was blind to.
 
 ### A name is what the manager will still answer to (U39)
 
@@ -1125,6 +1177,24 @@ is the managed set: the file that decides whether the next `sync` removes a pack
 that shape is not a reason, it is the finding, and it is why the gate named "every verb" could
 not see B-1. `hold`, `unhold`, `heal` and `adopt` are driven; a host that cannot supply the work
 (`adopt` with nothing unmanaged) is **skipped by name and counted**, never quietly passed.
+
+### A command whose product is a file (Q15, ruled 2026-07-30)
+
+**A file the user named as the command's destination is still a file the run would have
+written, so `--dry-run` writes none of it.** `bundle` and `export` produce an artifact — a
+restore set, a Brewfile — that outlives the run and can be carried to another machine. A
+preview that manufactures one has produced the thing it was asked to describe.
+
+**`plan` is the exception, and it is the whole exception.** Its product *is* the preview:
+`--dry-run plan` that wrote nothing would be a command with no output. The distinction is not
+"did the user name the path" — they name it for `bundle` too — but **whether the file is the
+preview or the result**.
+
+So: `--dry-run bundle` and `--dry-run export` print what they would write, to where, and write
+nothing; `--dry-run plan` writes `linix-plan.json` exactly as `plan` does. A preview that
+declines to write says so with the `[DRY-RUN]` marker every other verb uses, and never in the
+past tense — `bundle` printed *"Bundle written to X"* about nine files it had genuinely written
+under the flag, which is how this was found.
 
 ## II.9 Adopt
 

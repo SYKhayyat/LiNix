@@ -1,4 +1,4 @@
-# The decision register — all 125, and three of them open
+# The decision register — all 125, and none of them open
 
 **One file, six features. None open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -16,9 +16,9 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **3** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **120** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **123** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Four of these five statuses now describe nothing, and they stay.** The categories are not
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Three are open.** All 125 are accounted for: **120 ANSWERED, 2 PARKED, 3 OPEN** — and this line
+**None are open.** All 125 are accounted for: **123 ANSWERED, 2 PARKED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -246,9 +246,9 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q11** | What should `opam:` do on a machine with no opam switch? — RULED. | 2026-07-29 |
 | **Q12** | Should the sweep fail when its real coverage collapses, and against what? — RULED: **a ratchet**, threshold to the builder. | 2026-07-28 |
 | **Q13** | Should `asdf:` add the plugin a declared tool needs? — RULED: **yes**, off the argv. | 2026-07-29 |
-| **Q14** | What should `@unverified` do on a tool version with no flag to turn verification off? | **OPEN** |
-| **Q15** | Should a command whose product is a file at a path the user named honour `--dry-run`? | **OPEN** |
-| **Q16** | Is a bare grammar keyword (`link`, `when`, `absent`) a package name? | **OPEN** |
+| **Q14** | What should `@unverified` do on a tool version with no flag to turn verification off? — RULED: **accept in silence**; the tool does not verify at all. | 2026-07-30 |
+| **Q15** | Should a command whose product is a file at a path the user named honour `--dry-run`? — RULED: **yes, except `plan`**. | 2026-07-30 |
+| **Q16** | Is a bare grammar keyword (`link`, `when`, `absent`) a package name? — RULED: **no, it is a parse error**; `list:NAME` still means the package. | 2026-07-30 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -3597,7 +3597,7 @@ The rule is in **II.7**; the reason is in **V.102**.
 
 ## Q14
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-30.**
 
 **Q14 — What should `@unverified` do on a tool version that has no flag to turn verification
 off?** Q5 ruled that `@unverified` reaches a manager that verifies signatures itself, and named
@@ -3631,11 +3631,36 @@ Not decided in code. The builder's lean is **(b)** — "accepted and does nothin
 defect this register keeps closing — while noting that (b) is the option that takes a capability
 away from a user on the older tool, which is why the choice is the owner's and not the builder's.
 
+**RULED (owner, 2026-07-30): none of the three — the question rested on a wrong fact, and it was
+measured before it was asked again.** helm 3.21.3's `helm plugin install --help` documents exactly
+two flags, `--help` and `--version`. There is no `--verify`, no `--keyring` and no provenance:
+**helm 3 does not verify plugins at all.** It verifies *charts* — `helm install --verify` and
+`--keyring` are both there — and helm 4 added plugin verification, which is where `--verify=false`
+comes from.
+
+So on helm 3 the state `@unverified` asks for is the state the machine is already in. **The line
+is accepted, no flag is built, and nothing is said** — not "accepted and does nothing", which is
+the defect class this register keeps closing, but *accepted and already true*, which is a correct
+no-op. Option (b) would have refused a correct declaration and removed the only way to install a
+helm plugin on helm 3 — the capability Q5's ruling existed to create.
+
+**The `warn!` goes.** Withholding a flag the tool never had is not an event, and a warning on a
+run that did the right thing is how people learn to stop reading warnings.
+
+**And the drift gate becomes writable rather than impossible.** It asserts the capability table
+against what the installed tool does, in *both* directions: a flag in the argv where the tool
+verifies, and no flag and no warning where it does not. That can go red on either version.
+`tests/grade2_flag_drift_blindspot_tests.rs` asserts the one-directional version and is red on
+helm 3 for a reason that was never drift; it is **replaced, not skipped**.
+
+The rule is in **II.2** — the `@unverified` row and the subsection below the option table; the
+reason is in **V.104**.
+
 ---
 
 ## Q15
 
-**Status: OPEN.**
+**Status: ANSWERED — ruled 2026-07-30.**
 
 **Q15 — Should a command whose whole output is a file it was told to write honour `--dry-run`?**
 Measured 2026-07-30, on a fresh config, after the round-4 work made `--dry-run` a property of the
@@ -3669,11 +3694,34 @@ user sees, and the reason `bundle` feels different from `plan` is a judgement ab
 commands are for, which is the owner's to make. What was fixed instead is the half that is not a
 judgement — the two verbs that *said* they had written when they had not (`lock`, `heal`).
 
+**RULED (owner, 2026-07-30): (c), the split — and `export` goes with `bundle`.** The line is not
+*"did the user name the path"* — they name it for `bundle` too — but **is the file the preview or
+the result**.
+
+- `bundle` and `export` produce an artifact that outlives the run and can be carried elsewhere. A
+  restore bundle made by a preview is indistinguishable from one made deliberately, and the next
+  person to find it cannot tell it was a rehearsal. Both honour the flag: they print what they
+  would write, to where, and write nothing.
+- `plan`'s file **is** its preview. `--dry-run plan` that wrote nothing would be a command with no
+  output — the flag would turn the command off rather than make it safe. It is exempt, and the
+  exemption is a rule with a reason rather than a line in a test's exemption list.
+
+`export` was **not measured either way** by the grader — its fixture had no package to export, so
+neither run wrote anything and there was no control. It is ruled with `bundle` on the reasoning
+above rather than on a measurement, and that is recorded here so the builder measures it rather
+than assuming this entry did.
+
+Whatever a preview declines to write, it says so with the `[DRY-RUN]` marker every other verb
+uses and never in the past tense — `bundle` printed *"Bundle written to X"* over nine files it
+had really written under the flag, which is B-1's defect with the sign flipped.
+
+The rule is in **II.8b**; the reason is in **V.105**.
+
 ---
 
 ## Q16
 
-**Status: OPEN.** Raised by the round-5 grader, 2026-07-30, measured rather than argued.
+**Status: ANSWERED — ruled 2026-07-30.** Raised by the round-5 grader, measured rather than argued.
 
 **Q16 — Is a bare grammar keyword a package name?** A package name is one bare word (II.2), so a
 line containing only `link` is a grammatically valid package declaration — and that is what LiNix
@@ -3728,5 +3776,26 @@ remove the ability to declare a package by a bare name, and both are the owner's
 
 Red tests are committed and failing: `tests/grade4_keyword_is_not_a_package_tests.rs`, driven off
 `known_prefixes()` so a prefix added later is covered without anyone remembering.
+
+**RULED (owner, 2026-07-30): (c) — refuse the bare word, and keep every package reachable.** A
+line containing only a keyword is a parse error that names both ways to mean it:
+
+```
+modules/dev.txt:4: `link` is a keyword, not a package name
+  to link a file:                      link:/path/to/source @target=…
+  to install a package by that name:   list:link   (or pin one: cargo:link)
+```
+
+**The owner asked for a way to still say "make it be a package", and the language already had
+one.** A bare `NAME` is defined in II.2 as short for `list:NAME`, so `list:link` means precisely
+what the bare form used to. **No quoting is introduced.** Quoting was the obvious shape for an
+escape hatch and it is the wrong one here: **V.10** already rejected quotes because `"` needs
+`\"` needs `\` needs a newline rule, and nothing about this question disturbs that reasoning.
+The ruling adds a refusal and takes nothing away.
+
+It binds the bare **word**, not the prefix — `link:` with its colon and nothing after it was
+already a legible refusal and stays exactly as it is.
+
+The rule is in **II.2**; the reason is in **V.103**.
 
 ---
