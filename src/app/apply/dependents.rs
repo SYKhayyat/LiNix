@@ -26,15 +26,27 @@ impl Dependents<'_> {
     /// plan to finish. Applied in declaration order, so a user who writes the config `link:`
     /// above the `service:` that reads it gets that order honoured.
     ///
-    /// Idempotent, like the repo phase: re-deploying an existing shim, re-enabling a running
-    /// service, or re-writing an unchanged link are all no-ops, which is what lets these
-    /// lines live in a file that syncs on every run. This is the forward (declared →
-    /// applied) direction only; reconciling away a *removed* dependent line is drift the
-    /// package planner does not yet track for extras.
+    /// Idempotent, and **asked rather than assumed**: this doc line used to claim that
+    /// re-writing an unchanged link was a no-op, and on Windows — where the deploy falls back
+    /// to a copy — it was not. Every sync re-copied all three links in the fixture and the
+    /// second run left `.linix-backup` files beside them, backups of the copies LiNix itself
+    /// had made, under a summary reading `already up to date`. `check` and `plan` reported
+    /// the same machine as converged, because they asked the probe this loop did not.
+    ///
+    /// So the probe decides here too: a resource it reports in effect is skipped, one it
+    /// cannot verify is placed. This is the forward (declared → applied) direction only;
+    /// undoing a *removed* line is `Extras::reconcile`'s half.
     pub async fn apply(&self, state: &crate::model::DesiredState) -> Result<()> {
         use crate::config::grammar::Statement;
 
         for (stmt, origin) in state.dependents() {
+            if let Some(key) = crate::core::extras_lock::extra_key(stmt) {
+                if crate::app::apply::extras::in_effect(self.config, stmt, &key).await == Some(true)
+                {
+                    tracing::debug!("`{}` is already in effect — nothing to do", key);
+                    continue;
+                }
+            }
             match stmt {
                 Statement::Shim(name, opts) => {
                     // U19: a shim lands in `~/.local/bin`, which is this account's PATH and

@@ -1035,6 +1035,13 @@ every command that answers "does the machine match your files?" has to read them
   read the same value. Five code paths each answering separately is how `check` came to report a
   match over a declared file that was not on disk while `--dry-run sync` named three teardowns on
   the same tree.
+- **Including the loop that does the work** (round 4, 2026-07-30). Reporting from the shared
+  value and *acting* from something else is the same defect with a longer fuse: the placement
+  loop asked nothing, so `sync` re-placed all three links on every run and the second run left
+  `<target>.linix-backup` files in the user's directory — backups of the copies LiNix had made
+  itself — while `check` called the machine converged and `plan` reported nothing to place. The
+  probe decides in both places now, and it compares a `link:` by **content**, because the
+  destination merely existing is what the ledger already knew.
 - **Two questions, two sources.** *Has this ever been applied?* is the extras ledger's, and the
   answer is the same for all six kinds. *Is it still in effect?* is the machine's — a resource
   LiNix placed and a user deleted is drift no record can see.

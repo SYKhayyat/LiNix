@@ -462,6 +462,23 @@ impl Installable for LinkInstallable {
                     }
                 }
 
+                // A copy LiNix made is as much "already in effect" as a symlink it made.
+                // Windows cannot symlink across drives, so the deploy below falls back to
+                // copying — and asking only `read_link` meant every later sync backed up its
+                // own copy as `<target>.linix-backup` and wrote the file again, under a
+                // summary reading `already up to date`.
+                if exists && !is_symlink {
+                    if let (Ok(from), Ok(to)) = (
+                        tokio::fs::read(&source).await,
+                        tokio::fs::read(&target_path).await,
+                    ) {
+                        if from == to {
+                            debug!("Link: {:?} already matches {:?}", target_path, source);
+                            continue;
+                        }
+                    }
+                }
+
                 // Preserve a pre-existing real file before replacing it with our symlink.
                 if backup {
                     self.core.backup_once(&target_path).await?;

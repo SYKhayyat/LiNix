@@ -77,39 +77,28 @@ impl Extras<'_> {
             undo: ledger.drift(&declared),
             ..Default::default()
         };
-        for key in &declared {
-            if !ledger.applied().contains(key) {
+        // By key, so a line declared twice is one entry and the order is the file's — the same
+        // set `declared_extras` builds, carrying the statement each key came from because the
+        // probe needs the source a `link:` was written from.
+        let by_key: std::collections::BTreeMap<String, &crate::config::grammar::Statement> = state
+            .extras
+            .iter()
+            .filter_map(|(s, _)| crate::core::extras_lock::extra_key(s).map(|k| (k, s)))
+            .collect();
+        for (key, stmt) in by_key {
+            if !ledger.applied().contains(&key) {
                 // Never applied. `sync` will place it, whatever the machine looks like — so
                 // this needs no probe and is the same answer for all six kinds.
-                changes.place.push(key.clone());
+                changes.place.push(key);
                 continue;
             }
-            match self.in_effect(key).await {
+            match in_effect(self.config, stmt, &key).await {
                 Some(true) => {}
-                Some(false) => changes.place.push(key.clone()),
-                None => changes.unverifiable.push(key.clone()),
+                Some(false) => changes.place.push(key),
+                None => changes.unverifiable.push(key),
             }
         }
         Ok(changes)
-    }
-
-    /// Whether a resource recorded as applied is still in effect on this machine.
-    ///
-    /// `None` means LiNix cannot ask — not that the answer is yes. A `setting:` reads back
-    /// through an adapter that does not report a current value, and a `service:` state costs a
-    /// process launch per line; those are named in `unverifiable` instead of being guessed,
-    /// because the whole finding here is a command that answered "the machine matches" about
-    /// something it never looked at.
-    async fn in_effect(&self, key: &str) -> Option<bool> {
-        use crate::core::extras_lock::split_key;
-        let (kind, id) = split_key(key)?;
-        match kind {
-            // The ledger keys a link by its resolved destination — exactly so the teardown can
-            // find what was written — which makes the probe a file test on the key itself.
-            "link" => Some(std::path::Path::new(id).exists()),
-            "shim" => Some(self.shim_manager().await.ok()?.is_in_effect(id).await),
-            _ => None,
-        }
     }
 
     /// Undo the extras that were applied but are no longer declared (S20). Extras had no
@@ -251,6 +240,75 @@ impl Extras<'_> {
 }
 
 /// Every declared extra key: the dependents (repo/shim/service/link/setting) and the schedules.
+/// Whether a declared resource is already in effect on this machine.
+///
+/// **The one probe.** `check` and `plan` ask it to report, and the loop that places resources
+/// asks it before doing the work — because when only the reporting half asked, `check` said
+/// *the machine matches your files* and `plan` said *0 resource(s) to place* while `sync`
+/// re-copied all three under a summary reading `already up to date`, and the second run backed
+/// up the copies LiNix had made itself.
+///
+/// `None` means LiNix cannot ask — **not** that the answer is yes. A `setting:` reads back
+/// through an adapter that does not report a current value, a `service:` state costs a process
+/// launch per line, and a `@decrypt`ed secret's plaintext cannot be compared with its ciphertext
+/// without running the tool. Those are named `unverifiable` and placed rather than guessed,
+/// which keeps today's behaviour for the kinds nothing can verify.
+///
+/// A `link:` is compared by content, not by existence: the destination existing is what the
+/// ledger already knew, and a user who edits the deployed file has drift the file test cannot
+/// see. On Windows the deploy falls back to a copy, so "is it a symlink to the source" is not
+/// the whole question either.
+pub(crate) async fn in_effect(
+    config: &std::sync::Arc<crate::config::Config>,
+    stmt: &crate::config::grammar::Statement,
+    key: &str,
+) -> Option<bool> {
+    use crate::config::grammar::Statement;
+    use crate::core::extras_lock::split_key;
+
+    let (kind, id) = split_key(key)?;
+    match kind {
+        // The ledger keys a link by its resolved destination — exactly so the teardown can
+        // find what was written — so the destination is the key and the source is the
+        // declaration's own name.
+        "link" => {
+            let dest = std::path::Path::new(id);
+            if !dest.exists() && !dest.is_symlink() {
+                return Some(false);
+            }
+            let Statement::Link(source, opts) = stmt else {
+                return None;
+            };
+            let want: Vec<u8> = match (
+                opts.one("content"),
+                opts.one("decrypt"),
+                opts.one("template"),
+            ) {
+                // Declared inline: the bytes are in the line, and that is what gets written.
+                (Some(content), None, None) => content.as_bytes().to_vec(),
+                // A rendered template or a decrypted secret is not its source, and comparing
+                // them would need the transform run; both are `unverifiable`, which places.
+                (_, None, None) => std::fs::read(source).ok()?,
+                _ => return None,
+            };
+            if let Ok(link) = std::fs::read_link(dest) {
+                if link == std::path::Path::new(source) {
+                    return Some(true);
+                }
+            }
+            Some(std::fs::read(dest).ok()? == want)
+        }
+        "shim" => Some(
+            crate::app::ShimManager::with_bin_dir(config.bin_dir.clone())
+                .await
+                .ok()?
+                .is_in_effect(id)
+                .await,
+        ),
+        _ => None,
+    }
+}
+
 fn declared_extras(state: &crate::model::DesiredState) -> std::collections::BTreeSet<String> {
     state
         .extras
