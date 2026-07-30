@@ -1,0 +1,13 @@
+[
+  {
+    "path": "C:\\Users\\Administrator\\scoop\\apps\\pnpm\\current\\global\\v11",
+    "private": true,
+    "dependencies": {
+      "cowsay": {
+        "from": "cowsay",
+        "version": "1.6.0",
+        "path": "C:\\Users\\Administrator\\scoop\\persist\\pnpm\\global\\v11\\212c-19faba54dd1-659bb1852fcf1992\\node_modules\\cowsay"
+      }
+    }
+  }
+]

@@ -17,3 +17,11 @@ Dockerfile* text eol=lf
 # was already covered by `*.sh`; this one was the exception, on a repo whose Windows clones get
 # core.autocrlf=true.
 scripts/lifecycle-floor.txt text eol=lf
+
+# A parser fixture's line endings ARE the content under test. These files are captured from a
+# real manager's stdout and compared byte for byte by the parser that reads that manager; letting
+# a Windows clone rewrite them to CRLF changes the input and can only change the answer — a
+# `\r` on the end of every version string, or a row the parser stops recognising. The reasoning
+# is `scripts/lifecycle-floor.txt`'s, one directory over, and the file that made it apply here
+# was committed with `warning: LF will be replaced by CRLF the next time Git touches it`.
+tests/fixtures/** text eol=lf

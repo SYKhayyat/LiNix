@@ -1,0 +1,6 @@
+hexyl v0.17.0:
+    hexyl.exe
+ripgrep v15.2.0:
+    rg.exe
+wasm-pack v0.15.0:
+    wasm-pack.exe

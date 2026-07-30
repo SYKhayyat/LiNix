@@ -81,10 +81,15 @@ fn parse_pipx_json(output: &str) -> Vec<Package> {
     let mut res = vec![];
     if let Some(venvs) = json.get("venvs").and_then(|v| v.as_object()) {
         for (name, data) in venvs {
+            // `package_version`, which is what pipx calls it. Reading `version` — a key that
+            // schema does not have — gave every pipx package the version `unknown`, on every
+            // machine, silently: `list` printed it, and `lock` skips a version reading
+            // `unknown`, so `linix lock` pinned no pipx package and said nothing. Caught by the
+            // first fixture captured from the tool itself.
             let ver = data
                 .get("metadata")
                 .and_then(|m| m.get("main_package"))
-                .and_then(|p| p.get("version"))
+                .and_then(|p| p.get("package_version"))
                 .and_then(|v| v.as_str());
             res.push(Package::with_version(
                 name,
@@ -118,10 +123,16 @@ fn parse_cargo_list(output: &str) -> Vec<Package> {
 }
 
 /// Parses the ASCII tree output of `yarn global list`.
+///
+/// Top-level rows only, for the reason [`crate::parsers::ecosystem::pixi_list`] gives: in every
+/// one of these trees an indented row is a child of the row above — a dependency, or a property
+/// of the entry — and a parser that trims the indentation away before reading reports it as
+/// something the user installed.
 fn parse_yarn_list(output: &str) -> Vec<Package> {
     output
         .lines()
         .filter(|l| l.contains('@') && !l.contains("info"))
+        .filter(|l| !l.starts_with(char::is_whitespace))
         .filter_map(|l| {
             let cleaned = l
                 .trim()
@@ -139,10 +150,15 @@ fn parse_yarn_list(output: &str) -> Vec<Package> {
 /// followed by "├── name@version" / "└── name@version" rows. Scoped packages keep
 /// their leading '@' in the name (e.g. "@scope/pkg@1.2.3" -> name "@scope/pkg").
 /// The header has no '@', so it is filtered out.
+///
+/// A row indented past the first column is a dependency of the one above it — `bun pm ls -g
+/// --all` prints four levels — and it is not globally installed. One flag away from forty
+/// invented packages, which is `pixi global list`'s `exposes:` row in another tool.
 fn parse_bun_list(output: &str) -> Vec<Package> {
     output
         .lines()
         .filter(|l| l.contains('@'))
+        .filter(|l| !l.starts_with(char::is_whitespace) && !l.starts_with('│'))
         .filter_map(|l| {
             let cleaned = l
                 .trim()
@@ -273,6 +289,38 @@ mod tests {
         assert_eq!(r2[0].name, "cowsay");
         assert_eq!(r2[0].version.as_deref(), Some("1.6.0"));
         assert_eq!(r2[0].backend, "pnpm");
+    }
+
+    /// The tool's own output, captured from `bun pm ls -g` and `bun pm ls -g --all` on the
+    /// machine this was written on. The second is the one with teeth: bun nests four levels
+    /// deep, and a parser that trims the tree glyphs off before reading reports every
+    /// dependency as a package someone installed.
+    #[test]
+    fn bun_reads_its_own_output_and_no_nested_row() {
+        const FLAT: &str = include_str!("../../tests/fixtures/bun/ls-global.txt");
+        const NESTED: &str = include_str!("../../tests/fixtures/bun/ls-global-all.txt");
+
+        let flat = parse_bun_list(FLAT);
+        assert_eq!(
+            flat.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            vec!["cowsay"],
+            "the header path line is not a package"
+        );
+
+        let nested = parse_bun_list(NESTED);
+        let found = |n: &str, v: &str| {
+            nested
+                .iter()
+                .any(|p| p.name == n && p.version.as_deref() == Some(v))
+        };
+        // `is-fullwidth-code-point` appears twice in that fixture: 2.0.0 hoisted to the top
+        // level, 3.0.0 only as a child of `string-width`. Exactly one of them is installed.
+        assert!(found("is-fullwidth-code-point", "2.0.0"), "{nested:?}");
+        assert!(
+            !found("is-fullwidth-code-point", "3.0.0"),
+            "a row nested under `string-width@4.2.3` was reported as a global install"
+        );
+        assert!(!found("ansi-regex", "5.0.1"), "nested under `strip-ansi`");
     }
 
     #[test]

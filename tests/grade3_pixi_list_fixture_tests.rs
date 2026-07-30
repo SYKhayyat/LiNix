@@ -46,7 +46,8 @@ fn pixi_list_reads_one_tool_as_one_package() {
 /// four cases GRADER §3.3 names — empty, single, not-found, error — are where junk rows come from.
 #[test]
 fn pixi_list_with_nothing_installed_is_empty() {
-    let empty = "Global environments as specified in 'C:\\Users\\u\\.pixi\\manifests\\pixi-global.toml'\n";
+    let empty =
+        "Global environments as specified in 'C:\\Users\\u\\.pixi\\manifests\\pixi-global.toml'\n";
     let pkgs = pixi_list(empty, "pixi");
     let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
     assert!(

@@ -303,11 +303,27 @@ pub fn emerge_search(output: &str, backend: &str) -> Vec<Package> {
 }
 
 /// pixi `global list`: tree rows like `├── python: 3.11.0` (older `- python 3.11.0`).
+///
+/// **Only the top level is a package.** pixi prints each environment's properties as indented
+/// children of its row:
+///
+/// ```text
+/// └── ripgrep: 15.2.0
+///     └─ exposes: rg
+/// ```
+///
+/// and `exposes` is the word for *this environment puts these binaries on PATH*, not a second
+/// tool. Reported as one, it became a package `list` printed and `check` counted, with `rg` as
+/// its version. The depth is the tool's own structure, so this reads that rather than
+/// blocklisting the property names pixi happens to print today.
 pub fn pixi_list(output: &str, backend: &str) -> Vec<Package> {
     let clean = sanitize(output);
     clean
         .lines()
         .filter_map(|l| {
+            if l.starts_with(char::is_whitespace) {
+                return None;
+            }
             let t = l
                 .trim()
                 .trim_start_matches(|c: char| {
@@ -482,6 +498,22 @@ mod tests {
         assert_eq!(pkgs.len(), 2);
         assert_eq!(pkgs[0].name, "app-editors/vim");
         assert_eq!(pkgs[1].name, "app-editors/gvim");
+    }
+
+    /// The tool's own output, not a hand-written imitation of it: the invented fixture had two
+    /// rows, no nested child and a banner in a wording pixi no longer uses, so it passed while
+    /// the parser reported `exposes` as an installed package (GRADER §3.3).
+    #[test]
+    fn pixi_list_reads_the_tools_own_output() {
+        const LIST: &str = include_str!("../../tests/fixtures/pixi/list-one-tool.txt");
+        let pkgs = pixi_list(LIST, "pixi");
+        let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["ripgrep"],
+            "an `exposes:` child is not a package"
+        );
+        assert_eq!(pkgs[0].version.as_deref(), Some("15.2.0"));
     }
 
     #[test]

@@ -1,0 +1,9 @@
+{
+  "name": "bin",
+  "dependencies": {
+    "cowsay": {
+      "version": "1.6.0",
+      "overridden": false
+    }
+  }
+}

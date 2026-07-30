@@ -1,0 +1,2 @@
+C:\Users\Administrator\scoop\persist\bun\install\global node_modules (41)
+└── cowsay@1.6.0
