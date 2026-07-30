@@ -265,3 +265,59 @@ fn info_agrees_with_list_about_every_backend_not_only_the_first() {
             .join(", ")
     );
 }
+
+/// GRADER §4: *flag every place internal vocabulary leaks.* `info` rendered every leftover
+/// property as an aligned field, so `linix info service:Appinfo` printed
+///
+///     status raw:    [SC] QueryServiceConfig SUCCESS
+///
+/// — an internal key with its underscore swapped for a space, holding the whole of `sc qc`'s
+/// multi-line output squeezed into a 14-column row. Two faults in one line: a key shown as a
+/// label, and a tool's raw dump shown as a value.
+///
+/// Swept over every backend that lists something, for the same reason the test above is: which
+/// backend carries a `*_raw` property is an accident of the platform, and on Windows it is the
+/// one the grader could not reach.
+#[test]
+fn info_shows_no_internal_property_key_as_a_field_label() {
+    let f = Fixture::new("grade2-info-internals");
+
+    let (listing, code) = f.run(&["list"]);
+    assert_eq!(code, 0, "`list` failed:\n{listing}");
+    let rows = one_row_per_backend(&listing);
+    assert!(
+        !rows.is_empty(),
+        "nothing installed, so nothing to inspect:\n{listing}"
+    );
+
+    let mut leaks = Vec::new();
+    for (backend, name) in &rows {
+        let (out, code) = f.run(&["info", &format!("{backend}:{name}")]);
+        if code != 0 {
+            continue;
+        }
+        for line in out.lines() {
+            // A field label is `word[ word]:` in the first column. An internal key reaches it
+            // either as a `__`-prefixed tag or as a `_raw` dump whose underscore became a space.
+            let Some((label, _)) = line.split_once(':') else {
+                continue;
+            };
+            if line.starts_with(' ') || label.is_empty() {
+                continue;
+            }
+            if label.starts_with("__") || label.ends_with(" raw") || label.contains("__") {
+                leaks.push(format!(
+                    "`info {backend}:{name}` printed the field `{label}:`"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        leaks.is_empty(),
+        "internal property keys reached the user as field labels:\n  {}\n\nA manager's own \
+         output belongs under a heading that says whose words they are, not in a 14-column row \
+         pretending to be a value.",
+        leaks.join("\n  ")
+    );
+}

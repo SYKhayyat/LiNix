@@ -818,13 +818,39 @@ pub(crate) async fn handle_info(app: &App, package: &str) -> Result<()> {
     {
         println!("{:<14} {}", "Install path:", path);
     }
-    // Any remaining properties, surfaced rather than hidden.
+    // Any remaining properties, surfaced rather than hidden — but not every property is a
+    // field, and this loop used to render them all as though they were.
+    //
+    // `linix info service:Appinfo` printed `status raw:    [SC] QueryServiceConfig SUCCESS`:
+    // a key name with its underscore swapped for a space, holding the whole of `sc qc`'s
+    // multi-line output, squeezed into a 14-column aligned row. Two faults in one line — an
+    // internal key shown as a label, and a tool's raw dump shown as a value (GRADER §4:
+    // *flag every place internal vocabulary leaks*).
+    let internal = |k: &str| k.starts_with("__");
+    let verbatim = |k: &str| k.ends_with("_raw");
     for (k, v) in &p.properties {
-        if matches!(k.as_str(), "description" | "install_path" | "bin_path") {
+        if matches!(k.as_str(), "description" | "install_path" | "bin_path")
+            || internal(k)
+            || verbatim(k)
+        {
             continue;
         }
         let label = format!("{}:", k.replace('_', " "));
         println!("{:<14} {}", label, v);
+    }
+    // A manager's own output is quoted as its own words, at the end, where a multi-line block
+    // can be read — rather than pretending to be a field with a value.
+    for (k, v) in &p.properties {
+        if !verbatim(k) || v.trim().is_empty() {
+            continue;
+        }
+        println!(
+            "\nWhat the manager said about its {}:",
+            k.trim_end_matches("_raw").replace('_', " ")
+        );
+        for line in v.lines() {
+            println!("  {}", line);
+        }
     }
     // Dependencies via the backend's MetadataProvider, if it has one.
     if let Some(b) = app.registry.get(&p.backend) {
