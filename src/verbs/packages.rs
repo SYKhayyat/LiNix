@@ -828,7 +828,13 @@ pub(crate) async fn handle_info(app: &App, package: &str) -> Result<()> {
     // *flag every place internal vocabulary leaks*).
     let internal = |k: &str| k.starts_with("__");
     let verbatim = |k: &str| k.ends_with("_raw");
-    for (k, v) in &p.properties {
+    // Sorted, because `properties` is a `HashMap` and Rust randomises its iteration order per
+    // process — so two `info` runs on one unchanged package printed their fields in different
+    // orders. Latent rather than observed on the host this was written on: no backend here
+    // carries two properties the generic loop reaches. It is still output a person diffs.
+    let mut ordered: Vec<(&String, &String)> = p.properties.iter().collect();
+    ordered.sort_by_key(|(k, _)| k.as_str());
+    for (k, v) in &ordered {
         if matches!(k.as_str(), "description" | "install_path" | "bin_path")
             || internal(k)
             || verbatim(k)
@@ -840,7 +846,7 @@ pub(crate) async fn handle_info(app: &App, package: &str) -> Result<()> {
     }
     // A manager's own output is quoted as its own words, at the end, where a multi-line block
     // can be read — rather than pretending to be a field with a value.
-    for (k, v) in &p.properties {
+    for (k, v) in &ordered {
         if !verbatim(k) || v.trim().is_empty() {
             continue;
         }
