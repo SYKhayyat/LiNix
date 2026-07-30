@@ -94,9 +94,26 @@ user, and that is what was built. Q15's `export` half was ruled with `bundle` on
 and never measured; measured now, **`export` already honoured the flag**, so W43's code change is
 `bundle` alone.
 
-**Untouched, and still the two that would move the grade most:** W18's supported/experimental
-split, and a real lifecycle for the 24 of 56 backends that have never had one. Nothing here
-touched the safety core, which came through round 5's adversarial pass intact.
+**And the order that must not be built.** `BUILDER.md` carries W18 — split the backends into
+*supported* and *experimental*, say so in `check health`, in `priority` and in the readme — as
+"the highest-value change in the document", marked ⚠️ *needs a ruling*, and repeats in two more
+places that it is still untouched. **It had the ruling, and the ruling was no.** `Q4`, owner,
+**2026-07-27**, three days before round 6's section was written: *"Are unverified backends
+labelled experimental? NO. They are tested instead, and nothing ships until they are."* The
+reason is a rule about the project (`V.93`): *this codebase does things; it does not cover for
+not doing them* — a label converts an unfinished job into a permanent disclaimer, and the gap
+would read as handled rather than open.
+
+I nearly built it, and the only reason I did not is that I went to the register to find out
+which ⚠️ rows were still open instead of trusting the document that listed them. **The register
+is the authority and the map was stale** — which is `E31`'s own finding, turning up in the
+document that reported it. `BUILDER.md` is corrected in four places, and this paragraph
+originally repeated the same claim before the register contradicted it.
+
+**Untouched, and now the one thing that would move the grade most:** a real lifecycle for the 24
+of 56 backends that have never had one — which under `Q4` is a release blocker rather than
+something a caption makes acceptable. Nothing here touched the safety core, which came through
+round 5's adversarial pass intact.
 
 ## Session 2026-07-30 (second) — the round-4 grade: a preview that armed a removal, and four gates that examined the wrong thing
 

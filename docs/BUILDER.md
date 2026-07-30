@@ -61,7 +61,7 @@ document about checks that name the wrong thing.)*
 | **W1** (manifest withdrawal) | Changes what happens after a failed install. The two harnesses disagree *in writing* about the intent — see `READINESS` §3.1. **Get the ruling, write it into `decisions.md` in the same commit.** |
 | **W15** (`check health` severity) | Changes what every user sees on a healthy machine. |
 | **W17** (exit codes) | Changes a published contract (`readme.md:708`) that scripts branch on. |
-| **W18** (supported vs experimental) | Re-labels backends users are relying on today. This is the highest-value change in the document and the most user-visible. |
+| ~~**W18** (supported vs experimental)~~ | 🚫 **RULED AND REJECTED as `Q4`, 2026-07-27** — three days before round 6 asked for the ruling again. No label exists; the coverage is the work and its absence is a release blocker. **Do not build it.** See the correction at W18. |
 | **W22** (refusal exit codes and the hook) | Same published contract as W17, on the security refusals. |
 | **W29** (coverage ratchet threshold) | Ruled as `Q12`; the threshold was delegated to the builder. |
 | **W31** (`--backend <typo>`) | Changes what a mistyped flag does, which scripts may depend on. |
@@ -410,9 +410,34 @@ decisions. Each of these is a one-line fix plus a check that stops it recurring.
 
 ## Tier 5 — The structural change (this is the one that matters)
 
-### W18 · `E33` and the whole of §5 — redefine "supported" ⚠️ needs a ruling (0.1)
+### W18 · `E33` and the whole of §5 — redefine "supported" 🚫 **RULED AND REJECTED — DO NOT BUILD**
 
-Everything above fixes instances. **This fixes the generator.**
+> **Corrected 2026-07-30 by the round-6 builder.** This order asks for a ruling it already had,
+> and the ruling was **no**. `Q4`, ruled by the owner on **2026-07-27**, three days before this
+> document's round-6 section repeated the request: *"Are unverified backends labelled
+> experimental? **NO.** They are tested instead, and nothing ships until they are."*
+>
+> The owner's reason is a rule about the project, and it is binding: *this codebase does things;
+> it does not cover for not doing them.* A label converts an unfinished job into a permanent
+> disclaimer, and a disclaimer nobody has to retire is one nobody does. The gap would be
+> *documented*, which reads like *handled*, and the untested backends would still be untested a
+> year later with a caption explaining why that is fine (`V.93`).
+>
+> **What the ruling binds, all of it:** no `experimental` or `supported` label anywhere — not in
+> `check health`, not in `priority`, not in the readme, nothing to grep for. **`linix init` keeps
+> scaffolding every manager it finds**, because scaffolding fewer is the same disclaimer written
+> as a default. A backend with no real lifecycle in an automated gate is a **release blocker**,
+> not a caption. No new backend until the current set passes.
+>
+> So items 1–4 below are superseded: **only item 4 survives**, and item 1's round-trip is the
+> work rather than the label. The three sentences elsewhere in this document calling W18 "the
+> highest-value change" and "still untouched" describe a change that must not be made. The
+> register is the authority and the map was stale — which is `E31`'s finding, on the document
+> that reported it.
+
+Everything above fixes instances. ~~**This fixes the generator.**~~ *(What follows is the
+original text, kept because the measurement in it is still true and still the argument for
+doing the coverage work. The proposed remedy is what was rejected.)*
 
 Measured: `check health` registers 48 backends on Windows, 56 on Ubuntu; the Ubuntu lifecycle
 reports **7 real lifecycles against 49 plan-smokes**. A plan-smoke proves an argv was
@@ -794,8 +819,9 @@ unverified. W8 asked for this in Round 1. Push it.
 ## What Round 2 does *not* change
 
 `E15` (search at 145 s) and `E33` (psresource's truncated error, untestable without PSResourceGet
-installed) are unchanged and unaddressed; W14's latency budgets and W18's supported/experimental
-split are still the two items that would move the grade most. Nothing above supersedes Tier 5 or
+installed) are unchanged and unaddressed; W14's latency budgets are still the item that would
+move the grade most. *(Corrected 2026-07-30: the other one named here, W18's
+supported/experimental split, was ruled and REJECTED as `Q4` on 2026-07-27 — see W18.)* Nothing above supersedes Tier 5 or
 Tier 6 — they remain the path from B to A.
 
 ---
@@ -1128,9 +1154,14 @@ to a backend `remove`/`purge` has a guard, enumerated from the sink; `SIGKILL` m
 reconcilable journal; `heal` verifies against the machine rather than closing entries. **Do not
 refactor any of it while fixing W36**, which is entirely about what `heal` prints and returns.
 
-Still untouched and still the two items that would move the grade most: **W18**'s
-supported/experimental split, and real lifecycles for the 24 of 56 backends that have never had
-one.
+Still untouched and still the thing that would move the grade most: **real lifecycles for the
+24 of 56 backends that have never had one.**
+
+*(Corrected 2026-07-30 by the round-6 builder: this paragraph named two items, and the other —
+W18's supported/experimental split — had been ruled and **rejected** as `Q4` on 2026-07-27,
+three days before this section was written. Under that ruling the missing coverage is a release
+blocker rather than something a label makes acceptable, so the remaining item is the coverage
+itself and there is no second one.)*
 
 **The register is at zero open.** `Q14`, `Q15` and `Q16` were all ruled on 2026-07-30 and are
 built into W33, W35/W42 and W43 above — so nothing in this document is waiting on the owner, and
@@ -1146,7 +1177,8 @@ three of the ⚠️ rows in §0.1 that predate round 6 still are.
   that no longer exists (`E29`); exemptions are unvalidated. Assert that every exempted name
   exists, and delete the stale one.
 - **Do not implement a §0.1 item without a ruling**, however obvious it looks.
-- **Do not add a backend.** See W18.
+- **Do not add a backend.** `Q4`, and unchanged by its rejection of the label: no new backend
+  until the current set has a real lifecycle in an automated gate.
 - **Do not trust a green suite as evidence of anything.** 1,359 tests were green while every
   defect in `READINESS` was live. Green is a floor.
 - **Do not check state at the wrong moment.** The harness uninstalls each package immediately
