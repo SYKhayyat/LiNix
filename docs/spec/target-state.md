@@ -123,9 +123,22 @@ that puts a module on disk; then you `use` it by name like everything else.
 
 ### A bare word that is a keyword is not a package (Q16, ruled 2026-07-30)
 
-`link`, `service`, `setting`, `shim`, `schedule`, `repo`, `absent`, `when`, `if`, `else`, `end`,
-`import` and `include`, written alone on a line, are **a parse error** naming the two ways to
-mean them:
+Every word this grammar reserves, written alone on a line, is **a parse error** naming the two
+ways to mean it. The authority is `config/grammar/statement.rs`'s `KEYWORDS` table — the same
+table the parser dispatches on, so a prefix added later is refused bare without anyone
+remembering — and it is, today:
+
+```
+absent  repo  shim  schedule  service  link  setting  exec  generate  dotfiles  firewall
+use  param  exclude  intersect  module  when            the words this grammar has
+if  else  end  import  include                          the words people arrive with
+```
+
+The ruling was measured against thirteen of these; the other nine are the same sentence one
+layer over — `exec`, `dotfiles`, `firewall` and `generate` are statement prefixes this document
+also failed to list when they shipped, and `exclude`, `intersect`, `module`, `use` and `param`
+are directives whose bare form fell through to the package parser by the identical route.
+Refusing thirteen of twenty-two would have left the typo live for `exec`.
 
 ```
 modules/dev.txt:4: `link` is a keyword, not a package name

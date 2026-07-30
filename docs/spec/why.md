@@ -1969,6 +1969,23 @@ rejected, because V.10 already rejected it for the reason that still holds** —
 needs `\` needs a newline rule, and a language that has to explain its escaping is not the
 language this one is trying to be. The ruling adds a refusal and removes nothing.
 
+**Built 2026-07-30 against twenty-two words, not the thirteen that were measured**, because the
+thirteen were a sample of the family and not the family. Nine more reach the package parser by
+the identical route: four statement prefixes the grade never tested (`exec:`, `dotfiles:`,
+`firewall:`, `generate:`) and five directives whose bare form has no delimiter to catch it
+(`exclude`, `intersect`, `module`, `use`, `param`). Shipping the refusal for `link` and not for
+`exec` would have been the reported symptom fixed and the class left live.
+
+**And the keyword list is now one list.** Three had grown: the "unrecognised line" message knew
+six prefixes, the dispatcher eleven, and the set-expression guard a *different* nine. That last
+disagreement was a live bug of its own, and it was measured rather than argued: on the old list
+`generate:C:\tools\list-packages.ps1` parsed as a **set expression**, because the copy deciding
+whether a backslash meant set math had never heard of `generate:`. (`setting:` was missing from
+the same copy and is *not* affected — a setting is `SCHEMA/KEY` and its validator rejects a
+backslash before the ambiguity can arise. The first draft of this entry claimed it was, and the
+test written to prove it disproved it instead.) A bare keyword cannot be refused reliably while
+the answer to "is this word a keyword" depends on which of three copies you ask.
+
 **V.104 — Why `@unverified` is silent on a tool that does not verify.** *(Owner ruling,
 2026-07-30 — Q14.)* helm 3.21.3 does not verify plugins at all: `helm plugin install --help`
 documents `--help` and `--version` and nothing else — no `--verify`, no `--keyring`, no

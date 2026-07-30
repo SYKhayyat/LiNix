@@ -302,14 +302,158 @@ impl<F: Fn(&str) -> bool> BackendNames for F {
     }
 }
 
-/// Every keyword that introduces a statement, for the "unrecognised line" error.
-const KNOWN_PREFIXES: &[&str] = &[
-    "absent:",
-    "repo:",
-    "shim:",
-    "schedule:",
-    "service:",
-    "link:",
+/// A word this grammar reserves: the statement it introduces, and the form to write instead
+/// when it turns up alone on a line (Q16).
+struct Keyword {
+    /// How the word is written when it introduces its statement: `link:` for a resource
+    /// prefix, `when` for a directive. The bare word is this with the colon trimmed, which is
+    /// why there is one field and not two that can disagree.
+    spelling: &'static str,
+    /// The form the user probably meant, shown in the refusal.
+    means: &'static str,
+    /// Builds the statement from `(name, options)`. `None` for the prefixes parsed above the
+    /// dispatch loop (`absent:`, `repo:` have payloads of their own shape) and for the
+    /// directives, which are not resources at all.
+    build: Option<fn(String, Options) -> Statement>,
+}
+
+impl Keyword {
+    /// The word alone — `link:` written as the user half-typed it.
+    fn word(&self) -> &'static str {
+        self.spelling.trim_end_matches(':')
+    }
+
+    /// Whether the word is written `word:` — a resource prefix rather than a directive.
+    fn takes_colon(&self) -> bool {
+        self.spelling.ends_with(':')
+    }
+}
+
+/// Every keyword that introduces a statement, in one list.
+///
+/// This is the list the dispatch loop below iterates, the list the "unrecognised line" error
+/// names, and the list a bare word is checked against. Three separate copies existed and had
+/// drifted apart — the error message knew six prefixes, the dispatcher nine, and the
+/// set-expression guard a *different* nine, so `setting:HKCU\Software\Foo` was read as a set
+/// difference by the only one of the three that had never heard of `setting:`.
+const KEYWORDS: &[Keyword] = &[
+    Keyword {
+        spelling: "absent:",
+        means: "absent:apt:libreoffice",
+        build: None,
+    },
+    Keyword {
+        spelling: "repo:",
+        means: "repo:apt:ppa:deadsnakes/ppa",
+        build: None,
+    },
+    Keyword {
+        spelling: "shim:",
+        means: "shim:NAME @target=/path/to/binary",
+        build: Some(Statement::Shim),
+    },
+    Keyword {
+        spelling: "schedule:",
+        means: "schedule:NAME @run=… @every=…",
+        build: Some(Statement::Schedule),
+    },
+    Keyword {
+        spelling: "service:",
+        means: "service:nginx @state=running",
+        build: Some(Statement::Service),
+    },
+    Keyword {
+        spelling: "link:",
+        means: "link:/path/to/source @target=/path/to/destination",
+        build: Some(Statement::Link),
+    },
+    Keyword {
+        spelling: "setting:",
+        means: "setting:SCHEMA/KEY @value=…",
+        build: Some(Statement::Setting),
+    },
+    Keyword {
+        spelling: "exec:",
+        means: "exec:./scripts/setup.sh",
+        build: Some(Statement::Exec),
+    },
+    Keyword {
+        spelling: "generate:",
+        means: "generate:/path/to/output @from=…",
+        build: Some(Statement::Generate),
+    },
+    Keyword {
+        spelling: "dotfiles:",
+        means: "dotfiles:./dotfiles @target=~",
+        build: Some(Statement::Dotfiles),
+    },
+    Keyword {
+        spelling: "firewall:",
+        means: "firewall:443/tcp @value=allow",
+        build: Some(Statement::Firewall),
+    },
+    // The directives. No colon, no `build` — each has its own parser above the package
+    // parser, but only when written with something after it, so the bare word falls through
+    // to the package parser exactly like a resource prefix does.
+    Keyword {
+        spelling: "use",
+        means: "use editors",
+        build: None,
+    },
+    Keyword {
+        spelling: "param",
+        means: "param gpu = nvidia",
+        build: None,
+    },
+    Keyword {
+        spelling: "exclude",
+        means: "exclude heavy",
+        build: None,
+    },
+    Keyword {
+        spelling: "intersect",
+        means: "intersect Work",
+        build: None,
+    },
+    Keyword {
+        spelling: "module",
+        means: "module editors { … }",
+        build: None,
+    },
+    Keyword {
+        spelling: "when",
+        means: "when os == linux { … }",
+        build: None,
+    },
+    // Words this grammar does not have, which arrive from the config languages people come
+    // from. Each is a real package in a real index (`gem:if`, `npm:else`, `cargo:end`,
+    // `gem:import`, `cargo:include`), so left alone they are the one typo that installs
+    // software (Q16). `include` additionally has a refusal of its own for `include NAME`.
+    Keyword {
+        spelling: "if",
+        means: "when os == linux { … }",
+        build: None,
+    },
+    Keyword {
+        spelling: "else",
+        means: "a second `when` with the opposite condition",
+        build: None,
+    },
+    Keyword {
+        spelling: "end",
+        means: "`}` — blocks close with a brace",
+        build: None,
+    },
+    Keyword {
+        spelling: "import",
+        means: "use editors",
+        build: None,
+    },
+    Keyword {
+        spelling: "include",
+        means: "use editors",
+        build: None,
+    },
 ];
 
 /// Parse one statement. `line` must already have had comments stripped and be non-blank.
@@ -435,23 +579,14 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
         });
     }
 
-    for (prefix, build) in [
-        ("shim:", Statement::Shim as fn(String, Options) -> Statement),
-        ("schedule:", Statement::Schedule),
-        ("service:", Statement::Service),
-        ("link:", Statement::Link),
-        ("setting:", Statement::Setting),
-        ("exec:", Statement::Exec),
-        ("generate:", Statement::Generate),
-        ("dotfiles:", Statement::Dotfiles),
-        ("firewall:", Statement::Firewall),
-    ] {
-        if let Some(rest) = line.strip_prefix(prefix) {
+    for kw in KEYWORDS {
+        let Some(build) = kw.build else { continue };
+        if let Some(rest) = line.strip_prefix(kw.spelling) {
             let (name, options) = split_options(origin, rest.trim())?;
             if name.is_empty() {
                 return Err(GrammarError::new(
                     origin.clone(),
-                    format!("`{}` names nothing", prefix),
+                    format!("`{}` names nothing", kw.spelling),
                 ));
             }
             reject_leading_dash(origin, &name)?;
@@ -463,8 +598,48 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
         return Ok(var);
     }
 
+    // Q16: a bare keyword is not a package name. Checked here, after every form that has a
+    // delimiter has been dispatched, so it fires only on the line that would otherwise become
+    // a package declaration.
+    if let Some(kw) = bare_keyword(line) {
+        return Err(keyword_is_not_a_package(origin, kw));
+    }
+
     let decl = parse_package(origin, line, backends)?;
     Ok(Statement::Package(decl))
+}
+
+/// The keyword a line is nothing but, or `None`.
+///
+/// A line carrying a `:` is spelled with a prefix — `link:` is the statement and `list:link`
+/// / `cargo:link` are the package — so it is never the bare form and is not this function's
+/// business. Options are: `link @target=/x` and `link@version=1` are the same typo as `link`
+/// with the rest of the line still attached, and mean a package no more than the bare word does.
+fn bare_keyword(line: &str) -> Option<&'static Keyword> {
+    if line.contains(':') {
+        return None;
+    }
+    let head = line.split([' ', '\t', '@']).next()?;
+    KEYWORDS.iter().find(|k| k.word() == head)
+}
+
+/// Q16, ruled 2026-07-30. Names both ways to mean the word, because both are reachable and
+/// which one was meant is not knowable from the line.
+fn keyword_is_not_a_package(origin: &Origin, kw: &Keyword) -> GrammarError {
+    let word = kw.word();
+    let statement = if kw.takes_colon() {
+        format!("to declare that `{}`:", word)
+    } else {
+        format!("to write the `{}` you meant:", word)
+    };
+    GrammarError::new(
+        origin.clone(),
+        format!("`{}` is a keyword, not a package name", word),
+    )
+    .with_hint(format!(
+        "{:<38}{}\n  {:<38}list:{}   (or pin one: cargo:{})",
+        statement, kw.means, "to install a package by that name:", word, word,
+    ))
 }
 
 /// `NAME = VALUE` (IX.2), where NAME is an identifier.
@@ -492,19 +667,9 @@ fn parse_var(line: &str) -> Option<Statement> {
 /// statement and must not be mistaken for a set expression (II.4), whatever punctuation its
 /// payload carries — a `link:` target is a path, not a difference.
 fn starts_with_statement_prefix(line: &str) -> bool {
-    [
-        "absent:",
-        "repo:",
-        "shim:",
-        "schedule:",
-        "service:",
-        "link:",
-        "exec:",
-        "dotfiles:",
-        "firewall:",
-    ]
-    .iter()
-    .any(|p| line.starts_with(p))
+    KEYWORDS
+        .iter()
+        .any(|k| k.takes_colon() && line.starts_with(k.spelling))
 }
 
 fn parse_use(origin: &Origin, target: &str) -> Result<Statement> {
@@ -1468,9 +1633,14 @@ fn is_absolute_datetime(v: &str) -> bool {
 }
 
 /// The `absent:`-style prefixes, for building an "unrecognised line" message that lists
-/// what was expected.
-pub fn known_prefixes() -> &'static [&'static str] {
-    KNOWN_PREFIXES
+/// what was expected. Derived from [`KEYWORDS`] rather than listed again — the copy that
+/// used to live here knew six of the eleven.
+pub fn known_prefixes() -> Vec<&'static str> {
+    KEYWORDS
+        .iter()
+        .filter(|k| k.takes_colon())
+        .map(|k| k.spelling)
+        .collect()
 }
 
 #[cfg(test)]
@@ -1488,6 +1658,24 @@ mod tests {
 
     fn p(line: &str) -> Result<Statement> {
         parse(&o(), line, &known)
+    }
+
+    /// The three copies of the prefix list had drifted, and this is the line that proved it:
+    /// `starts_with_statement_prefix` had never heard of `setting:`, so a Windows registry key
+    /// — full of backslashes — was handed to the set-expression parser instead of the setting
+    /// parser. `generate:` had the same hole.
+    #[test]
+    fn a_prefix_whose_payload_looks_like_set_math_is_still_that_statement() {
+        for line in [
+            r"generate:C:\tools\list-packages.ps1",
+            r"link:C:\Users\me\.vimrc @target=~/.vimrc",
+        ] {
+            match p(line) {
+                Ok(Statement::Expr(e)) => panic!("`{line}` was read as a set expression: {e}"),
+                Ok(_) => {}
+                Err(e) => panic!("`{line}` did not parse: {e}"),
+            }
+        }
     }
 
     /// A `BackendNames` that also knows one group, `web = cargo, npm`, for the U18 tests.
