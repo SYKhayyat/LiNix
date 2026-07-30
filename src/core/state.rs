@@ -176,8 +176,15 @@ impl StateRegistry {
             Error::Persist(format!("Atomic write failed for state registry: {}", e))
         })?;
         if !written {
+            // The counts are what *would have been* recorded, said in those words. Read as a
+            // count of the operation they are the opposite of the truth: `--dry-run unhold`
+            // releases the one hold there is, and the old wording then reported "0 hold(s)
+            // were not recorded" — a number belonging to the registry, printed as if it were
+            // about the release. Same shape as `adopt`'s "listed in the manifest" (R-2).
             tracing::warn!(
-                "[DRY-RUN] {} managed package(s) and {} hold(s) were not recorded",
+                "[DRY-RUN] {} was not written — it would have recorded {} managed package(s) \
+                 and {} hold(s)",
+                self.path.display(),
                 self.packages.len(),
                 self.held.len()
             );

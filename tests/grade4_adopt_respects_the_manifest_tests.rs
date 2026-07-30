@@ -175,14 +175,53 @@ fn the_left_alone_count_is_about_what_it_says_it_is_about() {
         .and_then(|n| n.parse().ok())
         .unwrap_or_else(|| panic!("could not read a count out of: {line}"));
 
-    let declared = declared_in(&mine).len();
-    assert!(
-        reported <= declared,
-        "`adopt` reported `{}` — but the manifest declares {} package(s). The count is \
-         `found.skipped.len()`, and `skipped` is only ever the OS-essential names \
-         (adopt.rs:154) and the ones no package line can hold (adopt.rs:315). Neither has \
-         anything to do with the manifest, so the reason is wrong for every item it counts.",
+    // BUILDER round 6, re-aimed at the same subject. The original assertion was
+    // `reported <= declared_in(&mine).len()` — the only check available while the whole count
+    // wore one sentence, *"(listed in the manifest)"*. That sentence is gone; the count is now
+    // broken down by the reason each item actually carries, so the question "is this count
+    // about what it says it is about" is answerable directly instead of by proxy.
+    //
+    // Two assertions, and the first is what keeps this honest: a breakdown that does not add
+    // up to its own total is the same defect wearing a longer message. Pre-fix there is no
+    // breakdown at all, so the sum is 0 and this goes red exactly as the original did.
+    let breakdown: Vec<(usize, String)> = out
+        .lines()
+        .skip_while(|l| !l.trim_start().starts_with("Left alone:"))
+        .skip(1)
+        .map_while(|l| {
+            let t = l.trim_start();
+            let (n, reason) = t.split_once("  ")?;
+            Some((n.trim().parse::<usize>().ok()?, reason.trim().to_string()))
+        })
+        .collect();
+
+    let summed: usize = breakdown.iter().map(|(n, _)| n).sum();
+    assert_eq!(
+        summed,
+        reported,
+        "`{}` is explained by reasons adding up to {}:\n{:#?}\n\nA rollup whose parts do not \
+         account for its whole is the defect this test is about — the old version printed the \
+         whole under one reason (`found.skipped.len()` labelled \"listed in the manifest\") \
+         that was true for none of its inputs.",
         line.trim(),
-        declared
+        summed,
+        breakdown
+    );
+
+    // And the original proxy, now applied where it belongs: only the manifest reason may be
+    // measured against the manifest.
+    let declared = declared_in(&mine).len();
+    let blamed_on_the_manifest: usize = breakdown
+        .iter()
+        .filter(|(_, r)| r.contains("already declare"))
+        .map(|(n, _)| n)
+        .sum();
+    assert!(
+        blamed_on_the_manifest <= declared,
+        "{} package(s) were left alone because they are already declared, but only {} are \
+         declared:\n{:#?}",
+        blamed_on_the_manifest,
+        declared,
+        breakdown
     );
 }

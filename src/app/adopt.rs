@@ -34,6 +34,39 @@ pub struct Skipped {
     pub reason: String,
 }
 
+/// The skips, grouped by the reason each one carries.
+///
+/// The rollup used to be `skipped.len()` under one sentence — *"(listed in the manifest)"* —
+/// which was a filter that does not exist, so the reason was wrong for every item it counted,
+/// always. A count that explains itself with a reason belonging to none of its inputs is worse
+/// than a count with no explanation: it answers the question a reader would otherwise go and
+/// look up.
+fn by_reason(skipped: &[Skipped]) -> Vec<(String, usize)> {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for s in skipped {
+        *counts.entry(s.reason.as_str()).or_default() += 1;
+    }
+    let mut out: Vec<(String, usize)> = counts
+        .into_iter()
+        .map(|(r, n)| (r.to_string(), n))
+        .collect();
+    // Biggest group first; ties keep the alphabetical order the map gave them, so the same
+    // machine prints the same lines twice running.
+    out.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    out
+}
+
+/// The skip lines a user sees, printed under a total that agrees with them.
+fn print_left_alone(skipped: &[Skipped]) {
+    if skipped.is_empty() {
+        return;
+    }
+    println!("Left alone: {}", skipped.len());
+    for (reason, n) in by_reason(skipped) {
+        println!("  {:>5}  {}", n, reason);
+    }
+}
+
 /// What a discovery crawl found. `adopt` and `audit` share this so the preview cannot
 /// disagree with the real run — they were near-duplicate loops that had already drifted
 /// apart on two separate points.
@@ -147,10 +180,16 @@ impl Adopter {
         // deletion means "uninstall".
         let backends: HashSet<String> = candidates.iter().map(|p| p.backend.clone()).collect();
         let os_essential = guard::essential_names(&self.registry, &backends).await;
+        let declared = self.declared_outside_the_adoption_manifest().await;
 
         for pkg in candidates {
             let key = format!("{}:{}", pkg.backend, pkg.name);
-            if os_essential.contains(&key) {
+            if let Some(file) = declared.get(&key) {
+                found.skipped.push(Skipped {
+                    reason: format!("you already declare it, in {}", file),
+                    package: pkg,
+                });
+            } else if os_essential.contains(&key) {
                 found.skipped.push(Skipped {
                     reason: format!("{} reports it as essential to the system", pkg.backend),
                     package: pkg,
@@ -170,6 +209,55 @@ impl Adopter {
         });
 
         Ok(found)
+    }
+
+    /// `backend:name` -> the file that declares it, for every declaration the model holds
+    /// outside `adopt`'s own manifest.
+    ///
+    /// Discovery used to ask the managed-state **registry** and nothing else, so a package
+    /// written by hand and not yet synced was offered again — and `adopt` wrote a second
+    /// declaration for it, after which deleting the user's own line uninstalled nothing. That
+    /// is the direct opposite of the sentence `adopt` prints three lines under its count.
+    ///
+    /// `modules/adopted.txt` is excluded because `adopt` overwrites it every run (II.9): a line
+    /// this command wrote last time must not stop it writing the same line now, or the second
+    /// run would answer "the machine plus history" instead of "the machine as it is".
+    async fn declared_outside_the_adoption_manifest(&self) -> HashMap<String, String> {
+        let resolver = crate::app::sync::resolver::StateResolver::new(
+            &self.config,
+            self.registry.clone(),
+            false,
+        )
+        .await;
+        let model = match resolver.resolve_model().await {
+            Ok(m) => m,
+            Err(e) => {
+                // A config that does not resolve is not a reason to fail `adopt` — adopting is
+                // one of the ways out of a broken config. It IS a reason to say what could not
+                // be checked, rather than quietly re-enabling the duplication.
+                warn!("could not read your declarations, so this run cannot tell whether a discovered package is already declared: {e}");
+                println!(
+                    "Note: your modules did not resolve ({e}), so packages you have already\n\
+                     declared may be listed below. Run `linix check config`."
+                );
+                return HashMap::new();
+            }
+        };
+
+        let ours = crate::model::Landing::Adopted.module();
+        model
+            .packages
+            .values()
+            .flatten()
+            .filter_map(|spec| {
+                let origin = spec.options.get("__source")?;
+                // `__source` is `path:line`; the line number is not part of the file name.
+                let file = origin.rsplit_once(':').map_or(origin.as_str(), |(f, _)| f);
+                let stem = std::path::Path::new(file).file_stem()?.to_str()?;
+                (stem != ours)
+                    .then(|| (format!("{}:{}", spec.backend, spec.name), file.to_string()))
+            })
+            .collect()
     }
 
     /// Discovery -> manifest -> acquisition.
@@ -199,10 +287,8 @@ impl Adopter {
             println!("Nothing to adopt: every package your managers report as user-chosen is");
             println!("already managed, or is protected and deliberately left alone.");
             if !found.skipped.is_empty() {
-                println!(
-                    "\n{} discovered package(s) were left alone. See `linix protected <pkg>`.",
-                    found.skipped.len()
-                );
+                println!();
+                print_left_alone(&found.skipped);
             }
             return Ok(());
         }
@@ -276,12 +362,7 @@ impl Adopter {
         println!("\nAdopted {} package(s).", found.adopt.len());
         println!("{:-<64}", "");
         println!("Manifest:  {}", manifest_path.display());
-        if !found.skipped.is_empty() {
-            println!(
-                "Left alone: {} (listed in the manifest)",
-                found.skipped.len()
-            );
-        }
+        print_left_alone(&found.skipped);
         println!("{:-<64}", "");
         println!("This list is an ESTIMATE of what you chose to install — read it.");
         println!("Deleting a line UNINSTALLS that package on the next sync.");
@@ -372,12 +453,17 @@ impl Adopter {
 # === Found, but left alone ===\n\
 #   Commented out on purpose: they are listed so you know they exist, not handed to\n\
 #   you as lines whose deletion means \"uninstall\". They stay installed either way.\n\
-#   Most are packages the OS calls essential — uncomment one to manage it, and the\n\
-#   guard still refuses to remove it unless you put it in `unprotected_packages`.\n\
-#   The rest are names their manager reports in a form no line can hold, so there is\n\
-#   nothing to uncomment: the reason says which.\n\
+#   Uncommenting one manages it — except where the reason says the name cannot be\n\
+#   written as a line, or that you already declare it somewhere else, in which case\n\
+#   uncommenting would declare it twice.\n\
 #\n",
             );
+            // Counted from the reasons the items carry, not from a sentence written here
+            // that names the causes it happened to know about when it was written.
+            for (reason, n) in by_reason(&found.skipped) {
+                out.push_str(&format!("#   {:>5}  {}\n", n, reason));
+            }
+            out.push_str("#\n");
             for s in &found.skipped {
                 out.push_str(&format!(
                     "#   {}:{} — {}\n",
