@@ -1,4 +1,4 @@
-# The decision register — all 124, and two of them open
+# The decision register — all 125, and three of them open
 
 **One file, six features. None open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -16,7 +16,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **3** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **120** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**Two are open.** All 124 are accounted for: **120 ANSWERED, 2 PARKED, 2 OPEN** — and this line
+**Three are open.** All 125 are accounted for: **120 ANSWERED, 2 PARKED, 3 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -248,6 +248,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q13** | Should `asdf:` add the plugin a declared tool needs? — RULED: **yes**, off the argv. | 2026-07-29 |
 | **Q14** | What should `@unverified` do on a tool version with no flag to turn verification off? | **OPEN** |
 | **Q15** | Should a command whose product is a file at a path the user named honour `--dry-run`? | **OPEN** |
+| **Q16** | Is a bare grammar keyword (`link`, `when`, `absent`) a package name? | **OPEN** |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -3667,5 +3668,65 @@ The builder's lean is **(c)**, and this was deliberately not decided in code: it
 user sees, and the reason `bundle` feels different from `plan` is a judgement about what those
 commands are for, which is the owner's to make. What was fixed instead is the half that is not a
 judgement — the two verbs that *said* they had written when they had not (`lock`, `heal`).
+
+---
+
+## Q16
+
+**Status: OPEN.** Raised by the round-5 grader, 2026-07-30, measured rather than argued.
+
+**Q16 — Is a bare grammar keyword a package name?** A package name is one bare word (II.2), so a
+line containing only `link` is a grammatically valid package declaration — and that is what LiNix
+makes of it. Measured on a release binary, a module containing the single word `link`:
+
+```
+$ linix eval
+  "present": [ { "backend": "cargo", "name": "link", "source": "modules/kw.txt:1" } ]
+$ linix --dry-run sync -y
+  install 1   remove 0   (total 1 change(s))     backends: cargo
+$ linix check
+  ->  drift   1 to install, 0 to remove, 0 to place, 0 to undo
+                 run `linix sync`
+```
+
+Thirteen of fourteen keywords behave this way, and each resolves to a real backend holding a real
+package of that name — the resolver searched live indexes to produce these:
+
+```
+when -> cargo:when      absent -> pip:absent    link  -> cargo:link    service -> cargo:service
+setting -> cargo:setting  shim -> scoop:shim    schedule -> cargo:schedule  repo -> cargo:repo
+if -> gem:if            else -> npm:else        end -> cargo:end       import -> gem:import
+include -> cargo:include                        use  -> refused (the only one)
+```
+
+**This is not a parser defect, which is why it is a question.** Written with their punctuation the
+same words refuse correctly and legibly — `link:`, `service:`, `shim:`, `when linux`,
+`when linux {` all exit 1 with a located `Configuration error`. The ambiguity is confined to the
+bare word, and it is a property of the language rather than a bug in the code that implements it.
+
+The cost is that the most likely typo in the format — typing a resource prefix and stopping before
+the colon — silently declares a package, and every preview in the program then agrees, because the
+model genuinely contains it. `check` recommends the sync. A side effect worth pricing in: resolving
+one of these costs 10–27 seconds, since a bare name has no backend and the resolver asks every
+manager in priority order; the same fixture with `cargo:ripgrep` is 0.2s.
+
+The options:
+
+- **(a) Reserve them.** A bare word that is a known keyword is a parse error naming the form the
+  user probably meant (`link` → *"did you mean `link:PATH`?"*). Costs anyone whose package really is
+  called `end` the need to write `cargo:end`.
+- **(b) Warn and continue.** Declare it, but say so once per line. Keeps every name declarable and
+  puts a sentence between the typo and the install — but a warning on a `sync` that is about to do
+  the right thing for everybody else is noise, and V.42's objection to narration applies.
+- **(c) Require a backend for a colliding name.** `end` alone is refused; `cargo:end` is accepted.
+  This is (a) with an escape hatch, and it is the only option that keeps every package reachable
+  while making the typo impossible.
+- **(d) Leave it.** The grammar is consistent and II.2 is doing what it says.
+
+The grader's lean is **(c)**. Deliberately not decided in code: it changes what a user sees, it can
+remove the ability to declare a package by a bare name, and both are the owner's to rule on.
+
+Red tests are committed and failing: `tests/grade4_keyword_is_not_a_package_tests.rs`, driven off
+`known_prefixes()` so a prefix added later is covered without anyone remembering.
 
 ---
