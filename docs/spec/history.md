@@ -14,6 +14,90 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-30 (third) — the round-6 orders: a typo that installs software, and three checks that were wrong before the code was
+
+`docs/GRADE-2026-07-30-round-5.md` graded the tree **B−** for entirely different reasons than the
+round before it, and `docs/BUILDER.md` turned its findings into `W33`–`W43`. All eleven are
+built. Every one of the grader's red tests is green without an assertion being lowered, and each
+fix is at the mechanism rather than the instance — which is also why four of them found a second
+defect the grade had not seen.
+
+**W33 / Q16 — a bare grammar keyword was a package name.** A module containing the single word
+`link` declared `cargo:link`, `--dry-run sync` planned the install, and `check` recommended it.
+Ruled: refuse the bare word; `list:NAME` was already what a bare `NAME` meant (II.2), so the
+escape hatch needed no new grammar and V.10's rejection of quoting stands. **Built for
+twenty-two words, not the thirteen measured** — `exec`, `dotfiles`, `firewall`, `generate`,
+`exclude`, `intersect`, `module`, `use` and `param` reach the package parser by the identical
+route, and refusing thirteen of twenty-two would have been the reported symptom fixed and the
+class left live. Three copies of the prefix list were collapsed into one, and the disagreement
+between them was a live bug of its own, measured rather than argued: a `generate:` line whose
+payload is a Windows path parsed as a **set expression**, because the copy deciding whether a
+backslash meant set math had never heard of `generate:`. A first draft of the why entry claimed
+`setting:` had the same fault; the test written to prove it disproved it, and V.103 says so.
+
+**W34 — `adopt` re-declared what the manifest already named.** `discover()` asked the
+managed-state registry and never read the manifests, so a package written by hand and not yet
+synced was offered again and written into `adopted.txt` — after which *"Deleting a line
+UNINSTALLS that package"* was false for exactly the lines a user wrote themselves. Now
+subtracted from the resolved model, excluding `adopt`'s own manifest (II.9: adopting twice
+answers *the machine as it is*). The summary's *"(listed in the manifest)"* — a reason wrong for
+100% of its items, always — is replaced by the per-item reasons each `Skipped` already carried.
+Sibling fixed: `--dry-run unhold` said *"would release 1 hold"* and then *"0 hold(s) were not
+recorded"* about the same hold.
+
+**W35 / W36 — the classification was computed and then not consulted, in three places.** A rate
+limit is `Transient` in `error.rs` and `why_kept` had no `Transient` branch, so a user was told
+*"Nothing classified the failure above"* about a failure classified three lines away. `heal`
+printed `Some(CommandFailed { retry: Permanent, absent_name: true })` at the user, advised
+re-running `sync`, and **exited 0** after saying an operation could not be recovered. Both now
+read `retryability()` and `says_a_name_is_absent()`. The behaviour underneath `heal` — leaving a
+failed recovery's entry `InProgress` rather than closing it — was already right and is now pinned
+by a test, on a fixture the grader recorded as impossible to automate: a planted **Remove** for
+`cargo`, which fails locally, deterministically, with no network, on every runner that builds
+LiNix.
+
+**W37 — and the reason it looked like a Mac-only defect.** `list` reported
+`service:com.apple.SafariHistoryServiceAgent` and `info` denied it, because `service`, `link` and
+`setting` are each both a grammar prefix and a registered backend: a string copied out of a
+listing parses as a typed resource statement, and everything downstream understood only packages.
+`Statement::listed_as` reads the pair off the variant rather than splitting on `:` a second time.
+**It was invisible on Windows because `sc query type= service state= active` is rejected by `sc`
+— which exits 0 while printing `ERROR:`, so `linix list -b service` returned an empty list on
+every Windows machine since that row was written.** With the argv corrected the contradiction
+reproduces here, which is how it was fixed rather than guessed at from a CI log.
+
+**W38 — a refusal about a character nobody can see, that named no file and echoed itself.** The
+character validator's refusals now carry the same `Origin` the grammar's do, and `printable()`
+names a codepoint (`<U+202E>`) instead of emitting it. `rustc` refuses to compile a doc comment
+containing that character; LiNix printed it. The family sweep — five hostile characters through
+five commands, asserted on raw bytes — found **sixteen** leaks against the grader's two.
+
+**W39, W40, W41, W42, W43 — the gates.** A floor under `CAUGHT` in the mutation gate, which could
+not tell *the checks got stronger* from *the checks were deleted*. The orphan fixture wired up,
+and a check that no fixture goes unread again. A budget per command class, with the number in the
+output when it is crossed. The flag-drift gate re-aimed to branch on **whether the tool documents
+verification at all**, which is the one question `accepts_flag` cannot answer — and without which
+the obvious two-directional rewrite is green on a drifted table, which the first draft was.
+`bundle` no longer writes its nine files under `--dry-run`.
+
+**Three of the eleven found their own instrument at fault before the product.** The orphan-fixture
+check reported twenty orphans and nineteen were its own — it never looked in `src/`, where half
+the fixtures are read. The flag-drift rewrite passed a planted drift. The `setting:` claim was
+disproved by the test written to prove it. Each is recorded where it happened rather than quietly
+corrected, because *a check that examines the wrong thing and reports a finding* is the same
+defect as one that reports success, and this document's whole subject is the second.
+
+**Two corrections to the grade, which is the specification.** R-9 says *"nothing measures
+latency"* — `tests/latency_budget_tests.rs` has existed since `02a4ec9`, with two ceilings and a
+call-counting property test. What was missing is a budget per command *class* and a report to the
+user, and that is what was built. Q15's `export` half was ruled with `bundle` on the reasoning
+and never measured; measured now, **`export` already honoured the flag**, so W43's code change is
+`bundle` alone.
+
+**Untouched, and still the two that would move the grade most:** W18's supported/experimental
+split, and a real lifecycle for the 24 of 56 backends that have never had one. Nothing here
+touched the safety core, which came through round 5's adversarial pass intact.
+
 ## Session 2026-07-30 (second) — the round-4 grade: a preview that armed a removal, and four gates that examined the wrong thing
 
 `docs/GRADE-2026-07-30.md` graded the tree **B−** and named one blocker and four defects. All five
