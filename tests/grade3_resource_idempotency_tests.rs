@@ -31,6 +31,20 @@ struct Fixture {
 }
 
 impl Fixture {
+    /// **The fixture root is handed to the child as its home directory** (see `run`), and that is
+    /// not incidental. `link:` placement asks before writing a target outside the home directory
+    /// (`backends/link.rs:80`, `dirs::home_dir()`), and this fixture's targets are wherever the
+    /// checkout happens to be. On the machine it was written on that is `C:\Users\Administrator\…`
+    /// — inside home, so all three files were placed and the test passed. In a container at
+    /// `/src`, and on any runner that checks out elsewhere, the first sync placed nothing and the
+    /// control fired. **It was red on ubuntu-latest and macos-latest from the day it was
+    /// committed**: the S33 shape ("passes wherever a global git identity exists") with a
+    /// different environmental accident, and mine.
+    ///
+    /// Pointing `HOME` at the fixture makes the targets inside home *by construction* rather than
+    /// by luck, on every host. The behaviour under test is unchanged, and was re-verified by hand
+    /// in a Linux container before this was touched: three consecutive syncs leave three files,
+    /// `already up to date`, and no `.linix-backup`.
     fn new(name: &str) -> Self {
         let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
         let _ = std::fs::remove_dir_all(&root);
@@ -73,12 +87,30 @@ impl Fixture {
         names
     }
 
+    /// The placed files' modification times, in `dest_listing` order. The filesystem's answer to
+    /// "did the placement run again", which every platform can give — unlike a warning string.
+    fn dest_mtimes(&self) -> Vec<std::time::SystemTime> {
+        self.dest_listing()
+            .iter()
+            .map(|n| {
+                std::fs::metadata(self.root.join("dest").join(n))
+                    .and_then(|m| m.modified())
+                    .expect("a placed file has a modification time")
+            })
+            .collect()
+    }
+
     fn run(&self, args: &[&str]) -> (String, i32) {
         let out = Command::new(env!("CARGO_BIN_EXE_linix"))
             .args(args)
             .current_dir(&self.root)
             .env("LINIX_CONFIG_DIR", self.cfg())
             .env("LINIX_DATA_DIR", self.root.join("data"))
+            // The fixture IS the home directory, so every `@target=` below it is inside home on
+            // any host. Without this the test only passed where the checkout happened to sit
+            // under the user's home — see `new`.
+            .env("HOME", &self.root)
+            .env("USERPROFILE", &self.root)
             .stdin(std::process::Stdio::null())
             .output()
             .expect("the binary should run");
@@ -120,15 +152,21 @@ fn a_second_sync_leaves_no_backup_of_linixs_own_file() {
     );
 }
 
-/// The work itself, not just its litter: a run with nothing to do must not report doing the
-/// placement. `check` and `plan` both say there is nothing to place.
+/// The work itself, not just its litter: a run with nothing to do must not redo the placement.
+/// `check` and `plan` both say there is nothing to place.
+///
+/// **This asserted on the count of `Link:` in the output until 2026-07-30, and that string is the
+/// Windows-only cross-drive fallback warning** — so on Linux and macOS the count was zero, the
+/// control fired, and the test was red in CI from the day it was committed while passing on the
+/// author's box. Modification times are the same question asked of the filesystem instead of of a
+/// message, and every platform has them.
 #[test]
 fn a_second_sync_does_not_re_place_what_is_already_in_place() {
     let f = Fixture::new("grade3-resource-work");
     let (first, _) = f.run(&["sync", "-y"]);
-    let placements_first = first.matches("Link:").count();
-    assert!(
-        placements_first >= 3,
+    assert_eq!(
+        f.dest_listing(),
+        vec!["s0", "s1", "s2"],
         "the fixture's own first sync placed nothing, so a quiet second run would prove \
          nothing:\n{first}"
     );
@@ -140,13 +178,30 @@ fn a_second_sync_does_not_re_place_what_is_already_in_place() {
          disagreement:\n{check}"
     );
 
+    // Past the coarsest filesystem timestamp granularity in play, so that a re-copy is bound to
+    // show up as a different mtime rather than hiding inside one tick.
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let before = f.dest_mtimes();
+
+    // The instrument, self-tested: if writing a file did NOT move its mtime, everything below
+    // would pass no matter what `sync` did.
+    std::fs::write(f.root.join("dest").join("s0"), "touched\n").unwrap();
+    assert_ne!(
+        f.dest_mtimes()[0],
+        before[0],
+        "this filesystem did not change an mtime on write, so the comparison below cannot fail"
+    );
+    // Put it back so `sync` still sees a converged tree.
+    std::fs::write(f.root.join("dest").join("s0"), "content-0\n").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1200));
+    let before = f.dest_mtimes();
+
     let (second, _) = f.run(&["sync", "-y"]);
     assert_eq!(
-        second.matches("Link:").count(),
-        0,
-        "`sync` re-placed {} resource(s) that `check` had just called converged, under a summary \
+        f.dest_mtimes(),
+        before,
+        "`sync` rewrote resource(s) that `check` had just called converged, under a summary \
          reading `already up to date`:\n{}",
-        second.matches("Link:").count(),
         second.trim()
     );
 }
