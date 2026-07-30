@@ -9,6 +9,7 @@
 #   ./scripts/harness-mutation-test.sh                 # report
 #   ./scripts/harness-mutation-test.sh --check         # fail if survivors exceed the budget
 #   SURVIVOR_BUDGET=80 ./scripts/harness-mutation-test.sh --check
+#   CAUGHT_FLOOR=30 ./scripts/harness-mutation-test.sh --check
 #
 # The budget is a ratchet, not a target. It exists so the number can only go down: a new
 # exit-code-only check raises it and fails this gate, which is the moment to add the assertion
@@ -47,10 +48,25 @@ done
 #
 # Each number is a ratchet in its own right: lower it when a batch is fixed, never raise it.
 case "$HARNESS" in
-    */run-in-container.sh) DEFAULT_BUDGET=92 ;;
-    *)                     DEFAULT_BUDGET=86 ;;
+    */run-in-container.sh) DEFAULT_BUDGET=92; DEFAULT_FLOOR=40 ;;
+    *)                     DEFAULT_BUDGET=86; DEFAULT_FLOOR=33 ;;
 esac
 BUDGET="${SURVIVOR_BUDGET:-$DEFAULT_BUDGET}"
+# The floor under CAUGHT — the half this gate did not have.
+#
+# A ceiling on survivors cannot tell "the checks got stronger" from "the checks were deleted".
+# Proven rather than argued: pointed at a harness with three checks it reported `ok: 2
+# survivors, within the budget of 92; 1 checks did their job` and exited 0. Deleting every
+# effect assertion while still invoking every subcommand passed this gate, the lifecycle ratchet
+# and the subcommand audit alike.
+#
+# Measured 2026-07-30: the Windows harness catches 35 and the container harness 44 (the latter
+# run outside a container, where it reports one survivor fewer than CI does). The floors are set
+# a little under each, because this gate exists to catch a COLLAPSE — 35 down to 1 — and not a
+# wobble of one or two checks between hosts. Ratchet them up when a batch of checks is
+# strengthened; never down to get green, which is the same instruction the budget carries in the
+# other direction.
+FLOOR="${CAUGHT_FLOOR:-$DEFAULT_FLOOR}"
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
@@ -118,4 +134,12 @@ if [ "$SURVIVORS" -gt "$BUDGET" ]; then
     echo "         Add an assertion that looks at the effect, rather than raising the budget."
     exit 1
 fi
-echo " ok: $SURVIVORS survivors, within the budget of $BUDGET; $CAUGHT checks did their job."
+if [ "$CAUGHT" -lt "$FLOOR" ]; then
+    echo " FAILED: only $CAUGHT checks caught the do-nothing binary, under the floor of $FLOOR."
+    echo "         The survivor budget above cannot tell stronger checks from FEWER checks."
+    echo "         If assertions were deliberately removed, lower the floor in this file and say"
+    echo "         why in the commit. If they were not, something stopped running."
+    exit 1
+fi
+echo " ok: $SURVIVORS survivors, within the budget of $BUDGET;"
+echo "     $CAUGHT checks did their job, at or above the floor of $FLOOR."

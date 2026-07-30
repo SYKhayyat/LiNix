@@ -360,6 +360,34 @@ else
 fi
 rm -rf "$(dirname "$_silent")"
 
+# And the other side of the same gate (R-7). A ceiling on survivors cannot tell "the checks got
+# stronger" from "the checks were deleted": pointed at a harness with three checks, the gate
+# reported `ok: 2 survivors, within the budget of 92; 1 checks did their job` and exited 0. The
+# collapse case above only fires when a harness emits NOTHING; a harness reduced from 121 checks
+# to 3 emits plenty.
+echo "== the mutation gate fails when a harness still runs but its assertions are gone"
+TOTAL=$((TOTAL + 1))
+_tinydir="$(mktemp -d)"
+_tiny="$_tinydir/tiny-harness.sh"
+cat > "$_tiny" <<'TINYEOF'
+#!/usr/bin/env bash
+LX="${LINIX:-linix}"
+ok()  { echo "  PASS  $1"; }
+nok() { echo "  FAIL  $1"; }
+if "$LX" --version >/dev/null 2>&1; then ok "linix runs"; else nok "linix runs"; fi
+if "$LX" init      >/dev/null 2>&1; then ok "init runs";  else nok "init runs";  fi
+if "$LX" eval | grep -q schema;       then ok "eval emits a model"; else nok "eval emits a model"; fi
+TINYEOF
+chmod +x "$_tiny"
+if bash "$_mg" "$_tiny" --check >/tmp/mg-floor.out 2>&1; then
+    echo "  BAD   the mutation gate passed a harness with three checks and one real assertion:"
+    sed -n 's/^/        /p' /tmp/mg-floor.out | tail -3
+    BAD=$((BAD + 1))
+else
+    echo "  ok    a harness whose assertions were deleted fails the mutation gate"
+fi
+rm -rf "$_tinydir"
+
 # Gate parity: a local gate weaker than CI is a local GO that CI turns into a NO-GO, found
 # after the push instead of before it. E3/E4 was one instance (`cargo fmt` informational
 # locally, fatal in CI); the class is that three files list the gates and nobody diffs them.
