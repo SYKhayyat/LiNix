@@ -3,8 +3,8 @@ use crate::app::{LuaHooks, MetricsCollector, ShimManager};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
 use crate::core::{
-    CommandExecutor, Error, GraphAction, Journal, PackageSpec, Result, SnapshotManager,
-    StateRegistry, Transaction, TransactionConfig,
+    CommandExecutor, Error, GraphAction, Journal, PackageSpec, Result, Retryability,
+    SnapshotManager, StateRegistry, Transaction, TransactionConfig,
 };
 use crate::utils::progress::ProgressReporter;
 use std::sync::Arc;
@@ -738,11 +738,14 @@ impl<'a> SyncEngine<'a> {
                         );
                         recovered.push(format!("{} {}", verb, key));
                     } else {
+                        let e = remediation_res.err();
                         error!(
-                            "could not recover {} — {:?}. The system may be in a partial \
-                             state for this package; re-run `linix sync`.",
+                            "could not recover {} — {}. {} The entry stays recorded as \
+                             interrupted, so nothing claims this package is installed.",
                             key,
-                            remediation_res.err()
+                            e.as_ref()
+                                .map_or("no reason given".to_string(), |e| e.to_string()),
+                            what_to_do_about(e.as_ref(), &key),
                         );
                         failed.push(key);
                     }
@@ -766,16 +769,55 @@ impl<'a> SyncEngine<'a> {
                 kept.join(", ")
             );
         }
-        if !failed.is_empty() {
-            warn!(
-                "{} operation(s) could NOT be recovered: {}. Re-run `linix sync`.",
-                failed.len(),
-                failed.join(", ")
-            );
+        {
+            let mut j = self.journal.lock().await;
+            let _ = j.cleanup();
         }
 
-        let mut j = self.journal.lock().await;
-        let _ = j.cleanup();
+        // A command that says "1 operation(s) could NOT be recovered" and then exits 0 has
+        // told a script the opposite of what it told the person reading it — `linix heal &&
+        // echo ok` printed ok. U21 gave this program an exit vocabulary; the recovery path
+        // was the last one not using it.
+        if !failed.is_empty() {
+            return Err(Error::Other(format!(
+                "{} interrupted operation(s) could not be recovered: {}. Each is still \
+                 recorded as interrupted, so `heal` will try again — read the error above \
+                 for the one that says what to change.",
+                failed.len(),
+                failed.join(", ")
+            )));
+        }
         Ok(())
+    }
+}
+
+/// What to tell a user about an interrupted operation the recovery could not complete.
+///
+/// Driven off the classification the error already carries rather than a single sentence for
+/// every case: `heal` used to print `retry: Permanent, absent_name: true` — in Rust's `Debug`
+/// syntax, internal field names and all — and then advise *"re-run `linix sync`"*, which is
+/// the one thing that cannot help when the name does not exist.
+fn what_to_do_about(e: Option<&Error>, key: &str) -> String {
+    let Some(e) = e else {
+        return "Re-run `linix heal`.".to_string();
+    };
+    if e.says_a_name_is_absent() {
+        return format!(
+            "The manager says that name does not exist, so `sync` will keep failing the same \
+             way until the line naming it is corrected or removed with `linix unmanage {key}`."
+        );
+    }
+    match e.retryability() {
+        Retryability::Transient => {
+            "That failure is a passing one — a window, a lock or a connection. Run `linix heal` \
+             again."
+                .to_string()
+        }
+        Retryability::Permanent | Retryability::Exhausted => {
+            "The same command will fail the same way, so fix the cause the error names before \
+             re-running `linix heal`."
+                .to_string()
+        }
+        Retryability::Unknown => "Re-run `linix heal`.".to_string(),
     }
 }

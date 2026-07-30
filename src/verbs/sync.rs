@@ -41,7 +41,13 @@ pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
     let engine = app.sync_engine().await;
     if app.journal.lock().await.needs_recovery() {
         warn!("the transaction journal records an interrupted run; healing first.");
-        engine.heal().await?;
+        // `heal` now fails when it could not close an entry, and `linix heal` exits non-zero
+        // for it. Here it must not: one package whose recovery cannot complete would block
+        // every other package on the machine from converging, and the entry stays recorded
+        // as interrupted either way, so the next run tries it again.
+        if let Err(e) = engine.heal().await {
+            warn!("{e} Continuing with the sync.");
+        }
     }
 
     let mut resolver = linix::app::sync::resolver::StateResolver::new(

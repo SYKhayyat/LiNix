@@ -67,6 +67,7 @@ impl Leases<'_> {
             "{} package(s) have expired leases — reclaiming.",
             expired.len()
         );
+        let mut failed = Vec::new();
         for (backend, name) in expired {
             if let Some(b) = self.registry.get(&backend) {
                 if let Some(inst) = b.as_installable() {
@@ -76,6 +77,7 @@ impl Leases<'_> {
                         .await
                     {
                         warn!("failed to remove expired {}:{}: {}", backend, name, e);
+                        failed.push(format!("{}:{}", backend, name));
                         continue;
                     }
                     self.state.lock().await.remove(&backend, &name);
@@ -83,7 +85,20 @@ impl Leases<'_> {
             }
         }
         self.state.lock().await.save()?;
-        Ok(())
+        // Reported to the caller rather than swallowed. `perform_maintenance` still decides
+        // that a failed sweep must not fail the user's command — housekeeping is not the
+        // command — but the decision is now made at the call site, in a line a reader can see,
+        // instead of by a function that returns success after failing. `heal` had the same
+        // shape and it reached the exit code (R-6).
+        if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(Error::Other(format!(
+                "{} expired lease(s) could not be reclaimed and are still installed: {}",
+                failed.len(),
+                failed.join(", ")
+            )))
+        }
     }
     /// Reinstall a single package by backend + name (best-effort restore). Version is
     /// intentionally not pinned — restore is reinstall-by-name, and a backend that no

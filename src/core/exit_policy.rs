@@ -258,6 +258,11 @@ pub fn cargo() -> ExitPolicy {
             "no binaries",
             "nothing to install",
             "does not have these features",
+            // `cargo uninstall` on something this machine does not have. Permanent and NOT
+            // absent, by the same distinction as the two above: it says nothing about whether
+            // the crate exists, only that it is not installed here — so a retry cannot help
+            // and a withdrawal would delete a line that is correct.
+            "did not match any packages",
         ],
         absent_markers: vec!["could not find"],
         ..ExitPolicy::default()
