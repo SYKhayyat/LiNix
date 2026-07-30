@@ -136,7 +136,16 @@ async fn main() -> Result<()> {
     // U21: the result is mapped to the exit-code table rather than returned straight, so a
     // guard refusal (3) and a read-only command that found work (2) are distinguishable from
     // a failure (1). `anyhow`'s default would collapse all three into 1.
+    // Timed here, around the one dispatch, rather than inside each verb: a budget every verb
+    // has to remember to check is a budget the next verb forgets. Nothing measured latency at
+    // all before this, which is how a 98-second `info` shipped while `search` answered the same
+    // question in seconds (E14).
+    let started = std::time::Instant::now();
     let outcome = dispatch(&app, &cli).await;
+    linix::core::latency::report_if_over(
+        &linix::core::latency::subcommand_name(&cli.command),
+        started.elapsed(),
+    );
     finish(&app, outcome).await
 }
 

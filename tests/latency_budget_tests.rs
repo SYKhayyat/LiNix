@@ -146,3 +146,147 @@ go
         "the qualifier was passed through as part of the package name: {calls:?}"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// BUILDER round 6, W41 / R-9 — and a correction to the finding that asked for it.
+//
+// R-9 says "nothing measures latency". **This file already did**, committed in `02a4ec9` with
+// W14's fix: two ceilings and one call-counting property test. What did not exist is what
+// §8.1's A+ line actually names — a budget PER COMMAND CLASS, covering more than `info`, and a
+// number reaching the user when one is crossed. That is what is added here, in this file
+// rather than in a second one.
+//
+// Measured for this order on Windows, 24 ready backends, debug build, 111 adopted packages:
+//
+//     policy / vars / eval / check config        0.13 – 0.32 s
+//     list                                       3.4  – 3.9  s
+//     check health                               4.3  – 5.4  s
+//     check                                      8.5  – 18.3 s
+//
+// The split is the finding, and it decides which classes carry a budget at all: a command that
+// reads only files is fast on every machine, and one that asks every manager costs whatever
+// the managers cost — a fact about the host. So `EveryBackend` and `Mutating` carry none, and
+// saying that out loud is better than a number nobody can defend.
+// ---------------------------------------------------------------------------------------
+
+/// Every config-only command against its class budget — the class the two ceilings above did
+/// not cover, and the one whose cost is LiNix's alone.
+#[test]
+fn every_config_only_command_stays_inside_its_class_budget() {
+    use linix::core::latency::Class;
+    let budget = Class::ConfigOnly.budget().expect("config-only carries one");
+    let dir = fresh("latency-class-config");
+    let (_, code) = run_timed(&dir, &["init"]);
+    assert_eq!(code, 0, "init failed");
+
+    let mut over = Vec::new();
+    for args in [
+        vec!["policy"],
+        vec!["vars"],
+        vec!["eval"],
+        vec!["check", "config"],
+        vec!["protected", "jq"],
+    ] {
+        let (elapsed, code) = run_timed(&dir, &args);
+        // The control: a command that failed did not do the work, so its clock says nothing.
+        assert!(
+            code == 0 || code == 2,
+            "`linix {}` exited {code}, so its timing measures nothing",
+            args.join(" ")
+        );
+        if elapsed > budget {
+            over.push(format!("`linix {}` took {elapsed:?}", args.join(" ")));
+        }
+    }
+
+    assert!(
+        over.is_empty(),
+        "these read no manager and still crossed {}s:\n  {}\n\nMeasured at 0.13-0.32s when the \
+         budget was set, so crossing it is an order of magnitude and not load.",
+        budget.as_secs(),
+        over.join("\n  ")
+    );
+}
+
+/// The class table names subcommands, and a name is the thing that goes stale. `undo` sat in
+/// two harness exemption lists after being renamed away because nothing validated the list.
+#[test]
+fn every_subcommand_the_class_table_names_still_exists() {
+    let help = Command::new(env!("CARGO_BIN_EXE_linix"))
+        .arg("--help")
+        .output()
+        .expect("the binary should run");
+    let help = String::from_utf8_lossy(&help.stdout).into_owned();
+
+    const NAMED: &[&str] = &[
+        "policy",
+        "vars",
+        "eval",
+        "why",
+        "protected",
+        "completions",
+        "path",
+        "history",
+        "diff",
+        "sbom",
+        "export",
+        "plan",
+        "profile",
+        "module",
+        "edit",
+        "config",
+        "hooks",
+        "schedule",
+        "fleet",
+        "info",
+        "list",
+        "search",
+        "check",
+        "adopt",
+    ];
+
+    let missing: Vec<&str> = NAMED
+        .iter()
+        .copied()
+        .filter(|n| !help.contains(&format!("  {n} ")) && !help.contains(&format!("  {n}\n")))
+        .collect();
+
+    assert!(
+        missing.is_empty(),
+        "the latency class table names subcommands `--help` does not list: {missing:?}"
+    );
+}
+
+/// The classification and the name it is looked up by, which is the half a wall-clock test
+/// cannot pin without measuring the runner's mood instead of the program.
+#[test]
+fn the_class_of_a_command_is_read_off_its_own_variant() {
+    use linix::core::latency::{subcommand_name, Class};
+
+    // clap kebab-cases the variant; this reverses exactly that, so there is no second list of
+    // sixty-six names to drift.
+    #[derive(Debug)]
+    #[allow(dead_code)]
+    enum Fake {
+        SelfUpgrade,
+        Check { config: bool },
+        PurgeUnmanaged,
+    }
+    assert_eq!(subcommand_name(&Fake::SelfUpgrade), "self-upgrade");
+    assert_eq!(subcommand_name(&Fake::Check { config: true }), "check");
+    assert_eq!(subcommand_name(&Fake::PurgeUnmanaged), "purge-unmanaged");
+
+    assert_eq!(Class::of("eval"), Class::ConfigOnly);
+    assert_eq!(Class::of("info"), Class::OneBackend);
+    assert_eq!(Class::of("list"), Class::EveryBackend);
+    assert!(
+        Class::of("list").budget().is_none(),
+        "a host with forty managers is slow because it has forty managers"
+    );
+    assert_eq!(
+        Class::of("linix-command-that-does-not-exist"),
+        Class::Mutating,
+        "a name the table does not know must fall to the class with NO budget, never to one \
+         with a tight one — an unknown command is one nobody measured"
+    );
+}

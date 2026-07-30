@@ -14,6 +14,7 @@ pub mod extras_lock;
 pub mod git;
 pub mod hook_lock;
 pub mod journal;
+pub mod latency;
 pub mod manager;
 pub mod package;
 pub mod ratelimiter;
