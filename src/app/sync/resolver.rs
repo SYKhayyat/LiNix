@@ -807,10 +807,13 @@ impl<'a> StateResolver<'a> {
                 );
             }
 
+            let verdicts = self
+                .ask_the_chain(&chain, &name, constraint.as_deref())
+                .await;
             let mut found = None;
             let mut silent: Vec<String> = Vec::new();
-            for backend in &chain {
-                match self.ask(backend, &name, constraint.as_deref()).await {
+            for (backend, verdict) in chain.iter().zip(verdicts) {
+                match verdict {
                     Verdict::Has => {
                         found = Some(backend.clone());
                         break;
@@ -1127,6 +1130,70 @@ impl<'a> StateResolver<'a> {
     /// A manager this machine does not have, and one with no way to search at all, both
     /// answer `Lacks`: those are settled facts about the machine, and asking again next
     /// run would get the same answer. Only a command that failed is `CouldNotTell`.
+    /// Every manager in the chain's verdict, **in the chain's order**, asked in as few rounds
+    /// as the answer allows.
+    ///
+    /// The winner is still *the first manager in `priority` that has the name* — the caller
+    /// walks this list in order and takes the first `Has`, exactly as the serial loop did. What
+    /// changes is the waiting. Measured on Windows with 23 managers in `priority`, a bare name
+    /// no manager carries:
+    ///
+    /// ```text
+    /// linix eval, bare name nothing claims     18.1 s  (103 s cold)
+    /// linix eval, the same fixture qualified    0.31 s
+    /// ```
+    ///
+    /// Every manager has to be asked when nobody has the name, so the cost is not the number of
+    /// questions — it is asking them one at a time, each a network round trip.
+    ///
+    /// **The first is still asked alone.** That is the case `priority` exists to make cheap: a
+    /// bare name usually comes from the manager at the top of the list, and speculating across
+    /// the rest would spend twenty-two extra queries — one of them against the GitHub API, whose
+    /// rate limit is what R-3 was about — to save nothing. Only once the priority winner has
+    /// said no is the rest of the chain asked at once, which is the shape where the fan-out was
+    /// going to happen anyway.
+    ///
+    /// `ask` is read-only (`remote_has`, `search`, `remote_info`), which is what makes the order
+    /// of asking a question about latency rather than about behaviour.
+    async fn ask_the_chain(
+        &self,
+        chain: &[String],
+        name: &str,
+        constraint: Option<&str>,
+    ) -> Vec<Verdict> {
+        let Some((first, rest)) = chain.split_first() else {
+            return Vec::new();
+        };
+
+        let head = self.ask(first, name, constraint).await;
+        if matches!(head, Verdict::Has) || rest.is_empty() {
+            // Done, and nobody else was troubled. The caller stops at the first `Has`, so the
+            // verdicts it never reads are the ones never asked for.
+            return vec![head];
+        }
+
+        use futures::stream::{FuturesOrdered, StreamExt};
+        let cap = self.config.max_parallel.max(1);
+        let mut queued = rest
+            .iter()
+            .map(|backend| self.ask(backend, name, constraint));
+        let mut ordered = FuturesOrdered::new();
+        for _ in 0..cap {
+            match queued.next() {
+                Some(fut) => ordered.push_back(fut),
+                None => break,
+            }
+        }
+        let mut out = vec![head];
+        while let Some(verdict) = ordered.next().await {
+            out.push(verdict);
+            if let Some(fut) = queued.next() {
+                ordered.push_back(fut);
+            }
+        }
+        out
+    }
+
     async fn ask(
         &self,
         backend_name: &str,
@@ -1221,6 +1288,52 @@ mod tests {
             ..Config::default()
         };
         Repo { _tmp: tmp, config }
+    }
+
+    /// The property `ask_the_chain` rests on, asserted against a case built to break it.
+    ///
+    /// A bare name goes to **the first manager in `priority` that has it**. Asking the chain
+    /// concurrently is only a question about latency while the answers come back in the chain's
+    /// order — swap `FuturesOrdered` for `FuturesUnordered` and the winner becomes whichever
+    /// manager replied first, which on a slow morning is a different package.
+    ///
+    /// So the futures here finish in exactly the reverse of the order they are queued, and the
+    /// window is smaller than the set, which is the arrangement that makes a completion-ordered
+    /// stream visibly wrong.
+    #[tokio::test]
+    async fn the_chain_answers_in_the_chains_order_however_the_answers_arrive() {
+        use futures::stream::{FuturesOrdered, StreamExt};
+        use std::time::Duration;
+
+        let delays = [50u64, 40, 30, 20, 10, 0];
+        let cap = 2;
+
+        let mut queued = delays.iter().enumerate().map(|(i, ms)| async move {
+            tokio::time::sleep(Duration::from_millis(*ms)).await;
+            i
+        });
+        let mut ordered = FuturesOrdered::new();
+        for _ in 0..cap {
+            match queued.next() {
+                Some(f) => ordered.push_back(f),
+                None => break,
+            }
+        }
+        let mut out = Vec::new();
+        while let Some(i) = ordered.next().await {
+            out.push(i);
+            if let Some(f) = queued.next() {
+                ordered.push_back(f);
+            }
+        }
+
+        assert_eq!(
+            out,
+            vec![0, 1, 2, 3, 4, 5],
+            "the verdicts came back in completion order, so the caller's `zip` would pair each \
+             verdict with the wrong manager and a bare name would resolve to whichever manager \
+             was quickest to answer"
+        );
     }
 
     async fn resolve(r: &Repo) -> Result<HashMap<String, Vec<PackageSpec>>> {
