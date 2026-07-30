@@ -67,6 +67,15 @@ dispatch.
 a container **37 of 38 targets**; harness predicates **57/57**, each new one watched failing first;
 `decision-count.sh --check` ok.
 
+**Confirmed on CI** (run **30508477764**, the same dispatch shape): **15 of 16 jobs green**, the
+sixteenth being the tag-gated release job. `Integration (ubuntu)` now reports `PASS real-lifecycle
+ratchet: 7 >= 7 recorded for container-linux-ubuntu-local` — the first time in this repo's history
+that the ratchet has compared a container run against a record — and its mutation gate reads **45
+caught, 92 survivors within the budget of 92**, where it was 44 and 93 before. The four distro
+legs and `tools` all cleared the floors read off the previous run, so those numbers reproduce. On
+`Build on ubuntu-latest`, `--no-fail-fast` ran the whole suite: **42 targets green and exactly one
+failure**, which is the one below.
+
 **Open, and deliberately not answered in code: Q14.** The one remaining red target is
 `grade2_flag_drift_blindspot_tests`, and it is red for a reason that is not drift. The capability
 table names helm **4**'s `--verify=false`; on helm 3 the flag does not exist, LiNix withholds it,
