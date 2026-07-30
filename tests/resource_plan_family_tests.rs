@@ -99,23 +99,44 @@ fn declarations(f: &Fixture) -> (String, Vec<String>) {
     std::fs::write(&src, "content\n").unwrap();
     let dst = f.root.join("dest").join("f1");
 
-    let module = format!(
+    let mut module = format!(
         "link:{} @target={}\n\
          service:linix-test-svc @enabled=false\n\
          setting:org.linix.test/key @value=1\n\
-         shim:linix-test-shim\n\
-         repo:scoop:linix-test-bucket\n",
+         shim:linix-test-shim\n",
         Fixture::decl(&src),
         Fixture::decl(&dst)
     );
-    let keys = vec![
+    let mut keys = vec![
         format!("link:{}", Fixture::decl(&dst)),
         "service:linix-test-svc".to_string(),
         "setting:org.linix.test/key".to_string(),
         "shim:linix-test-shim".to_string(),
-        "repo:scoop:linix-test-bucket".to_string(),
     ];
+    // `repo:` is the one kind that cannot be a constant: it names a package manager, and
+    // resolution refuses a `repo:` whose backend is not in this host's `priority` — so hardcoded
+    // `scoop` made the whole module unresolvable anywhere but Windows, and every count below
+    // then read `does not resolve` instead of a number. Taken from the `priority` that `init`
+    // just wrote, so the line names a manager this machine actually uses.
+    if let Some(be) = repo_backend(f) {
+        module.push_str(&format!("repo:{be}:linix-test-bucket\n"));
+        keys.push(format!("repo:{be}:linix-test-bucket"));
+    } else {
+        eprintln!(
+            "  note: no repository-owning manager in this host's priority list, so the `repo:` \
+             kind is not covered by this run — the other four are."
+        );
+    }
     (module, keys)
+}
+
+/// A manager on this host that owns repositories, or `None`.
+fn repo_backend(f: &Fixture) -> Option<String> {
+    let priority = std::fs::read_to_string(f.cfg().join("priority")).unwrap_or_default();
+    ["scoop", "brew", "apt", "dnf", "pacman", "apk"]
+        .iter()
+        .find(|b| priority.lines().any(|l| l.trim() == **b))
+        .map(|b| (*b).to_string())
 }
 
 /// A resource nothing has ever applied is work, whatever kind it is — and the two commands a

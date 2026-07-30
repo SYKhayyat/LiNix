@@ -104,9 +104,19 @@ fn check_reports_drift_for_a_declared_resource_that_is_not_there() {
 
     // Control: drift itself works. A missing *package* is reported, on this same fixture, so a
     // green run below cannot be explained by "check is broken" or "the module did not parse".
+    //
+    // `cargo:`, and qualified on purpose. The prefix has to name a backend in this host's
+    // priority list or the module does not resolve at all — as `scoop:` this read `scoop is not
+    // a backend LiNix uses` on macOS and `scoop isn't in your priority list` on a Windows runner
+    // without scoop, the control reporting that the module did not parse, which is the one
+    // explanation it exists to rule out. Bare is not the fix either: an unqualified name is
+    // searched for across the managers, and a deliberately absent one is refused with `no
+    // package manager this line accepts has …`. A name is only declarable-but-missing when
+    // something else decides the manager. `cargo` is registered and in `priority` on every
+    // platform this suite runs on.
     std::fs::write(
         f.cfg().join("modules/starter.txt"),
-        "scoop:linix-no-such-pkg-zzz\n",
+        "cargo:linix-no-such-pkg-zzz\n",
     )
     .unwrap();
     // U21: a read-only command that looked and found work exits 2, so 0 and 2 both mean it ran.
