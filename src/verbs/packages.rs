@@ -595,35 +595,49 @@ pub(crate) async fn handle_hold(app: &App, packages: &[String]) -> Result<()> {
         return Ok(());
     }
     let mut n = 0usize;
-    {
+    let recorded = {
         let mut state = app.state.lock().await;
         for p in packages {
             if state.hold(p) {
                 n += 1;
             }
         }
-        state.save()?;
+        state.save()?
+    };
+    if recorded {
+        println!(
+            "Held {} package(s). `linix upgrade` will skip them until `linix unhold`.",
+            n
+        );
+    } else {
+        println!(
+            "[DRY-RUN] would hold {} package(s). Nothing was recorded.",
+            n
+        );
     }
-    println!(
-        "Held {} package(s). `linix upgrade` will skip them until `linix unhold`.",
-        n
-    );
     Ok(())
 }
 
 pub(crate) async fn handle_unhold(app: &App, packages: &[String]) -> Result<()> {
     app.require_known_spec_backends(packages).await?;
     let mut n = 0usize;
-    {
+    let recorded = {
         let mut state = app.state.lock().await;
         for p in packages {
             if state.unhold(p) {
                 n += 1;
             }
         }
-        state.save()?;
+        state.save()?
+    };
+    if recorded {
+        println!("Released {} hold(s).", n);
+    } else {
+        println!(
+            "[DRY-RUN] would release {} hold(s). Nothing was recorded.",
+            n
+        );
     }
-    println!("Released {} hold(s).", n);
     Ok(())
 }
 
