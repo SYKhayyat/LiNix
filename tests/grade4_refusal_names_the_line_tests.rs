@@ -172,3 +172,102 @@ fn a_refusal_does_not_reprint_the_control_bytes_it_rejects() {
         echoed.join(", ")
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// BUILDER round 6 — the family. The two tests above drive one command, `eval`, with two
+// characters. The class is "a refusal that skipped the location decoration" and "a message
+// that hands the terminal bytes it took from a file", and neither is a property of `eval`.
+//
+// Driven through the binary across every command that reads the model, so the assertion is
+// about what a user sees rather than about which `format!` a fix happened to touch. A fix
+// applied at one call site passes the tests above and fails these.
+// ---------------------------------------------------------------------------------------
+
+/// The characters that do something to a terminal, and the bytes that prove it.
+const HOSTILE: [(&str, char, &[u8]); 5] = [
+    ("rtl", '\u{202E}', &[0xE2, 0x80, 0xAE]), // RIGHT-TO-LEFT OVERRIDE
+    ("lri", '\u{2066}', &[0xE2, 0x81, 0xA6]), // LEFT-TO-RIGHT ISOLATE
+    ("esc", '\u{1b}', &[0x1b]),               // ANSI introducer
+    ("zwsp", '\u{200B}', &[0xE2, 0x80, 0x8B]), // ZERO WIDTH SPACE
+    ("ls", '\u{2028}', &[0xE2, 0x80, 0xA8]),  // LINE SEPARATOR
+];
+
+/// Every command a hostile manifest is read by. `eval` was the only one measured.
+const READERS: [&[&str]; 5] = [
+    &["eval"],
+    &["check", "config"],
+    &["check"],
+    &["--dry-run", "sync", "-y"],
+    &["why", "cargo:anything"],
+];
+
+fn raw(dir: &Path, args: &[&str]) -> Vec<u8> {
+    let out = Command::new(env!("CARGO_BIN_EXE_linix"))
+        .args(args)
+        .current_dir(dir)
+        .env("LINIX_CONFIG_DIR", dir.join("config"))
+        .env("LINIX_DATA_DIR", dir.join("data"))
+        .env("NO_COLOR", "1")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("the binary should run");
+    let mut all = out.stdout;
+    all.extend_from_slice(&out.stderr);
+    all
+}
+
+#[test]
+fn no_command_reprints_a_control_character_it_read_from_a_manifest() {
+    let mut leaks = Vec::new();
+
+    for (tag, ch, bytes) in HOSTILE {
+        let dir = fixture(&format!("grade4-fam-echo-{tag}"), &format!("cargo:{ch}bad"));
+        for args in READERS {
+            if raw(&dir, args).windows(bytes.len()).any(|w| w == bytes) {
+                leaks.push(format!("`linix {}` leaked {tag}", args.join(" ")));
+            }
+        }
+    }
+
+    assert!(
+        leaks.is_empty(),
+        "these commands handed the terminal the control bytes they read out of a module:\n  {}\n\n\
+         NO_COLOR=1 was set, so nothing here is LiNix's own styling. Escaping one message is not \
+         the fix — the name reaches a user through whichever command reads the model first.",
+        leaks.join("\n  ")
+    );
+}
+
+/// The location half of the family, over the same sweep. A refusal a user cannot locate is
+/// the same defect whichever command made it.
+#[test]
+fn every_command_that_refuses_a_hostile_name_says_where_it_is() {
+    let mut unlocated = Vec::new();
+
+    for (tag, ch, _) in HOSTILE {
+        let dir = fixture(&format!("grade4-fam-loc-{tag}"), &format!("cargo:{ch}bad"));
+        for args in [READERS[0], READERS[1], READERS[3]] {
+            let (out, code) = run(&dir, args);
+            if code == 0 {
+                // This command accepted the fixture, so it refused nothing to locate.
+                continue;
+            }
+            if !out.contains(&format!("big.txt:{BAD_LINE}")) {
+                unlocated.push(format!(
+                    "`linix {}` for {tag}: {}",
+                    args.join(" "),
+                    out.lines()
+                        .find(|l| l.contains("rror"))
+                        .unwrap_or("")
+                        .trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        unlocated.is_empty(),
+        "a refusal named neither the file nor the line:\n  {}",
+        unlocated.join("\n  ")
+    );
+}

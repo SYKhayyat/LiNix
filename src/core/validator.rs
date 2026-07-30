@@ -23,6 +23,38 @@ static FORBIDDEN_PATHS: &[&str] = &[
     "C:\\Windows\\System32\\config\\SECURITY",
 ];
 
+/// Render untrusted text for a message a terminal will draw.
+///
+/// A refusal about invisible characters that reprints them is worse than no refusal: U+202E
+/// reverses everything after it as it renders, so the message can be made to read as its own
+/// opposite, and an ANSI escape recolours or erases the lines around it. Manifests arrive from
+/// shared configs, not only from the user's own hand.
+///
+/// Everything outside printable ASCII-and-ordinary-Unicode is named by codepoint instead of
+/// emitted. Ordinary non-ASCII stays as itself — a package name in Cyrillic should read as one
+/// — so the rule is drawn at *what the character does to the display*, not at what alphabet it
+/// belongs to: C0/C1 controls, the bidi overrides and embeddings, the invisible formatting
+/// characters, and the line/paragraph separators.
+pub fn printable(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        let dangerous = c.is_control()
+            // Bidi overrides, embeddings and isolates — the trojan-source family.
+            || ('\u{202A}'..='\u{202E}').contains(&c)
+            || ('\u{2066}'..='\u{2069}').contains(&c)
+            // Zero-width and other invisible formatting.
+            || matches!(c, '\u{200B}'..='\u{200F}' | '\u{FEFF}' | '\u{00AD}')
+            // Line and paragraph separators, which break a message across lines.
+            || matches!(c, '\u{2028}' | '\u{2029}');
+        if dangerous {
+            out.push_str(&format!("<U+{:04X}>", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub struct Validator;
 
 impl Validator {
@@ -60,7 +92,7 @@ impl Validator {
         if name.contains("..") {
             return Err(Error::Validation(format!(
                 "Path traversal detected in name: {}",
-                name
+                printable(name)
             )));
         }
         // A leading path separator normally signals an absolute-path injection attempt — but
@@ -70,14 +102,14 @@ impl Validator {
         {
             return Err(Error::Validation(format!(
                 "Path traversal detected in name: {}",
-                name
+                printable(name)
             )));
         }
 
         if !PACKAGE_NAME_REGEX.is_match(name) {
             return Err(Error::Validation(format!(
                 "Invalid characters in package name: {}",
-                name
+                printable(name)
             )));
         }
 
@@ -143,7 +175,7 @@ impl Validator {
         {
             return Err(Error::Validation(format!(
                 "Invalid backend identifier: {}",
-                name
+                printable(name)
             )));
         }
         Ok(())

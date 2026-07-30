@@ -36,6 +36,24 @@ enum Verdict {
     CouldNotTell(String),
 }
 
+/// Give an error the file and line the declaration came from, in the shape the grammar's own
+/// refusals already use.
+///
+/// A refusal about an invisible character is the one a reader can least find by looking, so it
+/// is the one that most needs a location — and it was the only class arriving without one. The
+/// `__source` tag is how far the origin travels past the parser; a spec that somehow has none
+/// keeps the undecorated message rather than gaining a made-up location.
+fn located(e: Error, source: Option<&String>) -> Error {
+    let Some(origin) = source else { return e };
+    GrammarError::new(
+        origin
+            .parse::<Origin>()
+            .unwrap_or_else(|_| Origin::argument()),
+        e.to_string(),
+    )
+    .into()
+}
+
 /// A candidate list as the line wrote it, for an error to quote back.
 fn describe_candidates(candidates: &Candidates) -> String {
     match candidates {
@@ -346,7 +364,12 @@ impl<'a> StateResolver<'a> {
 
         for specs in state.packages.values_mut() {
             for spec in specs.iter_mut() {
-                Validator::validate_package_name_for(&spec.name, &spec.backend)?;
+                // Located, like every refusal the grammar makes about the same file. The
+                // character validator's refusals are the ones a user can least find by
+                // looking — the character at fault is a bidi override, a NUL or an escape —
+                // and they were the only ones arriving without a file and a line.
+                Validator::validate_package_name_for(&spec.name, &spec.backend)
+                    .map_err(|e| located(e, spec.options.get("__source")))?;
             }
         }
 
