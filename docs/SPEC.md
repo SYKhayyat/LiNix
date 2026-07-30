@@ -13,7 +13,7 @@ which point nobody could find a decision in it and 84 of them had no recorded an
 | [`spec/why.md`](spec/why.md) | V | The reason behind every Part II rule — each one the scar of a real bug. | **Before changing any Part II rule.** |
 | [`spec/plan.md`](spec/plan.md) | III + IV | The work in dependency order, each phase with its exit condition; then the proofs. | When picking up work. |
 | [`spec/bugs.md`](spec/bugs.md) | VI | Bugs killed by this design, and bugs carried forward. | Before building anything. |
-| [`spec/decisions.md`](spec/decisions.md) | — | **All 122 decisions. 120 answered, 2 parked, none open.** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
+| [`spec/decisions.md`](spec/decisions.md) | — | **All 123 decisions. 120 answered, 2 parked, one open (Q14).** Counted, not typed — `scripts/decision-count.sh --check`. | Before proposing anything. |
 | [`spec/history.md`](spec/history.md) | VII | How far the work got, session by session. **The living truth** — every frozen status line drifts behind the tree. | After Part II, before touching anything. |
 | [`spec/proposals/`](spec/proposals/) | VIII–XIII | Six features, all designed and all now ruled. Kept for the reasoning, not the questions. | When building one of them. |
 

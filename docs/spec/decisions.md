@@ -1,4 +1,4 @@
-# The decision register — all 122, and none of them open
+# The decision register — all 123, and one of them open
 
 **One file, six features. None open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -16,7 +16,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **120** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**None are open.** All 122 are accounted for: **120 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**One is open.** All 123 are accounted for: **120 ANSWERED, 2 PARKED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -3577,5 +3577,45 @@ The harness canary moved from `nodejs` to `jq` at the same time: both need the p
 downloads one binary in seconds where nodejs fetches a release tarball.
 
 The rule is in **II.7**; the reason is in **V.102**.
+
+---
+
+---
+
+## Q14
+
+**Status: OPEN.**
+
+**Q14 — What should `@unverified` do on a tool version that has no flag to turn verification
+off?** Q5 ruled that `@unverified` reaches a manager that verifies signatures itself, and named
+helm's `--verify=false`. That flag is **helm 4's**. Measured 2026-07-30 on helm 3.16.2: `helm
+plugin install --help` does not document it, `tool_help::accepts_flag` answers `Some(false)`,
+LiNix withholds it and logs a `tracing::warn!`. GitHub's `ubuntu-latest` ships helm 3, so this is
+the ordinary case rather than the exotic one.
+
+Two consequences, both measured rather than argued:
+
+- A `helm:` line carrying `@unverified` is accepted, resolves, and **does nothing**. If helm then
+  refuses an unsignable source, the advice names the option the user already wrote.
+- **The gate the round-3 grade asked for cannot exist on such a host.** Withholding a correct flag
+  and withholding a drifted one are the same action, so no assertion can tell them apart there.
+  `tests/grade2_flag_drift_blindspot_tests.rs` — written by the grader, verified green on their
+  helm 4.2.3 host and red on a planted mutation — is **red on helm 3**, for a reason that is not
+  drift.
+
+The options:
+
+- **(a) Leave it.** The table targets helm 4, the probe adapts, the warning is the notice. Drift in
+  `VERIFIES_ITSELF` is then detectable only on a helm-4 machine, and the blindspot gate has to
+  become a named skip everywhere else.
+- **(b) Refuse the declaration.** `@unverified` on a backend whose installed tool cannot honour it
+  is a config error, named in the file, so the option never silently does nothing. But it removes
+  the only declaration that installs a helm plugin on helm 3 — which is what Q5's ruling existed
+  to make possible.
+- **(c) Version-split the behaviour**: emit on 4, refuse on 3.
+
+Not decided in code. The builder's lean is **(b)** — "accepted and does nothing" is the class of
+defect this register keeps closing — while noting that (b) is the option that takes a capability
+away from a user on the older tool, which is why the choice is the owner's and not the builder's.
 
 ---

@@ -14,6 +14,68 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-30 — what CI said about the previous session, and the gate that was blind where it mattered
+
+The branch was pushed and CI dispatched (run **30503630610**, `workflow_dispatch` because that is
+the only event that also runs the nightly jobs). **11 of 16 jobs green**, including every leg the
+last session listed as unproven: the `tools` image, gentoo, and the macOS and Windows native
+sweeps. Five failed, and all five were this branch's own work.
+
+**Round 3's N-5 was worse than the grade described, and last session's fix did not touch it.** The
+grade said the ratchet was absent from the container legs; mounting the floor file made it
+*present*. It was still in force nowhere. The floor recorded exactly one host class — a
+developer's Windows box — so **7 of 7 classes in the matrix** took the "no record for this class
+yet" branch, which was a counted `PASS`. A ratchet that has never compared anything, reporting
+green on every platform. Nothing in the suite noticed except the in-container mutation gate,
+counting one more check that survives a do-nothing binary (93 against a budget of 92).
+
+Three defects under one finding, each fixed:
+
+- **The key could not tell two images apart.** It read `/etc/os-release`, which answers `ubuntu`
+  for both the ubuntu image and `tools` — because `tools` is built on Ubuntu. Measured on that
+  run: 25 real lifecycles and 7, filed under one record. Each Dockerfile now declares its own
+  `LINIX_IT_IMAGE`, and a predicate fails if one does not.
+- **No container class had a record.** Every number in `lifecycle-floor.txt` below the first was
+  read off that run rather than chosen.
+- **A first run is now counted as neither pass nor failure**, and a `SMOKE_ONLY` run is not judged
+  at all — its honest count is 0, which no floor can sit under.
+
+**The CRLF gate was blind on the only platform where the bug it guards happens.** `head -c … |
+grep -q $CR` does not fire on a CRLF file under Git Bash: MSYS grep opens files in text mode and
+normalises CRLF before matching. It had caught a *lone* CR — one not followed by LF, which no
+translation touches — which is exactly how it passed its own review last session. It now goes
+through `od -c` and **tests its own detector against a file that must trip it** before concluding
+anything from a negative. Same fix in `run.sh`'s pre-build check, its twin. And
+`scripts/lifecycle-floor.txt` — mounted into the container and parsed there — was the one mounted
+file `.gitattributes` did not pin to LF and no glob covered; a trailing CR makes the ratchet
+compare against something that is not a number, and `[ -lt ]` failing takes the branch that
+reports it satisfied.
+
+**Two fixtures named a backend the host may not have**: the grader's `check` control (`scoop:` —
+`not a backend` on macOS, `not in your priority list` on a Windows runner) and, in this session's
+own new file, `repo:scoop:`. Bare is not the fix: an unqualified name is searched for across the
+managers and a deliberately absent one is refused outright. A qualified cross-platform backend is,
+and `repo:` is read from the `priority` the fixture just wrote.
+
+**`cargo test` is fail-fast across targets, so each host reported one failing target and skipped
+the rest** — three findings visible and the remainder of the suite unmeasured on every platform,
+at 45 minutes a dispatch to learn the next one. `--no-fail-fast` now, and the whole suite was run
+locally on Linux in a container (with helm 3 installed on purpose) rather than one failure per
+dispatch.
+
+**Verified**: Windows 43 targets / 0 failures, clippy `-D warnings` clean, `fmt` clean; Linux in
+a container **37 of 38 targets**; harness predicates **57/57**, each new one watched failing first;
+`decision-count.sh --check` ok.
+
+**Open, and deliberately not answered in code: Q14.** The one remaining red target is
+`grade2_flag_drift_blindspot_tests`, and it is red for a reason that is not drift. The capability
+table names helm **4**'s `--verify=false`; on helm 3 the flag does not exist, LiNix withholds it,
+and `@unverified` on a `helm:` line is accepted and does nothing. On such a host withholding a
+correct flag and withholding a drifted one are the same action, so **no assertion can tell them
+apart** — the grader's own gate, verified green on their helm 4.2.3 box, cannot pass on helm 3.
+Left red on purpose: it is the owner's ruling, and a red test is where an unanswered question
+belongs.
+
 ## Session 2026-07-29 (later) — round 3's six findings, and two rulings that had been half-applied
 
 `docs/GRADE-2026-07-29.md` graded the tree **B** and left nine red tests for six findings. All six
