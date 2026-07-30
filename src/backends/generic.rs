@@ -425,17 +425,18 @@ impl GenericInstallable {
                 // Withheld only on positive evidence that the tool rejects it. `None` — no
                 // such program here, or its help would not run — leaves the capability table
                 // in charge, because a probe that cannot ask has learned nothing.
+                //
+                // And withheld SILENTLY (Q14, ruled 2026-07-30; V.104). helm 3 does not verify
+                // plugins at all, so the state `@unverified` asks for is the state the machine
+                // is already in: "accepted and already true" is a correct no-op, not a defect,
+                // and a warning on a run that did the right thing teaches people that warnings
+                // are noise. The case where silence WOULD be wrong — a tool that verifies under
+                // a flag it has since renamed — is not lost: the install then fails, and
+                // `verification_note` says so at the one moment the distinction matters.
                 if crate::core::tool_help::accepts_flag(self.core.binary(), &chain, arg)
                     != Some(false)
                 {
                     final_args.push(arg.to_string());
-                } else {
-                    tracing::warn!(
-                        "`{}` does not accept `{}`, so `@unverified` cannot turn its own                          verification off here. The install will be subject to it; if it                          refuses the source, this version of `{}` has no way to skip that.",
-                        self.core.binary(),
-                        arg,
-                        self.core.binary()
-                    );
                 }
             }
         }
