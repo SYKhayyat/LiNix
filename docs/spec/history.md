@@ -14,6 +14,111 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-30 (second) — the round-4 grade: a preview that armed a removal, and four gates that examined the wrong thing
+
+`docs/GRADE-2026-07-30.md` graded the tree **B−** and named one blocker and four defects. All five
+are closed, each at the mechanism rather than at the instance, and the round's own thirteen red
+tests — committed by the grader in five files — are green without their assertions being lowered.
+The one-line diagnosis of the round was **"every finding is a gate that examines the wrong thing
+while the product does the wrong thing behind it"**, so each entry below says what the gate now
+examines as well as what the product now does.
+
+**B-1 — `--dry-run adopt` recorded 112 packages as managed and wrote no manifest.** Managed and
+undeclared is the state the model reads as *the user deleted every line*: `linix check` then said
+`112 to remove … run linix sync`. The cause was **two writers**. `utils::file::write_config`
+honoured the flag exactly as II.8b describes; `atomic_write`, the primitive under it, was public,
+shorter, and what every `save()` had always called — the registry, the WAL, and the `github:`/
+`web:` backends' own state files. A writer that honours the flag is no protection while a writer
+that ignores it sits beside it. There is one now, `utils::file::persist`, returning **whether the
+bytes landed**; `atomic_write` is private. `hold`, `unhold`, `adopt` and `path --set` phrase their
+output from that answer, so `Held 1 package(s).` and a write that never happened can no longer
+appear together. Seventeen `save()` sites inherit it without being touched, including the three
+the grade could not measure (`shell` exit, the lease sweep, the pm-hook recorders).
+Measured after: `--dry-run adopt -y` on a fresh config finds 112 packages, writes nothing (`data/`
+holds only the lock file), and `check` says *the machine matches your files*.
+
+**The gate that could not see it, and the exemptions that hid it.**
+`tests/dry_run_every_verb_tests.rs` snapshotted the **config** directory only and excused three
+verbs *because they wrote to the other one* — "holds live in the data dir, not the config dir".
+That is not a reason; it is the finding, written down and believed for two rounds. Both snapshots
+now walk the whole fixture (config, data, and the working directory, with the binary run there),
+and `hold`, `unhold`, `heal` and `adopt` are driven — `heal` against a hand-built WAL entry, which
+is the only fixture that gives it work. A host that cannot supply the work is **skipped by name and
+counted**. `hooks` and `path` kept their exemptions with true reasons instead of false ones
+(`hooks install` writes to system hook dirs; `path --set` writes LiNix's own settings file, which
+no fixture can relocate) — and `path --set` is driven anyway, by a test that restores the real
+settings file in both directions if the fix ever regresses. **Mutation-checked**: with the flag
+test in `persist` replaced by `if false`, the gate goes red on five cases and the grader's
+`dry_run_hold` test goes red with it; restored, both are green.
+
+**The past tense that outlived it, on the two verbs the grade recorded as still reproducing.**
+`--dry-run lock` printed `Lock: pinned 0 package version(s) to …` beside its own `[DRY-RUN] would
+write …` for the same file, and up to seven more `Lock: approved …` lines; `--dry-run heal`
+printed `repaired: reconciled locks/versions.json`. Both now read their tense off what
+`persist` answered — `[DRY-RUN] Lock: would pin`, `heal: would reconcile` — and `heal`'s label
+itself changed, because `repaired:` was the last past-tense word in that output and no writer's
+answer could reach it.
+
+**P-3 — `linix protected <bare name>` was wrong for every name**, including `jq` (its own help's
+example) and `sudo`, which *is* protected and got the wrong reason. `protection_of` was handed
+`""` for the backend and opened with `is_declarable("", name)`, which builds the line `:jq` — a
+line no grammar accepts — so the declarability test fired before a rule was read. **An unknown
+backend is now `Option::None`, not an empty string**, in both `is_declarable` and
+`protection_of`: a bare name is checked against the config rules, and the reason says the OS's
+essential list was not consulted because it is keyed by backend. The inspector and the enforcer
+answer the same question again. `tests/unknown_backend_family_tests.rs` exempted this verb as
+taking "nothing — it lists the protected set"; it takes `[PACKAGES]...`, the exemption is deleted,
+and `protected` now refuses an unknown prefix the way the rest of that family does (N-3).
+
+**P-1 — `plan` predicted a refusal `apply` does not make.** It merged resources into the package
+removal list and asked `RemovalKind::Package`, so every `link:` came back `Undeclarable` and the
+user was told a dotfile teardown would be refused *because its manager reports a name no package
+line can hold*. `apply` then performed it at rc=0. The guard carries a unit test asserting this
+cannot happen — it exercises `RemovalKind::Extra`, and the product called the other function.
+`plan` now inspects each list as its own kind, each counting the other against the same ceiling,
+which is the split `sync` already used.
+
+**P-2 — `sync` re-placed every declared resource on every run**, and the second run left
+`.linix-backup` files beside the user's dotfiles: backups of the copies LiNix itself had made,
+under a summary reading `already up to date`. `check` and `plan` used the `in_effect` probe;
+the loop that does the work asked nothing. The probe is now one function all three call, it is
+compared **by content** rather than by existence (the destination existing is what the ledger
+already knew, and on Windows the deploy falls back to a copy so `read_link` answers nothing), and
+the `link:` backend skips a destination that already matches its source. A resource nothing can
+verify — a `setting:`, a `service:`, a decrypted secret — is still placed, and still named
+`unverifiable` rather than assumed converged.
+
+**P-4 — pixi's `list` parser invented a package.** `pixi global list` prints each environment's
+properties as indented children, and `exposes: rg` was read as an installed package whose version
+was `rg`. Depth is the tool's own structure, so the parser reads it rather than blocklisting the
+property names pixi prints today. **The family, not the instance**: `parse_bun_list` and
+`parse_yarn_list` trimmed the tree glyphs off before reading too — `bun pm ls -g --all` nests four
+levels, so that parser was one flag away from reporting forty dependencies as global installs.
+Both now take the top level only, asserted against **bun's own output, captured on this machine**
+in the flat and nested forms.
+
+**And the breadth axis, which four rounds of grades say has never moved.** Fixtures captured from
+the tools themselves — `scoop list`, `choco list -r`, `pipx list --json`, `helm plugin list`,
+`npm`/`pnpm ls -g --json`, `bun pm ls -g` flat and nested — each with a
+`tests/parser_fixture_tests.rs` expectation written by reading the file rather than the parser.
+That is 8 backends with a fixture → **13 of 48**.
+
+**The first batch found a defect on its first run, which is the argument for the batch.** `pipx
+list --json` reports a version under `main_package.package_version`; `parse_pipx_json` read
+`main_package.version`, a key that schema does not have, and fell back to the string `unknown` —
+for **every pipx package on every machine, silently**. `linix list -b pipx` printed `unknown`, and
+`lock` skips a version reading `unknown`, so `linix lock` pinned no pipx package and said nothing
+about it. Now `pycowsay 0.0.0.2`. Nothing in 1,500 tests could see it, because the parser's own
+test wrote its own JSON: a hand-written fixture is the one thing a schema bug cannot fail. It is
+still the axis with the most left on it — no backend meets the four-case rule
+(empty/single/not-found/error), and these are single-case `list` captures. `.gitattributes` now pins `tests/fixtures/**` to LF, for
+`scripts/lifecycle-floor.txt`'s reason one directory over: a parser fixture's line endings are the
+content under test, and the pixi fixture was committed with git warning it would rewrite them.
+
+**Left for the owner, untouched:** **Q14** (the flag half of the argv-drift gate, still OPEN), and
+`E15`/`E33`. The `tools`, fedora, arch, alpine and gentoo images were not built this session; the
+destructive effectors, the SIGKILL/`heal` loop and real `sudo` remain unrun, as in every round.
+
 ## Session 2026-07-30 — what CI said about the previous session, and the gate that was blind where it mattered
 
 The branch was pushed and CI dispatched (run **30503630610**, `workflow_dispatch` because that is
