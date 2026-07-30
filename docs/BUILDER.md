@@ -1,7 +1,12 @@
 # YOU ARE THE BUILDER
 
-**Your job: raise LiNix from C+ to A by writing code.** Work through the numbered work orders in
-this document, in tier order. Everything you need is here or named here.
+**Your job: raise LiNix to an A by writing code.** Work through the numbered work orders in this
+document, in tier order. Everything you need is here or named here.
+
+**Where the grade stands: C+ when this document was written, B− after round 5** — the ledger of
+how it moved is one file per round, `docs/GRADE-*.md`, newest last. **Start from the newest**:
+its §2 says which older orders are closed (do not re-open those) and its §3 is the specification
+for the newest tier at the bottom of this document. Round 6's orders are `W33`–`W42`.
 
 You are working in the LiNix repo at the path given to you. Start by reading, in this order:
 
@@ -45,12 +50,22 @@ From `CLAUDE.md`, and they are not optional:
 `CLAUDE.md` requires a ruling for: anything with a register ID (`D* W* K* N* T* U*`), anything a
 user would notice, anything that removes a feature, anything where Part II looks wrong.
 
+Every order below whose heading carries ⚠️ is in this table, and every row names the heading it
+belongs to. *(Corrected round 6: three of the four original rows pointed at numbers that had since
+moved — "W12 (exit codes)" is `W17`, "W13 (check health severity)" is `W15`, "W16 (supported vs
+experimental)" is `W18`. A table of what to stop and ask about, naming the wrong thing, in the
+document about checks that name the wrong thing.)*
+
 | order | why it needs a ruling |
 |---|---|
 | **W1** (manifest withdrawal) | Changes what happens after a failed install. The two harnesses disagree *in writing* about the intent — see `READINESS` §3.1. **Get the ruling, write it into `decisions.md` in the same commit.** |
-| **W12** (exit codes) | Changes a published contract (`readme.md:708`) that scripts branch on. |
-| **W13** (`check health` severity) | Changes what every user sees on a healthy machine. |
-| **W16** (supported vs experimental) | Re-labels backends users are relying on today. This is the highest-value change in the document and the most user-visible. |
+| **W15** (`check health` severity) | Changes what every user sees on a healthy machine. |
+| **W17** (exit codes) | Changes a published contract (`readme.md:708`) that scripts branch on. |
+| **W18** (supported vs experimental) | Re-labels backends users are relying on today. This is the highest-value change in the document and the most user-visible. |
+| **W22** (refusal exit codes and the hook) | Same published contract as W17, on the security refusals. |
+| **W29** (coverage ratchet threshold) | Ruled as `Q12`; the threshold was delegated to the builder. |
+| **W31** (`--backend <typo>`) | Changes what a mistyped flag does, which scripts may depend on. |
+| **W33** (a bare keyword as a package) | **Open as `Q16`** with four options and a stated lean. It changes what a user sees and may remove the ability to declare a package by a bare name. |
 
 Everything else in this brief is internal correctness. **Build it without asking.**
 
@@ -785,6 +800,291 @@ Tier 6 — they remain the path from B to A.
 
 ---
 
+# Round 6 — the work orders from the round-5 grade
+
+Source: `docs/GRADE-2026-07-30-round-5.md`, graded at `0cdeca2`. **Every round-4 finding
+(`B-1`, `P-1`–`P-4`) is closed and verified by its original reproduction on two platforms — do
+not re-open them.** What follows is new, and the red tests for most of it are already committed
+and failing.
+
+Read the grade document's §3 before starting: each order below is a summary of an entry there
+that carries the measured output, and the measurement is the specification.
+
+**Two of these are old orders, unfinished.** W35 is the half of `W27` that was never built, and
+W36 extends `W17`'s audit from refusals to failures. Neither is a regression; both are a family
+that was fixed at the reported instance and left live one layer over.
+
+---
+
+## Tier 1 (round 6) — a typo installs software
+
+### W33 · `R-1` / **`Q16`** — a bare grammar keyword is a package name ⚠️ **needs a ruling (0.1)**
+
+A module containing the single word `link` — which is what a half-typed
+`link:SRC @target=DEST` line looks like — declares a package. `linix eval` reports
+`{"backend": "cargo", "name": "link"}`, `--dry-run sync` plans one install, and `linix check`
+says *"1 to install … run `linix sync`"*. Thirteen of fourteen keywords do this, and each
+resolves to a **real** backend holding a real package of that name: `when`→`cargo:when`,
+`absent`→`pip:absent`, `shim`→`scoop:shim`, `if`→`gem:if`, `else`→`npm:else`. Only `use` refuses.
+
+**This is not a parser defect.** A package name is one bare word (II.2), so a bare keyword is a
+valid package line, and with their punctuation the same words refuse correctly and legibly
+(`link:`, `when linux {` all exit 1 with a located error). It is an ambiguity in the language.
+
+**Do not build this without a ruling.** `Q16` is open in the register with four options
+((a) reserve, (b) warn, (c) require a backend for a colliding name, (d) leave it) and the
+grader's lean, (c). It changes what a user sees and it can remove the ability to declare a
+package by a bare name — both are §0.1 items.
+
+**Test first.** Already red: `tests/grade4_keyword_is_not_a_package_tests.rs` (2 red, 1 green
+control). It reads `known_prefixes()` rather than a copied list, so a prefix added later is
+covered without anyone remembering.
+
+**Siblings.** The seven near-miss forms with punctuation were measured and all refuse correctly —
+do not touch them. Not measured: a keyword as the *name half* of a qualified line (`cargo:link`),
+which is presumably fine and intended.
+
+**Also fix, and it needs no ruling:** resolving one of these costs **10–27 seconds**, because a
+bare name has no backend and the resolver asks every manager in priority order. The same fixture
+with `cargo:ripgrep` is 0.2s. Whatever `Q16` rules, a name that no backend claims should not cost
+half a minute to find that out. See W41.
+
+### W34 · `R-2` — `adopt` re-declares what the manifest already names, and mislabels its own count
+
+One package declared and installed, and `adopt` writes a second declaration for it in
+`adopted.txt` — so *"Deleting a line UNINSTALLS that package on the next sync"*, printed two
+lines below, is false for exactly the packages the user wrote by hand. Measured: delete your own
+line, and `--dry-run sync` says `already up to date`.
+
+**Root cause, and it is two things with one root.** `discover()` (`app/adopt.rs:117`) keeps a
+candidate when `!state_guard.is_managed(&pkg.backend, &pkg.name)` — the managed-state *registry*.
+**Nothing in `discover` reads the manifests at all.** And `found.skipped` has exactly two push
+sites, `:154` (the OS reports it essential) and `:315` (`hold_back_what_cannot_be_written`), while
+the summary at `:281` prints `found.skipped.len()` under *"(listed in the manifest)"* — a reason
+that is wrong for 100% of the items, always. A one-line manifest produced *"Left alone: 185
+(listed in the manifest)"*.
+
+**Fix.** Subtract what the resolved model already declares, not only what the registry manages;
+and render the summary from the per-item `reason` each `Skipped` already carries, rather than
+collapsing three causes into one sentence that names none of them.
+
+**Test first.** Already red: `tests/grade4_adopt_respects_the_manifest_tests.rs` (2). It asks
+LiNix itself what this host can adopt, so it names a real package rather than guessing, and a
+host with nothing to adopt is **skipped and named** rather than passed.
+
+**Siblings.** Every other rollup count that explains itself with a reason belonging to one of its
+inputs. One more is known: `--dry-run unhold` prints *"would release 1 hold(s)"* and then
+*"0 hold(s) were not recorded"* about the same hold.
+
+---
+
+## Tier 2 (round 6) — the classification is computed and then not consulted
+
+### W35 · `R-3` — a `Transient` failure is reported as "Nothing classified the failure above"
+#### *(this is the unbuilt half of `W27`)*
+
+`error.rs:226` classifies a rate limit `Transient` and says why: *"The whole point of a rate limit
+is that the window moves."* `why_kept` (`verbs/packages.rs:274`) branches on `Refused`,
+`Exhausted` and name-absence, then falls through to `Unclassified` — **there is no `Transient`
+branch**, and `WhyKept` has no variant meaning *"known to be temporary, and here is the window"*.
+Observed live on the macOS runner, with the window printed one line above the advice:
+
+```
+Error: API rate limit: … does not reset for 1236s, past the 30s ceiling. …
+ WARN … Nothing classified the failure above, so if it repeats unchanged the cause is not a
+      passing one …
+```
+
+The advice inverts the truth: a rate limit repeats unchanged *because* it is passing. W27 asked
+you to *"stop telling the user a retry will help"* when it will not; the same sentence needs to
+stop telling them nothing looked, when something did.
+
+**Fix.** A `WhyKept::Transient` carrying what the error already knows. The wording for
+`Exhausted` is the model to follow — it is precise about what was tried.
+
+**Test first.** Already red: `verbs::packages::tests::a_transient_failure_is_not_reported_as_unclassified`
+and `…_is_not_advised_as_if_it_were_permanent` (`cargo test --bin linix`). Its sibling,
+`a_transient_or_unclassified_failure_keeps_the_line`, stays green — the line must still be kept.
+
+**And fix the harness half, which is costing two red CI jobs.** `classify_install` in
+`scripts/integration-windows.sh` tests transience by retrying the install *immediately*, which
+cannot succeed inside a 1236-second window — so it scored `defect`, the macOS leg went red, and
+the real-lifecycle ratchet fell 8 → 7 and went red behind it. `GRADER` §2.2 asked for this to be
+driven off LiNix's own `Retryability`; LiNix computes it correctly and the harness cannot see it.
+**Surface the classification** (a machine-readable line, or a distinct exit code) and have the
+harness read it, rather than guessing from a repeat.
+
+**Do not** fix the red ratchet by lowering `windows-native-darwin-ci` to 7. That would ratchet
+macOS coverage down over a rate limit, permanently. It is the one edit `scripts/lifecycle-floor.txt`
+exists to make visible in a diff.
+
+**Siblings.** Both production consumers of `retryability()` were enumerated: `transaction.rs:551`
+(`give_up = … == Permanent`) is correct and needs nothing. W36 is the third place that has the
+classification and ignores it.
+
+### W36 · `R-6` — `heal` reports an unrecovered operation at rc=0, in Rust `Debug` syntax
+#### *(this extends `W17`'s audit from refusals to failures)*
+
+**The behaviour underneath is right and must not change**: given an `InProgress` install for a
+package that does not exist, `heal` attempts the recovery, fails, and **leaves the entry
+`InProgress`** rather than closing it, and `list` does not claim the phantom. That is the answer a
+"mark everything done" implementation gets wrong. Three defects in how it says so:
+
+```
+ERROR could not recover npm:… — Some(CommandFailed { message: "…404…", retry: Permanent,
+absent_name: true }). … re-run `linix sync`.
+ WARN 1 operation(s) could NOT be recovered: npm:… . Re-run `linix sync`.
+heal: reconciled locks/versions.json (1 entries)
+heal: refreshed backend metadata
+heal rc=0
+```
+
+1. **rc=0** after *"1 operation(s) could NOT be recovered"*. `linix heal && echo ok` prints ok.
+   W17 audited *refusals* for the exit-code contract; failures were not in scope and are not
+   covered.
+2. **`{:?}` on an `Option<Error>` printed at the user** — `Some(CommandFailed { … })`,
+   `retry: Permanent`, `absent_name: true`. `absent_name` is an internal field the N-1 fix added
+   this month. `GRADER` §4: flag every place internal vocabulary leaks.
+3. **The advice contradicts the struct it just printed.** `absent_name: true, retry: Permanent`
+   means the name does not exist, and `packages.rs` has a whole `WhyKept::NameAbsentElsewhere`
+   branch whose wording is *"`sync` will keep failing the same way until the line naming it is
+   corrected"*. `heal` says *"re-run `linix sync`"*.
+
+The last two lines a user sees are successes.
+
+**Test first — not yet written, and here is why**, because the difficulty is the useful part:
+planting a WAL entry whose recovery fails needs either a network round-trip or a backend present
+on every runner, and a hand-written `Install` entry that omits `options` lands in the
+**corrupt-WAL branch** instead of the recovery branch. Build the entry from a real one (run a
+sync, then edit the journal in place) rather than by hand.
+
+**Siblings.** Every recovery path that can partly fail: `heal`, rollback compensation, the lease
+sweep, the shell-exit teardown. Check each for an exit code that ignores its own failures.
+
+---
+
+## Tier 3 (round 6) — messages, and one platform defect
+
+### W37 · `R-4` — `linix list` and `linix info` contradict each other on macOS
+
+`tests/grade2_info_tests.rs` is red on `macos-latest`: `list` reports
+`service:com.apple.SafariHistoryServiceAgent` and `info` about that exact name answers *"is not
+installed on this machine, so there is nothing to describe."* The `service` backend enumerates
+launchd agents that `info` cannot then resolve.
+
+The rubric weights this heavily: *a `list` that disagrees with the machine breaks the one thing it
+promises*. **Not reproduced by the grader** — it has no Mac; this is CI's result. Reproduce it on
+a Mac or a runner before fixing, because the round-3 lesson about checking state at the wrong
+moment applies to a listing that is a snapshot of a daemon table.
+
+**Test first.** Already red and already correct — `grade2_info_tests` takes the first thing `list`
+reports and asks `info` about it. Do not narrow it to skip services.
+
+**Siblings.** Every backend whose `list` enumerates something its `info` resolves differently.
+`service` on Linux (systemd units) is the obvious twin and was not measured.
+
+### W38 · `R-5` — a refusal that names no file, about a character nobody can see, echoed raw
+
+Two error classes over one 60-line module with one bad line at 40:
+
+```
+cargo:<U+202E>reversed  ->  Validation error: Invalid characters in package name: …    (no location)
+cargo:<ESC>[31mred…     ->  Validation error: Invalid characters in package name: …    (no location)
+cargo:aaa…(300 chars)   ->  Configuration error: …/big.txt:40: …                       located
+cargo:rip<TAB>grep      ->  Configuration error: …/big.txt:40: …                       located
+```
+
+The grammar's refusals name `file:line` and are excellent. The character validator's name neither
+— and the offending character is a bidi override, a NUL or an escape, so it cannot be found by
+looking either. **And it echoes**: verified at byte level, the refusal reprints `342 200 256`
+(U+202E, the trojan-source character) and raw `033` escapes into the terminal. Manifests arrive
+from shared configs, not only from the user's own hand.
+
+**Fix.** Route the character validator's refusals through the same `Origin` the grammar's use, and
+escape non-printing characters in the message — name the codepoint (`U+202E`) rather than emitting
+it. `rustc` refuses to compile a doc comment containing this character; LiNix prints it.
+
+**Test first.** Already red: `tests/grade4_refusal_names_the_line_tests.rs` (2 red, 1 green control
+asserting the grammar's own refusal in the same fixture still names the line).
+
+**Siblings.** Every `Error::Validation` construction site — the class is "refusals that skipped the
+location decoration", not this one message.
+
+---
+
+## Tier 4 (round 6) — gates, and the number nobody computes
+
+### W39 · `R-7` — the mutation gate has a ceiling and no floor
+
+`scripts/harness-mutation-test.sh` fails when survivors exceed the budget (92 container / 86
+Windows) and asserts nothing about `CAUGHT`. Proven rather than argued — pointed at a harness with
+three checks it reports `ok: 2 survivors, within the budget of 92; 1 checks did their job` and
+exits 0. It cannot tell *"the checks got stronger"* from *"the checks were deleted"*.
+
+**Fix.** A floor under `CAUGHT`, ratcheted the same way and in the same file, per harness.
+
+**Siblings.** A *total* coverage collapse is caught by the lifecycle ratchet and the subcommand
+audit; an assertion-strength collapse — deleting the effect assertions while still invoking every
+subcommand — passes all three gates today. Check the other two for the same one-sidedness.
+
+### W40 · `R-8` — one orphan fixture
+
+`tests/fixtures/cargo/install-list.txt` was captured from the real tool and is read by no test —
+the only orphan of the 30. The cargo parser is correct, so this is a false signal of coverage
+rather than a hidden bug, in the same commit that established the rule fixtures exist to serve.
+Wire it up (assert the indented binary lines are not packages, which is `pixi:exposes`' family) or
+delete it. **Then add the check**: a test that every file under `tests/fixtures/` is referenced.
+
+### W41 · `R-9` / **`W14` reopened** — nothing measures latency
+
+Release binary, five samples, a machine with 24 ready backends:
+
+```
+linix list           min  6.13s   median 20.43s   max 40.41s
+linix check health   min  8.47s   median 18.58s   max 35.92s
+linix check          min 17.02s   median 18.71s   max 55.40s
+linix policy / vars / eval / check config          ~0.25s
+```
+
+The split is diagnostic: config-only commands are instant, anything that queries the managers is
+6–55 seconds **with a 6× spread on the same command**. W14 fixed one 98-second `info`; the budget
+it asked for was never built, so nothing would notice the next one. §8.1's A+ bar names latency
+budgets per command class explicitly.
+
+**Fix.** A budget per command class, enforced in CI, and a number in the output when it is
+exceeded. Start by measuring on a runner rather than trusting the figures above — that machine is
+an upper bound, not a norm.
+
+### W42 · make `cargo test` green on three platforms
+
+It is green on Windows (1542 tests, 49 targets) and red on Linux and macOS. Three targets, three
+causes, and they need three different things:
+
+- `grade2_flag_drift_blindspot_tests` — red pending **`Q14`**. Not yours to fix; get the ruling.
+- `grade3_resource_idempotency_tests` — **already repaired** by the grader, in the commit before
+  this document. Green on both platforms now.
+- `grade2_info_tests` — W37, a real defect.
+
+Not because green is the goal — this whole document's premise is that green is a floor — but
+because a suite red for three unrelated reasons teaches everyone to stop reading it, and one of
+those reasons is a live defect currently indistinguishable from the two that are not.
+
+---
+
+## What Round 6 does *not* change
+
+The safety core is in good shape and was checked adversarially rather than assumed — every path
+to a backend `remove`/`purge` has a guard, enumerated from the sink; `SIGKILL` mid-sync leaves a
+reconcilable journal; `heal` verifies against the machine rather than closing entries. **Do not
+refactor any of it while fixing W36**, which is entirely about what `heal` prints and returns.
+
+Still untouched and still the two items that would move the grade most: **W18**'s
+supported/experimental split, and real lifecycles for the 24 of 56 backends that have never had
+one. `Q15` (does a command whose product is a file honour `--dry-run`) remains open with data in
+the register and no ruling.
+
+---
+
 ## What NOT to do
 
 - **Do not fix a harness by making it green.** If deleting the scrub in W5 turns a run red, that
@@ -814,6 +1114,15 @@ Tier 6 — they remain the path from B to A.
 - **Do not test your own oracle by assuming it works.** "All 24 `[READY]` backends answer `list`"
   was measured and true and **meaningless**, because a backend that does not exist answers `list`
   the same way. Before trusting a check you wrote, feed it something it must reject.
+- **Do not let a test depend on where the checkout is, or on a message only one platform prints**
+  *(added round 6, by the grader, about the grader's own test)*.
+  `grade3_resource_idempotency_tests` had both faults and was red on Linux and macOS from the day
+  it was committed while passing on its author's box: its `link:` targets were inside `$HOME` only
+  because the repo happened to live under `C:\Users\Administrator`, and its central assertion
+  counted `Link:`, the text of the **Windows-only** cross-drive-fallback warning — a count that is
+  zero on Linux whatever `sync` does. Both are the S33 shape. Ask the filesystem, not the output,
+  when the question is "did the work happen"; and make the environment your fixture needs *by
+  construction* (hand the child its own `HOME`) rather than inheriting it and hoping.
 
 ---
 
