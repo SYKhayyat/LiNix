@@ -1,4 +1,4 @@
-# The decision register — all 123, and one of them open
+# The decision register — all 124, and two of them open
 
 **One file, six features. None open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -16,7 +16,7 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **2** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **120** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open.** All 123 are accounted for: **120 ANSWERED, 2 PARKED, 1 OPEN** — and this line
+**Two are open.** All 124 are accounted for: **120 ANSWERED, 2 PARKED, 2 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -223,7 +223,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U42** | Do the overlapping command clusters get consolidated? | 2026-07-27 |
 | **U43** | How much does an ordinary run say about itself? | 2026-07-27 |
 
-### Q — the production-readiness round (`docs/READINESS-2026-07-27.md`) — 4
+### Q — the production-readiness round and the grading rounds after it — 15
 
 *Not a proposal part. These are the questions the readiness assessment forced — behaviour a
 user notices, or a published contract — raised because `CLAUDE.md` requires a ruling for them
@@ -239,6 +239,18 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q4** | Are unverified backends labelled "experimental"? — RULED: **no.** They are tested, and nothing ships until they are. | 2026-07-27 |
 | **Q5** | Does `@unverified` reach past the backends that download? — RULED: **yes** — a manager that verifies a signature itself (`helm`) takes it too. | 2026-07-28 |
 | **Q6** | May a definition in `adapters/backends.toml` take a built-in's name? — RULED: **yes, and only by saying so** — `overrides = true`. | 2026-07-28 |
+| **Q7** | Does the removal guard cover the resources a declaration puts in place, or only packages? — RULED: **the same rules**. | 2026-07-28 |
+| **Q8** | Should the security refusals return the documented refusal code? — RULED: **yes, all of them exit 3**. | 2026-07-28 |
+| **Q9** | Should a verb taking a backend name refuse one that does not exist? — RULED: **yes**, `install`'s message everywhere. | 2026-07-28 |
+| **Q10** | Should `mix` install Hex before installing an archive from it? — RULED. | 2026-07-29 |
+| **Q11** | What should `opam:` do on a machine with no opam switch? — RULED. | 2026-07-29 |
+| **Q12** | Should the sweep fail when its real coverage collapses, and against what? — RULED: **a ratchet**, threshold to the builder. | 2026-07-28 |
+| **Q13** | Should `asdf:` add the plugin a declared tool needs? — RULED: **yes**, off the argv. | 2026-07-29 |
+| **Q14** | What should `@unverified` do on a tool version with no flag to turn verification off? | **OPEN** |
+| **Q15** | Should a command whose product is a file at a path the user named honour `--dry-run`? | **OPEN** |
+
+*Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
+this file exists to prevent, found on 2026-07-30 by adding a row to it.*
 
 ---
 
@@ -3617,5 +3629,43 @@ The options:
 Not decided in code. The builder's lean is **(b)** — "accepted and does nothing" is the class of
 defect this register keeps closing — while noting that (b) is the option that takes a capability
 away from a user on the older tool, which is why the choice is the owner's and not the builder's.
+
+---
+
+## Q15
+
+**Status: OPEN.**
+
+**Q15 — Should a command whose whole output is a file it was told to write honour `--dry-run`?**
+Measured 2026-07-30, on a fresh config, after the round-4 work made `--dry-run` a property of the
+one writer:
+
+- `linix --dry-run bundle --out X` writes **five files** into `X` — `active`, `priority`,
+  `modules/starter.txt`, `packages.json`, `plan.json` — byte-identical to the run without the
+  flag, and prints `See X/RESTORE.md for offline restore steps.`
+- `linix --dry-run plan` writes `linix-plan.json`, the same as `linix plan`.
+- `linix --dry-run export --out X` was **not** measured either way: the fixture had no package to
+  export, so neither run wrote anything and there was no control.
+
+II.8b says *"a preview writes no file the run would have written"*, and by the letter of it these
+are violations. The counter-argument is in the exemption these three carry in
+`tests/dry_run_every_verb_tests.rs` — *"writes to a path the user names"* — which is a real
+distinction: nothing about the machine changes, the destination was named on the command line,
+and `--dry-run plan` producing no plan is a command with no output at all.
+
+The options:
+
+- **(a) Exempt them by rule**, not by an exemption list nobody ruled on: II.8b gains a sentence
+  saying a command whose *product* is a file at a path the user named is outside the rule, and
+  says which commands those are.
+- **(b) Honour the flag everywhere**: `--dry-run bundle` prints what it would write and writes
+  nothing; same for `plan` and `export`.
+- **(c) Split them**: `plan`'s output *is* its preview, so leave it; `bundle` builds a restore
+  artifact and should not build one during a preview.
+
+The builder's lean is **(c)**, and this was deliberately not decided in code: it changes what a
+user sees, and the reason `bundle` feels different from `plan` is a judgement about what those
+commands are for, which is the owner's to make. What was fixed instead is the half that is not a
+judgement — the two verbs that *said* they had written when they had not (`lock`, `heal`).
 
 ---
