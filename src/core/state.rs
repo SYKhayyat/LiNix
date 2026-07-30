@@ -1,5 +1,5 @@
 use crate::core::{Error, Result};
-use crate::utils::file::atomic_write;
+use crate::utils::file::persist;
 use crate::utils::safe_data_dir;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -155,22 +155,34 @@ impl StateRegistry {
         Self::load_from(&default_path)
     }
 
-    pub fn save(&self) -> Result<()> {
+    /// Persist the registry, and report whether the bytes reached the disk.
+    ///
+    /// Seventeen call sites save this file and three — `adopt`, `hold`, `unhold` — did not ask
+    /// whether the run was a preview, so the decision lives in [`persist`] instead of here.
+    /// `adopt` was the expensive one: it recorded every discovered package as managed while its
+    /// *manifest* write correctly went nowhere, which is the one state the model reads as **the
+    /// user deleted every line** — and the next `sync`, the one `linix check` then recommends,
+    /// uninstalls them.
+    ///
+    /// A caller says `Held` or `would hold` from the returned answer rather than by asking the
+    /// flag a second time.
+    pub fn save(&self) -> Result<bool> {
         trace!("saving state to {:?}", self.path);
-
-        if let Some(parent) = self.path.parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    Error::Io(format!("Failed to create registry directory: {}", e))
-                })?;
-            }
-        }
 
         let data = serde_json::to_string_pretty(self)
             .map_err(|e| Error::Other(format!("State Serialization Error: {}", e)))?;
 
-        atomic_write(&self.path, &data)
-            .map_err(|e| Error::Persist(format!("Atomic write failed for state registry: {}", e)))
+        let written = persist(&self.path, &data).map_err(|e| {
+            Error::Persist(format!("Atomic write failed for state registry: {}", e))
+        })?;
+        if !written {
+            tracing::warn!(
+                "[DRY-RUN] {} managed package(s) and {} hold(s) were not recorded",
+                self.packages.len(),
+                self.held.len()
+            );
+        }
+        Ok(written)
     }
 
     pub fn add(

@@ -635,15 +635,12 @@ impl Config {
         Ok(config)
     }
 
-    pub fn save(&self) -> Result<()> {
+    /// Returns whether the bytes reached the disk; a preview writes none.
+    pub fn save(&self) -> Result<bool> {
         let content = toml::to_string_pretty(self)
             .map_err(|e| Error::Config(format!("Failed to serialize config: {}", e)))?;
-        if let Some(parent) = self.preferences_file.parent() {
-            fs::create_dir_all(parent).map_err(Error::from)?;
-        }
-        fs::write(&self.preferences_file, content)
-            .map_err(|e| Error::Config(format!("Failed to write config file: {}", e)))?;
-        Ok(())
+        crate::utils::file::persist(&self.preferences_file, &content)
+            .map_err(|e| Error::Config(format!("Failed to write config file: {}", e)))
     }
 
     pub fn get_hostname() -> String {

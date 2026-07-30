@@ -670,8 +670,11 @@ named and skipped rather than rebuilt. It cannot be put in `schedules`.
   A crash that goes unattended for hours is still healable.
 - **Snapshots.** btrfs, ZFS, Timeshift and Windows Restore Points, taken automatically before a
   sync or upgrade where a provider exists.
-- **Dry run.** `linix --dry-run sync` previews without touching anything. Every destructive
-  command honours it.
+- **Dry run.** `linix --dry-run sync` previews without touching anything — and so does every
+  other command, because the flag is honoured by the single function every file LiNix owns is
+  written through, not by each command remembering to ask. That includes `data/registry.json`,
+  the record of what LiNix manages: a preview that quietly recorded it would leave your packages
+  managed and undeclared, which is the state the next `sync` reads as *remove all of these*.
 - **Non-interactive refusals.** `sync`, `rollback` and `remove-orphans` refuse to apply
   unconfirmed changes in a pipe, cron job or CI run without `--yes`.
 

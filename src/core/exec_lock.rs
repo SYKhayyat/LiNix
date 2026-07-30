@@ -110,7 +110,7 @@ impl ExecLedger {
         }
     }
 
-    /// Through `write_config`, so a preview does not write an approval or a pin. `linix
+    /// Through `persist`, so a preview does not write an approval or a pin. `linix
     /// --dry-run lock` used to leave `locks/versions.json` and `locks/hooks.toml` behind.
     pub fn save(&self, path: &Path) -> Result<()> {
         if !crate::core::dry_run::active() {
@@ -121,7 +121,7 @@ impl ExecLedger {
         }
         let body = toml::to_string_pretty(self)
             .map_err(|e| Error::Toml(format!("serializing the exec ledger: {}", e)))?;
-        crate::utils::file::write_config(path, &body).map(|_| ())
+        crate::utils::file::persist(path, &body).map(|_| ())
     }
 
     /// How many times this content has run here. An unknown hash has run zero times, which is

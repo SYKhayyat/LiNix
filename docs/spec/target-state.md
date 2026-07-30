@@ -1078,10 +1078,15 @@ left the machine on Work while printing nothing at all.
 So the flag is a property of the run, read where the **write** happens:
 
 - `core::dry_run` holds it, set once in `main` after the config merge and before dispatch;
-- `utils::file::write_config` is the writer every config mutation goes through — `active`, the
-  profile files, `preferences.toml`, and all six ledgers under `locks/`. It reports what it
-  would have written, at a level the default filter shows, because acting silently was the
-  worse half of the defect;
+- `utils::file::persist` is the writer **every file LiNix owns** goes through — `active`, the
+  profile files, `preferences.toml`, the settings file, all six ledgers under `locks/`, the WAL,
+  and `data/registry.json`. It reports what it would have written, at a level the default filter
+  shows, because acting silently was the worse half of the defect. **There is one writer, and
+  that is the rule.** Round 4 found a second — a permissive `atomic_write` beside the
+  preview-aware one — and the `save()` methods had reached for it: `--dry-run adopt` recorded 112
+  packages as managed while the manifest declaring them was correctly not written, which is the
+  one state the model reads as *the user deleted every line*. `atomic_write` is private now, so
+  the shorter name is not reachable;
 - `GitManager::init` and `commit_all` carry the same check, because a repository and a commit
   are the one case where the preview's residue is a permanent artifact rather than a changed
   file.
@@ -1093,11 +1098,20 @@ write a no-op and `--dry-run profile show Work` describe whatever was already ac
 silent-wrong-answer defect, moved.
 
 **Checked over every subcommand, not over the ones with a bug report.**
-`tests/dry_run_every_verb_tests.rs` snapshots the config directory, runs the command under the
-flag, snapshots again and requires the bytes to match — **and requires the same command without
-the flag to change something**, so a case whose fixture made the command a no-op fails as a
-broken case rather than passing as a clean one. Every name in `--help` is either driven or
-exempted with a reason, and every exemption has to name a command that still exists.
+`tests/dry_run_every_verb_tests.rs` snapshots **the whole fixture — config, data and the working
+directory** — runs the command under the flag, snapshots again and requires the bytes to match
+— **and requires the same command without the flag to change something**, so a case whose
+fixture made the command a no-op fails as a broken case rather than passing as a clean one.
+Every name in `--help` is either driven or exempted with a reason, and every exemption has to
+name a command that still exists.
+
+**An exemption says what the fixture cannot supply, never what the instrument cannot see.** The
+snapshot walked only the config directory for two rounds, and three verbs were excused *because*
+they wrote to the other one — "holds live in the data dir, not the config dir". `data/registry.json`
+is the managed set: the file that decides whether the next `sync` removes a package. A reason of
+that shape is not a reason, it is the finding, and it is why the gate named "every verb" could
+not see B-1. `hold`, `unhold`, `heal` and `adopt` are driven; a host that cannot supply the work
+(`adopt` with nothing unmanaged) is **skipped by name and counted**, never quietly passed.
 
 ## II.9 Adopt
 

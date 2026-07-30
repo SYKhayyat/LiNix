@@ -71,7 +71,7 @@ impl BtrfsBackendCore {
         lines.push(new_line);
 
         let final_content = lines.join("\n") + "\n";
-        crate::utils::file::atomic_write(fstab_path, &final_content)?;
+        crate::utils::file::persist(fstab_path, &final_content)?;
 
         Ok(())
     }

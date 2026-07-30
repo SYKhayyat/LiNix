@@ -1772,6 +1772,24 @@ is the same class of defect one level down: a preview that silently answers a di
 question. It is written as its own function with its own name, so the next reader sees an
 exception rather than an omission.
 
+**A writer that honours the flag is no protection while a writer that ignores it sits beside
+it.** *(Round 4, 2026-07-30 — the third finding of this same defect, and the first where the
+mechanism was already in place.)* `write_config` did exactly what this entry describes, and
+`atomic_write` — the primitive underneath it — was public, three characters shorter, and what
+every `save()` method had been calling since before the rule existed. So `--dry-run adopt`
+recorded 112 packages in `data/registry.json` as managed while its *manifest* write correctly
+went nowhere. Managed and undeclared is the one state the model reads as **the user deleted
+every line**: `linix check` then reported `112 to remove` and told the user to run `linix sync`,
+and it removed them. Driven end to end in a disposable data directory on one package, and above
+`max_removals` the count guard would have refused first — but any machine with fewer than twenty
+adopted packages gets it with nothing in the way.
+
+The fix is the one this entry already argued for, applied one layer down: **one writer**, named
+`persist`, with the primitive private behind it. A verb cannot reach the disk during a preview by
+picking the shorter name, because there is no shorter name. `hold`, `unhold`, `adopt` and
+`path --set` phrase their output from what that writer *answers* — `Held` or `would hold` — so
+the past-tense sentence and the write can no longer disagree.
+
 **And the check is a gate over every verb, not over the five.** The audit that found these had
 probed 13 of 61 subcommands, so its honest conclusion was "at least five" — a number nobody
 should have to re-derive by hand a third time. The gate snapshots the config directory, previews,

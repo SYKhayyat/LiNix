@@ -1,5 +1,5 @@
 use crate::core::{Error, PackageSpec, Result};
-use crate::utils::file::atomic_write;
+use crate::utils::file::persist;
 use chrono::{Duration as ChronoDuration, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -133,7 +133,10 @@ impl Journal {
         let data = serde_json::to_string_pretty(&self.entries)
             .map_err(|e| Error::Other(format!("Failed to serialize Journal: {}", e)))?;
 
-        atomic_write(&self.path, &data)
+        // A preview records no WAL entry: `persist` answers that, and a run that performed
+        // nothing has nothing to roll back.
+        persist(&self.path, &data)
+            .map(|_| ())
             .map_err(|e| Error::Persist(format!("Atomic write of WAL Journal failed: {}", e)))
     }
 

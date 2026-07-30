@@ -86,7 +86,7 @@ impl WebBackendCore {
     async fn save_state(&self, state: &HashMap<String, WebState>) -> Result<()> {
         let _guard = self.internal_lock.lock().await;
         let data = serde_json::to_string_pretty(state).map_err(Error::from)?;
-        crate::utils::file::atomic_write(&self.state_file, &data)
+        crate::utils::file::persist(&self.state_file, &data).map(|_| ())
     }
 }
 

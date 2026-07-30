@@ -48,7 +48,7 @@ impl RegexLock {
         }
     }
 
-    /// Through `write_config`, so a preview does not write an approval or a pin. `linix
+    /// Through `persist`, so a preview does not write an approval or a pin. `linix
     /// --dry-run lock` used to leave `locks/versions.json` and `locks/hooks.toml` behind.
     pub fn save(&self, path: &Path) -> Result<()> {
         if !crate::core::dry_run::active() {
@@ -59,7 +59,7 @@ impl RegexLock {
         }
         let body = toml::to_string_pretty(self)
             .map_err(|e| Error::Toml(format!("serializing the regex lock: {}", e)))?;
-        crate::utils::file::write_config(path, &body).map(|_| ())
+        crate::utils::file::persist(path, &body).map(|_| ())
     }
 
     pub fn get(&self, backend: &str, pattern: &str) -> Option<&[String]> {

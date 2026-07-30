@@ -31,7 +31,9 @@ pub fn render_path(resolved: &ResolvedRoot, explain: bool) -> String {
 }
 
 /// Store the repo location so later runs need no flag and no environment variable.
-pub fn set_root(dir: &Path) -> Result<PathBuf> {
+///
+/// The settings file, and whether it was written — a preview names it and leaves it alone.
+pub fn set_root(dir: &Path) -> Result<(PathBuf, bool)> {
     if !dir.is_absolute() {
         return Err(Error::Config(format!(
             "`{}` is not an absolute path.\n  A relative path would mean a different \
@@ -41,8 +43,8 @@ pub fn set_root(dir: &Path) -> Result<PathBuf> {
     }
     let mut settings = Settings::load()?;
     settings.config_root = Some(dir.to_path_buf());
-    settings.save()?;
-    Ok(Settings::path())
+    let stored = settings.save()?;
+    Ok((Settings::path(), stored))
 }
 
 /// A file the user named on `linix edit`, resolved inside the repo.

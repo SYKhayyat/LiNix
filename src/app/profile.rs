@@ -175,7 +175,7 @@ impl ProfileManager {
             body.push_str(name);
             body.push('\n');
         }
-        if !crate::utils::file::write_config(&file, &body)? {
+        if !crate::utils::file::persist(&file, &body)? {
             info!("[DRY-RUN] would add {} to active.", added.join(", "));
             return Ok(());
         }
@@ -238,7 +238,7 @@ impl ProfileManager {
             return Ok(());
         }
 
-        if !crate::utils::file::write_config(&file, &edit.body)? {
+        if !crate::utils::file::persist(&file, &edit.body)? {
             info!("[DRY-RUN] would deactivate {}.", names.join(", "));
             return Ok(());
         }
@@ -317,7 +317,7 @@ impl ProfileManager {
         tokio::fs::create_dir_all(self.layout.profiles_dir())
             .await
             .ok();
-        crate::utils::file::write_config(&path, PROFILE_TEMPLATE)?;
+        crate::utils::file::persist(&path, PROFILE_TEMPLATE)?;
         info!("Created profile '{}' at {}.", name, path.display());
         Ok(())
     }
@@ -352,7 +352,7 @@ impl ProfileManager {
              # them. Move them into a module to share them between profiles.\n\n{}\n",
             lines.join("\n")
         );
-        if !crate::utils::file::write_config(&path, &body)? {
+        if !crate::utils::file::persist(&path, &body)? {
             info!(
                 "[DRY-RUN] would save profile '{}' with {} package(s) to {}.",
                 name,
@@ -406,7 +406,7 @@ impl ProfileManager {
     /// `active` is a plain list of profile names and nothing else goes in it (II.6).
     /// The one write behind `activate`, `activate -a` and `deactivate`.
     ///
-    /// It goes through `write_config` rather than `tokio::fs::write` because `active` decides
+    /// It goes through `persist` rather than `tokio::fs::write` because `active` decides
     /// which modules are in the model, and therefore what the next `sync` installs and removes.
     /// A preview of "what would switching to Work do" that leaves you on Work has answered a
     /// question nobody asked, and until 2026-07-28 it did so without printing a line.
@@ -416,7 +416,7 @@ impl ProfileManager {
                 .await
                 .ok();
         }
-        crate::utils::file::write_config(&self.layout.active_file(), &active_body(active))
+        crate::utils::file::persist(&self.layout.active_file(), &active_body(active))
     }
 
     /// `profile show` answers "what would this profile give me" by pointing `active` at it,

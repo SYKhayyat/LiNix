@@ -4,9 +4,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
-/// Write a file the user's configuration is made of — `active`, `preferences.toml`, a lock
-/// under `locks/`. **The place `--dry-run` is honoured for config writes**, so a verb gets the
-/// preview by writing through here rather than by remembering to ask.
+/// Write a file LiNix owns — `active`, `preferences.toml`, a manifest, a lock under `locks/`,
+/// the WAL, its own state registry — atomically, and **the one place `--dry-run` stops bytes
+/// from reaching a disk**.
 ///
 /// Returns `true` when the bytes were written and `false` when the run is a preview, so a
 /// caller can phrase its own message either way without asking the flag a second time.
@@ -15,7 +15,14 @@ use tempfile::NamedTempFile;
 /// exists for did not merely act during a preview, they acted *silently*, and of the two that
 /// is the worse half — `--dry-run activate Work` switched the profile and printed nothing at
 /// all.
-pub fn write_config(path: &Path, content: &str) -> Result<bool> {
+///
+/// **There were two of these.** A preview-aware `write_config` and a permissive `atomic_write`,
+/// and the second is the one the `save()` methods reached for: `--dry-run adopt` recorded 112
+/// packages as managed while the manifest that declares them was correctly not written, leaving
+/// the machine in the one state the model reads as *the user deleted every line*. A writer that
+/// honours the flag is no protection while a writer that ignores it sits beside it, so there is
+/// now one.
+pub fn persist(path: &Path, content: &str) -> Result<bool> {
     if crate::core::dry_run::active() {
         tracing::warn!("[DRY-RUN] would write {}", path.display());
         return Ok(false);
@@ -24,7 +31,9 @@ pub fn write_config(path: &Path, content: &str) -> Result<bool> {
     Ok(true)
 }
 
-pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
+/// The bytes, atomically, with no policy. **Private on purpose** — [`persist`] is the way in,
+/// so a new writer cannot reach the disk during a preview by picking the shorter name.
+fn atomic_write(path: &Path, content: &str) -> Result<()> {
     let dir = path.parent().ok_or_else(|| {
         let err = std::io::Error::new(
             std::io::ErrorKind::InvalidInput,

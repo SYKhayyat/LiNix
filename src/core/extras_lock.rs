@@ -94,7 +94,7 @@ impl ExtrasLedger {
     }
 
     /// Write the ledger, creating `locks/` if needed.
-    /// Through `write_config`, so a preview does not write an approval or a pin. `linix
+    /// Through `persist`, so a preview does not write an approval or a pin. `linix
     /// --dry-run lock` used to leave `locks/versions.json` and `locks/hooks.toml` behind.
     pub fn save(&self, path: &Path) -> Result<()> {
         if !crate::core::dry_run::active() {
@@ -105,7 +105,7 @@ impl ExtrasLedger {
         }
         let body = toml::to_string_pretty(self)
             .map_err(|e| Error::Toml(format!("serializing extras ledger: {}", e)))?;
-        crate::utils::file::write_config(path, &body).map(|_| ())
+        crate::utils::file::persist(path, &body).map(|_| ())
     }
 
     /// The keys that were applied but are no longer declared — the extras to undo. Sorted

@@ -270,7 +270,7 @@ impl GithubBackendCore {
     async fn save_state_internal(&self, state: &HashMap<String, GithubState>) -> Result<()> {
         let _guard = self.internal_lock.lock().await;
         let data = serde_json::to_string_pretty(state).map_err(Error::from)?;
-        crate::utils::file::atomic_write(&self.state_file, &data)
+        crate::utils::file::persist(&self.state_file, &data).map(|_| ())
     }
 }
 

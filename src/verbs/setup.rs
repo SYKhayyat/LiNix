@@ -367,9 +367,14 @@ pub(crate) async fn handle_path(
     use linix::app::locate;
 
     if let Some(dir) = set {
-        let written = locate::set_root(dir)?;
-        println!("Config repo set to {}", dir.display());
-        println!("Stored in {}", written.display());
+        let (settings_file, stored) = locate::set_root(dir)?;
+        if stored {
+            println!("Config repo set to {}", dir.display());
+            println!("Stored in {}", settings_file.display());
+        } else {
+            println!("[DRY-RUN] would set the config repo to {}", dir.display());
+            println!("[DRY-RUN] would store it in {}", settings_file.display());
+        }
         return Ok(());
     }
 
@@ -450,7 +455,7 @@ pub(crate) async fn handle_config(app: &App, cmd: &ConfigCommand) -> Result<()> 
                     tokio::fs::create_dir_all(parent).await.ok();
                 }
             }
-            if linix::utils::file::write_config(&path, CONFIG_TEMPLATE)
+            if linix::utils::file::persist(&path, CONFIG_TEMPLATE)
                 .with_context(|| format!("Failed to write config to {}", path.display()))?
             {
                 println!("Wrote commented default preferences to {}", path.display());

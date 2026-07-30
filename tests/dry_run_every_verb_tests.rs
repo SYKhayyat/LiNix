@@ -20,6 +20,17 @@
 //! either exercised here or exempted with a reason, and every exemption names a subcommand
 //! that exists.** E29 was a stale exemption for `undo`, a command that had been renamed away;
 //! an exemption list nothing validates is a list that grows quietly.
+//!
+//! **The blind spot this file had, and what it cost.** Both snapshots walked the *config*
+//! directory, and three exemptions said so out loud: `hold`, `unhold` and `heal` were excused
+//! because "holds live in the data dir, not the config dir". The data directory holds
+//! `registry.json` — the managed set, the file that decides whether the next `sync` *removes* a
+//! package. So `--dry-run adopt` recorded 112 packages as managed while correctly not writing
+//! the manifest that declares them, which is the one state the model reads as *the user deleted
+//! every line*; `linix check` then said `112 to remove … run linix sync`, and it did. The gate
+//! that says "every subcommand" could not have seen it: an exemption naming the instrument's
+//! blind spot is not a reason, it is the finding. Both snapshots now walk the whole fixture —
+//! config, data and the working directory — and the three excused verbs are driven.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -29,8 +40,16 @@ use std::process::Command;
 struct Case {
     /// What to run, after `--dry-run`.
     argv: &'static [&'static str],
-    /// Files to place in the config directory first, so the command has work to do.
+    /// Files to place before the run, **relative to the fixture root** — so a case can plant
+    /// `data/journal.json` as readily as `config/profiles/Work`.
     setup: &'static [(&'static str, &'static str)],
+    /// Commands run *for real* first, so the measured one has something to change. `unhold`
+    /// releases nothing on a machine holding nothing.
+    pre: &'static [&'static [&'static str]],
+    /// Output that means "this host gave me nothing to do". A case printing it is **skipped and
+    /// named**, never passed: `adopt` needs installed packages, and a green result on a host
+    /// with none is the failure mode this file exists to end.
+    nothing_to_do: Option<&'static str>,
 }
 
 /// The commands that mutate the config directory and can be driven with no network, no package
@@ -38,60 +57,119 @@ struct Case {
 const CASES: &[Case] = &[
     Case {
         argv: &["activate", "Work"],
-        setup: &[(
-            "profiles/Work",
-            "use starter
-",
-        )],
+        setup: &[("config/profiles/Work", "use starter\n")],
+        pre: &[],
+        nothing_to_do: None,
     },
     Case {
         argv: &["activate", "-a", "Work"],
-        setup: &[(
-            "profiles/Work",
-            "use starter
-",
-        )],
+        setup: &[("config/profiles/Work", "use starter\n")],
+        pre: &[],
+        nothing_to_do: None,
     },
     Case {
         argv: &["deactivate", "Main"],
         setup: &[],
+        pre: &[],
+        nothing_to_do: None,
     },
     Case {
         argv: &["profile", "create", "Newone"],
         setup: &[],
+        pre: &[],
+        nothing_to_do: None,
     },
     Case {
         argv: &["profile", "save", "Snapshotted"],
         setup: &[],
+        pre: &[],
+        nothing_to_do: None,
     },
     Case {
         argv: &["module", "create", "extra"],
         setup: &[],
+        pre: &[],
+        nothing_to_do: None,
     },
     Case {
         argv: &["lock"],
         setup: &[],
+        pre: &[],
+        nothing_to_do: None,
     },
     Case {
         argv: &["config", "init", "--force"],
         setup: &[],
+        pre: &[],
+        nothing_to_do: None,
     },
     Case {
         argv: &["git", "init"],
         setup: &[],
+        pre: &[],
+        nothing_to_do: None,
+    },
+    // The three the config-only snapshot excused, and the one that made it matter. Every one
+    // writes `data/registry.json` or `data/journal.json` and nothing else.
+    Case {
+        argv: &["hold", "github:sharkdp/hexyl"],
+        setup: &[("config/modules/starter.txt", "github:sharkdp/hexyl\n")],
+        pre: &[],
+        nothing_to_do: None,
+    },
+    Case {
+        argv: &["unhold", "github:sharkdp/hexyl"],
+        setup: &[("config/modules/starter.txt", "github:sharkdp/hexyl\n")],
+        pre: &[&["hold", "github:sharkdp/hexyl"]],
+        nothing_to_do: None,
+    },
+    // An interrupted removal in the WAL: what `heal` exists for, and the only fixture that
+    // gives it work. The action is a *removal* of a package this host does not have, so the
+    // recovery it attempts cannot install anything.
+    Case {
+        argv: &["heal", "-y"],
+        setup: &[(
+            "data/journal.json",
+            r#"{"github:linix-probe-zzz:wal": {
+                "id": "github:linix-probe-zzz:wal",
+                "action": {"Remove": {"name": "linix-probe-zzz", "backend": "github"}},
+                "status": "InProgress",
+                "started_at_unix": 1000000,
+                "finished_at_unix": null,
+                "error": null,
+                "staged_properties": {}
+            }}"#,
+        )],
+        pre: &[],
+        nothing_to_do: None,
+    },
+    Case {
+        argv: &["adopt", "-y"],
+        setup: &[],
+        pre: &[],
+        nothing_to_do: Some("Nothing to adopt"),
     },
 ];
 
 /// Subcommands not driven here, each with the reason. Checked against `--help`, so a name that
 /// stops existing fails this file rather than sitting in the list forever (E29).
+///
+/// **A reason says what this file cannot supply — never what this file cannot see.** Three
+/// entries here used to read "lives in the data dir, not the config dir", which described the
+/// snapshot's blind spot and excused the verbs writing into it; that is how B-1 stayed invisible
+/// through two rounds of a gate named "every verb". `hooks` was excused as "read-only listing"
+/// while `hooks install` writes into a manager's system hook directory, and `path` as
+/// "read-only" while `path --set` writes LiNix's own settings file.
 const EXEMPT: &[(&str, &str)] = &[
     ("sync", "covered by grader_extras_guard_tests and dry_run_tests; needs backends"),
     ("rebuild", "removes and reinstalls through a real manager"),
     ("watch", "runs until interrupted"),
     ("run", "runs a declared command; not a config mutation"),
-    ("heal", "repairs the journal in the data dir, not the config dir"),
     ("remove-orphans", "needs a manager that reports orphans"),
-    ("clean-cache", "clears the cache dir, not the config dir"),
+    (
+        "clean-cache",
+        "needs a backend holding a real download cache; a fixture has none to clear",
+    ),
     ("reset", "refuses without a terminal — asserted in grader_refusal_exit_code_tests"),
     ("check", "read-only — reports, never writes"),
     ("vars", "read-only — prints this host's resolved variables"),
@@ -113,7 +191,6 @@ const EXEMPT: &[(&str, &str)] = &[
         "covered by dry_run_tests; measured — it needs the package in the state registry,          not merely declared, so it cannot be driven from a config fixture alone",
     ),
     ("repo", "needs a manager that manages repositories"),
-    ("adopt", "needs installed packages to adopt"),
     ("add", "covered by install: the same declare path"),
     ("shell", "starts an interactive session that ends on exit"),
     ("history", "read-only — reads the git log of the config"),
@@ -124,7 +201,11 @@ const EXEMPT: &[(&str, &str)] = &[
     ("eval", "read-only — resolves the model and prints it"),
     ("repl", "interactive — needs a terminal"),
     ("schedule", "covered by dry_run_tests; provisions onto the OS scheduler"),
-    ("path", "read-only — prints where things live"),
+    (
+        "path",
+        "`--set` writes LiNix's own settings file, which lives outside any directory a fixture \
+         controls — driven by a_preview_does_not_store_a_new_config_root below",
+    ),
     ("init", "creates the config dir itself, so there is no before-state to compare"),
     ("sbom", "read-only — emits a bill of materials"),
     ("export", "writes to a path the user names"),
@@ -134,9 +215,11 @@ const EXEMPT: &[(&str, &str)] = &[
     ("service", "needs an init system"),
     ("bisect", "runs many syncs through real managers"),
     ("fleet", "talks to other hosts"),
-    ("hooks", "read-only listing of the configured hooks"),
-    ("unhold", "holds live in the data dir, not the config dir"),
-    ("hold", "holds live in the data dir, not the config dir"),
+    (
+        "hooks",
+        "install/uninstall write into a manager's system hook dir and need root; status and \
+         shell-init are the read-only halves",
+    ),
     ("edit", "opens the user's editor on a manifest"),
     ("policy", "read-only listing of the guard rules"),
     ("completions", "prints a shell script"),
@@ -151,6 +234,9 @@ fn bin() -> &'static str {
 fn run(dir: &Path, args: &[&str]) -> (String, i32) {
     let out = Command::new(bin())
         .args(args)
+        // In the fixture, so a verb writing relative to the working directory writes where the
+        // snapshot looks rather than into the repo.
+        .current_dir(dir)
         .env("LINIX_CONFIG_DIR", dir.join("config"))
         .env("LINIX_DATA_DIR", dir.join("data"))
         .stdin(std::process::Stdio::null())
@@ -166,10 +252,14 @@ fn run(dir: &Path, args: &[&str]) -> (String, i32) {
     )
 }
 
-/// Every file under the config directory, by relative path, with its bytes.
+/// Every file under the fixture — `config/`, `data/`, and anything a verb drops in the working
+/// directory — by relative path, with its bytes.
 ///
 /// Content and not just names: `activate` rewrites `active` in place, so a listing would call
-/// the switched profile no change at all.
+/// the switched profile no change at all. **`data/` and not just `config/`**: `registry.json` is
+/// the managed set, and a preview that records a package there has armed the next `sync` to
+/// remove it (B-1). Nothing is filtered out — a lock file this walk reports as changed is a
+/// finding to read, not noise to exclude, and the diff names the file either way.
 fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     fn walk(dir: &Path, base: &Path, out: &mut BTreeMap<String, Vec<u8>>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -194,16 +284,25 @@ fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     out
 }
 
-fn fixture(name: &str, setup: &[(&str, &str)]) -> PathBuf {
+fn fixture(name: &str, case: &Case) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let (out, code) = run(&dir, &["init"]);
     assert_eq!(code, 0, "the fixture's own `init` failed:\n{out}");
-    for (rel, body) in setup {
-        let p = dir.join("config").join(rel);
+    for (rel, body) in case.setup {
+        let p = dir.join(rel);
         std::fs::create_dir_all(p.parent().unwrap()).unwrap();
         std::fs::write(&p, body).unwrap();
+    }
+    for argv in case.pre {
+        let (out, code) = run(&dir, argv);
+        assert_eq!(
+            code,
+            0,
+            "the fixture's own `linix {}` failed:\n{out}",
+            argv.join(" ")
+        );
     }
     dir
 }
@@ -234,25 +333,34 @@ fn diff(before: &BTreeMap<String, Vec<u8>>, after: &BTreeMap<String, Vec<u8>>) -
 #[test]
 fn a_preview_leaves_the_config_byte_identical() {
     let mut failures = Vec::new();
+    let mut skipped = Vec::new();
 
     for case in CASES {
         // The preview.
-        let dir = fixture(&format!("dryrun-{}", slug(case.argv)), case.setup);
-        let cfg = dir.join("config");
-        let before = snapshot(&cfg);
+        let dir = fixture(&format!("dryrun-{}", slug(case.argv)), case);
+        let before = snapshot(&dir);
         let mut args = vec!["--dry-run"];
         args.extend_from_slice(case.argv);
         let (out, _) = run(&dir, &args);
-        let after = snapshot(&cfg);
+        let after = snapshot(&dir);
         let changed = diff(&before, &after);
+
+        if let Some(marker) = case.nothing_to_do {
+            if out.contains(marker) {
+                skipped.push(format!(
+                    "`linix {}` — this host gave it nothing to do (\"{marker}\")",
+                    case.argv.join(" ")
+                ));
+                continue;
+            }
+        }
 
         // The control, on its own fresh fixture: the same command without the flag has to
         // change something, or the case above proved nothing.
-        let ctl_dir = fixture(&format!("control-{}", slug(case.argv)), case.setup);
-        let ctl_cfg = ctl_dir.join("config");
-        let ctl_before = snapshot(&ctl_cfg);
+        let ctl_dir = fixture(&format!("control-{}", slug(case.argv)), case);
+        let ctl_before = snapshot(&ctl_dir);
         let (ctl_out, _) = run(&ctl_dir, case.argv);
-        let ctl_changed = diff(&ctl_before, &snapshot(&ctl_cfg));
+        let ctl_changed = diff(&ctl_before, &snapshot(&ctl_dir));
 
         if ctl_changed.is_empty() {
             failures.push(format!(
@@ -267,7 +375,7 @@ fn a_preview_leaves_the_config_byte_identical() {
 
         if !changed.is_empty() {
             failures.push(format!(
-                "`linix --dry-run {}` changed the config directory:\n    {}\n  \
+                "`linix --dry-run {}` changed the fixture:\n    {}\n  \
                  (the same command without --dry-run changes: {})\n  output:\n{}",
                 case.argv.join(" "),
                 changed.join("\n    "),
@@ -277,12 +385,67 @@ fn a_preview_leaves_the_config_byte_identical() {
         }
     }
 
+    // Named, not silent: a skip is the one honest outcome for a host that cannot supply the
+    // work, and a count nobody prints is how coverage collapses unnoticed (G-11).
+    if !skipped.is_empty() {
+        eprintln!(
+            "skipped {} of {} case(s):\n  {}",
+            skipped.len(),
+            CASES.len(),
+            skipped.join("\n  ")
+        );
+    }
+
     assert!(
         failures.is_empty(),
         "--dry-run performed {} of {} commands:\n\n{}",
         failures.len(),
         CASES.len(),
         failures.join("\n\n")
+    );
+}
+
+/// `path --set` writes `linix.settings.toml`, which lives beside the user's other application
+/// settings rather than in any directory `LINIX_CONFIG_DIR` moves — so the only honest way to
+/// assert a preview leaves it alone is to look at the real one.
+///
+/// It restores whatever it finds, in both directions, because a test that damages the machine
+/// when it fails is a worse instrument than no test.
+#[test]
+fn a_preview_does_not_store_a_new_config_root() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("dryrun-path-set");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let (located, code) = run(&dir, &["path", "--explain"]);
+    assert_eq!(code, 0, "{located}");
+    let settings = located
+        .lines()
+        .find_map(|l| l.strip_prefix("settings file: "))
+        .map(|p| PathBuf::from(p.trim()))
+        .unwrap_or_else(|| panic!("`path --explain` names no settings file:\n{located}"));
+
+    let before = std::fs::read(&settings).ok();
+    let (out, _) = run(
+        &dir,
+        &["--dry-run", "path", "--set", &dir.to_string_lossy()],
+    );
+    let after = std::fs::read(&settings).ok();
+
+    if after != before {
+        match &before {
+            Some(bytes) => std::fs::write(&settings, bytes).unwrap(),
+            None => std::fs::remove_file(&settings).unwrap(),
+        }
+        panic!(
+            "`linix --dry-run path --set` wrote {} (restored). It said:\n{}",
+            settings.display(),
+            out.trim()
+        );
+    }
+    assert!(
+        out.contains("[DRY-RUN]"),
+        "the preview neither wrote nor said it would not:\n{out}"
     );
 }
 

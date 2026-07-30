@@ -127,13 +127,10 @@ impl Settings {
         Ok(Settings { config_root })
     }
 
-    pub fn save(&self) -> Result<()> {
-        let path = Self::path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| Error::Io(e.to_string()))?;
-        }
+    /// Returns whether the bytes reached the disk; a preview writes none.
+    pub fn save(&self) -> Result<bool> {
         let text = toml::to_string_pretty(self).map_err(|e| Error::Toml(e.to_string()))?;
-        std::fs::write(&path, text).map_err(|e| Error::Io(e.to_string()))
+        crate::utils::file::persist(&Self::path(), &text)
     }
 }
 

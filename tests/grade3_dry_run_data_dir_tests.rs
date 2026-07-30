@@ -125,7 +125,8 @@ fn dry_run_hold_does_not_record_a_hold() {
     );
 
     assert_eq!(
-        after, before,
+        after,
+        before,
         "`linix --dry-run hold` wrote the managed-state registry. It also said `{}` in the past \
          tense, with no [DRY-RUN] marker.",
         out.lines().next().unwrap_or("").trim()
@@ -151,7 +152,8 @@ fn dry_run_unhold_does_not_release_a_hold() {
     );
 
     assert_eq!(
-        after, before,
+        after,
+        before,
         "`linix --dry-run unhold` wrote the managed-state registry, and printed `{}`.",
         out.lines().next().unwrap_or("").trim()
     );

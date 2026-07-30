@@ -233,6 +233,7 @@ impl Adopter {
             })
         );
 
+        let recorded;
         {
             let mut state_mut = self.state.lock().await;
             let source_meta = Some("adopt".to_string());
@@ -249,12 +250,28 @@ impl Adopter {
             }
 
             let state_to_persist = state_mut.clone();
-            tokio::task::spawn_blocking(move || state_to_persist.save())
+            recorded = tokio::task::spawn_blocking(move || state_to_persist.save())
                 .await
                 .map_err(|e| Error::Other(format!("State-save thread failure: {}", e)))??;
         }
 
         debug!("state registry aligned");
+
+        if !recorded {
+            // Both halves of a preview, said once each, at a level the default filter shows.
+            // The manifest line used to go out at `info!` and the count as a `println!`, so the
+            // sentence a user saw was `Adopted 112 package(s).` about a file that was never
+            // written.
+            println!("\n[DRY-RUN] would adopt {} package(s).", found.adopt.len());
+            println!("{:-<64}", "");
+            println!(
+                "Manifest that would be written:  {}",
+                manifest_path.display()
+            );
+            println!("Nothing was written and nothing is managed. Run without `--dry-run` to");
+            println!("record them, and read the manifest before the next `linix sync`.");
+            return Ok(());
+        }
 
         println!("\nAdopted {} package(s).", found.adopt.len());
         println!("{:-<64}", "");
@@ -288,7 +305,7 @@ impl Adopter {
     fn hold_back_what_cannot_be_written(found: &mut Discovery) {
         let mut kept = Vec::with_capacity(found.adopt.len());
         for pkg in std::mem::take(&mut found.adopt) {
-            if crate::config::grammar::is_declarable(&pkg.backend, &pkg.name) {
+            if crate::config::grammar::is_declarable(Some(&pkg.backend), &pkg.name) {
                 kept.push(pkg);
             } else {
                 warn!(
