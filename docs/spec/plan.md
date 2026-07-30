@@ -1756,6 +1756,44 @@ box holds the data directory hostage.
 ---
 
 
+## The release blocker — every backend gets a real lifecycle (Q4)
+
+**`Q4` (owner, 2026-07-27) rejected labelling untested backends "experimental"**, and said the
+coverage they lack is tracked here. It was not, and that gap is why this section exists — the
+ruling pointed at a document that did not carry the thing it named, which is `E31`'s shape.
+
+The rule, and it is a rule about the project rather than the program (`V.93`): *this codebase
+does things; it does not cover for not doing them.* So **a backend with no real install → list →
+binary → remove round-trip in an automated gate blocks the release.** Not a caption, not a
+default that scaffolds fewer managers — the coverage is the work.
+
+**What is measurable from the repo, and now measured on every sweep.** Both harnesses compute
+the backends that are in neither `canary()` (a path to a real lifecycle) nor
+`no_lifecycle_reason()` (a stated reason they cannot have one), name them, and hold the count
+under a **ceiling that may only go down**. On Windows, 2026-07-30, that is **15 of the 48
+registered**:
+
+```
+cabal composer conda flatpak lvm mix nix opam pkg pkg_add pkgin snap spack stack zfs
+```
+
+The container harness's ceiling is deliberately **unrecorded**: the Linux registry is a
+different set (56, not 48) and that harness has its own canary table, so the number has to come
+from a run of that harness rather than from an estimate here. Until it is recorded the check
+reports the count and says how to record it, the same branch the real-lifecycle ratchet takes
+for a host class it has never seen.
+
+**This is the leading indicator, not the whole blocker.** A canary means the harness *could* run
+a lifecycle; whether one has ever *passed* is a fact about CI history, and nothing in the repo
+computes that union — the round-5 grader assembled it by hand from six job logs (32 of 56
+distinct backends). Making that union computable is the next piece, and it wants the per-run
+`be-life` ledgers published as an artifact rather than left in a temp dir.
+
+**Q4's item 4 is what the ceiling enforces today:** no new backend is added until the current
+set passes. Adding one without a canary or a stated reason raises the count and fails the sweep.
+
+---
+
 # Part IV — Verification
 
 **The specific proofs, on the ubuntu image:**

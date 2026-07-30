@@ -737,6 +737,12 @@ echo "[14] Real lifecycle, every other manager on this image"
 #   install-options `@k=v` appended at INSTALL only. helm installs a plugin from a
 #               URL and removes it by name, so the two verbs cannot be handed the
 #               same string — which is exactly what this section exists to catch.
+# The ceiling for the block below. **Deliberately unset**: the Linux registry is a different
+# set (56 backends, not Windows's 48) and this harness has its own `canary()` table, so the
+# number has to come from a run of THIS harness inside a container. Unset takes the
+# "not recorded" branch, which reports the count and says how to record it — a ceiling nobody
+# measured is the guessed constant `lifecycle-floor.txt` exists to argue against.
+LIFECYCLE_GAP_CEILING=
 canary() {
     case "$1" in
         npm)      echo "cowsay|cowsay|full|" ;;
@@ -1271,6 +1277,66 @@ elif [ -n "$UNTOUCHED_BE" ]; then
     echo "  FAIL  every registered backend is covered — untouched:$UNTOUCHED_BE"
 else
     PASS=$((PASS + 1)); echo "  PASS  every registered backend got a lifecycle or a plan-smoke"
+fi
+
+# --- the release blocker, counted (Q4) -----------------------------------
+# `Q4` (owner, 2026-07-27) REJECTED labelling untested backends "experimental", and the reason
+# is the rule: *this codebase does things; it does not cover for not doing them.* A label turns
+# an unfinished job into a permanent disclaimer. So a backend with no real lifecycle in an
+# automated gate is a **release blocker**, and its item 4 is *no new backend is added until the
+# current set passes*.
+#
+# That ruling says the coverage is tracked in `plan.md`, and it was not — nothing in the repo
+# could answer "which registered backends have no path to a real lifecycle at all". The
+# per-run audit above cannot: it asks *lifecycle OR plan-smoke*, and a plan-smoke satisfies it.
+# The `soft` in section 12 cannot either: it only looks at backends READY on THIS host, so a
+# backend that is ready nowhere is never examined anywhere.
+#
+# Computed here instead, from the two tables that already exist: a backend has a path to a real
+# lifecycle if `canary` gives it one, and an accounted-for reason not to if
+# `no_lifecycle_reason` names one. In NEITHER table is the gap, and it is named rather than
+# counted silently.
+#
+# A CEILING, ratcheted the same way the mutation budget is: it may only go down. Failing on
+# today's number would paint every run red from the first one, which is how a gate becomes
+# something people switch off; failing when it RISES is exactly Q4's item 4, enforceable now.
+NO_PATH=""
+for be in $ALL_BACKENDS; do
+    [ -n "$(canary "$be")" ] && continue
+    [ -n "$(no_lifecycle_reason "$be")" ] && continue
+    NO_PATH="$NO_PATH $be"
+done
+NO_PATH_N=$(echo $NO_PATH | wc -w)
+# An audit over an empty set passes without examining anything (G2), and this one passed
+# LOUDLY: under the do-nothing stub `ALL_BACKENDS` is empty, so nothing is in neither table,
+# so the count is 0 and the `else` below congratulated the registry that came back blank. The
+# mutation gate caught it on the first run after this check was written — 87 survivors against
+# a budget of 86 — which is the gate doing to me exactly what it is for.
+if too_few_to_audit 10 "$(echo $ALL_BACKENDS | wc -w)"; then
+    FAILC=$((FAILC + 1))
+    FAILED_NAMES="$FAILED_NAMES
+    - coverage: the registry came back empty, so the lifecycle-gap ceiling examined nothing"
+    echo "  FAIL  the lifecycle-gap ceiling cannot judge a registry that enumerated nothing"
+elif [ -z "${LIFECYCLE_GAP_CEILING:-}" ]; then
+    # Unrecorded, and reported as such rather than compared against a number nobody measured —
+    # the same branch the real-lifecycle ratchet takes for a host class it has never seen. The
+    # registry is platform-conditional (48 backends on Windows, 56 on Linux), so this harness's
+    # number has to come from a run of this harness.
+    soft "lifecycle-gap ceiling is not recorded for this harness: $NO_PATH_N backend(s) have no path to a real lifecycle —$NO_PATH"
+    echo "        record it in this script:  LIFECYCLE_GAP_CEILING=$NO_PATH_N"
+elif [ "$NO_PATH_N" -gt "$LIFECYCLE_GAP_CEILING" ]; then
+    FAILC=$((FAILC + 1))
+    FAILED_NAMES="$FAILED_NAMES
+    - coverage: $NO_PATH_N backend(s) have no path to a real lifecycle, over the ceiling of $LIFECYCLE_GAP_CEILING"
+    echo "  FAIL  $NO_PATH_N backend(s) can never get a real lifecycle from this harness, and the"
+    echo "        ceiling is $LIFECYCLE_GAP_CEILING:$NO_PATH"
+    echo "        Q4 item 4: no new backend until the current set passes. Give it a canary, or"
+    echo "        name in no_lifecycle_reason() why it cannot have one."
+elif [ "$NO_PATH_N" -gt 0 ]; then
+    soft "$NO_PATH_N backend(s) have no path to a real lifecycle (ceiling $LIFECYCLE_GAP_CEILING) —$NO_PATH"
+    echo "        Q4: this is the release blocker, not a caption. Lower the ceiling as they land."
+else
+    PASS=$((PASS + 1)); echo "  PASS  every registered backend has a canary or a stated reason it cannot have one"
 fi
 
 # --- the real-lifecycle ratchet (G-11) ------------------------------------
