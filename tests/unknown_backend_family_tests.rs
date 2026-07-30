@@ -55,7 +55,6 @@ const NOT_A_PACKAGE_SPEC: &[(&str, &str)] = &[
     ("run", "a program to execute"),
     ("shell", "a shell to open"),
     ("fleet", "a fleet subcommand"),
-    ("protected", "nothing — it lists the protected set"),
     // Reads rather than resolves: `search` is the command for "which manager has this?", so a
     // prefix is not part of its question.
     ("search", "a search term"),

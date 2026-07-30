@@ -30,13 +30,24 @@ use std::path::Path;
 ///
 /// Round-tripped rather than parsed: `winget:ARP\Machine\X64\Android Studio` *parses*, as a
 /// set expression, and only reading it back as the package it came from catches that.
-pub fn is_declarable(backend: &str, name: &str) -> bool {
-    let line = format!("{}:{}", backend, name);
-    let is_this_backend = |n: &str| n == backend;
+///
+/// **`None` is a name with no backend written beside it** — `jq`, as a user types it into
+/// `linix protected`, and as the grammar accepts it on a line that lets `priority` decide the
+/// manager. It is not the same question as `""`, which builds the line `:jq` and is refused by
+/// every grammar there has ever been: asking it that way told `linix protected` that `jq`,
+/// `sudo` and every other bare name was undeclarable, so the guard's declarability test fired
+/// before a single rule was read and the answer to *which rule protects this* was a sentence
+/// about package lines.
+pub fn is_declarable(backend: Option<&str>, name: &str) -> bool {
+    let line = match backend {
+        Some(b) => format!("{}:{}", b, name),
+        None => name.to_string(),
+    };
+    let is_this_backend = |n: &str| Some(n) == backend;
     matches!(
         statement::parse(&Origin::argument(), &line, &is_this_backend),
         Ok(Statement::Package(d))
-            if d.backend.as_deref() == Some(backend) && d.selector.as_str() == name
+            if d.backend.as_deref() == backend && d.selector.as_str() == name
     )
 }
 

@@ -690,7 +690,7 @@ impl Transaction {
                         Prior::Absent => {
                             if let Some(p) = crate::app::sync::guard::protection_of(
                                 &self.app_config,
-                                &spec.backend,
+                                Some(&spec.backend),
                                 &spec.name,
                                 &os_essential,
                             ) {

@@ -515,35 +515,56 @@ pub(crate) async fn handle_protected(app: &App, packages: &[String], json: bool)
     let cfg = &app.config;
 
     if !packages.is_empty() {
+        // Same refusal every other spec-taking verb gives (N-3): a `nosuchbackend:` prefix is a
+        // typo, and answering it as though it were a package name called `nosuchbackend:foo`
+        // is the silence that family was closed to end. This verb was missed because the gate
+        // deriving that family from `--help` exempted it as taking "nothing".
+        app.require_known_spec_backends(packages).await?;
+
         // Query mode. This MUST reach the same answer as a real removal, so it calls the
         // guard's own decision function rather than re-implementing the rules — an
         // inspector that contradicts the enforcer is worse than none, because it is
         // believed. "backend:name" consults that backend's essential list; a bare name is
-        // checked against the config rules only.
+        // checked against the config rules only, and says so, because the OS's list is keyed
+        // by backend and there is no honest way to answer it from a name alone.
         let mut rows = Vec::new();
         for spec in packages {
             let (backend, name) = linix::config::parser::split_removal_target(spec, |b| {
                 app.registry.get(b).is_some()
             });
-            let backend = backend.unwrap_or_default();
-            let os_essential = if backend.is_empty() {
-                std::collections::HashSet::new()
-            } else {
-                let mut set = std::collections::HashSet::new();
-                set.insert(backend.clone());
-                linix::app::sync::guard::essential_names(&app.registry, &set).await
+            let os_essential = match &backend {
+                Some(b) => {
+                    let mut set = std::collections::HashSet::new();
+                    set.insert(b.clone());
+                    linix::app::sync::guard::essential_names(&app.registry, &set).await
+                }
+                None => std::collections::HashSet::new(),
             };
-            let (protected, reason) =
-                match linix::app::sync::guard::protection_of(cfg, &backend, &name, &os_essential) {
-                    Some(p) => (true, p.reason()),
-                    None => match cfg.unprotect_rule(&name) {
-                        Some(rule) => (
-                            false,
-                            format!("exempted by unprotected_packages rule `{}`", rule),
-                        ),
-                        None => (false, "no rule matches".into()),
-                    },
-                };
+            let (protected, reason) = match linix::app::sync::guard::protection_of(
+                cfg,
+                backend.as_deref(),
+                &name,
+                &os_essential,
+            ) {
+                Some(p) => (true, p.reason()),
+                None => match cfg.unprotect_rule(&name) {
+                    Some(rule) => (
+                        false,
+                        format!("exempted by unprotected_packages rule `{}`", rule),
+                    ),
+                    None => (
+                        false,
+                        match &backend {
+                            Some(_) => "no rule matches".to_string(),
+                            None => format!(
+                                "no config rule matches (no backend named, so this machine's \
+                                 essential list was not consulted — ask `<backend>:{}` for that)",
+                                name
+                            ),
+                        },
+                    ),
+                },
+            };
             rows.push((spec.clone(), protected, reason));
         }
         if json {

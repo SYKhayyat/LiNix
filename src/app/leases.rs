@@ -32,7 +32,7 @@ impl Leases<'_> {
             expired.iter().map(|(b, _)| b.clone()).collect();
         let os_essential = crate::app::sync::guard::essential_names(self.registry, &backends).await;
         let (protected, expired): (Vec<_>, Vec<_>) = expired.into_iter().partition(|(b, n)| {
-            crate::app::sync::guard::protection_of(self.config, b, n, &os_essential).is_some()
+            crate::app::sync::guard::protection_of(self.config, Some(b), n, &os_essential).is_some()
         });
         for (backend, name) in &protected {
             warn!(

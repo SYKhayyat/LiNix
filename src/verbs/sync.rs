@@ -339,7 +339,7 @@ pub(crate) async fn handle_rebuild(
             all_pairs.iter().map(|(b, _)| b.clone()).collect();
         let essential = guard::essential_names(&app.registry, &backends).await;
         rebuild::without_protected(&mut plan, &|backend, name| {
-            guard::protection_of(&app.config, backend, name, &essential).map(|p| p.reason())
+            guard::protection_of(&app.config, Some(backend), name, &essential).map(|p| p.reason())
         });
     }
 

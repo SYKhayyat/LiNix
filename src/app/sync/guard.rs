@@ -98,11 +98,18 @@ impl Protection {
 /// apart, and an inspector that contradicts the guard is worse than none, because it is
 /// believed.
 ///
+/// `backend` is `None` when the caller does not know one — `linix protected jq`, where the user
+/// named no manager. The config rules match on the name alone and are answered; the OS's
+/// essential list is keyed by `backend:name` and cannot be, so it is not consulted. **An unknown
+/// backend is this case, never the empty string**: `is_declarable("", "jq")` builds the line
+/// `:jq`, which no grammar accepts, so every bare name came back `Undeclarable` before a rule
+/// was read.
+///
 /// `os_essential` holds `backend:name` keys the OS flagged; pass an empty set when that
 /// is unknown or irrelevant.
 pub fn protection_of(
     config: &Config,
-    backend: &str,
+    backend: Option<&str>,
     name: &str,
     os_essential: &HashSet<String>,
 ) -> Option<Protection> {
@@ -124,8 +131,10 @@ pub fn protection_of(
     if let Some(rule) = config.protection_rule(name) {
         return Some(Protection::Rule(rule.to_string()));
     }
-    if os_essential.contains(&format!("{}:{}", backend, name)) {
-        return Some(Protection::OsEssential(backend.to_string()));
+    if let Some(b) = backend {
+        if os_essential.contains(&format!("{}:{}", b, name)) {
+            return Some(Protection::OsEssential(b.to_string()));
+        }
     }
     None
 }
@@ -349,7 +358,7 @@ pub async fn inspect_removals(
 
     for (backend, name) in removals {
         let protection = match kind {
-            RemovalKind::Package => protection_of(config, backend, name, &os_essential),
+            RemovalKind::Package => protection_of(config, Some(backend), name, &os_essential),
             RemovalKind::Extra => protected_names(kind, name).into_iter().find_map(|n| {
                 config
                     .protection_rule(n)
@@ -638,10 +647,15 @@ mod tests {
         let cfg = Config::default();
         let empty = HashSet::new();
         assert!(matches!(
-            protection_of(&cfg, "winget", r"ARP\Machine\X64\Android Studio", &empty),
+            protection_of(
+                &cfg,
+                Some("winget"),
+                r"ARP\Machine\X64\Android Studio",
+                &empty
+            ),
             Some(Protection::Undeclarable)
         ));
-        assert!(protection_of(&cfg, "winget", "7zip.7zip", &empty).is_none());
+        assert!(protection_of(&cfg, Some("winget"), "7zip.7zip", &empty).is_none());
     }
 
     #[test]
@@ -656,7 +670,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            protection_of(&cfg, "winget", "Some Program 1.0", &HashSet::new()),
+            protection_of(&cfg, Some("winget"), "Some Program 1.0", &HashSet::new()),
             Some(Protection::Undeclarable)
         ));
     }
@@ -722,9 +736,9 @@ mod tests {
         cfg.guard.unprotected_packages = vec!["libpam-modules".into()];
         let none = HashSet::new();
         // libpam* still protects the rest of the family...
-        assert!(protection_of(&cfg, "apt", "libpam0g", &none).is_some());
+        assert!(protection_of(&cfg, Some("apt"), "libpam0g", &none).is_some());
         // ...but the explicit opt-out wins for the one the user named.
-        assert!(protection_of(&cfg, "apt", "libpam-modules", &none).is_none());
+        assert!(protection_of(&cfg, Some("apt"), "libpam-modules", &none).is_none());
     }
 
     #[test]
@@ -734,10 +748,10 @@ mod tests {
         let mut cfg = config_with(20);
         cfg.guard.unprotected_packages = vec!["dash".into()];
         let os: HashSet<String> = ["apt:dash".to_string()].into_iter().collect();
-        assert!(protection_of(&cfg, "apt", "dash", &os).is_none());
+        assert!(protection_of(&cfg, Some("apt"), "dash", &os).is_none());
         // An essential package the user did NOT exempt is still protected.
         let os2: HashSet<String> = ["apt:base-files".to_string()].into_iter().collect();
-        assert!(protection_of(&cfg, "apt", "base-files", &os2).is_some());
+        assert!(protection_of(&cfg, Some("apt"), "base-files", &os2).is_some());
     }
 
     #[tokio::test]

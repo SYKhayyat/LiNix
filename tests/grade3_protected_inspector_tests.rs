@@ -139,7 +139,10 @@ fn a_bare_name_that_is_protected_names_the_rule_that_protects_it() {
     );
 
     let (yes, reason) = f.row("sudo");
-    assert!(yes, "`sudo` is in protected_packages and was reported unprotected");
+    assert!(
+        yes,
+        "`sudo` is in protected_packages and was reported unprotected"
+    );
     assert!(
         reason.contains("config rule"),
         "`linix protected sudo` explains a `protected_packages` match as: {reason}\n\nThe rule is \
