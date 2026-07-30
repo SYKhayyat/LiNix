@@ -247,27 +247,56 @@ pub(crate) async fn handle_plan(app: &App, out: &str) -> Result<()> {
         // Writing a plan changes nothing, so this warns rather than refuses — but say it
         // here, where there is still time to fix the manifest, rather than letting the
         // refusal be a surprise at apply time.
-        // Resources are counted with the packages, because the guard counts them together: a
-        // sync dropping three packages and three links removes six things, and a limit of five
-        // has to see six. Warning about only the packages here would preview a refusal
-        // smaller than the one `apply` performs.
-        let mut removal_pairs: Vec<(String, String)> = plan
+        //
+        // **Asked the way `apply` asks it, kind by kind.** One `inspect` over both lists ran
+        // the package rules over resource keys, and `protection_of` opens by asking whether a
+        // package line could hold the name — which no `link:`/`service:` key can. So every
+        // teardown came back `Undeclarable`: `plan` predicted a refusal for undeclaring three
+        // dotfiles, `apply` performed it at rc=0, and the explanation a user read was a
+        // sentence about package names. The guard carries a unit test asserting exactly that
+        // cannot happen; it exercises `RemovalKind::Extra`, and this call site passed
+        // `Package`.
+        //
+        // Each list still counts the other against the same ceiling, because the ceiling is a
+        // property of the command: a sync dropping three packages and three links removes six
+        // things. The `also_removing` split matches `sync`'s (`guard::enforce` then
+        // `enforce_extras`), so the preview and the enforcer refuse on the same machine.
+        let package_pairs: Vec<(String, String)> = plan
             .removals
             .iter()
             .map(|r| (r.backend.clone(), r.name.clone()))
             .collect();
-        removal_pairs.extend(linix::app::sync::guard::extra_removal_pairs(
-            &plan.resources.undo,
-        ));
-        let report =
-            linix::app::sync::guard::inspect(&app.config, &app.registry, &removal_pairs).await;
-        if !report.is_empty() {
+        let extra_pairs = linix::app::sync::guard::extra_removal_pairs(&plan.resources.undo);
+        let scope = linix::app::sync::guard::GuardScope::Apply;
+        let mut refusals = Vec::new();
+        for (pairs, kind, also) in [
+            (
+                &package_pairs,
+                linix::app::sync::guard::RemovalKind::Package,
+                0,
+            ),
+            (
+                &extra_pairs,
+                linix::app::sync::guard::RemovalKind::Extra,
+                package_pairs.len(),
+            ),
+        ] {
+            let report = linix::app::sync::guard::inspect_removals(
+                &app.config,
+                &app.registry,
+                pairs,
+                kind,
+                also,
+            )
+            .await;
+            if !report.is_empty() {
+                refusals.push(report.message(scope, kind));
+            }
+        }
+        if !refusals.is_empty() {
             println!(
                 "\nWARNING: `linix apply` will refuse this plan.\n{}",
-                report.message(
-                    linix::app::sync::guard::GuardScope::Apply,
-                    linix::app::sync::guard::RemovalKind::Package,
-                )
+                refusals.join("\n")
             );
         }
     }
@@ -572,7 +601,7 @@ pub(crate) async fn build_and_write_locks(app: &App) -> Result<usize> {
         }
     }
     let doc = serde_json::json!({ "locks": locks });
-    linix::utils::file::write_config(&path, &serde_json::to_string_pretty(&doc)?)
+    linix::utils::file::persist(&path, &serde_json::to_string_pretty(&doc)?)
         .with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(count)
 }

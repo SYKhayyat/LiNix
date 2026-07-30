@@ -1044,6 +1044,12 @@ every command that answers "does the machine match your files?" has to read them
 - **`plan` freezes resources and `apply` executes them**, through the same phase list `sync`
   runs. A plan that omits work `sync` would do is a review that reports nothing to see — and the
   guard's own refusal text sends the user to `linix plan` to see what would be undone.
+- **A guard preview asks about the kind the items actually are.** `plan` merged resources into
+  the package removal list and asked `RemovalKind::Package`, and `protection_of` opens by asking
+  whether a package line could hold the name — which no `link:` key can. So `plan` predicted a
+  refusal for undeclaring three dotfiles, `apply` performed it at rc=0, and the sentence a user
+  read was about package names. Each list is inspected as its own kind, counting the other
+  against the same ceiling, which is what `sync` already did.
 
 **`check health` has four states, and "not installed" is one of them** (Q2, owner 2026-07-27;
 V.91). A package manager the user does not have is **absent**, not critical:

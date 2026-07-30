@@ -132,7 +132,8 @@ fn plan_does_not_predict_a_refusal_apply_will_not_make() {
     let gone = targets.iter().all(|t| !t.exists());
 
     assert!(
-        !(plan_out.contains("will refuse this plan") && !refused_for_real),
+        // The implication, unchanged: if `plan` predicted the refusal, `apply` has to make it.
+        !plan_out.contains("will refuse this plan") || refused_for_real,
         "`plan` warned `WARNING: linix apply will refuse this plan` and `apply` performed it \
          (rc={apply_code}, every target removed: {gone}).\n\nplan said:\n{}\n\napply said:\n{}",
         plan_out
