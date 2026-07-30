@@ -564,7 +564,7 @@ pub(crate) async fn handle_apply(app: &App, plan_path: &str, yes: bool) -> Resul
 /// Build and write `locks/versions.json` from the current managed state (live installed versions
 /// preferred, falling back to recorded state). Returns the number of versions pinned. Shared
 /// by `linix lock` and by `linix heal` (which reconciles the lockfile).
-pub(crate) async fn build_and_write_locks(app: &App) -> Result<usize> {
+pub(crate) async fn build_and_write_locks(app: &App) -> Result<(usize, bool)> {
     let mut locks = serde_json::Map::new();
     {
         let state = app.state.lock().await;
@@ -601,9 +601,9 @@ pub(crate) async fn build_and_write_locks(app: &App) -> Result<usize> {
         }
     }
     let doc = serde_json::json!({ "locks": locks });
-    linix::utils::file::persist(&path, &serde_json::to_string_pretty(&doc)?)
+    let written = linix::utils::file::persist(&path, &serde_json::to_string_pretty(&doc)?)
         .with_context(|| format!("Failed to write {}", path.display()))?;
-    Ok(count)
+    Ok((count, written))
 }
 
 pub(crate) async fn handle_lock(app: &App) -> Result<()> {
@@ -611,15 +611,29 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     // `resolve_model`, which now runs generators and would refuse an unapproved one, so the very
     // command that approves it could never resolve far enough to reach it (U33).
     let generators = approve_generate_commands(app)?;
+
+    // Every ledger this command writes goes through `utils::file::persist`, so its answer about
+    // one of them is its answer about all: a preview approves nothing and pins nothing. It used
+    // to say "pinned" and "approved" up to eight times beside its own `[DRY-RUN] would write`.
+    // The generator count is printed after the write rather than before it, because approving
+    // them has to happen first (U33) and knowing what to *call* it cannot.
+    let (count, recorded) = build_and_write_locks(app).await?;
+    let (tag, pinned, approved) = if recorded {
+        ("Lock:", "pinned", "approved")
+    } else {
+        ("[DRY-RUN] Lock:", "would pin", "would approve")
+    };
+
     if generators > 0 {
         println!(
-            "Lock: approved {} generate command(s) at their current hash.",
-            generators
+            "{} {} {} generate command(s) at their current hash.",
+            tag, approved, generators
         );
     }
-    let count = build_and_write_locks(app).await?;
     println!(
-        "Lock: pinned {} package version(s) to {}",
+        "{} {} {} package version(s) to {}",
+        tag,
+        pinned,
         count,
         app.config
             .config_root()
@@ -633,7 +647,9 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     let hooks = app.hooks.approve_all_hooks()?;
     if hooks > 0 {
         println!(
-            "Lock: approved {} hook(s) at their current script hash ({}).",
+            "{} {} {} hook(s) at their current script hash ({}).",
+            tag,
+            approved,
             hooks,
             linix::core::hook_lock::HookLedger::path_in(&app.config.config_root().join("locks"))
                 .display()
@@ -646,7 +662,9 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     let approved_events = events.approve_all()?;
     if approved_events > 0 {
         println!(
-            "Lock: approved {} event hook(s) — {}.",
+            "{} {} {} event hook(s) — {}.",
+            tag,
+            approved,
             approved_events,
             events
                 .all()
@@ -661,22 +679,25 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     // which is `status` and `plan`, not just `sync`.
     if let Some(file) = approve_vars_provider(app)? {
         println!(
-            "Lock: approved the vars provider `{}` at its current hash.",
-            file
+            "{} {} the vars provider `{}` at its current hash.",
+            tag, approved, file
         );
     }
     // And every `adapters/` file (7a/U10). They travel with the repo, and a definition is
     // argv LiNix will run, so each is approved here or it does not load.
     for name in approve_adapters(app)? {
-        println!("Lock: approved `adapters/{}` at its current hash.", name);
+        println!(
+            "{} {} `adapters/{}` at its current hash.",
+            tag, approved, name
+        );
     }
     // And every declared `exec:` script (XIII.3). II.12 admits no exceptions: a script the
     // configuration runs is approved by this command or it does not run.
     let execs = approve_exec_scripts(app).await?;
     if execs > 0 {
         println!(
-            "Lock: approved {} exec script(s) at their current hash.",
-            execs
+            "{} {} {} exec script(s) at their current hash.",
+            tag, approved, execs
         );
     }
     // And every user-declared health-check COMMAND (U31). A check is argv, run after a change,
@@ -684,8 +705,8 @@ pub(crate) async fn handle_lock(app: &App) -> Result<()> {
     let health = approve_health_checks(app).await?;
     if health > 0 {
         println!(
-            "Lock: approved {} health-check command(s) at their current hash.",
-            health
+            "{} {} {} health-check command(s) at their current hash.",
+            tag, approved, health
         );
     }
     Ok(())

@@ -476,7 +476,9 @@ pub(crate) async fn handle_heal(app: &App) -> Result<()> {
     // made one command both the diagnosis and the treatment — and a command that changes
     // things is one you cannot run to find out whether you want things changed.
     for fixed in repair_environment(app).await {
-        println!("repaired: {}", fixed);
+        // `heal:` rather than `repaired:`, because each item now carries its own tense and a
+        // preview repairs nothing — the label was the last past-tense word left in this output.
+        println!("heal: {}", fixed);
     }
     Ok(())
 }
@@ -501,12 +503,23 @@ pub(crate) async fn repair_environment(app: &App) -> Vec<String> {
     }
 
     match build_and_write_locks(app).await {
-        Ok(n) => fixed.push(format!("reconciled locks/versions.json ({} entries)", n)),
+        // Two tenses, from the writer's own answer rather than from the flag: `--dry-run heal`
+        // printed `repaired: reconciled locks/versions.json` beside its own `[DRY-RUN] would
+        // write` line for the same file.
+        Ok((n, true)) => fixed.push(format!("reconciled locks/versions.json ({} entries)", n)),
+        Ok((n, false)) => fixed.push(format!(
+            "would reconcile locks/versions.json ({} entries)",
+            n
+        )),
         Err(e) => warn!("could not reconcile the lockfile: {}", e),
     }
 
-    // A backend reading as "degraded, stale index" recovers from a refresh.
+    // A backend reading as "degraded, stale index" recovers from a refresh. Under a preview the
+    // executor runs no manager command, so the sentence has to say so.
     match app.update().await {
+        Ok(()) if linix::core::dry_run::active() => {
+            fixed.push("would refresh backend metadata".into())
+        }
         Ok(()) => fixed.push("refreshed backend metadata".into()),
         Err(e) => warn!("could not refresh backend metadata: {}", e),
     }
