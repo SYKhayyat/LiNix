@@ -2,6 +2,7 @@
 #   docker build -f docker/integration/Dockerfile.fedora -t linix-it-fedora .
 #   docker run --rm linix-it-fedora            # defaults to: dnf jq
 FROM fedora:41
+ENV LINIX_IT_IMAGE=fedora
 # Essential toolchain + a broad set of language package managers so the harness can sweep
 # many backends in one container (dnf + npm + yarn + pnpm + pipx + uv + bun + cargo + gem).
 RUN dnf install -y curl gcc gcc-c++ make pkgconf-pkg-config openssl-devel perl git \

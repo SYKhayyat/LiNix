@@ -1866,12 +1866,29 @@ line. A ratchet asks a question that has an answer on every machine: *did this h
 worse than it has done before?* Nobody has to guess, and the only way to make it green
 dishonestly is to edit a number in a committed file, which is a line in a diff someone reviews.
 
-**The class had to be got right, and the first attempt was not.** `uname -s` under git-bash is
-`MINGW64_NT-10.0-26200`. Keyed on that, every Windows update would mint a new host class with no
-record and a free pass — a ratchet that resets itself is a ratchet in name. The OS token is
-normalised to `windows`/`linux`/`darwin`, the container's distro is part of the key because
-ubuntu and the `tools` image are not comparable runs, and `ci` is separate from `local` because
-that distinction is the finding rather than noise around it.
+**The class had to be got right, and neither of the first two attempts was.** `uname -s` under
+git-bash is `MINGW64_NT-10.0-26200`. Keyed on that, every Windows update would mint a new host
+class with no record and a free pass — a ratchet that resets itself is a ratchet in name. The OS
+token is normalised to `windows`/`linux`/`darwin`, and `ci` is separate from `local` because that
+distinction is the finding rather than noise around it.
+
+The second attempt made the container's **distro** part of the key, "because ubuntu and the
+`tools` image are not comparable runs" — and read it from `/etc/os-release`, which answers
+`ubuntu` for both, because `tools` is built on Ubuntu. Measured on CI run 30503630610: `tools`
+completed 25 real lifecycles and the ubuntu image 7, both filed under
+`container-linux-ubuntu-local`. Whichever wrote the record made the other permanently wrong — one
+held to a number it cannot reach, the other free to lose 18 without a word. The key is the
+image's own declared `LINIX_IT_IMAGE`, and an image that declares none is a named gate failure
+rather than a silent merge into whatever it was built on.
+
+**And a first run must not be a pass.** "No record for this class yet" was a counted PASS, on the
+argument that failing a new platform is how a gate stops people adding platforms. That argument
+is right and the conclusion does not follow from it. The same run took that branch on **7 of 7**
+host classes — every container leg and both native CI legs — because one developer's machine was
+the only place that had ever written a record: a ratchet in force nowhere, reporting green
+everywhere. It counts as neither pass nor failure now, which is what a comparison against a
+record that does not exist has earned. Nothing in the suite noticed except the mutation gate,
+counting one more check that survives a do-nothing binary.
 
 **And it goes in both harnesses.** The same audit exists in the native sweep and the container
 sweep, and putting the ratchet in one would be `guard.rs`'s own lesson — a check on one path is a

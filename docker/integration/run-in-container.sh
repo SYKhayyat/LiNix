@@ -1245,17 +1245,31 @@ case "$(uname -s 2>/dev/null)" in
     Linux*)                        HOST_OS=linux ;;
     *)                             HOST_OS=unknown ;;
 esac
-# Inside a container the distro is what decides which managers exist, so it is part of the
-# class: ubuntu and the `tools` image are not comparable runs.
+# Which image this is, not which distro it was built on. `/etc/os-release` answers `ubuntu` for
+# both the ubuntu image (7 real lifecycles) and the `tools` image (25) — `tools` IS Ubuntu — so
+# keying on it filed two incomparable runs under one record, and whichever wrote it last made
+# the other permanently wrong. Each Dockerfile declares its own `LINIX_IT_IMAGE`; os-release
+# remains the fallback for an image that has not.
 HOST_FLAVOUR=""
-[ -r /etc/os-release ] && HOST_FLAVOUR="-$(. /etc/os-release 2>/dev/null; echo "${ID:-}")"
+if [ -n "${LINIX_IT_IMAGE:-}" ]; then
+    HOST_FLAVOUR="-$LINIX_IT_IMAGE"
+elif [ -r /etc/os-release ]; then
+    HOST_FLAVOUR="-$(. /etc/os-release 2>/dev/null; echo "${ID:-}")"
+fi
 HOST_CLASS="container-${HOST_OS}${HOST_FLAVOUR}-$([ -n "${CI:-}" ] && echo ci || echo local)"
 FLOOR_FILE="/src/scripts/lifecycle-floor.txt"
-if [ -f "$FLOOR_FILE" ]; then
+if [ -n "$SMOKE" ]; then
+    # A smoke run installs nothing, so 0 is its correct answer and a floor over it could only be
+    # 0 — a number no run can fall below. Judged here would be a check that cannot fail.
+    soft "real-lifecycle ratchet: not judged — SMOKE_ONLY installs nothing, so $LIFECYCLES is not a coverage measurement"
+elif [ -f "$FLOOR_FILE" ]; then
     FLOOR=$(grep -E "^${HOST_CLASS} " "$FLOOR_FILE" 2>/dev/null | awk '{print $2}' | head -1)
     if [ -z "$FLOOR" ]; then
-        PASS=$((PASS + 1))
-        echo "  PASS  real-lifecycle ratchet: no record for $HOST_CLASS yet — this run sets it"
+        # Not a PASS: this branch reads a record that is not there, so it examines nothing. It
+        # counted as a passing check while every container leg took it — the floor was mounted on
+        # all five and in force on none — and the only thing that noticed was the mutation gate,
+        # counting one more check that survives a do-nothing binary.
+        soft "real-lifecycle ratchet: no record for $HOST_CLASS yet, so nothing was compared"
         echo "        add to $FLOOR_FILE:  $HOST_CLASS $LIFECYCLES"
     elif [ "$LIFECYCLES" -lt "$FLOOR" ]; then
         FAILC=$((FAILC + 1))

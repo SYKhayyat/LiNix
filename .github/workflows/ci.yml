@@ -57,8 +57,12 @@ jobs:
     - name: Build
       run: cargo build --release --target ${{ matrix.target }}
 
+    # `--no-fail-fast` because cargo stops at the first test TARGET that fails, and this suite has
+    # dozens. Run 30503630610 reported exactly one failing target per OS and never ran the rest —
+    # three findings visible and the remainder of the suite unmeasured on every platform, at 45
+    # minutes a dispatch to learn the next one.
     - name: Run tests
-      run: cargo test --release --target ${{ matrix.target }}
+      run: cargo test --release --target ${{ matrix.target }} --no-fail-fast
 
     # The blind spot every other gate in this file shares: builds, tests, clippy and all four
     # container lifecycles run with pipes on every handle, so none of them can see what LiNix

@@ -573,10 +573,39 @@ fi
 # cannot fall out of the CI/local parity check one section up.
 TOTAL=$((TOTAL + 1))
 _root="$(cd "$(dirname "$0")/.." && pwd)"
+# The scripts, plus every file bind-mounted into a container — read off the mounts themselves
+# rather than listed here. `scripts/lifecycle-floor.txt` is data, not a script, so no glob covered
+# it, and it is parsed inside the container with `awk '{print $2}'`: over a CRLF line that yields
+# `7<CR>`, `[ -lt ]` errors on a non-integer, and the shell takes the else branch — the one that
+# reports the ratchet satisfied. `.gitattributes` pins it now; this is what notices the next one.
+_files="$(
+    ls "$_root"/scripts/*.sh "$_root"/docker/integration/*.sh 2>/dev/null
+    grep -hoE '[$]PWD/[^:"]+:' "$_root/.github/workflows/ci.yml"         "$_root/docker/integration/run.sh" 2>/dev/null |
+        sed -e 's|:$||' -e "s|[$]PWD/|$_root/|"
+)"
+# `od -c` first, and not `grep` alone, because MSYS grep opens a file in text mode and
+# normalises CRLF before matching: on Git Bash the pattern never fires on the endings this
+# check exists to find. It caught a *lone* CR once — one not followed by LF, which no
+# translation touches — which is how it passed its own review. `od` renders the byte as the
+# two characters \r, and grep matching ordinary text is something every platform agrees on.
+_has_cr() { head -c 65536 "$1" | od -c | grep -q '\\r'; }
+
+# The detector, tried against a file that must trip it, before anything is concluded from it
+# saying no. This gate was blind on the one platform where the bug it guards occurs.
+_probe="${TMPDIR:-/tmp}/linix-crlf-selftest.$$"
+printf 'x\r\n' > "$_probe"
+if _has_cr "$_probe"; then
+    rm -f "$_probe"
+else
+    rm -f "$_probe"
+    echo "  BAD   the CRLF detector cannot see a CRLF file, so its verdict below means nothing"
+    BAD=$((BAD + 1))
+fi
+
 _crlf=""
-for _f in "$_root"/scripts/*.sh "$_root"/docker/integration/*.sh; do
+for _f in $(printf '%s\n' "$_files" | sort -u); do
     [ -f "$_f" ] || continue
-    if head -c 65536 "$_f" | grep -q "$(printf '\r')"; then
+    if _has_cr "$_f"; then
         _crlf="$_crlf $(basename "$_f")"
     fi
 done
@@ -586,6 +615,29 @@ else
     echo "  BAD   CRLF line endings in the working tree — dash cannot run these:"
     for _f in $_crlf; do echo "        $_f"; done
     echo "        fix: sed -i 's/\\r\$//' on each, or git add --renormalize . && git checkout -- ."
+    BAD=$((BAD + 1))
+fi
+
+# ----------------------------------------------------------------------------
+# Every integration image declares its own identity, and declares it correctly.
+#
+# The ratchet keys its floor on the image, and `/etc/os-release` cannot supply that: `tools` is
+# built on Ubuntu, so it and the ubuntu image answered the same name and shared one record while
+# doing 25 and 7 real lifecycles. A new Dockerfile that forgets the ENV silently rejoins whatever
+# distro it is based on, which is the collision rather than a new host class.
+TOTAL=$((TOTAL + 1))
+_bad_img=""
+for _df in "$_root"/docker/integration/Dockerfile.*; do
+    [ -f "$_df" ] || continue
+    _want="${_df##*/Dockerfile.}"
+    _got="$(grep -E '^ENV LINIX_IT_IMAGE=' "$_df" | tail -1 | cut -d= -f2 | sed 's/[[:space:]]*$//')"
+    [ "$_got" = "$_want" ] || _bad_img="$_bad_img Dockerfile.$_want(declares=${_got:-none})"
+done
+if [ -z "$_bad_img" ]; then
+    echo "  ok    every integration image declares LINIX_IT_IMAGE matching its Dockerfile"
+else
+    echo "  BAD   image identity missing or wrong:$_bad_img"
+    echo "        The ratchet then files this image under its base distro's record."
     BAD=$((BAD + 1))
 fi
 

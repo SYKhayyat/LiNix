@@ -13,6 +13,7 @@
 # unavailable at build time the image still builds and that backend is simply not READY and
 # auto-skipped (and the COVERAGE AUDIT records that honestly).
 FROM ubuntu:24.04
+ENV LINIX_IT_IMAGE=tools
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LANG=C.UTF-8
 

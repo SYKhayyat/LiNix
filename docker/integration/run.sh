@@ -25,21 +25,37 @@ echo "repo root: $REPO_ROOT"
 # container gate was unavailable on the machine this project is developed on, and the failure
 # named a shell option rather than a line ending (N-6).
 crlf=""
-for f in docker/integration/run-in-container.sh docker/integration/*.sh scripts/*.sh; do
+# `od -c` before `grep`, and this is not belt-and-braces. MSYS grep opens a file in text mode
+# and normalises CRLF away before it matches, so on the Windows working tree this check ran on
+# it could not see the endings it exists to find — the build went ahead and dash failed inside
+# the container, which is the outcome the check was written to prevent. `od` turns the byte into
+# the two characters \r first.
+has_cr() { head -c 65536 "$1" | od -c | grep -q '\\r'; }
+probe="${TMPDIR:-/tmp}/linix-crlf-selftest.$$"
+printf 'x\r\n' > "$probe"
+if ! has_cr "$probe"; then
+    rm -f "$probe"
+    echo "FATAL: this shell cannot detect a CRLF file, so the check below would pass blindly."
+    exit 1
+fi
+rm -f "$probe"
+# The floor file is mounted into the container and parsed there too, so it is in this list even
+# though it is data rather than a script.
+for f in docker/integration/*.sh scripts/*.sh scripts/lifecycle-floor.txt; do
     [ -f "$f" ] || continue
-    # `grep -c` on a binary-ish match: any CR before a newline is the fault.
-    if head -c 65536 "$f" | grep -q $'\r'; then
+    if has_cr "$f"; then
         crlf="$crlf $f"
     fi
 done
 if [ -n "$crlf" ]; then
-    echo "FATAL: these shell scripts have CRLF line endings in your working tree:"
+    echo "FATAL: these files have CRLF line endings in your working tree:"
     for f in $crlf; do echo "    $f"; done
     cat <<'EOM'
 
-dash inside the container reads `set -u<CR>` and aborts before running any check, reporting
-`set: Illegal option -`. Git stores these files with LF; something in this working tree rewrote
-them. Fix, from the repo root:
+These are bind-mounted into the container and read there. dash reads `set -u<CR>` in a script
+and aborts with `set: Illegal option -` before any check runs; in the mounted floor file a
+trailing CR makes the ratchet compare against a value that is not a number. Git stores them
+with LF, so something in this working tree rewrote them. Fix, from the repo root:
 
     sed -i 's/\r$//' <the files above>          # or: git add --renormalize . && git checkout -- .
 

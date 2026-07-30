@@ -9,3 +9,11 @@
 # Same reasoning: these are read by Linux tooling inside the images.
 Dockerfile* text eol=lf
 *.bash text eol=lf
+
+# Bind-mounted into the containers and parsed there, so it is in the same class as the scripts
+# even though it is data. `awk '{print $2}'` over a CRLF line yields `7<CR>`, which is not an
+# integer to `[ -lt ]` — the test errors, the shell takes the else branch, and the else branch is
+# the one that reports the ratchet satisfied. Every other file mounted by `run.sh` and `ci.yml`
+# was already covered by `*.sh`; this one was the exception, on a repo whose Windows clones get
+# core.autocrlf=true.
+scripts/lifecycle-floor.txt text eol=lf

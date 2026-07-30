@@ -7,6 +7,7 @@
 # tweaks if a native dep doesn't support musl cleanly. bun ships glibc-only builds,
 # so it is intentionally omitted here (the sweep auto-skips backends that aren't READY).
 FROM alpine:latest
+ENV LINIX_IT_IMAGE=alpine
 # Essential toolchain + language package managers so the harness can sweep many backends
 # in one container (apk + npm + yarn + pnpm + pipx + uv + cargo + gem).
 RUN apk add --no-cache curl build-base pkgconf openssl-dev perl git rustup bash \

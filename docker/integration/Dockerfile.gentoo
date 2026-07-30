@@ -24,6 +24,7 @@ COPY . /src
 RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
 
 FROM gentoo/stage3:latest
+ENV LINIX_IT_IMAGE=gentoo
 # SMOKE-ONLY: no source builds; plan/parse/read-only only.
 ENV SMOKE_ONLY=1
 # On PATH, as in every other image: a second way to find the binary is a second way

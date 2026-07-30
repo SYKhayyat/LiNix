@@ -2,6 +2,7 @@
 #   docker build -f docker/integration/Dockerfile.ubuntu -t linix-it-ubuntu .
 #   docker run --rm linix-it-ubuntu            # defaults to: apt jq
 FROM ubuntu:24.04
+ENV LINIX_IT_IMAGE=ubuntu
 ENV DEBIAN_FRONTEND=noninteractive
 # Essential toolchain + a broad set of language package managers so the harness can sweep
 # many backends in one container (apt + npm + yarn + pnpm + pipx + uv + bun + cargo + gem).

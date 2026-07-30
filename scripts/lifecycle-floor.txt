@@ -17,11 +17,34 @@
 # already has half of them. Holding a developer to CI's number would make the gate red on every
 # machine that has ever been used, which is how a gate learns to be ignored.
 #
+# For a container, `<os>` is the IMAGE (`LINIX_IT_IMAGE`, declared by each Dockerfile), not the
+# distro underneath it. `/etc/os-release` says `ubuntu` for both the ubuntu image and the `tools`
+# image, because `tools` is built on Ubuntu — so the two runs that differ most in coverage (7 and
+# 25) were filed under one record, and whichever wrote it last made the other permanently wrong.
+#
+# A container is also always `local`: `docker run` passes no `CI`, and that is left alone rather
+# than "fixed", because the ci/local split exists for how used a machine is and a disposable
+# image is equally clean either way. One number per image is the honest granularity there.
+#
 # TO RAISE ONE: run the sweep, read the number it prints, edit the line, commit it. The harness
 # prints the exact edit when a run exceeds the record. Never lower a line to get green — that is
 # the one edit this file exists to make visible in a diff.
 #
-# A host class with no line here is recorded on its first run rather than failed: a gate that
-# fails the first time it sees a new platform is a gate that stops people adding platforms.
+# A host class with no line here is not failed — a gate that fails the first time it sees a new
+# platform is a gate that stops people adding platforms — but it is not PASSED either. It prints
+# the line to add and counts as neither, because a record that is not there compares nothing.
+# That branch was a counted PASS until 2026-07-30, and every class below was taking it: the whole
+# matrix reported the ratchet green while one developer's machine was the only place it ran.
+#
+# Every number below was read from CI run 30503630610 (2026-07-30) except the first, which
+# predates it. `gentoo` is absent on purpose: it runs SMOKE_ONLY, installs nothing, and its
+# honest count is 0 — a floor no run could fall below.
 
 windows-native-windows-local 4
+windows-native-windows-ci 10
+windows-native-darwin-ci 8
+container-linux-ubuntu-local 7
+container-linux-fedora-local 9
+container-linux-arch-local 7
+container-linux-alpine-local 7
+container-linux-tools-local 25

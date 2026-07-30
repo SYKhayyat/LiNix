@@ -1105,8 +1105,11 @@ FLOOR_FILE="$(dirname "$0")/lifecycle-floor.txt"
 if [ -f "$FLOOR_FILE" ]; then
     FLOOR=$(grep -E "^${HOST_CLASS} " "$FLOOR_FILE" 2>/dev/null | awk '{print $2}' | head -1)
     if [ -z "$FLOOR" ]; then
-        PASS=$((PASS + 1))
-        echo "  PASS  real-lifecycle ratchet: no record for $HOST_CLASS yet — this run sets it"
+        # The twin of the container branch, uncounted for the same reason: a record that is not
+        # there compares nothing. Only `windows-native-windows-local` is recorded, so the CI
+        # runner's own class lands here — and as a PASS it was a green check on the leg with no
+        # floor at all.
+        soft "real-lifecycle ratchet: no record for $HOST_CLASS yet, so nothing was compared"
         echo "        add to $FLOOR_FILE:  $HOST_CLASS $LIFECYCLES"
     elif [ "$LIFECYCLES" -lt "$FLOOR" ]; then
         FAILC=$((FAILC + 1))
