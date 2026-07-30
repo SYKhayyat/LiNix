@@ -1169,10 +1169,26 @@ mod tests {
                 boxed(Error::command_failed("`mix` failed: something")),
                 WhyKept::Unclassified,
             ),
+            // W35/R-3: this case used to expect `Unclassified`, and that expectation WAS the
+            // defect — a dpkg lock someone else holds is the textbook passing failure, and
+            // telling the user "nothing classified the failure above, so if it repeats
+            // unchanged the cause is not a passing one" is the exact inversion R-3 measured on
+            // a rate limit. The two expectations could not both stand; the register ruled with
+            // the grader, so `Transient` now has a branch and this is it.
             (
                 boxed(Error::CommandFailed {
                     message: "`apt` failed: Could not get lock".into(),
                     retry: Retryability::Transient,
+                    absent_name: false,
+                }),
+                WhyKept::Transient,
+            ),
+            // And the one that keeps the new branch honest: `Permanent` is not `Transient`, so
+            // widening the classifier cannot have swallowed the case above it.
+            (
+                boxed(Error::CommandFailed {
+                    message: "`helm` failed: plugin source does not support verification".into(),
+                    retry: Retryability::Permanent,
                     absent_name: false,
                 }),
                 WhyKept::Unclassified,
