@@ -265,8 +265,13 @@ enum WhyKept {
     /// A name is absent and nothing tied it to this line — the manager reported about a
     /// command covering several, or wrapped its output through the middle of the name.
     NameAbsentElsewhere,
-    /// Nothing classified it. The only case where another attempt is worth suggesting, and
-    /// the honest reason is that nobody looked rather than that it will work.
+    /// LiNix classified it as passing: a rate-limit window, a dropped connection, a lock
+    /// someone else holds. The retry that helps here is the *next run*, not this one, and the
+    /// error above already says how long the window is — so this is the one branch that may
+    /// promise a later attempt will work, because something did look.
+    Transient,
+    /// Nothing classified it. Another attempt is worth suggesting, and the honest reason is
+    /// that nobody looked rather than that it will work.
     Unclassified,
 }
 
@@ -277,8 +282,15 @@ fn why_kept(e: &anyhow::Error) -> WhyKept {
     if matches!(err, linix::core::Error::Refused(_)) {
         return WhyKept::Refused;
     }
-    if err.retryability() == linix::core::Retryability::Exhausted {
-        return WhyKept::Exhausted;
+    match err.retryability() {
+        linix::core::Retryability::Exhausted => return WhyKept::Exhausted,
+        // Ahead of the name check on purpose: `says_a_name_is_absent` reads the failure's
+        // text, and a passing HTTP failure whose body happens to contain "not found" would
+        // otherwise be reported as a package name that does not exist — sending the user to
+        // edit a line that is correct. The classification is structured; the text match is a
+        // guess, so the classification wins where they disagree.
+        linix::core::Retryability::Transient => return WhyKept::Transient,
+        linix::core::Retryability::Permanent | linix::core::Retryability::Unknown => {}
     }
     if err.says_a_name_is_absent() {
         return WhyKept::NameAbsentElsewhere;
@@ -311,6 +323,13 @@ fn kept_line_advice(why: WhyKept, line: &str, file: &std::path::Path) -> String 
             "{}, and the failure above says a package name does not exist. `sync` will keep \
              failing the same way until the line naming it is corrected or removed with \
              `linix unmanage {}`.",
+            where_it_is, line
+        ),
+        WhyKept::Transient => format!(
+            "{}, and the failure above is a passing one — a window, a lock or a connection, \
+             not the line. That is why it is kept: the next `sync` is expected to succeed \
+             without you changing anything. Read the error above for how long it lasts, or \
+             run `linix unmanage {}` if you did not mean the line at all.",
             where_it_is, line
         ),
         WhyKept::Unclassified => format!(
