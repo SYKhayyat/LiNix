@@ -609,6 +609,33 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
     Ok(Statement::Package(decl))
 }
 
+impl Statement {
+    /// The `(backend, name)` pair this statement's resource is **listed under**, when there is
+    /// a backend by that name.
+    ///
+    /// `service`, `link` and `setting` are each both a grammar prefix and a registered backend,
+    /// and `linix list` prints them in those two columns. So the string a user copies out of a
+    /// listing — `service:com.apple.SafariHistoryServiceAgent` — parses as a typed *resource
+    /// statement*, not as a `backend:name` package, and every consumer that only understands
+    /// packages answered "not installed" about a row `list` had just printed (R-4).
+    ///
+    /// Read off the variant, never by splitting the line again: which prefix produced this
+    /// statement is already known here, and a second place that splits on `:` and trusts what
+    /// it finds is the bug `CLAUDE.md` names and `C13` counted six of.
+    pub fn listed_as(&self) -> Option<(&'static str, &str)> {
+        match self {
+            Statement::Service(name, _) => Some(("service", name)),
+            Statement::Link(name, _) => Some(("link", name)),
+            Statement::Setting(name, _) => Some(("setting", name)),
+            // Every other statement's prefix is not a backend name: `shim:`, `schedule:` and
+            // `repo:` name things LiNix does rather than things a manager lists, and no
+            // registry entry answers to them. Checked, not assumed — `linix list -b shim`
+            // refuses as an unknown backend.
+            _ => None,
+        }
+    }
+}
+
 /// The keyword a line is nothing but, or `None`.
 ///
 /// A line carrying a `:` is spelled with a prefix — `link:` is the statement and `list:link`

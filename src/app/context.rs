@@ -418,6 +418,12 @@ impl App {
         self.resolver().await.declared_backend(spec_str).await
     }
 
+    /// The `(backend, name)` a `service:`/`link:`/`setting:` string denotes — the three
+    /// prefixes that are also backends, and therefore the three `list` prints as two columns.
+    pub async fn queried_resource(&self, spec_str: &str) -> Result<Option<(String, String)>> {
+        self.resolver().await.queried_resource(spec_str).await
+    }
+
     /// Refuse a `backend:name` argument whose prefix is not a backend (Q9).
     ///
     /// Q9 ruled that every verb taking a backend name refuses an unknown one, and listed the
@@ -588,6 +594,23 @@ impl App {
         // The registry's half of the same question: a name `priority` lists and this build has
         // no backend for.
         self.require_known_backend(named_backend.as_deref())?;
+
+        // `service:`, `link:` and `setting:` are each a grammar prefix AND a registered
+        // backend, and `list` prints them as those two columns — so a string copied out of a
+        // listing parses as a typed resource statement rather than as `backend:name`, and
+        // everything below understands only packages. `list` reported
+        // `service:com.apple.SafariHistoryServiceAgent` and `info` about that exact name said
+        // "not installed" (R-4). A list that disagrees with the machine breaks the one thing it
+        // promises, so this is answered before the package path rather than after it.
+        if let Ok(Some((backend_name, resource))) = self.queried_resource(package_name).await {
+            if let Some(backend) = self.registry.get(&backend_name) {
+                if let Some(q) = backend.as_queryable() {
+                    // A resource the backend does not have answers `None`, the same as any
+                    // other name it does not carry — the point is that it was *asked*.
+                    return q.info(&resource).await;
+                }
+            }
+        }
 
         // A resolution failure is not an error here: `info` answers about the machine, and a
         // name no manager *carries* can still be installed on it. Only the prefix check above

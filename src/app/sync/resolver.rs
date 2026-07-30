@@ -980,6 +980,28 @@ impl<'a> StateResolver<'a> {
         Ok(())
     }
 
+    /// The `(backend, name)` a query string denotes when it is a typed resource statement whose
+    /// prefix is also a backend — `service:com.apple.X`, `link:/etc/foo`, `setting:S/K`.
+    ///
+    /// Three prefixes are both grammar keywords and registered backends, and `linix list`
+    /// prints them as those two columns. A user who copies a row out of a listing therefore
+    /// hands a string the *declaration* parser reads as a resource, and a caller that only
+    /// understands packages sees nothing at all. That is R-4: `list` reported
+    /// `service:com.apple.SafariHistoryServiceAgent` and `info` about that exact name answered
+    /// "is not installed on this machine".
+    ///
+    /// Through the same parser as everything else, and the pair comes off the variant rather
+    /// than off a second split.
+    pub async fn queried_resource(&self, line: &str) -> Result<Option<(String, String)>> {
+        let facts = self.facts_for_host().await?;
+        let priority = self.priority(&facts).await?;
+        let known = self.vocab(&priority);
+        let stmt = statement::parse(&Origin::argument(), line.trim(), &known)?;
+        Ok(stmt
+            .listed_as()
+            .map(|(backend, name)| (backend.to_string(), name.to_string())))
+    }
+
     /// The backend a declaration *names*, if it names one: `Some("cargo")` for `cargo:ripgrep`,
     /// `None` for a bare `ripgrep`.
     ///
