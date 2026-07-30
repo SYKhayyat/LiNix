@@ -1,0 +1,3 @@
+Global environments as specified in 'C:\Users\Administrator\.pixi\manifests\pixi-global.toml'
+└── ripgrep: 15.2.0 
+    └─ exposes: rg
