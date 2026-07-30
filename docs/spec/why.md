@@ -2015,6 +2015,27 @@ know it was a rehearsal. `--dry-run bundle` printed *"Bundle written to X"* over
 which is the same past-tense-about-a-write-that-did-not-happen defect as B-1 with the sign
 flipped: it happened, and said so, under a flag that promises it did not.
 
+**`export` was ruled with `bundle` on the reasoning and had never been measured** — the grader's
+fixture had nothing to export, so neither run wrote anything and there was no control. Measured
+2026-07-30 against a fixture with 111 adopted packages: **`export` already complied.** It prints
+`[DRY-RUN] would write <path>` per manifest and writes none of them, while the control writes
+both. So the ruling changed nothing about `export`, and the code change is `bundle` alone. It is
+recorded because "ruled on the reasoning, then measured, then found already correct" is a
+different fact from "ruled and built", and a reader who cannot tell them apart will not know
+which parts of a ruling were ever tested.
+
+`sbom` is **not** in this family, confirmed rather than assumed: it takes no output flag and
+prints its document to stdout, so there is no artifact for a preview to manufacture.
+
+**`bundle` writes through a facade rather than a check at the top.** The obvious fix — return
+early under the flag — would produce a preview that says nothing, and the round-5 finding on
+`--dry-run activate` is that acting silently is the *worse* half. So every write in the bundle
+(the config copy, the git bundle, the registry, `packages.json`, `RESTORE.md`, `plan.json`, the
+archive, and the artifact pre-fetch, which is a network download) goes through one `Writes`
+value that counts what it would have done. The summary is the same summary; only the tense
+changes, and it changes because the writer says so rather than because the flag was read a
+second time.
+
 `plan` is exempt because **its file is the preview, not the result.** `--dry-run plan` that wrote
 nothing would be a command with no output — the flag would turn the command off rather than make
 it safe. The line the rule draws is therefore not "did the user name the destination" but

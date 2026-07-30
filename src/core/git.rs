@@ -337,8 +337,14 @@ impl GitManager {
     /// with its full history, so the recipient can `rollback` to any past commit, not just
     /// restore the current manifests. Returns `Ok(false)` (nothing written) when there is no
     /// repo or no commits yet — a bundle honestly reports what it could not include.
+    /// Whether a [`GitManager::bundle`] would have anything to carry. The precondition, asked
+    /// without the side effect — a preview needs the answer and must not produce the file.
+    pub fn has_commits(&self) -> bool {
+        self.is_repo() && self.head().ok().flatten().is_some()
+    }
+
     pub fn bundle(&self, dest: &Path) -> Result<bool> {
-        if !self.is_repo() || self.head()?.is_none() {
+        if !self.has_commits() {
             return Ok(false);
         }
         let dest = dest.to_string_lossy().to_string();

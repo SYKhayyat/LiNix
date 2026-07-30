@@ -346,8 +346,16 @@ pub(crate) async fn handle_bundle(
         linix::app::bundle::create_bundle(app, &out_path, artifacts, archive, plan_json.as_deref())
             .await?;
 
+    // The tense comes from the writer, not from asking the flag a second time (Q15/V.105).
+    // `--dry-run bundle` wrote all nine files and said "Bundle written to X" — a preview that
+    // manufactured the artifact it was asked to describe, and reported it in the past tense.
     println!(
-        "Bundle written to {} — {} config file(s), {} package(s).",
+        "{} {} — {} config file(s), {} package(s).",
+        if report.previewed {
+            "[DRY-RUN] would write a bundle to"
+        } else {
+            "Bundle written to"
+        },
         report.out.display(),
         report.files_copied,
         report.package_count
@@ -371,8 +379,13 @@ pub(crate) async fn handle_bundle(
     );
     if artifacts {
         println!(
-            "Artifacts: {} fetched, {} skipped.",
+            "Artifacts: {} {}, {} skipped.",
             report.artifacts_fetched.len(),
+            if report.previewed {
+                "would be fetched"
+            } else {
+                "fetched"
+            },
             report.artifacts_skipped.len()
         );
         // Honest reporting: never let a skipped backend read as "bundled everything".
@@ -381,16 +394,24 @@ pub(crate) async fn handle_bundle(
         }
     }
     if let Some((path, size)) = &report.archive {
+        if report.previewed {
+            println!("Archive: {} would be written.", path.display());
+        } else {
+            println!(
+                "Archive: {} ({:.1} KiB) — copy this one file to an air-gapped host.",
+                path.display(),
+                *size as f64 / 1024.0
+            );
+        }
+    }
+    if report.previewed {
+        println!("Nothing was written. Run without `--dry-run` to produce the bundle.");
+    } else {
         println!(
-            "Archive: {} ({:.1} KiB) — copy this one file to an air-gapped host.",
-            path.display(),
-            *size as f64 / 1024.0
+            "See {}/RESTORE.md for offline restore steps.",
+            report.out.display()
         );
     }
-    println!(
-        "See {}/RESTORE.md for offline restore steps.",
-        report.out.display()
-    );
     Ok(())
 }
 

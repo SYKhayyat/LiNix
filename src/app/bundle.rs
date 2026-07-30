@@ -25,6 +25,9 @@ pub struct BundleReport {
     pub registry_included: bool,
     /// Set when `--archive` was requested: the single `.tar.gz` produced, and its size.
     pub archive: Option<(PathBuf, u64)>,
+    /// True when nothing was written (Q15). Carried on the report rather than read from the
+    /// flag a second time, so the sentence a user sees is decided by what the writer did.
+    pub previewed: bool,
 }
 
 /// Pure: the command to *download* (not install) a package into `dest`, for backends that
@@ -56,9 +59,67 @@ pub fn offline_fetch_command(
     }
 }
 
+/// Whether this run puts the bundle on disk.
+///
+/// **Q15, ruled 2026-07-30: a preview does not write the file it was told to write.** A bundle
+/// outlives the run and is meant to be carried to another machine, so one made by a preview is
+/// indistinguishable from one made deliberately — and `--dry-run bundle` wrote all nine files
+/// and reported *"Bundle written to X"* in the past tense.
+///
+/// It is a type rather than a check at the top of `create_bundle` because the report has to
+/// stay the report: a preview that says nothing is worse than one that writes. Every write in
+/// the bundle goes through here, counts what it would have done, and produces the same summary
+/// with the tense fixed. A write added later that skips this facade is the only way to
+/// reintroduce the bug, which is why there is exactly one of them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Writes {
+    ToDisk,
+    Preview,
+}
+
+impl Writes {
+    fn for_run(dry_run: bool) -> Self {
+        if dry_run {
+            Writes::Preview
+        } else {
+            Writes::ToDisk
+        }
+    }
+
+    fn previewing(self) -> bool {
+        self == Writes::Preview
+    }
+
+    async fn mkdir(self, p: &Path) -> Result<()> {
+        if self.previewing() {
+            return Ok(());
+        }
+        tokio::fs::create_dir_all(p).await.map_err(Error::from)
+    }
+
+    async fn write(self, p: &Path, contents: &str) -> Result<()> {
+        if self.previewing() {
+            return Ok(());
+        }
+        tokio::fs::write(p, contents).await.map_err(Error::from)
+    }
+
+    async fn copy(self, from: &Path, to: &Path) -> Result<()> {
+        if self.previewing() {
+            return Ok(());
+        }
+        copy_over(from, to).await
+    }
+}
+
 /// Recursively copy a directory tree, returning the number of files copied. Missing sources
 /// are a no-op (return 0), not an error.
-async fn copy_dir_recursive(src: &Path, dst: &Path, skip: Option<&Path>) -> Result<usize> {
+async fn copy_dir_recursive(
+    src: &Path,
+    dst: &Path,
+    skip: Option<&Path>,
+    writes: Writes,
+) -> Result<usize> {
     if !src.exists() {
         return Ok(0);
     }
@@ -69,7 +130,7 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, skip: Option<&Path>) -> Resu
     let mut count = 0;
     let mut stack = vec![(src.to_path_buf(), dst.to_path_buf())];
     while let Some((s, d)) = stack.pop() {
-        tokio::fs::create_dir_all(&d).await.map_err(Error::from)?;
+        writes.mkdir(&d).await?;
         let mut rd = tokio::fs::read_dir(&s).await.map_err(Error::from)?;
         while let Some(entry) = rd.next_entry().await.map_err(Error::from)? {
             let ft = entry.file_type().await.map_err(Error::from)?;
@@ -85,7 +146,7 @@ async fn copy_dir_recursive(src: &Path, dst: &Path, skip: Option<&Path>) -> Resu
             if ft.is_dir() {
                 stack.push((from, to));
             } else {
-                copy_over(&from, &to).await?;
+                writes.copy(&from, &to).await?;
                 count += 1;
             }
         }
@@ -115,9 +176,11 @@ pub async fn create_bundle(
     archive: bool,
     plan_json: Option<&str>,
 ) -> Result<BundleReport> {
-    tokio::fs::create_dir_all(out).await.map_err(Error::from)?;
+    let writes = Writes::for_run(app.config.dry_run);
+    writes.mkdir(out).await?;
     let mut report = BundleReport {
         out: out.to_path_buf(),
+        previewed: writes.previewing(),
         ..Default::default()
     };
 
@@ -126,13 +189,24 @@ pub async fn create_bundle(
     // out of it silently left the rest behind, and a bundle that restores half your
     // declarations is worse than one that fails.
     let root = app.config.config_root();
-    report.files_copied += copy_dir_recursive(&root, out, Some(out)).await?;
+    report.files_copied += copy_dir_recursive(&root, out, Some(out), writes).await?;
 
     // The manifest HISTORY, not just the current files: a `git bundle` carries every commit,
     // so the far side can `rollback` to any past state, not only restore what's current. It is
     // honest about the miss — if the config is not a git repo (or has no commits) the bundle
     // simply reports history was not included, rather than pretending.
-    if let Ok(true) = app.git_manager().bundle(&out.join("config.bundle")) {
+    // A `git bundle` is a write like any other, so a preview asks whether there is history to
+    // carry without producing the file. `has_commits` is the same question `bundle` answers
+    // with its `Ok(true)`, asked without the side effect.
+    let history = if writes.previewing() {
+        app.git_manager().has_commits()
+    } else {
+        matches!(
+            app.git_manager().bundle(&out.join("config.bundle")),
+            Ok(true)
+        )
+    };
+    if history {
         report.git_history_included = true;
         report.files_copied += 1;
     }
@@ -146,7 +220,8 @@ pub async fn create_bundle(
             state.path.clone()
         };
         if tokio::fs::try_exists(&registry_path).await.unwrap_or(false)
-            && copy_over(&registry_path, &out.join("registry.json"))
+            && writes
+                .copy(&registry_path, &out.join("registry.json"))
                 .await
                 .is_ok()
         {
@@ -168,14 +243,29 @@ pub async fn create_bundle(
         .iter()
         .map(|(b, n, v)| json!({ "backend": b, "name": n, "version": v }))
         .collect();
-    tokio::fs::write(
-        out.join("packages.json"),
-        serde_json::to_string_pretty(&json!({ "packages": pkgs }))?,
-    )
-    .await
-    .map_err(Error::from)?;
+    writes
+        .write(
+            &out.join("packages.json"),
+            &serde_json::to_string_pretty(&json!({ "packages": pkgs }))?,
+        )
+        .await?;
 
-    if include_artifacts {
+    // Artifact pre-fetch downloads real files from the network. A preview reports what it
+    // would fetch and fetches nothing — this is the one part of a bundle whose side effects
+    // reach outside the output directory.
+    if include_artifacts && writes.previewing() {
+        for (backend, name, _) in &managed {
+            match offline_fetch_command(backend, name, "") {
+                Some(_) => report
+                    .artifacts_fetched
+                    .push(format!("{}:{}", backend, name)),
+                None => report.artifacts_skipped.push(format!(
+                    "{}:{} (no offline fetch for backend '{}')",
+                    backend, name, backend
+                )),
+            }
+        }
+    } else if include_artifacts {
         let dest_root = out.join("artifacts");
         tokio::fs::create_dir_all(&dest_root)
             .await
@@ -225,21 +315,19 @@ pub async fn create_bundle(
             0
         },
     );
-    tokio::fs::write(out.join("RESTORE.md"), restore)
-        .await
-        .map_err(Error::from)?;
+    writes.write(&out.join("RESTORE.md"), &restore).await?;
 
     // 4b. Frozen plan, so the target can review/apply it offline (before archiving, so it is
     // captured inside the tarball).
     if let Some(pj) = plan_json {
-        tokio::fs::write(out.join("plan.json"), pj)
-            .await
-            .map_err(Error::from)?;
+        writes.write(&out.join("plan.json"), pj).await?;
     }
 
     // The tar stores everything under one top folder named after the bundle dir; without
     // that prefix it would unpack loose files into the extractor's cwd.
-    if archive {
+    if archive && writes.previewing() {
+        report.archive = Some((PathBuf::from(format!("{}.tar.gz", out.display())), 0));
+    } else if archive {
         let root_name = out
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
@@ -328,7 +416,7 @@ pub async fn restore_bundle(
         let from = entry.path();
         let to = config_root.join(&name);
         if entry.file_type().await.map_err(Error::from)?.is_dir() {
-            report.config_files += copy_dir_recursive(&from, &to, None).await?;
+            report.config_files += copy_dir_recursive(&from, &to, None, Writes::ToDisk).await?;
         } else {
             if let Some(p) = to.parent() {
                 tokio::fs::create_dir_all(p).await.map_err(Error::from)?;
@@ -528,6 +616,7 @@ mod tests {
             Path::new("/nonexistent/xyz"),
             Path::new("/tmp/whatever"),
             None,
+            Writes::ToDisk,
         )
         .await
         .unwrap();
@@ -546,7 +635,7 @@ mod tests {
         let out = src.join("bundle"); // output dir lives INSIDE src
         std::fs::create_dir_all(&out).unwrap();
 
-        let n = copy_dir_recursive(&src, &out.join("groups"), Some(&out))
+        let n = copy_dir_recursive(&src, &out.join("groups"), Some(&out), Writes::ToDisk)
             .await
             .unwrap();
         assert_eq!(

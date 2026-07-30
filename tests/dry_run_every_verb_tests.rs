@@ -149,6 +149,19 @@ const CASES: &[Case] = &[
         pre: &[],
         nothing_to_do: Some("Nothing to adopt"),
     },
+    // Q15, ruled 2026-07-30: `bundle`'s product outlives the run and can be carried to another
+    // machine, so a preview must not manufacture one. It was exempted here as "writes to a path
+    // the user names" — which was the unruled guess, and which `--dry-run bundle` then used to
+    // write all nine files and report "Bundle written to X" in the past tense.
+    //
+    // It needs no `pre`: `bundle` copies the config root, which `init` has already filled, so
+    // the control changes something on every host.
+    Case {
+        argv: &["bundle", "--out", "bundle-out"],
+        setup: &[],
+        pre: &[],
+        nothing_to_do: None,
+    },
 ];
 
 /// Subcommands not driven here, each with the reason. Checked against `--help`, so a name that
@@ -175,7 +188,13 @@ const EXEMPT: &[(&str, &str)] = &[
     ("vars", "read-only — prints this host's resolved variables"),
     ("purge-unmanaged", "needs an adopted machine; refuses on the ratio check first"),
     ("protected", "read-only — explains why a name is guarded"),
-    ("plan", "writes to a path the user names, not into the config dir"),
+    // Q15: `plan` is the whole exemption, and the reason is not that the user named the path —
+    // they name it for `bundle` too. Its file IS the preview, so a `--dry-run plan` that wrote
+    // nothing would be a command with no output.
+    (
+        "plan",
+        "its file IS the preview — a `--dry-run plan` that wrote nothing would produce no          output at all (Q15, ruled 2026-07-30)",
+    ),
     ("apply", "applies a saved plan through a real manager"),
     ("unlock", "covered by lock: same ledger, same writer"),
     ("teleport", "rewrites a line then syncs through a real manager"),
@@ -207,9 +226,11 @@ const EXEMPT: &[(&str, &str)] = &[
          controls — driven by a_preview_does_not_store_a_new_config_root below",
     ),
     ("init", "creates the config dir itself, so there is no before-state to compare"),
-    ("sbom", "read-only — emits a bill of materials"),
-    ("export", "writes to a path the user names"),
-    ("bundle", "writes to a path the user names"),
+    ("sbom", "read-only — measured: it takes no output flag and prints to stdout"),
+    (
+        "export",
+        "driven by a_preview_does_not_write_native_manifests below, which can skip a host with          nothing to export; the table's control would read that as a broken fixture",
+    ),
     ("restore", "reads a bundle and installs through real managers"),
     ("why", "read-only — explains a package's provenance"),
     ("service", "needs an init system"),
@@ -446,6 +467,70 @@ fn a_preview_does_not_store_a_new_config_root() {
     assert!(
         out.contains("[DRY-RUN]"),
         "the preview neither wrote nor said it would not:\n{out}"
+    );
+}
+
+/// `export` writes native manifests (Brewfile, requirements.txt, package.json, Aptfile) into a
+/// directory the user names, and Q15 rules it goes with `bundle`: its product outlives the run.
+///
+/// **Measured before it was built, because the ruling says so.** The round-5 grader could not
+/// measure `export` — the fixture had nothing to export, so neither run wrote anything and there
+/// was no control — and ruled it with `bundle` on the reasoning rather than on a measurement.
+/// The measurement says `export` **already honours the flag**: it prints `[DRY-RUN] would write
+/// <path>` per manifest and writes none of them. So this test is a regression guard, not a fix,
+/// and W43's code change is `bundle` alone.
+///
+/// It is here rather than in `CASES` because a host with no packages to export makes the
+/// control write nothing, which the table correctly reads as a broken fixture. Such a host is
+/// **skipped and named**, the same way the table skips `adopt`.
+#[test]
+fn a_preview_does_not_write_native_manifests() {
+    let case = Case {
+        argv: &["export", "--out", "export-out"],
+        setup: &[],
+        pre: &[&["adopt", "-y"]],
+        nothing_to_do: None,
+    };
+
+    // The control first: it decides whether this host can measure anything at all.
+    let ctl = fixture("control-export", &case);
+    let ctl_before = snapshot(&ctl);
+    let (ctl_out, _) = run(&ctl, case.argv);
+    let ctl_changed = diff(&ctl_before, &snapshot(&ctl));
+    if ctl_changed.is_empty() {
+        eprintln!(
+            "skipped: this host has nothing `export` can emit, so a preview writing nothing              would prove nothing. `export` said:
+{}",
+            ctl_out.trim()
+        );
+        return;
+    }
+
+    let dir = fixture("dryrun-export", &case);
+    let before = snapshot(&dir);
+    let mut args = vec!["--dry-run"];
+    args.extend_from_slice(case.argv);
+    let (out, _) = run(&dir, &args);
+    let changed = diff(&before, &snapshot(&dir));
+
+    assert!(
+        changed.is_empty(),
+        "`linix --dry-run export` wrote:
+    {}
+  (the control writes: {})
+  output:
+{}",
+        changed.join(
+            "
+    "
+        ),
+        ctl_changed.join(", "),
+        out.trim()
+    );
+    assert!(
+        out.contains("[DRY-RUN]"),
+        "the preview wrote nothing and did not say so, which is the half of B-1 that was worse          than the writing:
+{out}"
     );
 }
 
