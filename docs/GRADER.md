@@ -138,6 +138,33 @@ were right" into one word.
 reports a *failure*, not a soft pass. Then point it at something LiNix should refuse, and assert
 it reports a *refusal*.
 
+### 2.2b Hunt the checker that verifies the arithmetic and not the claim
+
+A subtler relative of §2.2. A check can be **correct, running, and green every day** while the
+thing it guards is wrong — because it verifies a number and the number was never the claim.
+
+The known instance: `scripts/decision-count.sh` counts the decision register and fails CI if any
+documented total disagrees. It worked perfectly. Meanwhile `D15` said *"parked until D5 is
+answered"*, D5 was answered and built five days later, and the entry sat under a **met condition**
+for a week — filed under the status that means *needs nothing from you*. The totals were right
+the entire time the register was wrong. The same script also grepped only the shouted
+`N ANSWERED` form, so `SPEC.md`'s lower-case *"125 answered, 2 parked"* was invisible to it and
+went a week stale while the run printed `ok`.
+
+So, for every checker, script and CI gate in this repo, ask two questions:
+
+1. **What does it actually assert, as opposed to what its name says?** A count check asserts
+   arithmetic. It does not assert that a status is still true, that a condition is still unmet,
+   that a citation still points at the right line, or that a cross-reference resolves.
+2. **What claim does the guarded document make that nothing checks?** Statuses with conditions,
+   `waits on`/`until`/`blocked by` clauses, `file:line` citations, "see §N" pointers, and any
+   sentence of the form *"X is true because Y has not happened yet."* Each is a claim with an
+   expiry and no alarm.
+
+Then test it the §0.1 way: make the guarded document wrong in the *claim* rather than the
+*number* and confirm the checker still passes. If it does, that is a finding, and it is worth
+more than a broken test — a green checker is trusted, and trusted is how a week goes by.
+
 ### 2.3 Verify the exemption lists
 
 Both harnesses exempt subcommands by name. `undo` is exempted and **does not exist** (renamed to
@@ -211,6 +238,40 @@ command. `krew` does it correctly, checking both `kubectl` and `kubectl-krew`.
 Audit every `is_available` and `check_health` against one question: *does this probe the thing
 that actually has to work?* For each, construct the environment where the probe passes and the
 backend fails, and assert LiNix says so.
+
+### 3.5 Change every option after the install — the sweep no lifecycle performs
+
+**A lifecycle is `install → list → remove`, and by construction it never edits a declaration.**
+So an option that is read once when the install argv is built, and never again, passes every
+lifecycle, every plan-smoke and every unit test — for ever. This is not hypothetical: on
+2026-07-31 five of them were found this way in one afternoon (`Q19`, `Q20`), none reported by a
+user, all of them shipped, all of them green.
+
+The defect has a signature you can grep for and then must confirm by running: **an option
+consumed inside an `install` path and referenced nowhere in the planner's drift check.** But do
+not grade it by reading. Drive it:
+
+For **every** key in `config/grammar/statement.rs::PACKAGE_OPTION_KEYS` and every table in
+`backends/capability.rs`, on a backend that reads it:
+
+1. Declare it with value A. Sync. Confirm the machine has A.
+2. **Edit the line to value B and sync again.** Confirm the machine has B — by asking the tool,
+   never by asking LiNix.
+3. Sync a third time unchanged. Confirm **nothing happens.** This is the other half and it is
+   the half a single edit cannot see: a comparison that gets units or formatting wrong reports a
+   change on *every* sync, for ever, and a test that syncs once passes it.
+4. Delete the option and sync. Whatever happens must be a decision someone made — reverting to a
+   default and leaving it alone are both defensible, silently doing one while the docs say the
+   other is not.
+
+Three outcomes are legitimate for step 2: the machine changes, or the line is refused with a
+reason and a way out, or the docs say the option is create-only *and mean it*. **"Nothing
+happens" is not one of them**, and neither is "it changed but `sync` also reports a change next
+time".
+
+**Score the omission, not just the failure.** An option nobody can edit meaningfully is a feature
+that exists in the docs and not on the machine. Report every option you could not drive this way
+and why — that list is the finding.
 
 ---
 

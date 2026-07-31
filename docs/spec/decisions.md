@@ -1,5 +1,5 @@
-# The decision register — all 129, and one of them open
-**One file, six features, one question still the owner's.** Every decision this design forces lives here, with its
+# The decision register — all 130, and none of them open
+**One file, six features, nothing waiting on a ruling.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
 already settled in code could be re-opened by anyone reading the register instead of the tree.
@@ -15,12 +15,12 @@ not in this paragraph.
 | status | means | what it needs | count |
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **127** |
-| **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **1** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **128** |
+| **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
-**Two of these five statuses now describe nothing, and they stay.** The categories are not
+**Three of these five statuses now describe nothing, and they stay.** The categories are not
 decoration: *OPEN — blocking* refills the moment a new feature is proposed, and *BUILT, NEVER
 RULED* refills the moment somebody implements a recommendation before it is put to the owner.
 Deleting an empty category is how the next one goes unnoticed.
@@ -73,7 +73,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `D15`, and it does not block.** All 129 are accounted for: **127 ANSWERED, 1 PARKED, 1 OPEN** — and this line
+**None is open.** All 130 are accounted for: **128 ANSWERED, 2 PARKED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -115,7 +115,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **D12** | Network, GitHub rate limits, and whether `sync` works on a plane. | 2026-07-24 |
 | **D13** | Changing a `channel` — refresh, or remove and reinstall? | 2026-07-24 |
 | **D14** | Does `why` explain which of the three levels chose the artifact? | 2026-07-24 |
-| **D15** | **OPEN, not blocking.** `.flatpak`/`.snap` assets in a release. D5 answered the ownership half and was built; what is unruled is whether a sideloaded snap survives snapd refreshing it from the store. | — |
+| **D15** | `.flatpak`/`.snap` assets in a release. D5 answered the ownership half; **re-PARKED on a measurement** — what snapd actually does to a sideloaded snap, which decides it outright. | PARKED |
 | **D16** | libc variants (`gnu` vs `musl`) — CLOSED by D3's ruling. | PARKED |
 | **D17** | What does `github:re:…@formats=` mean across repos with different assets? | 2026-07-24 |
 
@@ -265,6 +265,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q18** | The storage backends read options II.2's table does not permit, so `lvm:` cannot be written at all — which half of Part II is wrong? — RULED: **the table.** The keys are added, scoped to the backends that read them. | 2026-07-31 |
 | **Q19** | A changed `@quota` or `@size` did nothing on the next sync — RULED 2026-07-31: it resizes, and shrinking needs `@allow_shrink` on the line. | 2026-07-31 |
 | **Q20** | A changed `@classic` did nothing either — RULED 2026-07-31: same answer. Relaxing confinement converges; narrowing it is refused, because only remove-and-reinstall can. | 2026-07-31 |
+| **Q21** | Is converging-on-change a property of *every* option, or of the five that happen to have it — RULED 2026-07-31: every option, proved per option. | 2026-07-31 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -3085,19 +3086,34 @@ removing those packages at that moment.
 
 ---
 
-# Reopened — a question parked on another question that has since been answered
+# Parked — each on a condition, and the conditions are checked now
 
-**A parking condition is a claim that has to be re-checked, and this one was not.** D15 said
-"parked until D5 is answered", D5 was ruled and built five days later, and the entry went on
-saying PARKED — filed in the section for questions that need nothing, which is where a question
-that needs a ruling goes to be missed. **Every `PARKED` entry names what it waits on; nothing
-re-reads those names when the thing arrives.** That is the check this section exists to make
-visible, and the reason it is a heading rather than a footnote.
+**A parking condition is a claim that has to be re-checked, and D15's was not.** It said "parked
+until D5 is answered", D5 was ruled and built five days later, and the entry went on saying
+PARKED — filed among the questions that need nothing, which is where a question that needs a
+ruling goes to be missed. **Every `PARKED` entry names what it waits on; nothing re-read those
+names when the thing arrived.** `scripts/decision-count.sh --check` now does: a parked `Status:`
+line must carry `waits on <what>`, and the run fails if the clause is missing or names a decision
+that has since been ANSWERED (V.109).
+
+**D15 is parked twice over, and the second parking is the interesting one.** Freed by D5, it was
+re-parked the same day on a *measurement* rather than ruled on an argument — because what it
+turns on is a fact about snapd that nobody here has observed. A condition a script cannot check
+(D16 waits on someone hitting the case; D15 waits on an experiment) is allowed and says so, since
+a clause that reads as checkable and quietly is not would be worse than none.
 
 ## D15
 
-**Status: OPEN — not blocking.** Parked until D5 was answered; **D5 was ruled 2026-07-24 and
-built 2026-07-26**, so the brake came off and nobody noticed. Reopened 2026-07-31.
+**Status: PARKED — waits on a measurement of what snapd does to a sideloaded snap.** Parked once
+before on D5; **D5 was ruled 2026-07-24 and built 2026-07-26**, so that brake came off and nobody
+noticed, and the entry sat under a met condition for a week (V.109). Reopened 2026-07-31 and
+**re-parked the same day, deliberately and on a different condition** — the owner declined to
+rule it on an argument when twenty minutes of experiment settles it.
+
+**The condition is an experiment, and it is small.** On a machine with snapd: install a snap from
+a local file, then make it refresh, and record what snapd does to it. The answer decides this
+entry outright and nothing else needs deciding first. **Re-parking on a measurement rather than
+ruling on a guess is the point** — the alternative was a ruling whose reasoning was "probably".
 
 **D15 — `.flatpak`/`.snap` assets in a GitHub release.** They exist. Adding them to the
 vocabulary means `github` installing something `flatpak` then does not own — **D5's ownership
@@ -3121,12 +3137,23 @@ healthy. **Which of those actually happens has not been measured** — it needs 
 snapd and a release asset, not an argument. A `.flatpak` from a release has the same shape one
 step down.
 
+**Two answers, failing in opposite directions, and nobody knows which one is real.** If snapd
+refreshes a sideloaded snap from the store, the lock describes a build that has been replaced and
+LiNix believes the machine matches a config it no longer matches. If snapd *never* refreshes it —
+plausible, because a sideloaded snap has no store association to refresh from — the declaration
+pins a build that ages for ever, takes no security updates, and `check` calls it healthy.
+Neither is acceptable and they need opposite fixes, which is exactly why guessing is worse than
+waiting.
+
+**A cheaper question may kill it first: does anyone actually ship these as release assets?**
+Flatpak's distribution model is Flathub and snap's is the Snap Store; publishing the raw file to
+a GitHub release is unusual. If it is rare, "no, and here is why" is a complete answer that costs
+nothing to write.
+
 *No recommendation, and deliberately not one.* The ownership half is answered; the half about a
-manager that acts on its own schedule should be measured before it is argued.
+manager that acts on its own schedule is a fact about snapd, and facts are measured.
 
 ---
-
-# Parked or closed
 
 ## D16
 
@@ -4202,3 +4229,37 @@ refresh path.
 **Not run.** No image here has a working snapd — a container cannot run it — so this is argv- and
 unit-tested against real `snap info` output and has never been executed. It is named that way
 rather than counted, exactly as `zfs:` is.
+
+---
+
+## Q21
+
+**Status: ANSWERED — ruled 2026-07-31.** Raised by `Q19` and `Q20` landing in the same session
+from the same cause, which is the definition of a class rather than two bugs.
+
+**Q21 — Must every option a backend reads converge when it changes?**
+
+`Q19` found four options applied at creation and never again (`@quota`, `@size`, `@mount`,
+`@mount_options`). `Q20` found a fifth on a different backend (`@classic`) by asking the rest of
+the tree the same question. Neither was reported by a user; both were found by looking. **The
+question is therefore not about those five — it is whether "an option changes the machine when
+you change it" is a property of every option, or a thing five options happen to have.**
+
+**RULED (owner, 2026-07-31): every option, and the builder proves it per option.** An option a
+backend reads is a declaration; a declaration that stops applying the moment it is first applied
+is the defect `Q18` existed to prevent, arriving one layer in. So:
+
+- **Changing an option changes the machine**, or the line is refused with a reason. There is no
+  third outcome, and "nothing happens" is not one of them.
+- **The proof is per option, not per backend.** A lifecycle is install → list → remove, which by
+  construction never edits a declaration — which is exactly why all five sat dead through
+  thousands of green checks. A backend with a real lifecycle is *not* covered for this.
+- **Where the change cannot be applied, it is refused by name** with the by-hand path
+  (`Q19`'s shrink, `Q20`'s narrowing), never ignored.
+- **An option the line omits manages nothing.** Absence is not a declaration of the default, or
+  every existing config acquires refusals it never asked for (`V.107`, `V.108`).
+
+**In the tree today: NOT swept.** The five named above converge and are tested. Every other
+option a backend reads is unaudited against this rule — `PACKAGE_OPTION_KEYS` and
+`capability.rs`'s tables are the list to work from, and the work is in `plan.md`'s Tier 0. The
+grader carries the same sweep as §3.5, because it is the check and this entry is the obligation.

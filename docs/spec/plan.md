@@ -66,6 +66,14 @@ what blocks the next one. The reasoning and the measurements are the first entry
     it. Neither of the two options this item offered was taken: recording the name at install
     time keeps a broken declaration working, and dropping `remove` keeps a package LiNix can
     install and never undo.
+0c-bis. **Sweep every option against Q21** — change it after the install and confirm the machine
+    changes. **Five have been done and the rest are unaudited.** `@quota`, `@size`, `@mount`,
+    `@mount_options` (Q19) and `@classic` (Q20) converge and are tested; every other key in
+    `PACKAGE_OPTION_KEYS` and `backends/capability.rs` is unexamined against the rule. This is
+    Tier 0 because it is not a feature gap — it is a class of already-shipped feature that does
+    nothing, and it passes every lifecycle by construction: install → list → remove never edits a
+    declaration. Method and the four-step drive are in `GRADER.md` §3.5; the obligation is Q21.
+
 0e. **Cut a version.** `0.1.0`, no tags, `CHANGELOG` still `[Unreleased]`, and `install.sh`
     does `cargo install --git` from `HEAD` — so there is no artifact to install and nothing to
     roll back *to*. The tag-triggered release job in `ci.yml` exists and has never fired.

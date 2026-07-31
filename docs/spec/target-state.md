@@ -259,6 +259,19 @@ take the else branch — the silent-wrongness this rule closes.
 | `mount_options` | what the fstab entry's option field carries. `btrfs` only — ZFS keeps its mount properties on the dataset and has no such field — and **an error without `@mount`**, since there is then no entry for it to fill |
 | `allow_shrink` | bare flag: a smaller `@size` may take space back off a volume that already exists. `lvm` only — a quota is a limit and lowering one destroys nothing — and **an error without `@size`**, since it then permits nothing (Q19) |
 
+**Changing an option changes the machine, or the line is refused with a reason** (Q21, ruled
+2026-07-31). Every key above is a declaration, and a declaration that stops applying the moment
+it is first applied is II.2's line-that-does-nothing arriving one layer in. **"Nothing happens"
+is not a legitimate outcome of an edit**; neither is "it changed, and `sync` reports a change
+again next run". Where the change cannot be applied at all it is refused **by name**, with the
+by-hand path (`@size` shrinking, `@classic` narrowing) — never ignored. **An option the line
+omits manages nothing**: absence is not a declaration of the default, or every config that never
+mentioned a key acquires refusals it never asked for (V.107, V.108).
+
+**The proof is per option, not per backend.** A lifecycle is install → list → remove and never
+edits a declaration, which is exactly how five options stayed dead through thousands of green
+checks.
+
 **A key one family of backends reads is legal there and refused by name everywhere else** — the
 same shape as `@url`, and for the same reason: `apt:curl@quota=10G` would read as the machine
 having been told something when nothing anywhere would act on it. The authority is

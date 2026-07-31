@@ -81,6 +81,25 @@ The converged re-sync is the assertion nothing else could give: D13's failure mo
 to a harness that syncs once. `btrfs:`/`zfs:` did not run — this kernel has neither module — so
 the `@quota` re-apply is unit-tested and unexecuted, and is named that way rather than counted.
 
+**`Q21` generalised both into a rule, and `D15` was re-parked on a measurement.** Two options
+found dead in one afternoon by looking is a class, so the owner ruled the class: **changing an
+option changes the machine, or the line is refused with a reason** — "nothing happens" is not an
+outcome, absence manages nothing, and **the proof is per option, not per backend**, because
+`snap:` had a real lifecycle for months and it is precisely what `@classic` survived. Rule in
+II.2, reason in V.110, sweep in `plan.md` Tier 0 (`0c-bis`) and in `GRADER.md` §3.5 — the grader
+carries the check, the register carries the obligation. **Five options done, the rest unaudited**,
+and that is written down rather than implied.
+
+`D15` was reopened and **re-parked the same day, deliberately, on a different condition**: what
+snapd actually does to a sideloaded snap. The two possible answers fail in opposite directions
+and need opposite fixes, and nobody here has observed which is real — so it waits on twenty
+minutes of experiment rather than on an argument. The register is at **zero open**.
+
+`GRADER.md` gained the two sections this session earned: **§3.5**, the option-change sweep no
+lifecycle performs, and **§2.2b**, the checker that verifies the arithmetic and not the claim —
+`decision-count.sh` was green every day of the week `D15` was mis-filed, because it checked the
+totals and the totals were never the claim.
+
 **`D15` was reopened.** It had said *PARKED until D5 is answered* since the register was written;
 D5 was ruled 2026-07-24 and built 2026-07-26, and the entry went on saying PARKED — filed in the
 section for questions that need nothing. **A parking condition is a claim that has to be

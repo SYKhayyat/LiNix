@@ -2218,3 +2218,28 @@ The fix is the same shape as the count: a parked entry's `Status:` line must car
 decision that is now ANSWERED. A condition naming an event out in the world — D16 waits on
 someone actually hitting the case — is allowed and left unchecked, and **saying that out loud is
 the point**, because the alternative is a clause that reads as checkable and quietly is not.
+
+**V.110 — Why "an option converges when you change it" is a rule and not five fixes.** *(Owner
+ruling, 2026-07-31 — Q21.)* `Q19` found four options applied at creation and never again; `Q20`
+found a fifth on a different backend, by the simple method of asking the rest of the tree the
+question `Q19` had just answered. **Neither was reported. Both were found by looking**, in one
+afternoon, in code that had been green through thousands of checks.
+
+That is the shape of a class, not a coincidence, and the mechanism is worth naming precisely:
+**a lifecycle is install → list → remove, and by construction it never edits a declaration.**
+Every harness this project has, every plan-smoke, and most of the unit tests install once. So an
+option read when the install argv is built and nowhere else is invisible to all of them — not
+under-tested, *untestable* by the shape of the tests. Five features existed in the documentation
+and not on the machine, and no amount of running the existing suite harder would have said so.
+
+So the rule is the generalisation rather than the five repairs: changing an option changes the
+machine, or the line is refused with a reason and a way out. **"Nothing happens" is not a third
+option**, and neither is its mirror — a comparison so loose it reports a change on every sync for
+ever (D13). Both are ways of not converging, and a declarative tool that does not converge is a
+config file with opinions.
+
+**Two corollaries, each learned the expensive way in the same session.** *Absence manages
+nothing*: if a missing `@classic` meant "strict", every existing classic snap whose line never
+mentioned confinement would start failing on a refusal it never asked for — a fix that breaks
+configs nobody edited. And *the proof is per option, not per backend*: `snap:` had a real
+lifecycle for months, which is why the `@classic` defect survived one.
