@@ -332,7 +332,7 @@ binary_present() { # backend binary install-log
     [ -n "$(off_path_copy "$1" "$2" "$3")" ]
 }
 
-# assert_binary_reachable <backend> <binary> <install-log>
+# assert_binary_reachable <backend> <binary> <install-log> <what-the-name-resolved-to-before>
 #
 # An install the user cannot invoke is a failed install reported as a success (E6c). On a clean
 # runner most per-user managers install into a directory nobody's PATH names, so asking PATH
@@ -340,26 +340,53 @@ binary_present() { # backend binary install-log
 # nothing at all. So the assertion is the promise: the name resolves, OR the install named the
 # directory and the file is in it. Silence plus an unreachable binary is the defect — measured
 # 2026-07-29 on a clean Windows runner, `github` and `yarn` both.
-assert_binary_reachable() { # backend binary install-log
-    _rbe="$1"; _rbin="$2"
-    if on_path "$_rbin"; then
-        PASS=$((PASS + 1)); echo "  PASS  $_rbe: $_rbin is on PATH"; return 0
+#
+# The fourth argument is the question "is a binary of this name reachable" cannot answer: WHOSE.
+# Two managers ship a binary of the same name — cabal's canary is `hello` and so is go's — and
+# `go: hello is on PATH` passed on the tools image against /root/.cabal/bin/hello, which cabal
+# had installed four lifecycles earlier (G-3). Its twin `assert_binary_gone` was given this
+# value and this one was not, in the same three lines of the same function.
+assert_binary_reachable() { # backend binary install-log prior-resolution
+    # `$3` is used where it stands rather than named: every variable this function sets is a
+    # global in a POSIX shell, and `harness-logic-test.sh` lifts these bodies and runs them
+    # against globals of its own. Naming the log clobbered the test's `$_rlog` and broke three
+    # unrelated predicates that had nothing to do with the change.
+    _rbe="$1"; _rbin="$2"; _rprev="${4:-}"
+    _rnow="$(path_of "$_rbin")"
+
+    # It resolves somewhere it did not resolve before: this install is what put it there.
+    if [ -n "$_rnow" ] && [ "$_rnow" != "$_rprev" ]; then
+        PASS=$((PASS + 1)); echo "  PASS  $_rbe: $_rbin is on PATH (at $_rnow)"; return 0
     fi
-    _rdir="$(named_bin_dir "$1" "$3")"
-    if [ -z "$_rdir" ]; then
-        FAILC=$((FAILC + 1))
-        FAILED_NAMES="$FAILED_NAMES\n    - $_rbe: $_rbin is not on PATH and nothing said where it went"
-        echo "  FAIL  $_rbe: $_rbin is not on PATH and nothing said where it went"
-        return 1
-    fi
-    if binary_present "$1" "$_rbin" "$3"; then
+
+    # Either nothing resolves, or the name still resolves to whatever owned it before. PATH
+    # cannot answer for this backend in either case, so the evidence is the directory the
+    # install named — asked directly, because `binary_present` starts by asking PATH and PATH
+    # is the thing that is lying here.
+    _rdir="$(named_bin_dir "$_rbe" "$3")"
+    _rcopy=""
+    [ -n "$_rdir" ] && _rcopy="$(off_path_copy "$_rbe" "$_rbin" "$3")"
+    if [ -n "$_rcopy" ]; then
         PASS=$((PASS + 1))
-        echo "  PASS  $_rbe: $_rbin is not on PATH, and the install said so, naming $_rdir"
+        if [ -n "$_rnow" ]; then
+            echo "  PASS  $_rbe: $_rbin still resolves to the pre-existing $_rnow, and this backend's own copy is at $_rcopy"
+        else
+            echo "  PASS  $_rbe: $_rbin is not on PATH, and the install said so, naming $_rdir"
+        fi
         return 0
     fi
+
     FAILC=$((FAILC + 1))
-    FAILED_NAMES="$FAILED_NAMES\n    - $_rbe: the install named $_rdir and $_rbin is not in it"
-    echo "  FAIL  $_rbe: the install named $_rdir and $_rbin is not in it"
+    if [ -n "$_rnow" ]; then
+        _rwhy="$_rbin resolves to $_rnow, which was already there before this install — nothing here shows $_rbe installed anything"
+    elif [ -z "$_rdir" ]; then
+        _rwhy="$_rbin is not on PATH and nothing said where it went"
+    else
+        _rwhy="the install named $_rdir and $_rbin is not in it"
+    fi
+    FAILED_NAMES="$FAILED_NAMES
+    - $_rbe: $_rwhy"
+    echo "  FAIL  $_rbe: $_rwhy"
     return 1
 }
 
@@ -420,6 +447,10 @@ PKG_WAS_HERE=""
 # `on_path` here and `binary_present` below, deliberately: this runs BEFORE the install, so
 # there is no log in which anything could have named a directory yet.
 on_path "$PKG" && PKG_WAS_HERE=1
+# And WHERE it resolved, which is what tells a binary this install put there from one that was
+# already on PATH under the same name (G-3). The lifecycle sweep below has always recorded this
+# for the removal half; section 5 recorded nothing.
+PKG_PREPATH="$(path_of "$PKG")"
 
 > /tmp/itw-life0.out
 lx -y install "$BACKEND:$PKG" >/tmp/itw-life0.out 2>&1
@@ -435,7 +466,7 @@ if [ "$CLASS" = installed ] || [ "$CLASS" = transient ]; then
     [ "$CLASS" = installed ] && { PASS=$((PASS + 1)); echo "  PASS  install $BACKEND:$PKG"; }
     echo "$BACKEND" >> "$LEDGER/be-life"
     grep_ok "list shows $PKG" "$PKG" lx list
-    assert_binary_reachable "$BACKEND" "$PKG" /tmp/itw-life0.out
+    assert_binary_reachable "$BACKEND" "$PKG" /tmp/itw-life0.out "$PKG_PREPATH"
     ok "second sync is a no-op" lx -y sync
     # `unmanage` belongs here and not with the read-only verbs: "forgets it WITHOUT
     # uninstalling it" is only a proof while something is installed to leave behind.
@@ -888,7 +919,7 @@ lifecycle() {
     else
         grep_ok "$be: list shows $ctok" "$ctok" lx list --backend "$be"
     fi
-    [ -n "$cbin" ] && assert_binary_reachable "$be" "$cbin" /tmp/itw-life.out
+    [ -n "$cbin" ] && assert_binary_reachable "$be" "$cbin" /tmp/itw-life.out "$_prepath"
 
     if [ "$cmode" = "unsupported" ]; then
         grep_ok "$be: removal reports a graceful unsupported" \

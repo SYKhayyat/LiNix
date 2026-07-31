@@ -185,6 +185,31 @@ run_against() {
     outcome "the platform's extension counts" pass assert_binary_reachable go "$_rbin" "$_rlog"
     rm -f "$_rd/$_rbin.cmd"
 
+    # G-3, the reachability half of the collision `assert_binary_gone` has handled since
+    # 2026-07-29. Measured on the tools image (CI 30566924407): `PASS go: hello is on PATH`
+    # scored against /root/.cabal/bin/hello, which cabal installed four lifecycles earlier and
+    # cannot uninstall. The check would have passed if the go install had done nothing at all.
+    FAKE="/root/.cabal/bin/hello"
+    outcome "the name resolves to the manager that already owned it" fail \
+        assert_binary_reachable go hello "$_rd/no-such.log" "/root/.cabal/bin/hello"
+
+    # Same collision, but this backend did install its own copy and said where it went. The
+    # other manager holding the PATH entry is not this install's failure.
+    : > "$_rd/hello"
+    outcome "a collision the backend's own copy answers for" pass \
+        assert_binary_reachable go hello "$_rlog" "/root/.cabal/bin/hello"
+    rm -f "$_rd/hello"
+
+    # The control, and it is the whole reason the comparison is against the PRIOR value rather
+    # than against a list of known collisions: a name that resolves somewhere it did not before
+    # is this install's doing, and must still pass with nothing else to go on.
+    FAKE="/root/go/bin/hello"
+    outcome "a resolution that changed is this install's" pass \
+        assert_binary_reachable go hello "$_rd/no-such.log" "/root/.cabal/bin/hello"
+    # The lifted bodies assign to globals — there are no locals in a POSIX shell — so the three
+    # cases above left `$_rbin` reading `hello`. Restored, because the checks below share it.
+    FAKE=""; _rbin=linix-reach-zzz
+
     # The warning belongs to the backend that printed it. One sync can warn about two
     # managers, and handing yarn's directory to go would answer for the wrong install.
     TOTAL=$((TOTAL + 1))

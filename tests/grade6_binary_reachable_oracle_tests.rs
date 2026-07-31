@@ -78,7 +78,17 @@ fn every_binary_reachable_call_is_told_what_already_owned_the_name() {
             if !t.contains("assert_binary_reachable ") {
                 continue;
             }
-            if t.contains("_prepath") {
+            // The fourth argument, and that it names a prior resolution — asked of the argument
+            // position rather than of the whole line, so a call cannot satisfy this by
+            // mentioning the value in a comment or by passing it somewhere else. Case-insensitive
+            // because the lifecycle's local is `$_prepath` and section 5's global is
+            // `$PKG_PREPATH`; the value is the point, not the spelling.
+            let args: Vec<&str> = t
+                .split_whitespace()
+                .skip_while(|w| !w.contains("assert_binary_reachable"))
+                .skip(1)
+                .collect();
+            if args.len() >= 4 && args[3].to_ascii_lowercase().contains("prepath") {
                 continue;
             }
             blind.push(format!("{}:{}: {}", h, i + 1, t));
