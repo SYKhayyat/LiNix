@@ -1,0 +1,3 @@
+Name            Id              Version  Source
+------------------------------------------------
+Python Launcher Python.Launcher > 3.13.5 winget

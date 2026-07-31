@@ -1,0 +1,10 @@
+Name                                                           Id                                                                                     Version                       Available                     Source
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+7-Zip 25.01 (x64)                                              7zip.7zip                                                                              25.01                         26.02                         winget
+Adobe Acrobat                                                  MSIX\AdobeAcrobatDCCoreApp_23.1.0.0_x64__pc75e8sa7ep4e                                 23.1.0.0                                                    
+Adobe Illustrator 2026                                         ARP\Machine\X86\ILST_30_2_1                                                            30.2.1                                                      
+Adobe InDesign 2026                                            ARP\Machine\X86\IDSN_21_2                                                              21.2                                                        
+Adobe Lightroom Classic                                        ARP\Machine\X86\LTRM_15_2                                                              15.2                                                        
+Adobe Photoshop 2026                                           ARP\Machine\X86\PHSP_27_2                                                              27.2.0.15                                                   
+Affinity Photo 2                                               ARP\Machine\X64\{8BD2A40D-67A6-45F5-877D-6D9D04C9D5A2}                                 2.6.5.3782                                                  
+AMS Software PhotoWorks version 21.0                           ARP\Machine\X86\{62F1E71E-EBB3-43F3-9E71-945F2972F877}_is1                             21.0                                                        

@@ -143,9 +143,78 @@ fn cargo_list_reads_the_crates_and_not_their_binaries() {
     );
 }
 
+/// `winget list` — the platform this repo is developed on, and the directory that existed with
+/// nothing in it (G-7). Four cases, as §3.3 asks: the full table, one result, no result, and a
+/// version winget itself cannot pin down.
+///
+/// The identity is the **Id** column, not the display name: `winget install` takes the Id, and
+/// 185 of the 278 rows this machine reports carry a backslash (`ARP\Machine\…`, `MSIX\…`). Every
+/// row below is real output from a Windows 11 box; nothing here was written by hand, which is
+/// the point — the unit test beside the parser used to build its own fixed-width rows, and a
+/// synthesised table cannot disagree with the parser that reads it.
+#[test]
+fn winget_list_reads_the_id_column_whatever_punctuation_it_carries() {
+    const LIST: &str = include_str!("fixtures/winget/list.txt");
+    let pkgs = windows::parse_installed("winget", LIST);
+    let names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+
+    assert_eq!(
+        names,
+        vec![
+            "7zip.7zip",
+            "MSIX\\AdobeAcrobatDCCoreApp_23.1.0.0_x64__pc75e8sa7ep4e",
+            "ARP\\Machine\\X86\\ILST_30_2_1",
+            "ARP\\Machine\\X86\\IDSN_21_2",
+            "ARP\\Machine\\X86\\LTRM_15_2",
+            "ARP\\Machine\\X86\\PHSP_27_2",
+            "ARP\\Machine\\X64\\{8BD2A40D-67A6-45F5-877D-6D9D04C9D5A2}",
+            "ARP\\Machine\\X86\\{62F1E71E-EBB3-43F3-9E71-945F2972F877}_is1",
+        ],
+        "the header, the dashed rule and the multi-word display names are not package names"
+    );
+    // The Version column, never the `Available` one beside it: reading the upgrade candidate as
+    // the installed version makes every upgradable package look already-upgraded.
+    let sevenz = pkgs.iter().find(|p| p.name == "7zip.7zip").unwrap();
+    assert_eq!(sevenz.version.as_deref(), Some("25.01"));
+}
+
+#[test]
+fn winget_list_reads_one_result_and_no_result() {
+    const ONE: &str = include_str!("fixtures/winget/list-one.txt");
+    let pkgs = windows::parse_installed("winget", ONE);
+    assert_eq!(
+        pkgs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        vec!["7zip.7zip"],
+        "a one-row table narrows every column, so the widths differ from the full listing"
+    );
+
+    const NONE: &str = include_str!("fixtures/winget/list-not-found.txt");
+    let pkgs = windows::parse_installed("winget", NONE);
+    assert!(
+        pkgs.is_empty(),
+        "`No installed package found matching input criteria.` is a sentence, not a package: \
+         {pkgs:?}"
+    );
+}
+
+/// `> 3.13.5` is winget's own way of saying "at least this". The parser reads the column
+/// faithfully rather than inventing a number, and — the half worth asserting — the `>` does not
+/// become a package name of its own.
+#[test]
+fn winget_reports_a_version_it_cannot_pin_down_as_winget_wrote_it() {
+    const ODD: &str = include_str!("fixtures/winget/list-unknown-version.txt");
+    let pkgs = windows::parse_installed("winget", ODD);
+    assert_eq!(
+        pkgs.iter()
+            .map(|p| (p.name.as_str(), p.version.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![("Python.Launcher", Some("> 3.13.5"))]
+    );
+}
+
 /// Every file under `tests/fixtures/` is read by something.
 ///
-/// An orphan is a **false signal of coverage**: the directory listing says fourteen backends
+/// An orphan is a **false signal of coverage**: the directory listing says fifteen backends
 /// have a fixture captured from their own tool, and `cargo/install-list.txt` was read by no
 /// test at all — committed in the same change that established the rule fixtures exist to
 /// serve. That is worse than a missing fixture, because a missing one is visible.
@@ -196,9 +265,30 @@ fn every_fixture_is_read_by_some_test() {
     }
 
     let mut orphans = Vec::new();
+    let mut empty_dirs = Vec::new();
     let mut total = 0;
     let mut stack = vec![fixtures_dir.clone()];
     while let Some(dir) = stack.pop() {
+        // A directory with no files in it (G-7). This walk counts FILES, so `winget/` sat there
+        // holding nothing and contributed nothing to count — the listing said fifteen backends
+        // had a captured fixture and fourteen did, on the platform this repo is developed on and
+        // whose `list` returns 278 rows. An orphan file is a false signal of coverage; an empty
+        // directory is the same signal with no file to notice.
+        if dir != fixtures_dir
+            && std::fs::read_dir(&dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .next()
+                .is_none()
+        {
+            empty_dirs.push(
+                dir.strip_prefix(&fixtures_dir)
+                    .unwrap_or(&dir)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
         for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
             let p = entry.path();
             if p.is_dir() {
@@ -220,6 +310,15 @@ fn every_fixture_is_read_by_some_test() {
     assert!(
         total > 0,
         "no fixtures found — this test is looking in the wrong place"
+    );
+    empty_dirs.sort();
+    assert!(
+        empty_dirs.is_empty(),
+        "{} fixture director(ies) hold no files:\n  {}\n\nThe directory listing is what anyone \
+         counts backends by, so an empty one claims a captured fixture that does not exist. \
+         Capture the tool's real output or delete the directory.",
+        empty_dirs.len(),
+        empty_dirs.join("\n  ")
     );
     orphans.sort();
     assert!(
