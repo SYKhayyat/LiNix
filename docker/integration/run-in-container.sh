@@ -173,9 +173,38 @@ nok() {
         FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc — never ran, not a refusal)"
         echo "  FAIL  $desc (rc=$rc — the command never ran; that is not a refusal)"
         excerpt; return 1
+    elif [ "$rc" = 3 ]; then
+        FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=3: a deliberate refusal where a failure was expected)"
+        echo "  FAIL  $desc (rc=3: LiNix refused on purpose; if that is the outcome under test, assert it with refuses_with_3)"
+        return 1
     else
-        PASS=$((PASS + 1)); echo "  PASS  $desc (correctly refused)"; return 0
+        PASS=$((PASS + 1)); echo "  PASS  $desc (failed, as it must)"; return 0
     fi
+}
+
+# The other half of `nok`, and the reason it is a separate word: LiNix has a dedicated exit code
+# for declining on purpose (`Exit::Refused` = 3, U21) and `nok` could not tell it from a crash.
+# Measured by the round-6 grader against a stub that answers `--version` and fails everything
+# else: SIXTEEN of seventeen surviving checks were refusal checks, every one of them scored
+# "correctly refused" because the stub exited 1. The distinction the product publishes is the
+# distinction the harness has to assert.
+refuses_with_3() { # description command...
+    desc="$1"; shift
+    "$@" >/tmp/it.out 2>&1; rc=$?
+    if [ "$rc" = 3 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  $desc (refused on purpose, exit 3)"; return 0
+    fi
+    FAILC=$((FAILC + 1))
+    if [ "$rc" = 0 ]; then
+        _rw="it succeeded"
+    elif never_ran "$rc"; then
+        _rw="rc=$rc: the command never ran"
+    else
+        _rw="rc=$rc: a failure, not the documented refusal (readme.md: 3 means refused on purpose)"
+    fi
+    FAILED_NAMES="$FAILED_NAMES\n    - $desc ($_rw)"
+    echo "  FAIL  $desc ($_rw)"
+    excerpt; return 1
 }
 
 # grep_ok "desc" pattern cmd... — passes when cmd's output contains pattern.
@@ -451,7 +480,7 @@ nok "dry-run did NOT actually install $PKG" binary_present "$BACKEND" "$PKG" /tm
 # the machine is nearly all managed, so "delete everything unmanaged" is a small
 # removal and the ratio it exists to catch never fires.
 echo "[4] purge-unmanaged, before adopt (the state that makes it a test)"
-nok "purge-unmanaged is refused on a machine LiNix has not adopted" lx -y purge-unmanaged
+refuses_with_3 "purge-unmanaged is refused on a machine LiNix has not adopted" lx -y purge-unmanaged
 # WHICH rule refused matters: a `nok` that accepts any non-zero exit accepts a panic
 # and an unknown flag just as happily. Before adopt the ratio rule is the one that
 # fires, and it says so by name.
@@ -592,7 +621,7 @@ else
 fi
 # Post-adopt the ratio no longer fires, so the bare command must still not be a
 # silent mass-delete — the refusal is asserted in both states, for different reasons.
-nok "purge-unmanaged is still not a silent mass-delete after adopt" lx -y purge-unmanaged
+refuses_with_3 "purge-unmanaged is still not a silent mass-delete after adopt" lx -y purge-unmanaged
 # WHICH rule refuses is still asserted, but the answer depends on how much `adopt`
 # could take on this image: where it adopted well the protected set decides, where it
 # adopted little the ratio still does. Both are named answers; "some error" is not, and
@@ -1479,7 +1508,7 @@ else
 fi
 # A container has no container runtime, which is exactly `try`'s refusal path —
 # and the one a developer's own machine (which has docker) can never exercise.
-nok "try refuses when there is no container runtime" lx try
+refuses_with_3 "try refuses when there is no container runtime" lx try
 grep_ok "try's refusal names what is missing" "podman" lx try
 ok "check unmanaged lists what LiNix does not manage" lx check unmanaged
 ok "path prints the config repo" lx path
@@ -1569,7 +1598,7 @@ ok "edit opens a file in \$EDITOR" env EDITOR=true VISUAL=true $TO "$LINIX" edit
 
 # reset deletes the registry. The command is exercised through the refusal it owes
 # a machine that still has a config repo — running it for real would end the run.
-nok "reset refuses while a config repo still exists" lx reset
+refuses_with_3 "reset refuses while a config repo still exists" lx reset
 grep_ok "and says --force is what overrides it" "force" lx reset
 
 # self-upgrade --check only reports; it rebuilds nothing.
@@ -1588,7 +1617,7 @@ record_argv restore /tmp/linix-it-bundle
 answers "the restored model parses" \
     env LINIX_CONFIG_DIR=/tmp/linix-it-restored LINIX_DATA_DIR=/tmp/linix-it-restored-state \
         $TO "$LINIX" check
-nok "restore refuses a config directory that is not empty" \
+refuses_with_3 "restore refuses a config directory that is not empty" \
     env LINIX_CONFIG_DIR=/tmp/linix-it-restored LINIX_DATA_DIR=/tmp/linix-it-restored-state \
         $TO "$LINIX" restore /tmp/linix-it-bundle
 ok "and --force overrides it" \

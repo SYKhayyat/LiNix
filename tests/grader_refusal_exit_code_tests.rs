@@ -283,7 +283,28 @@ fn every_site_that_says_it_is_refusing_is_built_as_a_refusal() {
             if t.starts_with("//") || t.contains("assert") {
                 continue;
             }
-            if !(line.contains("refusing to") || line.contains("Refusing to")) {
+            // A refusal is RETURNED, never printed: `linix protected`'s heading says "what LiNix
+            // refuses to remove" and is not itself a refusal.
+            if ["println!", "print!", "info!", "warn!", "eprintln!"]
+                .iter()
+                .any(|m| t.starts_with(m))
+            {
+                continue;
+            }
+            // The vocabulary, and it is a list — which is the shape this repo distrusts, so the
+            // list is widened when a member is found rather than assumed complete. G-8 found the
+            // second entry: `bundle.rs`'s restore said "it refuses unless you pass --force",
+            // returned `Error::Other`, exited 1, and the round-2 sweep of this exact class could
+            // not see it because it matched only the first phrasing.
+            // `refuses to` is deliberately NOT in the list: it is the phrasing LiNix uses about
+            // somebody ELSE refusing — "Windows Task Scheduler refuses to register one
+            // otherwise" is an `Error::Permission` and correctly so, and `linix protected`'s
+            // heading is "what LiNix refuses to remove". Both were measured as offenders when
+            // the phrase was included, and both are right as they are.
+            if !["refusing to", "Refusing to", "refuses unless"]
+                .iter()
+                .any(|v| line.contains(v))
+            {
                 continue;
             }
             found += 1;

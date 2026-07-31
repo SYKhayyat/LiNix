@@ -388,7 +388,10 @@ pub async fn restore_bundle(
     }
 
     if !force && dir_has_entries(config_root).await {
-        return Err(Error::Other(format!(
+        // `Error::Refused`, not `Other`: LiNix worked correctly and declined on purpose, which
+        // readme.md's table calls exit 3. It said "refuses" where the rest of the family says
+        // "refusing to", which is how it survived the round-2 sweep of exactly this class.
+        return Err(Error::Refused(format!(
             "{} is not empty. A restore writes your declarations over what is there, so it \
              refuses unless you pass --force.",
             config_root.display()

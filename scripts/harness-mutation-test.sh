@@ -10,6 +10,11 @@
 #   ./scripts/harness-mutation-test.sh --check         # fail if survivors exceed the budget
 #   SURVIVOR_BUDGET=80 ./scripts/harness-mutation-test.sh --check
 #   CAUGHT_FLOOR=30 ./scripts/harness-mutation-test.sh --check
+#   FAIL_SURVIVOR_BUDGET=10 FAIL_CAUGHT_FLOOR=90 ./scripts/harness-mutation-test.sh --check
+#
+# Two stubs run under --check: one that does nothing and succeeds, one that fails everything.
+# The first finds checks that examine nothing; the second finds checks that cannot tell a
+# deliberate refusal from a crash.
 #
 # The budget is a ratchet, not a target. It exists so the number can only go down: a new
 # exit-code-only check raises it and fails this gate, which is the moment to add the assertion
@@ -68,6 +73,18 @@ BUDGET="${SURVIVOR_BUDGET:-$DEFAULT_BUDGET}"
 # strengthened; never down to get green, which is the same instruction the budget carries in the
 # other direction.
 FLOOR="${CAUGHT_FLOOR:-$DEFAULT_FLOOR}"
+# The same pair for the fail-everything stub. Measured on this tree the day `refuses_with_3`
+# split off from `nok`: Windows 12 survivors / 96 caught, container 17 / 118 (run outside a
+# container, which reports one survivor fewer than CI does -- hence the single point of slack).
+# The grader measured SEVENTEEN survivors on the Windows harness before the split, sixteen of
+# them refusal checks; five of those are now assertions about exit 3 and the rest are honest
+# `nok`s whose command really does fail with 1. Ratchet down, never up.
+case "$HARNESS" in
+    */run-in-container.sh) DEFAULT_FAIL_BUDGET=18; DEFAULT_FAIL_FLOOR=110 ;;
+    *)                     DEFAULT_FAIL_BUDGET=13; DEFAULT_FAIL_FLOOR=90 ;;
+esac
+FAIL_BUDGET="${FAIL_SURVIVOR_BUDGET:-$DEFAULT_FAIL_BUDGET}"
+FAIL_FLOOR="${FAIL_CAUGHT_FLOOR:-$DEFAULT_FAIL_FLOOR}"
 
 ROOT="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
@@ -75,6 +92,15 @@ cd "$ROOT" || exit 2
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+
+# Two stubs, because they answer different questions.
+#
+# The first does nothing and reports success: every check that still passes examined nothing.
+# The second answers `--version` (so the harness does not bail at its own front door) and fails
+# everything else: every check that still passes cannot tell a working LiNix from a broken one
+# in the OTHER direction. The round-6 grader built the second by hand and found seventeen
+# survivors, SIXTEEN of them refusal checks scoring "correctly refused" against a binary that
+# was simply failing (G-8).
 STUB="$WORK/linix"
 cat > "$STUB" <<'STUBEOF'
 #!/bin/sh
@@ -83,37 +109,58 @@ exit 0
 STUBEOF
 chmod +x "$STUB"
 
-echo "== running $HARNESS$HARNESS_ARGS against a do-nothing linix"
-# Unquoted on purpose: the harness's own arguments, split as it would receive them on a
-# command line.
-# shellcheck disable=SC2086
-LINIX="$STUB" bash "$HARNESS" $HARNESS_ARGS > "$WORK/out.txt" 2>&1
-echo "   harness exit: $?"
-
-# `grep -c` prints `0` and ALSO exits 1 when it matches nothing, so `$( … || echo 0 )` ran
-# both halves and captured the two-line string "0\n0". Every `[ "$X" -eq … ]` below then died
-# with "integer expected", `[` returning an error took the else branch, and this script fell
-# through to its success message — in exactly the total-collapse case the guards exist for.
-# Assign first, default on failure: one integer, always.
-SURVIVORS=$(grep -c "  PASS  " "$WORK/out.txt" 2>/dev/null) || SURVIVORS=0
-CAUGHT=$(grep -c "  FAIL  " "$WORK/out.txt" 2>/dev/null) || CAUGHT=0
-
-# And a guard that does not depend on the counters being right, because the counters are what
-# went wrong. A number that is not a number is a broken gate, not a zero.
-for _n in "$SURVIVORS" "$CAUGHT"; do
-    case "$_n" in
-        ''|*[!0-9]*)
-            echo " FAILED: counted '$_n', which is not a number. The gate cannot judge this run."
-            exit 2
-            ;;
+FAILSTUB="$WORK/linix-fail"
+cat > "$FAILSTUB" <<'FAILEOF'
+#!/bin/sh
+# Answers --version and fails everything else, with a plain failure and never a refusal.
+for a in "$@"; do
+    case "$a" in
+        --version|-V) echo "linix 0.0.0-mutation-stub"; exit 0 ;;
     esac
 done
+echo "linix: this stub fails everything" >&2
+exit 1
+FAILEOF
+chmod +x "$FAILSTUB"
 
-echo "   $CAUGHT check(s) caught the do-nothing binary"
-echo "   $SURVIVORS check(s) passed anyway — each of those examined nothing the stub broke"
-echo
-echo "== survivors"
-grep "  PASS  " "$WORK/out.txt" | sed 's/^  PASS  /   /' | sort
+# Run the harness against one stub and count what survived. Sets SURVIVORS and CAUGHT.
+measure() { # stub label
+    _stub="$1"; _label="$2"
+    echo "== running $HARNESS$HARNESS_ARGS against $_label"
+    # Unquoted on purpose: the harness's own arguments, split as it would receive them on a
+    # command line.
+    # shellcheck disable=SC2086
+    LINIX="$_stub" bash "$HARNESS" $HARNESS_ARGS > "$WORK/out.txt" 2>&1
+    echo "   harness exit: $?"
+
+    # `grep -c` prints `0` and ALSO exits 1 when it matches nothing, so `$( ... || echo 0 )` ran
+    # both halves and captured a two-line string. Every `[ "$X" -eq ... ]` below then
+    # died with "integer expected", `[` returning an error took the else branch, and this script
+    # fell through to its success message -- in exactly the total-collapse case the guards exist
+    # for. Assign first, default on failure: one integer, always.
+    SURVIVORS=$(grep -c "  PASS  " "$WORK/out.txt" 2>/dev/null) || SURVIVORS=0
+    CAUGHT=$(grep -c "  FAIL  " "$WORK/out.txt" 2>/dev/null) || CAUGHT=0
+
+    # And a guard that does not depend on the counters being right, because the counters are what
+    # went wrong. A number that is not a number is a broken gate, not a zero.
+    for _n in "$SURVIVORS" "$CAUGHT"; do
+        case "$_n" in
+            ''|*[!0-9]*)
+                echo " FAILED: counted '$_n', which is not a number. The gate cannot judge this run."
+                exit 2
+                ;;
+        esac
+    done
+
+    echo "   $CAUGHT check(s) caught $_label"
+    echo "   $SURVIVORS check(s) passed anyway"
+    echo
+    echo "== survivors ($_label)"
+    grep "  PASS  " "$WORK/out.txt" | sed 's/^  PASS  /   /' | sort
+    echo
+}
+
+measure "$STUB" "a do-nothing linix"
 
 if [ -z "$CHECK" ]; then exit 0; fi
 
@@ -144,3 +191,22 @@ if [ "$CAUGHT" -lt "$FLOOR" ]; then
 fi
 echo " ok: $SURVIVORS survivors, within the budget of $BUDGET;"
 echo "     $CAUGHT checks did their job, at or above the floor of $FLOOR."
+
+# The second stub, and its own ratchet. A check that passes here cannot tell a LiNix that
+# refused on purpose from one that simply broke -- which is the distinction the product
+# publishes as exit 3 and the reason `refuses_with_3` exists beside `nok`.
+measure "$FAILSTUB" "a linix that fails everything"
+if [ "$SURVIVORS" -gt "$FAIL_BUDGET" ]; then
+    echo " FAILED: $SURVIVORS checks pass against a binary that fails everything, over the"
+    echo "         budget of $FAIL_BUDGET. A check that cannot tell a refusal from a crash is"
+    echo "         asserting the exit code is non-zero and nothing else -- assert exit 3 with"
+    echo "         \`refuses_with_3\`, or look at the effect."
+    exit 1
+fi
+if [ "$CAUGHT" -lt "$FAIL_FLOOR" ]; then
+    echo " FAILED: only $CAUGHT checks caught a binary that fails everything, under the floor"
+    echo "         of $FAIL_FLOOR. Same reasoning as the floor above, other stub."
+    exit 1
+fi
+echo " ok: $SURVIVORS survive a fail-everything linix, within the budget of $FAIL_BUDGET;"
+echo "     $CAUGHT caught it, at or above the floor of $FAIL_FLOOR."

@@ -170,9 +170,38 @@ nok() {
         FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=$rc — never ran, not a refusal)"
         echo "  FAIL  $desc (rc=$rc — the command never ran; that is not a refusal)"
         excerpt; return 1
+    elif [ "$rc" = 3 ]; then
+        FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES\n    - $desc (rc=3: a deliberate refusal where a failure was expected)"
+        echo "  FAIL  $desc (rc=3: LiNix refused on purpose; if that is the outcome under test, assert it with refuses_with_3)"
+        return 1
     else
-        PASS=$((PASS + 1)); echo "  PASS  $desc (correctly refused)"; return 0
+        PASS=$((PASS + 1)); echo "  PASS  $desc (failed, as it must)"; return 0
     fi
+}
+
+# The other half of `nok`, and the reason it is a separate word: LiNix has a dedicated exit code
+# for declining on purpose (`Exit::Refused` = 3, U21) and `nok` could not tell it from a crash.
+# Measured by the round-6 grader against a stub that answers `--version` and fails everything
+# else: SIXTEEN of seventeen surviving checks were refusal checks, every one of them scored
+# "correctly refused" because the stub exited 1. The distinction the product publishes is the
+# distinction the harness has to assert.
+refuses_with_3() { # description command...
+    desc="$1"; shift
+    "$@" >/tmp/itw.out 2>&1; rc=$?
+    if [ "$rc" = 3 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  $desc (refused on purpose, exit 3)"; return 0
+    fi
+    FAILC=$((FAILC + 1))
+    if [ "$rc" = 0 ]; then
+        _rw="it succeeded"
+    elif never_ran "$rc"; then
+        _rw="rc=$rc: the command never ran"
+    else
+        _rw="rc=$rc: a failure, not the documented refusal (readme.md: 3 means refused on purpose)"
+    fi
+    FAILED_NAMES="$FAILED_NAMES\n    - $desc ($_rw)"
+    echo "  FAIL  $desc ($_rw)"
+    excerpt; return 1
 }
 grep_ok() {
     desc="$1"; pat="$2"; shift 2
@@ -434,7 +463,7 @@ ok "install --dry-run shows a plan" lx --dry-run install "$BACKEND:$PKG"
 # IV.1: the only state in which this tests anything. After `adopt` the machine is
 # nearly all managed, so the ratio it exists to catch never fires.
 echo "[4] purge-unmanaged, before adopt"
-nok "purge-unmanaged is refused on a machine LiNix has not adopted" lx -y purge-unmanaged
+refuses_with_3 "purge-unmanaged is refused on a machine LiNix has not adopted" lx -y purge-unmanaged
 grep_ok "and it is the unadopted-machine ratio that refused" \
     "adopt\|allow-mass-purge" lx -y purge-unmanaged
 
@@ -540,7 +569,7 @@ echo "[8] The guard"
 # only that the binary still exists — which it would whatever LiNix did.
 $TO "$LINIX" -y uninstall linix >/dev/null 2>&1 || true
 ok "linix survives an uninstall attempt" on_path "$LINIX"
-nok "purge-unmanaged is still not a silent mass-delete after adopt" lx -y purge-unmanaged
+refuses_with_3 "purge-unmanaged is still not a silent mass-delete after adopt" lx -y purge-unmanaged
 # WHICH rule refuses is still asserted, but the answer depends on how much `adopt`
 # could take on this host: where it adopted well the protected set decides, where it
 # adopted little the ratio still does. Both are named answers; "some error" is not.
@@ -1062,7 +1091,7 @@ ok "sbom emits a bill of materials" lx sbom
 # `try` rehearses in a container. Named against an image that cannot exist, so the
 # answer is a refusal on every host: with no runtime it refuses for want of one, with a
 # runtime it refuses for want of the image — and neither spends ten minutes building.
-nok "try refuses to rehearse on an image that is not there" lx try --image linix-it-no-such-image
+refuses_with_3 "try refuses to rehearse on an image that is not there" lx try --image linix-it-no-such-image
 grep_ok "try's refusal says what it refused" "refusing to rehearse" lx try --image linix-it-no-such-image
 # `add` vendors a source's modules. A local path is the network-free case: it copies the
 # module in and reports it. The line names the package this run already manages, so
@@ -1137,7 +1166,7 @@ ok "edit opens a file in \$EDITOR" env EDITOR=true VISUAL=true $TO "$LINIX" edit
 
 # reset deletes the registry. The command is exercised through the refusal it owes a
 # machine that still has a config repo — running it for real would end the run.
-nok "reset refuses while a config repo still exists" lx reset
+refuses_with_3 "reset refuses while a config repo still exists" lx reset
 grep_ok "and says --force is what overrides it" "force" lx reset
 
 ok "self-upgrade --check reports the version and source" lx self-upgrade --check
@@ -1163,7 +1192,7 @@ restore_lx() {
 record_argv restore "$BUNDLE_DIR"
 ok "restore into a clean config directory" restore_lx restore "$BUNDLE_DIR"
 answers "the restored model parses" restore_lx check
-nok "restore refuses a config directory that is not empty" restore_lx restore "$BUNDLE_DIR"
+refuses_with_3 "restore refuses a config directory that is not empty" restore_lx restore "$BUNDLE_DIR"
 ok "and --force overrides it" restore_lx restore "$BUNDLE_DIR" --force
 
 # --- 14c. `--help` for the whole surface ----------------------------------
