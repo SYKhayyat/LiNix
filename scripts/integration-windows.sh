@@ -772,6 +772,21 @@ canary() {
         gem)      echo "colorize||full|" ;;
         cargo)    echo "hexyl|hexyl|full|" ;;
         github)   echo "sharkdp/fd|fd|full|fd" ;;
+        # The three the disposable-host rule opened up. Each is a manager that works fine here
+        # and was declined out of respect for the developer's machine, so each gets a canary
+        # that only runs where `disposable_host` is true.
+        #
+        # No binary check on any of them: a pip module, a VS Code extension and an Emacs package
+        # are none of them a program on PATH, and asserting one would be asserting a guess.
+        # `list` is the presence proof, as it is for `helm` and `mise`.
+        pip)      echo "six||full|" ;;
+        vscode)   echo "ms-python.python||full|" ;;
+        emacs)    echo "hydra||full|" ;;
+        # A pinned release asset, so a red run means one thing. The list-token is the name LiNix
+        # records for a `web:` install, which is derived from the URL rather than chosen here.
+        web)      echo "https://github.com/bootandy/dust/releases/download/v1.1.1/dust-v1.1.1-x86_64-pc-windows-msvc.zip|dust|full|dust" ;;
+        mise)     echo "jq||full|" ;;
+        asdf)     echo "jq||full|" ;;
         brew)     echo "wget|wget|full|" ;;
         # Each of these installs into a per-user directory (~/go/bin, ~/.dotnet/tools,
         # ~/.pub-cache/bin, ~/.pixi/bin, ~/.nimble/bin), so a real lifecycle here leaves
@@ -797,6 +812,19 @@ is_elevated() {
     net session >/dev/null 2>&1
 }
 
+# Is this host disposable — a runner that is destroyed after the job, rather than somebody's
+# machine?
+#
+# Four exemptions below are host-RESPECT rather than impossibility: LiNix can install a VS Code
+# extension, an Emacs package or a system-Python module perfectly well, and this sweep declines
+# to do it on a developer's box because it would leave their editor and their Python changed.
+# On a runner there is nobody to inconvenience, and `Q4` is explicit that an exemption must be
+# something the harness genuinely cannot do — not something it would rather not.
+#
+# Detected, never assumed: `CI` is set by GitHub Actions and by every other runner worth the
+# name, and a developer who wants the wide sweep can set it for one run.
+disposable_host() { [ -n "${CI:-}" ]; }
+
 no_lifecycle_reason() {
     case "$1" in
         # winget, choco and psresource were excused here until 2026-07-30 on the grounds that
@@ -809,14 +837,19 @@ no_lifecycle_reason() {
         psresource) powershell -NoProfile -Command "exit (\$null -eq (Get-Command Install-PSResource -ErrorAction SilentlyContinue))" >/dev/null 2>&1 \
                         || echo "this host has no PSResourceGet cmdlets, so there is no manager here to lifecycle — LiNix's own health check prints the one command that installs it" ;;
         mas)        echo "needs a signed-in App Store account — plan-smoked instead" ;;
-        pip)        echo "installs into the system Python this host runs on — plan-smoked instead" ;;
+        pip)        disposable_host || echo "installs into the system Python this host runs on, and this host is somebody's — plan-smoked instead" ;;
         link)       echo "a dependent statement (link:SRC), not a package name — smoked in 13" ;;
         service)    echo "a dependent statement (service:NAME), and starting one mutates the host" ;;
         setting)    echo "a dependent statement (setting:K @value=), and it writes a live desktop setting" ;;
-        vscode)     echo "installs an extension into the developer's real editor profile" ;;
-        emacs)      echo "installs a package into the developer's real Emacs profile" ;;
-        mise|asdf)  echo "rewrites the host's tool-version shims" ;;
-        web|appimage) echo "installs from a pasted URL; no stable public canary — smoked in 13" ;;
+        vscode)     disposable_host || echo "installs an extension into the developer's real editor profile" ;;
+        emacs)      disposable_host || echo "installs a package into the developer's real Emacs profile" ;;
+        mise|asdf)  disposable_host || echo "rewrites the host's tool-version shims" ;;
+        # `web:` had no lifecycle ANYWHERE, and the reason given was "no stable public
+        # canary" — which was a search nobody had done rather than a fact. A pinned GitHub
+        # release asset is exactly a stable public URL; `dust` is chosen because nothing else
+        # in this table installs it, so the binary it leaves cannot be confused with another
+        # backend's canary. `appimage` keeps the reason it has: Windows cannot run one.
+        appimage)   echo "an AppImage is a Linux artifact; this host cannot run one — lifecycled on the storage image instead" ;;
         # It IS an install target — `btrfs:PATH` runs `subvolume create` — and the sentence that
         # stood here until 2026-07-31 ("a snapshot provider, not an install target") is the one
         # that kept three destructive backends unrun for months. The Linux harness was corrected

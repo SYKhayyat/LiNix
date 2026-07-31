@@ -1043,7 +1043,14 @@ canary() {
         # in the install-only field because `lvremove` takes the volume and not the size.
         lvm)      [ -n "$STORAGE_LVM" ] && echo "$STORAGE_LVM/canary||full||@size=64M" ;;
         zfs)      [ -n "$STORAGE_ZFS" ] && echo "$STORAGE_ZFS/canary||full||@quota=100M,mount=/mnt/linix-zfs-canary" ;;
-        appimage) echo "" ;;   # a URL, not a name — smoked in 15, not lifecycled
+        # An AppImage is installed by URL, so the "name" is the URL — and that is the whole
+        # reason this row was empty for months. Pinned to a tag rather than `continuous`: a
+        # moving artifact makes a red run mean two things at once.
+        #
+        # No binary check. LiNix symlinks the downloaded file under a name derived from the URL,
+        # and asserting a name this table guessed would be asserting the guess. `list` is the
+        # presence proof, as it is for `mise` and `helm`.
+        appimage) echo "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage||full|appimagetool" ;;
         web)      echo "" ;;
         *)        echo "" ;;
     esac
@@ -1666,6 +1673,31 @@ done
 # The only check here that can notice what is MISSING from the list above it. A
 # backend or a command added next year fails this until it is covered.
 echo "[17] Coverage audit"
+
+# What the image SAID it shipped, against what is here.
+#
+# Every manager above the `COPY` in the Dockerfile is installed best-effort — an arch or a
+# mirror can take one of thirty away and the rest are still worth testing — and until this
+# check a failed install was indistinguishable from a manager nobody ever tried. `nix` printed
+# `SKIP nix install` in step 12 of a 26-step build for months while the coverage ledger recorded
+# it as having **no path to a real lifecycle anywhere**: a cost we chose not to notice, filed as
+# an impossibility (Q4).
+#
+# Named as a soft rather than a hard failure on purpose. Some of these genuinely cannot install
+# on some architectures, and turning that into a red run would teach people to delete the line
+# rather than fix the install — which is how the exemption lists got long in the first place.
+# What it must never do again is stay invisible.
+if [ -f /etc/linix-image-managers ]; then
+    _absent="$(awk '$2 == "ABSENT" {printf "%s ", $1}' /etc/linix-image-managers)"
+    if [ -n "$_absent" ]; then
+        soft "the image tried to install these and they are not here: $_absent"
+        echo "        a manager that failed to install is MISSING, not impossible — read the"
+        echo "        build log for its step before excusing the backend that needs it."
+    else
+        PASS=$((PASS + 1))
+        echo "  PASS  every manager this image installs is present"
+    fi
+fi
 
 sort -u "$LEDGER/be-life" > "$LEDGER/be-life.u" 2>/dev/null || : > "$LEDGER/be-life.u"
 sort -u "$LEDGER/be-life-partial" > "$LEDGER/be-life-partial.u" 2>/dev/null || : > "$LEDGER/be-life-partial.u"

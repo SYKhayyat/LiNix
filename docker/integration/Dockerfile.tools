@@ -47,11 +47,23 @@ RUN curl -fsSL -o /tmp/mf.sh "https://github.com/conda-forge/miniforge/releases/
 # the binaries into /usr/local/bin (always on PATH) so `command -v nix` succeeds and the backend
 # reports READY regardless of profile-script sourcing; enable flakes for `nixpkgs#hello`.
 RUN mkdir -p /etc/nix && printf 'experimental-features = nix-command flakes\n' > /etc/nix/nix.conf
-RUN sh -c 'curl -L https://nixos.org/nix/install | sh -s -- --no-daemon' \
+# **The nixos.org script refuses to run as root and this image IS root**, so every build since
+# this line was written printed `warning: installing Nix as root is not supported by this
+# script!`, then `SKIP nix install` — and `nix` was absent from every run while the coverage
+# ledger recorded it as a backend with *no path to a real lifecycle anywhere*. A cost we chose
+# not to notice, filed as an impossibility, for as long as nobody read a build log.
+#
+# The Determinate installer is the one that supports a container with no init, and says so:
+# `--init none`. No `|| true` — see the assertion below.
+RUN curl -fsSL https://install.determinate.systems/nix \
+      | sh -s -- install linux --no-confirm --init none \
     && for b in nix nix-env nix-collect-garbage nix-store; do \
-         ln -sf "/nix/var/nix/profiles/default/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true; \
-       done \
-    || echo "SKIP nix install"
+         ln -sf "/nix/var/nix/profiles/default/bin/$b" "/usr/local/bin/$b"; \
+       done
+# The assertion that makes the line above honest. A manager this image claims to ship and does
+# not is worse than one it never claimed: the sweep then counts it as impossible rather than
+# missing, and the gap ledger inherits the lie.
+RUN nix --version && nix profile list >/dev/null
 
 # Rust (for a REAL `cargo install`), uv and bun — same installers as the base image.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal || true
@@ -123,6 +135,22 @@ RUN (flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub
 # on a language registry. A real machine has an index; the sweep needs one to be testing apt
 # at all. Last, so it is not thrown away again.
 RUN apt-get update
+# What this image actually ships, written down at build time.
+#
+# Every best-effort installer above ends in `|| true`, which is right — an arch or a mirror can
+# take one of thirty managers away and the other twenty-nine are still worth testing. What was
+# wrong is that a manager which failed to install became INDISTINGUISHABLE from one nobody ever
+# tried: `nix` printed `SKIP nix install` in step 12 of a 26-step build for months, and the
+# coverage ledger recorded it as a backend with no path to a real lifecycle anywhere.
+#
+# So the image says what it has, the sweep reads it, and a manager that is missing is missing
+# rather than impossible (Q4).
+RUN for m in nix code flatpak stack cabal opam luarocks nimble spack conda pixi asdf mise \
+             bun uv helm kubectl dart php composer emacs dotnet mix; do \
+      if command -v "$m" >/dev/null 2>&1; then echo "$m present"; else echo "$m ABSENT"; fi; \
+    done > /etc/linix-image-managers \
+    && cat /etc/linix-image-managers
+
 WORKDIR /src
 COPY . /src
 RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
