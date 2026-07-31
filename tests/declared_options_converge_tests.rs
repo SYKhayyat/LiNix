@@ -169,7 +169,8 @@ async fn a_satisfied_mount_does_not_hide_a_drifted_quota() {
 async fn a_snap_that_gained_classic_after_it_was_installed_is_drift() {
     const INFO: &str = "snap info -- code";
     let strict = "name:      code\ntracking:     latest/stable\ninstalled:  1.85.1 (139) 351MB -\n";
-    let classic = "name:      code\ntracking:     latest/stable\ninstalled:  1.85.1 (139) 351MB classic\n";
+    let classic =
+        "name:      code\ntracking:     latest/stable\ninstalled:  1.85.1 (139) 351MB classic\n";
 
     assert!(
         plans_a_change(
@@ -204,7 +205,11 @@ async fn a_satisfied_channel_does_not_hide_a_drifted_confinement() {
     assert!(
         plans_a_change(
             &[(INFO, strict_on_stable)],
-            spec("snap", "code", &[("channel", "stable"), ("classic", "true")]),
+            spec(
+                "snap",
+                "code",
+                &[("channel", "stable"), ("classic", "true")]
+            ),
         )
         .await,
         "the channel matches and the confinement does not — that is a change"

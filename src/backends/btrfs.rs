@@ -219,7 +219,11 @@ fn qgroup_limit_in(output: &str) -> Option<u64> {
         .position(|c| c == "max_rfer")?;
     lines
         .filter(|l| !l.trim_start().starts_with("---"))
-        .find_map(|l| l.split_whitespace().nth(column).and_then(|v| v.parse().ok()))
+        .find_map(|l| {
+            l.split_whitespace()
+                .nth(column)
+                .and_then(|v| v.parse().ok())
+        })
 }
 
 /// `content` with one entry for this subvolume and no other.
@@ -602,7 +606,11 @@ impl Queryable for BtrfsQueryable {
         if let Ok(out) = self
             .core
             .executor
-            .run_output("btrfs", &["qgroup", "show", "-r", "-f", "--raw", name], false)
+            .run_output(
+                "btrfs",
+                &["qgroup", "show", "-r", "-f", "--raw", name],
+                false,
+            )
             .await
         {
             let limit = qgroup_limit_in(&out).map(|b| b.to_string());
@@ -698,7 +706,10 @@ mod tests {
 
         // Quotas disabled: btrfs says so on stderr and prints no table at all.
         assert_eq!(qgroup_limit_in(""), None);
-        assert_eq!(qgroup_limit_in("ERROR: can't list qgroups: quotas not enabled\n"), None);
+        assert_eq!(
+            qgroup_limit_in("ERROR: can't list qgroups: quotas not enabled\n"),
+            None
+        );
     }
 
     /// The inverse of what `fstab_with` writes, so a changed `@mount_options` can be seen. The
@@ -719,7 +730,10 @@ mod tests {
         // planner must be able to tell "not written" from "written with the default".
         assert_eq!(fstab_options("", "/data"), None);
         assert_eq!(
-            fstab_options(&fstab_with("", "abc", "/data", "/srv", "defaults"), "/other"),
+            fstab_options(
+                &fstab_with("", "abc", "/data", "/srv", "defaults"),
+                "/other"
+            ),
             None
         );
     }
@@ -757,8 +771,14 @@ mod tests {
             .await
             .unwrap()
             .expect("the subvolume is listed");
-        assert_eq!(p.properties.get("quota").map(String::as_str), Some("10737418240"));
-        assert_eq!(p.properties.get("mount_options").map(String::as_str), Some("noatime"));
+        assert_eq!(
+            p.properties.get("quota").map(String::as_str),
+            Some("10737418240")
+        );
+        assert_eq!(
+            p.properties.get("mount_options").map(String::as_str),
+            Some("noatime")
+        );
     }
 
     /// `list_installed` asked `btrfs subvolume list -p /` until 2026-07-30 — one filesystem,

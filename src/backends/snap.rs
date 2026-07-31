@@ -492,7 +492,10 @@ mod tests {
             present: true,
         };
         spec.options.insert("classic".into(), "true".into());
-        assert_eq!(install_args(&spec), vec!["install", "--classic", "--", "code"]);
+        assert_eq!(
+            install_args(&spec),
+            vec!["install", "--classic", "--", "code"]
+        );
         spec.options.insert("classic".into(), "false".into());
         assert_eq!(install_args(&spec), vec!["install", "--", "code"]);
     }

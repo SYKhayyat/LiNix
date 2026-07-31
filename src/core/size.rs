@@ -92,7 +92,15 @@ mod tests {
     /// 7% away from the one that got created.
     #[test]
     fn one_size_written_every_way_parses_to_one_number() {
-        for spelling in ["10G", "10g", "10GB", "10gb", "10GiB", "10gib", "10737418240"] {
+        for spelling in [
+            "10G",
+            "10g",
+            "10GB",
+            "10gb",
+            "10GiB",
+            "10gib",
+            "10737418240",
+        ] {
             assert_eq!(
                 parse_size(spelling),
                 Some(10 * (1 << 30)),
@@ -119,7 +127,9 @@ mod tests {
     /// Junk parses to nothing rather than to a number that would silently resize a volume.
     #[test]
     fn what_is_not_a_size_is_not_guessed_at() {
-        for junk in ["", "  ", "big", "10X", "G10", "-5G", "10 G B", "10Gigs", "10.5.5G"] {
+        for junk in [
+            "", "  ", "big", "10X", "G10", "-5G", "10 G B", "10Gigs", "10.5.5G",
+        ] {
             assert_eq!(parse_size(junk), None, "{} parsed as a size", junk);
         }
     }
