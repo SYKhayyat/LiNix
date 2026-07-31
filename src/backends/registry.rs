@@ -87,20 +87,8 @@ pub async fn create_default_registry(
         // AUR helpers: pacman-syntax drop-ins for Arch's user repository. Registered as
         // distinct backends (not a pacman flag) so `yay:pkg` / `paru:pkg` are explicit and
         // tracked separately. Runtime-gated by the helper binary being present.
-        register_aur_helper(
-            &mut reg,
-            &executor,
-            "yay",
-            |o| crate::parsers::pacman::parse_list_for(o, "yay"),
-            |o| crate::parsers::pacman::parse_search_for(o, "yay"),
-        );
-        register_aur_helper(
-            &mut reg,
-            &executor,
-            "paru",
-            |o| crate::parsers::pacman::parse_list_for(o, "paru"),
-            |o| crate::parsers::pacman::parse_search_for(o, "paru"),
-        );
+        register_yay(&mut reg, &executor);
+        register_paru(&mut reg, &executor);
     }
 
     // --- Windows native system managers ---
@@ -139,8 +127,9 @@ pub async fn create_default_registry(
     crate::backends::snap::register(&mut reg, &executor, config);
     crate::backends::flatpak::register(&mut reg, &executor, config);
     crate::backends::conda::register(&mut reg, &executor, config);
-    #[cfg(target_os = "windows")]
-    crate::backends::psresource::register(&mut reg, &executor, config);
+    if cfg!(target_os = "windows") {
+        crate::backends::psresource::register(&mut reg, &executor, config);
+    }
 
     // --- Language package managers (generic, config-driven) ---
     register_pip(&mut reg, &executor);
@@ -270,6 +259,32 @@ fn register_apt(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             .with_metadata_provider(core.clone())
             .build(),
     ));
+}
+
+/// The two AUR helpers, each a two-argument registrar so the argv table can name it.
+///
+/// They are registered on Linux only, which makes them exactly the class
+/// `every_os_native_backend_sends_the_argv_its_manager_expects` exists for — and until these
+/// wrappers existed the five-argument `register_aur_helper` could not appear in that table, so
+/// neither could they.
+fn register_yay(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    register_aur_helper(
+        reg,
+        executor,
+        "yay",
+        |o| crate::parsers::pacman::parse_list_for(o, "yay"),
+        |o| crate::parsers::pacman::parse_search_for(o, "yay"),
+    );
+}
+
+fn register_paru(reg: &mut BackendRegistry, executor: &CommandExecutor) {
+    register_aur_helper(
+        reg,
+        executor,
+        "paru",
+        |o| crate::parsers::pacman::parse_list_for(o, "paru"),
+        |o| crate::parsers::pacman::parse_search_for(o, "paru"),
+    );
 }
 
 /// Register an AUR helper (`yay`, `paru`) as a generic backend. AUR helpers accept
@@ -464,7 +479,13 @@ fn register_zypper(reg: &mut BackendRegistry, executor: &CommandExecutor) {
             repo_list_args: Some(vec!["repos".into()]),
             repo_binary: None,
             repo_list_binary: None,
-            depends_args: Some(vec!["info".into(), "--requires".into(), "{name}".into()]),
+            // None, like apt, dnf and pacman: zypper resolves its own dependency closure at
+            // install time, so LiNix re-deriving one adds nodes the planner then tries to
+            // install by name. What `info --requires` reports are RPM capabilities
+            // (`libjq.so.1()(64bit)`), not packages anyone declares — and until 2026-07-30 this
+            // was the only system manager that set it, which is why it was the only one whose
+            // first real run could not install anything.
+            depends_args: None,
             needs_root: true,
             is_exclusive: true,
             install_source_option: None,
@@ -1994,6 +2015,77 @@ mod tests {
     /// compiled everywhere now and still *registered* only on their own OS, which is the part
     /// that has to stay true: `create_default_registry` keeps its `cfg!` gate, and
     /// `registry_capability_matrix` asserts what this host actually offers.
+    /// A system package manager resolves its own dependency closure, so LiNix must not
+    /// re-derive one: `expand_transitive_dependencies` turns every returned name into an
+    /// install node, and a name that is not a package is then installed by name.
+    ///
+    /// `zypper` was the only system manager that asked, and it is the one whose first real run
+    /// could not install anything — `zypper info --requires jq` answered with `Loading`,
+    /// `Reading`, `No` and twenty other words it had printed, and three of them required each
+    /// other in a cycle. This asserts the whole family agrees, not just the one that broke.
+    #[tokio::test]
+    async fn no_self_resolving_system_manager_re_derives_a_dependency_closure() {
+        type Registrar = fn(&mut BackendRegistry, &CommandExecutor);
+        let system: &[(&str, Registrar)] = &[
+            ("apt", register_apt),
+            ("apk", register_apk),
+            ("zypper", register_zypper),
+            ("winget", register_winget),
+            ("scoop", register_scoop),
+            ("choco", register_choco),
+            ("guix", register_guix),
+            ("emerge", register_emerge),
+            ("eopkg", register_eopkg),
+            ("slackpkg", register_slackpkg),
+            ("pkgin", register_pkgin),
+            ("pkg", register_pkg_freebsd),
+            ("pkg_add", register_pkg_add_openbsd),
+            ("yay", register_yay),
+            ("paru", register_paru),
+        ];
+
+        let mut asks: Vec<String> = Vec::new();
+        for (name, register) in system {
+            let vfs = Arc::new(dashmap::DashMap::new());
+            let mock_calls = Arc::new(crate::core::executor::MockExecutor::new(vfs.clone()));
+            let exec = CommandExecutor::with_layer(
+                true,
+                false,
+                mock_calls.clone(),
+                vfs,
+                Arc::new(dashmap::DashMap::new()),
+            );
+            let mut reg = BackendRegistry::new();
+            register(&mut reg, &exec);
+            let b = reg
+                .get(name)
+                .unwrap_or_else(|| panic!("{} did not register", name));
+            let Some(mp) = b.as_metadata_provider() else {
+                continue;
+            };
+            let _ = mp.get_dependencies("jq").await;
+            // The assertion is that it RAN NOTHING. Checking the returned `Vec` instead would
+            // pass on every manager whether or not it asked, because an unmocked command
+            // answers with nothing — the vacuous check this repo keeps rediscovering.
+            let ran = mock_calls.get_calls().await;
+            if !ran.is_empty() {
+                asks.push(format!("{name} ran {ran:?}"));
+            }
+        }
+        assert!(
+            asks.is_empty(),
+            "these system managers re-derive a dependency closure their own installer already \
+             resolves, and every name they return becomes an install node: {asks:?}"
+        );
+    }
+
+    /// `psresource::register` takes a `Config` the others do not, so it needs two lines of
+    /// adapter to sit in the table. It is here rather than beside the production registrars
+    /// because nothing outside the test wants it.
+    fn register_psresource_for_test(reg: &mut BackendRegistry, exec: &CommandExecutor) {
+        crate::backends::psresource::register(reg, exec, &Config::default());
+    }
+
     #[tokio::test]
     async fn every_os_native_backend_sends_the_argv_its_manager_expects() {
         use crate::core::executor::MockExecutor;
@@ -2001,106 +2093,155 @@ mod tests {
 
         type Registrar = fn(&mut BackendRegistry, &CommandExecutor);
         // backend, registrar, the install argv, the remove argv.
-        let cases: &[(&str, Registrar, &str, &str)] = &[
+        //
+        // The remove argv is `None` for a manager that genuinely has no uninstall verb. That is
+        // asserted rather than skipped: `remove` must refuse with `Unsupported` and run nothing,
+        // because a manager that silently ran *something* would leave the model claiming a
+        // package is gone that is still installed.
+        let cases: &[(&str, Registrar, &str, Option<&str>)] = &[
             // OS-native system managers — each invisible to every platform's CI but its own.
             (
                 "apt",
                 register_apt,
                 "apt install -y -- jq",
-                "apt remove -y -- jq",
+                Some("apt remove -y -- jq"),
             ),
-            ("apk", register_apk, "apk add -- jq", "apk del -- jq"),
+            ("apk", register_apk, "apk add -- jq", Some("apk del -- jq")),
             (
                 "zypper",
                 register_zypper,
                 "zypper install -y",
-                "zypper remove -y",
+                Some("zypper remove -y"),
             ),
             (
                 "winget",
                 register_winget,
                 "winget install",
-                "winget uninstall",
+                Some("winget uninstall"),
             ),
-            ("scoop", register_scoop, "scoop install", "scoop uninstall"),
-            ("choco", register_choco, "choco install", "choco uninstall"),
-            ("mas", register_mas, "mas install", "mas uninstall"),
+            (
+                "scoop",
+                register_scoop,
+                "scoop install",
+                Some("scoop uninstall"),
+            ),
+            (
+                "choco",
+                register_choco,
+                "choco install",
+                Some("choco uninstall"),
+            ),
+            ("mas", register_mas, "mas install", Some("mas uninstall")),
             (
                 "macports",
                 register_macports,
                 "port install",
-                "port uninstall",
+                Some("port uninstall"),
             ),
-            ("guix", register_guix, "guix install", "guix remove"),
-            ("emerge", register_emerge, "emerge", "--unmerge"),
+            // PowerShell's module manager. Its module was `#[cfg(target_os = "windows")]` until
+            // 2026-07-30, so it could not appear in this table at all: the row would not compile
+            // where it is most needed, which is every platform that cannot run PSResourceGet.
+            (
+                "psresource",
+                register_psresource_for_test,
+                "Install-PSResource",
+                Some("Uninstall-PSResource"),
+            ),
+            ("guix", register_guix, "guix install", Some("guix remove")),
+            ("emerge", register_emerge, "emerge", Some("--unmerge")),
             (
                 "eopkg",
                 register_eopkg,
                 "eopkg install -y",
-                "eopkg remove -y",
+                Some("eopkg remove -y"),
             ),
             (
                 "slackpkg",
                 register_slackpkg,
                 "slackpkg -batch=on",
-                "remove",
+                Some("remove"),
             ),
+            // The AUR helpers: pacman-syntax, registered on Linux only, and until 2026-07-30
+            // reached through a five-argument helper no row could name.
+            ("yay", register_yay, "yay -S", Some("yay -Rs")),
+            ("paru", register_paru, "paru -S", Some("paru -Rs")),
             // The BSD tools, where removal is a different program.
             (
                 "pkgin",
                 register_pkgin,
                 "pkgin -y install",
-                "pkgin -y remove",
+                Some("pkgin -y remove"),
             ),
             (
                 "pkg",
                 register_pkg_freebsd,
                 "pkg install -y",
-                "pkg delete -y",
+                Some("pkg delete -y"),
             ),
-            ("pkg_add", register_pkg_add_openbsd, "pkg_add", "pkg_delete"),
+            (
+                "pkg_add",
+                register_pkg_add_openbsd,
+                "pkg_add",
+                Some("pkg_delete"),
+            ),
             // Language and ecosystem managers: the verbs are where a mock sees nothing.
-            ("pip", register_pip, "pip install", "pip uninstall"),
-            ("gem", register_gem, "gem install", "gem uninstall"),
-            ("bun", register_bun, "bun add", "bun remove"),
+            ("pip", register_pip, "pip install", Some("pip uninstall")),
+            ("gem", register_gem, "gem install", Some("gem uninstall")),
+            ("bun", register_bun, "bun add", Some("bun remove")),
             (
                 "dotnet",
                 register_dotnet,
                 "dotnet tool install",
-                "dotnet tool uninstall",
+                Some("dotnet tool uninstall"),
             ),
             (
                 "composer",
                 register_composer,
                 "composer global require",
-                "global remove",
+                Some("global remove"),
             ),
-            ("opam", register_opam, "opam install", "opam remove"),
+            ("opam", register_opam, "opam install", Some("opam remove")),
             (
                 "luarocks",
                 register_luarocks,
                 "luarocks install",
-                "luarocks remove",
+                Some("luarocks remove"),
             ),
             (
                 "nimble",
                 register_nimble,
                 "nimble install",
-                "nimble uninstall",
+                Some("nimble uninstall"),
             ),
             (
                 "pixi",
                 register_pixi,
                 "pixi global install",
-                "pixi global uninstall",
+                Some("pixi global uninstall"),
             ),
-            ("spack", register_spack, "spack install", "spack uninstall"),
+            (
+                "spack",
+                register_spack,
+                "spack install",
+                Some("spack uninstall"),
+            ),
             (
                 "mix",
                 register_mix,
                 "mix archive.install",
-                "mix archive.uninstall",
+                Some("mix archive.uninstall"),
             ),
+            (
+                "asdf",
+                register_asdf,
+                "asdf install",
+                Some("asdf uninstall"),
+            ),
+            // The two Haskell managers, which have no uninstall verb at all. `None` asserts
+            // that removal refuses rather than running a command — the failure mode being
+            // guarded against is a removal that reports success and leaves the package there.
+            ("cabal", register_cabal, "cabal install", None),
+            ("stack", register_stack, "stack install", None),
             // `helm` is deliberately absent: it installs from an option this table cannot
             // carry, so its install call never happens and the row would pass on the remove
             // alone — a check that tests nothing (IV.1). It has its own tests and a live run.
@@ -2131,10 +2272,31 @@ mod tests {
                 ..Default::default()
             };
             let _ = inst.install(&[spec], false).await;
-            let _ = inst.remove(&["jq".to_string()], false).await;
+            let after_install = mock.get_calls().await.len();
+            let removal = inst.remove(&["jq".to_string()], false).await;
 
             let calls = mock.get_calls().await;
-            for want in [want_install, want_remove] {
+            let mut wanted = vec![*want_install];
+            match want_remove {
+                Some(w) => wanted.push(*w),
+                None => {
+                    assert!(
+                        matches!(removal, Err(crate::core::Error::Unsupported(_))),
+                        "{}: this manager has no uninstall verb, so removal must refuse with \
+                         Unsupported — it returned {:?}",
+                        name,
+                        removal.map(|_| "Ok")
+                    );
+                    assert_eq!(
+                        calls.len(),
+                        after_install,
+                        "{}: removal is unsupported and yet it ran something: {:?}",
+                        name,
+                        &calls[after_install..]
+                    );
+                }
+            }
+            for want in wanted {
                 assert!(
                     calls.iter().any(|c| c.contains(want)),
                     "{}: no call contained `{}`\n  calls: {:?}",

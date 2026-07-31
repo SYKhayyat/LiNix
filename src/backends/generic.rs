@@ -276,21 +276,73 @@ impl MetadataProvider for GenericBackendCore {
             .run_output(self.binary(), &arg_refs, false)
             .await?;
 
-        // Extract clean package names. apt/zypper print labelled lines
-        // ("Depends: libc6", "Requires: foo"); strip the "Label: " prefix and take the
-        // bare name (dropping any version constraint / alternative). Backends that print
-        // bare names (e.g. apk) pass through unchanged.
-        Ok(output
-            .lines()
-            .map(|l| l.trim())
-            .filter(|l| !l.is_empty())
-            .filter_map(|l| {
-                let after_label = l.rsplit(": ").next().unwrap_or(l);
-                after_label.split_whitespace().next().map(|s| s.to_string())
-            })
-            .filter(|s| !s.is_empty())
-            .collect())
+        Ok(parse_dependency_output(&output))
     }
+}
+
+/// Pull the dependency names out of a `depends` / `info --requires` report.
+///
+/// **Only what a dependency label introduces counts.** Most of what these commands print is not
+/// a dependency: `zypper info --requires` opens with `Loading repository data...`, reports
+/// `Installed      : No`, and prints a paragraph of prose — and taking the first word of every
+/// non-empty line, which is what this did until 2026-07-30, yields packages called `Loading`,
+/// `Reading` and `No`. The planner adds every dependency as an install node and then asks *that*
+/// node for its dependencies, which returns the same three words, so the first real `zypper` run
+/// in this project's history could not install anything at all: it died on a `requires` cycle
+/// between three adverbs.
+///
+/// Two shapes are handled, and they are the two that exist:
+///
+/// - one dependency per labelled line — `  Depends: libc6` (apt)
+/// - a labelled header and an indented block — `Requires : [4]` then the names (zypper)
+///
+/// A `Key : Value` row that is not a dependency label closes the block, which is what keeps
+/// `Description`'s indented prose out.
+fn parse_dependency_output(output: &str) -> Vec<String> {
+    fn is_dependency_label(key: &str) -> bool {
+        let k = key.trim().to_ascii_lowercase();
+        k.starts_with("depends") || k.starts_with("requires") || k.starts_with("pre-depends")
+    }
+    // A count (`[4]`), a placeholder (`(none)`) or an empty value is a header, not a name.
+    fn name_of(value: &str) -> Option<String> {
+        let first = value.split_whitespace().next()?;
+        if first.starts_with('[') || first.starts_with('(') || first == "<none>" {
+            return None;
+        }
+        Some(first.to_string())
+    }
+
+    let mut deps = Vec::new();
+    let mut in_block = false;
+    for raw in output.lines() {
+        if raw.trim().is_empty() {
+            in_block = false;
+            continue;
+        }
+        let indented = raw.starts_with([' ', '\t']);
+        let trimmed = raw.trim();
+
+        match trimmed.split_once(':') {
+            Some((key, value)) if is_dependency_label(key) => {
+                in_block = true;
+                if let Some(n) = name_of(value) {
+                    deps.push(n);
+                }
+            }
+            // Any other top-level `Key : Value` row is metadata and ends the block. Indented
+            // rows are left to fall through, because a dependency may legitimately carry a
+            // colon (`libc.so.6(GLIBC_2.38)(64bit)` does not, but a path-shaped one would).
+            Some(_) if !indented => in_block = false,
+            _ => {
+                if in_block && indented {
+                    if let Some(n) = name_of(trimmed) {
+                        deps.push(n);
+                    }
+                }
+            }
+        }
+    }
+    deps
 }
 
 pub struct GenericInstallable {
@@ -1082,11 +1134,15 @@ mod tests {
         vfs: Arc<DashMap<std::path::PathBuf, String>>,
     ) -> GenericBackendCore {
         let exec = CommandExecutor::with_layer(true, false, mock, vfs, Arc::new(DashMap::new()));
+        apt_like_core_named("apt", exec)
+    }
+
+    fn apt_like_core_named(name: &str, exec: CommandExecutor) -> GenericBackendCore {
         GenericBackendCore {
-            name: "apt".into(),
+            name: name.into(),
             executor: exec,
             config: ManagerConfig {
-                name: "apt".into(),
+                name: name.into(),
                 binary: None,
                 remove_binary: None,
                 install_args: vec![],
@@ -1145,6 +1201,78 @@ mod tests {
         let deps = core.get_dependencies("curl").await.unwrap();
         // "Depends: libc6" -> "libc6" (label + constraints stripped)
         assert_eq!(deps, vec!["libc6".to_string(), "bash".to_string()]);
+    }
+
+    /// Everything a manager prints that is *not* a dependency has to be thrown away, and until
+    /// 2026-07-30 none of it was: this parser took the first word of every non-empty line.
+    ///
+    /// The first real `zypper` run in the project's history could not install a single package
+    /// because of it. `zypper info --requires jq` opens with `Loading repository data...` and
+    /// `Reading installed packages...`, and reports `Installed      : No` — so the dependency
+    /// list came back as `Loading`, `Reading`, `No` and a dozen other words. The planner adds
+    /// every dependency as an install node and then asks *it* for its dependencies, which
+    /// returned the same three words, and the sweep died on:
+    ///
+    /// ```text
+    /// Error: `requires` forms a cycle
+    ///   zypper:No requires zypper:Loading
+    ///   zypper:Loading requires zypper:Reading
+    ///   zypper:Reading requires zypper:No
+    /// ```
+    ///
+    /// The fixture is that command's real output, captured from the openSUSE image.
+    #[tokio::test]
+    async fn preamble_and_metadata_are_not_dependencies() {
+        let fixture = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/zypper/info-requires.txt"
+        ))
+        .expect("the zypper fixture");
+
+        let vfs = Arc::new(DashMap::new());
+        let mock = Arc::new(MockExecutor::new(vfs.clone()));
+        mock.set_response(
+            "zypper info --requires jq",
+            Ok(DryRunOutput {
+                stdout: fixture.into_bytes(),
+                stderr: vec![],
+            }
+            .into()),
+        );
+        let exec = CommandExecutor::with_layer(true, false, mock, vfs, Arc::new(DashMap::new()));
+        let mut core = apt_like_core_named("zypper", exec);
+        core.config.depends_args = Some(vec!["info".into(), "--requires".into(), "{name}".into()]);
+
+        let deps = core.get_dependencies("jq").await.unwrap();
+
+        for junk in [
+            "Loading",
+            "Reading",
+            "No",
+            "Information",
+            "openSUSE",
+            "openSUSE-Tumbleweed-Oss",
+            "jq-1.8.2-1.3.src",
+            "[4]",
+            "A",
+            "JSON",
+            "not",
+        ] {
+            assert!(
+                !deps.iter().any(|d| d == junk),
+                "`{junk}` is a word zypper printed, not a package it requires — got {deps:?}"
+            );
+        }
+        assert_eq!(
+            deps,
+            vec![
+                "libc.so.6(GLIBC_2.38)(64bit)".to_string(),
+                "libonig.so.5()(64bit)".to_string(),
+                "libjq.so.1()(64bit)".to_string(),
+                "libjq1".to_string(),
+            ],
+            "only the four lines under `Requires` are requirements"
+        );
     }
 
     fn queryable_with(

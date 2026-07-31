@@ -28,7 +28,6 @@ pub mod vscode;
 pub mod web;
 pub mod xbps;
 
-#[cfg(target_os = "windows")]
 pub mod psresource;
 
 pub mod brew;
