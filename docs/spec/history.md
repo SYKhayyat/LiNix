@@ -87,10 +87,22 @@ newlines in it is one line to `lines()` and winget draws its spinner with bare c
 And the grammar's punctuation family is pinned as a family: every mark `looks_like_expression`
 fires on is asserted against a qualified line, so the next one needs no third discovery.
 
-**The BOM itself is raised, not fixed.** LiNix still reads U+FEFF as part of the first backend
-name, so the config does not work — only the diagnosis improved. Whether a leading BOM should be
-stripped is user-visible behaviour and therefore the owner's, and it is the one question this
-round leaves open.
+**The BOM was raised, and ruled the same day — `Q22`.** The message fix came first and the
+behaviour was left for the owner, because reading a file LiNix used to refuse is visible from
+outside the program. **RULED: read it.** A leading mark is stripped where config text enters a
+parser — `parse_document` for the line files, `gated::read_inner` for `priority` and `active`,
+and both TOML readers — never where a file is *read*, because `edit.rs` reads the same files in
+order to append to them and II.16 forbids rewriting a user's file, encoding included. Only at
+the start: a U+FEFF mid-line is still refused by name, and that is the control test. Rule in
+II.1, reason in **V.112**.
+
+Two things worth keeping from building it. **The preferences case was already green** — the
+`toml` crate tolerates a BOM — so that assertion is a pin rather than a repair, and the test says
+so instead of counting itself among the fixes. And **one of the new oracles was wrong**: the
+preferences test first asked `linix policy`, which reports install/change rules and would never
+have printed the setting it claimed to check. It failed, which is the only reason it was caught —
+a check that cannot see the thing it names is the round-6 lesson arriving in the round-8 fix for
+it.
 
 **Two shell lessons worth keeping.** There are no locals in a POSIX shell: `harness-logic-test.sh`
 lifts function bodies and runs them against globals of its own, so naming a parameter `_rlog`

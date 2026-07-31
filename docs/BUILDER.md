@@ -1468,9 +1468,10 @@ longer refuses with two identical-looking names; a width cap on a failed command
 because a stream with no newlines is one line; and the punctuation family pinned so the next
 `\ | & (` case needs no third discovery.
 
-**One question left for the owner:** a UTF-8 BOM — what Windows Notepad writes — is still read
-as part of the first backend name, so the config fails. Only the message was fixed. Stripping a
-leading BOM is user-visible behaviour and is not the builder's call.
+**The one question was asked and ruled the same day — `Q22`:** a UTF-8 BOM, what Windows
+Notepad writes, was read as part of the first backend name. **RULED: read the file.** Stripped at
+the parser (never at the read — `edit.rs` rewrites these files and II.16 forbids changing their
+encoding), only at the start, and a mid-line U+FEFF is still refused by name. II.1 + V.112.
 
 **What this round did NOT do**, so the next grader does not have to re-derive it:
 
