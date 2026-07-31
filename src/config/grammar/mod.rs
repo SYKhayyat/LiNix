@@ -242,6 +242,7 @@ pub fn strip_comment(line: &str) -> &str {
 
 /// Parse a whole file body.
 pub fn parse_document(file: &Path, body: &str, backends: &dyn BackendNames) -> Result<Document> {
+    let body = crate::config::without_bom(body);
     let mut lines = body.lines().enumerate().peekable();
     let items = parse_items(file, &mut lines, backends, false)?;
     Ok(Document { items })

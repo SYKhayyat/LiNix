@@ -1,4 +1,4 @@
-# The decision register — all 130, and none of them open
+# The decision register — all 131, and none of them open
 **One file, six features, nothing waiting on a ruling.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **128** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **129** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,7 +73,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**None is open.** All 130 are accounted for: **128 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**None is open.** All 131 are accounted for: **129 ANSWERED, 2 PARKED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -266,6 +266,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q19** | A changed `@quota` or `@size` did nothing on the next sync — RULED 2026-07-31: it resizes, and shrinking needs `@allow_shrink` on the line. | 2026-07-31 |
 | **Q20** | A changed `@classic` did nothing either — RULED 2026-07-31: same answer. Relaxing confinement converges; narrowing it is refused, because only remove-and-reinstall can. | 2026-07-31 |
 | **Q21** | Is converging-on-change a property of *every* option, or of the five that happen to have it — RULED 2026-07-31: every option, proved per option. | 2026-07-31 |
+| **Q22** | A config file saved by a Windows editor starts with a byte-order mark, which became part of the first name — refuse it, or read the file? — RULED 2026-07-31: **read it.** The mark is stripped where text enters a parser. | 2026-07-31 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -4263,3 +4264,39 @@ is the defect `Q18` existed to prevent, arriving one layer in. So:
 option a backend reads is unaudited against this rule — `PACKAGE_OPTION_KEYS` and
 `capability.rs`'s tables are the list to work from, and the work is in `plan.md`'s Tier 0. The
 grader carries the same sweep as §3.5, because it is the check and this entry is the obligation.
+
+## Q22
+
+**Status: ANSWERED — ruled 2026-07-31.** Raised by the round-8 builder after reading `linix eval`
+on a module saved the way Windows saves files.
+
+**Q22 — A config file that begins with a byte-order mark: refuse it, or read it?**
+
+Notepad writes UTF-8 **with** a BOM by default, and so does PowerShell 5.1's `Set-Content
+-Encoding utf8` — the editor and the shell this project is developed in. The three bytes are an
+encoding artefact: no editor displays them, and the user has no way to see what is wrong.
+LiNix read them as part of the first name on the first line:
+
+```text
+$ linix eval
+Error: .../modules/starter.txt:1: `<U+FEFF>cargo` is not a backend LiNix uses
+  add `<U+FEFF>cargo` to your `priority` file, or check the spelling.
+```
+
+Two names that render identically, and advice the user has already followed. The alternative to
+reading the file was refusing it by name — *"this file begins with a byte-order mark; save it as
+UTF-8 without one"* — which is loud, honest, and makes every Windows user's first config fail.
+
+**RULED (owner, 2026-07-31): read it.** A leading BOM is stripped where config text enters a
+parser, for every file: modules, profiles, `priority`, `active`, `vars`, `schedules`,
+`preferences.toml` and the settings file. The rule is II.1's, the reason is `V.112`.
+
+**Only the mark, and only at the start.** A U+FEFF anywhere else in a line is a zero-width
+character that nothing but a paste puts there, and it is still refused by name — stripping every
+occurrence would be the silent repair this codebase exists as a reaction to. The refusal names
+the codepoint rather than drawing it, which is the same session's fix to `GrammarError`.
+
+**Where it is applied is part of the ruling.** At the parser, not at the read: `model/edit.rs`
+reads the same files in order to rewrite them, and II.16 says LiNix must not rewrite your files
+— which includes their encoding. A file that arrived with a mark keeps it.
+

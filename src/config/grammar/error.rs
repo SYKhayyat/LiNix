@@ -104,6 +104,18 @@ impl fmt::Display for GrammarError {
     }
 }
 
+impl std::error::Error for GrammarError {}
+
+pub type Result<T> = std::result::Result<T, GrammarError>;
+
+/// The whole message survives the crossing — origin and hint included. A grammar error that
+/// reaches the user as "invalid config" has thrown away the two things it was built to say.
+impl From<GrammarError> for crate::core::Error {
+    fn from(e: GrammarError) -> Self {
+        crate::core::Error::Config(e.to_string())
+    }
+}
+
 #[cfg(test)]
 mod display_tests {
     use super::*;
@@ -128,15 +140,3 @@ mod display_tests {
         }
     }
 }
-
-/// The whole message survives the crossing — origin and hint included. A grammar error that
-/// reaches the user as "invalid config" has thrown away the two things it was built to say.
-impl From<GrammarError> for crate::core::Error {
-    fn from(e: GrammarError) -> Self {
-        crate::core::Error::Config(e.to_string())
-    }
-}
-
-impl std::error::Error for GrammarError {}
-
-pub type Result<T> = std::result::Result<T, GrammarError>;

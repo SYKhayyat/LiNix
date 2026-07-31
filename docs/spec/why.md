@@ -2270,3 +2270,34 @@ The safety ledger got stronger by the same move. `remove_shim` had been accounte
 inheritance — *its only caller runs inside a plan the guard already enforced* — which is a
 sentence about paths, of the kind this repo has learned to distrust. It is now counted by
 `guard::enforce_extras` over the drift set, like every other resource that can be taken away.
+
+**V.112 — Why a byte-order mark is read rather than refused.** *(Owner ruling, 2026-07-31 —
+Q22.)* Every other rule in this document leans the same way: **fail loud, never silent.** This
+one goes the other way, and the reason is that the loud failure has nobody to talk to.
+
+A refusal teaches a rule the user can act on — *"`link:` needs a `@target=`"* names a thing they
+typed. A BOM is not a thing they typed. Notepad writes it, PowerShell 5.1's `Set-Content
+-Encoding utf8` writes it, no editor displays it, and the file looks correct in every tool the
+user has. The refusal LiNix actually produced was the proof:
+
+```text
+`<U+FEFF>cargo` is not a backend LiNix uses
+  add `<U+FEFF>cargo` to your `priority` file, or check the spelling.
+```
+
+— and before the same session's `printable` fix, those two names rendered *identically*. The
+advice was to do the thing the user had already done. A message that cannot be acted on is not a
+loud failure; it is a silent one with more words.
+
+**So the line is drawn at what the byte means, not at how loud the outcome is.** A BOM at the
+start of a file is an encoding artefact — the editor's, not the author's — and reading past it is
+what every other tool that reads text files does. A U+FEFF *inside* a line is different: nothing
+puts one there but a paste from a web page, it is invisible where it stands, and it is still
+refused by name. Stripping every occurrence would be the silent-repair habit this codebase is a
+reaction to, and it would hide a real trojan-source vector one codepoint away from U+202E.
+
+**And it is applied at the parser, never at the read.** `model/edit.rs` reads these same files in
+order to append to them, and II.16 says LiNix must not rewrite your files. That includes their
+encoding: a file that arrived with a mark keeps it. Stripping at the read would have quietly
+re-encoded a user's config the first time any command touched it, which is a bigger promise
+broken than the one being fixed.

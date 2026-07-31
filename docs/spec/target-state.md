@@ -45,6 +45,14 @@ backend and the program it now runs, and `check health` answers for the replacem
 for the built-in it displaced. Snapshot providers, init systems and secret stores are unchanged —
 they still never shadow a built-in.
 
+**Every file above may begin with a byte-order mark, and it is read anyway** (Q22). Notepad
+writes one by default and no editor shows it, so before this the three bytes became part of the
+first name on the first line and the refusal named two strings that render identically. The mark
+is stripped where text enters a parser — never where a file is read, because `edit.rs` reads
+these same files in order to rewrite them and II.16 forbids LiNix rewriting your files, encoding
+included. **Only at the start**: a zero-width character anywhere else is still refused by name
+(V.112).
+
 **LiNix's data** — `$LINIX_DATA_DIR` or the platform data dir. **Never in git. Never in a
 folder LiNix scans.**
 

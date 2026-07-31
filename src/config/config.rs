@@ -618,7 +618,7 @@ impl Config {
         // says only "line 17" — of which of several files, it does not say. A key deleted in
         // the rewrite (NO LEGACY) is still on disk in configs written by an older build, so
         // this is the first thing a returning user meets.
-        let mut config: Self = toml::from_str(&content).map_err(|e| {
+        let mut config: Self = toml::from_str(super::without_bom(&content)).map_err(|e| {
             Error::Config(format!(
                 "{} is not readable:\n{}\nDelete the line it names — the key no longer \
                  exists, and LiNix refuses a setting it would otherwise silently ignore.",

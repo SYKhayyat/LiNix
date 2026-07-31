@@ -75,6 +75,8 @@ fn read_inner(
     facts: Option<&HostFacts>,
     vocab: &Vocabulary,
 ) -> Result<Vec<GatedLine>> {
+    // `priority` and `active` both arrive here, so Q22's rule is applied once for both.
+    let body = crate::config::without_bom(body);
     let mut out: Vec<GatedLine> = Vec::new();
     let mut gate: Option<(String, bool)> = None;
     // The entry whose `{ }` body is open, and the header it was opened with.

@@ -80,7 +80,7 @@ impl Settings {
     }
 
     fn parse(text: &str, path: &Path) -> Result<Self> {
-        let table: toml::Table = toml::from_str(text)
+        let table: toml::Table = toml::from_str(crate::config::without_bom(text))
             .map_err(|e| Error::Config(format!("{} is not valid TOML: {}", path.display(), e)))?;
 
         for key in table.keys() {
