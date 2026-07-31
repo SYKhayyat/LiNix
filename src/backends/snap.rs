@@ -87,7 +87,7 @@ fn install_args(spec: &PackageSpec) -> Vec<String> {
 const RISK_ORDER: &[&str] = &["stable", "candidate", "beta", "edge"];
 
 fn risk_rank(channel: &str) -> Option<usize> {
-    let risk = crate::backends::artifact::capability::channel_risk(channel);
+    let risk = crate::backends::capability::channel_risk(channel);
     RISK_ORDER.iter().position(|r| *r == risk)
 }
 
@@ -127,7 +127,7 @@ impl SnapInstallable {
             .ok()?;
         out.lines()
             .find_map(|l| l.strip_prefix("tracking:"))
-            .map(|v| crate::backends::artifact::capability::channel_risk(v).to_string())
+            .map(|v| crate::backends::capability::channel_risk(v).to_string())
     }
 }
 
@@ -253,7 +253,7 @@ impl Queryable for SnapQueryable {
             // D13: the channel this snap is following, so a `@channel` change is visible to the
             // planner. `snap info` prints `tracking:     latest/stable`.
             if let Some(v) = line.strip_prefix("tracking:") {
-                let risk = crate::backends::artifact::capability::channel_risk(v.trim());
+                let risk = crate::backends::capability::channel_risk(v.trim());
                 p.properties.insert("channel".into(), risk.to_string());
             }
         }

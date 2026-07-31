@@ -14,6 +14,108 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-31 — `Q18` ruled: five keys the code read and the grammar refused
+
+**The question was which half of Part II was wrong, and the owner ruled it was the option table**
+— with a direction attached that shaped everything below: *broaden until everything the code can
+do can be written; never restrict the code to fit the table.* So the narrowed form the builder had
+offered (land `@size` and `@quota`, hold `@mount` back until the fstab path had been proven) was
+declined, and the fstab path was fixed and exercised instead.
+
+**`lvm:` is writable for the first time since it was merged.** `@size` on `lvm:`, `@quota` and
+`@mount` on `btrfs:` and `zfs:`, `@mount_options` on `btrfs:` — legal on the backends that read
+them, refused by name everywhere else, in the shape `@url` (U39) already used. `@options` was
+respelled `@mount_options`: no line could ever carry the old spelling, so there was nothing to
+migrate, and a key called `options` in a flat namespace is a collision waiting for the next
+feature.
+
+**The audit found three more keys in the identical state, and the third one is the lesson.**
+Every `.get("…")` against an options map was read: `snap`'s `@classic` had never reached its
+`--classic` branch, and `@shim` / `@sandbox` — which `sync` reads to decide whether a tool gets
+a PATH stand-in — were refused by the parser. **R3 deleted the imperative `shim` command in July
+and pointed at `@shim=true` on the line as the declarative way, and the change that closed the
+option table into a whitelist did not contain `shim` — so the ruling pointed at the one form that
+did not parse.** Shims were not unmakeable: a standalone `shim:NAME` statement still parsed and
+is still reconciled, which reading `app/apply/dependents.rs` settled after the first draft of this
+entry claimed otherwise. Two defensible changes, and between them a documented form no file could
+contain, every test green. The two lists are now
+one: `backends/capability.rs` (moved up out of `artifact/`, since it now answers for storage and
+confinement too) holds the table, the grammar and the install path both read it, and
+`every_scoped_option_is_a_legal_option_key` asserts the join. `validate_artifact_options` is
+`validate_backend_options` for the same reason — it stopped being about artifacts three keys ago.
+
+**Making `@mount` reachable exposed what the fstab code had been doing, unexecuted, since it was
+written.** It dropped every fstab line *containing* the mount point as a substring — declaring
+`/mnt` would have deleted `/mnt/data`, `/mnt/home` and any comment naming the path. It wrote
+`subvol=` as the declared path rather than the path from the filesystem root, which is the same
+offset bug `list` had been fixed for the day before, mirrored, and produces an entry that mounts
+nothing on any machine whose root is a subvolume — which is Fedora, openSUSE and Garuda by
+default. Removal left the entry behind, and an fstab line naming a subvolume that no longer
+exists stops the next boot in the initramfs. All three fixed, with the logic in pure functions so
+the tests need no root: field-wise matching, the `subvol_arg` inverse of `subvolume_paths`, and a
+removal that takes the entry and unmounts *before* deleting, because a mounted subvolume cannot
+be deleted.
+
+**Running it found three more, and none of them was findable by reading.** The first real
+`@mount=` on a real filesystem failed on `Could not determine BTRFS UUID`, twice, for two
+different reasons stacked on each other: the parser wanted a line *starting* `uuid:` when the
+report reads `Label: none  uuid: …`, and once that was fixed it was still asking
+`btrfs filesystem show` about the **subvolume**, which answers `not a valid btrfs filesystem` —
+it takes a filesystem, so the question can only be put at the mount point. `subvol_arg` already
+knew the mount point and was throwing it away. Third: `info()` — which is what the *planner*
+asks, not `list_installed` — answered `Path::exists`, so any directory was an installed
+subvolume and the `Package` it built carried no properties at all. It goes through the listing
+now, like `zfs:` and `lvm:` always did.
+
+**A half-applied storage declaration used to report itself as satisfied for ever.** The failed
+mount left the subvolume created; the name was therefore present; `sync` said *already up to
+date* over a declaration it had never finished. So a declared `@mount=` that does not match what
+the machine reports is drift now, in `spec_is_missing` beside `@version` and `@channel` (D13).
+**Mounted nowhere is a state, not an unknown** — the first draft copied D13's leave-unreadable-
+alone rule and put the whole bug straight back, because "not mounted" is exactly what an absent
+mountpoint means. Re-applying is idempotent, so being wrong costs a repeated no-op; the other
+reading costs a mount that never happens.
+
+**And `@mount` gives one subvolume a second name, which `list` now collapses.** A subvolume
+mounted elsewhere is reachable by two paths and the second is undeclared — `remove-orphans` would
+have offered to destroy the volume the user had just declared, under its other path. Identity is
+the device plus the path from that filesystem's root; the name reported is the one reached through
+the mount closest to the filesystem root. **Not the shortest name**, which was the first rule
+written and was wrong: `/srv` is shorter than `/mnt/fs/data`, and answering it would have left the
+declaration looking unfulfilled and `sync` re-creating the subvolume every run — the 2026-07-30
+bug from the opposite side, caught by writing the harness canary before believing the rule.
+
+**`lvm:` then failed for a reason that was not LiNix, and proving that was the point.** The
+lifecycle refused with `/dev/linixvg/canary: not found: device not cleared` — and a hand-run
+`lvcreate` with the identical argv failed the same way, which is how it was ruled out as a
+product defect in one command. The image had *meant* to handle this: it `sed`-ed three udev keys
+in `/etc/lvm/lvm.conf` from `= 1` to `= 0`, but Ubuntu ships them **commented out**, so the sed
+matched nothing — and the `grep` that was supposed to prove it had worked matched the comments
+and passed. **A build-time check that cannot fail.** The settings now go in `lvmlocal.conf`,
+which is read after `lvm.conf` and cannot be silently outvoted, and 13c probes with a real
+volume made and destroyed before it claims lvm has a canary, so a container that cannot make one
+says so in its own words instead of looking like a LiNix bug (Q17's rule).
+
+**Measured, on real devices: `pass=274 fail=0 soft=7`**, and the storage image's real-lifecycle
+floor goes 3 → 5 — apt, github, btrfs, cargo, lvm. `zfs` is still not among them, because this
+kernel has no ZFS module, which `Q4` counts as a release blocker rather than an exemption.
+
+**The deliberately-red job is green and gates every push.** `lvm:VG/LV@size=64M` was written the
+way Part II said it should be and failed by name every run, on purpose, for a day; `btrfs`'s
+canary now carries `@quota` and `@mount` so the fstab code runs on a real filesystem rather than
+being legal on paper. The storage job moved out of the nightly schedule, which is what its own
+comment said to do the moment this was ruled.
+
+**One thing was raised rather than decided: `Q19`.** `@mount` converges, and `@quota` / `@size`
+do not — editing a declared size changes nothing on the next sync. Re-applying a quota is a safe
+idempotent property write; honouring a changed `@size` on `lvm:` means `lvextend` to grow, and
+its mirror image **destroys data**. A declaration that may resize a filesystem, and whether
+shrinking is refused by name, is the owner's call and not a comparison to bolt on, so it is in
+the register with the recommendation and not in the code.
+
+Ruled in `decisions.md` `Q18`, `target-state.md` II.2 and the storage paragraph, `why.md` V.106,
+all in the commit that carries the code.
+
 ## Session 2026-07-30 (third) — the round-6 orders: a typo that installs software, and three checks that were wrong before the code was
 
 `docs/GRADE-2026-07-30-round-5.md` graded the tree **B−** for entirely different reasons than the

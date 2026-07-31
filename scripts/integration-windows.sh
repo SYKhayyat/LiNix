@@ -722,7 +722,13 @@ no_lifecycle_reason() {
         emacs)      echo "installs a package into the developer's real Emacs profile" ;;
         mise|asdf)  echo "rewrites the host's tool-version shims" ;;
         web|appimage) echo "installs from a pasted URL; no stable public canary — smoked in 13" ;;
-        btrfs)      echo "a snapshot provider, not an install target" ;;
+        # It IS an install target — `btrfs:PATH` runs `subvolume create` — and the sentence that
+        # stood here until 2026-07-31 ("a snapshot provider, not an install target") is the one
+        # that kept three destructive backends unrun for months. The Linux harness was corrected
+        # on 2026-07-30 and this copy was not, which is the twin-site failure this repo keeps
+        # finding. What actually excuses it is the machine, not the backend: creating a subvolume
+        # needs a real btrfs filesystem, and Windows has none to give.
+        btrfs|lvm|zfs) echo "$1 needs a real block device on a Linux filesystem; the privileged \`storage\` image lifecycles it for real, and this host cannot" ;;
         *)          echo "" ;;
     esac
 }
@@ -950,6 +956,13 @@ smoke_pkg() {
         vscode)   echo "ms-python.python" ;;
         flatpak)  echo "org.freedesktop.Platform" ;;
         helm)     echo "secrets@url=https://github.com/jkroepke/helm-secrets,unverified" ;;
+        # The storage effectors get the same plan-smoke as everything else, carrying the options
+        # that make them declarations rather than bare names (Q18). This host has no such
+        # filesystem, which is what a plan-smoke is for: the grammar, the planner and the argv
+        # are exercised without a device.
+        btrfs)    echo "/mnt/fs/data@quota=10G,mount=/srv" ;;
+        lvm)      echo "vg0/data@size=10G" ;;
+        zfs)      echo "tank/data@quota=10G,mount=/mnt/data" ;;
         web)      echo "https://example.invalid/tool.tar.gz" ;;
         appimage) echo "https://example.invalid/tool.AppImage" ;;
         *)        echo "$PKG" ;;
@@ -977,9 +990,6 @@ for be in $ALL_BACKENDS; do
             answers "setting: a setting statement parses" smoke_lx check
             ok "setting: and reaches a plan" smoke_lx --dry-run sync
             : > "$SMOKE_CFG/modules/base.txt"
-            echo "$be" >> "$LEDGER/be-smoke"; continue ;;
-        btrfs)
-            ok "btrfs: the snapshot verb runs" smoke_lx snapshot list
             echo "$be" >> "$LEDGER/be-smoke"; continue ;;
     esac
     sp="$(smoke_pkg "$be")"

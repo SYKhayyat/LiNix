@@ -27,10 +27,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get update && apt-get install -y --no-install-recommends zfsutils-linux || true
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 ENV PATH="/root/.cargo/bin:${PATH}"
-# LVM inside a container: the default config wants udev to populate /dev, and there is no udev
-# here, so every lvcreate would hang waiting for a device node that nobody is going to make.
-RUN sed -i 's/^\( *\)udev_sync = 1/\1udev_sync = 0/; s/^\( *\)udev_rules = 1/\1udev_rules = 0/; s/^\( *\)obtain_device_list_from_udev = 1/\1obtain_device_list_from_udev = 0/' /etc/lvm/lvm.conf \
-    && grep -E 'udev_sync|udev_rules|obtain_device_list_from_udev' /etc/lvm/lvm.conf
+# LVM inside a container: the default config wants udev to populate /dev, there is no udev here,
+# and /dev is a tmpfs rather than a devtmpfs — so `lvcreate` builds the volume, goes to zero the
+# first bytes of it, finds no device node and aborts:
+#
+#     /dev/linixvg/canary: not found: device not cleared
+#     Aborting. Failed to wipe start of new LV.
+#
+# **This was already meant to be handled and was not.** The previous version `sed`-ed the three
+# keys in `/etc/lvm/lvm.conf` from `= 1` to `= 0` — but Ubuntu ships them *commented out*, so the
+# sed matched nothing, and the `grep` that was supposed to prove it worked matched the comments
+# and passed. A build-time check that cannot fail is worse than none: it is why `lvm:` failed its
+# first real lifecycle for a reason that had nothing to do with LiNix (measured 2026-07-31 — a
+# hand-run `lvcreate` fails identically, and with these settings LiNix's own argv succeeds).
+#
+# `lvmlocal.conf` is read after `lvm.conf` and is the documented place for host overrides, so
+# these cannot be silently outvoted by the distribution's file.
+RUN printf 'activation {\n\tudev_sync = 0\n\tudev_rules = 0\n\tverify_udev_operations = 0\n}\ndevices {\n\tobtain_device_list_from_udev = 0\n}\nglobal {\n\tnotify_dbus = 0\n}\n' > /etc/lvm/lvmlocal.conf \
+    && grep -qE '^\s*udev_sync = 0' /etc/lvm/lvmlocal.conf \
+    && grep -qE '^\s*verify_udev_operations = 0' /etc/lvm/lvmlocal.conf \
+    && cat /etc/lvm/lvmlocal.conf
 # The index, last, for the same reason as every other image: without it `search` answers nothing
 # and the apt half of this sweep is not testing apt.
 RUN apt-get update

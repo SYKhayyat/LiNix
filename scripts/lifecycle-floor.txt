@@ -49,8 +49,14 @@ container-linux-arch-local 7
 container-linux-alpine-local 7
 container-linux-tools-local 25
 # Added 2026-07-31, each read off that image's own first green run rather than estimated. The
-# `storage` image is the only one that needs `--privileged` and the host's /lib/modules; its 3
-# are apt, github and btrfs, and it will rise to 4 when `Q18` unblocks `lvm`.
+# `storage` image is the only one that needs `--privileged` and the host's /lib/modules.
+#
+# Raised 3 → 5 the same day, on the first run of that image with NO failures (pass=274 fail=0):
+# apt, github, btrfs, cargo and lvm. `lvm` is the one `Q18` unblocked — it had no legal
+# declaration at all until the option table admitted `@size` — and `btrfs`'s canary now carries
+# `@quota` and `@mount` as well, so the number covers the mount path and not just creation.
+# `zfs` is still not in it: this kernel has no ZFS module, which `Q4` counts as a release
+# blocker rather than an exemption.
 container-linux-opensuse-local 7
 container-linux-void-local 9
-container-linux-storage-local 3
+container-linux-storage-local 5

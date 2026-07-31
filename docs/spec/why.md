@@ -2042,3 +2042,79 @@ it safe. The line the rule draws is therefore not "did the user name the destina
 "**is the file the description or the thing described**", and that reading is why `export` lands
 with `bundle`: a Brewfile is something you hand to brew, not something you read to find out what
 LiNix would do.
+
+**V.106 — Why the option table and the keys backends read are one list.** *(Owner ruling,
+2026-07-31 — Q18.)* Part II said both things at once: its option table permitted fifteen keys,
+and its storage paragraph said a volume "has a size and a mountpoint". Both halves were
+implemented faithfully, which is how `lvm:` came to be **unwritable by construction** — the
+backend refused every line without `@size` because `lvcreate` has no default size, and the parser
+refused every line with one. The backend's own error told the user to write a line the grammar
+rejected, and there was no third form. It had been that way since the day it was merged, and
+nothing noticed because a backend that operates on block devices was excused from every harness
+until Q17 gave it a privileged container.
+
+**The table was the half that was wrong, and the fix is the join rather than the four keys.**
+`PACKAGE_OPTION_KEYS` and the keys backends actually read were two lists with nothing holding
+them together, so the same defect was sitting on three more keys nobody had looked for: `snap`'s
+`@classic` (its `--classic` branch had never executed), and `@shim` / `@sandbox`, which `sync`
+reads to decide whether a tool gets a PATH stand-in. That last one is the one to remember. **R3
+deleted the imperative `shim` command in July and pointed at `@shim=true` on the package line as
+the declarative way to ask for one** — and a different change in the same month closed the option
+table into a whitelist that did not contain `shim`. So the ruling pointed at the one form that
+did not parse. It did not leave shims unmakeable, and the first draft of this entry claimed it
+had: a standalone `shim:NAME` statement still parses and is still reconciled, which reading
+`app/apply/dependents.rs` settled. The lesson survives the correction, because the shape is the
+same one and it is the shape that matters: **two changes, each defensible alone, and between them
+a documented form that no file could contain** — while every test stayed green, because nothing
+asserted that the keys the code reads and the keys a line may carry are the same keys. The join
+is now `backends/capability.rs`, one table read by the grammar and by the install path, with a
+test across it.
+
+**Why scoped and not simply permitted.** A key legal everywhere is a key that lies on most lines:
+`apt:curl@quota=10G` would read as the machine having been told something when nothing anywhere
+would act on it, and the option-nobody-reads class is the one II.2 exists to refuse. So each key
+is legal exactly where something reads it and refused by name elsewhere, in the shape `@url`
+(U39) already uses.
+
+**Why the mount half shipped with the rest, and what it cost.** The narrower option was to land
+`@size` and `@quota` and leave `@mount` refused until the fstab path had been proven. The owner
+ruled against narrowing: broaden until everything the code can do can be written. That is the
+right call and it was not the cheap one, because making `@mount` reachable exposed the state the
+fstab code was actually in — it dropped every fstab line *containing* the mount point as a
+substring, so declaring `/mnt` would have deleted `/mnt/data` and `/mnt/home`; it wrote `subvol=`
+as the declared path rather than the path from the filesystem root, which is the same offset bug
+`list` had been fixed for one day earlier, mirrored; and removal left the entry behind. **An fstab
+entry that outlives its subvolume is not untidy — it is a machine that stops in the initramfs at
+the next boot**, so the entry now goes before the volume does, in that order, and the mount is
+released first because a mounted subvolume cannot be deleted. A key made legal over code in that
+condition would have been a footgun with a specification blessing it.
+
+**The general lesson is what "unexecuted" is worth as evidence, which is nothing.** Every defect
+above was in code that compiled, read plausibly, and had never once run. Reading it found the
+substring match and the missing removal; *running* it found three more — a UUID parser that
+wanted a line starting `uuid:` from a report that says `Label: none  uuid: …`; the same query
+put to the subvolume when `btrfs filesystem show` only answers for a filesystem; and `info()`,
+which is what the planner actually asks, answering `Path::exists` so that any directory was an
+installed subvolume. No amount of review would have produced the third one, because it is only
+wrong in company. **A backend that has never been executed has not been reviewed, it has been
+proofread.**
+
+**And a declaration must be able to tell that it was only half applied.** The failed mount left
+the subvolume created, so the name was present, so `sync` reported *already up to date* over
+work it had never finished — for ever. A declared `@mount=` that does not match what the machine
+reports is drift now, in the same place `@version` and `@channel` are decided. **Mounted nowhere
+is a state, not an unknown**: the first draft copied D13's rule of leaving an unreadable value
+alone and thereby restored the whole bug, because an absent mountpoint is not an unreadable one —
+it is the machine saying no. Re-applying a mount is idempotent, so the cost of being wrong in
+this direction is a repeated no-op, and the cost in the other is a declaration that never comes
+true.
+
+**And one more thing `@mount` creates: a second name for one object.** A subvolume mounted
+somewhere else is reachable by two paths, and the second one is undeclared — `remove-orphans`
+would have offered to destroy the volume the user had just declared, under its other name. `list`
+now answers one package per subvolume, identified by the device it lives on plus its path from
+that filesystem's root, and reports it by the name reached through the mount closest to the
+filesystem root. Not the *shortest* name, which was the first thing tried and is wrong: a mount
+at `/srv` is shorter than `/mnt/fs/data`, and answering `/srv` would leave the declaration
+looking unfulfilled and `sync` re-creating it on every run — the 2026-07-30 bug arriving from the
+opposite direction.

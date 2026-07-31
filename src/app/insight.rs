@@ -470,7 +470,7 @@ pub struct Declared {
 /// The absent tag is the built-in default: `to_spec` writes the tag only when a level above
 /// it answered.
 fn format_choice(backend: &str, options: &HashMap<String, String>) -> Option<String> {
-    if !crate::backends::artifact::capability::selects_artifacts(backend) {
+    if !crate::backends::capability::selects_artifacts(backend) {
         return None;
     }
     let read = crate::backends::artifact::ArtifactOptions::read(options).ok()?;
@@ -579,7 +579,7 @@ async fn declarations_of(app: &App, backend: &str, name: &str) -> Result<Declare
 /// declaration installed several files (`@asset=all`), the first is shown — they were all
 /// chosen by the same rule, which is the thing being explained.
 fn artifact_selection(app: &App, backend: &str, name: &str) -> Option<(String, String)> {
-    if !crate::backends::artifact::capability::selects_artifacts(backend) {
+    if !crate::backends::capability::selects_artifacts(backend) {
         return None;
     }
     let path = app

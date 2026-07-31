@@ -86,7 +86,7 @@ impl Priority {
                 // The same rules as a declaration's options: an option on a backend that
                 // cannot read it is an error here too, or `priority` becomes the one file
                 // where a line that does nothing is legal.
-                crate::config::grammar::statement::validate_artifact_options(
+                crate::config::grammar::statement::validate_backend_options(
                     &Origin::new(file, entry.line),
                     Some(entry.text.as_str()),
                     &entry.options,

@@ -1492,7 +1492,7 @@ fn register_helm(reg: &mut BackendRegistry, executor: &CommandExecutor) {
     // Helm plugins are installed individually and pull in no plugin dependencies.
     cfg.manual = ManualListing::AllInstalled;
     cfg.install_source_option =
-        crate::backends::artifact::capability::install_source_key("helm").map(Into::into);
+        crate::backends::capability::install_source_key("helm").map(Into::into);
     cfg.install_args = vec!["plugin".into(), "install".into()];
     cfg.remove_args = vec!["plugin".into(), "uninstall".into()];
     cfg.list_args = vec!["plugin".into(), "list".into()];

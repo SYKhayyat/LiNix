@@ -1334,19 +1334,32 @@ pub(crate) const PACKAGE_OPTION_KEYS: &[&str] = &[
     // U39. Legal only on a backend that installs from something other than the name, and
     // refused by name everywhere else — `capability::INSTALLS_FROM_SOURCE` is the one table.
     "url",
+    // A shim is a PATH stand-in that forwards to a managed tool. `@shim=true` asks for one on
+    // the tool's own line — the form R3 named when it deleted the imperative command — and
+    // `@sandbox=true` asks for the same shim and confines `linix run` as well. Both are read by
+    // `sync`, and this table refused them until Q18, so the form the ruling pointed at was the
+    // one form that did not parse.
+    "shim",
+    "sandbox",
+    // Q18. The geometry of a declared storage object, and snap's confinement. Legal on the
+    // backends that read them and refused by name elsewhere — `capability::SCOPED_OPTIONS` is
+    // the one table, and the test beside it asserts every key there appears here.
+    "size",
+    "quota",
+    "mount",
+    "mount_options",
+    "classic",
 ];
 
-/// Options that are only meaningful on a backend that resolves one name to several
-/// downloadable artifacts, or that publishes several version streams. Each is refused by name
-/// on any other backend: an option nobody reads is a line that does nothing.
+/// Options that are only meaningful on some backends — one that resolves a name to several
+/// downloadable artifacts, one that publishes version streams, one that installs from a URL,
+/// one that carves up a disk. Each is refused by name on any other backend: an option nobody
+/// reads is a line that does nothing.
 /// Takes the backend and the options rather than a declaration, because the same rules apply
 /// to a backend's options body in `priority` (VIII.2) and one of them had to be the caller.
-pub fn validate_artifact_options(
-    origin: &Origin,
-    backend: Option<&str>,
-    o: &Options,
-) -> Result<()> {
-    use crate::backends::artifact::{capability, AssetPattern, FormatOrder};
+pub fn validate_backend_options(origin: &Origin, backend: Option<&str>, o: &Options) -> Result<()> {
+    use crate::backends::artifact::{AssetPattern, FormatOrder};
+    use crate::backends::capability;
 
     for key in ["formats", "asset", "bin"] {
         if !o.contains(key) {
@@ -1451,6 +1464,40 @@ pub fn validate_artifact_options(
                 capability::source_backends(key)
             )));
         }
+    }
+
+    // Q18's family: a key one kind of backend reads and no other can act on. Same shape as the
+    // install source above and for the same reason — on `apt` a `@quota=` would be read as the
+    // machine having been told something, when nothing anywhere would act on it.
+    for key in PACKAGE_OPTION_KEYS
+        .iter()
+        .filter(|k| capability::is_scoped_option(k))
+    {
+        if !o.contains(key) {
+            continue;
+        }
+        let Some(backend) = backend else { continue };
+        if !capability::takes_scoped_option(backend, key) {
+            return Err(GrammarError::new(
+                origin.clone(),
+                format!("`@{}` is not an option on `{}`", key, backend),
+            )
+            .with_hint(capability::scoped_option_reason(key)));
+        }
+    }
+
+    // `@mount_options` fills the option field of the fstab entry `@mount` writes. Without
+    // `@mount` there is no entry, so the key is read by nothing — the same "line that does
+    // nothing" the refusals above exist to prevent, one level in.
+    if o.contains("mount_options") && !o.contains("mount") {
+        return Err(GrammarError::new(
+            origin.clone(),
+            "`@mount_options` has no `@mount` to apply to",
+        )
+        .with_hint(
+            "it fills the option field of the fstab entry `@mount=` writes, so on its own it \
+             reaches nothing: add `@mount=/where`, or drop it.",
+        ));
     }
 
     // SEC2's two opt-outs each relax a rule, and the rules have different reach — which is why
@@ -1639,7 +1686,7 @@ fn validate_options(origin: &Origin, decl: &PackageDecl, absent: bool) -> Result
         );
     }
 
-    validate_artifact_options(origin, decl.backend.as_deref(), &decl.options)?;
+    validate_backend_options(origin, decl.backend.as_deref(), &decl.options)?;
     Ok(())
 }
 
@@ -2470,6 +2517,138 @@ mod artifact_option_tests {
             !err.hint.unwrap().contains("helm"),
             "http's refusal must not name helm as a backend that takes it"
         );
+    }
+}
+
+/// Q18's keys: the geometry of a declared storage object, snap's confinement, and the two that
+/// ask `sync` for a shim. Every one of them was read by the code and refused by the parser, so
+/// each test here is a line that could not be written at all before this ruling.
+#[cfg(test)]
+mod scoped_option_tests {
+    use super::*;
+
+    fn known(name: &str) -> bool {
+        matches!(
+            name,
+            "apt" | "cargo" | "snap" | "btrfs" | "lvm" | "zfs" | "github"
+        )
+    }
+
+    fn p(line: &str) -> Result<Statement> {
+        parse(&Origin::new("modules/dev.txt", 3), line, &known)
+    }
+
+    fn opt(line: &str, key: &str) -> String {
+        match p(line).unwrap_or_else(|e| panic!("`{}` was refused: {}", line, e)) {
+            Statement::Package(d) => d.options.one(key).unwrap_or("").to_string(),
+            other => panic!("expected a package, got {:?}", other),
+        }
+    }
+
+    /// `lvm:` was unusable by construction: `lvcreate` has no default size, so the backend
+    /// refused every line without `@size` and the parser refused every line with one. The
+    /// backend's own error told the user to write a line the grammar rejected.
+    #[test]
+    fn a_volume_can_be_given_the_size_lvm_requires() {
+        assert_eq!(opt("lvm:vg0/data@size=10G", "size"), "10G");
+        assert_eq!(opt("lvm:vg0/data@size=64M", "size"), "64M");
+    }
+
+    #[test]
+    fn a_storage_object_can_be_sized_and_mounted() {
+        assert_eq!(opt("zfs:tank/data@quota=10G", "quota"), "10G");
+        assert_eq!(opt("zfs:tank/data@mount=/srv", "mount"), "/srv");
+        assert_eq!(opt("btrfs:/mnt/fs/data@quota=5G", "quota"), "5G");
+        assert_eq!(opt("btrfs:/mnt/fs/data@mount=/srv", "mount"), "/srv");
+        assert_eq!(
+            opt(
+                "btrfs:/mnt/fs/data@mount=/srv,mount_options=noatime",
+                "mount_options"
+            ),
+            "noatime"
+        );
+    }
+
+    /// The other half of the ruling. A key that means nothing here would read as the machine
+    /// having been told something, when nothing anywhere would act on it.
+    #[test]
+    fn a_storage_option_is_refused_by_name_on_a_backend_that_cannot_read_it() {
+        for (line, key) in [
+            ("apt:curl@size=10G", "size"),
+            ("apt:curl@quota=10G", "quota"),
+            ("apt:curl@mount=/srv", "mount"),
+            ("cargo:ripgrep@mount_options=noatime", "mount_options"),
+        ] {
+            let err = format!("{}", p(line).unwrap_err());
+            assert!(
+                err.contains(&format!("`@{}` is not an option on", key)),
+                "`{}` was not refused by name: {}",
+                line,
+                err
+            );
+        }
+    }
+
+    /// The neighbours inside the family, which is where a shared table would have gone wrong: a
+    /// subvolume has no size to create at, a volume group has no quota, and ZFS keeps its mount
+    /// properties on the dataset rather than in fstab.
+    #[test]
+    fn the_storage_backends_do_not_share_each_others_options() {
+        let err = format!("{}", p("zfs:tank/data@size=10G").unwrap_err());
+        assert!(err.contains("`@size` is not an option on `zfs`"));
+        assert!(
+            err.contains("`@quota`"),
+            "a refusal that does not name the option that does work is a puzzle: {}",
+            err
+        );
+        assert!(p("btrfs:/mnt/fs/data@size=10G").is_err());
+        assert!(p("lvm:vg0/data@quota=10G").is_err());
+        assert!(p("lvm:vg0/data@mount=/srv").is_err());
+        assert!(p("zfs:tank/data@mount_options=noatime").is_err());
+    }
+
+    /// The same rule one level in. `@mount_options` fills the fstab entry `@mount` writes, so
+    /// without `@mount` it reaches nothing — which is the line-that-does-nothing class this
+    /// whole ruling is about, and it would have shipped inside the fix for it.
+    #[test]
+    fn mount_options_without_a_mount_is_refused() {
+        let err = format!(
+            "{}",
+            p("btrfs:/mnt/fs/data@mount_options=noatime").unwrap_err()
+        );
+        assert!(err.contains("`@mount_options` has no `@mount`"), "{}", err);
+        // With the mount it is exactly what it says.
+        assert_eq!(
+            opt(
+                "btrfs:/mnt/fs/data@mount=/srv,mount_options=noatime",
+                "mount_options"
+            ),
+            "noatime"
+        );
+        // And a bare `@mount` needs no options — `defaults` is what the entry gets.
+        assert_eq!(opt("btrfs:/mnt/fs/data@mount=/srv", "mount"), "/srv");
+    }
+
+    /// snap's `--classic` branch had never run: the backend read `@classic` and no line could
+    /// carry it.
+    #[test]
+    fn a_snap_can_be_declared_unconfined() {
+        assert_eq!(opt("snap:code@classic", "classic"), "true");
+        assert_eq!(opt("snap:code@classic=true", "classic"), "true");
+        let err = format!("{}", p("apt:code@classic").unwrap_err());
+        assert!(err.contains("`@classic` is not an option on `apt`"));
+    }
+
+    /// R3 deleted the imperative `shim` command and ruled `@shim=true` the only way to make a
+    /// shim. This table then refused the key, which left no way at all — a feature deleted from
+    /// one end and unreachable from the other.
+    #[test]
+    fn a_shim_can_be_asked_for_on_the_line_that_declares_the_tool() {
+        assert_eq!(opt("apt:ripgrep@shim", "shim"), "true");
+        assert_eq!(opt("cargo:just@shim=true", "shim"), "true");
+        assert_eq!(opt("apt:ripgrep@sandbox", "sandbox"), "true");
+        // Any backend: `sync` audits shims over every package it holds, not one family.
+        assert_eq!(opt("github:sharkdp/fd@shim", "shim"), "true");
     }
 }
 

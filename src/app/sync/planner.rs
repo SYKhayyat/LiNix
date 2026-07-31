@@ -555,10 +555,27 @@ impl<'a> ChangePlanner<'a> {
         // channel is *readable*: a channel we cannot read is left alone rather than refreshed
         // on every sync, which would be worse than the drift it is meant to catch.
         if let Some(want) = spec.options.get("channel") {
-            use crate::backends::artifact::capability::channel_risk;
+            use crate::backends::capability::channel_risk;
             if let Some(current) = installed.properties.get("channel") {
                 return Ok(channel_risk(current) != channel_risk(want));
             }
+        }
+        // Q18: a declared storage object that is not mounted where the line says is drift, the
+        // same shape as `@channel` above. Without this a `@mount=` that failed — or one the
+        // machine lost — is invisible for ever: the subvolume exists, so the name is present, so
+        // `sync` says "already up to date" over a declaration it never finished applying.
+        // Measured, on a real filesystem: an install whose mount half failed reported nothing
+        // wrong on every subsequent run.
+        //
+        // **Mounted nowhere is a state, not an unknown.** D13 leaves an unreadable value alone,
+        // and the first draft of this rule copied that — which put the motivating case straight
+        // back: the failed mount reports no mountpoint at all, so "no property" had to mean "not
+        // where the line says" or the declaration would never converge. Re-applying is
+        // idempotent (`mount`, `zfs set mountpoint=`), so the cost of being wrong here is a
+        // repeated no-op, while the cost of the other reading is a mount that never happens.
+        if let Some(want) = spec.options.get("mount") {
+            let current = installed.properties.get("mount").map(String::as_str);
+            return Ok(current.map(|c| c.trim_end_matches('/')) != Some(want.trim_end_matches('/')));
         }
         if spec.backend == "link" && spec.options.get("template") == Some(&"true".into()) {
             return Ok(self.template_needs_update(spec).await);

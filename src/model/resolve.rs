@@ -929,7 +929,7 @@ impl<'a> Resolver<'a> {
             // A line with no prefix could not be checked at parse time, because the backend
             // that will answer it was not known yet. It is known now, and an option nobody
             // reads is a line that does nothing (VIII.4).
-            crate::config::grammar::statement::validate_artifact_options(
+            crate::config::grammar::statement::validate_backend_options(
                 &e.declared.origin,
                 Some(e.backend.as_str()),
                 &e.declared.options,

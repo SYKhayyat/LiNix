@@ -785,8 +785,19 @@ setup_storage_devices() {
         if [ -n "$_loop" ] \
            && pvcreate -f -y "$_loop" >/dev/null 2>&1 \
            && vgcreate linixvg "$_loop" >/dev/null 2>&1; then
-            STORAGE_LVM=linixvg
-            PASS=$((PASS + 1)); echo "  PASS  lvm: volume group $STORAGE_LVM exists on $_loop"
+            # A volume group is not enough, and assuming it was cost a whole run: `lvcreate`
+            # needs a device node to zero the new volume through, and in a container with no
+            # udev and a tmpfs /dev there is nobody to make one. It aborts with "device not
+            # cleared" — a fact about the machine that reads exactly like a LiNix defect in the
+            # lifecycle below. So the probe is a real volume, made and destroyed with LiNix's
+            # own argv, and its failure is reported as the environment's (Q17).
+            if _probe="$(lvcreate -n linixprobe -L 8M linixvg 2>&1)"; then
+                lvremove -y linixvg/linixprobe >/dev/null 2>&1
+                STORAGE_LVM=linixvg
+                PASS=$((PASS + 1)); echo "  PASS  lvm: volume group $STORAGE_LVM exists on $_loop and can hold a volume"
+            else
+                soft "lvm: the volume group exists and \`lvcreate\` cannot make a volume in it, which is this container and not LiNix — $(echo "$_probe" | tr '\n' ' ')"
+            fi
         else
             soft "lvm: could not build a volume group on a loopback device here"
         fi
@@ -924,11 +935,18 @@ canary() {
         # installed as /mnt/linix-btrfs/canary came back as /canary and `sync` re-created it
         # every run. A token of `/canary` would pass either way — it is a substring of the full
         # path — so the weaker form could not tell the fix from the bug.
-        btrfs)    [ -n "$STORAGE_BTRFS" ] && echo "$STORAGE_BTRFS/canary||full|" ;;
+        #
+        # `@quota=` and `@mount=` ride along because a subvolume that is only ever created is
+        # half the backend: the mount half writes /etc/fstab, and until Q18 was ruled no line
+        # could carry the option that reaches it, so it had never run once. The mount point is
+        # deliberately NOT under $STORAGE_BTRFS — a second path to the same subvolume is what
+        # `list` has to collapse, and mounting it inside the filesystem it lives on would not
+        # produce one.
+        btrfs)    [ -n "$STORAGE_BTRFS" ] && echo "$STORAGE_BTRFS/canary||full||@quota=100M,mount=/mnt/linix-btrfs-canary" ;;
         # `@size=` is not optional: `lvm:` refuses without one, by name, and the option rides
         # in the install-only field because `lvremove` takes the volume and not the size.
         lvm)      [ -n "$STORAGE_LVM" ] && echo "$STORAGE_LVM/canary||full||@size=64M" ;;
-        zfs)      [ -n "$STORAGE_ZFS" ] && echo "$STORAGE_ZFS/canary||full|" ;;
+        zfs)      [ -n "$STORAGE_ZFS" ] && echo "$STORAGE_ZFS/canary||full||@quota=100M,mount=/mnt/linix-zfs-canary" ;;
         appimage) echo "" ;;   # a URL, not a name — smoked in 15, not lifecycled
         web)      echo "" ;;
         *)        echo "" ;;

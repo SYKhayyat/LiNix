@@ -1,4 +1,4 @@
-//! Which backends the artifact options are legal on.
+//! Which backends an option is legal on.
 //!
 //! Deliberately a static table rather than a question put to the registry. Backend
 //! *existence* is host-dependent — there is no `snap` on Windows — but "snap publishes
@@ -44,6 +44,77 @@ const HAS_CHANNELS: &[&str] = &["snap", "flatpak"];
 /// One table, read by both ends: the grammar decides the key is legal here and nowhere else,
 /// and `backends/registry.rs` builds the backend's `install_source_option` from it.
 const INSTALLS_FROM_SOURCE: &[(&str, &str)] = &[("helm", "url")];
+
+/// Options one family of backends reads and no other backend can act on: the geometry of a
+/// declared storage object (Q18), and snap's confinement. Each is legal exactly where something
+/// reads it and refused by name everywhere else.
+///
+/// **The failure this table exists to end.** Every one of these keys was read by a backend and
+/// absent from `PACKAGE_OPTION_KEYS`, so the grammar refused the only line that could reach the
+/// code — `lvm:` required `@size` and no `lvm:` line could carry one, which left the backend
+/// unwritable from the day it was merged, and `snap`'s `--classic` branch had never once run.
+/// A key a backend reads and the grammar has never heard of is dead code that reads as a
+/// feature, so the two lists are one list, asserted equal by a test below.
+///
+/// The third column is what the key means, and a refusal is that sentence plus the backends
+/// that take it — an error that says "not here" and not where is a puzzle, not a message.
+const SCOPED_OPTIONS: &[(&str, &[&str], &str)] = &[
+    (
+        "size",
+        &["lvm"],
+        "it is the size a volume is created at — a btrfs subvolume grows into its filesystem, \
+         and a ZFS dataset is bounded by `@quota` instead",
+    ),
+    (
+        "quota",
+        &["btrfs", "zfs"],
+        "it caps how much a declared storage object may use",
+    ),
+    (
+        "mount",
+        &["btrfs", "zfs"],
+        "it is where a declared storage object is mounted",
+    ),
+    (
+        "mount_options",
+        &["btrfs"],
+        "it is what the fstab entry's option field carries; ZFS keeps its mount properties on \
+         the dataset and has no such field",
+    ),
+    (
+        "classic",
+        &["snap"],
+        "it installs unconfined, which is a snap concept",
+    ),
+];
+
+/// Whether `key` belongs to one family of backends rather than to packages at large.
+pub fn is_scoped_option(key: &str) -> bool {
+    SCOPED_OPTIONS.iter().any(|(k, _, _)| *k == key)
+}
+
+/// Whether `backend` is one of the backends that reads `key`.
+pub fn takes_scoped_option(backend: &str, key: &str) -> bool {
+    SCOPED_OPTIONS
+        .iter()
+        .any(|(k, backends, _)| *k == key && backends.contains(&backend))
+}
+
+/// Why `key` exists and who takes it, for a refusal that names both.
+pub fn scoped_option_reason(key: &str) -> String {
+    SCOPED_OPTIONS
+        .iter()
+        .find(|(k, _, _)| *k == key)
+        .map(|(_, backends, meaning)| {
+            format!(
+                "{}, which only {} {}.",
+                meaning,
+                backends.join(", "),
+                if backends.len() == 1 { "takes" } else { "take" }
+            )
+        })
+        .unwrap_or_default()
+}
 
 /// The option key `backend` takes its install argument from, if it is not the name.
 pub fn install_source_key(backend: &str) -> Option<&'static str> {
@@ -167,6 +238,56 @@ mod tests {
             assert_eq!(install_source_key(backend), Some(*key));
             assert!(is_source_key(key));
         }
+    }
+
+    /// The same two ends as the test above, for the wider table (Q18). Five keys were read by a
+    /// backend and refused by the parser at once, so this asserts the join rather than any one
+    /// of them: a key that reaches no line is a feature nobody can use.
+    #[test]
+    fn every_scoped_option_is_a_legal_option_key() {
+        for (key, backends, meaning) in SCOPED_OPTIONS {
+            assert!(
+                crate::config::grammar::statement::PACKAGE_OPTION_KEYS.contains(key),
+                "`@{}` is read by {} and the grammar would refuse it",
+                key,
+                backends.join(", ")
+            );
+            assert!(!backends.is_empty(), "`@{}` is legal on nothing", key);
+            assert!(!meaning.is_empty(), "`@{}` refuses without saying why", key);
+            for b in *backends {
+                assert!(takes_scoped_option(b, key));
+            }
+            assert!(is_scoped_option(key));
+            let reason = scoped_option_reason(key);
+            assert!(reason.contains(backends[0]));
+            // One backend takes it; several take it. A refusal is read by a person.
+            assert!(
+                reason.ends_with(if backends.len() == 1 {
+                    "takes."
+                } else {
+                    "take."
+                }),
+                "`@{}`: {}",
+                key,
+                reason
+            );
+        }
+    }
+
+    #[test]
+    fn a_scoped_option_is_refused_on_a_backend_that_cannot_read_it() {
+        for b in ["apt", "cargo", "npm", "github", "brew"] {
+            for (key, _, _) in SCOPED_OPTIONS {
+                assert!(!takes_scoped_option(b, key), "{} takes @{}", b, key);
+            }
+        }
+        // The neighbours inside the family are the ones worth naming: each storage backend
+        // takes a different subset, and a table that let them share everything would put
+        // `@size` on a subvolume that has no size to set.
+        assert!(!takes_scoped_option("zfs", "size"));
+        assert!(!takes_scoped_option("btrfs", "size"));
+        assert!(!takes_scoped_option("zfs", "mount_options"));
+        assert!(!takes_scoped_option("lvm", "quota"));
     }
 
     #[test]

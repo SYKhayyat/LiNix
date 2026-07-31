@@ -250,6 +250,22 @@ take the else branch — the silent-wrongness this rule closes.
 | `unverified` | bare flag: nothing vouches for the bytes on this line. Legal wherever something otherwise would — LiNix's own `@sha256` on a downloading backend, and a manager that verifies a signature itself (`helm`). Refused where the manager's signed index answers anyway. **Never implied by `allow_http`** — over HTTP the checksum is the only thing left (SEC2). **On a tool that does not verify at all, it is accepted in silence (Q14)** — see below |
 | `health` | `port:N`, or a command that must exit 0. A failure **restores the pre-change snapshot** (XIII.5) |
 | `url` | where a `helm:` plugin is installed from. **Required on every `helm:` line** (U39) |
+| `shim` | bare flag: put a PATH stand-in for this tool in `[bin_dir]`. The form R3's ruling names — a shim asked for on the tool's own line, rather than as a separate `shim:` statement |
+| `sandbox` | bare flag: the shim above, and `linix run` confines the process |
+| `classic` | bare flag: install this snap unconfined. `snap` only |
+| `size` | the size a volume is created at. **Required on `lvm:`** — `lvcreate` has no default, so a line without one describes nothing that can be made. `lvm` only |
+| `quota` | a cap on what a declared storage object may use. `btrfs` and `zfs` only |
+| `mount` | where a declared storage object is mounted — recorded in fstab, so it survives a reboot, and taken out again when the declaration goes. `btrfs` and `zfs` only |
+| `mount_options` | what the fstab entry's option field carries. `btrfs` only — ZFS keeps its mount properties on the dataset and has no such field — and **an error without `@mount`**, since there is then no entry for it to fill |
+
+**A key one family of backends reads is legal there and refused by name everywhere else** — the
+same shape as `@url`, and for the same reason: `apt:curl@quota=10G` would read as the machine
+having been told something when nothing anywhere would act on it. The authority is
+`backends/capability.rs`, one table read by both the grammar and the install path, and a test
+across the join asserts every key a backend reads is a key this grammar accepts (Q18). That
+join is the rule, not the courtesy: five keys were read by code and refused by the parser at
+once, which made `lvm:` unwritable, `snap --classic` unreachable, and shims — declarative-only
+since R3 — impossible to declare.
 
 #### `@unverified` on a tool that does not verify (Q16's sibling — Q14, ruled 2026-07-30)
 
@@ -1625,6 +1641,15 @@ ordinary backends, a deleted line becomes drift becomes a removal through the sa
 package: a volume is protectable (`[guard] protected_packages`), it counts against `max_removals`,
 and `zfs destroy` / `lvremove` is previewed before the guard clears it (V.80). No special
 escalation — normal is already the strongest gate there is.
+
+**And a volume can be written with the size and the mountpoint this paragraph says it has**
+(Q18, ruled 2026-07-31). `@size` on `lvm:`, `@quota` and `@mount` on `btrfs:` and `zfs:`,
+`@mount_options` on `btrfs:` — see II.2's option table. Until that ruling this paragraph
+described a declaration nobody could write: the option table permitted none of them, so
+`lvm:vg0/data` was refused with a size and refused without one. A declared mount is recorded in
+fstab, which is what makes it survive a reboot, and it is taken out of fstab **before** the
+volume is destroyed — an entry that outlives its subvolume stops the next boot in the initramfs
+(V.106).
 
 **Secret decryption opens to declared providers, last and most carefully (U38).** `age` and
 `sops` stay built in; any other decrypt tool (Vault, 1Password, a KMS, GPG) is a `[[secret]]`

@@ -1270,11 +1270,11 @@ no. An excuse on the only harness that can run a backend is indistinguishable fr
   lowered again once btrfs got a device. It may only go down.
 - **CI runs all of it.** `ci.yml` hardcoded a four-distro matrix, so a new image in `run.sh`'s
   default would never have run there — the same "opt-in is how a backend stays untested" trap,
-  one layer up. `opensuse` and `void` are in the **fast** matrix now (every push); `storage` is
-  a nightly job because it is **deliberately red on `Q18`**, following the precedent the macOS
-  job sets in its own comment: a job whose first executions gate other people's commits is a job
-  that gets disabled rather than fixed. **Promote it the moment `Q18` is ruled and it goes
-  green.**
+  one layer up. `opensuse` and `void` are in the **fast** matrix now (every push); `storage` was
+  a nightly job for one day because it was **deliberately red on `Q18`**, and it joined the fast
+  set on 2026-07-31 when that ruling landed and it went green. It stays a job of its own rather
+  than a matrix leg because it is the only one needing `--privileged` and the host's
+  `/lib/modules`, and a matrix cannot vary `docker run` flags.
 - **`tests/lifecycle_coverage_union_tests.rs`** — the gate that would have caught `winget`. It
   reads both harnesses' tables and asks the one question neither sweep can: *is this backend
   reachable anywhere?* Ceiling 15, may only go down. It rejected its own author's first draft
@@ -1347,15 +1347,20 @@ immediately, for two *different* reasons, and neither is subtle:
   `Path traversal detected in name`. **Fixed** (`btrfs` added to the list; `..`, the character
   allowlist and injection blocking all still apply, and the test asserts `lvm`, `zfs` and
   `setting` are *not* widened, since their names carry a separator and never a leading one).
-- **`lvm:` still cannot be written.** It requires `@size`, and II.2's option table does not
-  permit it — the backend's own error message instructs the user to write a line the parser
-  refuses. That is **`Q18`, OPEN**, because Part II says both things and rule 4 forbids the
-  builder fixing Part II. `btrfs` and `zfs` have the same problem confined to their options
-  (`@quota`, `@mount`, `@options`), so they install by name and can never be sized or mounted.
+- **`lvm:` could not be written at all.** It requires `@size`, and II.2's option table did not
+  permit it — the backend's own error message instructed the user to write a line the parser
+  refused. That was **`Q18`**, raised rather than fixed, because Part II said both things and
+  rule 4 forbids the builder fixing Part II. `btrfs` and `zfs` had the same problem confined to
+  their options (`@quota`, `@mount`, `@options`), so they installed by name and could never be
+  sized or mounted. **RULED 2026-07-31: the table was wrong.** The keys are legal on the backends
+  that read them and refused by name elsewhere, `@options` is spelled `@mount_options`, and the
+  same audit found three more keys in the identical state — `snap`'s `@classic`, and `@shim` /
+  `@sandbox`, which R3 had made the *only* way to ask for a shim.
 
-**The lvm canary is written the way Part II says it should be and the sweep fails on it, by
-name, every run.** Do not remove the option to get a green sweep: that hides a defect in the
-program behind a change to the test.
+**The lvm canary was written the way Part II said it should be, and the sweep failed on it by
+name, every run, on purpose.** It passes now. The rule it was standing in for still holds: never
+remove an option to get a green sweep, because that hides a defect in the program behind a change
+to the test.
 
 **One observation, not yet a work order.** `tests/dry_run_every_verb_tests.rs` dominates the wall
 clock of a full `cargo test` — 30–45 minutes on the machine this project is developed on, against

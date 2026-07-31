@@ -159,9 +159,15 @@ a guess about where the value ended. In a block, everything after the first `=` 
 verbatim and trimmed — no escaping exists because none is needed.
 
 Common keys: `version`, `hold` (never upgrade), `expires` / `until` (absolute datetimes),
-`requires`, `health` (see [Safety](#safety)), the `*_install` hooks, and per-directive keys like
-`cron`/`run` on `schedule:` or `target`/`content`/`template`/`decrypt`/`identity` on `link:` —
-the last two are [Secrets](#secrets).
+`requires`, `health` (see [Safety](#safety)), `shim` (put a PATH stand-in for this tool in your
+`bin_dir`; `sandbox` does that and confines `linix run` too), the `*_install` hooks, and
+per-directive keys like `cron`/`run` on `schedule:` or
+`target`/`content`/`template`/`decrypt`/`identity` on `link:` — the last two are
+[Secrets](#secrets).
+
+Some keys belong to one family of backends and are refused, by name, anywhere else — `@classic`
+on a snap, and the storage keys below. An option no backend would read is an error rather than a
+line that quietly does nothing.
 
 **A `link:` line puts your file back when you delete it.** If the destination already held a
 file, LiNix keeps it as `<target>.linix-backup` before taking the path over; removing the
@@ -221,6 +227,31 @@ snap:code@channel=stable
 ```
 
 Both keys are errors on a backend they do not apply to, rather than being quietly ignored.
+
+### Storage you can declare
+
+A btrfs subvolume, a ZFS dataset and an LVM logical volume are declarations like any other —
+they have a size and a mountpoint rather than a version, and that is the only thing that makes
+them different:
+
+```
+btrfs:/mnt/fs/srv@quota=20G,mount=/srv
+zfs:tank/media@quota=500G,mount=/mnt/media
+lvm:vg0/data@size=100G
+```
+
+`@size` is required on `lvm:` — `lvcreate` has no default, so a volume with no size is not a
+declaration of anything. `@mount` writes the entry to `/etc/fstab`, which is what makes the
+mount survive a reboot; deleting the line takes the entry out **before** the volume is
+destroyed, because an fstab entry naming a volume that no longer exists stops the next boot.
+`@mount_options` fills that entry's option field — btrfs only, since ZFS keeps its mount
+properties on the dataset, and an error without `@mount`, because there is then no entry for it
+to fill.
+
+**Deleting one of these lines destroys a filesystem, and that goes through the ordinary removal
+guard** — no special escalation, because ordinary is already the strongest gate here. A volume
+is protectable like a package, counts against `max_removals`, and the destruction is previewed
+before the guard clears it.
 
 ### Host conditions
 

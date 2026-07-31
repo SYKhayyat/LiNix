@@ -35,6 +35,38 @@ fn zfs_set(property: &str, value: &str, name: &str) -> Vec<String> {
     vec!["set".into(), format!("{}={}", property, value), name.into()]
 }
 
+/// `zfs list -H -o name,mountpoint`, as datasets and where each is mounted.
+///
+/// `-H` separates columns with a tab and nothing else, so the split is on `\t`: a mountpoint is
+/// a path and may contain spaces.
+///
+/// A dataset reporting `none`, `legacy` or `-` has **no mountpoint ZFS is managing**, and that is
+/// recorded as no property at all rather than as those literal words — a declaration asking for
+/// `@mount=/srv` against a dataset ZFS is not mounting is unsatisfied, and the planner has to be
+/// able to see that. Reporting `legacy` as if it were a path would make the comparison false and
+/// re-run `zfs set mountpoint=` on every sync.
+fn parse_zfs_list(output: &str) -> Vec<Package> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut cols = line.split('\t');
+            let name = cols.next()?.trim();
+            if name.is_empty() {
+                return None;
+            }
+            let mut p = Package::new(name, "zfs");
+            if let Some(m) = cols
+                .next()
+                .map(str::trim)
+                .filter(|m| !matches!(*m, "" | "-" | "none" | "legacy"))
+            {
+                p.properties.insert("mount".into(), m.to_string());
+            }
+            Some(p)
+        })
+        .collect()
+}
+
 /// `zfs destroy -r <name>` — destroys the dataset and its children. The dangerous verb; it runs
 /// only after the sync guard has cleared the removal.
 fn zfs_destroy(name: &str) -> Vec<String> {
@@ -131,17 +163,14 @@ pub struct ZfsQueryable {
 #[async_trait]
 impl Queryable for ZfsQueryable {
     async fn list_installed(&self) -> Result<Vec<Package>> {
+        // `mountpoint` rides along on the listing that already runs, so `sync` can tell a
+        // declared `@mount=` that took effect from one that did not.
         let out = self
             .core
             .executor
-            .run_output("zfs", &["list", "-H", "-o", "name"], false)
+            .run_output("zfs", &["list", "-H", "-o", "name,mountpoint"], false)
             .await?;
-        Ok(out
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(|l| Package::new(l, "zfs"))
-            .collect())
+        Ok(parse_zfs_list(&out))
     }
     async fn list_manual(&self) -> Result<Vec<Package>> {
         self.list_installed().await
@@ -345,6 +374,44 @@ mod tests {
             zfs_set("mountpoint", "/mnt/data", "tank/data"),
             vec!["set", "mountpoint=/mnt/data", "tank/data"]
         );
+    }
+
+    /// The listing carries where each dataset is mounted, so `sync` can tell a `@mount=` that
+    /// took effect from one that did not. `legacy`, `none` and `-` are ZFS saying it mounts this
+    /// nowhere, and none of them is a path — reporting one as if it were would leave a declared
+    /// mountpoint looking satisfied by a word.
+    #[test]
+    fn the_dataset_listing_reads_mountpoints_and_knows_when_there_is_none() {
+        let pkgs = parse_zfs_list(
+            "tank\t/tank\n\
+             tank/data\t/mnt/data\n\
+             tank/legacy\tlegacy\n\
+             tank/hidden\tnone\n\
+             tank/blank\t-\n\
+             tank/spaced\t/mnt/my data\n\
+             \n",
+        );
+        let at = |n: &str| {
+            pkgs.iter()
+                .find(|p| p.name == n)
+                .unwrap_or_else(|| panic!("{} was not listed", n))
+                .properties
+                .get("mount")
+                .map(String::as_str)
+        };
+        assert_eq!(pkgs.len(), 6, "a blank line is not a dataset");
+        assert_eq!(at("tank/data"), Some("/mnt/data"));
+        assert_eq!(
+            at("tank/spaced"),
+            Some("/mnt/my data"),
+            "tab-separated, not whitespace"
+        );
+        // Three spellings of "ZFS is not mounting this". None is a path, so none is reported as
+        // one — a declared `@mount=` against any of them is unsatisfied, which is what the
+        // planner needs to see.
+        assert_eq!(at("tank/legacy"), None);
+        assert_eq!(at("tank/hidden"), None);
+        assert_eq!(at("tank/blank"), None);
     }
 
     #[test]

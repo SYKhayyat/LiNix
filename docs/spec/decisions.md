@@ -1,4 +1,4 @@
-# The decision register — all 127, and one of them open
+# The decision register — all 128, and one of them open
 
 **One file, six features. None open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -15,10 +15,10 @@ not in this paragraph.
 
 | status | means | what it needs | count |
 |---|---|---|---|
-| **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **1** |
-| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
+| **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
+| **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **124** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **125** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Four of these five statuses now describe nothing, and they stay.** The categories are not
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Q18`.** All 127 are accounted for: **124 ANSWERED, 2 PARKED, 1 OPEN — blocking** — and this line
+**One is open — `Q19`, and it does not block.** All 128 are accounted for: **125 ANSWERED, 2 PARKED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -223,7 +223,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **U42** | Do the overlapping command clusters get consolidated? | 2026-07-27 |
 | **U43** | How much does an ordinary run say about itself? | 2026-07-27 |
 
-### Q — the production-readiness round and the grading rounds after it — 15
+### Q — the production-readiness round and the grading rounds after it — 16
 
 *Not a proposal part. These are the questions the readiness assessment forced — behaviour a
 user notices, or a published contract — raised because `CLAUDE.md` requires a ruling for them
@@ -250,7 +250,8 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q15** | Should a command whose product is a file at a path the user named honour `--dry-run`? — RULED: **yes, except `plan`**. | 2026-07-30 |
 | **Q16** | Is a bare grammar keyword (`link`, `when`, `absent`) a package name? — RULED: **no, it is a parse error**; `list:NAME` still means the package. | 2026-07-30 |
 | **Q17** | How does a backend that mutates the real machine get its first real lifecycle? — RULED: **install and uninstall it, on the developer's own box**; and privileged containers are allowed for the storage backends. | 2026-07-30 |
-| **Q18** | **OPEN.** The storage backends read options II.2's table does not permit, so `lvm:` cannot be written at all. Which half of Part II is wrong? | — |
+| **Q18** | The storage backends read options II.2's table does not permit, so `lvm:` cannot be written at all — which half of Part II is wrong? — RULED: **the table.** The keys are added, scoped to the backends that read them. | 2026-07-31 |
+| **Q19** | **OPEN, not blocking.** A changed `@quota` or `@size` does nothing on the next sync. Does a declaration resize a volume — and may it shrink one? | — |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -3854,8 +3855,8 @@ II entry — the same shape as `Q4`, whose reason it extends. Its reason is in *
 
 ## Q18
 
-**Status: OPEN — blocking for `lvm:`, degrading for `btrfs:` and `zfs:`.** Raised 2026-07-30 by
-the first run of the storage backends in the project's history (`Q17`'s privileged image).
+**Status: ANSWERED — ruled 2026-07-31.** Raised 2026-07-30 by the first run of the storage
+backends in the project's history (`Q17`'s privileged image).
 
 **Q18 — The storage backends read options the grammar refuses. Which half of Part II is wrong?**
 
@@ -3916,13 +3917,116 @@ The options:
   LEGACY` and *prefer deleting to fixing* both point here, and it is the only option that costs
   nothing to maintain.
 
-**The builder's recommendation is (a)**, scoped by capability rather than globally: the paragraph
+**The builder's recommendation was (a)**, scoped by capability rather than globally: the paragraph
 already rules that a volume has a size, the mechanism for a backend-scoped option already exists
 and is used twice, and `btrfs:` and `zfs:` are otherwise working backends whose only defect is
-that half their surface is unreachable. (c) is worth asking about anyway, because "never worked,
+that half their surface is unreachable. (c) was put to the owner anyway, because "never worked,
 nothing depends on it" is the strongest argument this repo recognises.
 
-**Not answered in code.** The harness canary for `lvm:` is written the way Part II says it should
-be — `lvm:VG/LV@size=64M` — and the storage sweep **fails on it**, by name, every run. That
-failure is the finding and it stays until this is ruled; making the harness green by dropping the
-option would hide a defect in the program behind a change to the test.
+---
+
+**RULED (owner, 2026-07-31): (a), and the table is the half that was wrong.** `@size`, `@quota`,
+`@mount` and `@mount_options` are legal on the backends that read them and refused by name
+everywhere else. The direction given with the ruling binds the shape of it: **broaden so that
+everything the code can do can be written — never restrict the code to fit the table.** So the
+narrowed form the builder had offered — ship `@size` and `@quota` now, leave `@mount` refused
+until the fstab path has been exercised — was **not** taken. `@mount` ships, and the fstab path it
+reaches was fixed and given a real lifecycle in the same change rather than left legal on paper.
+
+**`@options` is spelled `@mount_options`.** It is what an fstab entry's option field carries, and
+in a flat namespace a key called `options` is a collision waiting for the next feature. Nobody
+could have written the old spelling — the parser refused it — so there is nothing to migrate and
+no second spelling kept alive.
+
+**The ruling was applied to the whole family, not to the three backends that raised it.** Q18's
+real defect is not storage: it is that `PACKAGE_OPTION_KEYS` and the keys backends actually read
+were two lists with nothing holding them together. Reading every `options.get(` in the tree found
+three more keys in the same state, and all three ship legal here:
+
+| key | read by | what it had been doing |
+|---|---|---|
+| `classic` | `snap` | `--classic` is how an unconfined snap is installed; the branch had never run |
+| `shim` | `sync` | a shim asked for on the tool's own line — **the form `R3` named** when it deleted the imperative `shim` command (2026-07-19) |
+| `sandbox` | `sync`, `run` | the same shim, plus confinement for `linix run` |
+
+`R3` is the one that stings. **Measured rather than asserted:** a standalone `shim:NAME` statement
+still parsed and is still reconciled (`app/apply/dependents.rs`), so shims were not unmakeable —
+the first draft of this entry said they were, and reading the code disproved it. What *was* true
+is worse in a quieter way: R3 deleted the imperative command and pointed at `@shim=true` on the
+package line as the declarative form, and a different change in the same month closed the option
+table into a whitelist that did not contain `shim`. **The ruling pointed at the one form that did
+not parse.** Neither change was wrong alone and nothing connected them, which is exactly why the
+two lists are now one list with a test across the join (`backends::capability`,
+`every_scoped_option_is_a_legal_option_key`).
+
+**What the ruling cost beyond the grammar.** Making `@mount` writable made `btrfs`'s fstab code
+reachable for the first time, and it was not fit to be reached: it dropped every fstab line
+*containing* the mount point as a substring (so declaring `/mnt` would have deleted `/mnt/data`
+and `/mnt/home`), it wrote `subvol=` as the declared path instead of the path from the filesystem
+root (the same offset bug `list` was fixed for the day before, mirrored), and removal left the
+entry behind — an fstab line naming a subvolume that no longer exists is a machine that stops in
+the initramfs. All three are fixed here, with unit tests, and `@mount` now also collapses the
+second name it creates for one subvolume so `remove-orphans` cannot offer to destroy a declared
+volume under its other path.
+
+**Running it found three defects reading it had not**, all of them in the newly-reachable mount
+path: the UUID parser wanted a line *starting* `uuid:` from a report that reads
+`Label: none  uuid: …`; the query was put to the **subvolume** when `btrfs filesystem show` only
+answers for a filesystem; and `info()` — which is what the planner asks, not `list_installed` —
+answered `Path::exists`, so any directory was an installed subvolume and the record it built
+carried no properties at all. A half-applied declaration therefore reported itself satisfied for
+ever, so a declared `@mount=` that does not match the machine is drift now, decided beside
+`@version` and `@channel`.
+
+**And the harness stopped being deliberately red.** The `lvm:VG/LV@size=64M` canary that failed
+by name every run now passes; `btrfs`'s canary carries `@quota` and `@mount` so the fstab path
+has a real lifecycle on a real device rather than a legal spelling. `lvm` then failed once more
+for a reason that was **not** LiNix — `device not cleared`, reproduced with a hand-run
+`lvcreate`, because the image's udev workaround `sed`-ed keys Ubuntu ships commented out and the
+`grep` meant to verify it matched the comments and passed. Fixed in the image, and 13c now
+probes with a real volume before claiming lvm has a canary. The storage job moves to the fast
+matrix, which is what its own comment said to do the moment this was ruled.
+
+**Final measurement, on real block devices: `pass=274 fail=0 soft=7`.** The image's
+real-lifecycle floor goes 3 → 5 — apt, github, btrfs, cargo, lvm. `zfs:` is still not among
+them and is not excused: this kernel ships no ZFS module, which `Q4` counts as a release
+blocker. So `@quota` and `@mount` are proven on btrfs and `@size` on lvm; on `zfs:` they are
+argv-tested and read the same options through the same table, and that is the honest limit of
+what has been run.
+
+---
+
+## Q19
+
+**Status: OPEN — not blocking.** Raised 2026-07-31 by building `Q18`: the keys are writable and
+applied, and nothing yet decides what a *changed* one means.
+
+**Q19 — When a declared size changes, does LiNix resize the volume?**
+
+`@mount` converges: a declared mountpoint that does not match the machine is drift, and `sync`
+re-applies it (that shipped with `Q18`, because a mount that silently never happened was the
+defect being fixed). **`@quota` and `@size` do not.** Editing `@quota=100M` to `200M`, or
+`@size=10G` to `20G`, changes nothing on the next sync — the volume is present under its name,
+so there is no drift to act on.
+
+Two questions, and they are not the same size:
+
+- **`@quota` on `btrfs:`/`zfs:` is safe to re-apply.** `btrfs qgroup limit` and `zfs set quota=`
+  are idempotent property writes, and lowering a quota below current usage is refused by the tool
+  rather than destroying anything. The only real work is comparing a declared `100M` against a
+  reported byte count without a normalisation bug — and a wrong comparison here has a specific
+  failure mode worth naming: **every sync reports a change for ever**, which is exactly what D13
+  warned about when it required a *readable* current value.
+- **`@size` on `lvm:` is not.** Honouring it means `lvextend` to grow — and its mirror image,
+  `lvreduce` to shrink, **destroys data** unless the filesystem is shrunk first, which LiNix
+  does not do and should probably never do unattended. So this is not "add a comparison"; it is
+  a decision about whether a declaration may resize a filesystem at all, and whether shrinking
+  is refused by name.
+
+**The builder's recommendation:** re-apply `@quota` (with a unit-normalising comparison and a
+test per unit), **grow** on `@size` via `lvextend`, and **refuse to shrink** with an error that
+names the declared and actual sizes and tells the user to do it by hand. That keeps the
+declarative promise in the direction that cannot lose data and stops at the direction that can.
+
+**Not answered in code.** `@quota` and `@size` are applied at creation and left alone
+afterwards, which is where `Q18` left them.

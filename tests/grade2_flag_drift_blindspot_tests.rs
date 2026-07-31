@@ -117,7 +117,7 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
 
     for backend in registry.available() {
         let name = backend.name().to_string();
-        let Some(flag) = linix::backends::artifact::capability::unverified_arg(&name) else {
+        let Some(flag) = linix::backends::capability::unverified_arg(&name) else {
             continue;
         };
         let Some(installable) = backend.as_installable() else {
@@ -133,7 +133,7 @@ async fn a_capability_flag_is_sent_exactly_when_the_tool_documents_it() {
             .insert("unverified".to_string(), "true".to_string());
         // The install source, where the backend demands one — helm's `plugin install` takes a
         // URL, and without it the call fails before it builds an argv at all.
-        if let Some(key) = linix::backends::artifact::capability::install_source_key(&name) {
+        if let Some(key) = linix::backends::capability::install_source_key(&name) {
             spec.options.insert(
                 key.to_string(),
                 "https://example.invalid/linix-drift-probe".to_string(),

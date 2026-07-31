@@ -43,6 +43,17 @@ There is no migration path and no compatibility shim. Nothing reads a v6 config.
     as always; several each keep the name of the program inside them, and two that would land
     on the same name is an error naming both files rather than one overwriting the other.
     Everything is downloaded, checked and unpacked before anything reaches your `PATH`.
+- **Storage is declarable.** `btrfs:/mnt/fs/srv@quota=20G,mount=/srv`, `zfs:tank/media@quota=500G`
+  and `lvm:vg0/data@size=100G` are declarations like any other — they have a size and a
+  mountpoint rather than a version, which is the only thing that makes them different. A declared
+  mount is written to `/etc/fstab` so it survives a reboot, and taken out again *before* the
+  volume is destroyed. Deleting one of these lines erases a filesystem, and it goes through the
+  ordinary removal guard: protectable, counted against `max_removals`, previewed first.
+- **An option is legal exactly where something reads it.** `@classic` on a snap, `@size` on a
+  logical volume, `@quota` and `@mount` on a storage object — each is refused *by name* on any
+  backend that could not act on it, rather than being accepted and ignored. The grammar's list
+  and the keys backends read are one list with a test across the join, which is what stops a key
+  being read by code no line can reach.
 - **`linix path` and `linix edit` find your files for you**, so neither you nor your scripts
   have to hard-code `~/.config/linix`. `linix path --set DIR` records the repo location in
   LiNix's own settings file — the one file that lives outside the repo, because a key inside

@@ -1,4 +1,4 @@
-use crate::backends::artifact::capability;
+use crate::backends::capability;
 use crate::core::{
     BackendCore, CommandExecutor, Enumerable, Error, Installable, MetadataProvider, Package,
     PackageSpec, Queryable, RepoManager, Result, Searchable, Upgradable,

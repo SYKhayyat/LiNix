@@ -4,7 +4,6 @@
 //! the choice is made from an ordered preference over a closed vocabulary, filtered first to
 //! what this machine can run, and recorded in the lock once made.
 
-pub mod capability;
 pub mod discover;
 pub mod format;
 pub mod options;
