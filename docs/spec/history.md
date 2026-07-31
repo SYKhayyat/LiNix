@@ -74,6 +74,24 @@ green. Four cases captured from the real tool, the parser's own unit test switch
 hand-built table — a synthesised fixture cannot disagree with the parser that reads it — and the
 gate now fails on an empty directory, self-tested by planting one.
 
+**Four things were built past the eight findings, each because the finding pointed at a class
+rather than a line.** A negative check now asserts LiNix's *sentence* and not only a non-zero
+code (`nok_saying`, five call sites per harness, patterns captured from the running binary):
+that is what G-8 was really about, and it took the fail-everything survivors from 12 to 7 on
+Windows and 17 to 12 in the container, with both ratchets lowered a step behind the measurement.
+Every grammar refusal is drawn through `validator::printable`, so **a config saved by Notepad**
+— a UTF-8 BOM is what Windows writes by default — no longer produces `` `cargo` is not a backend
+LiNix uses; add `cargo` to your priority file ``, naming two strings that look identical. A
+failed command's output is capped by width as well as by line count, because a stream with no
+newlines in it is one line to `lines()` and winget draws its spinner with bare carriage returns.
+And the grammar's punctuation family is pinned as a family: every mark `looks_like_expression`
+fires on is asserted against a qualified line, so the next one needs no third discovery.
+
+**The BOM itself is raised, not fixed.** LiNix still reads U+FEFF as part of the first backend
+name, so the config does not work — only the diagnosis improved. Whether a leading BOM should be
+stripped is user-visible behaviour and therefore the owner's, and it is the one question this
+round leaves open.
+
 **Two shell lessons worth keeping.** There are no locals in a POSIX shell: `harness-logic-test.sh`
 lifts function bodies and runs them against globals of its own, so naming a parameter `_rlog`
 inside `assert_binary_reachable` clobbered the test's own `$_rlog` and broke three predicates that

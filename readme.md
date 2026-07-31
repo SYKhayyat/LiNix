@@ -160,7 +160,9 @@ verbatim and trimmed — no escaping exists because none is needed.
 
 Common keys: `version`, `hold` (never upgrade), `expires` / `until` (absolute datetimes),
 `requires`, `health` (see [Safety](#safety)), `shim` (put a PATH stand-in for this tool in your
-`bin_dir`; `sandbox` does that and confines `linix run` too), the `*_install` hooks, and
+`bin_dir`; `sandbox` does that and confines `linix run` too — both declare the same thing a
+`shim:` line does, so adding one to a package you already have creates the stand-in and deleting
+it takes the stand-in away), the `*_install` hooks, and
 per-directive keys like `cron`/`run` on `schedule:` or
 `target`/`content`/`template`/`decrypt`/`identity` on `link:` — the last two are
 [Secrets](#secrets).

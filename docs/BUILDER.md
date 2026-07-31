@@ -1460,6 +1460,18 @@ red-before / green-after evidence and an independent reproduction. The narrative
 | `G-7` | four captured `winget` fixtures; the parser's hand-built table retired; an empty fixture directory now fails the gate |
 | `G-8` | `refuses_with_3` beside `nok`; the fail-everything stub is part of the mutation gate with its own ratchet. Found and fixed a live `W22` sibling: `restore`'s refusal exited 1 |
 
+**Built past the eight, because each pointed at a class rather than a line:** `nok_saying`
+(a negative check asserts LiNix's sentence, not only a non-zero code — the fail-everything
+survivors went 12 -> 7 on Windows and 17 -> 12 in the container, both ratchets lowered);
+every grammar refusal drawn through `validator::printable`, so a config saved by Notepad no
+longer refuses with two identical-looking names; a width cap on a failed command's output,
+because a stream with no newlines is one line; and the punctuation family pinned so the next
+`\ | & (` case needs no third discovery.
+
+**One question left for the owner:** a UTF-8 BOM — what Windows Notepad writes — is still read
+as part of the first backend name, so the config fails. Only the message was fixed. Stripping a
+leading BOM is user-visible behaviour and is not the builder's call.
+
 **What this round did NOT do**, so the next grader does not have to re-derive it:
 
 - **Nothing was pushed.** The unpushed backlog (`E26`) is larger, not smaller, and no CI has seen
