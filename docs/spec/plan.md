@@ -67,9 +67,14 @@ what blocks the next one. The reasoning and the measurements are the first entry
     time keeps a broken declaration working, and dropping `remove` keeps a package LiNix can
     install and never undo.
 0c-bis. **Sweep every option against Q21** — change it after the install and confirm the machine
-    changes. **Five have been done and the rest are unaudited.** `@quota`, `@size`, `@mount`,
-    `@mount_options` (Q19) and `@classic` (Q20) converge and are tested; every other key in
-    `PACKAGE_OPTION_KEYS` and `backends/capability.rs` is unexamined against the rule. This is
+    changes. **Seven have been done and the rest are unaudited.** `@quota`, `@size`, `@mount`,
+    `@mount_options` (Q19), `@classic` (Q20) and — found by the round-6 grader in the same table,
+    one layer further in — `@shim` and `@sandbox` (G-1, V.111) converge and are tested;
+    `@version` and `@channel` were already drift-checked. Every other key in
+    `PACKAGE_OPTION_KEYS` and `backends/capability.rs` is unexamined against the rule.
+    `tests/grade6_option_edit_reaches_the_machine_tests.rs` holds the guard over the table: a key
+    with a machine effect is drift-checked by the planner or desugared into a declared resource,
+    and a new one has to say which. This is
     Tier 0 because it is not a feature gap — it is a class of already-shipped feature that does
     nothing, and it passes every lifecycle by construction: install → list → remove never edits a
     declaration. Method and the four-step drive are in `GRADER.md` §3.5; the obligation is Q21.

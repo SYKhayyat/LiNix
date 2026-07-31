@@ -1438,3 +1438,37 @@ exactly how a cost gets recorded as an impossibility. Read each against Q17 befo
 
 Each is a sentence that was true when written and was never re-derived, which is the disease
 this whole round is about.
+
+---
+
+# Round 8 — the round-6 grade, worked (2026-07-31)
+
+Source: `docs/GRADE-2026-07-31.md` (graded at `a510728`, **B−**). **All eight findings `G-1`–`G-8`
+are closed, plus `E3`**, which had re-reproduced. One commit per finding; each carries its own
+red-before / green-after evidence and an independent reproduction. The narrative is
+`spec/history.md`, session 2026-07-31 (third).
+
+| finding | what shipped |
+|---|---|
+| `E3` | `cargo fmt` clean. The gate was fixed in round 1 and not run — nothing yet stops the next one, and a pre-commit hook is a change to how this repo is worked, not to the program |
+| `G-1` | `@shim`/`@sandbox` resolve to a `shim:` extra, so the ledger/guard/preview answer for them. `reconcile_all_shims` **deleted**. II.2 + **V.111** |
+| `G-2` | `<known backend>:` shields a line from set math, so a name with `\` is a package. Set math between qualified packages still parses |
+| `G-3` | `assert_binary_reachable` takes the prior resolution, both harnesses, all four call sites; three predicates in `harness-logic-test.sh` |
+| `G-4` | `--no-fail-fast`, `opensuse`/`void`/`storage` in the local matrix, and a reachability row for every CI job |
+| `G-5` | a failed command's output is picked by the manager's own vocabulary, capped, counted, and sanitised through `validator::printable` |
+| `G-6` | `linix-failure-class:` only on a pipe |
+| `G-7` | four captured `winget` fixtures; the parser's hand-built table retired; an empty fixture directory now fails the gate |
+| `G-8` | `refuses_with_3` beside `nok`; the fail-everything stub is part of the mutation gate with its own ratchet. Found and fixed a live `W22` sibling: `restore`'s refusal exited 1 |
+
+**What this round did NOT do**, so the next grader does not have to re-derive it:
+
+- **Nothing was pushed.** The unpushed backlog (`E26`) is larger, not smaller, and no CI has seen
+  any of it. The pty half of `G-6` and both container harnesses' changes are unrun on Linux.
+- **Twelve checks still survive the fail-everything stub** on the Windows harness. Each is an
+  honest `nok` over a command that really does fail with 1; strengthening them means asserting
+  the message, not the code.
+- **The grammar refusals exit 1**, measured, and stay `nok`. Whether a parse refusal ought to be
+  exit 3 is a published-contract question — a ruling, not a fix.
+- The grader's two source-level assertions in `grade6_option_edit_reaches_the_machine_tests.rs`
+  were **replaced by behavioural ones** driven through the shipped binary. That file's own
+  `expect()` said to re-derive the finding if `reconcile_all_shims` went; it went.

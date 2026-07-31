@@ -2243,3 +2243,30 @@ nothing*: if a missing `@classic` meant "strict", every existing classic snap wh
 mentioned confinement would start failing on a refusal it never asked for — a fix that breaks
 configs nobody edited. And *the proof is per option, not per backend*: `snap:` had a real
 lifecycle for months, which is why the `@classic` defect survived one.
+
+**V.111 — Why `@shim` is a resource and not a package option that gets re-applied.** *(G-1,
+2026-07-31.)* `@shim` and `@sandbox` were the sixth and seventh options found dead by the sweep
+V.110 ordered, and they failed differently from the other five: not "read once when the install
+argv is built" but "read from the frozen state registry" — the map only an install writes. So a
+manifest edit that scheduled no install could never reach the decision, in either direction.
+
+The obvious repair was to make the package's drift check name the two keys, the way it names
+`@quota` and `@classic`. That would have converged, and it would have been wrong twice over.
+**It converges by reinstalling the package to obtain a symlink** — for `@sandbox` the reinstall
+does nothing at all, since the confinement lives in `linix run` — and it leaves the
+frozen-snapshot reader standing, one install away from the truth for every package the current
+sync does not touch.
+
+The right shape was already in the tree and had been since S20: **a shim is a noun with an
+inverse.** `shim:NAME` is a declaration, `locks/extras.toml` records that it was placed, the
+removal guard counts it, `--dry-run` names it and a deleted line tears it down. A package line
+asking for a shim is asking for that same resource by another route, so it resolves to that same
+declaration, and every one of those behaviours arrives without being written a second time. The
+reconciler that decided from `state.packages` is **deleted**, not repaired: two things placing
+shims is the two-of-everything disease, and the one being deleted is the one that could not see
+what the file says today.
+
+The safety ledger got stronger by the same move. `remove_shim` had been accounted for by
+inheritance — *its only caller runs inside a plan the guard already enforced* — which is a
+sentence about paths, of the kind this repo has learned to distrust. It is now counted by
+`guard::enforce_extras` over the drift set, like every other resource that can be taken away.

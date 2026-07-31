@@ -14,6 +14,73 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-31 (third) — the round-6 grade, worked: eight findings and the blocker that came back
+
+**Nothing here was reported by a user and nothing was found by running the suite.** The
+independent grader graded `a510728` at **B−** and left `docs/GRADE-2026-07-31.md` plus four red
+tests. All eight findings are closed, plus `E3`, which had *re-reproduced* — `cargo fmt --check`
+failed on 12 diffs across 4 files, every one of them a file that session's own commits touched.
+The gate was fixed in round 1 and rated HARD in both release scripts; it simply was not run. That
+is E3 and E4's lesson arriving in the other order, and nothing in the tree stops the next one:
+**a pre-commit hook is the obvious answer and is a change to how this repo is worked**, so it is
+named here rather than made.
+
+**`@shim` and `@sandbox` were write-once (G-1), and the fix deletes an engine rather than
+repairing it.** Q19/Q20 closed five option keys that morning; these two were in the same table,
+on the same `sync`, and failed one layer further in — read from the frozen `StateRegistry`, which
+only an install writes. A present package line carrying either now resolves to a `shim:NAME`
+extra, the identical noun a `shim:` statement declares, so the ledger, the guard, `--dry-run`,
+`plan` and `check` all answer for it without a line of new machinery. `reconcile_all_shims` is
+gone. Rule in II.2, reason in **V.111**. The removal-guard ledger is stronger for it: the shim
+teardown was accounted for by *inheritance* and is now counted by `guard::enforce_extras`.
+
+**A backslash in a package name was read as set math (G-2).** `winget:ARP\Machine\X64\Firefox`
+— which is what **185 of the 278 names `winget list` reports on this box** look like — was
+refused with "a module cannot use a set expression". The shield that protects `link:C:\…` covers
+`<known backend>:` now, and set math between qualified packages still parses, because an operator
+stands apart from its operands and a name never does.
+
+**The two message findings are the same lesson twice: the machine was protected and the human was
+not.** A failed backend command pasted its whole output at the user, escapes intact — ~110 lines
+of scoop bucket commits with the sentence that mattered fourth (G-5) — while `ExitPolicy::opening`
+had been stripping those same escapes so *detection* would work. The manager's own vocabulary now
+picks the lines that explain the failure, the rest is counted and reachable at `-v`, and the
+sanitiser is `validator::printable`, which W38 wrote for the grammar's refusals. And
+`linix-failure-class: permanent` (G-6) — a good contract, printed unconditionally — was the first
+line of the first command a new user runs; it is written only to a pipe now, which is exactly
+where both harnesses read it.
+
+**Three of the eight were about checks that could not fail.** `assert_binary_reachable` scored
+`go: hello is on PATH` against *cabal's* binary on the tools image, in a run where the harness
+printed the collision two lines earlier and handed the value that would have caught it to the
+*other* assertion (G-3). The gate-parity checker compares script names while the claim is about
+gates, so three asymmetries were live behind an `ok`: `--no-fail-fast`, the `storage` job, and
+opensuse/void (G-4). And `nok` accepted any non-zero exit as "correctly refused" while LiNix
+publishes exit 3 for refusing on purpose — sixteen of seventeen checks surviving a
+fail-everything stub were refusal checks (G-8). That stub is now part of the mutation gate, with
+its own ratchet per harness, so the class is measured on every push rather than by a grader once.
+
+**One product defect fell out of G-8's measurement**, and it is round 2's `W22` family alive:
+`restore` into a non-empty config directory refused with `Error::Other`, exiting 1 while its own
+message said *"it refuses unless you pass --force"*. The round-2 sweep matched the phrase
+*"refusing to"* and this site says *"refuses unless"*. Fixed, and the vocabulary widened with the
+reason written down — including why `refuses to` is deliberately **not** in it: that is what
+LiNix says about somebody *else* refusing (`Windows Task Scheduler refuses to register one`, an
+`Error::Permission`), and including it produced exactly that false offender.
+
+**`tests/fixtures/winget/` existed and was empty (G-7)**, on the platform this repo is developed
+on. The orphan gate walks files, so a directory with none contributed nothing to count and stayed
+green. Four cases captured from the real tool, the parser's own unit test switched off its
+hand-built table — a synthesised fixture cannot disagree with the parser that reads it — and the
+gate now fails on an empty directory, self-tested by planting one.
+
+**Two shell lessons worth keeping.** There are no locals in a POSIX shell: `harness-logic-test.sh`
+lifts function bodies and runs them against globals of its own, so naming a parameter `_rlog`
+inside `assert_binary_reachable` clobbered the test's own `$_rlog` and broke three predicates that
+had nothing to do with the change. And a check written to catch the collision passed on the
+unfixed tree, because it asked whether the word "shim" appeared anywhere in a JSON document that
+always contains it — the first draft of an assertion is where the free green lives.
+
 ## Session 2026-07-31 (second) — `Q19` and `Q20` ruled, and `D15` was never really parked
 
 **`Q20` was not reported by anyone — it was found by asking the rest of the tree the question
