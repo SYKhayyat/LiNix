@@ -98,6 +98,24 @@ fn heal_that_could_not_recover(tag: &str) -> Option<(String, i32)> {
         );
         return None;
     }
+    // This planted entry is recovered by shelling out to `cargo`, and cargo takes a lock on its
+    // package cache. Under `cargo test` — which holds that lock — the child answers `Blocking
+    // waiting for file lock on crate metadata` and fails on the lock rather than on the absent
+    // crate, so what LiNix classified is a different failure from the one under test. Measured:
+    // this target failed inside a full `cargo test --no-fail-fast` run and passed alone, on the
+    // same tree, twice.
+    //
+    // Named and skipped rather than asserted-around: the assertions below are about the advice
+    // LiNix gives for a PERMANENT failure, and a lock wait is not one. It cannot hide the
+    // defect — the skip fires only on cargo's own lock sentence.
+    if out.contains("waiting for file lock") {
+        eprintln!(
+            "skipped: another cargo holds the package-cache lock, so the recovery failed on the \
+             lock rather than on the absent crate — a different failure from the one this \
+             measures:\n{out}"
+        );
+        return None;
+    }
     Some((out, code))
 }
 
@@ -146,6 +164,11 @@ fn heal_does_not_print_rust_debug_syntax_at_the_user() {
 /// The behaviour underneath, which is right and which this whole order must not disturb: the
 /// entry is **left `InProgress`** rather than closed, so the next `heal` tries it again and
 /// nothing claims the package is installed.
+///
+/// Deliberately does **not** take the package-cache-lock skip the helper carries: this asserts
+/// that a failed recovery stays open and is retried, which is true whatever the recovery failed
+/// on. Only the assertions about the ADVICE are invalidated by failing on a lock instead of on
+/// the absent crate.
 #[test]
 fn a_failed_recovery_leaves_the_entry_open() {
     let dir = fixture("grade4-heal-open", "cargo", ABSENT);
