@@ -1,0 +1,31 @@
+# LiNix integration image — openSUSE Tumbleweed (zypper). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.opensuse -t linix-it-opensuse .
+#   docker run --rm linix-it-opensuse          # defaults to: zypper jq
+#
+# `zypper` was registered, argv-tested against a mock, and had never been run against the real
+# program in any harness — it was in neither the canary table nor the reason table of either
+# sweep, which is the state Q4 calls a release blocker. This image is the whole fix.
+FROM opensuse/tumbleweed:latest
+ENV LINIX_IT_IMAGE=opensuse
+# `--no-recommends`: Tumbleweed's recommends pull a desktop stack into a build image.
+RUN zypper --non-interactive --gpg-auto-import-keys refresh \
+    && zypper --non-interactive install --no-recommends \
+       curl gcc make pkg-config libopenssl-devel perl git tar gzip \
+       nodejs npm python3-pipx ruby ruby-devel \
+    && zypper --non-interactive clean --all
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+# Extra managers via their own installers. Tolerant (`|| true`): a build-time network hiccup
+# leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
+RUN corepack enable || true
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
+RUN curl -fsSL https://bun.sh/install | bash || true
+ENV PATH="/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
+# `clean --all` above throws the repo metadata away, which leaves zypper unable to answer
+# `search` at runtime — so every unpinned name would skip the native manager and land on a
+# language registry, and the sweep would not be testing zypper at all. Last, so it survives.
+RUN zypper --non-interactive --gpg-auto-import-keys refresh
+WORKDIR /src
+COPY . /src
+RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
+ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
+CMD ["zypper", "jq"]

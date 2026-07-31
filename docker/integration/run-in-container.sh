@@ -533,10 +533,33 @@ fi
 # --- 9. The guard (Part IV proofs) ----------------------------------------
 echo "[9] The guard"
 # A protected package is never removed. Only survival is asserted: whether the
-# verb refuses or no-ops depends on whether bash was declared, and the earlier
+# verb refuses or no-ops depends on whether it was declared, and an earlier
 # form asserted an exit code so convoluted that a correct refusal failed it.
-lx -y uninstall bash >/dev/null 2>&1 || true
-ok "bash survives an uninstall attempt" on_path bash
+#
+# The victim comes from LiNix's OWN protected list, intersected with what this image actually
+# has installed. It was hardcoded to `bash` until 2026-07-30, and Void Linux ships no bash at
+# all — so on the first Void run this check asserted the survival of a package that had never
+# been there and printed `FAIL bash survives an uninstall attempt`, which reads exactly like
+# the guard having deleted /bin/bash. A proof that cannot run must say so, not accuse.
+_installed_names() { lx list --backend "$BACKEND" 2>/dev/null | awk '{print $2}'; }
+GUARD_VICTIM=""
+_have="$(_installed_names)"
+for _p in $(lx protected 2>/dev/null | sed -n 's/^  \([a-z0-9][a-z0-9._+-]*\)$/\1/p'); do
+    if printf '%s\n' "$_have" | grep -qx "$_p"; then GUARD_VICTIM="$_p"; break; fi
+done
+if [ -z "$GUARD_VICTIM" ]; then
+    FAILC=$((FAILC + 1))
+    FAILED_NAMES="$FAILED_NAMES
+    - guard: no protected package is installed on this image, so the guard proof examined nothing"
+    echo "  FAIL  not one of LiNix's protected packages is installed here, so nothing could be"
+    echo "        protected and this check proved nothing. Add one to the image, or widen"
+    echo "        default_protected_packages so it names something this distro ships."
+else
+    echo "        guard victim: $GUARD_VICTIM (from \`linix protected\`, and installed here)"
+    lx -y uninstall "$GUARD_VICTIM" >/dev/null 2>&1 || true
+    ok "$GUARD_VICTIM survives an uninstall attempt" \
+        sh -c "$LINIX list --backend '$BACKEND' 2>/dev/null | awk '{print \$2}' | grep -qx '$GUARD_VICTIM'"
+fi
 # Post-adopt the ratio no longer fires, so the bare command must still not be a
 # silent mass-delete — the refusal is asserted in both states, for different reasons.
 nok "purge-unmanaged is still not a silent mass-delete after adopt" lx -y purge-unmanaged
@@ -711,6 +734,93 @@ EOSHIM
 fi
 
 # ==========================================================================
+# 13b. REAL DEVICES for the storage effectors (btrfs, lvm, zfs)
+# ==========================================================================
+# These three operate on block devices, and until 2026-07-30 none of them had ever been run.
+# The harness called btrfs "a snapshot provider, not an install target" — which is not what the
+# code does. `btrfs:PATH` runs `btrfs subvolume create`, `lvm:VG/LV` runs `lvcreate`, and both
+# have an ordinary install → list → remove cycle that needs nothing but a real device.
+#
+# Inert unless the image asked for it (`LINIX_IT_STORAGE`), because it needs `--privileged` and
+# nothing else here is. The devices are loopback files made in the container and destroyed with
+# it. Owner-authorised 2026-07-30 (Q17).
+#
+# Every step is checked: a failure leaves the backend without a canary and PRINTS why, rather
+# than leaving a half-made volume for the lifecycle to trip over in a way that reads like a
+# LiNix defect.
+STORAGE_BTRFS=""
+STORAGE_LVM=""
+STORAGE_ZFS=""
+
+setup_storage_devices() {
+    [ -n "${LINIX_IT_STORAGE:-}" ] || return 0
+    [ -z "$SMOKE" ] || { skip_smoke "loopback devices for the storage effectors"; return 0; }
+    echo "[13b] Loopback devices for the storage effectors"
+
+    if ! command -v mkfs.btrfs >/dev/null 2>&1; then
+        soft "btrfs: no mkfs.btrfs in this image, so there is no filesystem to make a subvolume in"
+    elif ! modprobe btrfs >/dev/null 2>&1 && ! grep -qw btrfs /proc/filesystems; then
+        soft "btrfs: this kernel has no btrfs — a container borrows the HOST's kernel, so that is a fact about the machine and not about LiNix"
+    else
+        rm -f /var/tmp/linix-btrfs.img
+        truncate -s 512M /var/tmp/linix-btrfs.img
+        mkdir -p /mnt/linix-btrfs
+        if mkfs.btrfs -q -f /var/tmp/linix-btrfs.img >/dev/null 2>&1 \
+           && mount -o loop /var/tmp/linix-btrfs.img /mnt/linix-btrfs >/dev/null 2>&1; then
+            STORAGE_BTRFS=/mnt/linix-btrfs
+            PASS=$((PASS + 1)); echo "  PASS  btrfs: a real filesystem is mounted at $STORAGE_BTRFS"
+        else
+            soft "btrfs: mkfs or mount failed in this container, so the lifecycle has nowhere to run"
+        fi
+    fi
+
+    if ! command -v lvcreate >/dev/null 2>&1; then
+        soft "lvm: no lvcreate in this image"
+    elif ! modprobe dm_mod >/dev/null 2>&1 && [ ! -e /dev/mapper/control ]; then
+        soft "lvm: this kernel has no device-mapper — again a fact about the machine"
+    else
+        rm -f /var/tmp/linix-lvm.img
+        truncate -s 512M /var/tmp/linix-lvm.img
+        _loop="$(losetup -f --show /var/tmp/linix-lvm.img 2>/dev/null)"
+        if [ -n "$_loop" ] \
+           && pvcreate -f -y "$_loop" >/dev/null 2>&1 \
+           && vgcreate linixvg "$_loop" >/dev/null 2>&1; then
+            STORAGE_LVM=linixvg
+            PASS=$((PASS + 1)); echo "  PASS  lvm: volume group $STORAGE_LVM exists on $_loop"
+        else
+            soft "lvm: could not build a volume group on a loopback device here"
+        fi
+    fi
+
+    # ZFS is out of tree, so whether it is available is a property of the kernel the container
+    # borrowed. On the WSL2 kernel this project is developed against, `modprobe -n zfs` says no.
+    # That must read as "this machine cannot", never as "this backend is excused" (Q17).
+    if ! command -v zpool >/dev/null 2>&1; then
+        soft "zfs: no zpool in this image"
+    elif ! modprobe zfs >/dev/null 2>&1; then
+        soft "zfs: this kernel has no ZFS module — it is out-of-tree and the WSL2 kernel ships without it. This is the release blocker Q4 counts, not an exemption."
+    else
+        rm -f /var/tmp/linix-zfs.img
+        truncate -s 512M /var/tmp/linix-zfs.img
+        if zpool create -f linixpool /var/tmp/linix-zfs.img >/dev/null 2>&1; then
+            STORAGE_ZFS=linixpool
+            PASS=$((PASS + 1)); echo "  PASS  zfs: pool $STORAGE_ZFS is imported"
+        else
+            soft "zfs: the module is loaded and zpool create still failed"
+        fi
+    fi
+}
+
+teardown_storage_devices() {
+    [ -n "$STORAGE_ZFS" ] && zpool destroy "$STORAGE_ZFS" >/dev/null 2>&1
+    [ -n "$STORAGE_LVM" ] && vgremove -f "$STORAGE_LVM" >/dev/null 2>&1
+    [ -n "$STORAGE_BTRFS" ] && umount "$STORAGE_BTRFS" >/dev/null 2>&1
+    losetup -D >/dev/null 2>&1
+    rm -f /var/tmp/linix-btrfs.img /var/tmp/linix-lvm.img /var/tmp/linix-zfs.img
+    return 0
+}
+
+# ==========================================================================
 # 14. REAL lifecycle for every other manager this image ships
 # ==========================================================================
 # The `tools` image installs fifteen ecosystem managers and its header promises
@@ -723,6 +833,7 @@ fi
 # Install failure is SOFT (a registry outage is not a LiNix bug); everything
 # after a successful install is HARD. That split is what caught the pixi
 # `global remove` vs `global uninstall` bug a dry-run plan could never see.
+setup_storage_devices
 echo "[14] Real lifecycle, every other manager on this image"
 
 # canary <backend> → "package|binary|remove-mode|list-token|install-options"
@@ -737,12 +848,14 @@ echo "[14] Real lifecycle, every other manager on this image"
 #   install-options `@k=v` appended at INSTALL only. helm installs a plugin from a
 #               URL and removes it by name, so the two verbs cannot be handed the
 #               same string — which is exactly what this section exists to catch.
-# The ceiling for the block below. **Deliberately unset**: the Linux registry is a different
-# set (56 backends, not Windows's 48) and this harness has its own `canary()` table, so the
-# number has to come from a run of THIS harness inside a container. Unset takes the
-# "not recorded" branch, which reports the count and says how to record it — a ceiling nobody
-# measured is the guessed constant `lifecycle-floor.txt` exists to argue against.
-LIFECYCLE_GAP_CEILING=
+# The ceiling for the block below, and it may only go DOWN. Raising it is Q4's item 4 happening.
+#
+# **Measured, not guessed** — 12, read off the openSUSE run of 2026-07-30, the first run of this
+# harness after `primary_manager_image` stopped it counting a distro's own manager as uncovered.
+# The twelve: brew emerge eopkg guix lvm paru pkg pkg_add pkgin slackpkg yay zfs. Three of those
+# have images being built for them; the BSDs need a userland no Linux container can host, and
+# `emerge` is smoke-only by design.
+LIFECYCLE_GAP_CEILING=12
 canary() {
     case "$1" in
         npm)      echo "cowsay|cowsay|full|" ;;
@@ -801,9 +914,45 @@ canary() {
         flatpak)  echo "org.freedesktop.Platform||full|" ;;
         snap)     echo "hello||full|" ;;
         vscode)   echo "ms-python.python||full|" ;;
+        # The storage effectors. Each canary exists only when 13b built it a real device, so
+        # this table never claims a lifecycle the machine could not give — and `btrfs` is an
+        # install target, whatever the old exemption said: `btrfs:PATH` is `subvolume create`.
+        #
+        # The list-token is what `list` calls it, and for btrfs that is NOT the install path:
+        # `btrfs subvolume list` reports a path relative to the filesystem root, so a subvolume
+        # installed as /mnt/linix-btrfs/canary is listed as /canary.
+        btrfs)    [ -n "$STORAGE_BTRFS" ] && echo "$STORAGE_BTRFS/canary||full|/canary" ;;
+        # `@size=` is not optional: `lvm:` refuses without one, by name, and the option rides
+        # in the install-only field because `lvremove` takes the volume and not the size.
+        lvm)      [ -n "$STORAGE_LVM" ] && echo "$STORAGE_LVM/canary||full||@size=64M" ;;
+        zfs)      [ -n "$STORAGE_ZFS" ] && echo "$STORAGE_ZFS/canary||full|" ;;
         appimage) echo "" ;;   # a URL, not a name — smoked in 15, not lifecycled
         web)      echo "" ;;
         *)        echo "" ;;
+    esac
+}
+
+# The manager an image exists to test. Section 5 gives it a full install → list → binary →
+# remove on that image, so it needs no `canary()` row — but the gap audit at the end of this
+# script could not see that, and counted every distro manager as having no path to a lifecycle
+# including the one this very run was about to lifecycle.
+#
+# Named per backend rather than read from `$BACKEND`, because the question the audit asks is
+# "does a real lifecycle for this backend exist ANYWHERE", and on the ubuntu image the answer
+# for `dnf` is yes, on the fedora image. A run cannot see the other images; this table can.
+#
+# `emerge` is deliberately absent. Gentoo is always SMOKE_ONLY — a source-building
+# install→remove costs hours — so its image installs nothing and crediting it here would turn
+# the release blocker into a caption, which is the whole of what Q4 forbids.
+primary_manager_image() {
+    case "$1" in
+        apt)    echo "ubuntu, tools" ;;
+        dnf)    echo "fedora" ;;
+        pacman) echo "arch" ;;
+        apk)    echo "alpine" ;;
+        zypper) echo "opensuse" ;;
+        xbps)   echo "void" ;;
+        *)      echo "" ;;
     esac
 }
 
@@ -814,7 +963,17 @@ no_lifecycle_reason() {
         link)     echo "a dependent statement (link:SRC), not a package name — smoked in 15" ;;
         service)  echo "a dependent statement (service:NAME), not a package name — smoked in 15" ;;
         setting)  echo "a dependent statement (setting:K @value=), not a package name — smoked in 15" ;;
-        btrfs)    echo "a snapshot provider, not an install target — exercised by \`snapshot\`" ;;
+        # btrfs, lvm and zfs are install targets — `btrfs:PATH` runs `subvolume create`,
+        # `lvm:VG/LV` runs `lvcreate`. The old text here said btrfs was "a snapshot provider, not
+        # an install target", which is not what the code does, and that sentence is why the
+        # three most destructive backends in the program had never been run (Q17).
+        #
+        # What they need is a real device, so the reason is whatever 13b could not build — and
+        # it is DETECTED there and printed there. Silence here means either a canary exists or
+        # 13b already said why not, and an unexplained skip is impossible in both directions.
+        btrfs|lvm|zfs)
+            [ -n "${LINIX_IT_STORAGE:-}" ] \
+                || echo "needs a real block device, which only the \`storage\` image (--privileged) provides — plan-smoked here" ;;
         web)      echo "installs from a pasted URL; no stable public canary — smoked in 15" ;;
         appimage) echo "needs FUSE, which a plain container does not have — smoked in 15" ;;
         stack)    echo "its first install downloads a whole GHC toolchain (~2 GB) — smoked in 15" ;;
@@ -1304,9 +1463,38 @@ NO_PATH=""
 for be in $ALL_BACKENDS; do
     [ -n "$(canary "$be")" ] && continue
     [ -n "$(no_lifecycle_reason "$be")" ] && continue
+    # A distro's own manager is lifecycled by section 5 of the image built for it, which is a
+    # real lifecycle and not a plan-smoke — but it happens on a DIFFERENT run of this same
+    # script, so nothing in this process can observe it. Named in one table instead.
+    [ -n "$(primary_manager_image "$be")" ] && continue
     NO_PATH="$NO_PATH $be"
 done
 NO_PATH_N=$(echo $NO_PATH | wc -w)
+
+# `primary_manager_image` is a CLAIM about runs this process cannot see, and a claim nothing
+# checks is how a coverage table starts lying. Each row names an image; on that image, this run
+# is the one that can check it — so it does, and across the matrix every row is verified exactly
+# once. Without this the table would excuse `zypper` from the gap on the strength of an image
+# that might never have been built.
+if [ -z "$SMOKE" ] && [ -n "${LINIX_IT_IMAGE:-}" ]; then
+    for be in $ALL_BACKENDS; do
+        case ",$(primary_manager_image "$be" | tr -d ' ')," in
+            *",$LINIX_IT_IMAGE,"*) ;;
+            *) continue ;;
+        esac
+        if grep -qx "$be" "$LEDGER/be-life" "$LEDGER/be-life-partial" \
+                "$LEDGER/be-life-unmeasured" 2>/dev/null; then
+            PASS=$((PASS + 1))
+            echo "  PASS  $be: the image that claims its lifecycle is this one, and it ran"
+        else
+            FAILC=$((FAILC + 1))
+            FAILED_NAMES="$FAILED_NAMES
+    - coverage: primary_manager_image says $be is lifecycled on the $LINIX_IT_IMAGE image, and this run of it never touched $be"
+            echo "  FAIL  $be is excused from the lifecycle gap because this image lifecycles it,"
+            echo "        and this image did not. Either section 5 skipped it or the table is wrong."
+        fi
+    done
+fi
 # An audit over an empty set passes without examining anything (G2), and this one passed
 # LOUDLY: under the do-nothing stub `ALL_BACKENDS` is empty, so nothing is in neither table,
 # so the count is 0 and the `else` below congratulated the registry that came back blank. The
@@ -1469,6 +1657,11 @@ elif [ -n "$UNTOUCHED_CMD" ]; then
 else
     PASS=$((PASS + 1)); echo "  PASS  every non-exempt subcommand was executed, not just --help'd"
 fi
+
+# The container is thrown away either way, so this is not cleanup for its own sake: an
+# unmounted loopback file left behind by a run that failed halfway makes the NEXT run's
+# `mkfs` fail on a busy device, and that failure names btrfs rather than the run before it.
+teardown_storage_devices
 
 # --- Summary ---------------------------------------------------------------
 echo "=============================================================="

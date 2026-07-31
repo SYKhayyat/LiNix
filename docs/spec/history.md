@@ -4815,3 +4815,52 @@ failure mode rule 9 describes, in prose instead of a ✅.*
 
 ---
 
+
+---
+
+## Round 7 — the coverage round (2026-07-30)
+
+The owner's instruction was one sentence: *build the test and harness for all of it, to make
+sure it really works.* This is `Q4` being executed rather than cited.
+
+**The number was worse than any document said.** Cross-referencing both harnesses' canary and
+exemption tables against the union of the two registries — 60 distinct backends — **20 had never
+completed a real lifecycle in any harness, and 12 were in neither table of either one.** No
+coverage and no stated reason. Nothing could have reported this before, because each sweep
+audits only its own registry: `winget`, `choco` and `psresource` are absent from the Linux
+registry entirely, so the question *"is winget lifecycled anywhere?"* was asked by nothing at
+all. An excuse on the only harness that can run a backend looks exactly like coverage.
+
+**Two defects fell out of building the harness, and neither could have fallen out of reading.**
+
+`psresource` was compiled on Windows only — `pub mod psresource` still carried
+`#[cfg(target_os = "windows")]` — which also made it the one OS-native backend that *could not*
+appear in the argv table, since the row would not compile on the platforms that need it most.
+`registry.rs`'s own doc comment records that this class was fixed on 2026-07-26. It was fixed for
+`mas` and for `apt`. `psresource` survived, with no argv check off Windows and no lifecycle
+anywhere: two blindfolds on one backend, each of which reads like the other one's job.
+
+And the generic dependency parser took the first word of every non-empty line. The first real
+`zypper` run in this project's history could not install a single package: `zypper info
+--requires jq` opens with two progress lines and prints a paragraph of prose, so the parser
+returned twenty-five "dependencies" of which four were real — among them
+`---------------------------`, `x86_64`, `150.4` and `you`. The planner adds every dependency as
+an install node and then asks *that* node for its dependencies, which returned the same words,
+and the sweep died on a `requires` cycle between three adverbs. Because `sync` syncs the whole
+model, that one manager failed every other backend's lifecycle in the same image.
+
+*Both were sitting behind a green suite of 1,581 tests. Neither is subtle. What was missing was
+not cleverness — it was a container with openSUSE in it.*
+
+**What the round is careful about.** The new `primary_manager_image()` table is a claim about
+runs the process making it cannot see, so it is verified on the run of the image it names: no row
+may excuse a backend on the strength of a sweep nobody performs. And every exemption added this
+round is *detected* — `choco` when the shell is not elevated, `psresource` when the host has no
+PSResourceGet cmdlets, `zfs` when `modprobe -n zfs` says the kernel has no module. `Q17` makes
+that the rule, because an assumed skip is a check nobody ever revisits, which is `Q4`'s
+disclaimer wearing harness clothes.
+
+*One instrument lied during the round and was caught: an ad-hoc CRLF scan reported nine
+contaminated shell scripts, and all nine were clean — the pattern had degraded to matching the
+letter `r`. `run.sh`'s version writes a real CRLF probe and asserts it detects it before trusting
+itself, which is the entire difference between the two.*

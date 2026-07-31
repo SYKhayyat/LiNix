@@ -1224,3 +1224,122 @@ a recommendation and no jargon — `CLAUDE.md` rule 3).
 Then hand the tree to a **different** agent with `docs/GRADER.md` and no sight of your work.
 If it cannot independently reproduce your acceptance criteria, you are not done — and that
 handoff, not your own green run, is what the grade in `READINESS` §8.1 is measured against.
+
+---
+
+# Round 7 — the coverage round, 2026-07-30
+
+**Not a grader's round.** This one came from the owner: *"you need to build the test and harness
+for all of it to make sure it really works."* It is the direct execution of `Q4`, which made a
+backend with no real lifecycle a **release blocker**, and of `Q17`, which ruled on how the
+remaining coverage is obtained.
+
+## What the number actually is
+
+Both harnesses' `canary()` and `no_lifecycle_reason()` tables, cross-referenced against the union
+of the two registries (Windows 48 + Linux 56 = **60 distinct backends**), measured 2026-07-30:
+
+| | count |
+|---|---|
+| never completed a real lifecycle in **any** harness | **20** |
+| in **neither** table of **either** harness — no coverage and no stated reason | **12** |
+
+The twelve were `lvm zfs pkg pkg_add pkgin eopkg guix paru slackpkg xbps yay zypper`.
+
+**Why no gate could see this.** Each sweep audits only its own registry. `winget`, `choco` and
+`psresource` exist only on Windows and were excused there; they are absent from Linux entirely.
+So the question "is `winget` ever lifecycled anywhere?" was asked by nothing, and the answer was
+no. An excuse on the only harness that can run a backend is indistinguishable from coverage.
+
+## What round 7 changed
+
+- **`primary_manager_image()`** (container harness) — a distro's own manager is lifecycled by
+  section 5 of the image built for it, and the gap audit was counting all of them as uncovered.
+  The table is a claim about runs this process cannot see, so it is **verified on the run of the
+  image it names**: no row can excuse a backend on the strength of a sweep nobody performs.
+  `emerge` is deliberately absent, because gentoo is SMOKE_ONLY and installs nothing.
+- **`Dockerfile.opensuse` (zypper) and `Dockerfile.void` (xbps)**, both in the **default** matrix.
+  Opt-in is how a backend stays untested with a Dockerfile sitting next to it.
+- **`Dockerfile.storage`** — the first `--privileged` image, for `btrfs`, `lvm` and `zfs` on
+  loopback devices. Authorised by the owner (`Q17`).
+- **Windows: `winget` has a real lifecycle**, canary `ajeetdsouza.zoxide` — measured by hand
+  first, with LiNix's exact argv, unelevated, no `--scope` flag: install, list, uninstall, gone.
+  `choco` and `psresource` are now skipped only for a **detected** reason (shell not elevated /
+  host has no PSResourceGet cmdlets), the way `pip` already handled PEP 668.
+- **`LIFECYCLE_GAP_CEILING=12`** for the container harness — measured on the openSUSE run, not
+  guessed. It may only go down.
+
+## The two defects the coverage work uncovered
+
+Both were found by *building the missing harness and running it*, which is the point.
+
+1. **`psresource` was compiled on Windows only.** `pub mod psresource` carried
+   `#[cfg(target_os = "windows")]`, so its code did not exist on Linux or macOS — which also
+   made it the one OS-native backend that could not appear in the argv table, because the row
+   would not compile where it is most needed. `registry.rs`'s own doc comment says this class was
+   fixed on 2026-07-26; it was fixed for `mas` and `apt` and `psresource` survived. It therefore
+   had **no argv check off Windows and no lifecycle anywhere**. Un-gated; six rows added
+   (`psresource`, `yay`, `paru`, `asdf`, `cabal`, `stack`); the table's remove column is now
+   `Option<&str>`, and `None` asserts that removal *refuses* rather than silently running
+   something. `tests/os_native_argv_coverage_tests.rs` fails when the next registrar arrives
+   without a row or a written reason.
+
+2. **The generic dependency parser took the first word of every line.** The first real `zypper`
+   run in the project's history could not install a single package. `zypper info --requires jq`
+   opens with `Loading repository data...`, reports `Installed : No`, and prints a paragraph of
+   prose; the parser returned **25 "dependencies" of which 4 were real**, including
+   `---------------------------`, `x86_64`, `150.4` and `you`. The planner adds every dependency
+   as an install node and then asks *that* node for its dependencies, which returned the same
+   words — so the sweep died on a `requires` cycle between three adverbs:
+
+   ```
+   zypper:No requires zypper:Loading
+   zypper:Loading requires zypper:Reading
+   zypper:Reading requires zypper:No
+   ```
+
+   And because `sync` syncs the whole model, that one broken manager failed **every other
+   backend's lifecycle in the same image**. Fixed in two places, instance and generator:
+   `zypper` no longer re-derives a closure its own installer resolves (`depends_args: None`,
+   like apt, dnf and pacman — it was the only system manager that asked), and
+   `parse_dependency_output` now takes only what a dependency label introduces.
+
+## What is still open, and what it needs
+
+`LIFECYCLE_GAP_CEILING=12` on the container harness, 15 on Windows. Lower them, do not raise:
+
+| backend(s) | what it needs |
+|---|---|
+| `btrfs`, `lvm` | the storage image, wired and run — **in progress** |
+| `zfs` | a host kernel with the module. `modprobe -n zfs` says no on the WSL2 kernel; out-of-tree. Detected, not assumed. |
+| `eopkg` | no Solus image exists on any public registry (probed 2026-07-30) |
+| `guix`, `slackpkg` | an image built from an install script rather than a published base |
+| `yay`, `paru` | AUR helpers refuse to run as root (`needs_root = false`) and the container sweep runs as root. Needs a non-root leg. |
+| `pkg`, `pkg_add`, `pkgin` | FreeBSD / OpenBSD / NetBSD userlands. A container shares the host's **Linux** kernel; these need VMs. |
+| `mas` | a signed-in Mac |
+| `brew` | a container canary (it has a Windows one and no Linux one) |
+| `emerge` | stays smoke-only by design; a source-building lifecycle costs hours |
+
+**Do not close any of these by writing a reason.** `Q4` and `Q17` both say the same thing: an
+exemption must be something the harness genuinely cannot do — no such userland, no such device,
+no account to sign in with — and it must be **detected at run time**, never assumed. "It touches
+the real machine" is not a reason; every package manager does.
+
+### Three exemptions that survive on the old standard and not on Q17's
+
+These are *already in* `no_lifecycle_reason()` and therefore invisible to the ceiling, which is
+exactly how a cost gets recorded as an impossibility. Read each against Q17 before trusting it:
+
+- **`stack`** — *"its first install downloads a whole GHC toolchain (~2 GB)"*. That is a **cost**,
+  not an impossibility, and the fix is the one already used for every other manager in the
+  `tools` image: bake the toolchain in at build time, so the lifecycle pays milliseconds.
+- **`flatpak`** — *"the smallest app pulls a multi-GB runtime, and there is no session bus here"*.
+  Two claims welded together: the runtime size is cost, the session bus is real. Split them, and
+  test whether `flatpak --user` on a `dbus-run-session` closes it.
+- **`appimage`** — *"needs FUSE, which a plain container does not have"*. True of a *plain*
+  container, and there is now a `--privileged` one. `/dev/fuse` is reachable there. What is left
+  is the second half of its reason — no stable public canary — and that is a smaller problem
+  than the one the sentence is doing duty for.
+
+Each is a sentence that was true when written and was never re-derived, which is the disease
+this whole round is about.

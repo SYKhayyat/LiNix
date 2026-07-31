@@ -1,4 +1,4 @@
-# The decision register — all 125, and none of them open
+# The decision register — all 126, and none of them open
 
 **One file, six features. None open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -18,7 +18,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **123** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **124** |
 | **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
 
 **Four of these five statuses now describe nothing, and they stay.** The categories are not
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**None are open.** All 125 are accounted for: **123 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**None are open.** All 126 are accounted for: **124 ANSWERED, 2 PARKED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -249,6 +249,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q14** | What should `@unverified` do on a tool version with no flag to turn verification off? — RULED: **accept in silence**; the tool does not verify at all. | 2026-07-30 |
 | **Q15** | Should a command whose product is a file at a path the user named honour `--dry-run`? — RULED: **yes, except `plan`**. | 2026-07-30 |
 | **Q16** | Is a bare grammar keyword (`link`, `when`, `absent`) a package name? — RULED: **no, it is a parse error**; `list:NAME` still means the package. | 2026-07-30 |
+| **Q17** | How does a backend that mutates the real machine get its first real lifecycle? — RULED: **install and uninstall it, on the developer's own box**; and privileged containers are allowed for the storage backends. | 2026-07-30 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -3797,5 +3798,53 @@ It binds the bare **word**, not the prefix — `link:` with its colon and nothin
 already a legible refusal and stays exactly as it is.
 
 The rule is in **II.2**; the reason is in **V.103**.
+
+---
+
+## Q17
+
+**Status: ANSWERED — ruled 2026-07-30.** A follow-on from `Q4`: that ruling made missing coverage
+a release blocker, and this one says how the remaining coverage is obtained.
+
+**Q17 — How does a backend that mutates the real machine get its first real lifecycle?**
+
+Twenty of the sixty registered backends had never completed a real install → list → binary →
+remove in any harness, and twelve of those were in **neither** the canary table nor the
+exemption table of either sweep — no coverage and no stated reason. Three of them, `winget`,
+`choco` and `psresource`, were excused in writing on the grounds that they *"install machine-wide
+on a developer's real machine"*. The excuse did not survive being read next to the rest of the
+table: `scoop`, `npm`, `cargo`, `go`, `dotnet` and eleven others install on that same real
+machine and have had real lifecycles all along.
+
+**RULED (owner, 2026-07-30): install and uninstall them, like everything else.** A disposable
+Windows box is not a precondition. The harness already refuses to remove software the host
+already had — that guard is what makes this safe, and it is the same guard the other sixteen
+managers rely on.
+
+**And privileged containers are authorised** for `lvm`, `zfs` and `btrfs`, which cannot be
+exercised any other way: they need real block devices, and a loopback file in a `--privileged`
+container is the only disposable way to give them one. These are the destructive effectors, the
+code with the most to lose from being wrong, and they were argv-tested and never run.
+
+What binds:
+
+1. **A backend is excused from a lifecycle only for a reason that is *detected*, never assumed.**
+   `choco` is skipped when the shell is not elevated and lifecycled when it is; `psresource` is
+   skipped when the host has no PSResourceGet cmdlets and lifecycled when it has them. The
+   pattern already existed for `pip` and PEP 668 and is now the rule: an assumed skip is a check
+   nobody revisits, which is `Q4`'s disclaimer wearing harness clothes.
+2. **"It touches the real machine" is not a reason.** Every package manager does. The reason has
+   to be something the harness genuinely cannot do — no such userland, no such device, no
+   account to sign in with.
+3. **Coverage is measured across harnesses, not within one.** Each sweep audited only its own
+   registry, so `winget` — excused on Windows and absent from Linux — was examined by nothing
+   anywhere. A claim that some *other* image lifecycles a backend is verified on the run of that
+   image, so no row can excuse a backend on the strength of a sweep nobody performs.
+4. **A platform we do not have is still a release blocker, not an exemption.** `mas` needs a
+   signed-in Mac; `pkg`, `pkg_add` and `pkgin` need BSD userlands a Linux container cannot host.
+   Those stay counted.
+
+This is a rule about how the project is tested rather than about the program, so it has no Part
+II entry — the same shape as `Q4`, whose reason it extends. Its reason is in **V.93**.
 
 ---

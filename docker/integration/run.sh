@@ -71,17 +71,24 @@ PKG="${1:-jq}"
 # `gentoo` (emerge) is opt-in — it pulls a large base — via `DISTROS="... gentoo"`; it is always
 # run SMOKE-ONLY (a source-building emerge lifecycle costs hours), handled per-distro below, so it
 # composes into a full-matrix run without forcing the binary-package distros to smoke too.
-DISTROS="${DISTROS:-ubuntu fedora arch alpine tools}"
+# `opensuse` and `void` are in the DEFAULT matrix, not opt-in. `zypper` and `xbps` had been
+# registered backends with no real lifecycle in any harness and no stated reason for it — and an
+# image that closes that gap only when someone remembers to name it closes nothing. Opt-in is
+# how a backend stays untested with a Dockerfile sitting next to it (Q4).
+DISTROS="${DISTROS:-ubuntu fedora arch alpine opensuse void storage tools}"
 
 backend_for() {
     case "$1" in
-        ubuntu) echo apt ;;
-        fedora) echo dnf ;;
-        arch)   echo pacman ;;
-        alpine) echo apk ;;
-        tools)  echo apt ;;     # Ubuntu base; native lifecycle on apt, plan-smoke for the rest
-        gentoo) echo emerge ;;  # SMOKE-ONLY (baked into the image); no source builds
-        *)      echo "" ;;
+        ubuntu)   echo apt ;;
+        fedora)   echo dnf ;;
+        arch)     echo pacman ;;
+        alpine)   echo apk ;;
+        opensuse) echo zypper ;;
+        void)     echo xbps ;;
+        storage)  echo apt ;;   # Ubuntu base; the point of this image is btrfs/lvm/zfs in 13b
+        tools)    echo apt ;;   # Ubuntu base; native lifecycle on apt, plan-smoke for the rest
+        gentoo)   echo emerge ;;  # SMOKE-ONLY (baked into the image); no source builds
+        *)        echo "" ;;
     esac
 }
 
@@ -109,12 +116,18 @@ for d in $DISTROS; do
     # ALWAYS smoke-only — a real emerge install→remove builds from source and costs hours — so a
     # single `DISTROS="... gentoo"` run does the right thing per distro: full lifecycle for the
     # binary-package managers, smoke for Portage. A global SMOKE_ONLY still forces every distro.
+    # The one image that gets `--privileged`, and it is named rather than inferred from a
+    # variable the image could set: a Dockerfile must not be able to ask for privilege.
+    # It needs real block devices for btrfs/lvm/zfs, which no other check here does (Q17).
+    PRIV=""
+    [ "$d" = storage ] && PRIV="--privileged"
+
     ENVFLAGS=""
     smoke="${SMOKE_ONLY:-}"
     [ "$d" = gentoo ] && smoke=1
     [ -n "$smoke" ] && ENVFLAGS="$ENVFLAGS -e SMOKE_ONLY=$smoke"
     # shellcheck disable=SC2086
-    if docker run --rm $ENVFLAGS -v "$SCRIPT_MOUNT" -v "$FLOOR_MOUNT" "linix-it-$d" "$be" "$PKG"; then
+    if docker run --rm $PRIV $ENVFLAGS -v "$SCRIPT_MOUNT" -v "$FLOOR_MOUNT" "linix-it-$d" "$be" "$PKG"; then
         summary="${summary}\n  ${d} (${be}): PASS"
     else
         summary="${summary}\n  ${d} (${be}): FAIL"; overall=1

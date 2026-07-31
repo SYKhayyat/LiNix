@@ -122,11 +122,23 @@ scripts/integration-windows.sh scoop jq
 ```
 
 `scripts/integration-windows.sh` mirrors the container harness section for section, with the
-same coverage audit. One deliberate difference: **it runs on a real machine, not a disposable
-one**, so the real-lifecycle sweep covers only managers that install per-user and uninstall
-cleanly (scoop, cargo, npm, pipx, uv, gem, github, brew). The machine-wide ones — winget,
-choco, psresource, system pip, and the ones that rewrite a live desktop or editor profile —
-are plan-smoked and **named with that reason**, not silently skipped.
+same coverage audit. It runs on a real machine rather than a disposable one, and the guard that
+makes that safe is the same one every other manager relies on: **a canary the host already had
+is left alone, never removed.**
+
+Until 2026-07-30 `winget`, `choco` and `psresource` were excused from the real-lifecycle sweep
+on the grounds that they "install machine-wide on a developer's real machine" — which is true of
+`scoop`, `npm` and `cargo` too, and those have had real lifecycles all along. The owner ruled the
+excuse away (`Q17`): **install and uninstall them like everything else.** `winget` now has a real
+lifecycle here, and what remains is *detected* rather than assumed —
+
+- `choco` is skipped only when the shell is **not elevated**, because Chocolatey writes to
+  `C:\ProgramData`. Re-run from an elevated shell and it gets a full lifecycle.
+- `psresource` is skipped only when the host has **no PSResourceGet cmdlets**, which LiNix's own
+  health check prints the command to fix.
+
+That distinction is the point. An assumed skip is a check nobody ever revisits; a detected one
+turns into coverage the moment the machine can carry it.
 
 ## macOS — why it's not in the matrix
 

@@ -1777,17 +1777,41 @@ registered**:
 cabal composer conda flatpak lvm mix nix opam pkg pkg_add pkgin snap spack stack zfs
 ```
 
-The container harness's ceiling is deliberately **unrecorded**: the Linux registry is a
-different set (56, not 48) and that harness has its own canary table, so the number has to come
-from a run of that harness rather than from an estimate here. Until it is recorded the check
-reports the count and says how to record it, the same branch the real-lifecycle ratchet takes
-for a host class it has never seen.
+The container harness's ceiling is **12**, measured on the openSUSE run of 2026-07-30 — the
+first run after `primary_manager_image()` stopped the audit counting a distro's own manager as
+uncovered, which it had been doing for every image:
 
-**This is the leading indicator, not the whole blocker.** A canary means the harness *could* run
-a lifecycle; whether one has ever *passed* is a fact about CI history, and nothing in the repo
-computes that union — the round-5 grader assembled it by hand from six job logs (32 of 56
-distinct backends). Making that union computable is the next piece, and it wants the per-run
-`be-life` ledgers published as an artifact rather than left in a temp dir.
+```
+brew emerge eopkg guix lvm paru pkg pkg_add pkgin slackpkg yay zfs
+```
+
+**The per-harness ceiling was never the whole question, and on its own it hid the worst case.**
+Each sweep audits only its own registry, so a backend that exists on one platform and is excused
+there is examined by *nothing*: `winget`, `choco` and `psresource` are absent from the Linux
+registry entirely, so "is `winget` ever lifecycled anywhere?" was a question no gate asked. The
+answer was no. Measured across the union of both registries on 2026-07-30 — **60 distinct
+backends** — **20 had never completed a real lifecycle in any harness, and 12 of those were in
+neither table of either one**: no coverage and no stated reason.
+
+That is the number the blocker is about, and `Q17` (owner, 2026-07-30) ruled on how it comes
+down: install and uninstall on the real machine like every other manager; privileged containers
+for the storage effectors; and **an exemption must be detected at run time and named, never
+assumed** — "it touches the real machine" is not a reason, because every package manager does.
+
+**This is still a leading indicator, not the whole blocker.** A canary means the harness *could*
+run a lifecycle; whether one has ever *passed* is a fact about CI history, and nothing in the
+repo computes that union — the round-5 grader assembled it by hand from six job logs. Making
+that union computable is the next piece, and it wants the per-run `be-life` ledgers published as
+an artifact rather than left in a temp dir.
+
+**What the coverage work found by being built.** Two defects, both invisible to every green
+suite that preceded them, and both found by running the real thing rather than reasoning about
+it: `psresource` was compiled on Windows only and so could not appear in the argv table that
+exists to make OS-native argv visible off its own platform; and the generic dependency parser
+took the first word of every line of output, which meant the first real `zypper` run in the
+project's history could not install anything — it died on a `requires` cycle between
+`zypper:Loading`, `zypper:Reading` and `zypper:No`. `docs/BUILDER.md`'s round-7 section carries
+both in full.
 
 **Q4's item 4 is what the ceiling enforces today:** no new backend is added until the current
 set passes. Adding one without a canary or a stated reason raises the count and fails the sweep.

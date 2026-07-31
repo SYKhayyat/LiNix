@@ -1,0 +1,41 @@
+# LiNix integration image — the storage effectors (btrfs, lvm, zfs). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.storage -t linix-it-storage .
+#   docker run --rm --privileged linix-it-storage apt jq
+#
+# **This image must be run `--privileged`.** It is the only one that is, and the reason is that
+# `btrfs`, `lvm` and `zfs` are the three backends that operate on block devices: they cannot be
+# exercised by any amount of mocking, and until 2026-07-30 they had never been run at all — the
+# harnesses called btrfs "a snapshot provider, not an install target", which is not what the code
+# does. `btrfs:PATH` runs `btrfs subvolume create`, `lvm:VG/LV` runs `lvcreate`, and both have a
+# real install → list → remove cycle that only needs a real device to run on.
+#
+# The devices are loopback files created inside the container and destroyed with it, so nothing
+# outside the container is reachable. Privileged is still privileged: the kernel is the host's.
+# Authorised by the owner on 2026-07-30 (Q17).
+FROM ubuntu:24.04
+ENV LINIX_IT_IMAGE=storage
+ENV LINIX_IT_STORAGE=1
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates build-essential pkg-config libssl-dev perl git \
+    btrfs-progs lvm2 xfsprogs kmod \
+    && rm -rf /var/lib/apt/lists/*
+# zfsutils-linux pulls the userland only; the kernel module belongs to the host and is checked
+# for at run time rather than assumed. Tolerant: on a host kernel without ZFS the package is
+# still worth having, because the harness's refusal then names the missing module and not a
+# missing binary.
+RUN apt-get update && apt-get install -y --no-install-recommends zfsutils-linux || true
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+# LVM inside a container: the default config wants udev to populate /dev, and there is no udev
+# here, so every lvcreate would hang waiting for a device node that nobody is going to make.
+RUN sed -i 's/^\( *\)udev_sync = 1/\1udev_sync = 0/; s/^\( *\)udev_rules = 1/\1udev_rules = 0/; s/^\( *\)obtain_device_list_from_udev = 1/\1obtain_device_list_from_udev = 0/' /etc/lvm/lvm.conf \
+    && grep -E 'udev_sync|udev_rules|obtain_device_list_from_udev' /etc/lvm/lvm.conf
+# The index, last, for the same reason as every other image: without it `search` answers nothing
+# and the apt half of this sweep is not testing apt.
+RUN apt-get update
+WORKDIR /src
+COPY . /src
+RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
+ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
+CMD ["apt", "jq"]

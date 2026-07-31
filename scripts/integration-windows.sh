@@ -642,6 +642,19 @@ LIFECYCLE_GAP_CEILING=15
 canary() {
     case "$1" in
         scoop)    echo "jq|jq|full|" ;;
+        # zoxide, and not jq/rg/fd: those three are this host's scoop, pixi and github canaries,
+        # so a leftover from any of them would answer winget's PATH check for it. It is also a
+        # portable zip package, which winget installs under the user's own profile with the argv
+        # LiNix already sends — measured 2026-07-30, install and uninstall both clean, with no
+        # `--scope` flag and no elevation.
+        winget)   echo "ajeetdsouza.zoxide|zoxide|full|" ;;
+        # Chocolatey only reaches this row on an elevated shell; `no_lifecycle_reason` says so
+        # and skips it otherwise. `bat` is small, has no dependencies, and is nothing else's
+        # canary on this platform.
+        choco)    echo "bat|bat|full|" ;;
+        # A PowerShell module, so there is no binary on PATH — the field is empty rather than
+        # faked, and `list --backend psresource` is the presence assertion.
+        psresource) echo "powershell-yaml||full|" ;;
         npm)      echo "cowsay|cowsay|full|" ;;
         pnpm)     echo "cowsay|cowsay|full|" ;;
         yarn)     echo "cowsay|cowsay|full|" ;;
@@ -669,13 +682,26 @@ canary() {
     esac
 }
 
+# True when this process can write the machine-wide locations an installer needs. `net session`
+# is the cheapest reliable answer on a shell that has no `id -u` worth trusting: it needs the
+# Server service and fails with "Access is denied" for a non-elevated token.
+is_elevated() {
+    net session >/dev/null 2>&1
+}
+
 no_lifecycle_reason() {
     case "$1" in
-        winget)     echo "installs machine-wide on a developer's real machine — plan-smoked instead" ;;
-        choco)      echo "installs machine-wide and needs an elevated shell — plan-smoked instead" ;;
-        psresource) echo "writes to the PowerShell module path for the whole user profile — plan-smoked instead" ;;
-        pip)        echo "installs into the system Python this host runs on — plan-smoked instead" ;;
+        # winget, choco and psresource were excused here until 2026-07-30 on the grounds that
+        # they touch the real machine — which is true of scoop, npm and cargo too, and those
+        # have had real lifecycles all along. The owner ruled the excuse away: install and
+        # uninstall, like every other manager. What is left is DETECTED rather than assumed, so
+        # a host that can run one gets a real lifecycle and only a host that genuinely cannot
+        # prints a reason. An assumed skip is a check nobody will ever revisit.
+        choco)      is_elevated || echo "chocolatey writes to C:\\ProgramData and this shell is not elevated, so the install would fail on permissions rather than on anything LiNix did — re-run from an elevated shell to lifecycle it" ;;
+        psresource) powershell -NoProfile -Command "exit (\$null -eq (Get-Command Install-PSResource -ErrorAction SilentlyContinue))" >/dev/null 2>&1 \
+                        || echo "this host has no PSResourceGet cmdlets, so there is no manager here to lifecycle — LiNix's own health check prints the one command that installs it" ;;
         mas)        echo "needs a signed-in App Store account — plan-smoked instead" ;;
+        pip)        echo "installs into the system Python this host runs on — plan-smoked instead" ;;
         link)       echo "a dependent statement (link:SRC), not a package name — smoked in 13" ;;
         service)    echo "a dependent statement (service:NAME), and starting one mutates the host" ;;
         setting)    echo "a dependent statement (setting:K @value=), and it writes a live desktop setting" ;;

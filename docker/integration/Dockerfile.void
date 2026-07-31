@@ -1,0 +1,37 @@
+# LiNix integration image — Void Linux (xbps). Build context = repo root.
+#   docker build -f docker/integration/Dockerfile.void -t linix-it-void .
+#   docker run --rm linix-it-void              # defaults to: xbps jq
+#
+# Same reason as the openSUSE image: `xbps` was registered and had never been run against the
+# real program anywhere. Void ships Rust in its own repository, so this image does not need
+# rustup — which also means the toolchain it builds LiNix with is the distro's, one more thing
+# the other images do not cover.
+FROM ghcr.io/void-linux/void-linux:latest-full-x86_64
+ENV LINIX_IT_IMAGE=void
+# xbps insists on updating itself before anything else; without this first line the second
+# `xbps-install` aborts with "xbps needs to be updated" and the image build fails in a way that
+# reads like a network problem.
+RUN xbps-install -Syu xbps || true
+RUN xbps-install -yu \
+    && xbps-install -y curl gcc make pkg-config openssl-devel perl git \
+       nodejs ruby ruby-devel python3-pipx rust cargo
+# Extra managers via their own installers. Tolerant (`|| true`): a build-time network hiccup
+# leaves the image usable; that backend just won't be READY and is auto-skipped by the sweep.
+RUN corepack enable || true
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh || true
+RUN curl -fsSL https://bun.sh/install | bash || true
+# `/root/.local/share/pnpm` is pnpm's global bin directory, and pnpm REFUSES to install a global
+# package when it is not on PATH — `corepack enable` puts the pnpm shim there and does not do
+# this, so on the first Void run pnpm was READY and could not install anything:
+#     ERROR  The configured global bin directory "/root/.local/share/pnpm/bin" is not in PATH
+# The other images inherit it from their base; this one has no base to inherit from.
+ENV PNPM_HOME="/root/.local/share/pnpm"
+ENV PATH="/root/.local/share/pnpm:/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
+# The index, for the same reason the other images end with one: without it `search` answers
+# nothing and every unpinned name silently leaves the native manager untested.
+RUN xbps-install -S
+WORKDIR /src
+COPY . /src
+RUN cargo build --release && cp target/release/linix /usr/local/bin/linix && chmod 0755 /usr/local/bin/linix
+ENTRYPOINT ["sh", "/src/docker/integration/run-in-container.sh"]
+CMD ["xbps", "jq"]
