@@ -510,8 +510,11 @@ fn parse_inner(origin: &Origin, line: &str, backends: &dyn BackendNames) -> Resu
     // before the typed statements. `looks_like_expression` fires on `\ | & (`, and a
     // `link:C:\Users\me\.vimrc` is full of `\`: without this guard II.4's set math eats
     // II.2's statements, and `link:` silently parses as `Statement::Expr`. A line that opens
-    // with a known statement prefix is that statement, never an expression.
-    if !starts_with_statement_prefix(line) && crate::app::profile_expr::looks_like_expression(line)
+    // with a known statement prefix — or with a known backend, which makes it a package line —
+    // is that statement, never an expression.
+    if !starts_with_statement_prefix(line)
+        && !opens_a_package_line(line, backends)
+        && crate::app::profile_expr::looks_like_expression(line)
     {
         return Ok(Statement::Expr(line.to_string()));
     }
@@ -698,6 +701,31 @@ fn starts_with_statement_prefix(line: &str) -> bool {
         .iter()
         .any(|k| k.takes_colon() && line.starts_with(k.spelling))
 }
+
+/// Whether a line opens with `<known backend>:`, which makes it a package line (II.2) and not
+/// set math (II.4). `\` is a difference operator *and* a legal character in a package name —
+/// `winget list` reports 185 such names on a stock Windows box (`ARP\Machine\X64\Firefox`) —
+/// so without this the commonest line in the language is read as profile algebra.
+///
+/// A real difference between two qualified packages (`apt:jq \ apt:vim`) still parses as one:
+/// an operator stands apart from its operands and a name never does.
+fn opens_a_package_line(line: &str, backends: &dyn BackendNames) -> bool {
+    let head = match line.split_whitespace().next() {
+        Some(h) => h,
+        None => return false,
+    };
+    let Some((backend, rest)) = head.split_once(':') else {
+        return false;
+    };
+    if rest.is_empty() || !backends.is_backend(backend) {
+        return false;
+    }
+    !SPACED_OPERATORS.iter().any(|op| line.contains(op))
+}
+
+/// The set operators as they are written between operands. Glued forms (`(a|b)&c`) are still
+/// expressions — they cannot open with a backend prefix.
+const SPACED_OPERATORS: [&str; 3] = [" \\ ", " | ", " & "];
 
 fn parse_use(origin: &Origin, target: &str) -> Result<Statement> {
     if target.is_empty() {
@@ -2241,7 +2269,7 @@ mod option_key_tests {
     use super::*;
 
     fn known(name: &str) -> bool {
-        matches!(name, "apt" | "cargo")
+        matches!(name, "apt" | "cargo" | "winget")
     }
 
     fn parse_line(line: &str) -> Result<Statement> {
@@ -2299,6 +2327,39 @@ mod option_key_tests {
             err.hint.unwrap().contains("@expires"),
             "must point at the present-line form"
         );
+    }
+
+    #[test]
+    fn a_package_name_carrying_a_backslash_is_a_package_not_a_difference() {
+        // `winget list` reports 185 such names out of 278 on a stock Windows box. The typed
+        // prefixes were shielded from `looks_like_expression` and the package line — the most
+        // common line in the language — was not.
+        for line in [
+            r"winget:ARP\Machine\X64\Firefox",
+            r"winget:MSIX\Microsoft.AV1VideoExtension_2.0.24.0_x64__8wekyb3d8bbwe",
+        ] {
+            assert!(
+                matches!(parse_line(line).unwrap(), Statement::Package(_)),
+                "{line} must be a package line"
+            );
+        }
+    }
+
+    #[test]
+    fn set_math_between_qualified_packages_is_still_set_math() {
+        // The shield must not eat II.4: an operator stands apart from its operands, a name
+        // never does. Both spellings of a difference, and the other two operators.
+        for line in [
+            r"apt:jq \ apt:vim",
+            "apt:jq | apt:vim",
+            "apt:jq & apt:vim",
+            "(Work | gaming) & security",
+        ] {
+            assert!(
+                matches!(parse_line(line).unwrap(), Statement::Expr(_)),
+                "{line} must stay a set expression"
+            );
+        }
     }
 
     #[test]
@@ -2655,7 +2716,10 @@ mod scoped_option_tests {
             opt("lvm:vg0/data@size=5G,allow_shrink=true", "allow_shrink"),
             "true"
         );
-        assert_eq!(opt("lvm:vg0/data@size=5G,allow_shrink", "allow_shrink"), "true");
+        assert_eq!(
+            opt("lvm:vg0/data@size=5G,allow_shrink", "allow_shrink"),
+            "true"
+        );
 
         // Nowhere else. A quota is a limit, not a filesystem, so lowering one destroys nothing
         // and there is nothing here to permit — the flag on those backends would read as a
@@ -2683,7 +2747,11 @@ mod scoped_option_tests {
     fn allow_shrink_without_a_size_is_refused() {
         let err = format!("{}", p("lvm:vg0/data@allow_shrink=true").unwrap_err());
         assert!(err.contains("`@allow_shrink` has no `@size`"), "{}", err);
-        assert!(err.contains("add `@size=`"), "the way out is named: {}", err);
+        assert!(
+            err.contains("add `@size=`"),
+            "the way out is named: {}",
+            err
+        );
     }
 
     /// snap's `--classic` branch had never run: the backend read `@classic` and no line could
