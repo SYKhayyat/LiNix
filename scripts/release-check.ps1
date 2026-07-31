@@ -2,7 +2,7 @@
 #
 # Runs the hermetic gates then the native Windows integration sweep and prints one go/no-go:
 #   1. cargo clippy -D warnings   (HARD)
-#      cargo test --release        (HARD)
+#      cargo test --release --no-fail-fast   (HARD)
 #      cargo build --release       (HARD)
 #      cargo fmt -- --check        (HARD - CI fails the build on it, so this must too)
 #   2. scripts/integration-windows.sh - real install/list/remove for every backend installable
@@ -71,8 +71,10 @@ Write-Host "-> cargo clippy --all-targets --all-features -- -D warnings"
 cargo clippy --all-targets --all-features -- -D warnings
 if ($LASTEXITCODE -eq 0) { Pass "clippy: no warnings" } else { Fail "clippy reported warnings/errors" }
 
-Write-Host "-> cargo test --release"
-cargo test --release
+Write-Host "-> cargo test --release --no-fail-fast"
+# --no-fail-fast because CI does: without it cargo stops at the first failing test TARGET and
+# the rest of the suite goes unmeasured (G-4).
+cargo test --release --no-fail-fast
 if ($LASTEXITCODE -eq 0) { Pass "cargo test: all tests pass" } else { Fail "cargo test: failures" }
 
 Write-Host "-> cargo build --release"

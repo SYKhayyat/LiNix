@@ -504,7 +504,13 @@ if [ -f "$_here/$_ci" ]; then
             done
         done
         if [ -z "$_missing" ]; then
-            echo "  ok    both release scripts run all $_n gate script(s) CI runs, against the same harnesses"
+            # The count is in the sentence on purpose. This predicate sees SCRIPTS, and the claim
+            # it is quoted for is about GATES: a CI job whose steps run `cargo test` or
+            # `docker run` directly is invisible here, and three such asymmetries lived behind an
+            # unqualified `ok` (G-4). Job-level parity is
+            # `tests/grade6_gate_parity_sees_whole_jobs_tests.rs`; this line answers for the
+            # gate scripts and says so.
+            echo "  ok    both release scripts run all $_n gate script(s) CI runs, against the same harnesses (scripts only — job-level parity is grade6_gate_parity_sees_whole_jobs_tests.rs)"
         else
             echo "  BAD   a local gate is weaker than CI:"
             printf "%b\n" "$_missing"

@@ -5,7 +5,7 @@
 #   1. HERMETIC gates (any host, fast, no Docker):
 #        cargo fmt --check          (HARD)
 #        cargo clippy -D warnings   (HARD)
-#        cargo test --release       (HARD — all unit/integration tests)
+#        cargo test --release --no-fail-fast   (HARD — all unit/integration tests)
 #        cargo build --release      (HARD)
 #   2. REAL integration matrix (needs Docker on Linux): every distro image + the broad `tools`
 #        image, each doing real install→list→remove for every feasible backend, full feature
@@ -43,8 +43,11 @@ echo "-> cargo clippy --all-targets --all-features -- -D warnings"
 if cargo clippy --all-targets --all-features -- -D warnings; then pass "clippy: no warnings"
 else fail "clippy reported warnings/errors"; fi
 
-echo "-> cargo test --release"
-if cargo test --release; then pass "cargo test: all tests pass"
+echo "-> cargo test --release --no-fail-fast"
+# `--no-fail-fast` because CI does: without it cargo stops at the first test TARGET that
+# fails, and this suite has dozens. A local gate that measures less than CI turns a local GO
+# into a NO-GO on the push (G-4).
+if cargo test --release --no-fail-fast; then pass "cargo test: all tests pass"
 else fail "cargo test: failures"; fi
 
 echo "-> cargo build --release"
@@ -87,7 +90,10 @@ elif [ "$OS" = "Darwin" ]; then
 elif command -v docker >/dev/null 2>&1; then
     step "2. REAL INTEGRATION MATRIX (Docker: every distro + tools + gentoo)"
     # Full release coverage includes gentoo (emerge, SMOKE-ONLY). Override with DISTROS=…
-    export DISTROS="${DISTROS:-ubuntu fedora arch alpine tools gentoo}"
+    # Every image CI drives, plus gentoo, which is nightly there. `opensuse`, `void` and
+    # `storage` were missing: CI has run all three on every push since 2026-07-31, and the
+    # parity checker could not see it because a matrix row is not a script name (G-4).
+    export DISTROS="${DISTROS:-ubuntu fedora arch alpine opensuse void storage tools gentoo}"
     if ./docker/integration/run.sh; then pass "integration matrix ($DISTROS) PASS"
     else fail "integration matrix ($DISTROS) had FAILURES"; fi
 else

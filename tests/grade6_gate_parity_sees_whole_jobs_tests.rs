@@ -186,8 +186,12 @@ fn every_ci_job_has_something_local_that_runs_it() {
     //   windows-native  release-check.ps1: integration-windows.sh $Backend $Package
     //   argv-drift      `cargo test` builds and runs tests/argv_drift_tests.rs
     //   harness-mutation harness-mutation-test.sh — both scripts, both targets
+    //   storage         release-check.sh's DISTROS names the image; run.sh gives it --privileged
     //
-    // `storage` is the one with no row, and that is the finding.
+    // `storage` had no row when this was written, and that was the finding: the only job that
+    // touches real block devices, on every push, driven by nothing a developer can run. Its
+    // needle is the image name rather than `run.sh`, because `run.sh` appears in this file
+    // twice already and would have made the row true without making the job reachable.
     let reached_by: &[(&str, &str)] = &[
         ("build", "cargo build"),
         ("containers", "docker/integration/run.sh"),
@@ -196,6 +200,7 @@ fn every_ci_job_has_something_local_that_runs_it() {
         ("windows-native", "integration-windows.sh"),
         ("harness-mutation", "harness-mutation-test.sh"),
         ("argv-drift", "cargo test"),
+        ("storage", "storage"),
     ];
     let drives_nothing = ["release"];
 
