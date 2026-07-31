@@ -2,7 +2,19 @@
 
 All notable changes to LiNix are documented here.
 
-## [Unreleased] — v7, the declarative rewrite
+## [0.7.0] — 2026-07-31 — v7, the declarative rewrite
+
+> **The version is `0.7.0` and the design is "v7"**, which are two different numbers and were
+> confusing each other. `Cargo.toml` said `0.1.0` while every document called the rewrite v7, so
+> a user reading `linix --version` had no way to tell which tree they had. The crate version now
+> tracks the design generation; the leading `0.` says what is true — this has never been
+> installed from an artifact by anyone.
+>
+> **What "released" means here:** the tag is not pushed by this commit. `ci.yml`'s release job
+> fires on a tag and publishes; that is an outward act and it belongs to the owner:
+>
+>     git tag -a v0.7.0 -m "v0.7.0" && git push origin v0.7.0
+
 
 v7 is a rewrite, not an upgrade. The model changed: **one file says what should be installed,
 and `sync` makes the machine match it.** Everything that used to be a separate mechanism for
