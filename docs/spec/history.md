@@ -14,6 +14,49 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-31 (fourth) — the coverage round: exemptions read against `Q4`
+
+**`Q23` first, because CI was red on it on two platforms.** A package name beginning with `@` —
+every scoped npm package — could not be written at all: `@` opens an option, so `npm:@bazel/bazelisk`
+was read as an empty name followed by nonsense and refused with *"is not a list of `key=value`
+options"*. `npm ls -g` prints those names and `linix list` reports them, so LiNix was refusing
+names it had just printed. **RULED (owner): the leading `@` is part of the name**, positionally —
+only the first character, so `npm:@angular/cli@version=17.3.0` still pins. Rule in II.2, reason in
+**V.113**, which also names the shape all three of the day's grammar defects share: *a manager
+prints a name LiNix's own grammar cannot take back* (`\` as set math, a byte-order mark, `@`).
+Where the two disagree the grammar gives way, because the manager's names are facts and the
+grammar is a choice.
+
+**Then the coverage, and the first finding is the one that matters: `nix` was never installed.**
+The tools image ran the nixos.org script as root, which refuses — `warning: installing Nix as root
+is not supported by this script!` — and `|| echo "SKIP nix install"` swallowed it in step 12 of a
+26-step build. For months the ledger recorded `nix` as *no path to a real lifecycle anywhere*: an
+impossibility that was a broken line nobody read. It installs now (Determinate, `--init none`, the
+container case), with **no `|| true` and a build-time assertion**.
+
+**The class is closed too.** The image writes what it actually ships to
+`/etc/linix-image-managers` and the coverage audit reads it, so a manager that failed to install
+is *missing and named* rather than impossible. Soft rather than hard on purpose: an architecture
+can legitimately take one of thirty away, and a red run there teaches people to delete the line
+rather than fix the install — which is how these lists got long.
+
+**Four Windows exemptions were host-RESPECT, not impossibility.** LiNix can install a VS Code
+extension, an Emacs package, a system-Python module or a mise shim perfectly well; the sweep
+declined so a developer's machine would not be changed. **On a runner there is nobody to
+inconvenience**, and `Q4` is explicit that an exemption is something the harness cannot do rather
+than something it would rather not. `disposable_host` — `CI`, detected and never assumed — opens
+`pip`, `vscode`, `emacs`, `mise` and `asdf` where the machine is thrown away afterwards.
+
+**And `web:` had no lifecycle anywhere because of "no stable public canary"** — a search nobody
+had run. A pinned GitHub release asset is exactly a stable public URL. `appimage` likewise: it had
+been excused as *needing FUSE, which a plain container does not have*, when installing one is a
+download and a symlink; its Windows reason is corrected to the true one, that Windows cannot run
+an AppImage at all.
+
+**What stays a cost, said plainly:** `stack` (a Haskell package builds from source, and baking the
+toolchain does not change that) and `flatpak` (the smallest runtime is multi-GB). Those are real
+prices, not impossibilities, and they are written as prices.
+
 ## Session 2026-07-31 (third) — the round-6 grade, worked: eight findings and the blocker that came back
 
 **Nothing here was reported by a user and nothing was found by running the suite.** The
