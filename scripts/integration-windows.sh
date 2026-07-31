@@ -185,6 +185,33 @@ nok() {
 # else: SIXTEEN of seventeen surviving checks were refusal checks, every one of them scored
 # "correctly refused" because the stub exited 1. The distinction the product publishes is the
 # distinction the harness has to assert.
+# `nok`, plus the sentence. A negative check that asserts only "non-zero" cannot tell the
+# product refusing your input from the binary being broken — measured: a stub that fails
+# everything left twelve of these passing (G-8). The pattern is the manager-independent half
+# of LiNix's own message, so this stays true wherever the sweep runs.
+nok_saying() { # description pattern command...
+    desc="$1"; pat="$2"; shift 2
+    "$@" >/tmp/itw.out 2>&1; rc=$?
+    if [ "$rc" = 0 ]; then
+        FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
+    - $desc (expected a failure, got 0)"
+        echo "  FAIL  $desc (expected a failure, but it succeeded)"; return 1
+    fi
+    if never_ran "$rc"; then
+        FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
+    - $desc (rc=$rc: never ran)"
+        echo "  FAIL  $desc (rc=$rc: the command never ran; that is not a failure)"
+        excerpt; return 1
+    fi
+    if grep -q "$pat" /tmp/itw.out; then
+        PASS=$((PASS + 1)); echo "  PASS  $desc (refused, saying so)"; return 0
+    fi
+    FAILC=$((FAILC + 1)); FAILED_NAMES="$FAILED_NAMES
+    - $desc (failed without saying /$pat/)"
+    echo "  FAIL  $desc (rc=$rc, but nothing in the output said /$pat/ — it failed for some other reason)"
+    excerpt; return 1
+}
+
 refuses_with_3() { # description command...
     desc="$1"; shift
     "$@" >/tmp/itw.out 2>&1; rc=$?
@@ -413,8 +440,7 @@ assert_binary_reachable() { # backend binary install-log prior-resolution
     else
         _rwhy="the install named $_rdir and $_rbin is not in it"
     fi
-    FAILED_NAMES="$FAILED_NAMES
-    - $_rbe: $_rwhy"
+    FAILED_NAMES="$FAILED_NAMES\n    - $_rbe: $_rwhy"
     echo "  FAIL  $_rbe: $_rwhy"
     return 1
 }
@@ -618,11 +644,11 @@ echo "        lock file: ${LOCKFILE:-<none>}"
 ok  "a chain is legal"           lx --dry-run install "$BACKEND,cargo:$PKG"
 ok  "a chain may end in list"    lx --dry-run install "$BACKEND,list:$PKG"
 ok  "list alone is legal"        lx --dry-run install "list:$PKG"
-nok "an empty slot is refused"   lx --dry-run install "$BACKEND,,cargo:$PKG"
-nok "an unknown link is refused" lx --dry-run install "$BACKEND,nope:$PKG"
-nok "list must come last"        lx --dry-run install "list,$BACKEND:$PKG"
-nok "a name repeated is refused" lx --dry-run install "$BACKEND,$BACKEND:$PKG"
-nok "a pattern cannot span one"  lx --dry-run install "$BACKEND,cargo:re:^$PKG"
+nok_saying "an empty slot is refused" "has an empty backend"   lx --dry-run install "$BACKEND,,cargo:$PKG"
+nok_saying "an unknown link is refused" "is not a backend LiNix uses" lx --dry-run install "$BACKEND,nope:$PKG"
+nok_saying "list must come last" "must come last"        lx --dry-run install "list,$BACKEND:$PKG"
+nok_saying "a name repeated is refused" "is named twice" lx --dry-run install "$BACKEND,$BACKEND:$PKG"
+nok_saying "a pattern cannot span one" "must match in exactly one backend"  lx --dry-run install "$BACKEND,cargo:re:^$PKG"
 # A manager no Windows host has: a pin to it must say so rather than no-op.
 nok "a pin to a manager this host lacks is not silent" lx -y install "apt:$PKG"
 ok  "unlock --list runs"         lx unlock --list

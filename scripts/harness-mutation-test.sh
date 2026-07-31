@@ -77,11 +77,13 @@ FLOOR="${CAUGHT_FLOOR:-$DEFAULT_FLOOR}"
 # split off from `nok`: Windows 12 survivors / 96 caught, container 17 / 118 (run outside a
 # container, which reports one survivor fewer than CI does -- hence the single point of slack).
 # The grader measured SEVENTEEN survivors on the Windows harness before the split, sixteen of
-# them refusal checks; five of those are now assertions about exit 3 and the rest are honest
-# `nok`s whose command really does fail with 1. Ratchet down, never up.
+# them refusal checks. Five became assertions about exit 3 (`refuses_with_3`) and five more
+# assert the sentence as well as the code (`nok_saying`), which took Windows 12 -> 7 and the
+# container 17 -> 12; the budgets are one step above each so a wobble between hosts is not a
+# red gate. Ratchet down, never up.
 case "$HARNESS" in
-    */run-in-container.sh) DEFAULT_FAIL_BUDGET=18; DEFAULT_FAIL_FLOOR=110 ;;
-    *)                     DEFAULT_FAIL_BUDGET=13; DEFAULT_FAIL_FLOOR=90 ;;
+    */run-in-container.sh) DEFAULT_FAIL_BUDGET=13; DEFAULT_FAIL_FLOOR=115 ;;
+    *)                     DEFAULT_FAIL_BUDGET=8;  DEFAULT_FAIL_FLOOR=95 ;;
 esac
 FAIL_BUDGET="${FAIL_SURVIVOR_BUDGET:-$DEFAULT_FAIL_BUDGET}"
 FAIL_FLOOR="${FAIL_CAUGHT_FLOOR:-$DEFAULT_FAIL_FLOOR}"
