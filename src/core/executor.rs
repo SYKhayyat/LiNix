@@ -802,12 +802,25 @@ impl CommandExecutor {
         } else {
             lines.clone()
         };
+        /// A line long enough for any sentence a manager writes, and short enough that a stream
+        /// with no newlines in it — a progress bar drawn with bare carriage returns is one long
+        /// line to `lines()` — cannot fill a terminal past the cap above.
+        const WIDTH: usize = 240;
+
         let shown: Vec<String> = chosen
             .iter()
             // A tab is a column, not an escape: kept as spaces so a manager's table still reads
             // as one. Everything else that moves a cursor or reverses a line is named by
             // codepoint, by the same function the grammar's refusals use.
             .map(|l| crate::core::validator::printable(&l.replace('\t', "    ")))
+            .map(|l| {
+                if l.chars().count() > WIDTH {
+                    let head: String = l.chars().take(WIDTH).collect();
+                    format!("{head}…")
+                } else {
+                    l
+                }
+            })
             .collect();
         let dropped = lines.len().saturating_sub(shown.len());
         let mut out = shown.join("\n");
@@ -1412,6 +1425,23 @@ mod exit_status_tests {
         assert!(msg.contains("line 39"), "the tail is missing:\n{msg}");
         assert!(!msg.contains("line 0\n"), "the head was kept:\n{msg}");
         assert!(msg.contains("32 more line(s)"), "no count:\n{msg}");
+    }
+
+    /// A stream with no newlines is one line, and one line has no cap without this. winget draws
+    /// its progress spinner with bare carriage returns, which `lines()` does not split on.
+    #[test]
+    fn a_single_enormous_line_is_cut_rather_than_printed_whole() {
+        let stream = "x".repeat(9_000);
+        let err = executor_for(ExitPolicy::default())
+            .ensure_status("somepm", finished(1, "", &stream))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.chars().count() < 400,
+            "{} characters reached the user from a single line",
+            msg.chars().count()
+        );
+        assert!(msg.contains('…'), "nothing said it had been cut:\n{msg}");
     }
 
     /// Trojan source, in a package manager's output rather than in a module: U+202E reverses

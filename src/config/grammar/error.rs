@@ -88,12 +88,44 @@ impl GrammarError {
 }
 
 impl fmt::Display for GrammarError {
+    /// Both halves are drawn through [`printable`](crate::core::validator::printable), because a
+    /// refusal quotes the line it refused and the line is untrusted text. W38 gave the character
+    /// validator this rule and left the grammar's own refusals with the raw bytes: a module saved
+    /// by Notepad begins with a byte-order mark, and the refusal then reads
+    /// `` `cargo` is not a backend LiNix uses — add `cargo` to your priority file ``, naming two
+    /// strings that look identical and are not.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.origin, self.what)?;
+        use crate::core::validator::printable;
+        write!(f, "{}: {}", self.origin, printable(&self.what))?;
         if let Some(h) = &self.hint {
-            write!(f, "\n  {}", h)?;
+            write!(f, "\n  {}", printable(h))?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn an_invisible_character_in_a_refusal_is_named_not_drawn() {
+        // U+FEFF is what Windows Notepad writes at the top of a UTF-8 file, and U+202E is the
+        // trojan-source override: the first makes a refusal unreadable, the second makes it
+        // reversible.
+        for (raw, named) in [('\u{feff}', "<U+FEFF>"), ('\u{202e}', "<U+202E>")] {
+            let e = GrammarError::new(Origin::new("modules/dev.txt", 1), format!("`{raw}cargo`"))
+                .with_hint(format!("add `{raw}cargo` to your `priority` file"));
+            let rendered = e.to_string();
+            assert!(
+                rendered.contains(named),
+                "the codepoint was not named: {rendered:?}"
+            );
+            assert!(
+                !rendered.contains(raw),
+                "the character was drawn at the terminal: {rendered:?}"
+            );
+        }
     }
 }
 

@@ -471,6 +471,12 @@ mod tests {
         let reg = data.join("registry.json");
         let refused = restore_bundle(&bundle, &cfg, &reg, false).await;
         assert!(refused.is_err(), "a non-empty config must be refused");
+        // And refused as a REFUSAL: `Error::Other` here exited 1, which readme.md's table
+        // defines as "LiNix could not carry it out", and never fired `on_guard_refusal`.
+        assert!(
+            matches!(refused, Err(Error::Refused(_))),
+            "a deliberate refusal is `Error::Refused` (exit 3), got {refused:?}"
+        );
 
         // Into a clean directory it restores the declarations.
         let clean = tmp.join("clean");
