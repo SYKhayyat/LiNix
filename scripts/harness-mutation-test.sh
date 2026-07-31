@@ -79,11 +79,23 @@ FLOOR="${CAUGHT_FLOOR:-$DEFAULT_FLOOR}"
 # The grader measured SEVENTEEN survivors on the Windows harness before the split, sixteen of
 # them refusal checks. Five became assertions about exit 3 (`refuses_with_3`) and five more
 # assert the sentence as well as the code (`nok_saying`), which took Windows 12 -> 7 and the
-# container 17 -> 12; the budgets are one step above each so a wobble between hosts is not a
-# red gate. Ratchet down, never up.
+# container 17 -> 12 on the developer's box.
+#
+# **The numbers below are the RUNNER's, not that box's**, and the first version of this gate was
+# red in CI for exactly that reason: the container harness leaves 12 survivors here and 14 on a
+# clean ubuntu runner, because two checks that fail locally have nothing to act on there
+# (`git log shows a linix commit`, `rebuild wrote no git commit`). A budget measured on one host
+# and enforced on another is a gate that fails for being wrong about the machine rather than
+# about the checks. The Windows harness goes the other way — 7 locally, 6 on the runner — so its
+# budget is the tighter of the two.
+#
+# The survivors that remain are mostly ABSENCE assertions ("x is gone", "no commit was written"),
+# and an absence cannot tell a product that did nothing right from one that did nothing at all.
+# Lowering these budgets means giving each a positive control, not deleting it. Ratchet down,
+# never up.
 case "$HARNESS" in
-    */run-in-container.sh) DEFAULT_FAIL_BUDGET=13; DEFAULT_FAIL_FLOOR=115 ;;
-    *)                     DEFAULT_FAIL_BUDGET=8;  DEFAULT_FAIL_FLOOR=95 ;;
+    */run-in-container.sh) DEFAULT_FAIL_BUDGET=14; DEFAULT_FAIL_FLOOR=115 ;;
+    *)                     DEFAULT_FAIL_BUDGET=7;  DEFAULT_FAIL_FLOOR=95 ;;
 esac
 FAIL_BUDGET="${FAIL_SURVIVOR_BUDGET:-$DEFAULT_FAIL_BUDGET}"
 FAIL_FLOOR="${FAIL_CAUGHT_FLOOR:-$DEFAULT_FAIL_FLOOR}"
