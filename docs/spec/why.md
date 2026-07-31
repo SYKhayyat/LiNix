@@ -2324,6 +2324,14 @@ introduce quoting: the owner named quoting as a fallback if the rule ever confus
 backslash rule, and a backslash rule needs a newline rule. One positional exception is cheaper
 than a lexer.
 
+**And the rule has two halves, which is how it caught its own author out.** The grammar was
+taught that a backslash belongs in a package name; `core/validator.rs` was not. So `adopt` asked
+"can this name be written?", the grammar said yes, 340 winget rows went into `adopted.txt`, and
+every command after that failed to parse the file — a wedged model, which is `E1`'s class
+arriving through the door this rule had just opened. **A name is admitted by a grammar and a
+validator, and admitting it in one place is not admitting it.** The measurement is on the native
+sweep: `adopted.txt:78`.
+
 This is the third defect of one shape in one session — `\` read as set math (G-2), a
 byte-order mark read as part of a name (Q22), `@` read as an option (Q23). The shape is: **a
 manager prints a name that LiNix's own grammar cannot take back.** Where the two disagree the
