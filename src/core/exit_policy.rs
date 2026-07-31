@@ -90,6 +90,27 @@ impl ExitPolicy {
         rest
     }
 
+    /// The lines of a failed command's output that this manager's own vocabulary marks as the
+    /// reason. Empty when nothing matches, which is the honest answer for a manager whose
+    /// policy is bare.
+    ///
+    /// The same three lists `signals_failure` reads, asked line by line instead of of the whole
+    /// stream — because a user needs the sentence, not the verdict.
+    pub fn explaining_lines<'t>(&self, text: &'t str) -> Vec<&'t str> {
+        text.lines()
+            .filter(|line| {
+                let lower = line.to_ascii_lowercase();
+                let opening = Self::opening(&lower).to_string();
+                self.failure_markers.iter().any(|m| lower.contains(m))
+                    || self.absent_markers.iter().any(|m| lower.contains(m))
+                    || self
+                        .failure_line_prefixes
+                        .iter()
+                        .any(|p| opening.starts_with(p))
+            })
+            .collect()
+    }
+
     /// Whether this manager said the name it was given does not exist.
     ///
     /// The fact `install` reads to take a line back out of the manifest. It is answered from

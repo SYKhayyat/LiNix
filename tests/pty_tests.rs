@@ -138,3 +138,42 @@ fn a_pty_and_a_pipe_report_the_same_packages() {
         under_pty
     );
 }
+
+/// G-6: the machine-readable failure class is for a program, and a terminal is not one.
+///
+/// `linix-failure-class: permanent` was the first line a new user saw on the first command they
+/// run. The line itself is a good contract — both harnesses read it instead of guessing by
+/// retrying (W35) — so it stays on a pipe and goes on a terminal. Asserted from both sides here,
+/// because "it is gone" and "it is gone everywhere" are different findings.
+#[test]
+fn the_failure_class_line_is_for_a_pipe_and_not_for_a_terminal() {
+    if !have("script") || !have("timeout") {
+        panic!("this check needs script(1) and timeout(1)");
+    }
+    let root = fake_apt("failure-class");
+    // No `priority` file was ever written for this fixture, so `sync` fails on the config —
+    // the exact failure the finding was reported against.
+    let under_pty = linix_under_pty(&root, "sync -y");
+    assert!(
+        !under_pty.contains("linix-failure-class"),
+        "internal vocabulary on a user's terminal:\n{under_pty}"
+    );
+
+    let bin = env!("CARGO_BIN_EXE_linix");
+    let piped = Command::new(bin)
+        .args(["sync", "-y"])
+        .env("LINIX_CONFIG_DIR", root.join("cfg"))
+        .env("LINIX_DATA_DIR", root.join("data"))
+        .output()
+        .expect("linix should run");
+    let piped = format!(
+        "{}{}",
+        String::from_utf8_lossy(&piped.stdout),
+        String::from_utf8_lossy(&piped.stderr)
+    );
+    assert!(
+        piped.contains("linix-failure-class:"),
+        "the harnesses' one machine-readable line is gone from a pipe too, which is where they \
+         read it:\n{piped}"
+    );
+}

@@ -252,6 +252,19 @@ pub(crate) async fn finish(app: &App, outcome: Result<()>) -> Result<()> {
 /// compile error rather than a silently missing token.
 fn print_failure_class(e: &anyhow::Error) {
     use linix::core::Retryability;
+    use std::io::IsTerminal;
+
+    // Addressed to a program, so it is written only where a program is listening. On a terminal
+    // it was internal vocabulary on the first line of the first command a new user runs:
+    //
+    //     $ linix sync
+    //     linix-failure-class: permanent
+    //     Error: Configuration error: no `priority` file at …
+    //
+    // A pipe is exactly the condition under which both harnesses read it (G-6).
+    if std::io::stderr().is_terminal() {
+        return;
+    }
     let class = match e
         .downcast_ref::<linix::core::Error>()
         .map(|x| x.retryability())

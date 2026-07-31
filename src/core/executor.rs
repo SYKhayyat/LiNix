@@ -14,7 +14,7 @@ use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tokio::process::Command;
 use tokio::sync::Mutex;
-use tracing::info;
+use tracing::{debug, info};
 
 /// Set on every process LiNix spawns, carrying the pid of the LiNix that spawned it. A
 /// `linix` that finds it in its environment was started by a package manager LiNix is
@@ -770,6 +770,56 @@ impl CommandExecutor {
         self.ensure_status(cmd, result?)
     }
 
+    /// What a failed command's own output is allowed to put on a terminal.
+    ///
+    /// A manager's stream is untrusted text of unbounded length: one `scoop` typo produced ~110
+    /// lines of unrelated bucket commits with raw SGR sequences, and the sentence that mattered
+    /// — `Couldn't find manifest for 'x'` — was the fourth of them. The escapes were already
+    /// handled for the *machine* (`ExitPolicy::opening` strips them so detection works) and not
+    /// for the person, which is the wrong way round.
+    ///
+    /// So: the manager's own vocabulary picks the lines that explain the failure; failing that,
+    /// the tail, because a tool that says nothing it declared usually ends with its complaint.
+    /// Whatever is dropped is named and reachable — the whole stream is logged at `-v` by the
+    /// caller, and a count with nowhere to look is not one place to look.
+    fn detail_for_user(policy: &ExitPolicy, stream: &str) -> String {
+        /// Enough for a stack trace's opening, far short of a bucket update.
+        const CAP: usize = 8;
+
+        let lines: Vec<&str> = stream
+            .lines()
+            .map(str::trim_end)
+            .filter(|l| !l.trim().is_empty())
+            .collect();
+        if lines.is_empty() {
+            return String::new();
+        }
+        let explaining = policy.explaining_lines(stream);
+        let chosen: Vec<&str> = if !explaining.is_empty() {
+            explaining.into_iter().take(CAP).collect()
+        } else if lines.len() > CAP {
+            lines[lines.len() - CAP..].to_vec()
+        } else {
+            lines.clone()
+        };
+        let shown: Vec<String> = chosen
+            .iter()
+            // A tab is a column, not an escape: kept as spaces so a manager's table still reads
+            // as one. Everything else that moves a cursor or reverses a line is named by
+            // codepoint, by the same function the grammar's refusals use.
+            .map(|l| crate::core::validator::printable(&l.replace('\t', "    ")))
+            .collect();
+        let dropped = lines.len().saturating_sub(shown.len());
+        let mut out = shown.join("\n");
+        if dropped > 0 {
+            out.push_str(&format!(
+                "\n({} more line(s) of output; re-run with -v to see all of it)",
+                dropped
+            ));
+        }
+        out
+    }
+
     /// Classify a finished mutating command as success or failure, and — when it failed —
     /// whether another attempt could go differently.
     ///
@@ -795,7 +845,7 @@ impl CommandExecutor {
         // the diagnostic when stderr is empty (e.g. a `status_ok` malignant-success case).
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let detail = {
+        let stream = {
             let e = stderr.trim();
             if e.is_empty() {
                 stdout.trim()
@@ -803,6 +853,12 @@ impl CommandExecutor {
                 e
             }
         };
+        // Everything the command said, for whoever asked for the internals. The message below
+        // keeps only what explains the failure, so this is the one place the rest survives.
+        if !stream.is_empty() {
+            debug!("`{}` said:\n{}", cmd, stream);
+        }
+        let detail = Self::detail_for_user(&self.exit_policy, stream);
         // A manager that exited 0 and said it failed is not described by its exit code.
         // "`scoop` failed (exit 0)" is a sentence that argues with itself, and it was the
         // first thing a user saw after a typo; when the verdict comes from what the command
@@ -1300,6 +1356,81 @@ mod exit_status_tests {
             .is_err());
         let apt = executor_for(exit_policy::apt());
         assert!(apt.ensure_status("apt-get", finished(0, out, "")).is_ok());
+    }
+
+    /// G-5. One `scoop` typo printed ~110 lines of unrelated bucket commits at the user, with
+    /// raw SGR sequences, and the sentence that mattered was the fourth of them. The stream is
+    /// reproduced here in its real shape: a coloured banner, a long body, the complaint early.
+    #[test]
+    fn a_failed_command_shows_the_line_that_explains_it_and_not_the_bucket_update() {
+        let mut stream =
+            String::from("\u{1b}[32mUpdating Scoop...\u{1b}[0m\nUpdating 'main' bucket...\n");
+        stream.push_str("Couldn't find manifest for 'definitely-not-real-xyz123'.\n");
+        for i in 0..110 {
+            stream.push_str(&format!("   \u{1b}[33m* commit {i} in main\u{1b}[0m\n"));
+        }
+        let err = executor_for(exit_policy::scoop())
+            .ensure_status("scoop", finished(0, &stream, ""))
+            .unwrap_err();
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("Couldn't find manifest for 'definitely-not-real-xyz123'"),
+            "the message dropped the one line that explains the failure:\n{msg}"
+        );
+        assert!(
+            !msg.contains('\u{1b}'),
+            "an escape sequence reached the user's terminal; the machine was protected from \
+             these and the human was not:\n{msg:?}"
+        );
+        assert!(
+            !msg.contains("commit 42 in main"),
+            "the whole bucket update was pasted at the user:\n{msg}"
+        );
+        assert!(
+            msg.lines().count() <= 10,
+            "{} lines of a manager's output reached the user; a failure names one place to \
+             look:\n{msg}",
+            msg.lines().count()
+        );
+        assert!(
+            msg.contains("more line(s) of output"),
+            "output was dropped and not accounted for; a count with nowhere to look is not one \
+             place to look:\n{msg}"
+        );
+    }
+
+    /// A manager with nothing declared still has to be legible: no markers, so no line can be
+    /// singled out, and the tail is what a tool that failed usually ends with.
+    #[test]
+    fn a_manager_with_a_bare_policy_gets_the_tail_and_a_count() {
+        let stream: String = (0..40).map(|i| format!("line {i}\n")).collect();
+        let err = executor_for(ExitPolicy::default())
+            .ensure_status("somepm", finished(1, "", &stream))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("line 39"), "the tail is missing:\n{msg}");
+        assert!(!msg.contains("line 0\n"), "the head was kept:\n{msg}");
+        assert!(msg.contains("32 more line(s)"), "no count:\n{msg}");
+    }
+
+    /// Trojan source, in a package manager's output rather than in a module: U+202E reverses
+    /// everything after it as it renders, so a failure can be made to read as its opposite.
+    /// The grammar's refusals have named it by codepoint since W38; a command's output did not.
+    #[test]
+    fn an_invisible_character_in_a_managers_output_is_named_not_drawn() {
+        let err = executor_for(ExitPolicy::default())
+            .ensure_status("somepm", finished(1, "", "failed: \u{202E}drowssap\n"))
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("<U+202E>"),
+            "the override was not named:\n{msg}"
+        );
+        assert!(
+            !msg.contains('\u{202E}'),
+            "the override was reprinted at the terminal"
+        );
     }
 
     #[test]
