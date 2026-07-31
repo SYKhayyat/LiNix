@@ -48,9 +48,9 @@ container-linux-fedora-local 9
 container-linux-arch-local 7
 container-linux-alpine-local 7
 container-linux-tools-local 25
-# Added 2026-07-31, each read off that image's own first green run rather than estimated.
-# `opensuse` is absent on purpose: its sweep has not been re-run since the zypper dependency
-# defect was fixed, so there is no honest number for it yet and the unrecorded branch — which
-# reports the count and refuses to call it a pass — is the correct state.
+# Added 2026-07-31, each read off that image's own first green run rather than estimated. The
+# `storage` image is the only one that needs `--privileged` and the host's /lib/modules; its 3
+# are apt, github and btrfs, and it will rise to 4 when `Q18` unblocks `lvm`.
+container-linux-opensuse-local 7
 container-linux-void-local 9
 container-linux-storage-local 3
