@@ -1,5 +1,5 @@
 use crate::app::diagnostics::FailureDiagnosticEngine;
-use crate::app::{LuaHooks, MetricsCollector, ShimManager};
+use crate::app::{LuaHooks, MetricsCollector};
 use crate::backends::BackendRegistry;
 use crate::config::Config;
 use crate::core::{
@@ -9,7 +9,6 @@ use crate::core::{
 use crate::utils::progress::ProgressReporter;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::task::JoinSet;
 use tracing::{debug, error, info, instrument, warn};
 
 pub mod guard;
@@ -200,15 +199,6 @@ impl<'a> SyncEngine<'a> {
                 .map_err(|e| {
                     Error::Other(format!("Kernel panic during state persistence: {}", e))
                 })??;
-
-            // Scope the state guard to shim reconciliation ONLY. Steps below (the health
-            // probes and snapshot retention) re-acquire `self.state` internally, and
-            // `tokio::sync::Mutex` is not re-entrant — holding the guard across those calls
-            // self-deadlocks the whole sync/prune/upgrade after the transaction has succeeded.
-            {
-                let final_state = self.state.lock().await;
-                self.reconcile_all_shims(&final_state).await?;
-            }
 
             if self.config.quiet {
                 self.metrics.print_summary_quiet();
@@ -588,32 +578,6 @@ impl<'a> SyncEngine<'a> {
 
         self.metrics.record_install(changes.total_install() as u64);
         self.metrics.record_remove(changes.total_remove() as u64);
-        Ok(())
-    }
-
-    async fn reconcile_all_shims(&self, state: &StateRegistry) -> Result<()> {
-        let shim_mgr = Arc::new(ShimManager::with_bin_dir(self.config.bin_dir.clone()).await?);
-        let mut worker_set = JoinSet::new();
-
-        debug!("auditing shims for {} packages", state.packages.len());
-
-        for pkg in &state.packages {
-            let mgr = shim_mgr.clone();
-            let pkg_name = pkg.name.clone();
-            let needs_shim = pkg.options.get("sandbox") == Some(&"true".to_string())
-                || pkg.options.get("shim") == Some(&"true".to_string());
-
-            worker_set.spawn(async move { mgr.reconcile_shims(&pkg_name, needs_shim).await });
-        }
-
-        while let Some(res) = worker_set.join_next().await {
-            if let Err(e) = res {
-                error!("Shim worker task panicked: {}", e);
-            } else if let Ok(Err(e)) = res {
-                warn!("Non-critical shim reconciliation failure: {}", e);
-            }
-        }
-
         Ok(())
     }
 

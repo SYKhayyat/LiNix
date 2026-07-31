@@ -947,6 +947,17 @@ impl<'a> Resolver<'a> {
                     gates: &e.gates,
                 },
             );
+            // A stand-in on the user's `PATH` is a resource with a teardown, so it is declared
+            // as one — the same noun a `shim:` line declares, reached the other way. Held as an
+            // option only, it was applied at install and never again: it could not be added to
+            // an installed package and could not be withdrawn from one, and the executable
+            // outlived the line that asked for it (Q21).
+            if e.declared.present && wants_a_shim(&e.declared.options) {
+                out.extras.push((
+                    Statement::Shim(spec.name.clone(), Options::default()),
+                    e.declared.origin.clone(),
+                ));
+            }
             out.packages.entry(e.backend).or_default().push(spec);
         }
 
@@ -994,6 +1005,12 @@ impl<'a> Resolver<'a> {
             }
         }
     }
+}
+
+/// Whether a package line asks for a PATH stand-in. `@sandbox` implies it: `linix run` confines
+/// the tool *through* the shim, so there is nothing to confine without one.
+pub fn wants_a_shim(options: &Options) -> bool {
+    options.one("shim") == Some("true") || options.one("sandbox") == Some("true")
 }
 
 /// The backend of a bare name, before probing. Never reaches a backend: `Resolver::resolve`

@@ -143,14 +143,6 @@ impl ShimManager {
         Ok(())
     }
 
-    pub async fn reconcile_shims(&self, package_name: &str, should_exist: bool) -> Result<()> {
-        if should_exist {
-            self.create_shim(package_name).await
-        } else {
-            self.remove_shim(package_name).await
-        }
-    }
-
     pub async fn remove_shim(&self, binary_name: &str) -> Result<()> {
         // Was its own copy of the `.exe` rule, and the copy had drifted: it appended the
         // extension only when there was none, while `create_shim` replaced any extension that
@@ -219,9 +211,9 @@ mod tests {
 
     /// `bin_dir` is `~/.local/bin`, shared with the user and every other tool. Removal
     /// used to match on FILENAME alone, so a managed package named `jq` made every sync
-    /// delete whatever `~/.local/bin/jq` happened to be. `reconcile_all_shims` calls
-    /// `remove_shim` for every managed package that is not shimmed, so this ran on each
-    /// successful sync, with no guard and no confirmation.
+    /// delete whatever `~/.local/bin/jq` happened to be. The ownership test is what stands
+    /// between a teardown and a file LiNix never wrote, so it belongs here rather than in
+    /// whichever caller happens to reach it.
     #[tokio::test]
     async fn remove_shim_never_deletes_a_file_linix_did_not_deploy() {
         let tmp = tempdir().unwrap();

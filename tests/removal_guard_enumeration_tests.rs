@@ -38,22 +38,16 @@ const LEDGER: &[Accounted] = &[
         guarded_by: "guard::enforce at leases.rs:51, GuardScope::ExpirySweep",
     },
     Accounted {
-        file: "src/app/shim_manager.rs",
-        calls: 1,
-        guarded_by: "reconcile_shims dispatch; its only caller is sync/mod.rs:606, which runs \
-                     inside a plan already enforced at sync/mod.rs:141",
-    },
-    Accounted {
         file: "src/app/apply/extras.rs",
         calls: 4,
         guarded_by: "guard::enforce_extras at extras.rs:65, over the whole drift set before \
-                     any kind is dispatched (W21)",
+                     any kind is dispatched (W21) — including the shim a package line asks \
+                     for with `@shim`/`@sandbox`, which resolves to a `shim:` extra (G-1)",
     },
     Accounted {
         file: "src/app/sync/mod.rs",
-        calls: 2,
-        guarded_by: "reconcile_shims at :606 rides the plan guard at :141; the Heal removal at \
-                     :726 is enforced at :690",
+        calls: 1,
+        guarded_by: "the Heal removal at :700 is enforced at :664",
     },
     Accounted {
         file: "src/core/transaction.rs",
@@ -100,7 +94,6 @@ fn is_removal_call(line: &str) -> bool {
         || t.contains(".remove_repo(")
         || t.contains(".remove_shim(")
         || t.contains(".deprovision(")
-        || t.contains(".reconcile_shims(")
 }
 
 /// Every `.rs` file under `src/`.
