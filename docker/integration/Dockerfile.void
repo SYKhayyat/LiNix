@@ -25,8 +25,13 @@ RUN curl -fsSL https://bun.sh/install | bash || true
 # this, so on the first Void run pnpm was READY and could not install anything:
 #     ERROR  The configured global bin directory "/root/.local/share/pnpm/bin" is not in PATH
 # The other images inherit it from their base; this one has no base to inherit from.
+#
+# `$PNPM_HOME/bin` and not `$PNPM_HOME`: pnpm 11 reports its global bin directory as
+# `<PNPM_HOME>/bin`, and refuses the install when THAT is off PATH. Measured both ways in this
+# image — with `$PNPM_HOME` alone it still refuses, with `/bin` appended `pnpm add -g cowsay`
+# succeeds. Documented because the first fix put the right variable on the wrong directory.
 ENV PNPM_HOME="/root/.local/share/pnpm"
-ENV PATH="/root/.local/share/pnpm:/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
+ENV PATH="/root/.local/share/pnpm/bin:/root/.local/bin:/root/.bun/bin:/root/.cargo/bin:${PATH}"
 # The index, for the same reason the other images end with one: without it `search` answers
 # nothing and every unpinned name silently leaves the native manager untested.
 RUN xbps-install -S
