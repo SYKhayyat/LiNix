@@ -104,6 +104,25 @@ have printed the setting it claimed to check. It failed, which is the only reaso
 a check that cannot see the thing it names is the round-6 lesson arriving in the round-8 fix for
 it.
 
+**Pushed, and CI found two things the local runs could not.** Both are about the *machine*, which
+is the half a developer's box cannot answer:
+
+- **A budget measured here and enforced there.** The fail-everything stub leaves 12 survivors on
+  this box and **14** on a clean ubuntu runner — two checks that fail here have nothing to act on
+  there (`git log shows a linix commit`, `rebuild wrote no git commit`) — so the gate added this
+  session went red in CI for being wrong about the machine rather than about the checks. The
+  container budget is the runner's number now; the Windows harness went the other way (7 here, 6
+  there) and its budget **tightened**. The sweep itself was identical on both: `pass=285 fail=0`.
+- **`Integration (gentoo)` fails on `not one of LiNix's protected packages is installed here`,
+  and it is the image rather than the code.** Ubuntu found `bash` the same hour with the same
+  binary, so `linix protected` and the intersection work. `Dockerfile.gentoo` builds `FROM
+  gentoo/stage3:latest` — a moving base — and today's pull has none of the protected names in
+  emerge's database. The consequence is real and worth keeping red: **the guard proof on that
+  image examined nothing**, and the subcommand audit failed behind it because `uninstall` is only
+  ever executed by the guard victim on a SMOKE_ONLY image. The fix is in the image (record a
+  protected package) or in `default_protected_packages`; it is not a harness bug and must not be
+  softened into one.
+
 **Two shell lessons worth keeping.** There are no locals in a POSIX shell: `harness-logic-test.sh`
 lifts function bodies and runs them against globals of its own, so naming a parameter `_rlog`
 inside `assert_binary_reachable` clobbered the test's own `$_rlog` and broke three predicates that
