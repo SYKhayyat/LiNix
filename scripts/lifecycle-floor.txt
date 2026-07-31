@@ -40,7 +40,7 @@
 # predates it. `gentoo` is absent on purpose: it runs SMOKE_ONLY, installs nothing, and its
 # honest count is 0 — a floor no run could fall below.
 
-windows-native-windows-local 4
+windows-native-windows-local 5
 windows-native-windows-ci 10
 windows-native-darwin-ci 8
 container-linux-ubuntu-local 7

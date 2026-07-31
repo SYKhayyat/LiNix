@@ -1377,6 +1377,44 @@ Two harness facts learned the hard way, both worth keeping:
   script incrementally; changing its bytes mid-run shifts every offset after the read head. Any
   run overlapping such an edit is untrustworthy and must be repeated.
 
+### What the Windows sweep found once winget was in it
+
+`winget` completed a real lifecycle and the real-lifecycle ratchet moved **4 → 5** on
+`windows-native-windows-local`. One assertion had to be corrected — and *not* by weakening it:
+
+- **A winget portable package is not on the running shell's PATH, and that is correct.** It lands
+  in `%LOCALAPPDATA%\Microsoft\WinGet\Links` and winget adds that directory to the **persisted**
+  user PATH (`Path environment variable modified; restart your shell to use the new value`). A
+  shell that is already running cannot see it, so `on_path` asks a question whose honest answer
+  is *"yes, in your next shell"*. The off-PATH fallback does not apply either: it reads LiNix's
+  own *"installs its executables into DIR, which is not on your PATH"* warning, and LiNix is
+  right not to print that here — the directory **is** on PATH, just not on this process's copy.
+  The canary asserts no binary, with that reason written down, and `list --backend winget`
+  remains the presence assertion.
+
+**Three failures on this host that round 7 did not introduce**, listed so the next builder does
+not attribute them to this work. The recorded floor of **4** encodes that this host has been
+getting four real lifecycles for some time, so these have been failing here before tonight.
+
+- **`luarocks:luafilesystem` — checked, and it is not a LiNix defect.** This host's luarocks
+  targets **Lua 5.5**, and no rock manifest is published for 5.5: all three mirrors 404, and the
+  summary is `No results matching query were found for Lua 5.5`. LiNix classifies the download
+  failures transient, retries, and `falsify_transience` downgrades them to `Exhausted` — so the
+  run hard-fails and withdraws nothing, which is correct. **Do not add the summary line to
+  `luarocks()`'s permanent markers**: `exit_policy.rs:314` explains at length why it is
+  deliberately in neither list, and marking it permanent would beat the download failures
+  printed above it *in the same output*, turning a broken mirror into a promise that a rock will
+  never exist. The fix here is the host's Lua version, not the code.
+- `nimble:nimjson` (fails permanently) and `pub:sass` (not on PATH, nothing said where it went)
+  are unexamined. Each wants the treatment the rest of this round got: run it, read the error,
+  fix the cause — and check the exit-policy comment first, because one of these three already
+  had the answer written down.
+
+**`heal recovers an uninterrupted transaction` fails on both Windows and Void, and on Void it was
+a cascade.** Once `pnpm` installed correctly the heal check passed with no change to heal. Treat a
+heal failure in a sweep with other failures as a symptom until the others are cleared — one broken
+manager produces failures that look like defects in unrelated verbs.
+
 ### Three exemptions that survive on the old standard and not on Q17's
 
 These are *already in* `no_lifecycle_reason()` and therefore invisible to the ceiling, which is

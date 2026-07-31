@@ -643,11 +643,24 @@ canary() {
     case "$1" in
         scoop)    echo "jq|jq|full|" ;;
         # zoxide, and not jq/rg/fd: those three are this host's scoop, pixi and github canaries,
-        # so a leftover from any of them would answer winget's PATH check for it. It is also a
+        # so a leftover from any of them would answer winget's check for it. It is also a
         # portable zip package, which winget installs under the user's own profile with the argv
         # LiNix already sends — measured 2026-07-30, install and uninstall both clean, with no
         # `--scope` flag and no elevation.
-        winget)   echo "ajeetdsouza.zoxide|zoxide|full|" ;;
+        #
+        # **No binary is asserted, and the reason is not that it is missing.** A winget portable
+        # package lands in `%LOCALAPPDATA%\Microsoft\WinGet\Links`, and winget adds that
+        # directory to the *persisted* user PATH — `Path environment variable modified; restart
+        # your shell to use the new value`. A shell that is already running cannot see it, so
+        # `on_path` asks a question whose honest answer is "yes, in your next shell". Nor does
+        # the off-PATH fallback apply: that reads LiNix's own "installs its executables into
+        # DIR, which is not on your PATH" warning, and LiNix is right not to print it here —
+        # the directory IS on PATH, just not on this process's copy of it.
+        #
+        # `list --backend winget` is the presence assertion, and the lifecycle still proves
+        # install → list → uninstall → gone. Measured by hand 2026-07-30: the alias is created,
+        # `winget list` shows it, uninstall removes it, and `winget list` then finds nothing.
+        winget)   echo "ajeetdsouza.zoxide||full|" ;;
         # Chocolatey only reaches this row on an elevated shell; `no_lifecycle_reason` says so
         # and skips it otherwise. `bat` is small, has no dependencies, and is nothing else's
         # canary on this platform.
