@@ -80,7 +80,15 @@ check_row() { # row-label counted-value
 }
 check_row "ANSWERED" "$ANSWERED"
 check_row "PARKED" "$PARKED"
-check_row "OPEN" "$OPEN"
+# OPEN is two rows — `OPEN — blocking` and `OPEN` — and the register counts them as one status.
+# `check_row "OPEN"` matched only the second and compared it against the total, so the first
+# blocking question in this checker's lifetime (`Q18`, 2026-07-30) made a correct table read as
+# wrong. The two rows are summed instead, which is the number the register actually holds.
+_open_rows="$(grep -E '^\| \*\*OPEN' "$REG" | grep -oE '\*\*[0-9]+\*\* *\|' | grep -oE '[0-9]+' \
+    | awk '{s+=$1} END {print s+0}')"
+if [ "$_open_rows" != "$OPEN" ]; then
+    say_bad "decisions.md's status table says $_open_rows OPEN (both rows) where the register holds $OPEN"
+fi
 
 if [ "$BAD" = 0 ]; then
     echo "  ok    every documented count matches the register"

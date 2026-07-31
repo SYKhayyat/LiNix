@@ -1,4 +1,4 @@
-# The decision register — all 126, and none of them open
+# The decision register — all 127, and one of them open
 
 **One file, six features. None open.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
@@ -15,7 +15,7 @@ not in this paragraph.
 
 | status | means | what it needs | count |
 |---|---|---|---|
-| **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
+| **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **1** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **124** |
@@ -61,7 +61,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**None are open.** All 126 are accounted for: **124 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**One is open — `Q18`.** All 127 are accounted for: **124 ANSWERED, 2 PARKED, 1 OPEN — blocking** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -250,6 +250,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q15** | Should a command whose product is a file at a path the user named honour `--dry-run`? — RULED: **yes, except `plan`**. | 2026-07-30 |
 | **Q16** | Is a bare grammar keyword (`link`, `when`, `absent`) a package name? — RULED: **no, it is a parse error**; `list:NAME` still means the package. | 2026-07-30 |
 | **Q17** | How does a backend that mutates the real machine get its first real lifecycle? — RULED: **install and uninstall it, on the developer's own box**; and privileged containers are allowed for the storage backends. | 2026-07-30 |
+| **Q18** | **OPEN.** The storage backends read options II.2's table does not permit, so `lvm:` cannot be written at all. Which half of Part II is wrong? | — |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -3848,3 +3849,80 @@ This is a rule about how the project is tested rather than about the program, so
 II entry — the same shape as `Q4`, whose reason it extends. Its reason is in **V.93**.
 
 ---
+
+---
+
+## Q18
+
+**Status: OPEN — blocking for `lvm:`, degrading for `btrfs:` and `zfs:`.** Raised 2026-07-30 by
+the first run of the storage backends in the project's history (`Q17`'s privileged image).
+
+**Q18 — The storage backends read options the grammar refuses. Which half of Part II is wrong?**
+
+`lvm:` cannot be written at all. Measured, in a privileged container with a real volume group on
+a loopback device:
+
+```
+$ linix -y install 'lvm:linixvg/canary@size=64M'
+Error: Configuration error: <argument>: `@size` is not an option
+  options on a package are: version, hold, expires, until, requires, sha256, formats,
+  asset, bin, channel, allow_http, unverified, health, download_only, url, and the
+  `*_install` hooks.
+```
+
+And without it:
+
+```
+Error: `lvm:linixvg/canary` has no `size` — a logical volume needs one to be created,
+       e.g. `lvm:linixvg/canary@size=10G`.
+```
+
+**The backend's own error message instructs the user to write a line the parser rejects.** There
+is no third form. `lvm:` is unusable by construction, and has been since it was written.
+
+**Part II says both things.** II.2's option table (`PACKAGE_OPTION_KEYS` in
+`config/grammar/statement.rs`, whose comment cites II.2 as its source) permits fifteen keys and
+none of these. The storage paragraph says the opposite in plain words: *"`zfs:tank/data` and
+`lvm:vg0/data` join `btrfs:` as declared, sized, mounted objects — Rust, not a `ManagerConfig`,
+**because a volume has a size and a mountpoint**, not a version."*
+
+The full extent, from the code rather than from the paragraph:
+
+| backend | options it reads | in II.2's table |
+|---|---|---|
+| `lvm` | `size` (**required** — install refuses without it) | no |
+| `zfs` | `quota`, `mount` | no |
+| `btrfs` | `quota`, `mount`, `options` | no |
+
+So `lvm:` is entirely unusable; `btrfs:` and `zfs:` install fine by name and **every documented
+option on them is refused**. A declaration that sizes or mounts a volume — the thing the
+paragraph says these backends exist for — cannot be written.
+
+**Why this is the owner's and not the builder's.** `CLAUDE.md` rule 4: *anything where Part II
+looks wrong — do not fix Part II yourself.* Part II contradicts itself here, and both halves are
+implemented. It is also rule 2: whichever way it goes changes what a user may write.
+
+The options:
+
+- **(a) Add them to II.2's table, scoped to the backends that read them.** `@size`, `@quota`,
+  `@mount`, `@options` become legal on `lvm:`/`zfs:`/`btrfs:` and are refused by name everywhere
+  else — the shape `@url` (U39) and `@download_only` (D3b) already use, with
+  `capability::INSTALLS_FROM_SOURCE` as the precedent for one table both the grammar and the
+  install path read. Makes the storage paragraph true. Costs one row per option.
+- **(b) Delete the option reads from the three backends.** Volumes get created at a default size
+  and never mounted or quota'd, which contradicts the storage paragraph and leaves `lvm:` still
+  unusable (its size is required by LVM itself, not by LiNix).
+- **(c) Delete the three backends.** They have never worked and nothing depends on them. `NO
+  LEGACY` and *prefer deleting to fixing* both point here, and it is the only option that costs
+  nothing to maintain.
+
+**The builder's recommendation is (a)**, scoped by capability rather than globally: the paragraph
+already rules that a volume has a size, the mechanism for a backend-scoped option already exists
+and is used twice, and `btrfs:` and `zfs:` are otherwise working backends whose only defect is
+that half their surface is unreachable. (c) is worth asking about anyway, because "never worked,
+nothing depends on it" is the strongest argument this repo recognises.
+
+**Not answered in code.** The harness canary for `lvm:` is written the way Part II says it should
+be — `lvm:VG/LV@size=64M` — and the storage sweep **fails on it**, by name, every run. That
+failure is the finding and it stays until this is ruled; making the harness green by dropping the
+option would hide a defect in the program behind a change to the test.

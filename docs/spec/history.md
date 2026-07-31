@@ -4864,3 +4864,30 @@ disclaimer wearing harness clothes.
 contaminated shell scripts, and all nine were clean — the pattern had degraded to matching the
 letter `r`. `run.sh`'s version writes a real CRLF probe and asserts it detects it before trusting
 itself, which is the entire difference between the two.*
+
+**And then the privileged image ran.** `btrfs`, `lvm` and `zfs` had been excused from every
+harness on the strength of one sentence — *"a snapshot provider, not an install target"* — which
+is not what the code does. Given a real filesystem to install into, both installable ones failed
+on the first attempt, for two different reasons and neither of them subtle.
+
+`btrfs:` could not be written at all. The validator's list of backends whose name is legitimately
+a path — `link | web | github | appimage` — omitted the one whose name is *most* literally a
+filesystem path, so `btrfs:/mnt/data/vol` came back as `Path traversal detected in name`. It is
+the psresource shape again: a list that names most of its members, and the missing one is the
+member nobody could test.
+
+`lvm:` still cannot be written, and that one is not the builder's to fix. It requires `@size`;
+II.2's option table does not permit it; **the backend's own error message instructs the user to
+write a line the parser refuses.** Part II says both things — its storage paragraph says in plain
+words that *"a volume has a size and a mountpoint"* — so this is `Q18`, OPEN, and rule 4 applies.
+
+*The harness fails on it, by name, every run, and stays that way until it is ruled. Removing the
+option would have made the sweep green in one line and hidden a defect in the program behind a
+change to the test.*
+
+Two things about running containers that cost an hour between them: a container borrows the
+host's kernel but **not its module files**, so `modprobe btrfs` searched an empty `/lib/modules`
+and the harness truthfully reported "this kernel has no btrfs" about a kernel that has it. And
+`sh` reads a script incrementally — editing a bind-mounted harness while a container is running
+it shifts every byte offset after the read head, and any run overlapping such an edit has to be
+thrown away. Both were mine.

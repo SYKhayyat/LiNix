@@ -734,7 +734,7 @@ EOSHIM
 fi
 
 # ==========================================================================
-# 13b. REAL DEVICES for the storage effectors (btrfs, lvm, zfs)
+# 13c. REAL DEVICES for the storage effectors (btrfs, lvm, zfs)
 # ==========================================================================
 # These three operate on block devices, and until 2026-07-30 none of them had ever been run.
 # The harness called btrfs "a snapshot provider, not an install target" — which is not what the
@@ -755,7 +755,7 @@ STORAGE_ZFS=""
 setup_storage_devices() {
     [ -n "${LINIX_IT_STORAGE:-}" ] || return 0
     [ -z "$SMOKE" ] || { skip_smoke "loopback devices for the storage effectors"; return 0; }
-    echo "[13b] Loopback devices for the storage effectors"
+    echo "[13c] Loopback devices for the storage effectors"
 
     if ! command -v mkfs.btrfs >/dev/null 2>&1; then
         soft "btrfs: no mkfs.btrfs in this image, so there is no filesystem to make a subvolume in"
@@ -855,7 +855,7 @@ echo "[14] Real lifecycle, every other manager on this image"
 # The twelve: brew emerge eopkg guix lvm paru pkg pkg_add pkgin slackpkg yay zfs. Three of those
 # have images being built for them; the BSDs need a userland no Linux container can host, and
 # `emerge` is smoke-only by design.
-LIFECYCLE_GAP_CEILING=12
+LIFECYCLE_GAP_CEILING=11
 canary() {
     case "$1" in
         npm)      echo "cowsay|cowsay|full|" ;;
@@ -918,10 +918,13 @@ canary() {
         # this table never claims a lifecycle the machine could not give — and `btrfs` is an
         # install target, whatever the old exemption said: `btrfs:PATH` is `subvolume create`.
         #
-        # The list-token is what `list` calls it, and for btrfs that is NOT the install path:
-        # `btrfs subvolume list` reports a path relative to the filesystem root, so a subvolume
-        # installed as /mnt/linix-btrfs/canary is listed as /canary.
-        btrfs)    [ -n "$STORAGE_BTRFS" ] && echo "$STORAGE_BTRFS/canary||full|/canary" ;;
+        # The list-token is EMPTY, which means `list` must say the same string `install` was
+        # given. That is the assertion, and it is the whole point: `btrfs subvolume list`
+        # reports a path relative to the filesystem root, so until 2026-07-30 a subvolume
+        # installed as /mnt/linix-btrfs/canary came back as /canary and `sync` re-created it
+        # every run. A token of `/canary` would pass either way — it is a substring of the full
+        # path — so the weaker form could not tell the fix from the bug.
+        btrfs)    [ -n "$STORAGE_BTRFS" ] && echo "$STORAGE_BTRFS/canary||full|" ;;
         # `@size=` is not optional: `lvm:` refuses without one, by name, and the option rides
         # in the install-only field because `lvremove` takes the volume and not the size.
         lvm)      [ -n "$STORAGE_LVM" ] && echo "$STORAGE_LVM/canary||full||@size=64M" ;;

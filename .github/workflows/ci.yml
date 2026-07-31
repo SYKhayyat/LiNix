@@ -132,10 +132,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { distro: ubuntu, backend: apt,    pkg: jq }
-          - { distro: fedora, backend: dnf,    pkg: jq }
-          - { distro: alpine, backend: apk,    pkg: jq }
-          - { distro: arch,   backend: pacman, pkg: jq }
+          - { distro: ubuntu,   backend: apt,    pkg: jq }
+          - { distro: fedora,   backend: dnf,    pkg: jq }
+          - { distro: alpine,   backend: apk,    pkg: jq }
+          - { distro: arch,     backend: pacman, pkg: jq }
+          # `zypper` and `xbps` were registered backends with no real lifecycle in ANY harness
+          # and no stated reason for it — two of the twelve `Q4` counts as a release blocker.
+          # They are in the fast matrix and not the nightly one on purpose: an image that runs
+          # only when someone remembers it closes nothing.
+          - { distro: opensuse, backend: zypper, pkg: jq }
+          - { distro: void,     backend: xbps,   pkg: jq }
     steps:
     - uses: actions/checkout@v4
     - name: Build the ${{ matrix.distro }} image
@@ -190,6 +196,35 @@ jobs:
           -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
           -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
           linix-it-${{ matrix.distro }} ${{ matrix.backend }} ${{ matrix.pkg }}
+
+  # The storage effectors, on real block devices. `btrfs`, `lvm` and `zfs` operate on volumes
+  # and cannot be exercised by any amount of mocking; before 2026-07-30 none of them had ever
+  # been run at all. This is the only job that gets `--privileged`, and the only one that needs
+  # the host's `/lib/modules` — a container borrows the host's kernel but not its module files,
+  # so `modprobe btrfs` inside one otherwise fails on a kernel that has btrfs.
+  #
+  # **Nightly, not every push, and it is RED today.** `lvm:` requires `@size` and II.2's option
+  # table does not permit it (`Q18`, OPEN) — the backend's own error tells the user to write a
+  # line the parser refuses. The canary is written the way Part II says it should be and this
+  # job fails on it by name, deliberately: making it green would hide a defect in the program
+  # behind a change to the test. **Promote this to the fast matrix the moment Q18 is ruled and
+  # this goes green** — the precedent is the macOS job below, for the same reason: a job whose
+  # first executions gate other people's commits is a job that gets disabled rather than fixed.
+  storage:
+    name: Integration (storage — btrfs/lvm/zfs on loopback devices, nightly)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build the storage image
+      run: docker build -f docker/integration/Dockerfile.storage -t linix-it-storage .
+    - name: Run the storage lifecycle
+      run: |
+        docker run --rm --privileged \
+          -v /lib/modules:/lib/modules:ro \
+          -v "$PWD/docker/integration/run-in-container.sh:/src/docker/integration/run-in-container.sh:ro" \
+          -v "$PWD/scripts/lifecycle-floor.txt:/src/scripts/lifecycle-floor.txt:ro" \
+          linix-it-storage apt jq
 
   # macOS, run rather than compiled. A Darwin build passing `cargo test` says the code
   # compiles there; it says nothing about whether `brew install` reaches brew, whether the

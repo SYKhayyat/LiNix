@@ -1266,8 +1266,19 @@ no. An excuse on the only harness that can run a backend is indistinguishable fr
   first, with LiNix's exact argv, unelevated, no `--scope` flag: install, list, uninstall, gone.
   `choco` and `psresource` are now skipped only for a **detected** reason (shell not elevated /
   host has no PSResourceGet cmdlets), the way `pip` already handled PEP 668.
-- **`LIFECYCLE_GAP_CEILING=12`** for the container harness — measured on the openSUSE run, not
-  guessed. It may only go down.
+- **`LIFECYCLE_GAP_CEILING=11`** for the container harness — measured on the openSUSE run and
+  lowered again once btrfs got a device. It may only go down.
+- **CI runs all of it.** `ci.yml` hardcoded a four-distro matrix, so a new image in `run.sh`'s
+  default would never have run there — the same "opt-in is how a backend stays untested" trap,
+  one layer up. `opensuse` and `void` are in the **fast** matrix now (every push); `storage` is
+  a nightly job because it is **deliberately red on `Q18`**, following the precedent the macOS
+  job sets in its own comment: a job whose first executions gate other people's commits is a job
+  that gets disabled rather than fixed. **Promote it the moment `Q18` is ruled and it goes
+  green.**
+- **`tests/lifecycle_coverage_union_tests.rs`** — the gate that would have caught `winget`. It
+  reads both harnesses' tables and asks the one question neither sweep can: *is this backend
+  reachable anywhere?* Ceiling 15, may only go down. It rejected its own author's first draft
+  (`brew` is reachable via the Windows harness, which the macOS leg runs).
 
 ## The two defects the coverage work uncovered
 
@@ -1324,6 +1335,47 @@ Both were found by *building the missing harness and running it*, which is the p
 exemption must be something the harness genuinely cannot do — no such userland, no such device,
 no account to sign in with — and it must be **detected at run time**, never assumed. "It touches
 the real machine" is not a reason; every package manager does.
+
+### What the privileged image found the moment it existed
+
+The `storage` image gave `btrfs`, `lvm` and `zfs` their first run. Both installable ones failed
+immediately, for two *different* reasons, and neither is subtle:
+
+- **`btrfs:` could not be written at all.** `Validator::is_path_oriented_backend` lists
+  `link | web | github | appimage` — every backend whose name is a path — and omitted the one
+  whose name is *most* literally a filesystem path. `btrfs:/mnt/data/vol` was rejected as
+  `Path traversal detected in name`. **Fixed** (`btrfs` added to the list; `..`, the character
+  allowlist and injection blocking all still apply, and the test asserts `lvm`, `zfs` and
+  `setting` are *not* widened, since their names carry a separator and never a leading one).
+- **`lvm:` still cannot be written.** It requires `@size`, and II.2's option table does not
+  permit it — the backend's own error message instructs the user to write a line the parser
+  refuses. That is **`Q18`, OPEN**, because Part II says both things and rule 4 forbids the
+  builder fixing Part II. `btrfs` and `zfs` have the same problem confined to their options
+  (`@quota`, `@mount`, `@options`), so they install by name and can never be sized or mounted.
+
+**The lvm canary is written the way Part II says it should be and the sweep fails on it, by
+name, every run.** Do not remove the option to get a green sweep: that hides a defect in the
+program behind a change to the test.
+
+**One observation, not yet a work order.** `tests/dry_run_every_verb_tests.rs` dominates the wall
+clock of a full `cargo test` — 30–45 minutes on the machine this project is developed on, against
+seconds on a clean runner. The cause is `adopt -y`: its preview asks every installed manager to
+list everything, and this box has twenty-four of them. That makes the suite's runtime — and
+possibly its coverage — **a function of what the developer happens to have installed**, which is
+the same shape as `G-11`, the finding that a used machine silently gets a weaker sweep. Worth
+measuring before touching: narrowing the fixture's `priority` would make it fast and
+deterministic, and might also stop it exercising the backends where a preview is most likely to
+write something.
+
+Two harness facts learned the hard way, both worth keeping:
+
+- A container borrows the host's kernel but **not its module files**, so `modprobe btrfs` inside
+  one searches the image's empty `/lib/modules` and fails. The harness correctly reported "this
+  kernel has no btrfs" on a kernel that has it. `run.sh` now mounts `/lib/modules` read-only for
+  the storage image.
+- **Do not edit a bind-mounted harness script while a container is running it.** `sh` reads a
+  script incrementally; changing its bytes mid-run shifts every offset after the read head. Any
+  run overlapping such an edit is untrustworthy and must be repeated.
 
 ### Three exemptions that survive on the old standard and not on Q17's
 

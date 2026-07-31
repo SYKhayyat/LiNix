@@ -120,7 +120,14 @@ for d in $DISTROS; do
     # variable the image could set: a Dockerfile must not be able to ask for privilege.
     # It needs real block devices for btrfs/lvm/zfs, which no other check here does (Q17).
     PRIV=""
-    [ "$d" = storage ] && PRIV="--privileged"
+    if [ "$d" = storage ]; then
+        PRIV="--privileged"
+        # A container borrows the host's kernel but NOT its module files, so `modprobe btrfs`
+        # inside one searches the image's empty /lib/modules and fails — which the harness
+        # correctly reported as "this kernel has no btrfs" on a kernel that has it. Read-only,
+        # and skipped rather than guessed at if the host keeps its modules elsewhere.
+        [ -d /lib/modules ] && PRIV="$PRIV -v /lib/modules:/lib/modules:ro"
+    fi
 
     ENVFLAGS=""
     smoke="${SMOKE_ONLY:-}"
