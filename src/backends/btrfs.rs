@@ -187,6 +187,41 @@ fn fstab_subvol(line: &str) -> Option<&str> {
         .find_map(|o| o.strip_prefix("subvol="))
 }
 
+/// The option field of this subvolume's fstab entry, without the `subvol=` that addresses it.
+///
+/// The inverse of what [`fstab_with`] writes, so a declared `@mount_options` can be compared
+/// against the entry on disk (Q19). Without it a changed `@mount_options` is invisible: the
+/// subvolume exists and is mounted where the line says, so `sync` finds nothing to do and the
+/// old options survive every run — the same shape as a `@quota` that never re-applies, one file
+/// over.
+fn fstab_options(content: &str, subvol: &str) -> Option<String> {
+    let line = content.lines().find(|l| fstab_subvol(l) == Some(subvol))?;
+    let field = line.split_whitespace().nth(3)?;
+    let rest: Vec<&str> = field
+        .split(',')
+        .filter(|o| !o.starts_with("subvol="))
+        .collect();
+    Some(rest.join(","))
+}
+
+/// The referenced-size limit in a `btrfs qgroup show -r -f --raw` report, in bytes.
+///
+/// The column is found by its header rather than by counting: `btrfs-progs` has added columns
+/// across versions, and a hardcoded index would silently read `excl` on the version that did.
+/// `none` is btrfs saying there is no limit, and it is not a number — reporting it as one would
+/// make a declared `@quota=` compare against a word.
+fn qgroup_limit_in(output: &str) -> Option<u64> {
+    let mut lines = output.lines();
+    let column = lines
+        .by_ref()
+        .find(|l| l.split_whitespace().any(|c| c == "max_rfer"))?
+        .split_whitespace()
+        .position(|c| c == "max_rfer")?;
+    lines
+        .filter(|l| !l.trim_start().starts_with("---"))
+        .find_map(|l| l.split_whitespace().nth(column).and_then(|v| v.parse().ok()))
+}
+
 /// `content` with one entry for this subvolume and no other.
 ///
 /// Both matches are dropped and not just one: a declaration that moves a subvolume to a new
@@ -551,11 +586,39 @@ impl Queryable for BtrfsQueryable {
     /// declared `@mount=` that never happened stays invisible for ever.
     async fn info(&self, name: &str) -> Result<Option<Package>> {
         let name = name.trim_end_matches('/');
-        Ok(self
+        let Some(mut p) = self
             .list_installed()
             .await?
             .into_iter()
-            .find(|p| p.name.trim_end_matches('/') == name))
+            .find(|p| p.name.trim_end_matches('/') == name)
+        else {
+            return Ok(None);
+        };
+        // The quota and the fstab options are read **here and not in `list_installed`**, because
+        // each is a question about one named subvolume and the listing walks every subvolume on
+        // every btrfs filesystem. Asking there would fan one `sync` out into a subprocess per
+        // subvolume — the shape the planner's own dependency walk is capped at one level to
+        // avoid. The planner asks `info`, which is the only caller that needs these.
+        if let Ok(out) = self
+            .core
+            .executor
+            .run_output("btrfs", &["qgroup", "show", "-r", "-f", "--raw", name], false)
+            .await
+        {
+            let limit = qgroup_limit_in(&out).map(|b| b.to_string());
+            p.properties.insert(
+                "quota".into(),
+                limit.unwrap_or_else(|| crate::backends::storage::NO_LIMIT.to_string()),
+            );
+        }
+        if let Ok((subvol, _)) = self.core.subvol_for(name) {
+            if let Ok(content) = fs::read_to_string(&self.core.fstab_file) {
+                if let Some(opts) = fstab_options(&content, &subvol) {
+                    p.properties.insert("mount_options".into(), opts);
+                }
+            }
+        }
+        Ok(Some(p))
     }
 }
 
@@ -609,6 +672,93 @@ mod tests {
             mounts_file: f,
             fstab_file: std::env::temp_dir().join(format!("{}-fstab", stem)),
         }
+    }
+
+    /// The limit is found by its header, not by counting columns: `btrfs-progs` has changed what
+    /// it prints across versions, and an index would read `excl` on the version that added one.
+    #[test]
+    fn the_qgroup_limit_is_read_by_name_and_none_is_not_a_number() {
+        let with_limit = "qgroupid         rfer         excl     max_rfer \n\
+                          --------         ----         ----     -------- \n\
+                          0/257            16384        16384    10737418240\n";
+        assert_eq!(qgroup_limit_in(with_limit), Some(10737418240));
+
+        // `none` is btrfs saying there is no limit. It is not a size, and a declared `@quota=`
+        // compared against it would be satisfied by a word.
+        let unlimited = "qgroupid         rfer         excl     max_rfer \n\
+                         --------         ----         ----     -------- \n\
+                         0/257            16384        16384    none\n";
+        assert_eq!(qgroup_limit_in(unlimited), None);
+
+        // A column order this code did not choose. The header moves, the answer does not.
+        let reordered = "qgroupid     max_rfer         rfer\n\
+                         --------     --------         ----\n\
+                         0/257        5368709120       16384\n";
+        assert_eq!(qgroup_limit_in(reordered), Some(5368709120));
+
+        // Quotas disabled: btrfs says so on stderr and prints no table at all.
+        assert_eq!(qgroup_limit_in(""), None);
+        assert_eq!(qgroup_limit_in("ERROR: can't list qgroups: quotas not enabled\n"), None);
+    }
+
+    /// The inverse of what `fstab_with` writes, so a changed `@mount_options` can be seen. The
+    /// `subvol=` is dropped because it is the address, not an option the user declared — leaving
+    /// it in would make every entry compare unequal to the options that produced it.
+    #[test]
+    fn the_fstab_options_read_back_as_the_ones_that_were_declared() {
+        for declared in ["defaults", "noatime", "noatime,compress=zstd"] {
+            let written = fstab_with("", "abc", "/data", "/srv", declared);
+            assert_eq!(
+                fstab_options(&written, "/data").as_deref(),
+                Some(declared),
+                "round trip through the entry changed {}",
+                declared
+            );
+        }
+        // A subvolume with no entry has no options, which is not the same as `defaults`: the
+        // planner must be able to tell "not written" from "written with the default".
+        assert_eq!(fstab_options("", "/data"), None);
+        assert_eq!(
+            fstab_options(&fstab_with("", "abc", "/data", "/srv", "defaults"), "/other"),
+            None
+        );
+    }
+
+    /// `info` is what the planner asks, so it is what has to carry the geometry. Both reads are
+    /// per-subvolume and live here rather than in `list_installed`, which walks every subvolume
+    /// on every filesystem — asking there would spawn a subprocess per subvolume on every sync.
+    #[tokio::test]
+    async fn info_reports_the_quota_and_the_mount_options_a_declaration_can_drift_from() {
+        let core = core_with(
+            "/dev/sdb1 /mnt/fs btrfs rw,relatime,subvol=/ 0 0\n",
+            &[
+                (
+                    "btrfs subvolume list /mnt/fs",
+                    "ID 256 gen 8 top level 5 path data\n",
+                ),
+                (
+                    "btrfs qgroup show -r -f --raw /mnt/fs/data",
+                    "qgroupid         rfer         excl     max_rfer \n\
+                     --------         ----         ----     -------- \n\
+                     0/256            16384        16384    10737418240\n",
+                ),
+            ],
+        );
+        std::fs::write(
+            &core.fstab_file,
+            "UUID=abc /srv btrfs subvol=/data,noatime 0 0\n",
+        )
+        .expect("fixture fstab");
+        let q = BtrfsQueryable {
+            core: Arc::new(core),
+        };
+        let p = q
+            .info("/mnt/fs/data")
+            .await
+            .unwrap()
+            .expect("the subvolume is listed");
+        assert_eq!(p.properties.get("quota").map(String::as_str), Some("10737418240"));
+        assert_eq!(p.properties.get("mount_options").map(String::as_str), Some("noatime"));
     }
 
     /// `list_installed` asked `btrfs subvolume list -p /` until 2026-07-30 — one filesystem,

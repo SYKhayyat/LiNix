@@ -21,6 +21,7 @@ pub mod ratelimiter;
 pub mod regex_lock;
 pub mod retention;
 pub mod security;
+pub mod size;
 pub mod snapshot;
 pub mod state;
 pub mod tool_help;
@@ -51,6 +52,8 @@ pub use manager::{
 pub use package::{Package, PackageSpec};
 
 pub use security::verify_checksum;
+
+pub use size::{format_size, parse_size, same_size};
 
 pub use hook_lock::{hook_id, HookLedger, Verdict};
 

@@ -1,6 +1,6 @@
 use crate::core::{
-    BackendCore, CommandExecutor, Installable, MetadataProvider, Package, PackageSpec, Queryable,
-    Result, Searchable, Upgradable,
+    BackendCore, CommandExecutor, Error, Installable, MetadataProvider, Package, PackageSpec,
+    Queryable, Result, Searchable, Upgradable,
 };
 use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
@@ -101,33 +101,75 @@ fn is_channel_downgrade(from: &str, to: &str) -> bool {
     }
 }
 
-impl SnapInstallable {
-    async fn is_installed(&self, name: &str) -> bool {
-        match self
-            .core
-            .executor
-            .run_output("snap", &["list", name], false)
-            .await
-        {
-            Ok(out) => out
-                .lines()
-                .skip(1)
-                .any(|l| l.split_whitespace().next() == Some(name)),
-            Err(_) => false,
-        }
-    }
+/// What a `snap info` report says about a snap that is installed here — absent when it is not.
+///
+/// One reading, not three. `is_installed` asked `snap list` and `current_channel` asked
+/// `snap info` for facts that are on the same page of the same report, so a snap was interrogated
+/// twice per sync and the two answers could disagree across the gap between them.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct SnapState {
+    channel: Option<String>,
+    classic: bool,
+}
 
-    /// The channel `name` is currently following, read from `snap info`'s `tracking:` line.
-    async fn current_channel(&self, name: &str) -> Option<String> {
+/// `snap info`'s account of an installed snap, or `None` when it names one that is not.
+///
+/// Presence is the `installed:` line, not the exit code: `snap info` answers happily for a snap
+/// that only exists in the store, and reading that as installed would send every first install
+/// down the refresh path.
+fn installed_state(output: &str) -> Option<SnapState> {
+    let installed = output.lines().find_map(|l| l.strip_prefix("installed:"))?;
+    // `installed:  1.85.1  (139)  351MB  classic` — the last field is the notes, and it is the
+    // only place `snap info` says whether confinement was relaxed. A snap with no notes ends on
+    // its size, which can never spell `classic`.
+    let classic = installed
+        .split_whitespace()
+        .next_back()
+        .is_some_and(|notes| notes.split(',').any(|n| n == "classic"));
+    Some(SnapState {
+        channel: output
+            .lines()
+            .find_map(|l| l.strip_prefix("tracking:"))
+            .map(|v| crate::backends::capability::channel_risk(v).to_string()),
+        classic,
+    })
+}
+
+/// `snap refresh` with whatever the declaration asks to change, or `None` when it asks for
+/// nothing (Q20).
+///
+/// **Both switches ride one refresh.** A snap that needs a channel *and* a confinement change
+/// used to get only the channel — the branch that built the refresh looked at `@channel` alone,
+/// so writing the two options together silently dropped one.
+fn refresh_args(name: &str, channel: Option<&String>, to_classic: bool) -> Option<Vec<String>> {
+    if channel.is_none() && !to_classic {
+        return None;
+    }
+    let mut a = vec!["refresh".to_string()];
+    if let Some(channel) = channel {
+        a.push("--channel".to_string());
+        a.push(channel.clone());
+    }
+    if to_classic {
+        a.push("--classic".to_string());
+    }
+    crate::core::argv::push_names(&mut a, "snap", [name]);
+    Some(a)
+}
+
+impl SnapInstallable {
+    /// What this snap is on the machine right now, read once.
+    async fn current_state(&self, name: &str) -> Option<SnapState> {
+        let mut args = vec!["info".to_string()];
+        crate::core::argv::push_names(&mut args, "snap", [name]);
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
         let out = self
             .core
             .executor
-            .run_output("snap", &["info", name], false)
+            .run_output("snap", &refs, false)
             .await
             .ok()?;
-        out.lines()
-            .find_map(|l| l.strip_prefix("tracking:"))
-            .map(|v| crate::backends::capability::channel_risk(v).to_string())
+        installed_state(&out)
     }
 }
 
@@ -136,13 +178,14 @@ impl Installable for SnapInstallable {
     async fn install(&self, specs: &[PackageSpec], sudo: bool) -> Result<()> {
         for spec in specs {
             // D13: `snap install` refuses an already-installed snap, so a `@channel` change has
-            // to go through `snap refresh --channel=`. Decide by whether the snap is present.
+            // to go through `snap refresh --channel=`. Q20 puts `@classic` on the same footing.
+            // Decide by whether the snap is present.
             let want_channel = spec.options.get("channel");
-            let already = self.is_installed(&spec.name).await;
+            let want_classic = spec.options.get("classic").map(String::as_str);
 
-            let args = if let (true, Some(channel)) = (already, want_channel) {
-                if let Some(current) = self.current_channel(&spec.name).await {
-                    if is_channel_downgrade(&current, channel) {
+            let args = if let Some(state) = self.current_state(&spec.name).await {
+                if let (Some(current), Some(channel)) = (&state.channel, want_channel) {
+                    if is_channel_downgrade(current, channel) {
                         // A downgrade is removal-shaped; name it so it is not a silent swap in
                         // the plan the user is confirming.
                         warn!(
@@ -151,14 +194,39 @@ impl Installable for SnapInstallable {
                         );
                     }
                 }
-                let mut a = vec![
-                    "refresh".to_string(),
-                    "--channel".to_string(),
-                    channel.clone(),
-                ];
-                crate::core::argv::push_names(&mut a, "snap", [spec.name.as_str()]);
-                info!("Snap: Switching {} to channel {}...", spec.name, channel);
-                a
+                // Q20: **snapd relaxes confinement in place and does not narrow it.**
+                // `snap refresh --classic` moves a strict snap to classic; there is no switch
+                // that moves one back, so the only way is remove-and-reinstall — a removal, of a
+                // package the user declared, to satisfy an option. That is the guard's decision
+                // and not this backend's, so the line is refused and the way out is named.
+                if want_classic == Some("false") && state.classic {
+                    return Err(Error::Validation(format!(
+                        "`snap:{}` is installed with classic confinement and the line declares \
+                         `@classic=false` — snapd can relax confinement in place but cannot \
+                         narrow it, so there is no refresh that does this. Remove and reinstall \
+                         it by hand (`snap remove {}` then let `sync` install it), or restore \
+                         `@classic`.",
+                        spec.name, spec.name
+                    )));
+                }
+                let to_classic = want_classic == Some("true") && !state.classic;
+                if to_classic {
+                    info!("Snap: Moving {} to classic confinement...", spec.name);
+                }
+                match refresh_args(&spec.name, want_channel, to_classic) {
+                    Some(a) => {
+                        if let Some(channel) = want_channel {
+                            info!("Snap: Switching {} to channel {}...", spec.name, channel);
+                        }
+                        a
+                    }
+                    // Present, and neither switch applies: the planner asked for this spec for
+                    // some other reason. Falls through to `snap install` exactly as it did
+                    // before Q20 — snapd refuses an installed snap and the sync says so, which
+                    // is how an unsatisfiable `@version` on a manager that cannot pin one has
+                    // always surfaced. Changing that is its own question, not this one's.
+                    None => install_args(spec),
+                }
             } else {
                 info!("Snap: Installing {}...", spec.name);
                 install_args(spec)
@@ -242,6 +310,14 @@ impl Queryable for SnapQueryable {
         }
 
         let mut p = Package::new(name, "snap");
+        // Q20: confinement, from the same report and the same line as the version. The planner
+        // reads `info`, so a `@classic` that never took effect is invisible without this — the
+        // snap is installed, so the name is present, so `sync` reports nothing to do over a
+        // declaration it applied to a different confinement.
+        if let Some(state) = installed_state(&output) {
+            p.properties
+                .insert("classic".into(), state.classic.to_string());
+        }
         for line in output.lines() {
             if let Some(v) = line.strip_prefix("summary:") {
                 p.properties.insert("summary".into(), v.trim().to_string());
@@ -342,6 +418,84 @@ pub fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real `snap info` shape. Presence is the `installed:` line — `snap info` answers just as
+    /// happily for a snap that only exists in the store, and reading that as installed would
+    /// send every first install down the refresh path.
+    #[test]
+    fn a_snaps_state_is_read_from_the_one_report() {
+        let classic = "name:      code\n\
+                       summary:   Code editing. Redefined.\n\
+                       tracking:     latest/stable\n\
+                       installed:          1.85.1                     (139) 351MB classic\n";
+        assert_eq!(
+            installed_state(classic),
+            Some(SnapState {
+                channel: Some("stable".into()),
+                classic: true
+            })
+        );
+
+        // No notes: the line ends on its size, and a size can never spell `classic`.
+        let strict = "name:      hello\n\
+                      tracking:     latest/edge\n\
+                      installed:          2.10                       (42) 98kB -\n";
+        assert_eq!(
+            installed_state(strict),
+            Some(SnapState {
+                channel: Some("edge".into()),
+                classic: false
+            })
+        );
+
+        // Several notes at once, comma-separated — `classic` is one of them and must be found
+        // among them rather than by the field being equal to it.
+        let both = "installed:  1.0 (7) 2MB classic,disabled\n";
+        assert!(installed_state(both).unwrap().classic);
+
+        // In the store, not on the machine.
+        assert_eq!(installed_state("name: code\nsummary: x\n"), None);
+    }
+
+    /// Q20's argv. Both switches ride one refresh: a snap needing a channel *and* a confinement
+    /// change used to get only the channel, because the branch that built the refresh looked at
+    /// `@channel` alone.
+    #[test]
+    fn a_refresh_carries_every_switch_the_declaration_asks_for() {
+        let ch = "stable".to_string();
+        assert_eq!(
+            refresh_args("code", Some(&ch), false).unwrap(),
+            vec!["refresh", "--channel", "stable", "--", "code"]
+        );
+        assert_eq!(
+            refresh_args("code", None, true).unwrap(),
+            vec!["refresh", "--classic", "--", "code"]
+        );
+        assert_eq!(
+            refresh_args("code", Some(&ch), true).unwrap(),
+            vec!["refresh", "--channel", "stable", "--classic", "--", "code"],
+            "a line carrying both options must not lose one"
+        );
+        // Nothing to change is not a refresh — the caller decides what to do instead.
+        assert!(refresh_args("code", None, false).is_none());
+    }
+
+    /// The install argv still carries `@classic` for a snap that is not there yet: Q20 is about
+    /// the *change*, and a first install must not regress into a strict one.
+    #[test]
+    fn a_first_install_still_asks_for_classic() {
+        let mut spec = PackageSpec {
+            name: "code".into(),
+            backend: "snap".into(),
+            options: Default::default(),
+            requires: vec![],
+            present: true,
+        };
+        spec.options.insert("classic".into(), "true".into());
+        assert_eq!(install_args(&spec), vec!["install", "--classic", "--", "code"]);
+        spec.options.insert("classic".into(), "false".into());
+        assert_eq!(install_args(&spec), vec!["install", "--", "code"]);
+    }
 
     #[test]
     fn snap_find_parses_rows() {

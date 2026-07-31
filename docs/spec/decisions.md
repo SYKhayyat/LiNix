@@ -1,6 +1,5 @@
-# The decision register — all 128, and one of them open
-
-**One file, six features. None open.** Every decision this design forces lives here, with its
+# The decision register — all 129, and one of them open
+**One file, six features, one question still the owner's.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
 already settled in code could be re-opened by anyone reading the register instead of the tree.
@@ -18,13 +17,26 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **1** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **125** |
-| **PARKED** | Deliberately not asked yet, and it says what it waits on. | Nothing. | **2** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **127** |
+| **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **1** |
 
-**Four of these five statuses now describe nothing, and they stay.** The categories are not
+**Two of these five statuses now describe nothing, and they stay.** The categories are not
 decoration: *OPEN — blocking* refills the moment a new feature is proposed, and *BUILT, NEVER
 RULED* refills the moment somebody implements a recommendation before it is put to the owner.
 Deleting an empty category is how the next one goes unnoticed.
+
+**`PARKED` needs nothing *until the thing it named arrives*.** D15 sat parked on D5 for a week
+after D5 was ruled and built, because "needs nothing" was read as a permanent property of the
+entry rather than a claim with a condition attached. A parked entry is a scheduled re-read, and
+the schedule is whatever it says it waits on.
+
+**So the condition is now checked, not just written.** A parked entry's `Status:` line must carry
+`waits on <what>`, and `scripts/decision-count.sh --check` fails if that clause is missing, or if
+it names a decision that has since been ANSWERED. A condition naming an event out in the world
+(D16 waits on someone hitting the case) is allowed and left alone — no script can see that
+arrive, and saying so is better than a clause that reads as checkable and is not. **The totals
+were checked for a week while the register was wrong; a checker that verifies the arithmetic and
+not the claims is half a checker.**
 
 **A status is a claim about the tree, and the "In the tree today:" line in each entry is dated at
 the moment it was written.** Several of them are now stale in the direction that matters least —
@@ -61,7 +73,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**One is open — `Q19`, and it does not block.** All 128 are accounted for: **125 ANSWERED, 2 PARKED, 1 OPEN** — and this line
+**One is open — `D15`, and it does not block.** All 129 are accounted for: **127 ANSWERED, 1 PARKED, 1 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -103,7 +115,7 @@ there). It is when the question stopped being open, not when the code landed.
 | **D12** | Network, GitHub rate limits, and whether `sync` works on a plane. | 2026-07-24 |
 | **D13** | Changing a `channel` — refresh, or remove and reinstall? | 2026-07-24 |
 | **D14** | Does `why` explain which of the three levels chose the artifact? | 2026-07-24 |
-| **D15** | `.flatpak`/`.snap` assets in a release — PARKED until D5 is answered. | PARKED |
+| **D15** | **OPEN, not blocking.** `.flatpak`/`.snap` assets in a release. D5 answered the ownership half and was built; what is unruled is whether a sideloaded snap survives snapd refreshing it from the store. | — |
 | **D16** | libc variants (`gnu` vs `musl`) — CLOSED by D3's ruling. | PARKED |
 | **D17** | What does `github:re:…@formats=` mean across repos with different assets? | 2026-07-24 |
 
@@ -251,7 +263,8 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q16** | Is a bare grammar keyword (`link`, `when`, `absent`) a package name? — RULED: **no, it is a parse error**; `list:NAME` still means the package. | 2026-07-30 |
 | **Q17** | How does a backend that mutates the real machine get its first real lifecycle? — RULED: **install and uninstall it, on the developer's own box**; and privileged containers are allowed for the storage backends. | 2026-07-30 |
 | **Q18** | The storage backends read options II.2's table does not permit, so `lvm:` cannot be written at all — which half of Part II is wrong? — RULED: **the table.** The keys are added, scoped to the backends that read them. | 2026-07-31 |
-| **Q19** | **OPEN, not blocking.** A changed `@quota` or `@size` does nothing on the next sync. Does a declaration resize a volume — and may it shrink one? | — |
+| **Q19** | A changed `@quota` or `@size` did nothing on the next sync — RULED 2026-07-31: it resizes, and shrinking needs `@allow_shrink` on the line. | 2026-07-31 |
+| **Q20** | A changed `@classic` did nothing either — RULED 2026-07-31: same answer. Relaxing confinement converges; narrowing it is refused, because only remove-and-reinstall can. | 2026-07-31 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -3072,21 +3085,56 @@ removing those packages at that moment.
 
 ---
 
-# Parked or closed
+# Reopened — a question parked on another question that has since been answered
+
+**A parking condition is a claim that has to be re-checked, and this one was not.** D15 said
+"parked until D5 is answered", D5 was ruled and built five days later, and the entry went on
+saying PARKED — filed in the section for questions that need nothing, which is where a question
+that needs a ruling goes to be missed. **Every `PARKED` entry names what it waits on; nothing
+re-reads those names when the thing arrives.** That is the check this section exists to make
+visible, and the reason it is a heading rather than a footnote.
 
 ## D15
 
-**Status: PARKED.**
+**Status: OPEN — not blocking.** Parked until D5 was answered; **D5 was ruled 2026-07-24 and
+built 2026-07-26**, so the brake came off and nobody noticed. Reopened 2026-07-31.
 
 **D15 — `.flatpak`/`.snap` assets in a GitHub release.** They exist. Adding them to the
 vocabulary means `github` installing something `flatpak` then does not own — **D5's ownership
-question, one layer worse.** Parked until D5 is answered.
+question, one layer worse.**
+
+**What D5 settled, and what it does not.** The installing backend owns the artifact: the lock
+records it, removal routes back through it, and `check`'s dedup and `purge-unmanaged` defer to
+it. That machinery is generic — `backends/artifact/system_pkg.rs` and
+`Queryable::owned_system_packages` — so a `.flatpak` handed to `flatpak install` would inherit
+the same ownership rule a `.deb` handed to `dpkg` already has, and the question D15 was parked on
+has an answer.
+
+**What is still a question is whether the rule holds where the manager is a running service.**
+`dpkg` writes a database and then stops; `snapd` and `flatpak` keep running, hold remotes, and
+refresh on a schedule of their own. So the sharp form of D15 is no longer "who owns it" — it is
+**what a sideloaded snap does over time**, and that has two possible answers and they fail in
+opposite directions: if snapd refreshes it from the store, LiNix's lock describes a file that has
+been replaced; if it never refreshes it (a sideloaded snap has no store association to refresh
+*from*), the declaration silently pins a build that ages forever while `check` reports it
+healthy. **Which of those actually happens has not been measured** — it needs a machine with
+snapd and a release asset, not an argument. A `.flatpak` from a release has the same shape one
+step down.
+
+*No recommendation, and deliberately not one.* The ownership half is answered; the half about a
+manager that acts on its own schedule should be measured before it is argued.
 
 ---
 
+# Parked or closed
+
 ## D16
 
-**Status: PARKED.**
+**Status: PARKED — waits on someone actually hitting it.** Not on another decision: `D3`'s
+ruling already covers the case in principle, and what is missing is a real machine where the
+ambiguity bites. An event, not a question, so no check can tell when it arrives — which is
+itself worth writing down, because the alternative is a condition that reads as checkable and is
+not.
 
 **D16 — libc variants** (`gnu` vs `musl`, both valid for this machine). A real ambiguity
 `formats` cannot express, and a fourth axis is not worth opening until someone hits it. **D3's
@@ -3095,6 +3143,13 @@ rather than expediently.
 
 ---
 
+# The Q-series — what building it kept asking
+
+Nineteen questions the code raised after the six proposal rounds closed, each one found by a
+thing that did not work. They were filed under *Parked or closed* because they were appended to
+the end of the file and that was the last heading in it — nineteen entries, none of them parked,
+under a heading that said they were. **A section heading is a claim about what is under it**,
+and this file's whole argument is that an unchecked claim rots.
 
 ## Q1
 
@@ -3998,8 +4053,8 @@ what has been run.
 
 ## Q19
 
-**Status: OPEN — not blocking.** Raised 2026-07-31 by building `Q18`: the keys are writable and
-applied, and nothing yet decides what a *changed* one means.
+**Status: ANSWERED — ruled 2026-07-31.** Raised the same day by building `Q18`: the keys were
+writable and applied, and nothing decided what a *changed* one meant.
 
 **Q19 — When a declared size changes, does LiNix resize the volume?**
 
@@ -4023,10 +4078,127 @@ Two questions, and they are not the same size:
   a decision about whether a declaration may resize a filesystem at all, and whether shrinking
   is refused by name.
 
-**The builder's recommendation:** re-apply `@quota` (with a unit-normalising comparison and a
-test per unit), **grow** on `@size` via `lvextend`, and **refuse to shrink** with an error that
-names the declared and actual sizes and tells the user to do it by hand. That keeps the
-declarative promise in the direction that cannot lose data and stops at the direction that can.
+**RULED (owner, 2026-07-31): it edits — and where editing can lose data, the line has to say
+so.** A declaration is the machine's description of itself, so an edited `@quota` or `@size` is
+drift like any other and `sync` converges it. The owner declined the half of the recommendation
+that refused shrinking outright: shrinking is *allowed*, behind a flag, because the register's
+job is to record what the user decided and not to decide it for them. What the flag buys is that
+nobody shrinks a filesystem by editing a number and pressing enter.
 
-**Not answered in code.** `@quota` and `@size` are applied at creation and left alone
-afterwards, which is where `Q18` left them.
+**The rule, as built:**
+
+- **`@quota` re-applies** on `btrfs:` and `zfs:`. Idempotent property writes; lowering one below
+  current usage is the tool's refusal to make, not ours.
+- **`@size` resizes on `lvm:`.** Bigger runs `lvextend --resizefs`. Smaller is **refused unless
+  the line carries `@allow_shrink=true`**, and the refusal names the actual size, the declared
+  size, and the way out.
+- **`--resizefs` on both directions, never a bare `lvreduce`.** It shrinks the filesystem before
+  the volume, so the bytes given up are ones nothing is using — which is what makes the flag a
+  permission to *resize* rather than a permission to truncate. A filesystem that cannot shrink
+  (xfs) fails there, before the volume is touched.
+- **`@allow_shrink` without `@size` is a parse error**, the same one level in `@mount_options`
+  gets: a line that reads "shrinking is allowed here" while nothing can shrink is worse than a
+  line that does nothing, because someone will believe it.
+
+**The comparison is by value, in bytes, and only the declared side is ever parsed.** Every tool
+is asked for raw bytes — `zfs list -p`, `lvs --units b --nosuffix`, `btrfs qgroup show --raw` —
+so `@quota=10240M` against a reported `10737418240` is not a change. `D13`'s failure mode was the
+one to design against here: a comparator that had to reconcile `10.00GiB`, `10.00g` and `10G`
+reports a change on every sync, for ever.
+
+**Three states, not two.** A byte count is a limit; `none` is a backend that looked and found no
+limit, which against a line declaring one is drift; **no property at all** is a backend that
+could not look, and that is left alone. Reading "could not read" as "no limit" is how a quota
+gets re-applied on every sync for ever; reading it as "satisfied" is how one never gets applied
+at all.
+
+**The sibling this fix would have shipped past.** `@mount` used to `return` out of the drift
+check, so a line carrying both a mount and a quota had only the mount looked at — the second
+option was dead the moment anyone wrote the two together, which is the ordinary way to write
+them. The facets are OR-ed now. `@mount_options` was dead the same way and converges too: a
+changed option field rewrites the fstab entry, where before it kept yesterday's options through
+every sync and every reboot.
+
+**Run, not argued — on a real logical volume, `docker/integration/run-in-container.sh` §14b.**
+The storage image goes **`pass=274 fail=0 soft=7` → `pass=279 fail=0 soft=7`**, and the five are
+these; the real-lifecycle ratchet holds at 5 ≥ 5 (`btrfs`, `lvm` both on real devices, `zfs`
+still short a kernel module):
+
+```
+PASS  lvm: a bigger @size grew linixvg/resizer, 67108864 -> 134217728 bytes
+PASS  lvm: a second sync over the same declaration left the volume alone
+PASS  lvm: a smaller @size is refused by name and the volume is untouched at 134217728 bytes
+PASS  lvm: @allow_shrink shrank linixvg/resizer, 134217728 -> 67108864 bytes
+PASS  lvm: the resize canary uninstalls
+```
+
+The edit is made **in the module file and applied by `sync`**, never by re-running `install` —
+`install` hands a named spec to the backend, so it would prove the resize argv and skip the half
+that was broken, which was the planner deciding a volume already present under its name still
+needs work. **The second line is the one that could not be got any other way:** D13's failure
+mode is a comparison that reports a change on every sync for ever, and a harness that syncs once
+cannot see it. `btrfs:` and `zfs:` did not run here — this kernel has neither module (Q4's
+release blocker, unchanged) — so `@quota` re-apply is argv-and-unit-tested and not yet executed.
+
+**Deleting the option is not declaring "no limit".** A line that drops `@quota=` stops declaring
+a quota; it does not ask for the existing one to be lifted. That is the same reading `@mount`
+already has — an option nobody wrote is an option nobody is managing — and the opposite reading
+would make removing a word from a config file silently uncap a filesystem.
+
+**What is not covered.** `lvm:` grows through `fsadm`, so a volume carrying **no** filesystem
+fails loudly rather than growing silently — the honest limit of resizing by declaration, and
+better than applying half of one. And a resize appears in the preview as an install of the
+object, the same shape `@mount` and `@channel` already take; a `Resize` node of its own would be
+a fourth spelling of "this line needs work" threaded through the guard, the transaction and the
+preview.
+
+---
+
+## Q20
+
+**Status: ANSWERED — ruled 2026-07-31.** Raised the same day by `Q19`'s sibling sweep: the fix
+for storage geometry found the identical defect on `snap:`, and the owner ruled it the same way
+in the same session.
+
+**Q20 — When `@classic` changes, does LiNix re-confine the snap?**
+
+`@classic` is read in exactly one place: when the install argv is built. So a snap that gains the
+option *after* it was installed stays strictly confined for ever — `snap list` shows the name,
+the planner finds nothing to do, and `sync` reports success over a declaration it never applied.
+That is `Q19` word for word with a different noun, which is why it was found by looking for
+siblings rather than by anyone hitting it.
+
+**RULED (owner, 2026-07-31): yes, the same.** An edited `@classic` is drift and `sync` converges
+it.
+
+**But the two directions are not symmetric, and snapd is what makes them asymmetric.**
+`snap refresh --classic` relaxes confinement in place; **there is no switch that narrows it
+back.** The only way from classic to strict is remove-and-reinstall — a removal, of a package the
+user declared, to satisfy an option. That is the guard's decision and not a backend's, so:
+
+- **`@classic=true` on a strictly-confined snap** → `snap refresh --classic`. Automatic, and
+  nothing is destroyed.
+- **`@classic=false` on a classic snap** → **refused by name**, with the message saying snapd
+  cannot narrow confinement and naming the by-hand path. The same shape as `Q19`'s shrink
+  refusal, and for the same reason: the direction that removes something says so out loud.
+- **No `@classic` at all** → **unmanaged**, exactly as a dropped `@quota` is. A line that says
+  nothing about confinement is not asking for strict, so it can never schedule that removal. This
+  is what keeps the refusal above from firing on configs nobody edited.
+
+**The sibling inside the sibling.** `@channel`'s drift check `return`ed from the function, so a
+snap carrying a channel *and* `@classic` had only the channel looked at — the identical fault
+`Q19` fixed for `@mount`, in the branch immediately above it, found because the fix for one was
+being written next to the other. Both are folded into one accumulator now. The argv had the
+matching bug: the refresh was built from `@channel` alone, so a line asking for both changes
+would have dropped one. One refresh carries both switches.
+
+**And `snap info` is now read once.** `is_installed` asked `snap list` and `current_channel`
+asked `snap info` for facts printed on the same page of the same report — two subprocesses per
+snap per sync, and two answers that could disagree across the gap between them. Presence is the
+`installed:` line, not the exit code: `snap info` answers just as happily for a snap that only
+exists in the store, and reading that as installed would send every first install down the
+refresh path.
+
+**Not run.** No image here has a working snapd — a container cannot run it — so this is argv- and
+unit-tested against real `snap info` output and has never been executed. It is named that way
+rather than counted, exactly as `zfs:` is.

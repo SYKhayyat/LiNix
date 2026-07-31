@@ -781,10 +781,21 @@ setup_storage_devices() {
     else
         rm -f /var/tmp/linix-lvm.img
         truncate -s 512M /var/tmp/linix-lvm.img
-        _loop="$(losetup -f --show /var/tmp/linix-lvm.img 2>/dev/null)"
-        if [ -n "$_loop" ] \
-           && pvcreate -f -y "$_loop" >/dev/null 2>&1 \
-           && vgcreate linixvg "$_loop" >/dev/null 2>&1; then
+        # Three commands, three separate reasons, and they used to share one message: "could not
+        # build a volume group on a loopback device here" is a sentence you cannot act on. It
+        # said the same thing whether the kernel had no free loop device, LVM's filter rejected
+        # the one it got, or the group name was already taken — and on 2026-07-31 that cost an
+        # hour chasing a leak that did not exist, because the message named nothing.
+        _why=""
+        _loop="$(losetup -f --show /var/tmp/linix-lvm.img 2>&1)"
+        if [ ! -b "$_loop" ]; then
+            _why="losetup: $_loop"
+        elif ! _out="$(pvcreate -f -y "$_loop" 2>&1)"; then
+            _why="pvcreate on $_loop: $(echo "$_out" | tr '\n' ' ')"
+        elif ! _out="$(vgcreate linixvg "$_loop" 2>&1)"; then
+            _why="vgcreate linixvg on $_loop: $(echo "$_out" | tr '\n' ' ')"
+        fi
+        if [ -z "$_why" ]; then
             # A volume group is not enough, and assuming it was cost a whole run: `lvcreate`
             # needs a device node to zero the new volume through, and in a container with no
             # udev and a tmpfs /dev there is nobody to make one. It aborts with "device not
@@ -799,7 +810,7 @@ setup_storage_devices() {
                 soft "lvm: the volume group exists and \`lvcreate\` cannot make a volume in it, which is this container and not LiNix — $(echo "$_probe" | tr '\n' ' ')"
             fi
         else
-            soft "lvm: could not build a volume group on a loopback device here"
+            soft "lvm: could not build a volume group on a loopback device here — $_why"
         fi
     fi
 
@@ -1188,6 +1199,147 @@ else
         lifecycle "$be"
     done
 fi
+
+# ==========================================================================
+# 14b. A DECLARED SIZE THAT CHANGES (Q19)
+# ==========================================================================
+# Section 14's lifecycle is install → list → remove, so it proves a volume can be *made* at a
+# declared size and never that the number can be edited. Q19 ruled that it can: a bigger `@size`
+# grows the volume, a smaller one is refused unless the line carries `@allow_shrink=true`.
+#
+# **That path cannot be proven by argv.** `lvextend --resizefs` shells out to `fsadm`, which
+# talks to the filesystem, and the whole safety story — a shrink gives up bytes nothing is using,
+# and a filesystem that cannot shrink stops the operation before the volume moves — lives in what
+# that program does, not in the arguments it is handed. V.106's lesson from the run before this
+# one: a backend that has never been executed has not been reviewed, it has been proofread.
+#
+# The converged re-run at the end is the assertion that matters most. D13's failure mode is a
+# comparison that gets units wrong and reports a change on every sync **for ever**, and it is
+# invisible to a test that syncs once.
+storage_resize_lifecycle() {
+    [ -n "$STORAGE_LVM" ] || return 0
+    [ -z "$SMOKE" ] || { skip_smoke "the resize path (this image installs nothing)"; return 0; }
+    echo "[14b] A declared size that changes (Q19)"
+
+    _vol="$STORAGE_LVM/resizer"
+    _dev="/dev/$STORAGE_LVM/resizer"
+    _size_of() { lvs --noheadings --units b --nosuffix -o lv_size "$1" 2>/dev/null | tr -d ' 	'; }
+    _cleanup_resizer() {
+        undeclare_canary "lvm:$_vol"
+        lvremove -y "$_vol" >/dev/null 2>&1
+    }
+
+    grep -qx lvm "$LINIX_CONFIG_DIR/priority" 2>/dev/null || echo lvm >> "$LINIX_CONFIG_DIR/priority"
+
+    if ! lx_slow -y install "lvm:$_vol@size=64M" >/tmp/resize.out 2>&1; then
+        soft "lvm: could not create the resize canary — $(tr '\n' ' ' < /tmp/resize.out)"
+        _cleanup_resizer
+        return 0
+    fi
+
+    # A raw volume has nothing for `--resizefs` to carry, and growing one is *meant* to fail —
+    # so the canary gets a filesystem, and a machine that cannot give it one says so rather than
+    # scoring the image's gap as a LiNix defect.
+    if ! mkfs.ext4 -q -F "$_dev" >/dev/null 2>&1; then
+        soft "lvm: no ext4 on the resize canary (mkfs.ext4 failed or is absent), so --resizefs has no filesystem and the grow below would fail for the image's reason"
+        _cleanup_resizer
+        return 0
+    fi
+
+    # **The edit is made in the file and applied by `sync`, not by re-running `install`.** That is
+    # the path Q19 is about: `install` names a spec and hands it to the backend, so it would prove
+    # the resize argv and skip the half that was actually broken — the planner deciding that a
+    # declaration whose volume already exists under its name still needs work.
+    _mod="$LINIX_CONFIG_DIR/modules/imperative.txt"
+    if ! grep -q "lvm:$_vol" "$_mod" 2>/dev/null; then
+        soft "lvm: the resize canary is not declared in $_mod, so the edit-then-sync path cannot be driven here"
+        _cleanup_resizer
+        return 0
+    fi
+    _resize_to() {
+        sed -i "s|\(lvm:$_vol@\)size=[^ ,]*|\1size=$1|" "$_mod"
+        grep -q "size=$1" "$_mod"
+    }
+
+    _before="$(_size_of "$_vol")"
+    if _resize_to 128M && lx_slow -y sync >/tmp/resize.out 2>&1; then
+        _after="$(_size_of "$_vol")"
+        if [ -n "$_after" ] && [ -n "$_before" ] && [ "$_after" -gt "$_before" ]; then
+            PASS=$((PASS + 1)); echo "  PASS  lvm: a bigger @size grew $_vol, $_before -> $_after bytes"
+        else
+            FAILC=$((FAILC + 1))
+            FAILED_NAMES="$FAILED_NAMES\n    - lvm: @size=128M reported success and the volume is still $_after bytes"
+            echo "  FAIL  lvm: @size=128M reported success and the volume is still $_after bytes (was $_before)"
+        fi
+    else
+        FAILC=$((FAILC + 1))
+        FAILED_NAMES="$FAILED_NAMES\n    - lvm: growing a declared volume failed"
+        echo "  FAIL  lvm: growing $_vol to 128M failed — $(tr '\n' ' ' < /tmp/resize.out)"
+    fi
+
+    # The point of the whole feature: a machine that already matches its declaration is not
+    # work. A unit comparison that is wrong in either direction shows up here and nowhere else.
+    _grown="$(_size_of "$_vol")"
+    if lx_slow -y sync >/tmp/resize.out 2>&1; then
+        if [ "$(_size_of "$_vol")" = "$_grown" ]; then
+            PASS=$((PASS + 1)); echo "  PASS  lvm: a second sync over the same declaration left the volume alone"
+        else
+            FAILC=$((FAILC + 1))
+            FAILED_NAMES="$FAILED_NAMES\n    - lvm: a converged sync resized the volume again"
+            echo "  FAIL  lvm: a converged sync resized $_vol again"
+        fi
+    else
+        soft "lvm: the converged re-sync did not exit 0 — $(tr '\n' ' ' < /tmp/resize.out)"
+    fi
+
+    # Shrinking unasked: the refusal is the feature. Asserted against the volume, not only
+    # against the exit code — a command that says no and shrinks anyway is the worst outcome.
+    if _resize_to 64M && lx_slow -y sync >/tmp/resize.out 2>&1; then
+        FAILC=$((FAILC + 1))
+        FAILED_NAMES="$FAILED_NAMES\n    - lvm: a smaller @size shrank the volume with no @allow_shrink"
+        echo "  FAIL  lvm: a smaller @size was accepted with no @allow_shrink"
+    elif grep -q "allow_shrink" /tmp/resize.out; then
+        if [ "$(_size_of "$_vol")" = "$_grown" ]; then
+            PASS=$((PASS + 1)); echo "  PASS  lvm: a smaller @size is refused by name and the volume is untouched at $_grown bytes"
+        else
+            FAILC=$((FAILC + 1))
+            FAILED_NAMES="$FAILED_NAMES\n    - lvm: the shrink was refused and the volume changed anyway"
+            echo "  FAIL  lvm: the shrink was refused and $_vol changed anyway"
+        fi
+    else
+        FAILC=$((FAILC + 1))
+        FAILED_NAMES="$FAILED_NAMES\n    - lvm: a smaller @size failed without naming @allow_shrink"
+        echo "  FAIL  lvm: a smaller @size failed and the message never named @allow_shrink — $(tr '\n' ' ' < /tmp/resize.out)"
+    fi
+
+    sed -i "s|\(lvm:$_vol@size=64M\)|\1,allow_shrink=true|" "$_mod"
+    if grep -q "allow_shrink=true" "$_mod" && lx_slow -y sync >/tmp/resize.out 2>&1; then
+        _shrunk="$(_size_of "$_vol")"
+        if [ -n "$_shrunk" ] && [ "$_shrunk" -lt "$_grown" ]; then
+            PASS=$((PASS + 1)); echo "  PASS  lvm: @allow_shrink shrank $_vol, $_grown -> $_shrunk bytes"
+        else
+            FAILC=$((FAILC + 1))
+            FAILED_NAMES="$FAILED_NAMES\n    - lvm: @allow_shrink reported success and the volume is still $_shrunk bytes"
+            echo "  FAIL  lvm: @allow_shrink reported success and $_vol is still $_shrunk bytes"
+        fi
+    else
+        # ext4 shrinks; xfs cannot, and fsadm refuses before touching the volume. Either is a
+        # fact about the filesystem, so it is reported and not scored — but the volume must be
+        # intact, because "refused" and "half shrunk" are the two outcomes this flag separates.
+        if [ "$(_size_of "$_vol")" = "$_grown" ]; then
+            soft "lvm: @allow_shrink did not shrink here and left the volume intact at $_grown bytes — $(tr '\n' ' ' < /tmp/resize.out)"
+        else
+            FAILC=$((FAILC + 1))
+            FAILED_NAMES="$FAILED_NAMES\n    - lvm: a failed shrink left the volume changed"
+            echo "  FAIL  lvm: the shrink failed and $_vol is no longer $_grown bytes"
+        fi
+    fi
+
+    ok "lvm: the resize canary uninstalls" lx_slow -y uninstall "lvm:$_vol"
+    _cleanup_resizer
+}
+
+storage_resize_lifecycle
 
 # ==========================================================================
 # 15. PLAN-SMOKE — every backend this image cannot run for real

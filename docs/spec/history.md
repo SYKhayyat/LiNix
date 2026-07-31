@@ -14,6 +14,81 @@ verified against the tree at the commit that last touched this section, not reca
 > the copy is what gets read. The rule at the top of this section is the fix and it was already
 > written: *update it at the end of every session.*
 
+## Session 2026-07-31 (second) — `Q19` and `Q20` ruled, and `D15` was never really parked
+
+**`Q20` was not reported by anyone — it was found by asking the rest of the tree the question
+`Q19` had just answered.** *What else is applied once at install and never again?* `@classic` on
+`snap:` came back: read in exactly one place, when the install argv is built, so a snap that
+gained the option after it was installed stayed strictly confined for ever with `sync` reporting
+nothing to do. **RULED (owner): the same answer** — an edited `@classic` converges.
+
+The two directions came out asymmetric because snapd is: `snap refresh --classic` relaxes
+confinement in place and nothing narrows it back, so `@classic=false` on a classic snap is
+refused by name with the by-hand path spelled out (V.107's shrink refusal, one backend over).
+**Omitting `@classic` manages nothing**, which is what keeps that refusal off configs nobody
+edited. Rule in II.2, reason in V.108. **Not run** — no container can host snapd, so it is
+argv- and unit-tested against real `snap info` output and named as unexecuted, like `zfs:`.
+
+**And the sibling was inside the sibling.** `@channel`'s drift check `return`ed from the
+function — the same fault `Q19` had just fixed for `@mount`, in the branch immediately above it —
+so a snap carrying a channel *and* `@classic` had only the channel looked at. The argv had the
+matching bug: the refresh was built from `@channel` alone and would have dropped one of two
+requested changes. Both fixed; one refresh now carries both switches. `snap info` is also read
+once instead of twice (`is_installed` asked `snap list` for a fact printed on the same page).
+
+**`V.109` — the register's checker now verifies parked *conditions*, not just totals.** It
+counted entries and failed CI on any wrong number, and it passed every day of the week D15 was
+mis-filed: the arithmetic was right the whole time the register was wrong. A parked entry's
+`Status:` line must now carry `waits on <what>`; the check fails if the clause is missing or
+names a decision that has since been ANSWERED. D16 was caught immediately — it had never said
+what it waits on. Self-tested by pointing it at an answered decision and watching it fire.
+
+**Q19 asked what a *changed* `@quota` or `@size` meant, and the code's answer was "nothing".**
+Q18 had made the keys writable and applied them at creation; the volume then exists under its
+name, so there is no drift to act on, so editing the number left `sync` reporting success over a
+declaration it had stopped applying. **RULED (owner): it edits — and where editing can lose data,
+the line has to say so.** The builder had recommended refusing to shrink outright; the owner
+overrode that half and required a flag instead.
+
+**Built:** `@quota` re-applies on `btrfs:`/`zfs:`; `@size` grows via `lvextend --resizefs` and
+shrinks only behind `@allow_shrink=true`, refusing otherwise with both sizes named.
+`--resizefs` runs in both directions — that is what makes the flag a permission to resize rather
+than to truncate, and it is why xfs (which cannot shrink) fails before the volume is touched.
+`@allow_shrink` without `@size` is a parse error, the same one level in `@mount_options` gets.
+Rule in II.2 and XIII, reason in V.107.
+
+**The comparison is in bytes and only the declared side is parsed.** Every tool is asked for raw
+counts (`zfs list -p`, `lvs --units b --nosuffix`, `btrfs qgroup show --raw`) through one
+`core::size`, so `@quota=10240M` against a reported `10737418240` is not a change. D13's failure
+mode — a change reported on every sync for ever — was the thing being designed against.
+
+**Two siblings, found by looking rather than by being reported.** `@mount`'s drift check
+*returned* from the function, so a line carrying both a mount and a quota had only the mount
+looked at; the facets are OR-ed now. And **`@mount_options` was dead the same way** — the fstab
+entry is rewritten on every install, but no install was ever scheduled, so a changed option field
+survived every sync and every reboot. Checked and **not** affected: `@shim`/`@sandbox`, which have
+their own reconcile pass over every managed package (`sync/mod.rs::reconcile_all_shims`) and
+converge already. **Still live, and raised rather than built: `@classic` on `snap:`** is read only
+when the install argv is built, so flipping it does nothing — the same class, but honouring it
+means reinstalling a package when a flag changes, which is a ruling and not a detail.
+
+**Proven on a real logical volume, not argued** (§14b, new; storage image `pass=274 fail=0` →
+**`pass=279 fail=0 soft=7`**, the ratchet holding at 5 ≥ 5): grow `67108864 -> 134217728`, a
+converged re-sync that left it alone, a smaller `@size` refused by name with the volume untouched,
+and `@allow_shrink` shrinking it back. The edit goes into the module file and is applied by
+`sync` — `install` would prove the argv and skip the planner, which is the half that was broken.
+The converged re-sync is the assertion nothing else could give: D13's failure mode is invisible
+to a harness that syncs once. `btrfs:`/`zfs:` did not run — this kernel has neither module — so
+the `@quota` re-apply is unit-tested and unexecuted, and is named that way rather than counted.
+
+**`D15` was reopened.** It had said *PARKED until D5 is answered* since the register was written;
+D5 was ruled 2026-07-24 and built 2026-07-26, and the entry went on saying PARKED — filed in the
+section for questions that need nothing. **A parking condition is a claim that has to be
+re-checked, and nothing re-reads those conditions when the thing they wait on arrives.** The
+register's status table now says so, and the Q-series got its own heading: nineteen entries had
+been sitting under *Parked or closed* because that was the last heading in the file when they
+were appended.
+
 ## Session 2026-07-31 — `Q18` ruled: five keys the code read and the grammar refused
 
 **The question was which half of Part II was wrong, and the owner ruled it was the option table**

@@ -2118,3 +2118,103 @@ filesystem root. Not the *shortest* name, which was the first thing tried and is
 at `/srv` is shorter than `/mnt/fs/data`, and answering `/srv` would leave the declaration
 looking unfulfilled and `sync` re-creating it on every run — the 2026-07-30 bug arriving from the
 opposite direction.
+
+**V.107 — Why an edited size resizes the volume, and why shrinking says so on the line.** *(Owner
+ruling, 2026-07-31 — Q19.)* V.106 made the geometry writable and applied it at creation. **What
+it did not do was decide what a changed number meant, and the answer the code gave was
+"nothing":** the volume exists under its name, so there is no drift to act on, so editing
+`@quota=100M` to `200M` — or `@size=10G` to `20G` — left `sync` reporting success over a
+declaration it had stopped applying. That is V.106's own lesson one turn later. A declaration
+that cannot tell it was half applied is the same defect whether the half that failed was the
+mount or the number, and the fix has to be the class rather than the case.
+
+**Growing and shrinking are two decisions, not one command with a sign.** Growing hands back
+space nothing was using. Shrinking takes space off a live filesystem, and on one that cannot
+shrink at all it takes away whatever was past the new end — so the builder's recommendation was
+to grow and to *refuse* to shrink. **The owner overrode the refusal and required a flag
+instead:** shrinking is allowed where the line carries `@allow_shrink=true`, and refused with
+both sizes named otherwise. The reasoning is the one this whole document is built on — the
+register records what the owner decided, and a tool that decides for them is a tool that gets
+worked around. What the flag buys is that **nobody shrinks a filesystem by editing a number and
+pressing enter**; what a flat refusal would have bought is a user doing it by hand, outside
+anything LiNix can see.
+
+**`--resizefs` is the rule, not the implementation.** It runs in both directions, and on the
+shrink it is the thing that makes the flag a permission to *resize* rather than a permission to
+truncate: `lvreduce` alone chops the volume out from under a mounted filesystem, while
+`lvreduce --resizefs` shrinks the filesystem first, so the bytes given up are ones nothing is
+using — and xfs, which cannot shrink at all, fails there, **before** the volume is touched. A
+flag guarding a bare `lvreduce` would have been a consent form for data loss. The cost is named
+rather than hidden: a volume carrying no filesystem fails to grow, because `fsadm` cannot find a
+type. That is the honest limit of resizing by declaration, and better than silently applying half
+of one.
+
+**The comparison is where this feature dies if it is done casually, and Q19 said so before it was
+built.** A quota is printed `10.00GiB` by btrfs, `10.00g` by lvs and `10G` by zfs, and the
+declaration says whatever the user typed. **A comparator that reconciled display strings would
+report a change on every sync, for ever** — D13's failure mode, which is why D13 required a
+*readable* current value in the first place. So every tool is asked for raw bytes (`zfs list -p`,
+`lvs --units b --nosuffix`, `btrfs qgroup show --raw`) and **only the declared side is ever
+parsed**. And three states are reported, never two: a byte count, `none` where the backend looked
+and found no limit, and no property at all where it could not look. Collapsing the last two is a
+coin-flip between two permanent bugs — read "could not read" as "no limit" and the quota
+re-applies for ever; read it as "satisfied" and it never applies at all.
+
+**The sibling that would have shipped past this fix.** `@mount`'s drift check *returned* from the
+function, so a line carrying both a mount and a quota had only the mount looked at — the second
+option was dead the moment anyone wrote the two together, which is the ordinary way to write them.
+The facets are OR-ed now. **`@mount_options` was dead the same way and for the same reason:** the
+fstab entry is rewritten on every install, but no install was ever scheduled, so a changed option
+field kept yesterday's options through every sync and every reboot. One reported symptom, two
+live siblings — the same count as the container-harness `command -v` bug, which is not a
+coincidence but a measurement of how far a fix travels when nobody goes looking.
+
+**V.108 — Why a changed `@classic` re-confines a snap, and why only in one direction.** *(Owner
+ruling, 2026-07-31 — Q20.)* This entry exists because of how it was found. Nobody hit it. V.107's
+fix was written, and then the question "what else is applied once and never again" was asked of
+the rest of the tree — and `@classic` came back, read in exactly one place, when the install argv
+is built. A snap that gained the option after it was installed stayed strictly confined for ever,
+with `sync` reporting nothing to do. **The same defect, a different backend, and it had been
+sitting there since `@classic` was written.**
+
+**The owner ruled it the same way, and the two directions still came out asymmetric — because
+snapd is asymmetric.** `snap refresh --classic` relaxes confinement in place; nothing narrows it
+back. Going from classic to strict means remove-and-reinstall: a *removal*, of a package the user
+declared, to satisfy an option. That is the guard's decision and emphatically not a backend's, so
+`@classic=false` on a classic snap is refused by name with the by-hand path spelled out — the
+same shape as V.107's shrink refusal, and for the same reason: **the direction that destroys
+something says so out loud rather than doing it quietly on your behalf.**
+
+**Omitting the option manages nothing, and that is what makes the refusal safe.** If an absent
+`@classic` meant "strict", every existing classic snap whose line never mentioned confinement
+would start failing every sync with that refusal — a fix that breaks configs nobody edited. So
+absence is unmanaged, exactly as a dropped `@quota` is (V.107), and the refusal can only be
+reached by someone who explicitly wrote `@classic=false`.
+
+**And the sibling was inside the sibling.** `@channel`'s drift check `return`ed from the
+function — the identical fault V.107 had just fixed for `@mount`, in the branch immediately above
+it. A snap carrying a channel *and* `@classic` had only the channel looked at. The argv had the
+matching bug one layer down: the refresh was built from `@channel` alone, so a line asking for
+both changes would have silently dropped one. **Two spellings of one mistake, twenty lines apart,
+and the only reason the second was found is that the first was being fixed next to it.** The
+lesson is not about snaps. It is that "check the neighbouring branch" is not a courtesy — the
+neighbouring branch is where the same author made the same assumption on the same afternoon.
+
+**V.109 — Why a parked decision's condition is checked by a script.** *(2026-07-31, from D15.)*
+`PARKED` is not a state, it is a promise to come back: *not asking you yet, and here is what I am
+waiting on.* D15 said, in those words, "parked until D5 is answered". D5 was ruled on 2026-07-24
+and built on the 26th — so from the 24th, D15 was a live question the owner had never been asked,
+still filed under the status that means *needs nothing from you*. It surfaced on the 31st only
+because someone asked what was open and read D5 by hand.
+
+**The register already had a checker, and it passed every day of that week.** It counts the
+entries and fails CI if any written total disagrees — which is why the arithmetic cannot drift.
+But it verified the *totals* and never the *claims*, and a parked entry makes a claim: that the
+thing it waits on has not happened. So the totals were right the entire time the register was
+wrong, which is the most expensive kind of green.
+
+The fix is the same shape as the count: a parked entry's `Status:` line must carry
+`waits on <what>`, the checker fails if the clause is missing, and it fails if the clause names a
+decision that is now ANSWERED. A condition naming an event out in the world — D16 waits on
+someone actually hitting the case — is allowed and left unchecked, and **saying that out loud is
+the point**, because the alternative is a clause that reads as checkable and quietly is not.

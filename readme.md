@@ -169,6 +169,12 @@ Some keys belong to one family of backends and are refused, by name, anywhere el
 on a snap, and the storage keys below. An option no backend would read is an error rather than a
 line that quietly does nothing.
 
+**Adding `@classic` to a snap you already installed re-confines it** on the next sync, rather than
+waiting for a reinstall. Taking it away manages nothing — LiNix will not silently reconfine a
+snap because a word left the file. Writing `@classic=false` on a snap that *is* classic is
+refused, because snapd can relax confinement in place but cannot narrow it, and the only way back
+is to remove and reinstall — which the error tells you.
+
 **A `link:` line puts your file back when you delete it.** If the destination already held a
 file, LiNix keeps it as `<target>.linix-backup` before taking the path over; removing the
 declaration restores that file and deletes the backup. So a `link:` line that comes and goes
@@ -247,6 +253,21 @@ destroyed, because an fstab entry naming a volume that no longer exists stops th
 `@mount_options` fills that entry's option field — btrfs only, since ZFS keeps its mount
 properties on the dataset, and an error without `@mount`, because there is then no entry for it
 to fill.
+
+**Editing one of these numbers changes the volume.** Raise `@quota` and the next sync raises the
+quota; raise `@size` on an `lvm:` volume and it grows, filesystem and all. Lowering `@size`
+shrinks it, and that is the one change here that can lose data — so it needs saying on the line:
+
+```
+lvm:vg0/data@size=50G,allow_shrink=true
+```
+
+Without `@allow_shrink`, a smaller `@size` is refused and the error names what the volume is now
+and what you asked for. With it, LiNix shrinks the filesystem before the volume, so a filesystem
+that cannot shrink (xfs) stops the operation rather than losing its tail. `@allow_shrink` is
+`lvm:` only — lowering a quota takes nothing away — and an error without `@size`, because on its
+own it permits nothing. Dropping an option stops declaring it; it does not lift what it declared,
+so deleting `@quota=` leaves the quota where it is.
 
 **Deleting one of these lines destroys a filesystem, and that goes through the ordinary removal
 guard** — no special escalation, because ordinary is already the strongest gate here. A volume

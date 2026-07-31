@@ -139,6 +139,24 @@ fn describe_cycle(graph: &StableDiGraph<GraphAction, ()>) -> String {
     )
 }
 
+/// Whether a declared size or quota disagrees with what the backend reports (Q19).
+///
+/// Three answers, because the backends report three states. A **byte count** is compared by
+/// value, so `@quota=10240M` against a reported `10737418240` is not a change. **`none`** is the
+/// backend saying it looked and there is no limit, which against a line that declares one is
+/// drift. **Nothing at all** is the backend saying it could not look, and that is left alone —
+/// D13's rule, and the reason it exists: a value read as "no limit" whenever the read fails
+/// schedules the same change on every sync for ever.
+fn limit_drifted(want: &str, reported: Option<&String>) -> bool {
+    match reported.map(String::as_str) {
+        None => false,
+        Some(crate::backends::storage::NO_LIMIT) => true,
+        Some(bytes) => bytes
+            .parse::<u64>()
+            .is_ok_and(|b| !crate::core::same_size(want, b)),
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct SyncChanges {
     pub graph: StableDiGraph<GraphAction, ()>,
@@ -554,10 +572,24 @@ impl<'a> ChangePlanner<'a> {
         // otherwise a channel change is invisible and does nothing. Only acts when the current
         // channel is *readable*: a channel we cannot read is left alone rather than refreshed
         // on every sync, which would be worse than the drift it is meant to catch.
+        let mut drifted = false;
         if let Some(want) = spec.options.get("channel") {
             use crate::backends::capability::channel_risk;
             if let Some(current) = installed.properties.get("channel") {
-                return Ok(channel_risk(current) != channel_risk(want));
+                drifted |= channel_risk(current) != channel_risk(want);
+            }
+        }
+        // Q20: `@classic` is confinement, and it was applied at install and never again — a snap
+        // that gained the option after it was installed stayed strictly confined for ever, with
+        // `sync` reporting nothing to do. The same shape as `@quota`, on a different backend.
+        //
+        // Absent means unmanaged, exactly as it does for a declared quota: a line that says
+        // nothing about confinement is not asking for strict, so it never schedules the
+        // remove-and-reinstall that narrowing would take. Only an explicit `@classic=false`
+        // does, and the backend refuses it by name rather than removing a declared package.
+        if let Some(want) = spec.options.get("classic") {
+            if let Some(current) = installed.properties.get("classic") {
+                drifted |= current != want;
             }
         }
         // Q18: a declared storage object that is not mounted where the line says is drift, the
@@ -573,9 +605,31 @@ impl<'a> ChangePlanner<'a> {
         // where the line says" or the declaration would never converge. Re-applying is
         // idempotent (`mount`, `zfs set mountpoint=`), so the cost of being wrong here is a
         // repeated no-op, while the cost of the other reading is a mount that never happens.
+        //
+        // Q19: and every other facet of that geometry is checked beside it, with the answers
+        // OR-ed rather than returned. `@mount` used to `return` from here, so a line carrying
+        // both a mount and a quota had only the mount looked at — the second option was dead the
+        // moment somebody wrote the two together. `@channel` above had the identical fault and
+        // is folded into the same accumulator (Q20).
         if let Some(want) = spec.options.get("mount") {
             let current = installed.properties.get("mount").map(String::as_str);
-            return Ok(current.map(|c| c.trim_end_matches('/')) != Some(want.trim_end_matches('/')));
+            drifted |= current.map(|c| c.trim_end_matches('/')) != Some(want.trim_end_matches('/'));
+        }
+        // The option field of the fstab entry `@mount` wrote. Editing it and finding nothing
+        // happens is the same defect as an editable `@quota` that never re-applies: the entry
+        // on disk keeps yesterday's options and the next boot honours them.
+        if let Some(want) = spec.options.get("mount_options") {
+            if let Some(current) = installed.properties.get("mount_options") {
+                drifted |= current != want;
+            }
+        }
+        for key in ["quota", "size"] {
+            if let Some(want) = spec.options.get(key) {
+                drifted |= limit_drifted(want, installed.properties.get(key));
+            }
+        }
+        if drifted {
+            return Ok(true);
         }
         if spec.backend == "link" && spec.options.get("template") == Some(&"true".into()) {
             return Ok(self.template_needs_update(spec).await);

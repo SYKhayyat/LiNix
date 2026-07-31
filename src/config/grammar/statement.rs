@@ -1349,6 +1349,9 @@ pub(crate) const PACKAGE_OPTION_KEYS: &[&str] = &[
     "mount",
     "mount_options",
     "classic",
+    // Q19. A declared `@size` is applied to a volume that already exists, and the one direction
+    // that can destroy data says so on the line.
+    "allow_shrink",
 ];
 
 /// Options that are only meaningful on some backends — one that resolves a name to several
@@ -1497,6 +1500,21 @@ pub fn validate_backend_options(origin: &Origin, backend: Option<&str>, o: &Opti
         .with_hint(
             "it fills the option field of the fstab entry `@mount=` writes, so on its own it \
              reaches nothing: add `@mount=/where`, or drop it.",
+        ));
+    }
+
+    // Q19's opt-out, and the same one-level-in rule. `@allow_shrink` permits a *declared* size to
+    // take space back, so without `@size` there is no declaration for it to permit — and a line
+    // that reads as "shrinking is allowed here" while nothing can shrink is worse than a line
+    // that does nothing, because someone will believe it.
+    if o.contains("allow_shrink") && !o.contains("size") {
+        return Err(GrammarError::new(
+            origin.clone(),
+            "`@allow_shrink` has no `@size` to apply to",
+        )
+        .with_hint(
+            "it lets a smaller `@size=` take space back off an existing volume, so on its own \
+             it permits nothing: add `@size=`, or drop it.",
         ));
     }
 
@@ -2627,6 +2645,45 @@ mod scoped_option_tests {
         );
         // And a bare `@mount` needs no options — `defaults` is what the entry gets.
         assert_eq!(opt("btrfs:/mnt/fs/data@mount=/srv", "mount"), "/srv");
+    }
+
+    /// Q19's opt-out. A declared `@size` is applied to a volume that already exists, and the one
+    /// direction that can destroy a filesystem is written on the line rather than assumed.
+    #[test]
+    fn a_volume_may_declare_that_it_is_allowed_to_shrink() {
+        assert_eq!(
+            opt("lvm:vg0/data@size=5G,allow_shrink=true", "allow_shrink"),
+            "true"
+        );
+        assert_eq!(opt("lvm:vg0/data@size=5G,allow_shrink", "allow_shrink"), "true");
+
+        // Nowhere else. A quota is a limit, not a filesystem, so lowering one destroys nothing
+        // and there is nothing here to permit — the flag on those backends would read as a
+        // safety measure that guards nothing.
+        for line in [
+            "zfs:tank/data@quota=5G,allow_shrink=true",
+            "btrfs:/mnt/fs/data@quota=5G,allow_shrink=true",
+            "apt:curl@allow_shrink=true",
+        ] {
+            let err = format!("{}", p(line).unwrap_err());
+            assert!(
+                err.contains("`@allow_shrink` is not an option on"),
+                "`{}`: {}",
+                line,
+                err
+            );
+        }
+    }
+
+    /// The `@mount_options` rule applied to the sibling that arrived with it. `@allow_shrink`
+    /// permits a *declared* size to take space back, so without `@size` it permits nothing —
+    /// and a line reading "shrinking is allowed here" while nothing can shrink is worse than a
+    /// line that does nothing, because someone will believe it.
+    #[test]
+    fn allow_shrink_without_a_size_is_refused() {
+        let err = format!("{}", p("lvm:vg0/data@allow_shrink=true").unwrap_err());
+        assert!(err.contains("`@allow_shrink` has no `@size`"), "{}", err);
+        assert!(err.contains("add `@size=`"), "the way out is named: {}", err);
     }
 
     /// snap's `--classic` branch had never run: the backend read `@classic` and no line could

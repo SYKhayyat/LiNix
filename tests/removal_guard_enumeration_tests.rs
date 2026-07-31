@@ -1,7 +1,7 @@
 //! The check that would have caught G-1: enumerate every path that removes something from
 //! the machine, from the code, and require each one to be accounted for.
 //!
-//! `readme.md:266` says "**every path that removes anything** goes through one guard".
+//! `readme.md` says "**every path that removes anything** goes through one guard".
 //! `src/app/sync/guard.rs`'s own module doc says "*Every* path that deletes is guarded... A
 //! guard on one command is a guard on nothing." Both sentences were true when written. Neither
 //! was ever re-derived, and by 2026-07-28 the count was eleven sites and nine guards — the
@@ -201,7 +201,7 @@ fn every_path_that_removes_anything_is_accounted_for() {
     assert!(
         problems.is_empty(),
         "the removal surface has moved since it was last counted:\n\n{}\n\n\
-         readme.md:266 says every path that removes anything goes through one guard. That \
+         readme.md says every path that removes anything goes through one guard. That \
          sentence is only true while this list is.",
         problems.join("\n\n")
     );

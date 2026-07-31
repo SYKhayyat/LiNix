@@ -252,11 +252,12 @@ take the else branch — the silent-wrongness this rule closes.
 | `url` | where a `helm:` plugin is installed from. **Required on every `helm:` line** (U39) |
 | `shim` | bare flag: put a PATH stand-in for this tool in `[bin_dir]`. The form R3's ruling names — a shim asked for on the tool's own line, rather than as a separate `shim:` statement |
 | `sandbox` | bare flag: the shim above, and `linix run` confines the process |
-| `classic` | bare flag: install this snap unconfined. `snap` only |
+| `classic` | bare flag: install this snap unconfined. `snap` only. **Converges (Q20):** adding it to an installed snap runs `snap refresh --classic`. `@classic=false` on a snap that is already classic is **refused** — snapd cannot narrow confinement, and only remove-and-reinstall can, which is the guard's call. Omitting the option manages nothing |
 | `size` | the size a volume is created at. **Required on `lvm:`** — `lvcreate` has no default, so a line without one describes nothing that can be made. `lvm` only |
 | `quota` | a cap on what a declared storage object may use. `btrfs` and `zfs` only |
 | `mount` | where a declared storage object is mounted — recorded in fstab, so it survives a reboot, and taken out again when the declaration goes. `btrfs` and `zfs` only |
 | `mount_options` | what the fstab entry's option field carries. `btrfs` only — ZFS keeps its mount properties on the dataset and has no such field — and **an error without `@mount`**, since there is then no entry for it to fill |
+| `allow_shrink` | bare flag: a smaller `@size` may take space back off a volume that already exists. `lvm` only — a quota is a limit and lowering one destroys nothing — and **an error without `@size`**, since it then permits nothing (Q19) |
 
 **A key one family of backends reads is legal there and refused by name everywhere else** — the
 same shape as `@url`, and for the same reason: `apt:curl@quota=10G` would read as the machine
@@ -1650,6 +1651,25 @@ described a declaration nobody could write: the option table permitted none of t
 fstab, which is what makes it survive a reboot, and it is taken out of fstab **before** the
 volume is destroyed — an entry that outlives its subvolume stops the next boot in the initramfs
 (V.106).
+
+**A declared geometry converges, and the one direction that can destroy a filesystem is written
+on the line** (Q19, ruled 2026-07-31). An edited `@quota`, `@size`, `@mount` or `@mount_options`
+is drift like any other: `sync` re-applies the quota, rewrites the fstab entry, and resizes the
+volume. **`lvm:` grows with `lvextend --resizefs`; it shrinks only where the line carries
+`@allow_shrink=true`, and refuses otherwise with both sizes named.** `--resizefs` in both
+directions is the rule and not an implementation detail — it shrinks the filesystem before the
+volume, so the flag permits a *resize* rather than a truncation, and a filesystem that cannot
+shrink fails before the volume is touched (V.107). **`@allow_shrink` without `@size` is a parse
+error**, the same one level in `@mount_options` gets.
+
+**Every facet is compared, and comparison is by value in bytes.** The tools are asked for raw
+byte counts (`zfs list -p`, `lvs --units b --nosuffix`, `btrfs qgroup show --raw`) so only the
+declared side is ever parsed; and a backend reports three states, never two — a byte count, `none`
+where it looked and found no limit, and **nothing at all where it could not look**, which is left
+alone (D13). A geometry facet that is satisfied does not stop the others being checked: a line
+carrying `@mount` and `@quota` has both read. **Dropping an option stops declaring it, and does
+not lift what it declared** — deleting a word from a config file must not silently uncap a
+filesystem.
 
 **Secret decryption opens to declared providers, last and most carefully (U38).** `age` and
 `sops` stay built in; any other decrypt tool (Vault, 1Password, a KMS, GPG) is a `[[secret]]`

@@ -66,6 +66,12 @@ const SCOPED_OPTIONS: &[(&str, &[&str], &str)] = &[
          and a ZFS dataset is bounded by `@quota` instead",
     ),
     (
+        "allow_shrink",
+        &["lvm"],
+        "it lets a smaller `@size` take space back off a volume that already exists, which is \
+         the one declared change that can destroy a filesystem",
+    ),
+    (
         "quota",
         &["btrfs", "zfs"],
         "it caps how much a declared storage object may use",
