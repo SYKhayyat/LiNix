@@ -505,7 +505,16 @@ on_path "$PKG" && PKG_WAS_HERE=1
 # And WHERE it resolved, which is what tells a binary this install put there from one that was
 # already on PATH under the same name (G-3). The lifecycle sweep below has always recorded this
 # for the removal half; section 5 recorded nothing.
-PKG_PREPATH="$(path_of "$PKG")"
+#
+# **Empty when the host already had the package**, and that is the whole subtlety. This sweep
+# does not remove a developer's software, so when `$PKG` was already installed the resolution
+# CANNOT change and comparing against it calls a correct run a failure. Measured on the macOS
+# runner, which ships wget: `FAIL brew: wget resolves to /opt/homebrew/bin/wget, which was
+# already there before this install`. The canary loop below needs no such guard — it skips a
+# canary this host already has (`left alone rather than removed`), so anything it does install
+# is genuinely new.
+PKG_PREPATH=""
+[ -z "$PKG_WAS_HERE" ] && PKG_PREPATH="$(path_of "$PKG")"
 
 > /tmp/itw-life0.out
 lx -y install "$BACKEND:$PKG" >/tmp/itw-life0.out 2>&1
