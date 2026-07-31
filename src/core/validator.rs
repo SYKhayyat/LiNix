@@ -9,6 +9,24 @@ use tracing::warn;
 static PACKAGE_NAME_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._@:+/-]+$").unwrap());
 
+/// The same allowlist plus the characters a Windows package identifier is built from.
+///
+/// `winget list` reports 185 of 278 names on a stock box as `ARP\Machine\X64\...` or
+/// `MSIX\...`, and the ARP rows for MSI installers are GUIDs in braces. Those are the
+/// identifiers `winget install` and `winget uninstall` take, so they are the names LiNix has to
+/// be able to carry (V.113).
+static WINDOWS_IDENTIFIER_NAME_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^[a-zA-Z0-9._@:+/\\{}-]+$").unwrap());
+
+/// Shell metacharacters, minus the three a Windows package identifier is made of.
+///
+/// Safe because **no package-manager command is ever a shell string** — every one is argv, and
+/// that is the property the executor's own tests exist to keep. This list is defence in depth
+/// against a name reaching a shell that does not exist; it is not what stands between a crafted
+/// name and a command line.
+static SHELL_INJECTION_REGEX_WINDOWS_ID: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[;&|><`$\(\)\[\]\*\?\!]").unwrap());
+
 /// Shell metacharacters blocked to prevent command injection.
 static SHELL_INJECTION_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"[;&|><`$\(\)\[\]\{\}\*\?\!\\]").unwrap());
@@ -74,6 +92,15 @@ impl Validator {
         matches!(backend, "link" | "web" | "github" | "appimage" | "btrfs")
     }
 
+    /// Backends whose manager's own identifiers carry a path separator or braces.
+    ///
+    /// `winget` is the whole list, and a list rather than a rule because those characters are
+    /// worth refusing everywhere else: no second manager on any platform names things this way.
+    /// `..` stays forbidden for it, exactly as for everything else.
+    fn names_carry_windows_identifiers(backend: &str) -> bool {
+        backend == "winget"
+    }
+
     /// Validates package names against injection and traversal, with no knowledge of the
     /// backend — the strict rule (a leading path separator is rejected). Prefer
     /// [`Validator::validate_package_name_for`] when the backend is known.
@@ -113,14 +140,27 @@ impl Validator {
             )));
         }
 
-        if !PACKAGE_NAME_REGEX.is_match(name) {
+        // A manager that prints a name must be able to be handed it back (V.113). `winget`'s
+        // identifiers carry backslashes and braces; the grammar was taught to accept them and
+        // this check was not, so `adopt` wrote rows that then failed to parse and wedged the
+        // model — measured on the native sweep at `adopted.txt:78`.
+        let (allowed, injection) = if Self::names_carry_windows_identifiers(backend) {
+            (
+                &*WINDOWS_IDENTIFIER_NAME_REGEX,
+                &*SHELL_INJECTION_REGEX_WINDOWS_ID,
+            )
+        } else {
+            (&*PACKAGE_NAME_REGEX, &*SHELL_INJECTION_REGEX)
+        };
+
+        if !allowed.is_match(name) {
             return Err(Error::Validation(format!(
                 "Invalid characters in package name: {}",
                 printable(name)
             )));
         }
 
-        if SHELL_INJECTION_REGEX.is_match(name) {
+        if injection.is_match(name) {
             return Err(Error::Validation(
                 "Shell injection characters detected".into(),
             ));
@@ -258,6 +298,61 @@ mod tests {
                 Validator::validate_package_name_for(name, backend).is_err(),
                 "`{backend}:` names {name} with no leading separator; allowing one would widen \
                  the guard for nothing"
+            );
+        }
+    }
+
+    /// `winget`'s own identifiers, and the four things widening the allowlist must NOT do.
+    ///
+    /// Found by running the native sweep: the grammar was taught to accept a backslash in a
+    /// name (G-2) and this validator was not, so `adopt` wrote 340 winget rows it believed it
+    /// could write and the next command could not parse the file — `adopted.txt:78`, a wedged
+    /// model, which is E1's class arriving through the other door.
+    #[test]
+    fn winget_identifiers_are_names_and_the_widening_stops_there() {
+        for name in [
+            r"ARP\Machine\X64\{8BD2A40D-67A6-45F5-877D-6D9D04C9D5A2}",
+            r"ARP\Machine\X86\ILST_30_2_1",
+            r"MSIX\Microsoft.AV1VideoExtension_2.0.24.0_x64__8wekyb3d8bbwe",
+            "7zip.7zip",
+        ] {
+            assert!(
+                Validator::validate_package_name_for(name, "winget").is_ok(),
+                "winget prints `{name}` and cannot be handed it back"
+            );
+        }
+
+        // 1. Only winget. Every other backend keeps the strict allowlist.
+        assert!(
+            Validator::validate_package_name_for(r"ARP\Machine\X64\thing", "cargo").is_err(),
+            "the widening leaked to a backend whose manager never prints such a name"
+        );
+        // 2. Traversal is still forbidden, for winget as for everything else.
+        assert!(
+            Validator::validate_package_name_for(r"ARP\..\..\Windows\System32", "winget").is_err(),
+            "`..` must stay refused whatever else the name may carry"
+        );
+        // 3. The shell metacharacters that are NOT part of a Windows identifier stay blocked.
+        for hostile in [
+            r"ARP\Machine; rm -rf /",
+            r"ARP\Machine`whoami`",
+            r"ARP\Machine$(id)",
+            r"ARP\Machine|cat",
+        ] {
+            assert!(
+                Validator::validate_package_name_for(hostile, "winget").is_err(),
+                "`{hostile}` is not an identifier, it is a command line"
+            );
+        }
+        // 4. And the ordinary names every other backend depends on still pass.
+        for (name, backend) in [
+            ("@angular/cli", "npm"),
+            ("serde_json", "cargo"),
+            ("sharkdp/fd", "github"),
+        ] {
+            assert!(
+                Validator::validate_package_name_for(name, backend).is_ok(),
+                "`{name}` stopped being a legal {backend} name"
             );
         }
     }
