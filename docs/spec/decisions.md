@@ -1,4 +1,4 @@
-# The decision register — all 131, and none of them open
+# The decision register — all 132, and none of them open
 **One file, six features, nothing waiting on a ruling.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **129** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **130** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,7 +73,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**None is open.** All 131 are accounted for: **129 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**None is open.** All 132 are accounted for: **130 ANSWERED, 2 PARKED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -267,6 +267,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q20** | A changed `@classic` did nothing either — RULED 2026-07-31: same answer. Relaxing confinement converges; narrowing it is refused, because only remove-and-reinstall can. | 2026-07-31 |
 | **Q21** | Is converging-on-change a property of *every* option, or of the five that happen to have it — RULED 2026-07-31: every option, proved per option. | 2026-07-31 |
 | **Q22** | A config file saved by a Windows editor starts with a byte-order mark, which became part of the first name — refuse it, or read the file? — RULED 2026-07-31: **read it.** The mark is stripped where text enters a parser. | 2026-07-31 |
+| **Q23** | A package name that begins with `@` — every scoped npm package — was read as an option list and could not be written at all. — RULED 2026-07-31: **the leading `@` is part of the name.** | 2026-07-31 |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -4300,3 +4301,35 @@ the codepoint rather than drawing it, which is the same session's fix to `Gramma
 reads the same files in order to rewrite them, and II.16 says LiNix must not rewrite your files
 — which includes their encoding. A file that arrived with a mark keeps it.
 
+
+
+## Q23
+
+**Status: ANSWERED — ruled 2026-07-31.** Raised by CI: both `Build` jobs were red on
+`tests/grade2_info_tests.rs`, on two platforms, for one cause.
+
+**Q23 — Is an `@` that opens a package name part of the name, or the start of the options?**
+
+npm's scoped packages are named `@scope/name` — `@angular/cli`, `@vue/cli`, `@bazel/bazelisk` —
+and `npm ls -g` prints them, so `linix list` reports them. Writing one back was impossible:
+
+```text
+$ linix info npm:@bazel/bazelisk
+Error: `@bazel/bazelisk` is not a list of `key=value` options
+  commas need the block form.
+```
+
+`@` introduces an option (`@version=1.2`), so a name starting with `@` was read as an empty name
+followed by nonsense options. **A name LiNix lists has to be a name LiNix accepts**, and the
+error was advice about a mistake nobody had made.
+
+**RULED (owner, 2026-07-31): the leading `@` is part of the name.** Only the first character of
+the name is special; every later `@` still opens the options, so `npm:@angular/cli@version=17.3.0`
+is a pinned scoped package. Nothing existing can break — a line beginning `npm:@...` did not
+parse, so no config anywhere contains one. Rule in II.2, reason in **V.113**.
+
+**The owner also named a fallback and it is deliberately NOT built:** *"if it gets confusing, we
+can have them quote it."* Quoting was rejected once as **V.10** — a quote needs an escape, which
+needs a backslash rule, which needs a newline rule — so it stays a decision to be re-argued
+rather than a convenience to be assumed. Nothing today is ambiguous enough to need it: the rule
+is positional, and there is exactly one special position.

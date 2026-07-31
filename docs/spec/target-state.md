@@ -267,6 +267,12 @@ take the else branch — the silent-wrongness this rule closes.
 | `mount_options` | what the fstab entry's option field carries. `btrfs` only — ZFS keeps its mount properties on the dataset and has no such field — and **an error without `@mount`**, since there is then no entry for it to fill |
 | `allow_shrink` | bare flag: a smaller `@size` may take space back off a volume that already exists. `lvm` only — a quota is a limit and lowering one destroys nothing — and **an error without `@size`**, since it then permits nothing (Q19) |
 
+**A name may begin with `@`, and only the first character is special** (Q23). npm's scoped
+packages are named `@scope/name` and every manager that has them prints them, so a name LiNix
+lists is a name LiNix accepts: `npm:@angular/cli` is that package, and
+`npm:@angular/cli@version=17.3.0` is that package pinned, because every `@` after the first
+character of the name still opens the options (V.113).
+
 **Changing an option changes the machine, or the line is refused with a reason** (Q21, ruled
 2026-07-31). Every key above is a declaration, and a declaration that stops applying the moment
 it is first applied is II.2's line-that-does-nothing arriving one layer in. **"Nothing happens"

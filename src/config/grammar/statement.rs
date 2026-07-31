@@ -998,9 +998,32 @@ fn reject_leading_dash(origin: &Origin, name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Where a package line's options begin, if they do.
+///
+/// An `@` that **opens the name** is part of the name (Q23). npm's scoped packages are named
+/// `@scope/name` — `@angular/cli`, `@bazel/bazelisk` — and `npm ls -g` prints them, so a name
+/// LiNix lists has to be a name LiNix can be given back. Before this, `npm:@bazel/bazelisk` was
+/// read as an empty name followed by an option list and refused with *"is not a list of
+/// `key=value` options"*, which is baffling advice about a line nobody wrote wrongly.
+///
+/// Only the first character of the name is special. Every later `@` still opens the options,
+/// which is what keeps `npm:@scope/name@version=1.2` a pinned scoped package rather than a
+/// package called `@scope/name@version=1.2`.
+fn option_separator(text: &str) -> Option<usize> {
+    // Where the name starts: after the backend prefix and any space that follows it.
+    let after_prefix = text.find(':').map(|i| i + 1).unwrap_or(0);
+    let name_start = text[after_prefix..]
+        .find(|c: char| !c.is_whitespace())
+        .map(|off| after_prefix + off)
+        .unwrap_or(after_prefix);
+    text.char_indices()
+        .find(|(i, c)| *c == '@' && *i != name_start)
+        .map(|(i, _)| i)
+}
+
 fn parse_package(origin: &Origin, text: &str, backends: &dyn BackendNames) -> Result<PackageDecl> {
-    let (head, options) = match text.split_once('@') {
-        Some((head, opts)) => (head.trim(), parse_short(origin, opts)?),
+    let (head, options) = match option_separator(text) {
+        Some(at) => (text[..at].trim(), parse_short(origin, &text[at + 1..])?),
         None => (text, Options::default()),
     };
 
@@ -2269,7 +2292,7 @@ mod option_key_tests {
     use super::*;
 
     fn known(name: &str) -> bool {
-        matches!(name, "apt" | "cargo" | "winget")
+        matches!(name, "apt" | "cargo" | "winget" | "npm")
     }
 
     fn parse_line(line: &str) -> Result<Statement> {
@@ -2342,6 +2365,49 @@ mod option_key_tests {
                 matches!(parse_line(line).unwrap(), Statement::Package(_)),
                 "{line} must be a package line"
             );
+        }
+    }
+
+    /// Q23: npm's scoped packages. `npm ls -g` prints `@bazel/bazelisk`, so a name LiNix lists
+    /// has to be a name LiNix accepts — and the two CI `Build` jobs were red on exactly that,
+    /// because the runners have one installed globally and this developer's box does not.
+    #[test]
+    fn a_name_may_open_with_an_at_sign_and_still_take_options() {
+        let scoped = |line: &str| match parse_line(line).unwrap() {
+            Statement::Package(d) => (d.selector.as_str().to_string(), d.options),
+            other => panic!("{line} parsed as {other:?}"),
+        };
+
+        // The name alone.
+        let (name, opts) = scoped("npm:@bazel/bazelisk");
+        assert_eq!(name, "@bazel/bazelisk");
+        assert!(opts.one("version").is_none());
+
+        // And with a pin: only the FIRST character of the name is special, so the second `@`
+        // still opens the options.
+        let (name, opts) = scoped("npm:@angular/cli@version=17.3.0");
+        assert_eq!(name, "@angular/cli");
+        assert_eq!(opts.one("version"), Some("17.3.0"));
+
+        // A bare scoped name, with the backend left to `priority`.
+        let (name, _) = scoped("@vue/cli");
+        assert_eq!(name, "@vue/cli");
+
+        // A chain, where the name starts after the last comma-separated backend.
+        let (name, _) = scoped("npm,cargo:@scope/thing");
+        assert_eq!(name, "@scope/thing");
+    }
+
+    /// The control: an ordinary name still splits on its first `@`, or this rule has eaten the
+    /// option syntax rather than made room beside it.
+    #[test]
+    fn an_ordinary_name_still_takes_its_options_at_the_first_at_sign() {
+        match parse_line("cargo:ripgrep@version=15.2.0").unwrap() {
+            Statement::Package(d) => {
+                assert_eq!(d.selector.as_str(), "ripgrep");
+                assert_eq!(d.options.one("version"), Some("15.2.0"));
+            }
+            other => panic!("parsed as {other:?}"),
         }
     }
 

@@ -2301,3 +2301,30 @@ order to append to them, and II.16 says LiNix must not rewrite your files. That 
 encoding: a file that arrived with a mark keeps it. Stripping at the read would have quietly
 re-encoded a user's config the first time any command touched it, which is a bigger promise
 broken than the one being fixed.
+
+**V.113 — Why the first character of a name is the one place `@` is not an option.** *(Owner
+ruling, 2026-07-31 — Q23.)* The option syntax and npm's scope syntax want the same character,
+and the collision is not hypothetical: `@angular/cli`, `@vue/cli` and `@bazel/bazelisk` are
+ordinary packages that `npm ls -g` prints, that `linix list` therefore reports, and that no
+module could contain. The refusal a user met was *"`@bazel/bazelisk` is not a list of
+`key=value` options"* — advice about a mistake they had not made, on a line they had copied out
+of LiNix's own output.
+
+**The rule is positional rather than contextual, and that is the whole of its defence.** "An `@`
+means an option unless the name looks like an npm scope" would need a table of which backends
+have scopes, and the table would be wrong the first time another ecosystem adopts the
+convention. "The first character of the name is part of the name" needs no table, no backend
+knowledge and no lookahead — and it leaves every existing line meaning exactly what it meant,
+because a line beginning `npm:@` did not parse at all before it.
+
+**Two things it deliberately does not do.** It does not make `@` legal *inside* a name — the
+second `@` still opens the options, which is what keeps a pin writable. And it does not
+introduce quoting: the owner named quoting as a fallback if the rule ever confuses anyone, and
+**V.10** already rejected quoting once, because a quote needs an escape, an escape needs a
+backslash rule, and a backslash rule needs a newline rule. One positional exception is cheaper
+than a lexer.
+
+This is the third defect of one shape in one session — `\` read as set math (G-2), a
+byte-order mark read as part of a name (Q22), `@` read as an option (Q23). The shape is: **a
+manager prints a name that LiNix's own grammar cannot take back.** Where the two disagree the
+grammar gives way, because the manager's names are facts and the grammar is a choice.
