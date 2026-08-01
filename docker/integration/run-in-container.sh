@@ -629,8 +629,17 @@ echo "[9] The guard"
 _installed_names() { lx list --backend "$BACKEND" 2>/dev/null | awk '{print $2}'; }
 GUARD_VICTIM=""
 _have="$(_installed_names)"
+# A protected name is matched against the manager's own spelling AND its last path component,
+# because Portage names a package `app-shells/bash` while `linix protected` says `bash`. Without
+# that the intersection on gentoo is empty however much bash is installed, the guard proof
+# examines nothing, and `uninstall` — which on a SMOKE_ONLY image is executed ONLY by the guard
+# victim — is reported as never run. Two failures, one missing slash. Measured on CI 30680916682.
 for _p in $(lx protected 2>/dev/null | sed -n 's/^  \([a-z0-9][a-z0-9._+-]*\)$/\1/p'); do
-    if printf '%s\n' "$_have" | grep -qx "$_p"; then GUARD_VICTIM="$_p"; break; fi
+    _match="$(printf '%s\n' "$_have" | while IFS= read -r _n; do
+        [ "$_n" = "$_p" ] && { printf '%s' "$_n"; break; }
+        [ "${_n##*/}" = "$_p" ] && { printf '%s' "$_n"; break; }
+    done)"
+    if [ -n "$_match" ]; then GUARD_VICTIM="$_match"; break; fi
 done
 if [ -z "$GUARD_VICTIM" ]; then
     FAILC=$((FAILC + 1))
