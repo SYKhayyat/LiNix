@@ -971,12 +971,16 @@ echo "[14] Real lifecycle, every other manager on this image"
 # The twelve: brew emerge eopkg guix lvm paru pkg pkg_add pkgin slackpkg yay zfs. Three of those
 # have images being built for them; the BSDs need a userland no Linux container can host, and
 # `emerge` is smoke-only by design.
-# Lowered 11 -> 10 on 2026-07-31, measured on the tools image: `nix` left the gap list by
-# being installed, which it never had been. The remaining ten are brew emerge eopkg guix
-# paru pkg pkg_add pkgin slackpkg yay — AUR helpers that refuse to run as root, BSD
-# userlands no Linux container can host, images that exist on no public registry, and
-# gentoo, which is smoke-only by design.
-LIFECYCLE_GAP_CEILING=10
+# 10 on the `tools` image and 11 on every other one, and this constant is shared — so lowering
+# it to 10 on the tools measurement turned the `storage` job red for a reason that had nothing
+# to do with storage: `nix` is installed in `tools` and nowhere else, so only that image can
+# reach 10. Measured on CI 30680916682, and put back the same hour.
+#
+# **The real fix is a ceiling per image**, the way `scripts/lifecycle-floor.txt` is a floor per
+# host class and for exactly the same reason — one number over unlike machines is a number that
+# is wrong for all but one of them. Not done tonight, and named here rather than left as a
+# surprise for whoever next lowers this line.
+LIFECYCLE_GAP_CEILING=11
 canary() {
     case "$1" in
         # **One binary name per backend.** `cowsay` was the canary for npm, pnpm, yarn AND bun,
