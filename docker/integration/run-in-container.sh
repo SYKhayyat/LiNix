@@ -962,7 +962,12 @@ echo "[14] Real lifecycle, every other manager on this image"
 # The twelve: brew emerge eopkg guix lvm paru pkg pkg_add pkgin slackpkg yay zfs. Three of those
 # have images being built for them; the BSDs need a userland no Linux container can host, and
 # `emerge` is smoke-only by design.
-LIFECYCLE_GAP_CEILING=11
+# Lowered 11 -> 10 on 2026-07-31, measured on the tools image: `nix` left the gap list by
+# being installed, which it never had been. The remaining ten are brew emerge eopkg guix
+# paru pkg pkg_add pkgin slackpkg yay — AUR helpers that refuse to run as root, BSD
+# userlands no Linux container can host, images that exist on no public registry, and
+# gentoo, which is smoke-only by design.
+LIFECYCLE_GAP_CEILING=10
 canary() {
     case "$1" in
         # **One binary name per backend.** `cowsay` was the canary for npm, pnpm, yarn AND bun,

@@ -41,9 +41,17 @@ fn case_labels(script: &str, func: &str) -> BTreeSet<String> {
         if t.starts_with('#') {
             continue;
         }
-        let Some((head, _)) = t.split_once(')') else {
+        let Some((head, arm)) = t.split_once(')') else {
             continue;
         };
+        // A label is coverage only if its arm actually YIELDS a canary. `web) echo "" ;;` is a
+        // row that says "there is nothing here", and counting it made this gate overstate
+        // coverage by every empty row in both tables — the check examining its own shape
+        // rather than the thing it names. Rows that echo a variable (`$STORAGE_BTRFS/canary`)
+        // are real; only a literal empty string is the absence.
+        if func == "canary" && (arm.contains(r#"echo "" "#) || arm.trim() == r#"echo "" ;;"#) {
+            continue;
+        }
         if head.is_empty() || head.contains(' ') || head.contains('$') || head.contains('(') {
             continue;
         }
@@ -232,6 +240,19 @@ const NOWHERE: &[Nowhere] = &[
     },
 ];
 
+/// **What this gate cannot see, stated because `nix` proved it.** It reads the two harnesses'
+/// TABLES, not their runs — deliberately, since no single run observes every image. So a canary
+/// row for a manager that is not installed anywhere counts as coverage: `nix` had a row here the
+/// whole time, `no_lifecycle_reason` had no excuse for it, and the manager itself was missing
+/// from the image because its installer refused to run as root. Both gates said fine and nothing
+/// ran for months.
+///
+/// The run-time half of that question now exists and lives in the sweep: each image writes what
+/// it actually ships to `/etc/linix-image-managers`, and the coverage audit reports a manager
+/// that failed to install as MISSING rather than impossible. This test and that check answer
+/// different halves — *is it claimed anywhere* and *is it really there* — and neither is the
+/// whole answer alone.
+///
 /// May only go DOWN. Raising it is `Q4`'s item 4 happening — *no new backend is added until the
 /// current set passes* — and the failure says so.
 const NOWHERE_CEILING: usize = 15;
