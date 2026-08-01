@@ -139,6 +139,22 @@ all     = tools, windows      # groups can contain groups
 Then `tools:ripgrep` expands to `apt,dnf,cargo:ripgrep`. It is only a shortcut — it resolves
 exactly as the chain would, `priority` is unchanged, and a group that reaches itself is refused.
 
+**A name is whatever the manager calls it.** If `linix list` prints it, you can write it back:
+
+```
+npm:@angular/cli                       # a scoped package — the leading @ is part of the name
+npm:@angular/cli@version=17.3.0        #   ...and a later @ still opens the options
+winget:ARP\Machine\X64\{8BD2A40D-...}    # what winget calls an installed MSI
+cargo:serde_json                       # underscores, dots, plus signs, slashes
+```
+
+That is a rule rather than a list of exceptions: a manager's names are facts, and where they and
+the grammar disagree, the grammar gives way (V.113). The one thing a name may never contain
+is `..`.
+
+A config file may also start with a **byte-order mark** — what Notepad writes — and LiNix reads
+it anyway (Q22). It is an encoding artefact, not part of your first backend's name.
+
 ### Options
 
 Short form for simple values, block form for anything with a comma:
