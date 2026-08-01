@@ -70,6 +70,21 @@ been excused as *needing FUSE, which a plain container does not have*, when inst
 download and a symlink; its Windows reason is corrected to the true one, that Windows cannot run
 an AppImage at all.
 
+**The numbers, measured on this machine rather than predicted.**
+
+| | before | after |
+|---|---|---|
+| `tools` image real lifecycles | 25 | **26** (`pass=359 fail=0 soft=11`) |
+| Windows native real lifecycles | 5 | **6** |
+| container gap ceiling | 11 | **10** |
+| `nix` | *no path to a real lifecycle anywhere* | install → list → PATH → remove → gone |
+
+**Three canary collisions were hiding in plain sight, and G-3 is what exposed them.** `cowsay`
+was the canary for npm, pnpm, yarn AND bun; `pycowsay` for pipx and uv; `hello` for cabal and
+nix. Whichever installed first owned the name, so every other backend's PATH check passed on
+somebody else's binary — four checks where one was meaningful. One binary per backend now, each
+verified from the registry rather than assumed.
+
 **What stays a cost, said plainly:** `stack` (a Haskell package builds from source, and baking the
 toolchain does not change that) and `flatpak` (the smallest runtime is multi-GB). Those are real
 prices, not impossibilities, and they are written as prices.
