@@ -85,6 +85,27 @@ nix. Whichever installed first owned the name, so every other backend's PATH che
 somebody else's binary — four checks where one was meaningful. One binary per backend now, each
 verified from the registry rather than assumed.
 
+**And the pattern repeated on `choco`, which is the third backend to break the moment it was
+covered.** Chocolatey is skipped unless the shell is elevated, and GitHub's Windows runners are —
+so CI 30684191791 is its first real lifecycle anywhere:
+
+```text
+  PASS  choco installed bat for real
+  FAIL  choco: list shows bat (output missing /bat/)
+  FAIL  choco: bat is not on PATH and nothing said where it went
+  FAIL  choco: uninstall bat (rc=1)
+        | removed as packages have dependencies for a reason...
+```
+
+**Not reproduced here and not guessed at**: this developer's box has chocolatey and an
+unelevated shell, so the case cannot be driven locally, and the three failures admit at least
+two readings — an install that reported success without installing, or a `list` that cannot see
+what choco calls a dependency. **It is left red and named rather than papered over**, because
+the canary could be changed to something without dependencies and that would hide the question
+instead of answering it (`Q4`). What it needs is twenty minutes on an elevated Windows shell:
+`choco install bat`, then `choco list -r`, then `linix list --backend choco`, and whichever of
+those three disagrees is the defect.
+
 **What stays a cost, said plainly:** `stack` (a Haskell package builds from source, and baking the
 toolchain does not change that) and `flatpak` (the smallest runtime is multi-GB). Those are real
 prices, not impossibilities, and they are written as prices.
