@@ -145,6 +145,21 @@ fn a_name_no_backend_can_install_is_never_left_in_the_manifest() {
             eprintln!("skipped: {backend} is not READY on this machine");
             continue;
         };
+        // A rate limit is the one failure that makes this measurement meaningless, and it is
+        // not hypothetical: the macOS runner hit one (`does not reset for 999s`) and LiNix
+        // correctly kept the line, because a window that moves IS a passing failure and W35
+        // exists to say so. The premise here — "this failure is permanent" — is false in that
+        // environment, so the case is skipped and NAMED rather than asserted around.
+        //
+        // Keyed on the sentence the product itself prints, so a run that is merely slow, or
+        // offline, still measures what it claims to.
+        if out.contains("rate limit") || out.contains("rate limiting") {
+            eprintln!(
+                "skipped: {backend} is rate limited by its registry, so the failure under test                  is transient rather than permanent and the line is kept ON PURPOSE:
+{out}"
+            );
+            continue;
+        }
         examined += 1;
         assert_eq!(
             code, 1,
