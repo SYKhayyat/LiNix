@@ -47,7 +47,12 @@ container-linux-ubuntu-local 7
 container-linux-fedora-local 9
 container-linux-arch-local 7
 container-linux-alpine-local 7
-container-linux-tools-local 25
+# Raised 25 -> 26 on 2026-07-31: `nix`, which this file's own harness had recorded as a
+# backend with NO PATH TO A REAL LIFECYCLE ANYWHERE for months. The truth was that the image's
+# install line refused to run as root and said so in a build log nobody read. It now installs,
+# lists, and removes `figlet` — a canary chosen because `hello`, its old one, is also cabal's
+# and cabal cannot uninstall.
+container-linux-tools-local 26
 # Added 2026-07-31, each read off that image's own first green run rather than estimated. The
 # `storage` image is the only one that needs `--privileged` and the host's /lib/modules.
 #

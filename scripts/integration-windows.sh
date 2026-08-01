@@ -1213,7 +1213,11 @@ ok "hooks shell-init prints the wrapper functions" lx hooks shell-init bash
 #
 # What W36 ruled is what is asserted: heal NAMES what it could not recover and does not exit 0
 # while saying so. Both states are legitimate; the two that cannot both be true are not.
-_heal_out=$($TO "$LINIX" heal 2>&1); _heal_rc=$?
+# Through `lx`, not `$TO "$LINIX"`: the wrapper is what records a subcommand as EXECUTED,
+# and the first version of this check called the binary directly — so the coverage audit
+# reported `heal` as only ever --help'd, which is precisely the claim this sweep exists
+# to refuse. Measured: `FAIL every subcommand is executed — only --help'd: heal`.
+_heal_out=$(lx heal 2>&1); _heal_rc=$?
 if printf '%s' "$_heal_out" | grep -q "could not be recovered"; then
     if [ "$_heal_rc" -ne 0 ]; then
         PASS=$((PASS + 1)); echo "  PASS  heal names what it could not recover, and says so in the exit code"
