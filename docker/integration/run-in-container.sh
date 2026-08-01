@@ -1000,7 +1000,13 @@ canary() {
         # `nix:hello` and not the flake ref `nixpkgs#hello`: `#` opens a comment in the
         # one grammar, so a flake ref cannot be written in a manifest at all. The backend
         # builds `nixpkgs#<name>` itself from a plain name.
-        nix)      echo "hello|hello|full|" ;;
+        # `figlet` and not `hello`: cabal's canary is ALSO `hello`, cabal has no uninstall verb,
+        # and its copy therefore sits on PATH for the rest of the run — so nix's binary check
+        # could never be clean, and the harness said so out loud the first time nix was
+        # installed (`nix: hello resolves to /root/.cabal/bin/hello, which was already there`).
+        # Two canaries sharing a binary name is the G-3 collision by construction; the fix is a
+        # name nothing else in this image installs, not a weaker check.
+        nix)      echo "figlet|figlet|full|" ;;
         dotnet)   echo "dotnetsay|dotnetsay|full|" ;;
         pub)      echo "sass|sass|full|" ;;
         # mise appends the version itself; `jq@latest` here would be read as an option.
@@ -1100,8 +1106,17 @@ no_lifecycle_reason() {
                 || echo "needs a real block device, which only the \`storage\` image (--privileged) provides — plan-smoked here" ;;
         web)      echo "installs from a pasted URL; no stable public canary — smoked in 15" ;;
         appimage) echo "needs FUSE, which a plain container does not have — smoked in 15" ;;
-        stack)    echo "its first install downloads a whole GHC toolchain (~2 GB) — smoked in 15" ;;
-        flatpak)  echo "the smallest app pulls a multi-GB runtime, and there is no session bus here" ;;
+        # A PRICE, not a wall, and the difference is the whole lesson of the `nix` finding
+        # (Q17). Baking the toolchain into the image does not help: `stack install` builds the
+        # PACKAGE from source too, and the smallest thing on Hackage is minutes per run on
+        # every image forever. Re-derive this before believing it — that is what nobody did
+        # for `nix`.
+        stack)    echo "a Haskell package builds from source; the toolchain can be baked in, the build cannot — a cost, not an impossibility — smoked in 15" ;;
+        # Two claims, and only one of them is a wall. The runtime size is a PRICE; the session
+        # bus is real but `dbus-run-session flatpak --user` may close it, which is an
+        # experiment nobody has run. Written as two facts so the next person can attack the
+        # half that is attackable.
+        flatpak)  echo "the smallest app pulls a multi-GB runtime (a cost), and there is no session bus here (a wall) — try dbus-run-session with --user before believing this" ;;
         # Detected, not assumed: on a distro without the marker a system pip install is
         # ordinary and gets the full lifecycle. Naming it keeps a permanent, expected
         # refusal from reading as ecosystem flakiness run after run.
