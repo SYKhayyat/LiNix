@@ -1514,6 +1514,21 @@ judgement call — **more features, more extensibility, more intuitive** — and
 container gap ceiling 11 -> **10** · full Windows suite **exit 0, 62 targets** · register at
 132 decisions, 130 answered, 0 open.
 
+## Open at the end of round 9, with evidence
+
+**`choco` fails its first real lifecycle** (CI 30684191791, `Integration (Windows native)`):
+install reports success, `linix list --backend choco` cannot see the package, and `choco
+uninstall bat` is refused over dependencies. Chocolatey is skipped unless the shell is elevated
+and runners are, so nothing had ever run it. **Left red on purpose** — the canary could be
+swapped for a dependency-free package and the question would disappear unanswered, which is
+what `Q4` forbids. Twenty minutes on an elevated Windows shell settles it: `choco install bat`,
+`choco list -r`, `linix list --backend choco`, and whichever of the three disagrees is the bug.
+
+That is the third backend this round to break the moment it was covered, after `nix` (a `list`
+blind to everything it installs) and winget's own identifiers (unwritable, then wedging the
+model). **The pattern is the finding**: every exemption removed so far has paid for itself in
+defects within minutes, which is the argument for removing the rest.
+
 ## What a future round should attack, in this order
 
 1. **The 15 backends unreachable anywhere.** `zfs` and the BSDs need VMs, not containers; `mas`
