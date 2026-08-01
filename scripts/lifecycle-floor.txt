@@ -45,9 +45,13 @@ windows-native-windows-local 5
 # is recorded deliberately: the gain comes from `pip` becoming lifecycleable on a disposable
 # host and from four canaries that stopped sharing one binary name, and one flaky manager
 # should not turn a real improvement into a red gate. Raise it to 13 once two consecutive
-# runs show 13 — which is the evidence a ratchet is supposed to want, and twice tonight I
+# runs show 13 — which is the evidence a ratchet is supposed to want, and twice that night I
 # set a threshold from a single measurement and CI made me take it back.
-windows-native-windows-ci 12
+#
+# **Raised to 13 the same night**: runs 30680916682 and 30682513822 both measured 13, which
+# is the condition written above. The rule got its evidence rather than the number getting
+# the benefit of the doubt.
+windows-native-windows-ci 13
 windows-native-darwin-ci 8
 container-linux-ubuntu-local 7
 container-linux-fedora-local 9
