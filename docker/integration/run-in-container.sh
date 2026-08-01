@@ -965,12 +965,18 @@ echo "[14] Real lifecycle, every other manager on this image"
 LIFECYCLE_GAP_CEILING=11
 canary() {
     case "$1" in
+        # **One binary name per backend.** `cowsay` was the canary for npm, pnpm, yarn AND bun,
+        # and `pycowsay` for both pipx and uv — so whichever installed first owned the name and
+        # the others' PATH checks passed on somebody else's binary. G-3 made that visible
+        # (`pnpm: cowsay resolves to .../bun/bin/cowsay, which was already there`) and the fix
+        # is a distinct canary per backend, not a weaker check. Each binary was verified from
+        # the registry (`npm view <pkg> bin`) rather than assumed.
         npm)      echo "cowsay|cowsay|full|" ;;
-        pnpm)     echo "cowsay|cowsay|full|" ;;
-        yarn)     echo "cowsay|cowsay|full|" ;;
-        bun)      echo "cowsay|cowsay|full|" ;;
+        pnpm)     echo "json|json|full|" ;;
+        yarn)     echo "catj|catj|full|" ;;
+        bun)      echo "sort-package-json|sort-package-json|full|" ;;
         pipx)     echo "pycowsay|pycowsay|full|" ;;
-        uv)       echo "pycowsay|pycowsay|full|" ;;
+        uv)       echo "pyjokes|pyjoke|full|" ;;
         pip)      echo "six||full|" ;;
         gem)      echo "colorize||full|" ;;
         cargo)    echo "hexyl|hexyl|full|" ;;

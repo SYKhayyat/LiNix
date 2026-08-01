@@ -763,12 +763,18 @@ canary() {
         # A PowerShell module, so there is no binary on PATH — the field is empty rather than
         # faked, and `list --backend psresource` is the presence assertion.
         psresource) echo "powershell-yaml||full|" ;;
+        # **One binary name per backend.** `cowsay` was the canary for npm, pnpm, yarn AND bun,
+        # and `pycowsay` for both pipx and uv — so whichever installed first owned the name and
+        # the others' PATH checks passed on somebody else's binary. G-3 made that visible
+        # (`pnpm: cowsay resolves to .../bun/bin/cowsay, which was already there`) and the fix
+        # is a distinct canary per backend, not a weaker check. Each binary was verified from
+        # the registry (`npm view <pkg> bin`) rather than assumed.
         npm)      echo "cowsay|cowsay|full|" ;;
-        pnpm)     echo "cowsay|cowsay|full|" ;;
-        yarn)     echo "cowsay|cowsay|full|" ;;
-        bun)      echo "cowsay|cowsay|full|" ;;
+        pnpm)     echo "json|json|full|" ;;
+        yarn)     echo "catj|catj|full|" ;;
+        bun)      echo "sort-package-json|sort-package-json|full|" ;;
         pipx)     echo "pycowsay|pycowsay|full|" ;;
-        uv)       echo "pycowsay|pycowsay|full|" ;;
+        uv)       echo "pyjokes|pyjoke|full|" ;;
         gem)      echo "colorize||full|" ;;
         cargo)    echo "hexyl|hexyl|full|" ;;
         github)   echo "sharkdp/fd|fd|full|fd" ;;
@@ -1198,7 +1204,27 @@ fi
 ok "list enumerates what is installed" lx list
 ok "hooks status says which managers are hookable" lx hooks status
 ok "hooks shell-init prints the wrapper functions" lx hooks shell-init bash
-ok "heal recovers an uninterrupted transaction" lx heal
+# `heal` when there is nothing to recover — and the check has to say WHICH, because by the time
+# it runs this sweep has deliberately failed an install and that leaves a `Failed` entry in the
+# journal, which `get_incomplete_actions` counts as incomplete. The old check asserted rc=0 and
+# therefore passed or failed on whether an earlier deliberate failure happened to still be
+# there: heads on ubuntu, tails on tools and macOS, in one CI run. Proved not a regression by
+# building the pre-session tree in a worktree and getting the same rc=1.
+#
+# What W36 ruled is what is asserted: heal NAMES what it could not recover and does not exit 0
+# while saying so. Both states are legitimate; the two that cannot both be true are not.
+_heal_out=$($TO "$LINIX" heal 2>&1); _heal_rc=$?
+if printf '%s' "$_heal_out" | grep -q "could not be recovered"; then
+    if [ "$_heal_rc" -ne 0 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  heal names what it could not recover, and says so in the exit code"
+    else
+        hard "heal reported an unrecovered operation and exited 0 (W36)"
+    fi
+elif [ "$_heal_rc" -eq 0 ]; then
+    PASS=$((PASS + 1)); echo "  PASS  heal had nothing to recover and said nothing"
+else
+    hard "heal exited $_heal_rc without naming anything it could not recover"
+fi
 ok "clean-cache frees archives without removing a package" lx clean-cache
 ok "update refreshes repository metadata" lx update
 ok "watch --once runs a single unattended reconcile" lx -y watch --once
