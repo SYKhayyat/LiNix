@@ -19,10 +19,25 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
-Say "building and installing from $repo (this can take a minute)..."
-# Prefer the reproducible, lockfile-pinned build; fall back if the lock is unavailable.
-cargo install --git $repo --locked
-if ($LASTEXITCODE -ne 0) { cargo install --git $repo }
+# WHICH LiNix — the twin of install.sh's rule. `HEAD` is whatever was pushed last, which is not
+# a thing anyone can ask for twice. The default is the newest release tag; $env:LINIX_REF
+# overrides it, and a repo with no tags falls back to the branch and says so.
+$ref = $env:LINIX_REF
+if (-not $ref) {
+    $tags = & git ls-remote --tags --refs --sort=-v:refname $repo 'v*' 2>$null
+    if ($tags) { $ref = ($tags | Select-Object -First 1) -replace '.*/', '' }
+    if (-not $ref) { Say "no release tag published yet - installing from the default branch instead." }
+}
+
+if ($ref) {
+    Say "building and installing $ref from $repo (this can take a minute)..."
+    cargo install --git $repo --tag $ref --locked
+    if ($LASTEXITCODE -ne 0) { cargo install --git $repo --tag $ref }
+} else {
+    Say "building and installing from $repo (this can take a minute)..."
+    cargo install --git $repo --locked
+    if ($LASTEXITCODE -ne 0) { cargo install --git $repo }
+}
 
 $cargoBin = if ($env:CARGO_HOME) { Join-Path $env:CARGO_HOME 'bin' } else { Join-Path $HOME '.cargo\bin' }
 # The binary just installed, by path, in preference to whatever `linix` resolves to on this

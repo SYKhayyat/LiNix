@@ -23,10 +23,39 @@ if ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-say "building and installing from $REPO (this can take a minute)..."
+# WHICH LiNix. `HEAD` is whatever was pushed last, which is not a thing anyone can ask for
+# twice — two machines installed an hour apart got different programs and neither could say
+# which. The default is the newest release TAG, and `LINIX_REF` overrides it:
+#
+#   LINIX_REF=main   ...install.sh | sh     # follow the branch, deliberately
+#   LINIX_REF=v0.7.0 ...install.sh | sh     # a specific release
+#
+# A repo with no tags yet falls back to the branch and SAYS SO, rather than silently
+# installing something else than it promised.
+REF="${LINIX_REF:-}"
+if [ -z "$REF" ]; then
+  REF="$(git ls-remote --tags --refs --sort=-v:refname "$REPO" 'v*' 2>/dev/null            | head -1 | sed 's#.*/##')"
+  if [ -z "$REF" ]; then
+    say "no release tag published yet — installing from the default branch instead."
+  fi
+fi
+
+if [ -n "$REF" ]; then
+  say "building and installing $REF from $REPO (this can take a minute)..."
+else
+  say "building and installing from $REPO (this can take a minute)..."
+fi
+
 # Prefer the reproducible, lockfile-pinned build; fall back if the lock is unavailable.
-if ! cargo install --git "$REPO" --locked 2>/dev/null; then
-  cargo install --git "$REPO"
+# `--tag` only when there is one: `cargo install --git X --tag ""` is not the same command.
+if [ -n "$REF" ]; then
+  if ! cargo install --git "$REPO" --tag "$REF" --locked 2>/dev/null; then
+    cargo install --git "$REPO" --tag "$REF"
+  fi
+else
+  if ! cargo install --git "$REPO" --locked 2>/dev/null; then
+    cargo install --git "$REPO"
+  fi
 fi
 
 # cargo installs into ~/.cargo/bin; make sure the user can find it.
