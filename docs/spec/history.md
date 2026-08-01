@@ -34,6 +34,23 @@ is not supported by this script!` — and `|| echo "SKIP nix install"` swallowed
 impossibility that was a broken line nobody read. It installs now (Determinate, `--init none`, the
 container case), with **no `|| true` and a build-time assertion**.
 
+**And installing it found a product bug in the first minute, which is the entire argument.**
+`linix -y install nix:hello` succeeded, `nix profile list` showed hello, and
+`linix list --backend nix` printed **nothing**. `nix profile list --json` returns `elements` as
+an OBJECT KEYED BY NAME from schema v3 (Nix >= 2.20); LiNix asked `as_array()`, got `None`, and
+reported an empty profile. That is `E6`'s class — a `list` blind to an installed package is
+permanent phantom drift, LiNix reinstalling for ever while `check` reports a problem that is not
+there — and it sat on the one backend no image had ever installed, so nothing could have caught
+it. Both shapes are read now, from one extracted parser, against a fixture captured from the
+running tool. **Verified in the image**: `linix list --backend nix` reports
+`determinate-nix figlet nss-cacert`.
+
+**The canary had to move too, and the harness said so itself.** `nix`'s canary was `hello` and so
+is `cabal`'s; cabal has no uninstall verb, so its copy sits on PATH for the rest of the run and
+the first nix lifecycle in this project's history reported *"nix: hello resolves to
+/root/.cabal/bin/hello, which was already there before this install"* — G-3's rule, working, on a
+collision built into the table. `figlet` now, because nothing else in the image installs it.
+
 **The class is closed too.** The image writes what it actually ships to
 `/etc/linix-image-managers` and the coverage audit reads it, so a manager that failed to install
 is *missing and named* rather than impossible. Soft rather than hard on purpose: an architecture
