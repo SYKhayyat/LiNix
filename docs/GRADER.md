@@ -410,6 +410,45 @@ which is how a 98-second `info` shipped.
 
 ---
 
+## 9b. The four rulings of 2026-07-31, and how to catch them lying
+
+Each shipped with a claim that a name a manager prints is a name LiNix accepts. Each is one
+command, and the *interesting* half of every one of them is the control beside it — a rule that
+admits everything is not a rule.
+
+| ruling | the check | the control that must still refuse |
+|---|---|---|
+| `Q22` BOM | `printf '\\xef\\xbb\\xbfcargo:ripgrep\\n' > $LINIX_CONFIG_DIR/modules/starter.txt; linix eval` | a U+FEFF *mid-name* is still refused, and the refusal names `<U+FEFF>` rather than drawing it |
+| `Q23` scoped `@` | `linix eval` over `npm:@angular/cli@version=17.3.0` — name `@angular/cli`, version `17.3.0` | `cargo:ripgrep@version=15.2.0` still splits at its first `@` |
+| winget identifiers | `winget:ARP\Machine\X64\{GUID}` resolves | the same name under `cargo` is refused; `..`, `;`, backtick, `$`, `|` still refused for winget |
+| `G-2` backslash | `winget:a\b` is a package | `apt:jq \ apt:vim` is still set math |
+
+**Then attack the seam they share.** A name is admitted by a **grammar** and a **validator**, and
+this session shipped a fix that taught one and not the other: `adopt` wrote 340 winget rows the
+grammar accepted, the validator then refused them, and every later command failed to parse
+`adopted.txt` — a wedged model, E1's class, found only by running the native sweep. So the
+question to ask of any name rule is not "does it parse" but **"does it survive `adopt` →
+`check`"**, which is two different pieces of code agreeing.
+
+## 9c. Coverage claims made this session — verify by reading a build log, not a table
+
+- **`nix` is installed in the `tools` image.** It was not, for months: the nixos.org script
+  refuses to run as root and `|| echo "SKIP nix install"` swallowed it, while the ledger called
+  `nix` a backend with *no path to a real lifecycle anywhere*. Check the image's own assertion
+  (`RUN nix --version && nix profile list`) and the `/etc/linix-image-managers` manifest the
+  sweep now reads — a manager that failed to install is reported MISSING, not impossible.
+- **Five exemptions are now conditional on `disposable_host`** (`CI` set): `pip`, `vscode`,
+  `emacs`, `mise`, `asdf`. On a developer's box they still skip, and the reason still says so.
+  **The check worth making: does the CI leg actually lifecycle them, or does it skip for a second
+  reason nobody noticed?** That is how `nix` hid.
+- **`web:` and `appimage` have pinned canaries.** A moving artifact would make a red run mean two
+  things; both are pinned to a tag. If either is flaky in your run, say which and why — a canary
+  that is unstable is worse than one that is absent.
+- **Still exempt, and now written as PRICES rather than walls:** `stack` (a Haskell package builds
+  from source whatever is baked into the image) and `flatpak` (the smallest runtime is multi-GB).
+  Read those two sentences against `Q17` and say whether they still hold; that is exactly the
+  re-derivation nobody performed for `nix`.
+
 ## 10. What to deliver
 
 1. **The coverage ledger from §1**, filled in. This is the most valuable artifact; it converts
