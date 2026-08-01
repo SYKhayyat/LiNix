@@ -1597,7 +1597,28 @@ fi
 ok "list enumerates what is installed" lx list
 ok "hooks status says which managers are hookable" lx hooks status
 ok "hooks shell-init prints the wrapper functions" lx hooks shell-init bash
-ok "heal recovers an uninterrupted transaction" lx heal
+# `heal` when there is nothing to recover — and the check has to say WHICH, because by the time
+# it runs this sweep has deliberately failed an install (section 7) and that leaves a Failed
+# entry in the journal. `get_incomplete_actions` counts Failed as incomplete, so heal correctly
+# reports it and exits non-zero. The old check asserted rc=0 and therefore passed or failed on
+# whether an earlier deliberate failure happened to still be in the journal — a coin toss that
+# came up heads on ubuntu and tails on tools and macOS in the same CI run.
+#
+# What W36 actually ruled is the thing worth asserting: heal NAMES what it could not recover and
+# does not exit 0 while saying so. Both outcomes are legitimate here; a heal that says nothing
+# and exits non-zero, or one that names a failure and exits 0, is not.
+_heal_out=$($TO "$LINIX" heal 2>&1); _heal_rc=$?
+if printf '%s' "$_heal_out" | grep -q "could not be recovered"; then
+    if [ "$_heal_rc" -ne 0 ]; then
+        PASS=$((PASS + 1)); echo "  PASS  heal names what it could not recover, and says so in the exit code"
+    else
+        hard "heal reported an unrecovered operation and exited 0 (W36)"
+    fi
+elif [ "$_heal_rc" -eq 0 ]; then
+    PASS=$((PASS + 1)); echo "  PASS  heal had nothing to recover and said nothing"
+else
+    hard "heal exited $_heal_rc without naming anything it could not recover"
+fi
 ok "clean-cache frees archives without removing a package" lx clean-cache
 ok "update refreshes repository metadata" lx update
 ok "watch --once runs a single unattended reconcile" lx -y watch --once
