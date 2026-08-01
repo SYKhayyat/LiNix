@@ -1485,3 +1485,43 @@ encoding), only at the start, and a mid-line U+FEFF is still refused by name. II
 - The grader's two source-level assertions in `grade6_option_edit_reaches_the_machine_tests.rs`
   were **replaced by behavioural ones** driven through the shipped binary. That file's own
   `expect()` said to re-derive the finding if `reconcile_all_shims` went; it went.
+
+---
+
+# Round 9 — the coverage round, 2026-07-31 (owner-directed)
+
+**Not a grader's round.** The owner's instruction: *"build the @ first, then build as many of the
+real tests as you can, test them, and fix. iterate"*, with a standing direction for every
+judgement call — **more features, more extensibility, more intuitive** — and no questions.
+
+## What shipped
+
+| | |
+|---|---|
+| `Q23` | a leading `@` is part of a package name. Every scoped npm package was unwritable; both CI `Build` jobs were red on it |
+| `Q22` | a byte-order mark is an encoding artefact, not part of your first backend's name |
+| winget identifiers | `ARP\Machine\X64\{GUID}` and `MSIX\…` are names. The validator had to be taught what the grammar already knew — half a fix wedged the model |
+| `nix` | **installed at last** (its installer refuses to run as root and `\|\| echo SKIP` ate it), and its first lifecycle found a real bug |
+| nix `list` | blind to everything nix installs: schema v3 made `elements` a name-keyed object, LiNix asked for an array |
+| exemptions | five host-respect ones open on disposable hosts; `web:`/`appimage` given pinned canaries; `stack`/`flatpak` rewritten as PRICES |
+| canaries | one binary name per backend — `cowsay` had served four, `pycowsay` two, `hello` two |
+| gates | the heal check no longer asserts a premise the sweep falsifies; the union gate no longer counts an empty canary row as coverage |
+| release | `0.7.0` cut; both installers install the newest tag rather than `HEAD` |
+
+## The measurements
+
+`tools` 25 -> **26** real lifecycles (`pass=359 fail=0 soft=11`) · Windows native 5 -> **6** ·
+container gap ceiling 11 -> **10** · full Windows suite **exit 0, 62 targets** · register at
+132 decisions, 130 answered, 0 open.
+
+## What a future round should attack, in this order
+
+1. **The 15 backends unreachable anywhere.** `zfs` and the BSDs need VMs, not containers; `mas`
+   needs a signed-in Mac; `yay`/`paru` need a non-root leg, which is an afternoon.
+2. **`purge-unmanaged` has still never run against a machine that matters.** It is the most
+   destructive command in the product and the largest untested area.
+3. **The suite takes an hour on a developer's box**, nearly all of it one test whose cost is a
+   function of how many managers the developer has installed. An hour-long gate is a gate that
+   gets skipped, and `E3` came back this week for exactly that reason.
+4. **`stack` and `flatpak`** — read their reasons against `Q17` again. They are written as
+   prices now; the flatpak one names the experiment that would settle half of it.
