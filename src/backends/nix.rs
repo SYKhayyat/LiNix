@@ -253,34 +253,72 @@ impl NixBackendCore {
 
         let json: Value = serde_json::from_str(&output)
             .map_err(|e| Error::Other(format!("Nix JSON error: {}", e)))?;
-        let mut packages = Vec::new();
-
-        if let Some(elements) = json.get("elements").and_then(|e| e.as_array()) {
-            for (i, el) in elements.iter().enumerate() {
-                let attr_path = el
-                    .get("attrPath")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-
-                let name = attr_path.split('.').next_back().unwrap_or(attr_path);
-
-                let mut p = Package::new(name, "nix");
-                p.properties.insert("index".into(), i.to_string());
-                p.properties
-                    .insert("full_attr".into(), attr_path.to_string());
-
-                if let Some(store_paths) = el.get("storePaths").and_then(|a| a.as_array()) {
-                    if let Some(first_path) = store_paths.first().and_then(|p| p.as_str()) {
-                        p.properties
-                            .insert("store_path".into(), first_path.to_string());
-                    }
-                }
-
-                packages.push(p);
-            }
-        }
+        let packages = parse_profile_list(&json);
 
         Ok(packages)
+    }
+}
+
+/// `nix profile list --json` -> the packages LiNix owns.
+///
+/// **Two shapes, one manager.** `elements` was an ARRAY (position = identity) until Nix 2.20 and
+/// is an OBJECT KEYED BY NAME from schema v3 onward. LiNix read only the array, so on a modern
+/// nix `list` returned nothing it had just installed — E6's class, a blind `list` producing
+/// permanent phantom drift, on the one backend no image had ever installed. Measured against
+/// Determinate Nix 3.21.9 in the tools image; the capture is
+/// `tests/fixtures/nix/profile-list-json.txt`.
+///
+/// Both are read here because they are one tool's output across versions, not two mechanisms of
+/// LiNix's own — the NO-LEGACY rule is about this codebase's formats, not upstream's.
+fn parse_profile_list(json: &Value) -> Vec<Package> {
+    let fields = |el: &Value, key: Option<&str>| {
+        let attr_path = el.get("attrPath").and_then(|v| v.as_str());
+        let name = key
+            .or_else(|| attr_path.and_then(|a| a.split('.').next_back()))
+            .unwrap_or("unknown")
+            .to_string();
+        let store_path = el
+            .get("storePaths")
+            .and_then(|a| a.as_array())
+            .and_then(|a| a.first())
+            .and_then(|p| p.as_str())
+            .map(str::to_string);
+        (name, attr_path.map(str::to_string), store_path)
+    };
+    let build =
+        |name: String, attr: Option<String>, store: Option<String>, index: Option<usize>| {
+            let mut p = Package::new(&name, "nix");
+            if let Some(a) = attr {
+                p.properties.insert("full_attr".into(), a);
+            }
+            if let Some(sp) = store {
+                p.properties.insert("store_path".into(), sp);
+            }
+            if let Some(i) = index {
+                p.properties.insert("index".into(), i.to_string());
+            }
+            p
+        };
+
+    match json.get("elements") {
+        // v3: the key IS the name, and it is what `nix profile remove` takes.
+        Some(Value::Object(map)) => map
+            .iter()
+            .map(|(key, el)| {
+                let (name, attr, store) = fields(el, Some(key));
+                build(name, attr, store, None)
+            })
+            .collect(),
+        // The array form, where position is the identity and removal must renumber.
+        Some(Value::Array(elements)) => elements
+            .iter()
+            .enumerate()
+            .map(|(i, el)| {
+                let (name, attr, store) = fields(el, None);
+                build(name, attr, store, Some(i))
+            })
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -307,6 +345,47 @@ pub fn register(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `nix profile list --json`, captured from Determinate Nix 3.21.9 in the tools image the
+    /// hour this was written. The schema is v3: `elements` is an OBJECT KEYED BY NAME, and
+    /// LiNix asked it for an array — so `nix` listed nothing it had just installed, which is
+    /// E6's class (a blind `list` is permanent phantom drift) on a backend that until tonight
+    /// had never been installed in any image to notice.
+    #[test]
+    fn nix_profile_list_reads_the_v3_map_keyed_by_name() {
+        const REAL: &str = include_str!("../../tests/fixtures/nix/profile-list-json.txt");
+        let json: Value = serde_json::from_str(REAL).unwrap();
+        let pkgs = parse_profile_list(&json);
+        let mut names: Vec<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, vec!["determinate-nix", "hello", "nss-cacert"]);
+
+        let hello = pkgs.iter().find(|p| p.name == "hello").expect("hello");
+        assert_eq!(
+            hello.properties.get("full_attr").map(String::as_str),
+            Some("legacyPackages.x86_64-linux.hello")
+        );
+        assert!(hello
+            .properties
+            .get("store_path")
+            .is_some_and(|s| s.contains("hello-2.12.3")));
+        // No `index` on the map form: position is not identity there, and the removal path
+        // branches on exactly this.
+        assert!(!hello.properties.contains_key("index"));
+
+        // And the array form still reads, because an older nix is still a nix.
+        let old: Value = serde_json::from_str(
+            r#"{"elements":[{"attrPath":"legacyPackages.x86_64-linux.jq","storePaths":["/nix/store/x-jq"]}]}"#,
+        )
+        .unwrap();
+        let old_pkgs = parse_profile_list(&old);
+        assert_eq!(old_pkgs.len(), 1);
+        assert_eq!(old_pkgs[0].name, "jq");
+        assert_eq!(
+            old_pkgs[0].properties.get("index").map(String::as_str),
+            Some("0")
+        );
+    }
 
     #[test]
     fn nix_search_parses_json_map() {
