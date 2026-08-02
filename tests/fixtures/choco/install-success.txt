@@ -1,0 +1,112 @@
+Installing the following packages:
+bat
+By installing, you accept licenses for the packages.
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+chocolatey-compatibility.extension v1.0.0 [Approved]
+chocolatey-compatibility.extension package files install completed. Performing other installation steps.
+ Installed/updated chocolatey-compatibility extensions.
+ The install of chocolatey-compatibility.extension was successful.
+  Deployed to 'C:\ProgramData\chocolatey\extensions\chocolatey-compatibility'
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+chocolatey-core.extension v1.4.0 [Approved]
+chocolatey-core.extension package files install completed. Performing other installation steps.
+ Installed/updated chocolatey-core extensions.
+ The install of chocolatey-core.extension was successful.
+  Deployed to 'C:\ProgramData\chocolatey\extensions\chocolatey-core'
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+chocolatey-windowsupdate.extension v1.0.5 [Approved]
+chocolatey-windowsupdate.extension package files install completed. Performing other installation steps.
+ Installed/updated chocolatey-windowsupdate extensions.
+ The install of chocolatey-windowsupdate.extension was successful.
+  Deployed to 'C:\ProgramData\chocolatey\extensions\chocolatey-windowsupdate'
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+KB2919442 v1.0.20160915 [Approved]
+KB2919442 package files install completed. Performing other installation steps.
+Skipping installation because this hotfix only applies to Windows 8.1 and Windows Server 2012 R2.
+ The install of KB2919442 was successful.
+  Software install location not explicitly set, it could be in package or
+  default install location of installer.
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+KB2919355 v1.0.20160915 [Approved]
+KB2919355 package files install completed. Performing other installation steps.
+Skipping installation because this hotfix only applies to Windows 8.1 and Windows Server 2012 R2.
+ The install of KB2919355 was successful.
+  Software install location not explicitly set, it could be in package or
+  default install location of installer.
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+KB2999226 v1.0.20181019 [Approved]
+KB2999226 package files install completed. Performing other installation steps.
+Skipping installation because update KB2999226 does not apply to this operating system (Microsoft Windows 11 Pro).
+ The install of KB2999226 was successful.
+  Software install location not explicitly set, it could be in package or
+  default install location of installer.
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+KB3035131 v1.0.3 [Approved]
+KB3035131 package files install completed. Performing other installation steps.
+Skipping installation because update KB3035131 does not apply to this operating system (Microsoft Windows 11 Pro).
+ The install of KB3035131 was successful.
+  Software install location not explicitly set, it could be in package or
+  default install location of installer.
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+KB3033929 v1.0.5 [Approved]
+KB3033929 package files install completed. Performing other installation steps.
+Skipping installation because update KB3033929 does not apply to this operating system (Microsoft Windows 11 Pro).
+ The install of KB3033929 was successful.
+  Software install location not explicitly set, it could be in package or
+  default install location of installer.
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+less v679.0.0 [Approved] - Possibly broken
+less package files install completed. Performing other installation steps.
+ ShimGen has successfully created a shim for less.exe
+ ShimGen has successfully created a shim for lesskey.exe
+ The install of less was successful.
+  Software install location not explicitly set, it could be in package or
+  default install location of installer.
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+vcredist140 v14.51.36247 [Approved]
+vcredist140 package files install completed. Performing other installation steps.
+Runtime for architecture x86 version 14.51.36247 is already installed.
+Runtime for architecture x64 version 14.51.36247 is already installed.
+ The install of vcredist140 was successful.
+  Software install location not explicitly set, it could be in package or
+  default install location of installer.
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+
+bat v0.26.1 [Approved]
+bat package files install completed. Performing other installation steps.
+Downloading Bat 
+  from 'https://github.com/sharkdp/bat/releases/download/v0.26.1/bat-v0.26.1-x86_64-pc-windows-msvc.zip'
+
+Download of bat-v0.26.1-x86_64-pc-windows-msvc.zip (3.45 MB) completed.
+Hashes match.
+Extracting C:\Users\Administrator\AppData\Local\Temp\chocolatey\Bat\0.26.1\bat-v0.26.1-x86_64-pc-windows-msvc.zip to C:\ProgramData\chocolatey\lib\Bat\tools...
+C:\ProgramData\chocolatey\lib\Bat\tools
+ ShimGen has successfully created a shim for bat.exe
+ The install of bat was successful.
+  Deployed to 'C:\ProgramData\chocolatey\lib\Bat\tools'
+
+Chocolatey installed 11/11 packages. 
+ See the log for details (C:\ProgramData\chocolatey\logs\chocolatey.log).
+
+Installed:
+ - bat v0.26.1
+ - chocolatey-compatibility.extension v1.0.0
+ - chocolatey-core.extension v1.4.0
+ - chocolatey-windowsupdate.extension v1.0.5
+ - KB2919355 v1.0.20160915
+ - KB2919442 v1.0.20160915
+ - KB2999226 v1.0.20181019
+ - KB3033929 v1.0.5
+ - KB3035131 v1.0.3
+ - less v679.0.0
+ - vcredist140 v14.51.36247

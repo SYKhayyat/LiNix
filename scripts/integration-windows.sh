@@ -757,8 +757,14 @@ canary() {
         # `winget list` shows it, uninstall removes it, and `winget list` then finds nothing.
         winget)   echo "ajeetdsouza.zoxide||full|" ;;
         # Chocolatey only reaches this row on an elevated shell; `no_lifecycle_reason` says so
-        # and skips it otherwise. `bat` is small, has no dependencies, and is nothing else's
-        # canary on this platform.
+        # and skips it otherwise. `bat` is nothing else's canary on this platform.
+        #
+        # It is NOT dependency-free, and the line that said so was never measured: an elevated
+        # `choco install -y bat` pulls eleven packages — three chocolatey extensions, five KB
+        # hotfixes, `less` and `vcredist140` — and any one of them can fail or ask for a reboot
+        # while `bat` itself never installs. That is the whole of what CI 30684191791 found, and
+        # it is why the canary stays as it is: a dependency-free package would pass this row
+        # without ever exercising the path that broke.
         choco)    echo "bat|bat|full|" ;;
         # A PowerShell module, so there is no binary on PATH — the field is empty rather than
         # faked, and `list --backend psresource` is the presence assertion.

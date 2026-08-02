@@ -243,9 +243,20 @@ pub fn brew() -> ExitPolicy {
 
 /// Chocolatey, which surfaces MSI conventions in its own exit status: 1641 reboot
 /// initiated, 3010 reboot required, 1605/1614/1618 already-removed or uninstall-in-progress.
+///
+/// Chocolatey raises its exit code to 1 for a failed package only when nothing has set one
+/// already, so a dependency asking for a reboot leaves 3010 standing over a package that never
+/// installed — a benign code on an install of nothing. The count sentence is the only thing
+/// that knows, and choco writes it only when a package failed.
 pub fn choco() -> ExitPolicy {
     ExitPolicy {
         benign_exits: vec![1605, 1614, 1618, 1641, 3010],
+        failure_markers: vec![
+            "packages failed",
+            // Not an absent marker: the name exists on the source, it is simply not installed
+            // here, and an absent name takes the declaration out of the user's files.
+            "cannot uninstall a non-existent package",
+        ],
         absent_markers: vec!["the package was not found with the source"],
         ..ExitPolicy::default()
     }
@@ -253,9 +264,16 @@ pub fn choco() -> ExitPolicy {
 
 /// winget's HRESULT-style "success but noteworthy": no applicable upgrade, already
 /// installed, no installed package found.
+///
+/// -1978335212 arrives for opposite events: `uninstall` of something already gone is the
+/// outcome that was asked for, and `install` of a name that does not exist is not. Only
+/// winget's wording separates them — `No installed package found` for the first, `No package
+/// found` for the second — so the marker is the second phrasing, which the first does not
+/// contain.
 pub fn winget() -> ExitPolicy {
     ExitPolicy {
         benign_exits: vec![-1978335189, -1978335212, -1978335215],
+        failure_markers: vec!["no package found matching input criteria"],
         absent_markers: vec!["no package found matching input criteria"],
         ..ExitPolicy::default()
     }
