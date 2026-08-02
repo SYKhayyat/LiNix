@@ -275,9 +275,47 @@ pub async fn audit(app: &App) -> Result<AuditReport> {
     let val: Value = resp.json().await?;
     let per_query_ids = parse_querybatch_ids(&val);
 
-    // Cache vuln-id -> detail so we don't refetch shared advisories, and cap total lookups.
-    let mut detail_cache: HashMap<String, Value> = HashMap::new();
-    let mut lookups = 0usize;
+    // Which advisories need a detail lookup: distinct ids, in the order they were first seen,
+    // capped. Deduping *before* fetching is what makes the cap mean "distinct advisories"
+    // rather than "advisory mentions".
+    let mut wanted: Vec<String> = Vec::new();
+    let mut seen: HashMap<String, ()> = HashMap::new();
+    for ids in per_query_ids.iter() {
+        for id in ids {
+            if seen.insert(id.clone(), ()).is_none() && wanted.len() < MAX_DETAIL_LOOKUPS {
+                wanted.push(id.clone());
+            }
+        }
+    }
+
+    // Fetched at once, over one pooled connection. This was a nested serial loop of network
+    // GETs: a scan across a few hundred managed packages with a handful of advisories each was
+    // minutes of pure round-trip latency, and — before the shared client — a full TLS handshake
+    // for every one of them.
+    let detail_cache: HashMap<String, Value> = {
+        use futures::stream::StreamExt;
+        futures::stream::iter(wanted)
+            .map(|id| {
+                let client = client.clone();
+                async move {
+                    let url = format!("{}/{}", OSV_VULN_URL, id);
+                    match client.get(url).send().await {
+                        Ok(r) if r.status().is_success() => match r.json::<Value>().await {
+                            Ok(d) => Some((id, d)),
+                            Err(e) => {
+                                debug!("audit: failed to parse detail for {}: {}", id, e);
+                                None
+                            }
+                        },
+                        _ => None,
+                    }
+                }
+            })
+            .buffer_unordered(app.config.network_parallel.max(1))
+            .filter_map(|r| async move { r })
+            .collect()
+            .await
+    };
 
     for (qi, ids) in per_query_ids.iter().enumerate() {
         let Some(&pkg_idx) = index_map.get(qi) else {
@@ -285,28 +323,7 @@ pub async fn audit(app: &App) -> Result<AuditReport> {
         };
         let pkg = &pkgs[pkg_idx];
         for id in ids {
-            let detail = if let Some(d) = detail_cache.get(id) {
-                Some(d.clone())
-            } else if lookups < MAX_DETAIL_LOOKUPS {
-                lookups += 1;
-                match client.get(format!("{}/{}", OSV_VULN_URL, id)).send().await {
-                    Ok(r) if r.status().is_success() => match r.json::<Value>().await {
-                        Ok(d) => {
-                            detail_cache.insert(id.clone(), d.clone());
-                            Some(d)
-                        }
-                        Err(e) => {
-                            debug!("audit: failed to parse detail for {}: {}", id, e);
-                            None
-                        }
-                    },
-                    _ => None,
-                }
-            } else {
-                None
-            };
-
-            let (summary, fixed) = match &detail {
+            let (summary, fixed) = match detail_cache.get(id) {
                 Some(d) => (summarize(d), extract_fixed(d)),
                 None => (None, None),
             };
@@ -691,20 +708,35 @@ pub async fn why(app: &App, query: &str, as_json: bool) -> Result<()> {
 
         // Reverse dependencies: which other managed packages in the same backend list this
         // one as a native dependency.
+        // One subprocess per managed package in the same backend, so they run at once rather
+        // than end to end. Ordered, so `why` prints the same list every time.
         let mut dependents = Vec::new();
-        if let Some(b) = app.registry.get(&backend) {
-            if let Some(mp) = b.as_metadata_provider() {
-                for (qb, qn) in &all_managed {
-                    if qb != &backend || qn == &name {
-                        continue;
-                    }
-                    if let Ok(deps) = mp.get_dependencies(qn).await {
-                        if deps.iter().any(|d| d == &name) {
-                            dependents.push(qn.clone());
-                        }
+        if let Some(mp) = app
+            .registry
+            .get(&backend)
+            .and_then(|b| b.as_metadata_provider().cloned())
+        {
+            use futures::stream::StreamExt;
+            dependents = futures::stream::iter(
+                all_managed
+                    .iter()
+                    .filter(|(qb, qn)| qb == &backend && qn != &name)
+                    .map(|(_, qn)| qn.clone()),
+            )
+            .map(|qn| {
+                let mp = mp.clone();
+                let name = name.clone();
+                async move {
+                    match mp.get_dependencies(&qn).await {
+                        Ok(deps) if deps.iter().any(|d| d == &name) => Some(qn),
+                        _ => None,
                     }
                 }
-            }
+            })
+            .buffered(app.config.max_parallel.max(1))
+            .filter_map(|r| async move { r })
+            .collect()
+            .await;
         }
 
         // XIII.19: when this declaration first appeared, asked of git rather than of a store

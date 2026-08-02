@@ -515,7 +515,11 @@ pub struct BtrfsQueryable {
 
 #[async_trait]
 impl Queryable for BtrfsQueryable {
-    async fn list_installed(&self) -> Result<Vec<Package>> {
+    fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+        (self.core.executor.installed_listings(), &self.core.name)
+    }
+
+    async fn fetch_installed(&self) -> Result<Vec<Package>> {
         // One subvolume, one package — keyed by the filesystem it lives on and its path from
         // that filesystem's root, because `@mount` makes the same object reachable by two
         // paths. Declaring `btrfs:/mnt/fs/data @mount=/srv` leaves it listed under `/mnt/fs/data`

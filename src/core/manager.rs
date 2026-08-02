@@ -121,7 +121,35 @@ pub trait Installable: Send + Sync {
 
 #[async_trait]
 pub trait Queryable: Send + Sync {
-    async fn list_installed(&self) -> Result<Vec<Package>>;
+    /// Where this backend's once-per-run listing is kept, and the name to keep it under.
+    ///
+    /// Every backend is built on a duplicate of one `App`'s executor, and every duplicate
+    /// shares the same listings — so this is what makes the memo per-run rather than per
+    /// process.
+    fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str);
+
+    /// Ask the manager what it has installed.
+    ///
+    /// **Implemented per backend; not called directly.** Callers use
+    /// [`Queryable::list_installed`], which asks this once per run.
+    async fn fetch_installed(&self) -> Result<Vec<Package>>;
+
+    /// Everything this manager has installed — asked **once per run**.
+    ///
+    /// Eighteen backends implement `info(name)` as "list the whole machine, then find one",
+    /// and the callers ask `info` once per *declared* package. Measured on Ubuntu that was
+    /// exactly `declared + 1` `dpkg-query` invocations for a read-only `check drift`; measured
+    /// on Windows it was ~247 ms of marginal cost per additional declaration, because a
+    /// `winget list` takes over a second. `check health`, `adopt`, the unmanaged crawl and the
+    /// planner's `installed_sets` each list every backend again on top of that.
+    ///
+    /// The answer does not change while nothing is being installed, so it is fetched once. The
+    /// one thing that can change it is a mutating command, and `CommandExecutor::run` forgets
+    /// these when one finishes.
+    async fn list_installed(&self) -> Result<Vec<Package>> {
+        let (memo, key) = self.installed_cache();
+        memo.once(key, self.fetch_installed()).await
+    }
 
     /// Returns only packages explicitly requested by the user (non-dependencies).
     /// Backends whose installed set is user-requested by nature (`cargo install`, and

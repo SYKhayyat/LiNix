@@ -41,9 +41,19 @@ impl<'a> UniversalSearch<'a> {
             return Ok(vec![]);
         }
 
-        // The semaphore caps concurrent NETWORK requests at `max_parallel`; without it a
-        // wide registry would open one remote query per backend at once.
-        let semaphore = Arc::new(Semaphore::new(self.config.max_parallel));
+        // `network_parallel`, not `max_parallel`: these are ~22 sockets, and nothing about
+        // waiting on one is bounded by how many cores the machine has. On a four-core laptop
+        // the old cap ran the registries in six sequential waves, which is most of why this
+        // command measured anywhere between 15s and 160s.
+        let semaphore = Arc::new(Semaphore::new(self.config.network_parallel.max(1)));
+        // A deadline per backend, because without one this command's latency is the *maximum*
+        // over every registry rather than the median: one rate-limited GitHub call sets the
+        // whole runtime. `check health` already bounds its per-backend probe for exactly this
+        // reason and says how it chose the number; this one is twice the configured HTTP
+        // timeout with a 30s floor, so a single request that runs all the way to its own
+        // timeout still gets to finish and be counted.
+        let deadline =
+            std::time::Duration::from_secs((self.config.network_timeout_secs * 2).max(30));
         let mut worker_pool: JoinSet<Result<Vec<Package>>> = JoinSet::new();
 
         for backend in searchable_backends {
@@ -59,14 +69,19 @@ impl<'a> UniversalSearch<'a> {
                 debug!("Querying backend '{}'...", b.name());
 
                 if let Some(searchable) = b.as_searchable() {
-                    match searchable.search(&query_string).await {
-                        Ok(results) => {
+                    match tokio::time::timeout(deadline, searchable.search(&query_string)).await {
+                        Ok(Ok(results)) => {
                             trace!("Backend '{}' returned {} results.", b.name(), results.len());
                             Ok(results)
                         }
                         // Surface (don't swallow) the failure, tagged with the backend name,
                         // so the user is told which backends errored vs. returned nothing.
-                        Err(e) => Err(Error::Other(format!("{}: {}", b.name(), e))),
+                        Ok(Err(e)) => Err(Error::Other(format!("{}: {}", b.name(), e))),
+                        Err(_) => Err(Error::Other(format!(
+                            "{}: did not answer in {}s",
+                            b.name(),
+                            deadline.as_secs()
+                        ))),
                     }
                 } else {
                     Ok(vec![])
@@ -75,7 +90,7 @@ impl<'a> UniversalSearch<'a> {
         }
 
         let mut all_packages = Vec::new();
-        let mut seen_keys = HashSet::new();
+        let mut seen_keys: HashSet<(String, String)> = HashSet::new();
         let mut failed_backends: Vec<String> = Vec::new();
 
         while let Some(task_result) = worker_pool.join_next().await {
@@ -83,9 +98,10 @@ impl<'a> UniversalSearch<'a> {
                 Ok(Ok(packages)) => {
                     for pkg in packages {
                         // Identity is backend-qualified: the same name from two backends is
-                        // two distinct results, not a duplicate to collapse.
-                        let key = format!("{}:{}", pkg.backend, pkg.name);
-                        if seen_keys.insert(key) {
+                        // two distinct results, not a duplicate to collapse. A tuple key
+                        // rather than a formatted one — the old form allocated a `String` per
+                        // result purely to be hashed and thrown away.
+                        if seen_keys.insert((pkg.backend.clone(), pkg.name.clone())) {
                             all_packages.push(pkg);
                         }
                     }
@@ -102,8 +118,10 @@ impl<'a> UniversalSearch<'a> {
         }
 
         // Sorted because JoinSet completion order is arbitrary — without this the same
-        // query prints in a different order run to run.
-        all_packages.sort_by_key(|p| p.name.to_lowercase());
+        // query prints in a different order run to run. `sort_by_key` with a `to_lowercase()`
+        // built a fresh String on *every comparison*, so this is O(n log n) allocations for a
+        // key that could be computed once per element.
+        all_packages.sort_by_cached_key(|p| p.name.to_lowercase());
 
         // User-visible summary of backends that errored (distinct from "0 results").
         if !failed_backends.is_empty() {

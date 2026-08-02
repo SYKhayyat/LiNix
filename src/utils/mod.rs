@@ -1,5 +1,4 @@
 pub mod archive;
-pub mod command;
 pub mod file;
 pub mod progress;
 pub mod style;

@@ -104,6 +104,12 @@ pub struct StateResolver<'a> {
     /// Off unless a caller says otherwise: forgetting to ask means a command reads without
     /// leaving a mark, which is the harmless direction to be wrong in.
     may_record_locks: bool,
+    /// The one cap on remote lookups this resolver has in flight.
+    ///
+    /// There are two nested fan-outs — every bare name at once, and within each name every
+    /// candidate manager at once — and bounding them separately multiplies. One gate held by
+    /// the leaf that actually talks to a registry is the number a user set.
+    remote_gate: Arc<tokio::sync::Semaphore>,
 }
 
 impl<'a> StateResolver<'a> {
@@ -138,6 +144,7 @@ impl<'a> StateResolver<'a> {
             locks,
             vars_override: None,
             may_record_locks: false,
+            remote_gate: Arc::new(tokio::sync::Semaphore::new(config.network_parallel.max(1))),
         }
     }
 
@@ -504,6 +511,12 @@ impl<'a> StateResolver<'a> {
 
         let ledger = HookLedger::load(&HookLedger::path_in(&self.layout.locks_dir()))?;
 
+        // Two passes on purpose. Every refusal — generators off, an unreadable script, an
+        // unapproved hash — is checked first and in declaration order, so which one a user is
+        // told about does not depend on which script happened to finish first. Only then do the
+        // approved scripts run, and they run at once: each is a subprocess, they are
+        // independent of one another, and the merge happens afterwards anyway.
+        let mut approved: Vec<(String, Origin, Gates, std::path::PathBuf)> = Vec::new();
         for (cmd, origin, gates) in gens {
             if !self.config.allow_generators {
                 return Err(Error::Refused(format!(
@@ -544,17 +557,29 @@ impl<'a> StateResolver<'a> {
                 )));
             }
 
-            let output = tokio::process::Command::new(&path)
-                .current_dir(self.config.config_root())
-                .stdin(std::process::Stdio::null())
-                .output()
-                .await
-                .map_err(|e| {
-                    Error::Other(format!(
-                        "{}: could not run `generate:{}` ({})",
-                        origin, cmd, e
-                    ))
-                })?;
+            approved.push((cmd, origin, gates, path));
+        }
+
+        let outputs: Vec<std::io::Result<std::process::Output>> = {
+            use futures::stream::StreamExt;
+            futures::stream::iter(approved.iter().map(|(_, _, _, path)| {
+                tokio::process::Command::new(path)
+                    .current_dir(self.config.config_root())
+                    .stdin(std::process::Stdio::null())
+                    .output()
+            }))
+            .buffered(self.config.max_parallel.max(1))
+            .collect()
+            .await
+        };
+
+        for ((cmd, origin, gates, _path), output) in approved.into_iter().zip(outputs) {
+            let output = output.map_err(|e| {
+                Error::Other(format!(
+                    "{}: could not run `generate:{}` ({})",
+                    origin, cmd, e
+                ))
+            })?;
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return Err(Error::Other(format!(
@@ -783,6 +808,9 @@ impl<'a> StateResolver<'a> {
         }
 
         let mut questions: Vec<Question> = Vec::new();
+        // Name → its position, so "have I already asked this?" is a lookup rather than a scan
+        // over every declaration seen so far. The manifest is the thing users grow.
+        let mut asked: HashMap<String, usize> = HashMap::new();
         for (stmt, origin, _) in statements {
             let Statement::Package(decl) = stmt else {
                 continue;
@@ -791,7 +819,7 @@ impl<'a> StateResolver<'a> {
                 continue;
             }
             let name = decl.selector.as_str().to_string();
-            if let Some(seen) = questions.iter().find(|q| q.name == name) {
+            if let Some(seen) = asked.get(&name).map(|i| &questions[*i]) {
                 // Two lines asking the same name to come from different places have no one
                 // answer, and picking either silently would make the other line a lie.
                 if seen.candidates != decl.candidates {
@@ -816,6 +844,7 @@ impl<'a> StateResolver<'a> {
                 continue;
             }
             let constraint = decl.options.one("version").map(str::to_string);
+            asked.insert(name.clone(), questions.len());
             questions.push(Question {
                 name,
                 candidates: decl.candidates.clone(),
@@ -841,22 +870,20 @@ impl<'a> StateResolver<'a> {
         let listed: Vec<String> = priority.order().to_vec();
 
         let mut answers = HashMap::new();
+        let mut to_ask: Vec<(Question, Vec<String>)> = Vec::new();
+
+        // The lock answers what it can without troubling anyone.
         for question in questions {
-            let Question {
-                name,
-                candidates,
-                constraint,
-                origin,
-            } = question;
             // A candidate `priority` does not list is not a candidate at all: `priority` says
             // which managers LiNix may use on this host, whatever a line asks for (V.15).
-            let chain: Vec<String> = candidates
+            let chain: Vec<String> = question
+                .candidates
                 .order(&listed)
                 .into_iter()
                 .filter(|b| priority.allows(b))
                 .collect();
 
-            if let Some(backend) = lock.get(&name).map(str::to_string) {
+            if let Some(backend) = lock.get(&question.name).map(str::to_string) {
                 // Honoured only when the line still accepts it and this machine still has
                 // it. The lock exists to stop an unedited line quietly changing meaning — it
                 // was never a licence to demand a manager that is not here.
@@ -865,13 +892,13 @@ impl<'a> StateResolver<'a> {
                     .get(&backend)
                     .is_some_and(|b| b.is_available());
                 if chain.contains(&backend) && usable {
-                    debug!("`{}` is locked to `{}`.", name, backend);
-                    answers.insert(name, backend);
+                    debug!("`{}` is locked to `{}`.", question.name, backend);
+                    answers.insert(question.name, backend);
                     continue;
                 }
                 warn!(
                     "`{}` was locked to `{}`, which {}. Asking again.",
-                    name,
+                    question.name,
                     backend,
                     if usable {
                         "this line no longer accepts"
@@ -880,10 +907,38 @@ impl<'a> StateResolver<'a> {
                     }
                 );
             }
+            to_ask.push((question, chain));
+        }
 
-            let verdicts = self
-                .ask_the_chain(&chain, &name, constraint.as_deref())
-                .await;
+        // Every remaining name's chain, at once.
+        //
+        // `ask_the_chain` was already careful to ask one name's candidates concurrently; the
+        // loop around it was not, so every bare name waited on the previous one's registry
+        // round trips. A manifest with sixty bare names serialised sixty chains of network
+        // lookups, one after another, for answers that have nothing to do with each other.
+        //
+        // Determinism is unaffected: the verdicts come back in declaration order, and the lock
+        // records below are applied in that order, so the file this writes is byte-identical
+        // to what the serial version wrote.
+        let all_verdicts: Vec<Vec<Verdict>> = {
+            use futures::stream::StreamExt;
+            futures::stream::iter(
+                to_ask
+                    .iter()
+                    .map(|(q, chain)| self.ask_the_chain(chain, &q.name, q.constraint.as_deref())),
+            )
+            .buffered(self.config.network_parallel.max(1))
+            .collect()
+            .await
+        };
+
+        for ((question, chain), verdicts) in to_ask.into_iter().zip(all_verdicts) {
+            let Question {
+                name,
+                candidates,
+                origin,
+                ..
+            } = question;
             let mut found = None;
             let mut silent: Vec<String> = Vec::new();
             for (backend, verdict) in chain.iter().zip(verdicts) {
@@ -1279,6 +1334,12 @@ impl<'a> StateResolver<'a> {
         };
         let Some(searchable) = backend_cap.as_searchable() else {
             return Verdict::Lacks;
+        };
+
+        // The one cap on remote work, held by the leaf that does it. Both fan-outs above —
+        // over names and over candidates — queue here rather than multiplying.
+        let Ok(_permit) = self.remote_gate.acquire().await else {
+            return Verdict::CouldNotTell("the resolver was shutting down".to_string());
         };
 
         // One query per candidate. Presence and version come out of the same answer, so a

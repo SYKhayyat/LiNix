@@ -711,6 +711,13 @@ pub struct CommandExecutor {
     /// backend claims one with [`with_exit_policy`](Self::with_exit_policy), which is what
     /// keeps manager names out of this file.
     exit_policy: Arc<ExitPolicy>,
+    /// This run's installed listings, one per manager.
+    ///
+    /// Lives here rather than in a global because every backend of one `App` is built on a
+    /// duplicate of that `App`'s executor and every duplicate shares this `Arc` — so the memo
+    /// is scoped to the run, which is also what keeps one test's mock listing out of the next
+    /// test's in a suite where a hundred `App`s live in one process.
+    installed: Arc<crate::core::installed::InstalledListings>,
 }
 
 impl CommandExecutor {
@@ -730,6 +737,8 @@ impl CommandExecutor {
             vfs,
             lock_map,
             exit_policy: Arc::new(ExitPolicy::default()),
+
+            installed: Arc::new(crate::core::installed::InstalledListings::new()),
         }
     }
 
@@ -749,6 +758,8 @@ impl CommandExecutor {
             vfs,
             lock_map,
             exit_policy: Arc::new(ExitPolicy::default()),
+
+            installed: Arc::new(crate::core::installed::InstalledListings::new()),
         }
     }
 
@@ -844,11 +855,18 @@ impl CommandExecutor {
     pub async fn run(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<StdOutput> {
         let output = self.run_raw(cmd, args, sudo).await?;
         let checked = self.ensure_status(cmd, output);
-        // A mutation is the only thing that can change what is on PATH during a one-shot run —
-        // installing `npm` and then asking whether `npm` is available is a real sequence inside
-        // one `sync`. Every read stays memoised; this is the one edge that invalidates it.
+        // A mutation is the only thing that can change what is on PATH — or what is installed —
+        // during a one-shot run. Installing `npm` and then asking whether `npm` is available is
+        // a real sequence inside one `sync`. Every read stays memoised; this is the one edge
+        // that invalidates it.
         forget_path_lookups();
+        self.installed.forget_all();
         checked
+    }
+
+    /// This run's installed listings, shared by every backend built on this executor.
+    pub fn installed_listings(&self) -> &Arc<crate::core::installed::InstalledListings> {
+        &self.installed
     }
 
     pub async fn run_output(&self, cmd: &str, args: &[&str], sudo: bool) -> Result<String> {

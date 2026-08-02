@@ -1,7 +1,6 @@
 pub mod argv;
 pub mod artifact_lock;
 pub mod bare_lock;
-pub mod cache;
 pub mod datalock;
 pub mod download;
 pub mod dry_run;
@@ -14,6 +13,7 @@ pub mod extras_lock;
 pub mod git;
 pub mod hook_lock;
 pub mod http;
+pub mod installed;
 pub mod journal;
 pub mod latency;
 pub mod manager;
@@ -30,8 +30,6 @@ pub mod transaction;
 pub mod validator;
 
 pub use argv::{push_names, terminates_options};
-
-pub use cache::{PackageCache, SmartCache};
 
 pub use error::{Error, Result, Retryability};
 pub use exit_policy::ExitPolicy;

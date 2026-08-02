@@ -1007,7 +1007,11 @@ pub struct GithubQueryable {
 
 #[async_trait]
 impl Queryable for GithubQueryable {
-    async fn list_installed(&self) -> Result<Vec<Package>> {
+    fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+        (self.core.executor.installed_listings(), &self.core.name)
+    }
+
+    async fn fetch_installed(&self) -> Result<Vec<Package>> {
         let state = self.core.load_state_internal().await;
         Ok(state
             .into_iter()

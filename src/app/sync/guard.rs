@@ -258,30 +258,41 @@ pub async fn essential_names(
     registry: &Arc<BackendRegistry>,
     backends: &HashSet<String>,
 ) -> HashSet<String> {
-    let mut out = HashSet::new();
-    for name in backends {
-        let Some(backend) = registry.get(name) else {
-            continue;
-        };
-        let Some(q) = backend.as_queryable() else {
-            continue;
-        };
-        match q.essential().await {
-            Ok(names) => {
-                debug!(
-                    "backend '{}' reports {} essential package(s).",
-                    name,
-                    names.len()
-                );
-                out.extend(names.into_iter().map(|n| format!("{}:{}", name, n)));
+    // Each `essential()` is a subprocess and they have nothing to say to one another, so they
+    // run at once. This is on every removal path.
+    use futures::stream::StreamExt;
+    futures::stream::iter(backends.iter().cloned())
+        .map(|name| {
+            let registry = registry.clone();
+            async move {
+                let q = registry.get(&name)?.as_queryable()?.clone();
+                match q.essential().await {
+                    Ok(names) => {
+                        debug!(
+                            "backend '{}' reports {} essential package(s).",
+                            name,
+                            names.len()
+                        );
+                        Some(
+                            names
+                                .into_iter()
+                                .map(|n| format!("{}:{}", name, n))
+                                .collect::<Vec<_>>(),
+                        )
+                    }
+                    Err(e) => {
+                        // Not fatal: the protected list and the count limit still apply.
+                        warn!("backend '{}' essential query failed: {}", name, e);
+                        None
+                    }
+                }
             }
-            Err(e) => {
-                // Not fatal: the protected list and the count limit still apply.
-                warn!("backend '{}' essential query failed: {}", name, e);
-            }
-        }
-    }
-    out
+        })
+        .buffer_unordered(8)
+        .filter_map(|r| async move { r })
+        .flat_map(futures::stream::iter)
+        .collect()
+        .await
 }
 
 /// Inspect a removal set and report what disqualifies it. `removals` are

@@ -93,6 +93,67 @@ impl Adopter {
         }
     }
 
+    /// D5: a `.deb`/`.rpm` a download backend handed to a system manager is listed by that
+    /// manager as manually installed, but a `github:`/`web:` declaration already owns it — so
+    /// adopt must not offer to manage it a second time. Gathered once, matched by name.
+    async fn owned_system_names(
+        &self,
+        backends: &[Arc<crate::core::BackendCapabilities>],
+    ) -> HashSet<String> {
+        use futures::stream::StreamExt;
+        futures::stream::iter(backends.iter().filter_map(|b| b.as_queryable().cloned()))
+            .map(|q| async move { q.owned_system_packages().await })
+            .buffer_unordered(self.config.max_parallel.max(1))
+            .flat_map(futures::stream::iter)
+            .map(|(_installer, pkg)| pkg)
+            .collect()
+            .await
+    }
+
+    /// Each backend's user-chosen packages, as `(backend, how it decided, packages)`.
+    ///
+    /// Ordered, so what `adopt` offers does not depend on which manager answered first.
+    async fn manual_listings(
+        &self,
+        backends: &[Arc<crate::core::BackendCapabilities>],
+    ) -> Vec<(String, String, Vec<Package>)> {
+        use futures::stream::StreamExt;
+        futures::stream::iter(backends.iter().cloned())
+            .map(|backend| async move {
+                let queryable = backend.as_queryable()?;
+                // Adoption is only safe for backends that can name the packages a person
+                // actually chose. Where a manager installs dependencies but exposes no way to
+                // tell them apart, the honest answer is to adopt nothing. Adopting nothing
+                // costs the user a manual manifest entry; adopting a dependency graph costs
+                // them their system.
+                if !queryable.tracks_manual() {
+                    info!(
+                        "backend '{}' cannot distinguish user-chosen packages from \
+                         dependencies — skipping adoption. Add its packages to a manifest by \
+                         hand if you want them managed.",
+                        backend.name()
+                    );
+                    return None;
+                }
+                debug!("probing backend '{}'...", backend.name());
+                match queryable.list_manual().await {
+                    Ok(pkgs) => Some((backend.name().to_string(), queryable.manual_source(), pkgs)),
+                    Err(e) => {
+                        warn!(
+                            "backend '{}' discovery failed: {}. Continuing crawl.",
+                            backend.name(),
+                            e
+                        );
+                        None
+                    }
+                }
+            })
+            .buffered(self.config.max_parallel.max(1))
+            .filter_map(|r| async move { r })
+            .collect()
+            .await
+    }
+
     /// The one discovery crawl. Read-only: it acquires nothing and writes nothing.
     ///
     /// `adopt` and `audit` both go through here. They used to be near-duplicate loops
@@ -108,60 +169,28 @@ impl Adopter {
         // D5: a `.deb`/`.rpm` a download backend handed to a system manager is listed by that
         // manager as manually installed, but a `github:`/`web:` declaration already owns it —
         // so adopt must not offer to manage it a second time. Gathered once, matched by name.
-        let mut owned_system: HashSet<String> = HashSet::new();
-        for backend in self.registry.available() {
-            if let Some(q) = backend.as_queryable() {
-                for (_installer, pkg) in q.owned_system_packages().await {
-                    owned_system.insert(pkg);
-                }
-            }
-        }
+        // Both crawls at once, and both concurrent within themselves. This walked every
+        // backend serially, twice, while the identical first question already had a concurrent
+        // implementation twenty lines away in `AppContext::owned_system_package_names`. There
+        // is nothing shared between one backend's answer and another's.
+        let backends = self.registry.available();
+        let (owned_system, manual) = tokio::join!(
+            self.owned_system_names(&backends),
+            self.manual_listings(&backends)
+        );
 
-        for backend in self.registry.available() {
-            let Some(queryable) = backend.as_queryable() else {
-                continue;
-            };
-
-            // Adoption is only safe for backends that can name the packages a person
-            // actually chose. Where a manager installs dependencies but exposes no way to
-            // tell them apart, the honest answer is to adopt nothing. Adopting nothing
-            // costs the user a manual manifest entry; adopting a dependency graph costs
-            // them their system.
-            if !queryable.tracks_manual() {
-                info!(
-                    "backend '{}' cannot distinguish user-chosen packages from \
-                     dependencies — skipping adoption. Add its packages to a manifest by \
-                     hand if you want them managed.",
-                    backend.name()
-                );
-                continue;
-            }
-
-            debug!("probing backend '{}'...", backend.name());
-
-            match queryable.list_manual().await {
-                Ok(pkgs) => {
-                    found
-                        .sources
-                        .insert(backend.name().to_string(), queryable.manual_source());
-                    let state_guard = self.state.lock().await;
-                    for pkg in pkgs {
-                        let key = format!("{}:{}", pkg.backend, pkg.name);
-                        if !state_guard.is_managed(&pkg.backend, &pkg.name)
-                            && !owned_system.contains(&pkg.name)
-                            && seen_keys.insert(key.clone())
-                        {
-                            trace!("candidate: {}", key);
-                            candidates.push(pkg);
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        "backend '{}' discovery failed: {}. Continuing crawl.",
-                        backend.name(),
-                        e
-                    );
+        for (name, source, pkgs) in manual {
+            found.sources.insert(name, source);
+            let state_guard = self.state.lock().await;
+            let managed = state_guard.managed_index();
+            for pkg in pkgs {
+                let key = format!("{}:{}", pkg.backend, pkg.name);
+                if !managed.contains(&(pkg.backend.as_str(), pkg.name.as_str()))
+                    && !owned_system.contains(&pkg.name)
+                    && seen_keys.insert(key.clone())
+                {
+                    trace!("candidate: {}", key);
+                    candidates.push(pkg);
                 }
             }
         }

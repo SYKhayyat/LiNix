@@ -36,9 +36,13 @@ impl Default for TransactionConfig {
 }
 
 impl TransactionConfig {
+    /// The defaults. `sync` overrides `max_concurrent` from `max_parallel`; this is what every
+    /// other constructor gets, so it is the machine's parallelism rather than the number 4.
     pub fn patient() -> Self {
         Self {
-            max_concurrent: 4,
+            max_concurrent: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
             node_timeout: Duration::from_secs(300),
             total_timeout: Duration::from_secs(3600),
             max_retries: 3,

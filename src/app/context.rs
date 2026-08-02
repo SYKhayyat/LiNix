@@ -13,8 +13,7 @@ use crate::backends::{create_default_registry, BackendRegistry};
 use crate::config::grammar::Origin;
 use crate::config::Config;
 use crate::core::{
-    CommandExecutor, Error, Journal, Package, PackageCache, PackageSpec, Result, SnapshotManager,
-    StateRegistry,
+    CommandExecutor, Error, Journal, Package, PackageSpec, Result, SnapshotManager, StateRegistry,
 };
 use crate::utils::progress::{create_progress_reporter, ProgressReporter};
 
@@ -26,7 +25,6 @@ use tracing::{debug, info, instrument, warn};
 
 pub struct App {
     pub config: Arc<Config>,
-    pub cache: Arc<PackageCache>,
     pub registry: Arc<BackendRegistry>,
     pub executor: CommandExecutor,
     pub metrics: MetricsCollector,
@@ -93,7 +91,6 @@ impl App {
 
         Ok(Self {
             config: config_arc,
-            cache: Arc::new(PackageCache::new()),
             registry,
             executor,
             metrics: MetricsCollector::new(),
@@ -486,11 +483,28 @@ impl App {
             .snapshot_manager
             .auto_snapshot(crate::core::snapshot::SnapshotLabel::PreUpgrade)
             .await?;
+        use futures::stream::{self, StreamExt};
         info!("upgrading all packages");
         // The same rule as `update`, and for the same reason: one manager that cannot
         // upgrade must not silently cancel every manager after it in the list.
+        //
+        // **Grouped by what they contend for, not run one at a time.** This was deliberately
+        // serial, and the reason given — "it changes packages, so concurrent sudo operations
+        // would interleave" — is true of the managers that share a system package database and
+        // false of `cargo`, `npm`, `pipx`, `uv`, `yarn`, `pnpm`, `vscode`, `emacs`, `krew` and
+        // `go`, which contend with nothing and are typically the slow ones because each
+        // rebuilds or refetches from a registry. So the root-needing set stays strictly
+        // sequential and the rest overlap. `run_exclusive`'s per-manager mutex is still
+        // underneath both, which is the safety this loop was being blunt about.
+        let (rooted, unrooted): (Vec<_>, Vec<_>) = self
+            .registry
+            .available()
+            .into_iter()
+            .filter(|b| b.is_upgradable())
+            .partition(|b| b.needs_root());
+
         let mut failed: Vec<String> = Vec::new();
-        for backend in self.registry.available() {
+        for backend in rooted {
             if let Some(upgradable) = backend.as_upgradable() {
                 if let Err(e) = upgradable.upgrade(backend.sudo_for_write()).await {
                     warn!("{}: could not upgrade — {}", backend.name(), e);
@@ -498,6 +512,23 @@ impl App {
                 }
             }
         }
+        let cap = self.config.max_parallel.max(1);
+        let user_failures: Vec<String> = stream::iter(unrooted)
+            .map(|backend| async move {
+                let upgradable = backend.as_upgradable()?;
+                match upgradable.upgrade(backend.sudo_for_write()).await {
+                    Ok(()) => None,
+                    Err(e) => {
+                        warn!("{}: could not upgrade — {}", backend.name(), e);
+                        Some(format!("{} ({})", backend.name(), e))
+                    }
+                }
+            })
+            .buffer_unordered(cap)
+            .filter_map(|x| async move { x })
+            .collect()
+            .await;
+        failed.extend(user_failures);
         self.metrics
             .print_summary(crate::app::metrics::Narration::Change);
         if failed.is_empty() {

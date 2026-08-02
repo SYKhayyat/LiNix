@@ -243,6 +243,11 @@ pub struct ChangePlanner<'a> {
     /// scoped: a managed package whose backend is not in `priority` is left alone, never
     /// removed, because "not listed = LiNix does not use it" (II.6).
     enabled: Vec<String>,
+    /// `backend:name` → its direct native dependencies, for the length of this plan.
+    ///
+    /// The expansion pass and the graph-building pass ask about overlapping sets, and each
+    /// `get_dependencies` is a subprocess. See [`ChangePlanner::direct_dependencies`].
+    dependency_memo: dashmap::DashMap<String, Vec<String>>,
 }
 
 impl<'a> ChangePlanner<'a> {
@@ -256,6 +261,7 @@ impl<'a> ChangePlanner<'a> {
             state,
             config,
             enabled: Vec::new(),
+            dependency_memo: dashmap::DashMap::new(),
         }
     }
 
@@ -304,7 +310,9 @@ impl<'a> ChangePlanner<'a> {
                     ))
                 }
             })
-            .buffer_unordered(8)
+            // The knob, not a number: the two fan-outs on either side of this one already read
+            // `max_parallel`, and a cap that ignores the setting is a cap the user cannot move.
+            .buffer_unordered(self.config.max_parallel.max(1))
             .filter_map(|r| async move { r })
             .collect()
             .await
@@ -637,11 +645,55 @@ impl<'a> ChangePlanner<'a> {
         Ok(false)
     }
 
+    /// Each spec's *direct* native dependencies, asked concurrently and asked once.
+    ///
+    /// Two passes of the planner want this for overlapping sets — the expansion asks for the
+    /// roots, the graph build asks for the expanded set that contains them — and each asked
+    /// one spec at a time. That is a subprocess per spec, in series, upstream of the fan-out
+    /// that `identify_needed_actions` then does: time lost here cannot be recovered there.
+    /// Keyed `backend:name`; a backend that self-resolves contributes no entry.
+    async fn direct_dependencies(&self, specs: &[PackageSpec]) -> HashMap<String, Vec<String>> {
+        use futures::stream::StreamExt;
+        let unasked: Vec<(String, PackageSpec)> = specs
+            .iter()
+            .map(|s| (format!("{}:{}", s.backend, s.name), s.clone()))
+            .filter(|(key, _)| !self.dependency_memo.contains_key(key))
+            .collect();
+
+        let fetched: Vec<(String, Vec<String>)> = futures::stream::iter(unasked)
+            .map(|(key, spec)| {
+                let registry = self.registry.clone();
+                async move {
+                    let provider = registry.get(&spec.backend)?.as_metadata_provider()?.clone();
+                    let deps = provider.get_dependencies(&spec.name).await.ok()?;
+                    Some((key, deps))
+                }
+            })
+            .buffer_unordered(self.config.max_parallel.max(1))
+            .filter_map(|r| async move { r })
+            .collect()
+            .await;
+
+        for (key, deps) in fetched {
+            self.dependency_memo.insert(key, deps);
+        }
+
+        specs
+            .iter()
+            .filter_map(|s| {
+                let key = format!("{}:{}", s.backend, s.name);
+                let deps = self.dependency_memo.get(&key)?.clone();
+                Some((key, deps))
+            })
+            .collect()
+    }
+
     async fn build_execution_graph(
         &self,
         changes: &mut SyncChanges,
         targets: &[PackageSpec],
     ) -> Result<()> {
+        let deps_of = self.direct_dependencies(targets).await;
         for spec in targets {
             let key = format!("{}:{}", spec.backend, spec.name);
             let idx = changes.graph.add_node(GraphAction::Install(spec.clone()));
@@ -657,15 +709,11 @@ impl<'a> ChangePlanner<'a> {
                     changes.graph.add_edge(parent_idx, child_idx, ());
                 }
             }
-            if let Some(b) = self.registry.get(&spec.backend) {
-                if let Some(p) = b.as_metadata_provider() {
-                    if let Ok(native_deps) = p.get_dependencies(&spec.name).await {
-                        for dep in native_deps {
-                            let dep_key = format!("{}:{}", spec.backend, dep);
-                            if let Some(&parent_idx) = changes.install_map.get(&dep_key) {
-                                changes.graph.add_edge(parent_idx, child_idx, ());
-                            }
-                        }
+            if let Some(native_deps) = deps_of.get(&child_key) {
+                for dep in native_deps {
+                    let dep_key = format!("{}:{}", spec.backend, dep);
+                    if let Some(&parent_idx) = changes.install_map.get(&dep_key) {
+                        changes.graph.add_edge(parent_idx, child_idx, ());
                     }
                 }
             }
@@ -700,24 +748,20 @@ impl<'a> ChangePlanner<'a> {
         }
 
         // Add each root's DIRECT native dependencies as install nodes (no recursion).
+        let deps_of = self.direct_dependencies(&roots).await;
         for spec in &roots {
-            let Some(b) = self.registry.get(&spec.backend) else {
+            let Some(deps) = deps_of.get(&format!("{}:{}", spec.backend, spec.name)) else {
                 continue;
             };
-            let Some(p) = b.as_metadata_provider() else {
-                continue;
-            };
-            if let Ok(deps) = p.get_dependencies(&spec.name).await {
-                for dep in deps {
-                    let dep_key = format!("{}:{}", spec.backend, dep);
-                    expanded.entry(dep_key).or_insert_with(|| PackageSpec {
-                        name: dep,
-                        backend: spec.backend.clone(),
-                        options: HashMap::new(),
-                        requires: Vec::new(),
-                        present: true,
-                    });
-                }
+            for dep in deps {
+                let dep_key = format!("{}:{}", spec.backend, dep);
+                expanded.entry(dep_key).or_insert_with(|| PackageSpec {
+                    name: dep.clone(),
+                    backend: spec.backend.clone(),
+                    options: HashMap::new(),
+                    requires: Vec::new(),
+                    present: true,
+                });
             }
         }
         Ok(expanded)
@@ -941,6 +985,8 @@ mod tests {
     struct FakeInstalled {
         name: String,
         installed: Vec<String>,
+        /// Its own, so one fake's answer never reaches another's assertions.
+        listings: crate::core::installed::InstalledListings,
     }
 
     #[async_trait::async_trait]
@@ -961,7 +1007,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl crate::core::manager::Queryable for FakeInstalled {
-        async fn list_installed(&self) -> Result<Vec<crate::core::Package>> {
+        fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+            (&self.listings, &self.name)
+        }
+
+        async fn fetch_installed(&self) -> Result<Vec<crate::core::Package>> {
             Ok(self
                 .installed
                 .iter()
@@ -989,6 +1039,7 @@ mod tests {
         let fake = Arc::new(FakeInstalled {
             name: backend.to_string(),
             installed: installed.iter().map(|s| s.to_string()).collect(),
+            listings: crate::core::installed::InstalledListings::new(),
         });
         let mut registry = BackendRegistry::new();
         registry.register(Arc::new(

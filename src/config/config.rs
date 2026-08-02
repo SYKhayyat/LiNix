@@ -285,8 +285,20 @@ pub struct Config {
     #[serde(default)]
     pub quiet: bool,
 
+    /// How many **processes** LiNix runs at once. Defaults to the core count, which is the
+    /// right shape for work that ends up in a CPU or a package manager's own subprocess.
     #[serde(default = "default_max_parallel")]
     pub max_parallel: usize,
+
+    /// How many **network** requests LiNix has in flight at once — registry searches, the
+    /// priority chain's remote lookups, advisory fetches, SSH to a fleet.
+    ///
+    /// A separate number from `max_parallel` because nothing about waiting on a socket wants
+    /// to be bounded by how many cores the machine has. On a 4-core laptop `linix search`
+    /// used to run its ~22 registry queries in six sequential waves, for no reason but that
+    /// the laptop has four cores; the queries are not competing for anything the laptop owns.
+    #[serde(default = "default_network_parallel")]
+    pub network_parallel: usize,
 
     /// Timeout (seconds) for outbound HTTP requests (registry/PyPI/marketplace search).
     #[serde(default = "default_network_timeout_secs")]
@@ -463,6 +475,13 @@ fn default_max_parallel() -> usize {
         .map(|n| n.get())
         .unwrap_or(4)
 }
+/// Sixteen, and deliberately not the core count. These are sockets: the cost of one more in
+/// flight is a file descriptor and some memory, not a core, and the wins are large — ~22
+/// registries answered in one wave instead of six on a four-core machine. Held below the point
+/// where a registry starts reading the fan-out as abuse; a machine that wants more says so.
+fn default_network_parallel() -> usize {
+    16
+}
 /// 30 seconds: long enough to ride out GitHub's secondary-limit backoffs, short enough that
 /// a user watching a held data lock does not conclude the process has hung. The old behaviour
 /// was to sleep until the primary limit reset — up to an hour.
@@ -580,6 +599,7 @@ impl Default for Config {
             verbose: false,
             quiet: false,
             max_parallel: default_max_parallel(),
+            network_parallel: default_network_parallel(),
             network_timeout_secs: default_network_timeout_secs(),
             command_idle_timeout_secs: default_command_idle_timeout_secs(),
             rate_limit_max_wait_secs: default_rate_limit_max_wait_secs(),

@@ -12,16 +12,25 @@ pub(crate) async fn handle_remove_orphans(app: &App) -> Result<()> {
     let mut listed: Vec<(String, Vec<String>)> = Vec::new();
     let mut cannot_say: Vec<String> = Vec::new();
 
-    for backend in app.registry.available() {
-        let up = match backend.as_upgradable() {
-            Some(u) => u,
-            None => continue,
-        };
-        match up.list_orphans().await {
+    // Read-only and independent per manager; ordered so the report is stable.
+    use futures::stream::StreamExt;
+    let answers: Vec<(String, linix::core::Result<Vec<String>>)> =
+        futures::stream::iter(app.registry.available())
+            .filter_map(|backend| async move {
+                let up = backend.as_upgradable()?.clone();
+                Some((backend.name().to_string(), up))
+            })
+            .map(|(name, up)| async move { (name, up.list_orphans().await) })
+            .buffered(app.config.max_parallel.max(1))
+            .collect()
+            .await;
+
+    for (name, answer) in answers {
+        match answer {
             Ok(names) if names.is_empty() => {}
-            Ok(names) => listed.push((backend.name().to_string(), names)),
-            Err(linix::core::Error::Unsupported(_)) => cannot_say.push(backend.name().to_string()),
-            Err(e) => warn!("could not list orphans for {}: {}", backend.name(), e),
+            Ok(names) => listed.push((name, names)),
+            Err(linix::core::Error::Unsupported(_)) => cannot_say.push(name),
+            Err(e) => warn!("could not list orphans for {}: {}", name, e),
         }
     }
 
@@ -126,16 +135,33 @@ pub(crate) async fn handle_clean_cache(app: &App, all: bool) -> Result<()> {
         }
         return Ok(());
     }
+    // Independent per manager — each clears its own cache directory and they contend for
+    // nothing. `run_exclusive` still serialises anything that shares a manager lock.
+    use futures::stream::StreamExt;
+    let cleanable: Vec<(String, bool, std::sync::Arc<dyn linix::core::Upgradable>)> = app
+        .registry
+        .available()
+        .into_iter()
+        .filter_map(|b| {
+            Some((
+                b.name().to_string(),
+                b.sudo_for_write(),
+                b.as_upgradable()?.clone(),
+            ))
+        })
+        .collect();
+    let outcomes: Vec<(String, linix::core::Result<()>)> = futures::stream::iter(cleanable)
+        .map(|(name, sudo, up)| async move { (name, up.clean_cache(sudo).await) })
+        .buffered(app.config.max_parallel.max(1))
+        .collect()
+        .await;
+
     let mut cleaned = Vec::new();
-    for backend in app.registry.available() {
-        let up = match backend.as_upgradable() {
-            Some(u) => u,
-            None => continue,
-        };
-        match up.clean_cache(backend.sudo_for_write()).await {
-            Ok(()) => cleaned.push(backend.name().to_string()),
+    for (name, outcome) in outcomes {
+        match outcome {
+            Ok(()) => cleaned.push(name),
             Err(linix::core::Error::Unsupported(_)) => {}
-            Err(e) => warn!("cache clean failed for {}: {}", backend.name(), e),
+            Err(e) => warn!("cache clean failed for {}: {}", name, e),
         }
     }
     if cleaned.is_empty() {
@@ -527,17 +553,33 @@ pub(crate) async fn handle_protected(app: &App, packages: &[String], json: bool)
         // believed. "backend:name" consults that backend's essential list; a bare name is
         // checked against the config rules only, and says so, because the OS's list is keyed
         // by backend and there is no honest way to answer it from a name alone.
+        // The OS's essential set does not change partway through one command, and it costs a
+        // subprocess per backend to fetch. This asked for it *inside* the per-package loop, so
+        // checking 40 packages ran the whole per-backend essential query 40 times over for the
+        // same answer. Asked once, for every backend the request names.
+        let named_backends: std::collections::HashSet<String> = packages
+            .iter()
+            .filter_map(|spec| {
+                linix::config::parser::split_removal_target(spec, |b| app.registry.get(b).is_some())
+                    .0
+            })
+            .collect();
+        let all_essential =
+            linix::app::sync::guard::essential_names(&app.registry, &named_backends).await;
+
         let mut rows = Vec::new();
         for spec in packages {
             let (backend, name) = linix::config::parser::split_removal_target(spec, |b| {
                 app.registry.get(b).is_some()
             });
+            // A bare name is checked against the config rules only: the OS's list is keyed by
+            // backend and there is no honest way to answer it from a name alone.
             let os_essential = match &backend {
-                Some(b) => {
-                    let mut set = std::collections::HashSet::new();
-                    set.insert(b.clone());
-                    linix::app::sync::guard::essential_names(&app.registry, &set).await
-                }
+                Some(b) => all_essential
+                    .iter()
+                    .filter(|k| k.split_once(':').is_some_and(|(kb, _)| kb == b))
+                    .cloned()
+                    .collect(),
                 None => std::collections::HashSet::new(),
             };
             let (protected, reason) = match linix::app::sync::guard::protection_of(

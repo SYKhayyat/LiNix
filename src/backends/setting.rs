@@ -403,7 +403,11 @@ pub struct SettingQueryable {
 
 #[async_trait]
 impl Queryable for SettingQueryable {
-    async fn list_installed(&self) -> Result<Vec<Package>> {
+    fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+        (self.core.executor.installed_listings(), &self.core.name)
+    }
+
+    async fn fetch_installed(&self) -> Result<Vec<Package>> {
         // A setting is not software with an inventory: LiNix knows the keys it declares, not
         // every key the store holds. Nothing to enumerate.
         Ok(vec![])

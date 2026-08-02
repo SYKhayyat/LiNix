@@ -442,13 +442,28 @@ impl<'a> SyncEngine<'a> {
         }
         info!("running {} health check(s)...", checks.len());
 
+        // Concurrent: these are independent probes, nothing orders them, and the user is
+        // waiting on the answer to learn whether their change is about to be reverted.
+        // Ordered, so the log reads in declaration order and the failure list is stable.
+        use futures::stream::StreamExt;
+        let outcomes: Vec<(String, bool)> = futures::stream::iter(checks.iter())
+            .map(|check| async move {
+                (
+                    format!("{} ({})", check.subject, check.probe),
+                    Self::probe_ok(&check.probe).await,
+                )
+            })
+            .buffered(self.config.max_parallel.max(1))
+            .collect()
+            .await;
+
         let mut failed = Vec::new();
-        for check in &checks {
-            if Self::probe_ok(&check.probe).await {
-                info!("  OK   {} ({})", check.subject, check.probe);
+        for (described, ok) in outcomes {
+            if ok {
+                info!("  OK   {}", described);
             } else {
-                warn!("  FAIL {} ({})", check.subject, check.probe);
-                failed.push(format!("{} ({})", check.subject, check.probe));
+                warn!("  FAIL {}", described);
+                failed.push(described);
             }
         }
 
@@ -481,9 +496,18 @@ impl<'a> SyncEngine<'a> {
     async fn probe_ok(probe: &crate::model::health::Probe) -> bool {
         use crate::model::health::Probe;
         match probe {
-            Probe::Port(p) => tokio::net::TcpStream::connect(("127.0.0.1", *p))
-                .await
-                .is_ok(),
+            // Bounded, and the number is the point. A *closed* localhost port refuses at once,
+            // which is the common case — but a **filtered** one, which `apply/firewall.rs` can
+            // itself create, is dropped rather than refused, and an unbounded connect then
+            // waits out the OS default: ~21s on Windows, ~130s on Linux. This decides whether
+            // to roll a sync back; it must not be the thing that hangs. Five seconds is far
+            // above any localhost round trip and far below every OS's own give-up.
+            Probe::Port(p) => tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                tokio::net::TcpStream::connect(("127.0.0.1", *p)),
+            )
+            .await
+            .is_ok_and(|r| r.is_ok()),
             Probe::Command(cmd) => crate::app::bisect::run_test(cmd).await,
         }
     }

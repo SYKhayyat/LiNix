@@ -4,7 +4,6 @@ use crate::core::{
 };
 use crate::parsers::utils::sanitize;
 use async_trait::async_trait;
-use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -12,7 +11,6 @@ use tracing::{debug, info};
 pub struct FlatpakBackendCore {
     pub executor: CommandExecutor,
     pub name: String,
-    pub available: OnceCell<bool>,
     /// Backend-specific settings like default scope (user vs system).
     pub settings: HashMap<String, String>,
 }
@@ -22,7 +20,6 @@ impl FlatpakBackendCore {
         Self {
             executor,
             name: "flatpak".to_string(),
-            available: OnceCell::new(),
             settings,
         }
     }
@@ -48,9 +45,11 @@ impl BackendCore for FlatpakBackendCore {
     }
 
     fn is_available(&self) -> bool {
-        *self
-            .available
-            .get_or_init(|| self.executor.command_exists_sync("flatpak"))
+        // No per-backend cache: the executor memoises every PATH lookup now, which dedupes
+        // across the backends that probe the same program too. One backend having its own
+        // `OnceCell` while the other forty-four re-probed is exactly the "two of everything"
+        // this repo removes.
+        self.executor.command_exists_sync("flatpak")
     }
     fn probes(&self) -> Vec<String> {
         vec!["flatpak".into()]
@@ -170,7 +169,11 @@ pub struct FlatpakQueryable {
 
 #[async_trait]
 impl Queryable for FlatpakQueryable {
-    async fn list_installed(&self) -> Result<Vec<Package>> {
+    fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+        (self.core.executor.installed_listings(), &self.core.name)
+    }
+
+    async fn fetch_installed(&self) -> Result<Vec<Package>> {
         let out = self
             .core
             .executor

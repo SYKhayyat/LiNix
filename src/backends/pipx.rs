@@ -108,7 +108,11 @@ pub struct PipxQueryable {
 
 #[async_trait]
 impl Queryable for PipxQueryable {
-    async fn list_installed(&self) -> Result<Vec<Package>> {
+    fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+        (self.core.executor.installed_listings(), &self.core.name)
+    }
+
+    async fn fetch_installed(&self) -> Result<Vec<Package>> {
         let output = self
             .core
             .executor

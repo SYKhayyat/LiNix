@@ -207,12 +207,17 @@ fn backends_that_installed(changes: &linix::app::sync::planner::SyncChanges) -> 
 /// eleven copies of it is eleven chances to disagree. Once per manager, not once per package:
 /// installing forty rocks must not print the same paragraph forty times.
 async fn warn_about_unreachable_binaries(app: &App, backends: &[String]) {
-    for be in backends {
-        if let Some(message) =
-            linix::app::reachable::unreachable_warning(be, &app.config, &app.executor).await
-        {
-            warn!("{}", message);
-        }
+    // Each of these runs the manager to ask where it puts binaries (`npm prefix -g`, `go env
+    // GOPATH`, …) — a subprocess per backend, on the sync path, for something purely
+    // informational. Ordered, so the warnings print in the order the backends were named.
+    use futures::stream::StreamExt;
+    let messages: Vec<Option<String>> = futures::stream::iter(backends.iter())
+        .map(|be| linix::app::reachable::unreachable_warning(be, &app.config, &app.executor))
+        .buffered(app.config.max_parallel.max(1))
+        .collect()
+        .await;
+    for message in messages.into_iter().flatten() {
+        warn!("{}", message);
     }
 }
 

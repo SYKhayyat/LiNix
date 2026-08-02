@@ -7,11 +7,21 @@ description = "Universal Mission-Critical Package Manager with DAG-based paralle
 
 [dependencies]
 # Async Runtime & Concurrency
-tokio = { version = "1.35", features = ["full"] }
+tokio = { version = "1.35", features = [
+    "rt-multi-thread",
+    "macros",
+    "process",
+    "fs",
+    "io-util",
+    "io-std",
+    "net",
+    "sync",
+    "time",
+    "signal",
+] }
 async-trait = "0.1"
 futures = "0.3"
 dashmap = "5.5" # Thread-safe LockMap implementation
-rayon = "1.8"   # Parallel iterators
 tokio-util = { version = "0.7", features = ["rt"] }
 
 # Graph Theory & Execution Planning
@@ -39,7 +49,7 @@ tera = "1.19"
 # Networking & API Integration
 # rustls (not native-tls) so we don't drag in OpenSSL — that made static musl/Alpine
 # builds fail to link and required openssl-dev on every distro. lettre already uses rustls.
-reqwest = { version = "0.11", default-features = false, features = ["json", "stream", "rustls-tls", "blocking"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "stream", "rustls-tls"] }
 governor = "0.6"      # Rate limiting
 nonzero_ext = "0.3"
 

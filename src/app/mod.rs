@@ -25,7 +25,6 @@ pub mod repl;
 pub mod run;
 pub mod sandbox;
 pub mod search;
-pub mod services;
 pub mod shim_manager;
 pub mod snapshot_restore;
 pub mod sync;

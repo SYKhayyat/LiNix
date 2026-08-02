@@ -187,7 +187,11 @@ pub struct ZfsQueryable {
 
 #[async_trait]
 impl Queryable for ZfsQueryable {
-    async fn list_installed(&self) -> Result<Vec<Package>> {
+    fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+        (self.core.executor.installed_listings(), &self.core.name)
+    }
+
+    async fn fetch_installed(&self) -> Result<Vec<Package>> {
         // `quota` and `mountpoint` ride along on the listing that already runs, so `sync` can tell
         // a declared `@mount=`/`@quota=` that took effect from one that did not — two more
         // columns, not two more subprocesses.
@@ -476,7 +480,11 @@ pub struct LvmQueryable {
 
 #[async_trait]
 impl Queryable for LvmQueryable {
-    async fn list_installed(&self) -> Result<Vec<Package>> {
+    fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+        (self.core.executor.installed_listings(), &self.core.name)
+    }
+
+    async fn fetch_installed(&self) -> Result<Vec<Package>> {
         // `lv_size` rides along on the listing that already runs, in bytes, so `sync` can see a
         // declared `@size=` that no longer matches the volume (Q19).
         let out = self

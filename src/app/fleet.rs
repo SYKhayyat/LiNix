@@ -98,34 +98,32 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
         check_host(host)?;
     }
 
-    let mut report = Vec::new();
-    for host in &hosts {
-        match ssh_capture(host, "linix status --json").await {
-            Ok(json) => match parse_status(&json) {
-                Ok((ti, tr, un)) => report.push(HostDrift {
-                    host: host.clone(),
-                    to_install: ti,
-                    to_remove: tr,
-                    unmanaged: un,
-                    error: None,
-                }),
-                Err(e) => report.push(HostDrift {
-                    host: host.clone(),
-                    to_install: 0,
-                    to_remove: 0,
-                    unmanaged: 0,
-                    error: Some(e.to_string()),
-                }),
-            },
-            Err(e) => report.push(HostDrift {
-                host: host.clone(),
-                to_install: 0,
-                to_remove: 0,
-                unmanaged: 0,
-                error: Some(e.to_string()),
-            }),
-        }
-    }
+    // A fleet tool's whole subject is N machines, and it used to talk to them one at a time:
+    // every host paid the full SSH handshake plus the remote command's runtime, added end to
+    // end. Ten hosts at 3s each was 30s of waiting for answers that have nothing to say to one
+    // another. Ordered, so the table below still reads in the order the user listed them.
+    use futures::stream::StreamExt;
+    let report: Vec<HostDrift> = futures::stream::iter(hosts.iter().cloned())
+        .map(|host| async move {
+            let (to_install, to_remove, unmanaged, error) =
+                match ssh_capture(&host, "linix status --json").await {
+                    Ok(json) => match parse_status(&json) {
+                        Ok((ti, tr, un)) => (ti, tr, un, None),
+                        Err(e) => (0, 0, 0, Some(e.to_string())),
+                    },
+                    Err(e) => (0, 0, 0, Some(e.to_string())),
+                };
+            HostDrift {
+                host,
+                to_install,
+                to_remove,
+                unmanaged,
+                error,
+            }
+        })
+        .buffered(app.config.network_parallel.max(1))
+        .collect()
+        .await;
 
     let in_sync = report.iter().filter(|h| h.in_sync()).count();
     println!(
@@ -167,17 +165,33 @@ pub async fn fleet(app: &App, hosts: &[String], do_sync: bool, do_apply: bool) -
         if targets.is_empty() {
             println!("  (nothing to do)");
         }
+        // Concurrent for the same reason the drift pass is: these are separate machines, each
+        // running its own sync, contending for nothing. Serial, a fleet-wide push cost the sum
+        // of every host's sync.
+        let outcomes: Vec<(String, std::result::Result<(), String>)> =
+            futures::stream::iter(targets)
+                .map(|h| async move {
+                    info!("syncing {} ...", h.host);
+                    let outcome = ssh_capture(&h.host, "linix sync -y")
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
+                    (h.host.clone(), outcome)
+                })
+                .buffered(app.config.network_parallel.max(1))
+                .collect()
+                .await;
+
         let mut ok = 0usize;
         let mut failed = 0usize;
-        for h in targets {
-            info!("syncing {} ...", h.host);
-            match ssh_capture(&h.host, "linix sync -y").await {
-                Ok(_) => {
-                    println!("  {} synced.", h.host);
+        for (host, outcome) in outcomes {
+            match outcome {
+                Ok(()) => {
+                    println!("  {} synced.", host);
                     ok += 1;
                 }
                 Err(e) => {
-                    warn!("sync failed on {}: {}", h.host, e);
+                    warn!("sync failed on {}: {}", host, e);
                     failed += 1;
                 }
             }

@@ -108,6 +108,31 @@ pub(crate) async fn check_approvals(app: &App, json: bool) -> Result<()> {
 
 /// Every section's verdict, one line each. The summary is deliberately cheap to read: a reader
 /// wants to know whether anything needs them, and if so which command to run.
+/// Every backend's own health probe, run concurrently, in registry order.
+///
+/// `check_health` is a real probe for several backends and there are ~55 of them, so asking
+/// them one at a time cost the sum of every manager's answer — and the `check` rollup and the
+/// `check health` detail view each did their own serial pass, so a machine paid it twice. They
+/// share this one now, which is also what keeps the two views from disagreeing about the same
+/// machine.
+async fn probe_all_health(app: &App) -> Vec<(String, linix::core::HealthReport)> {
+    use futures::stream::StreamExt;
+    futures::stream::iter(app.registry.all())
+        .map(|b| async move {
+            let report = match b.core().check_health().await {
+                Ok(r) => r,
+                Err(e) => linix::core::HealthReport {
+                    status: linix::core::HealthStatus::Critical,
+                    message: Some(format!("health probe errored: {}", e)),
+                },
+            };
+            (b.name().to_string(), report)
+        })
+        .buffered(app.config.max_parallel.max(1))
+        .collect()
+        .await
+}
+
 pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
     use linix::app::check::{Finding, Section};
 
@@ -238,14 +263,15 @@ pub(crate) async fn check_summary(app: &App, json: bool) -> Result<()> {
     let mut ok = 0usize;
     let mut degraded = 0usize;
     let mut critical = 0usize;
-    for b in app.registry.all() {
-        if let Ok(r) = b.core().check_health().await {
-            match r.status {
-                linix::core::HealthStatus::Ok => ok += 1,
-                linix::core::HealthStatus::Degraded => degraded += 1,
-                linix::core::HealthStatus::Critical => critical += 1,
-                linix::core::HealthStatus::Absent => {}
-            }
+    // Concurrent: `check_health` is a real probe for several backends — `psresource` asks
+    // PowerShell about its cmdlets, a `generic` backend probes its binary — and there are ~55
+    // of them with nothing to say to one another.
+    for r in probe_all_health(app).await {
+        match r.1.status {
+            linix::core::HealthStatus::Ok => ok += 1,
+            linix::core::HealthStatus::Degraded => degraded += 1,
+            linix::core::HealthStatus::Critical => critical += 1,
+            linix::core::HealthStatus::Absent => {}
         }
     }
     findings.push(if critical > 0 {
@@ -655,28 +681,24 @@ pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
     use linix::core::{HealthReport, HealthStatus};
 
     // ---- Per-backend health, via each backend's own probe (not a shallow is_available). ----
+    // See `probe_all_health` for why it is concurrent.
     // Absent means "not installed, and nothing asked for it" — so a manager listed in
     // `priority` is not absent, it is broken. The user named it; LiNix cannot use it. That
     // second half is what keeps Q2 from being a way to hide real failures: the state depends
     // on whether the machine was asked for the manager, not only on whether it is there.
-    let wanted = app.priority_backends().await;
-    let mut reports: Vec<(String, HealthReport)> = Vec::new();
-    for b in app.registry.all() {
-        let mut report = match b.core().check_health().await {
-            Ok(r) => r,
-            Err(e) => HealthReport {
-                status: HealthStatus::Critical,
-                message: Some(format!("health probe errored: {}", e)),
-            },
-        };
-        if report.status == HealthStatus::Absent && wanted.iter().any(|w| w == b.name()) {
+    let wanted: std::collections::HashSet<String> =
+        app.priority_backends().await.into_iter().collect();
+    let mut reports: Vec<(String, HealthReport)> = probe_all_health(app).await;
+    for (name, report) in reports.iter_mut() {
+        // A set, not a scan: this ran `wanted.iter().any(...)` once per backend, inside the
+        // loop over every backend.
+        if report.status == HealthStatus::Absent && wanted.contains(name) {
             report.status = HealthStatus::Critical;
             report.message = Some(format!(
                 "{} — and `priority` lists it, so LiNix was told to use it",
                 report.message.as_deref().unwrap_or("it cannot run")
             ));
         }
-        reports.push((b.name().to_string(), report));
     }
 
     // A backend that says it is healthy and cannot answer its cheapest real question is
@@ -722,16 +744,26 @@ pub(crate) async fn check_health(app: &App, json: bool) -> Result<()> {
                     (name, complaint)
                 }
             })
-            .buffer_unordered(4)
+            // The knob, not a number. The 60s timeout above is chosen and defended; this cap
+            // was neither, and a machine told to run twenty at once was running four.
+            .buffer_unordered(app.config.max_parallel.max(1))
             .collect()
             .await;
 
-        for (name, complaint) in probed {
-            let Some(complaint) = complaint else { continue };
-            if let Some((_, r)) = reports.iter_mut().find(|(n, _)| *n == name) {
-                r.status = HealthStatus::Critical;
-                r.message = Some(complaint);
-            }
+        // An index rather than a scan per complaint: the outer loop is over backends and so
+        // was the inner one.
+        let at: std::collections::HashMap<&str, usize> = reports
+            .iter()
+            .enumerate()
+            .map(|(i, (n, _))| (n.as_str(), i))
+            .collect();
+        let updates: Vec<(usize, String)> = probed
+            .into_iter()
+            .filter_map(|(name, complaint)| Some((*at.get(name.as_str())?, complaint?)))
+            .collect();
+        for (i, complaint) in updates {
+            reports[i].1.status = HealthStatus::Critical;
+            reports[i].1.message = Some(complaint);
         }
     }
 
