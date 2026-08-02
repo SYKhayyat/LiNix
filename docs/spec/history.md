@@ -97,14 +97,45 @@ so CI 30684191791 is its first real lifecycle anywhere:
         | removed as packages have dependencies for a reason...
 ```
 
-**Not reproduced here and not guessed at**: this developer's box has chocolatey and an
-unelevated shell, so the case cannot be driven locally, and the three failures admit at least
-two readings — an install that reported success without installing, or a `list` that cannot see
-what choco calls a dependency. **It is left red and named rather than papered over**, because
-the canary could be changed to something without dependencies and that would hide the question
-instead of answering it (`Q4`). What it needs is twenty minutes on an elevated Windows shell:
-`choco install bat`, then `choco list -r`, then `linix list --backend choco`, and whichever of
-those three disagrees is the defect.
+**Answered 2026-08-01, by running it.** "The shell is not elevated" was a property of the
+shell, not of the machine: one UAC consent raises an Administrator account's filtered token, and
+the experiment then takes minutes. **All three lines are one defect, and it is LiNix's.**
+
+`bat` is not the dependency-free package the harness claimed. **Measured**: an elevated `choco
+install -y bat` pulls **eleven** packages — three chocolatey extensions, five KB hotfixes,
+`less` and `vcredist140` — and `bat` installs last, after all ten. So there are ten ways for
+this row to end with no `bat`, and the harness comment asserting there were none was never run.
+**Which of the ten failed on the runner is still unmeasured** — all eleven install clean here.
+
+Chocolatey raises its own exit code to 1 for a failed package **only when nothing has set one
+already** ([`ChocolateyPackageService.cs`][cps]: `if (Failures != 0 && Environment.ExitCode == 0)`).
+`usePackageExitCodes` is on by default, so a dependency that asks for a reboot leaves **3010**
+standing over an install that installed nothing — and 3010 is on LiNix's `benign_exits` for
+choco. LiNix read the code, called it success, and the harness printed `choco installed bat for
+real` about a `bat` that was never there. Everything after follows: `list` cannot show it,
+PATH cannot resolve it, and `choco uninstall bat` exits 1 with `bat is not installed. Cannot
+uninstall a non-existent package.`
+
+**The dependency reading was the report's own diagnostic hiding the evidence.** Chocolatey
+prints six lines of generic troubleshooting advice after *any* uninstall failure, and one
+paragraph of it happens to discuss dependencies. `detail_for_user` picks lines by the manager's
+declared vocabulary and falls back to the **tail** when a policy declares none — and choco
+declared none. So every choco failure ever reported was those six lines, with the sentence that
+said what actually went wrong inside the `(13 more line(s))`. Reproduced verbatim on this box,
+unelevated, by uninstalling a package that was not installed.
+
+**The family is exactly two.** `choco` and `winget` are the only policies that forgive a
+non-zero exit, and they were the only two with no way to say "and it still failed". winget
+returns `-1978335212` for opposite events: `uninstall` of something already gone is the outcome
+that was wanted, and `install` of a name that does not exist is not. Measured here, only its
+wording separates them — `No installed package found` against `No package found` — so
+`linix install winget:<typo>` reported success and left the bad line in the user's files.
+
+Both now carry the failure vocabulary their exit codes cannot express. **The canary stays
+`bat`**: a dependency-free package would pass this row without ever exercising the path that
+broke, which is the green board `Q4` forbids.
+
+[cps]: https://github.com/chocolatey/choco/blob/develop/src/chocolatey/infrastructure.app/services/ChocolateyPackageService.cs
 
 **What stays a cost, said plainly:** `stack` (a Haskell package builds from source, and baking the
 toolchain does not change that) and `flatpak` (the smallest runtime is multi-GB). Those are real

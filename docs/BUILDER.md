@@ -1514,20 +1514,39 @@ judgement call — **more features, more extensibility, more intuitive** — and
 container gap ceiling 11 -> **10** · full Windows suite **exit 0, 62 targets** · register at
 132 decisions, 130 answered, 0 open.
 
-## Open at the end of round 9, with evidence
+## Closed at the start of round 10: choco, and its twin
 
-**`choco` fails its first real lifecycle** (CI 30684191791, `Integration (Windows native)`):
-install reports success, `linix list --backend choco` cannot see the package, and `choco
-uninstall bat` is refused over dependencies. Chocolatey is skipped unless the shell is elevated
-and runners are, so nothing had ever run it. **Left red on purpose** — the canary could be
-swapped for a dependency-free package and the question would disappear unanswered, which is
-what `Q4` forbids. Twenty minutes on an elevated Windows shell settles it: `choco install bat`,
-`choco list -r`, `linix list --backend choco`, and whichever of the three disagrees is the bug.
+**`choco`'s first real lifecycle** (CI 30684191791) was written up as three failures admitting
+two readings, and left red pending "twenty minutes on an elevated Windows shell". It got them
+on 2026-08-01. **The three lines were one defect and it was LiNix's.** Full account in
+`spec/history.md`; the short version:
 
-That is the third backend this round to break the moment it was covered, after `nix` (a `list`
-blind to everything it installs) and winget's own identifiers (unwritable, then wedging the
-model). **The pattern is the finding**: every exemption removed so far has paid for itself in
-defects within minutes, which is the argument for removing the rest.
+- `bat` pulls **eleven** packages, not one. The harness comment calling it dependency-free was
+  never measured.
+- Chocolatey only raises its exit code to 1 for a failed package **when nothing has set one
+  already**, so a dependency asking for a reboot leaves `3010` over an install of nothing —
+  and `3010` was on LiNix's `benign_exits`. LiNix reported success. The rest followed.
+- The "refused over dependencies" reading was choco's *generic* troubleshooting footer, printed
+  after any uninstall failure. `detail_for_user` falls back to the tail when a policy declares
+  no vocabulary, and choco declared none — so every choco failure ever reported was that footer,
+  with the real reason inside the `(13 more line(s))`.
+- **The family is two.** `choco` and `winget` were the only policies that forgive a non-zero
+  exit and the only two with no way to contradict it. `winget install <typo>` reported success.
+
+**The method is the transferable part.** "Cannot reproduce, this shell is not elevated" was a
+statement about a shell. The account was an Administrator with a filtered token; one
+`Start-Process -Verb RunAs` and a consent click raises it. Before spending a CI round on a
+question, check whether the box in front of you can answer it — and check what the *comment*
+claims against what the tool does, because `bat` "has no dependencies" was the load-bearing lie.
+
+That was the third backend in round 9 to break the moment it was covered, after `nix` (a `list`
+blind to everything it installs) and winget's own identifiers. **The pattern is the finding**:
+every exemption removed so far has paid for itself in defects within minutes, which is the
+argument for removing the rest.
+
+**Still open:** why the eleven-package install failed *on the runner specifically* — this box
+installs all eleven clean. LiNix will now print choco's own reason instead of swallowing it, so
+the next `Integration (Windows native)` run answers it rather than needing another round.
 
 ## What a future round should attack, in this order
 
