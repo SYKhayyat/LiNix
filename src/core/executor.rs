@@ -857,10 +857,9 @@ impl CommandExecutor {
         let checked = self.ensure_status(cmd, output);
         // A mutation is the only thing that can change what is on PATH — or what is installed —
         // during a one-shot run. Installing `npm` and then asking whether `npm` is available is
-        // a real sequence inside one `sync`. Every read stays memoised; this is the one edge
-        // that invalidates it.
-        forget_path_lookups();
-        self.installed.forget_all();
+        // a real sequence inside one `sync`. Every read stays memoised; a mutation is the edge
+        // that invalidates them.
+        self.forget_run_scoped_answers();
         checked
     }
 
@@ -970,8 +969,20 @@ impl CommandExecutor {
                 .map_err(Error::from)?;
         let result = self.run_raw(cmd, args, sudo).await;
         let _ = lock_file.unlock();
+        // Same invalidation as `run`, and it has to be here too: this is the path most installs
+        // and removals actually take, and it reaches `run_raw` directly rather than through
+        // `run`. Without it the run-scoped listings would still be answering from before the
+        // install — which `Prior` reads to decide what a rollback puts back.
+        self.forget_run_scoped_answers();
         // Enforce status only after releasing the lock, so a failed mutation still frees it.
         self.ensure_status(cmd, result?)
+    }
+
+    /// Forget everything memoised for the length of a run that a mutation could have changed:
+    /// what is on `PATH`, and what each manager has installed.
+    fn forget_run_scoped_answers(&self) {
+        forget_path_lookups();
+        self.installed.forget_all();
     }
 
     /// What a failed command's own output is allowed to put on a terminal.

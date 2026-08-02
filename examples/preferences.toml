@@ -15,9 +15,20 @@ yes = false
 # NOT here — one list, with `when` blocks for the per-host case. Your repo root (holding
 # modules/, profiles/, active, priority) is $LINIX_CONFIG_DIR or the platform config dir.
 
-# Maximum number of parallel operations. Now drives the install/remove transaction
-# engine (DAG concurrency) as well as parallel search — not just search.
+# How many PROCESSES LiNix runs at once — the install/remove transaction engine's DAG
+# concurrency, the per-backend probes, the dependency queries. Defaults to the core count.
+#
+# Note that packages going to the same manager in the same wave now share ONE command line
+# (II.19), so this is a cap on how many *managers* are working at once far more often than
+# it is a cap on packages.
 max_parallel = 8
+
+# How many NETWORK REQUESTS LiNix has in flight at once — registry searches, the priority
+# chain's remote lookups, advisory fetches, SSH to a fleet. A separate number because
+# nothing about waiting on a socket is bounded by how many cores you have: on a four-core
+# machine this used to run `search`'s ~22 registry queries in six sequential waves.
+# Defaults to 16 whatever the core count.
+network_parallel = 16
 
 # Timeout (in seconds) for outbound HTTP search requests
 # (npm/pnpm/yarn registry, PyPI for pip, the VS Code marketplace).

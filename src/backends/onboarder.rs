@@ -44,7 +44,6 @@ use crate::backends::BackendRegistry;
 use crate::core::{BackendCapabilities, CommandExecutor, Package};
 use crate::parsers::utils::sanitize;
 use crate::parsers::OutputParser;
-use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -180,7 +179,7 @@ impl ParserSpec {
                 name_group,
                 version_group,
             } => {
-                let re = match Regex::new(pattern) {
+                let re = match crate::utils::regex_cache::compiled(pattern) {
                     Ok(re) => re,
                     Err(e) => {
                         warn!("Custom backend '{}': invalid regex: {}", backend, e);

@@ -4,6 +4,87 @@ All notable changes to LiNix are documented here.
 
 ## [Unreleased]
 
+### Performance
+
+*The whole of `docs/INEFFICIENCIES.md`, which audited every place in the tree slower than it has
+to be. LiNix spends its entire runtime waiting on other people's processes and other people's
+networks, so all of this is one of four shapes: don't ask twice, don't ask one at a time, don't
+ask at all, ask in one breath.*
+
+- **Packages going to the same manager in the same wave now share one command line** (`Y1`).
+  Measured before: six declared packages produced **six separate `apt` processes** and
+  12,465 ms, against **3,161 ms** for `apt install` of eight packages as one command — and one
+  at a time the cost was superlinear (8 packages took 31,901 ms). A dependency edge still splits
+  the wave, an install and a removal are still two commands, rollback is still per package, and
+  the line is bounded so it fits. **The batching code was already written and had never been
+  handed more than one package.**
+- **A manager is asked what it has installed once per run** (`Y1`). Eighteen backends answered
+  `info(name)` by listing the whole machine and finding one entry, and the callers asked once per
+  *declared* package: measured as exactly `declared + 1` `dpkg-query` calls for a read-only
+  `check drift` on Ubuntu, and **~247 ms per additional declaration** on Windows, where
+  `winget list` takes over a second.
+- **The post-install listing is gone.** Every install ran a full `info()` — on a generic backend,
+  a whole `choco list` of the machine — to read a `download_size` property **no backend in this
+  tree has ever produced**. The docs record an `install choco:bat` as a 399s transaction of which
+  18.75s was the install.
+- **`network_parallel`** (default 16), separate from `max_parallel` (`Y2`). Sockets are not
+  bounded by core count; a four-core laptop ran `search`'s ~22 registry queries in six
+  sequential waves.
+- **`search` gives up on a backend that will not answer** — twice the configured network
+  timeout, floor 30s — and names it (`Y3`). Its latency was the maximum over every registry
+  rather than the median; it measured anywhere from 15s to 160s.
+- **The pre-sync restore point runs alongside the pre-flight instead of in front of it, and says
+  it is happening** (`Y4`). On Windows it is a measured 50.8s, and nothing in the output
+  mentioned it, so the pause read as a hang.
+- **`upgrade` overlaps the managers that contend with nothing** — `cargo`, `npm`, `pipx`, `uv`,
+  `yarn`, `pnpm`, `vscode`, `emacs`, `krew`, `go`. The ones that share a system package database
+  still run one at a time (`Y2`).
+- **Variables resolve once per invocation**, which Part IX has always required. Measured: one
+  `linix check` ran the user's `vars.sh` **three times**, so its side effects happened three
+  times and any `http()` variable was fetched three times.
+- **One HTTP connection pool** instead of a fresh `reqwest::Client` per request in eight places.
+  Every OSV advisory GET, every registry query and every asset download paid a full TCP and TLS
+  handshake to a host the previous request had just finished talking to.
+- **Serial fan-outs that had no reason to be serial now overlap**: the priority chain across
+  every bare name, `adopt`'s two crawls, `check health`'s ~55 backend probes (which ran twice —
+  once for the rollup, once for the detail view), the removal guard's per-backend essential
+  queries, OSV advisory fetches, dependency expansion, `fleet`'s hosts, `generate:` scripts, the
+  post-sync health checks, orphan listing, cache cleaning and the reachability probe.
+- **PATH lookups are memoised.** `is_available()` is a `which` call on ~45 backends and
+  `registry.available()` is called at 20+ sites; on Windows a *miss* walks every PATH entry ×
+  every `PATHEXT` extension, and a miss is the common case.
+- **The write-ahead journal is append-only** (`data/journal.jsonl`, one JSON value per line). It
+  re-serialised the entire map, pretty printed, through a temp file and a rename, on **every**
+  state change — O(n²) bytes — while holding the one mutex every concurrent worker takes.
+- **Removing a resolver defect that cost 2–3× the network work.** `remote_has` and `remote_info`
+  both defaulted to a full search and neither was ever overridden, so the resolver could not tell
+  an honest "no" from an unimplemented one and re-ran *the identical search with the identical
+  argument*. One `lookup` answers presence and version together.
+- Smaller: the exit policy builds its haystack once per command instead of three times;
+  regexes from configuration are compiled once instead of per use; startup's four independent
+  I/O operations overlap; the state registry is compact JSON and is serialised under the lock
+  rather than deep-cloned across a thread boundary; `--dry-run heal` no longer moves a damaged
+  WAL aside.
+
+### Changed
+
+- **`data/journal.json` is now `data/journal.jsonl`.** There is no old-format reader (NO
+  LEGACY). A journal only records in-flight actions, and a wholly unreadable one is still moved
+  aside and named rather than swallowed.
+- **The `Parallel Task Breakdown` lines say when several packages shared one command.** Six
+  identical durations under that heading used to be the signature of a fully serialised run.
+
+### Removed
+
+- `AppCore`/`AppServices` — a dead thirteen-field duplicate of `App` with no references.
+- `PackageCache`/`SmartCache` — a TTL'd cache whose every accessor had zero callers. Replaced by
+  a once-per-run listing memo, not resurrected.
+- `utils::command` — a spawn-per-probe `which` with no callers, twenty lines from the in-process
+  implementation that replaced it.
+- The `rayon` and `nonzero_ext` dependencies (zero uses), reqwest's `blocking` feature, and
+  tokio's `features = ["full"]` narrowed to what is used.
+
+
 ### Fixed
 
 - **A command that stops talking no longer stops LiNix forever.** An uninstall sat 76 minutes on

@@ -173,14 +173,24 @@ fn beside(name: &str) -> String {
 /// The first free name in the `beside` family, so a second export never clobbers the first
 /// export's fallback either.
 async fn free_path(out_dir: &Path, name: &str) -> PathBuf {
-    let first = out_dir.join(beside(name));
+    let base = beside(name);
+    let first = out_dir.join(&base);
     if !tokio::fs::try_exists(&first).await.unwrap_or(false) {
         return first;
     }
+
+    // One directory read rather than up to 998 `stat` calls and 998 `format!` allocations to
+    // answer a question the directory listing answers once.
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Ok(mut entries) = tokio::fs::read_dir(out_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            taken.insert(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
     for n in 2..1000 {
-        let p = out_dir.join(format!("{}.{}", beside(name), n));
-        if !tokio::fs::try_exists(&p).await.unwrap_or(false) {
-            return p;
+        let candidate = format!("{}.{}", base, n);
+        if !taken.contains(&candidate) {
+            return out_dir.join(candidate);
         }
     }
     first

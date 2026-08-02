@@ -337,8 +337,17 @@ impl ConfigSnapshotProvider {
     }
 
     async fn run_ps(&self, command: &str, elevated: bool) -> Result<String> {
+        // `-NoProfile` because a user's PowerShell profile can add hundreds of milliseconds to
+        // seconds to every invocation, and none of it is work LiNix asked for; `-NonInteractive`
+        // because this output is captured, so a prompt here would be a question asked into a
+        // pipe nobody is showing. `psresource.rs` and `executor.rs` have passed `-NoProfile`
+        // all along — this was the third of three.
         self.executor
-            .run_output("powershell", &["-Command", command], elevated)
+            .run_output(
+                "powershell",
+                &["-NoProfile", "-NonInteractive", "-Command", command],
+                elevated,
+            )
             .await
     }
 
@@ -394,7 +403,7 @@ impl SnapshotProvider for ConfigSnapshotProvider {
                 .ok_or_else(|| Error::Snapshot("the create command is empty".into()))?;
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             let out = self.executor.run_output(prog, &refs, true).await?;
-            let re = regex::Regex::new(pattern)
+            let re = crate::utils::regex_cache::compiled(pattern)
                 .map_err(|e| Error::Snapshot(format!("bad create_id_pattern: {}", e)))?;
             re.captures(&out)
                 .and_then(|c| c.get(1))
@@ -431,7 +440,7 @@ impl SnapshotProvider for ConfigSnapshotProvider {
                 .run_output(prog, &refs, self.def.list_needs_root)
                 .await?
         };
-        let re = regex::Regex::new(&self.def.list_pattern)
+        let re = crate::utils::regex_cache::compiled(&self.def.list_pattern)
             .map_err(|e| Error::Snapshot(format!("bad list_pattern: {}", e)))?;
         let mut snaps = Vec::new();
         for line in out.lines() {

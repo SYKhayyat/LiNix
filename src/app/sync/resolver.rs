@@ -19,10 +19,25 @@ use version_compare::{compare as loose_compare, Cmp};
 #[allow(clippy::type_complexity)]
 static VARS_MEMO: once_cell::sync::Lazy<
     dashmap::DashMap<
-        (std::path::PathBuf, String),
+        (u64, std::path::PathBuf, String),
         Arc<tokio::sync::Mutex<Option<(crate::model::vars::Vars, crate::model::vars::VarOrigins)>>>,
     >,
 > = once_cell::sync::Lazy::new(dashmap::DashMap::new);
+
+/// Which resolution we are on. IX.6 says variables resolve once **per invocation**, and one
+/// process is not always one invocation.
+static RESOLUTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Declare that a fresh resolution is starting, so the variables are resolved again.
+///
+/// `watch` is the case that makes this necessary: it runs reconcile passes in a loop inside one
+/// process, and a provider that reads the clock or the network is *supposed* to answer
+/// differently on the next tick. Memoising for the life of the process would freeze a `when
+/// $hour` at whatever hour the daemon started, which is a worse bug than the one the memo fixes.
+pub fn new_resolution() {
+    RESOLUTION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    VARS_MEMO.clear();
+}
 
 /// Whether the statements handed to the prober are the whole model.
 ///
@@ -240,6 +255,7 @@ impl<'a> StateResolver<'a> {
         facts: &HostFacts,
     ) -> Result<(crate::model::vars::Vars, crate::model::vars::VarOrigins)> {
         let key = (
+            RESOLUTION.load(std::sync::atomic::Ordering::SeqCst),
             self.layout.config_root().to_path_buf(),
             format!("{:?}", self.config.vars.source),
         );
@@ -768,7 +784,7 @@ impl<'a> StateResolver<'a> {
                 )
             })?;
 
-        let re = regex::Regex::new(pattern).map_err(|e| {
+        let re = crate::utils::regex_cache::compiled(pattern).map_err(|e| {
             Error::from(GrammarError::new(
                 origin.clone(),
                 format!("`re:{}` is not a valid regular expression: {}", pattern, e),

@@ -88,6 +88,25 @@ impl<'a> SyncEngine<'a> {
         }
     }
 
+    /// Start the pre-sync snapshot, and say so.
+    ///
+    /// Returns a future the caller joins immediately before the first mutating command. The
+    /// announcement is the other half of the fix: `Checkpoint-Computer` measured **50.8s** on
+    /// Windows and nothing in the output said it was happening, so the pause read as a hang.
+    /// **Spawned, not merely constructed.** A future that is only held does nothing at all
+    /// until it is awaited, so returning one would have overlapped exactly zero milliseconds.
+    fn begin_snapshot(&self) -> tokio::task::JoinHandle<Result<Option<crate::core::Snapshot>>> {
+        let manager = self.snapshot_manager.clone();
+        if manager.has_provider() {
+            info!("taking a pre-sync restore point (this can take a minute on Windows)...");
+        }
+        tokio::spawn(async move {
+            manager
+                .auto_snapshot(crate::core::snapshot::SnapshotLabel::PreSync)
+                .await
+        })
+    }
+
     /// The scripts attached to LiNix's own events (XIII.13).
     ///
     /// Read at the moment of firing rather than held: the three files are tiny, and re-reading
@@ -122,60 +141,90 @@ impl<'a> SyncEngine<'a> {
             return Ok(());
         }
 
-        // The machine and the configuration disagree — which is what `on_drift` is for. Fired
-        // before anything is applied, so a hook that wants to veto by other means (page someone,
-        // open a ticket) is told while the drift is still the truth.
+        // Started here, joined below, and **not** waited on in between.
+        //
+        // The pre-sync snapshot is a safety NET, not a precondition — the comment at the join
+        // says so and it is what makes this legal. On Windows it is `Checkpoint-Computer`,
+        // measured at **50.8s**, with no faster API to swap to; taken as a barrier it was a
+        // fixed ~51-second tax on every install and every uninstall, in front of work that had
+        // to happen anyway. Everything between here and the join is read-only — an event, the
+        // removal guard's per-backend queries, two approval checks — so none of it can outrun
+        // the checkpoint it is overlapping.
+        //
+        // And it says it is happening. A silent 51-second pause reads as a hang; that is how
+        // it was first reported.
+        let taking_snapshot = self.begin_snapshot();
+
+        // Gathered into one block so a refusal can stop the snapshot it was overlapping. A
+        // sync that is refused must not leave a half-taken restore point behind it.
         let events = self.events();
-        events
-            .fire(
-                crate::model::event::Event::OnDrift,
-                serde_json::to_value(changes.generate_report()).unwrap_or_default(),
+        let preflight: Result<()> = async {
+            // The machine and the configuration disagree — which is what `on_drift` is for.
+            // Fired before anything is applied, so a hook that wants to veto by other means
+            // (page someone, open a ticket) is told while the drift is still the truth.
+            events
+                .fire(
+                    crate::model::event::Event::OnDrift,
+                    serde_json::to_value(changes.generate_report()).unwrap_or_default(),
+                )
+                .await;
+
+            // Before any package is touched: refuse a removal set that is oversized or takes
+            // something the system needs. `on_guard_refusal` fires inside the guard, not here,
+            // so every command that removes gets it — see `guard::refuse`.
+            guard::enforce(
+                self.config,
+                &self.registry,
+                &guard::removal_pairs(&changes),
+                scope,
             )
-            .await;
+            .await?;
 
-        // Before the snapshot and before any package is touched: refuse a removal set
-        // that is oversized or takes something the system needs. `on_guard_refusal` fires
-        // inside the guard, not here, so every command that removes gets it — see
-        // `guard::refuse`.
-        guard::enforce(
-            self.config,
-            &self.registry,
-            &guard::removal_pairs(&changes),
-            scope,
-        )
-        .await?;
+            // The install-side ceiling (II.10): a mis-globbed manifest schedules a flood of
+            // installs, and the count is the fact that explains it. Off by default; when set,
+            // only `--allow-mass-install` clears it.
+            guard::enforce_installs(self.config, changes.total_install(), scope).await?;
 
-        // The install-side ceiling (II.10): a mis-globbed manifest schedules a flood of
-        // installs, and the count is the fact that explains it. Off by default; when set,
-        // only `--allow-mass-install` clears it.
-        guard::enforce_installs(self.config, changes.total_install(), scope).await?;
+            // 7f: a declared health check with no way to revert is refused here, before the
+            // first package is touched — the only moment the answer is still actionable.
+            self.require_revert_path(&changes)?;
 
-        // 7f: a declared health check with no way to revert is refused here, before the first
-        // package is touched — the only moment the answer is still actionable.
-        self.require_revert_path(&changes)?;
+            // U31: a health-check COMMAND is argv from the config, so it rides II.12's ledger.
+            // An unapproved command cannot run, and a check that cannot run is a failed check —
+            // so this refuses before the change rather than doing it and then reverting on a
+            // check LiNix was never allowed to execute.
+            self.require_health_commands_approved(&changes)?;
+            Ok(())
+        }
+        .await;
+        if let Err(e) = preflight {
+            taking_snapshot.abort();
+            return Err(e);
+        }
 
-        // U31: a health-check COMMAND is argv from the config, so it rides II.12's ledger. An
-        // unapproved command cannot run, and a check that cannot run is a failed check — so this
-        // refuses before the change rather than doing it and then reverting on a check LiNix was
-        // never allowed to execute.
-        self.require_health_commands_approved(&changes)?;
-
-        // The pre-sync snapshot is a safety NET, not a precondition: a Windows System
-        // Restore checkpoint needs admin (and System Restore enabled), and btrfs/timeshift
-        // may be unavailable — none of which should abort a package sync. Policies that
-        // TRULY require a snapshot gate on `has_provider()` upstream; here we warn and
-        // proceed so a missing restore point never blocks the actual work.
+        // Joined here, immediately before the first mutating command — which is the whole
+        // requirement. A snapshot taken after the change would revert to the change.
+        //
+        // A safety NET, not a precondition: a Windows System Restore checkpoint needs admin
+        // (and System Restore enabled), and btrfs/timeshift may be unavailable — none of which
+        // should abort a package sync. Policies that TRULY require a snapshot gate on
+        // `has_provider()` upstream; here we warn and proceed so a missing restore point never
+        // blocks the actual work.
         // Kept: a failing health check restores exactly this snapshot (7f), so the id has to
         // outlive the call that took it.
-        let restore_point = match self
-            .snapshot_manager
-            .auto_snapshot(crate::core::snapshot::SnapshotLabel::PreSync)
-            .await
-        {
-            Ok(snap) => snap.map(|s| s.id),
-            Err(e) => {
+        let restore_point = match taking_snapshot.await {
+            Ok(Ok(snap)) => snap.map(|s| s.id),
+            Ok(Err(e)) => {
                 warn!(
                     "pre-sync safety snapshot unavailable ({}); proceeding without a restore point.",
+                    e
+                );
+                None
+            }
+            Err(e) => {
+                warn!(
+                    "the pre-sync snapshot task did not finish ({}); proceeding without a \
+                     restore point.",
                     e
                 );
                 None
@@ -575,6 +624,7 @@ impl<'a> SyncEngine<'a> {
                 res.result.err().map(|e| e.to_string()),
                 res.retries,
                 res.bytes_downloaded,
+                res.batch_size,
             );
         }
 

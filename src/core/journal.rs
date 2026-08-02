@@ -108,12 +108,43 @@ impl Journal {
             }
         }
 
-        if unreadable > 0 {
-            // S10: a damaged WAL must NOT brick every command — it used to return `Err`, which
-            // failed `App::new`, which failed everything. It is also no longer all-or-nothing:
-            // a crash partway through an append leaves one truncated line, and every complete
-            // line before it is still a true record. So the readable entries stand, and the
-            // damage is named rather than swallowed (P3 — fail loud).
+        if unreadable > 0 && self.entries.is_empty() {
+            // Nothing at all was readable, so this is not a torn tail — it is a corrupt file.
+            // S10: a corrupt WAL must NOT brick every command. It used to return `Err`, which
+            // failed `App::new`, which failed everything, with no message saying which file to
+            // delete. So: move it aside (preserved for inspection, and so it stops
+            // re-triggering), say so loudly (P3 — fail loud), and start fresh.
+            let backup = {
+                let mut s = self.path.clone().into_os_string();
+                s.push(".corrupt");
+                std::path::PathBuf::from(s)
+            };
+            // A preview moves nothing. Setting the file aside is a filesystem change like any
+            // other, and `--dry-run heal` on a machine with a damaged WAL was making one.
+            let previewing = crate::core::dry_run::active();
+            let moved = !previewing && std::fs::rename(&self.path, &backup).is_ok();
+            warn!(
+                "the WAL at {:?} is corrupt — none of its {} line(s) could be read. {} \
+                 Starting a fresh journal so commands still run; an operation interrupted \
+                 before this cannot be auto-recovered — re-run `linix sync` to reconcile.",
+                self.path,
+                unreadable,
+                match (previewing, moved) {
+                    (true, _) => format!(
+                        "A real run would move it to {:?} for inspection; this preview left it \
+                         alone.",
+                        backup
+                    ),
+                    (false, true) => format!("It has been moved to {:?} for inspection.", backup),
+                    (false, false) => {
+                        "It could not be moved aside; it will be overwritten on the next write."
+                            .to_string()
+                    }
+                },
+            );
+        } else if unreadable > 0 {
+            // A crash partway through an append leaves one truncated line, and every complete
+            // line before it is still a true record. Those stand; the damage is named.
             warn!(
                 "{} line(s) of the WAL at {:?} could not be read and were skipped; {} entr(ies) \
                  were recovered. If an operation was interrupted it may not be auto-healable — \

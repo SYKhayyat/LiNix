@@ -39,7 +39,14 @@ fn runs_of(kernel: &TestKernel, body: &str) -> u32 {
         .count(&hash_script(body))
 }
 
+/// One resolution, as a fresh invocation would do it.
+///
+/// The `new_resolution()` is what makes a second call here mean a second run rather than a
+/// second look inside one run: variables resolve once per invocation (IX.6), so a test that
+/// edits `vars` between two resolutions has to say that a new invocation began — the same thing
+/// `reconcile` says at the top of every `sync` and every `watch` tick.
 async fn resolve(kernel: &TestKernel) -> linix::model::DesiredState {
+    linix::app::sync::resolver::new_resolution();
     linix::app::sync::resolver::StateResolver::new(
         &kernel.app.config,
         kernel.app.registry.clone(),

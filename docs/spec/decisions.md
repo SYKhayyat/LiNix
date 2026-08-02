@@ -1,4 +1,4 @@
-# The decision register — all 133, and none of them open
+# The decision register — all 137, and none of them open
 **One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
@@ -17,7 +17,7 @@ not in this paragraph.
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
 | **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
-| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **130** |
+| **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **134** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
 **Three of these five statuses now describe nothing, and they stay.** The categories are not
@@ -73,7 +73,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**None is open.** All 133 are accounted for: **130 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 0 OPEN** — and this line
+**None is open.** All 137 are accounted for: **134 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -272,6 +272,21 @@ and that collision is exactly what this namespace exists to avoid.*
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
+
+### Y — the efficiency pass — 4
+
+*Not a proposal part. `docs/INEFFICIENCIES.md` audited every place in the tree slower than it has
+to be and marked the findings a user would notice as needing a ruling; the owner ruled the lot on
+2026-08-02 — "as parallel as possible, as efficient as possible, as fast as possible, restructure
+if it takes that". These four are the parts of that with visible behaviour. The rules are in
+II.19 and the reasons in V.115–V.118.*
+
+| | question | answered |
+|---|---|---|
+| **Y1** | One `apt install` per package, measured at 12,465 ms against 3,161 ms for one command — does LiNix batch? — RULED: **yes**, per manager, per wave, bounded, with rollback still per package. | 2026-08-02 |
+| **Y2** | `max_parallel` bounded sockets by core count — one knob or two? — RULED: **two.** `network_parallel` (16), and `upgrade` fans out across the managers that contend with nothing. | 2026-08-02 |
+| **Y3** | `search` had no per-backend deadline, so one slow registry set the whole runtime — may a read give up? — RULED: **yes, and it says which backend.** | 2026-08-02 |
+| **Y4** | A ~51-second Windows restore point ran as a silent barrier before every mutation — RULED: it **starts first, is joined last, and announces itself.** | 2026-08-02 |
 
 ---
 
@@ -4371,3 +4386,135 @@ wall-clock cap can be set above that and below a hang. Rule in II.12, reason in 
 per-class bounds keyed to `latency.rs`'s `Class` (a read bounded in seconds, a mutation in the
 quarter hour) — which is better and is not built, because the classes describe LiNix's own verbs
 and the bound is per *child process*.
+
+---
+
+## Y1
+
+**Status: ANSWERED — ruled 2026-08-02.** Raised by `docs/INEFFICIENCIES.md`, measured with
+counting shims around each manager binary rather than argued.
+
+**Y1 — Does LiNix put several packages on one manager command line?** It did not. Every install
+and every removal was its own DAG node and every node called its backend with a one-element
+slice, so installing 50 apt packages was 50 `apt-get install <one>` invocations. Measured in a
+disposable Ubuntu container: six declared packages produced six `apt` processes and 12,465 ms,
+against 3,161 ms for `apt install` of *eight* packages as one command. One at a time, the same
+packages scaled 1 → 2,131 ms, 2 → 4,017 ms, 4 → 7,372 ms, 8 → **31,901 ms**.
+
+**RULED: batch.** Everything ready at the same moment, for the same manager, with no edge
+between any two of them, goes on one command line. Rule in **II.19**, reason in **V.115**.
+
+**What the ruling binds:**
+
+- A dependency edge splits the wave; an install and a removal are two commands.
+- The line is bounded — 100 names or 6000 bytes, whichever comes first — because `cmd.exe` caps
+  a command line at 8191 characters and every manager has some limit.
+- **Rollback granularity is unchanged.** What each package looked like before is still captured
+  per package, before the command runs, and the compensation loop still walks per package. A
+  batch that fails fails every package in it, which is what a single node failure already meant:
+  any failure rolls the whole transaction back.
+- The WAL still records per package, before the manager is invoked.
+- `before_install` still fires per package and a failing one takes that package out of the batch
+  rather than out of the run.
+- **The telemetry says when packages shared a command.** Several packages reporting the same
+  duration to the millisecond was previously the signature of a fully serialised run reported
+  under a heading reading `Parallel Task Breakdown`; it is now the signature of a batch, and the
+  line says which.
+
+**What could reverse it:** a manager that mis-reports which package in a batch failed, making a
+failure less locatable than it was. None found in the sixteen hand-written backends, all of which
+already accept multiple names.
+
+---
+
+## Y2
+
+**Status: ANSWERED — ruled 2026-08-02.**
+
+**Y2 — Is one concurrency number enough?** `max_parallel` was doing three jobs: CPU/process
+fan-out, transaction concurrency, and pure network fan-out. It defaults to the core count, which
+is right for the first two and arbitrary for the third — on a four-core laptop `linix search` ran
+its ~22 registry queries in six sequential waves.
+
+**RULED: split the knob, do not remove it.** `max_parallel` stays the process knob (owner ruling
+2026-07-17 kept it as a user-settable cap). **`network_parallel`** is new, defaults to **16**
+regardless of cores, and bounds concurrent network requests. Rule in **II.19**, reason in
+**V.116**.
+
+**What the ruling binds:**
+
+- Nothing that fans out reads a third number. The three hardcoded caps — `installed_sets`'s 8,
+  the health probe's 4, `TransactionConfig::patient`'s 4 — read a knob now.
+- Where two fan-outs nest, the cap is held by the leaf that talks to the network, so they do not
+  multiply.
+- **`upgrade` fans out across the managers that contend with nothing.** The `needs_root()` set
+  stays strictly sequential; `cargo`, `npm`, `pipx`, `uv`, `yarn`, `pnpm`, `vscode`, `emacs`,
+  `krew` and `go` overlap. This narrows a rule recorded in `history.md:2055` to the case its
+  reason actually covers.
+- **Variables resolve once per invocation** — which II.6b already required and the code did not
+  do. Measured: one `linix check` ran the user's `vars.sh` three times.
+
+**What could reverse it:** a registry that reads 16 concurrent queries as abuse. The default is a
+judgement, not a measurement, and it is a key precisely so a machine can say otherwise.
+
+---
+
+## Y3
+
+**Status: ANSWERED — ruled 2026-08-02.**
+
+**Y3 — May a read-only command give up on a backend that will not answer?** `search` had no
+per-backend deadline, so its latency was the maximum over ~22 registries rather than the median:
+one rate-limited GitHub call set the whole runtime, and the command measured 15.5s / 25.5s /
+48.0s / 160.2s across four runs. `check health` had already answered this question for its own
+probe, with the reasoning for its number written beside it.
+
+**RULED: yes, and it says so.** A backend that has not answered within twice the configured
+network timeout (floor 30s) contributes nothing to a search and is named in the "backends that
+failed and were skipped" line. Rule in **II.19**, reason in **V.117**.
+
+**What the ruling binds:**
+
+- A `@health=` port probe gives up after 5s. A *closed* localhost port refuses immediately, but a
+  **filtered** one — which `apply/firewall.rs` can itself create — waits out the OS default:
+  ~21s on Windows, ~130s on Linux, while deciding whether to roll a sync back.
+- **A download still carries no whole-request timeout.** A release asset can legitimately take an
+  hour, and a bound sized for an API call turns a slow link into a corrupt install. Where a wait
+  is deliberately unbounded, that is stated rather than left to be inferred.
+
+**What could reverse it:** a legitimately slow registry that a user needs and that now reports as
+having failed. The alternative is the command that took 160 seconds without saying why.
+
+---
+
+## Y4
+
+**Status: ANSWERED — ruled 2026-08-02.**
+
+**Y4 — Must the pre-sync restore point finish before anything else starts?** It was awaited as a
+barrier before any work, and on Windows it is `Checkpoint-Computer` — measured at **50.8s**, with
+no faster API to swap to. So every install and every uninstall on Windows paid a fixed ~51-second
+tax in front of work that had to happen anyway, and **nothing in the output said it was
+happening**, so the pause read as a hang. It was reported as one, twice, and killed by hand both
+times.
+
+**RULED: it starts first and is joined last, and it announces itself.** The snapshot begins
+before the read-only pre-flight and is joined immediately before the first mutating command —
+which is the whole requirement, since a snapshot taken after the change would revert to the
+change. Rule in **II.19**, reason in **V.118**.
+
+**What the ruling binds:**
+
+- A refused sync aborts it, so a refusal leaves nothing half-taken.
+- The snapshot provider's PowerShell passes `-NoProfile -NonInteractive`. It passed neither; a
+  user's profile ran on every snapshot operation. `psresource.rs` and `executor.rs` had passed
+  `-NoProfile` all along, and this was the third of three.
+- **The write-ahead journal is `journal.jsonl`**, one JSON value per line, appended. It used to
+  re-serialise the entire map, pretty printed, through a temp file and a rename, on every state
+  change — O(n²) bytes in the number of actions, under the one mutex every concurrent DAG worker
+  has to take, which made it a throttle that got worse as `Y1` widened the graph. A pre-existing
+  `journal.json` is not read: under NO LEGACY there is no old-format reader, and a wholly
+  unreadable WAL is still moved aside and named rather than swallowed (S10).
+
+**What could reverse it:** a snapshot provider whose work is not safe to overlap with reads. All
+three built-in providers and the config-driven one only read while creating.

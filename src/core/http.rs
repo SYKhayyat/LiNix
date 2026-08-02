@@ -88,27 +88,33 @@ fn build(policy: &Policy) -> Result<reqwest::Client> {
 mod tests {
     use super::*;
 
+    /// How many clients this test's own policies hold. The pool is process-wide and the suite
+    /// is concurrent, so a test that read `POOL.len()` as a whole would be measuring whatever
+    /// other tests happened to be doing — which is exactly how these four came out flaky.
+    fn mine(user_agent: &str) -> usize {
+        POOL.iter()
+            .filter(|e| e.key().user_agent == user_agent)
+            .count()
+    }
+
     #[test]
     fn asking_twice_for_one_policy_builds_one_client() {
-        let _ = client("linix-pool-a", false, 15).unwrap();
-        let after_first = POOL.len();
         for _ in 0..20 {
             let _ = client("linix-pool-a", false, 15).unwrap();
         }
         assert_eq!(
-            POOL.len(),
-            after_first,
-            "twenty more asks for the same policy built more clients — the pool is not pooling"
+            mine("linix-pool-a"),
+            1,
+            "twenty asks for one policy built more than one client — the pool is not pooling"
         );
     }
 
     #[test]
     fn a_client_that_would_follow_a_downgrade_is_never_handed_to_one_that_refuses() {
-        let before = POOL.len();
         let _strict = client("linix-pool-b", false, 15).unwrap();
         let _loose = client("linix-pool-b", true, 15).unwrap();
         assert_eq!(
-            POOL.len() - before,
+            mine("linix-pool-b"),
             2,
             "the two redirect policies collapsed into one client — SEC2 would be enforced by \
              whichever caller happened to ask first"
@@ -117,26 +123,22 @@ mod tests {
 
     #[test]
     fn the_timeout_is_part_of_the_key() {
-        let before = POOL.len();
         let _bounded = client("linix-pool-c", false, 15).unwrap();
         let _unbounded = client("linix-pool-c", false, 0).unwrap();
-        assert_eq!(POOL.len() - before, 2);
+        assert_eq!(mine("linix-pool-c"), 2);
     }
 
     #[test]
     fn an_api_client_never_asks_reqwest_for_a_zero_second_timeout() {
         // reqwest reads a zero-second timeout as "fail instantly", not "no bound", so an API
         // caller handed a configured 0 must not pass it through.
-        let before = POOL.len();
         let _ = api("linix-pool-d", 0).unwrap();
-        let after_zero = POOL.len();
         let _ = api("linix-pool-d", 1).unwrap();
         assert_eq!(
-            POOL.len(),
-            after_zero,
-            "a 0-second API timeout was not raised to 1 — it built a distinct, instantly-failing \
-             client"
+            mine("linix-pool-d"),
+            1,
+            "a 0-second API timeout was not raised to 1 — it built a distinct, \
+             instantly-failing client"
         );
-        assert_eq!(after_zero - before, 1);
     }
 }

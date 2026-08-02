@@ -56,9 +56,11 @@ impl BackendRegistry {
     }
 
     pub fn get_filtered(&self, enabled: &[String]) -> Vec<Arc<BackendCapabilities>> {
+        // `enabled.iter().any(|e| e == b.name())`, not `contains(&b.name().to_string())`: the
+        // second allocates a `String` per backend per comparison, inside an O(n*m) scan.
         self.available()
             .into_iter()
-            .filter(|b| enabled.contains(&b.name().to_string()))
+            .filter(|b| enabled.iter().any(|e| e == b.name()))
             .collect()
     }
 }

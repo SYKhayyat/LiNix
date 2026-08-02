@@ -1873,6 +1873,50 @@ the whole-sync kind, which modules cannot express. See II.12.)*
 **Code:** `locksig.rs` · the generation format · `ManifestArchive` · `quick()` ·
 `ScopedFilter::None` as a spare-everything switch · every legacy branch
 
+## II.19 What LiNix does at once
+
+*(Owner ruling, 2026-08-02 — `Y1`–`Y4`. LiNix's entire runtime is spent waiting on other
+people's processes and other people's networks, so what it does at once is a rule about the
+product and not a tuning detail.)*
+
+**One command per manager per wave, not one per package.** Every install and every removal that
+is ready at the same moment, for the same manager, with no dependency edge between them, goes on
+**one** command line. A dependency edge splits the wave; an install and a removal are two
+commands; the line is bounded so it fits (100 names, 6000 bytes). Rollback granularity is
+unchanged: what each package looked like before is captured per package, and a batch that fails
+fails every package in it — which is what a single node failure already meant, since any failure
+rolls the transaction back. **V.115.**
+
+**The telemetry says when packages shared a command.** Several packages reporting the same
+duration to the millisecond is the truth about a batch and was a lie about a serialised run; the
+line says which. **V.115.**
+
+**Two knobs, because processes and sockets are not the same thing.** `max_parallel` bounds
+concurrent **processes** and defaults to the core count. `network_parallel` bounds concurrent
+**network requests** and defaults to 16, whatever the core count. Nothing that fans out reads a
+number that is not one of these two. **V.116.**
+
+**Every wait states its bound, or it has none on purpose.** A `search` backend that has not
+answered within twice the configured network timeout (floor 30s) contributes nothing and says
+so. A `@health=` port probe gives up after 5s. A download has no whole-request timeout, because
+a release asset can legitimately take an hour. **V.117.**
+
+**`upgrade` serialises what shares a package database and overlaps the rest.** The managers that
+`needs_root()` run one at a time; `cargo`, `npm`, `pipx`, `uv`, `yarn`, `pnpm`, `vscode`,
+`emacs`, `krew` and `go` contend with nothing and run together. **V.116.**
+
+**The pre-sync restore point starts first and is joined last.** It is a safety net rather than a
+precondition, so it runs alongside the read-only pre-flight and is joined immediately before the
+first mutating command — never after it. A refused sync stops it. **It announces itself**,
+because a silent fifty-second pause reads as a hang. **V.118.**
+
+**A manager is asked what it has installed once per run.** The answer cannot change while
+nothing is being installed; a mutating command is what forgets it. **V.115.**
+
+**Variables resolve exactly once per invocation**, which II.6b has always said and which is now
+what the code does. A vars provider is a program the user wrote, and running it three times runs
+its side effects three times. **V.116.**
+
 ## II.18 The version, and the way in (V.58)
 
 **The repo is `github.com/SYKhayyat/LiNix`.** Everything that names a source names that — the

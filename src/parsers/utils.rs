@@ -8,9 +8,17 @@ static ANSI_REGEX: Lazy<Regex> = Lazy::new(|| {
 
 /// Collapses CRLF only; a lone `\r` (winget's progress spinner) survives and must be
 /// handled by the caller.
+///
+/// Runs on every command's output. The common case on Linux is text with no escapes and no
+/// CRLF, where this still allocated three `String`s — one for `replace_all`, one for
+/// `replace`, one for `trim().to_string()`. That case allocates one now, and only because the
+/// signature promises an owned value.
 pub fn sanitize(input: &str) -> String {
     let cleaned = ANSI_REGEX.replace_all(input, "");
-    cleaned.replace("\r\n", "\n").trim().to_string()
+    match cleaned {
+        std::borrow::Cow::Borrowed(s) if !s.contains("\r\n") => s.trim().to_string(),
+        other => other.replace("\r\n", "\n").trim().to_string(),
+    }
 }
 
 /// Quoted runs stay one token: Windows managers emit names/versions containing spaces
@@ -40,9 +48,12 @@ pub fn split_columns(line: &str) -> Vec<String> {
     columns
 }
 
+/// A literal pattern, so it is compiled once for the process rather than once per package
+/// line parsed — which is what this used to do, on every line of every listing.
+static BRACKETED: Lazy<Regex> = Lazy::new(|| Regex::new(r"[\(\[](.*?)[\)\]]").unwrap());
+
 pub fn extract_version_bracketed(input: &str) -> Option<String> {
-    let re = Regex::new(r"[\(\[](.*?)[\)\]]").ok()?;
-    re.captures(input).map(|cap| cap[1].to_string())
+    BRACKETED.captures(input).map(|cap| cap[1].to_string())
 }
 
 #[cfg(test)]

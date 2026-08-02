@@ -1,6 +1,7 @@
 pub mod archive;
 pub mod file;
 pub mod progress;
+pub mod regex_cache;
 pub mod style;
 
 use std::path::PathBuf;

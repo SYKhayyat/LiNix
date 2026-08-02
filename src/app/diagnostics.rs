@@ -16,6 +16,24 @@ pub struct DiagnosticRule {
     /// backend id -> the package that fixes this failure on that backend.
     pub suggestions: HashMap<String, String>,
     pub description: String,
+    /// `pattern`, compiled — once, when the rule is loaded.
+    ///
+    /// `Regex::new` builds and optimises an automaton; doing it inside the match loop
+    /// recompiled **every** rule on **every** `diagnose()` call, and `diagnose` is called on
+    /// every failed command. A pattern that will not compile is `None` and is skipped, which
+    /// is what the old `if let Ok(re)` did anyway.
+    #[serde(skip)]
+    compiled: Option<Regex>,
+}
+
+impl DiagnosticRule {
+    fn compile(&mut self) {
+        self.compiled = Regex::new(&self.pattern).ok();
+    }
+
+    fn matches(&self, text: &str) -> bool {
+        self.compiled.as_ref().is_some_and(|re| re.is_match(text))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -30,8 +48,9 @@ impl DiagnosticDb {
         if tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
             match tokio::fs::read_to_string(&db_path).await {
                 Ok(content) => {
-                    if let Ok(db) = serde_json::from_str::<Self>(&content) {
+                    if let Ok(mut db) = serde_json::from_str::<Self>(&content) {
                         debug!("Loaded {} patterns from {:?}", db.rules.len(), db_path);
+                        db.rules.iter_mut().for_each(DiagnosticRule::compile);
                         return db;
                     }
                 }
@@ -55,6 +74,8 @@ impl DiagnosticDb {
             pattern: r"openssl/ssl\.h|libssl|cannot find -lssl|SSL_library_init".into(),
             suggestions: ssl,
             description: "Missing OpenSSL development headers".into(),
+
+            compiled: None,
         });
 
         let mut build = HashMap::new();
@@ -66,6 +87,8 @@ impl DiagnosticDb {
             pattern: r"cc1plus|stdio\.h|stdlib\.h|g\+\+ not found|make: command not found".into(),
             suggestions: build,
             description: "Missing C/C++ compiler or standard build orchestration tools".into(),
+
+            compiled: None,
         });
 
         let mut zlib = HashMap::new();
@@ -75,9 +98,13 @@ impl DiagnosticDb {
             pattern: r"zlib\.h|cannot find -lz".into(),
             suggestions: zlib,
             description: "Missing zlib compression development files".into(),
+
+            compiled: None,
         });
 
-        Self { rules }
+        let mut db = Self { rules };
+        db.rules.iter_mut().for_each(DiagnosticRule::compile);
+        db
     }
 }
 
@@ -95,18 +122,16 @@ impl FailureDiagnosticEngine {
     pub fn diagnose(&self, stderr: &str, current_backend: &str) -> Vec<String> {
         let mut suggestions = Vec::new();
         for rule in &self.db.rules {
-            if let Ok(re) = Regex::new(&rule.pattern) {
-                if re.is_match(stderr) {
-                    info!("Match found: {}", rule.description);
-                    if let Some(pkg) = rule.suggestions.get(current_backend) {
-                        suggestions.push(format!("{}:{}", current_backend, pkg));
-                    } else {
-                        for (b, p) in &rule.suggestions {
-                            suggestions.push(format!("{}:{}", b, p));
-                        }
+            if rule.matches(stderr) {
+                info!("Match found: {}", rule.description);
+                if let Some(pkg) = rule.suggestions.get(current_backend) {
+                    suggestions.push(format!("{}:{}", current_backend, pkg));
+                } else {
+                    for (b, p) in &rule.suggestions {
+                        suggestions.push(format!("{}:{}", b, p));
                     }
-                    break;
                 }
+                break;
             }
         }
         suggestions
@@ -223,10 +248,8 @@ impl FailureDiagnosticEngine {
 
     fn get_description(&self, stderr: &str) -> Option<String> {
         for rule in &self.db.rules {
-            if let Ok(re) = Regex::new(&rule.pattern) {
-                if re.is_match(stderr) {
-                    return Some(rule.description.clone());
-                }
+            if rule.matches(stderr) {
+                return Some(rule.description.clone());
             }
         }
         None

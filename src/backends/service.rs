@@ -131,7 +131,7 @@ impl InitProvider {
         let Some(pattern) = &self.list_pattern else {
             return Vec::new();
         };
-        let Ok(re) = regex::Regex::new(pattern) else {
+        let Ok(re) = crate::utils::regex_cache::compiled(pattern) else {
             warn!(
                 "the `{}` init adapter's list_pattern is not a regex",
                 self.name

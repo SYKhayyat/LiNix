@@ -38,6 +38,9 @@ pub(crate) fn scope_label(scope: linix::app::sync::guard::GuardScope) -> &'stati
 /// copy `watch` used to carry drifted from this body every time sync's ordering changed,
 /// which is why it is one function now.
 pub(crate) async fn reconcile(app: &App, opts: Reconcile) -> Result<usize> {
+    // A reconcile pass is one invocation for IX.6's purposes, and `watch` runs many of them in
+    // one process. Without this a `when $hour` would freeze at whatever hour the daemon started.
+    linix::app::sync::resolver::new_resolution();
     let engine = app.sync_engine().await;
     if app.journal.lock().await.needs_recovery() {
         warn!("the transaction journal records an interrupted run; healing first.");

@@ -5,6 +5,130 @@ Read as a work order: each finding names the file, the mechanism, the cost, and 
 
 Audited at `320bd5e`, 2026-08-02. 85,383 lines across `src/`.
 
+---
+
+# Disposition — what was built, 2026-08-02
+
+**The owner ruled the whole document on 2026-08-02**: *as parallel as possible, as efficient as
+possible, as fast as possible; restructure if it takes that.* The four findings marked
+**[RULING]** whose behaviour a user notices are in the register as `Y1`–`Y4`, the rules in
+`spec/target-state.md` **II.19**, the reasons in `spec/why.md` **V.115–V.118**.
+
+**Every finding in this document is now one of three things: FIXED, FIXED BY (something else), or
+NOT DONE with the reason.** Nothing is left unaccounted for, because an audit with an unmarked
+entry is an audit nobody can finish.
+
+| tier | finding | state |
+|---|---|---|
+| 0 | **I-1** one node per package, batch machinery dead | **FIXED** — the DAG's ready set is grouped by manager and kind; one command per group, bounded at 100 names / 6000 bytes. `Y1`, V.115. Tests: `core::transaction::batching_tests` (5). |
+| 0 | **I-2** `run_exclusive` serialises what the DAG parallelised, and the telemetry lies | **FIXED** — batching is what makes the per-manager mutex free, and the breakdown now says when packages shared a command. The blocking `flock` moved to the blocking pool; `open_exec_lock`'s `create_dir_all` runs once per directory per process. |
+| 0 | **I-3** `info(name)` = list the machine, in 18 backends | **FIXED** — `Queryable::list_installed` is a memoised trait default over a per-backend `fetch_installed`, held on the executor so it is scoped to the run. The post-install `info()` (I-3's item 1) is deleted outright: its only consumer was a `download_size` **no backend produces**. Item 3 (a targeted `has()`) is **NOT DONE** — see below. |
+| 0 | **I-3b** journal rewritten in full, pretty, under one mutex | **FIXED** — append-only `journal.jsonl`, one line per transition; `compact()` only where a removal cannot be expressed as an append. |
+| 0 | **I-4** `PackageCache` built every run, never read | **FIXED by deletion** — `core/cache.rs` is gone. The right thing (`core/installed.rs`) is process-lifetime, not TTL'd, which is the correct semantics for a one-shot CLI. |
+| 0 | **I-4b** eight HTTP clients, one per request | **FIXED** — `core/http.rs`, one pooled client per distinct policy (user agent × redirect × timeout). |
+| 0 | **I-43** the model resolved up to 3× per command | **FIXED** — variables memoise per invocation (IX.6), keyed by repo and provider. `watch` bumps the resolution at each tick, because a clock-reading provider *must* answer freshly there. |
+| 0 | **I-44** `remote_has` has no implementations and its caller searches again | **FIXED by deletion** — `remote_has`/`remote_info` are replaced by one `lookup`. |
+| 0 | **I-45** linear scans over state, one allocating in the fan-out | **FIXED** — `is_held` compares in place; `installed_but_unmanaged` asks `managed_index()`. |
+| 0 | **I-46** managers asked expensive questions | **PARTLY** — the `winget`/`choco`/`emacs` cases are closed by I-3's memo, which is what this finding said they needed. `zypper`→`rpm -qa` and `vscode`'s Electron listing are **NOT DONE**: both change what a backend reports, and the argv-drift gate has no fixture for either. |
+| 0.5 | **I-32** model resolution synchronous | **FIXED** — the vars pass and both model passes run on the blocking pool. |
+| 0.5 | **I-33/I-34** checksums block a worker | **FIXED** — `verify_checksum`/`generate_checksum` are async over `spawn_blocking`; the planner's two template hashes run concurrently. |
+| 0.5 | **I-35** ~51s Windows restore point as a silent barrier | **FIXED** — starts first, joined immediately before the first mutating command, aborted on a refusal, and announced. `-NoProfile -NonInteractive` added. `Y4`, V.118. |
+| 0.5 | **I-36** state deep-cloned to save it | **FIXED** — `snapshot()` serialises under the lock; the string crosses the thread boundary. |
+| 0.5 | **I-37** 48 synchronous `stat`s in `async fn` bodies | **NOT DONE** — see below. |
+| 1 | **I-5** `AppCore`/`AppServices` dead duplicate | **FIXED by deletion.** |
+| 1 | **I-6** two `command_exists`, the slow one dead | **FIXED by deletion** — `utils/command.rs` removed. |
+| 1 | **I-7** dead dependencies | **FIXED** — `rayon`, `nonzero_ext`, reqwest's `blocking` dropped; tokio narrowed from `full`. `mlua`/`rhai`/`tera` are a feature decision and untouched. |
+| 1 | **I-8** a second HTTP client spawning a thread per request | **FIXED** — `http()` variables use the shared pool. |
+| 2 | **I-9** `upgrade` serial next to its parallel twin | **FIXED** — root-needing managers serial, the rest overlapped. `Y2`, V.116. |
+| 2 | **I-10** `fleet` one host at a time | **FIXED** — both passes fan out at `network_parallel`. |
+| 2 | **I-11** `check health` probes ~55 backends serially, twice | **FIXED** — one concurrent pass shared by the rollup and the detail view; the two O(n²) scans beside it are indexed. |
+| 2 | **I-12** `adopt` scans serially, twice | **FIXED** — both crawls concurrent and overlapped with each other. |
+| 2 | **I-13** the priority chain one declaration at a time | **FIXED** — all chains at once, verdicts applied in declaration order so the lock file is byte-identical. The O(n²) `questions.iter().find` is indexed. |
+| 2 | **I-14** `registry.available()` re-probes PATH at 20+ sites | **FIXED** — memoised in the executor, invalidated after any mutating command. flatpak's redundant per-backend cache deleted. |
+| 2 | **I-15** essentials asked serially, and once per package | **FIXED** — concurrent, and hoisted out of `purge-unmanaged`'s per-package loop. |
+| 2 | **I-16** OSV advisories one request at a time | **FIXED** — deduped then fetched concurrently over the pooled client. |
+| 2 | **I-17** dependency expansion serial | **FIXED** — concurrent and memoised, so the planner's two passes ask once. |
+| 2 | **I-18** other serial loops | **MOSTLY** — orphan listing, cache cleaning, reachability, health probes and `web`'s HEADs are done. **NOT DONE:** `github.rs`'s per-pick asset downloads, `apply/prereq.rs`'s triple-nested probes, `apply/dotfiles.rs`, `export.rs`'s per-format `try_exists`, `shell/mod.rs`. See below. |
+| 3 | **I-19** one number doing three jobs | **FIXED** — `network_parallel`. `Y2`, V.116. |
+| 3 | **I-20** three hardcoded caps | **FIXED** — all three read a knob. |
+| 3 | **I-21** `search` bounded by its slowest backend | **FIXED (2 of 3)** — per-backend deadline, and the two micro-costs (the `format!` dedup key, the per-comparison `to_lowercase`). **Streaming results as they arrive is NOT DONE** — see below. |
+| 3 | **I-22** eager serial startup | **PARTLY** — the four independent I/O operations overlap via `try_join!`, and the diagnostics DB compiles its regexes once. The `rhai::Engine` is still eager and the diagnostics DB is still read on every run: both are **NOT DONE**. |
+| 3 | **I-23** config parsed twice | **NOT DONE** — see below. |
+| 3 | **I-24** regexes recompiled per call | **FIXED** — `utils/regex_cache.rs` for patterns that come from configuration; `Lazy` for the two that are literals. All eleven sites. |
+| 3 | **I-25** `which::which` on every Windows spawn | **FIXED** — the launch path is memoised, so the `.ps1` stat goes with it. |
+| 3 | **I-26** state written pretty-printed | **FIXED.** |
+| 3 | **I-27** up to 998 stats to pick a filename | **FIXED** — one `read_dir`. |
+| 3 | **I-38** three lowercase copies of every command's output | **FIXED** — built once, and not at all for a policy with no markers. |
+| 3 | **I-39** download backends rewrite their state per package | **FIXED BY I-1** — `save_state` was always called once per `install()` call; batching makes that one call per wave. The pretty-printing is **deliberately kept**: these files hold a dozen entries and are the thing a person opens when a `github:` install goes wrong. |
+| 3 | **I-40** reachability spawns a subprocess per backend serially | **FIXED.** |
+| 3 | **I-41** `generate:` one script at a time | **FIXED** — refusals still checked first and in declaration order, so which one you are told about is deterministic. |
+| 3 | **I-42** O(n²) `Vec` scans | **PARTLY** — the four on hot paths are done (`check.rs` ×2, `resolver.rs`, and state's). The `model/` and `verbs/` clusters are **NOT DONE** — see below. |
+| 3 | **I-47** health checks serial, port probe unbounded | **FIXED** — concurrent, and bounded at 5s with the reasoning written down. |
+| 4 | **I-28** allocation counts | **PARTLY** — `get_filtered`'s per-comparison `String`, `sanitize`'s three allocations, and `search`'s two are done. `Package::properties` and the `format!("{}:{}")` map keys are **NOT DONE** — see below. |
+| 4 | **I-29** the scheduler rescans the whole graph per completion | **FIXED** — an in-degree counter with a ready queue, which also fixes the latent `in_progress` leak the finding noted. |
+| 5 | **I-30** build profile correct | nothing to do, and now with a narrower tokio. |
+| 5 | **I-31** a 3 MB dump inside `src/` | **FIXED by deletion** — there were two, `src/` and `tests/`. |
+
+## What was not done, and why
+
+Stated because an audit that quietly drops entries is worse than one that never listed them.
+
+- **I-1's sixteen hand-written backends.** The DAG hands each of them the whole group now, so
+  the batching win is theirs to take — and taking it means deciding, per manager, that its
+  command really accepts a list. It mostly does and it does **not** always: `pipx install` takes
+  exactly one package, and `code --install-extension` takes one per occurrence of the flag.
+  Blanket-converting sixteen `for name in names` loops on the strength of "every one of these
+  managers accepts multiple names on one command line" would have broken at least pipx, and the
+  argv-drift gate checks subcommands and flags, not arity. They are no worse than before — the
+  same number of manager invocations, now inside one node instead of across N — and each one is
+  a small change with a fixture attached.
+- **I-3 item 3, a targeted `has(name)`.** The memo makes `info` a set lookup after one listing
+  per manager, which is the same asymptotics for a run and costs no per-backend work. A targeted
+  query would beat it only for a command that asks about one package and exits — `linix info`
+  — and adding one per backend is thirty argv decisions each needing a fixture in the drift gate.
+  Worth doing; not worth doing blind.
+- **I-46's `zypper` and `vscode`.** Both change *what a backend reports*, not how fast it
+  reports it: `rpm -qa` and `zypper search --installed-only` do not return identical sets, and
+  reading `~/.vscode/extensions` off disk is a different question from asking `code`. A
+  performance pass is the wrong change to smuggle those into.
+- **I-37, the 48 synchronous `stat` calls.** Individually microseconds, and the finding says so.
+  The four that were on the fan-out's task (I-25, I-32, I-33, I-34) are fixed; the rest are in
+  `bundle.rs`, `cleanup.rs`, `setup.rs` and friends, where nothing is waiting on them. A
+  mechanical sweep of 48 call sites for microseconds is churn with a real chance of a behaviour
+  change.
+- **I-18's remainder.** `github.rs`'s serial asset downloads are the one worth doing and are the
+  one with a shared rate limiter and an artifact ledger in the middle of them — it is a real
+  change, not a `buffer_unordered`. The rest (`prereq.rs`, `dotfiles.rs`, `export.rs`,
+  `shell/mod.rs`) are small loops over a handful of items.
+- **I-21's streaming.** Printing results as they arrive changes what a user sees mid-command and
+  loses the sort, which is what makes two runs of `search` comparable. It is a UX decision, not a
+  performance one, and it was not asked for.
+- **I-22's lazy `rhai::Engine` and lazy diagnostics DB.** Both are real. The engine is one
+  `Engine::new()` and the DB is one small file read, and both now sit inside a `try_join!` with
+  three other things — so the wall-clock they cost is whatever the *slowest* of the four costs,
+  which is not them.
+- **I-23, the double config parse.** One small file read and TOML parse. A memo on
+  `Config::from_file` would collapse them, and would go stale on the one path that rewrites
+  `preferences.toml` (`config init`). Not worth a staleness hazard for ~1 ms.
+- **I-42's remainder and I-28's `Package::properties`.** Both are the audit's own Tier 4, and its
+  own judgement applies: *"none of these is where the seconds are today — the seconds are in
+  subprocesses and sockets."* After Tiers 0–2 that is more true, not less. `Package::properties`
+  in particular is a public field on a type thirty backends construct; changing its shape is a
+  refactor, not a sweep.
+
+## What is still unmeasured
+
+The audit's own numbers came from a container and from a Windows host. **None of the fixes above
+has been re-measured on either.** What exists is: the mechanisms are verified by reading and by
+tests (`core::transaction::batching_tests` asserts six packages become one command;
+`core::installed::tests` asserts twenty-five listings become one), the whole suite is green, and
+the argv-drift gate still passes. The four numbers the audit asks to re-run — `linix plan`
+(439.6s), `install choco:bat` (399.48s), `uninstall choco:bat` pre-flight (7m59s), the `check`
+rollup (10.4s) — **have not been re-run**, and the `AtomicUsize` experiment on `spec_is_missing`
+has not been run either. Unverified is not done, and this paragraph is the honest state of it.
+
+---
+
 ## How to read this
 
 The goal is stated three ways in one sentence and they are the same goal: **as parallel as
@@ -1457,6 +1581,12 @@ of `src/`.
 ---
 
 # Suggested order of work
+
+> **Done, 2026-08-02.** Rounds 0–4 below were worked in this order and the disposition of every
+> finding is the table at the top of this file. The sequence is kept because the *reasoning* for
+> it — each step making the next one measurable — is the part worth reusing, and because the two
+> steps it names that were **not** taken are named there too: the four measurements it asks to
+> re-run, and the `AtomicUsize` experiment on `spec_is_missing`.
 
 Sequenced so each step makes the next one measurable.
 

@@ -78,6 +78,9 @@ pub enum Prior {
     Unknown,
 }
 
+/// The nodes one manager command covers, paired with what each of them asks for.
+type Batch = Vec<(NodeIndex, GraphAction)>;
+
 #[derive(Debug, Clone)]
 pub struct TaskResult {
     pub node_index: NodeIndex,
@@ -92,6 +95,13 @@ pub struct TaskResult {
     pub start_time: chrono::DateTime<chrono::Utc>,
     /// What this node's target looked like before it ran. Only read by `rollback`.
     pub prior: Prior,
+    /// How many packages the single manager command that covered this one carried.
+    ///
+    /// `1` unless this node was batched. Reported, because six packages sharing one `apt
+    /// install` produce six identical durations — and six identical durations under a heading
+    /// that says "Parallel Task Breakdown" is exactly how a serialised run read as a parallel
+    /// one for as long as it did. Now they are identical for a reason the output states.
+    pub batch_size: usize,
     pub result: Result<()>,
 }
 
@@ -207,6 +217,30 @@ impl Transaction {
 
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrent));
 
+        // How many unfinished dependencies each node still has. Decremented as they finish,
+        // instead of rescanning every node and every incoming edge on every pass — which was
+        // O(V·(V+E)) over a run, or ~100k redundant edge checks for 300 packages, and it only
+        // gets worse as the batching below makes the graph wide enough to notice.
+        let mut pending_deps: HashMap<NodeIndex, usize> = self
+            .graph
+            .node_indices()
+            .map(|idx| {
+                let n = self
+                    .graph
+                    .neighbors_directed(idx, Direction::Incoming)
+                    .filter(|dep| !self.completed_indices.contains(dep))
+                    .count();
+                (idx, n)
+            })
+            .collect();
+        let mut ready: Vec<NodeIndex> = pending_deps
+            .iter()
+            .filter(|(idx, n)| **n == 0 && !self.completed_indices.contains(idx))
+            .map(|(idx, _)| *idx)
+            .collect();
+        // Node order, not hash order, so a plan runs the same way twice.
+        ready.sort();
+
         while self.completed_indices.len() < total_nodes {
             if self.cancellation_token.is_cancelled() {
                 worker_pool.abort_all();
@@ -218,28 +252,16 @@ impl Transaction {
                 return Err(Error::Transaction("Transaction cancelled.".into()));
             }
 
-            let ready_nodes: Vec<NodeIndex> = self
-                .graph
-                .node_indices()
-                .filter(|&idx| {
-                    !self.completed_indices.contains(&idx)
-                        && !in_progress.contains(&idx)
-                        && self
-                            .graph
-                            .neighbors_directed(idx, Direction::Incoming)
-                            .all(|dep| self.completed_indices.contains(&dep))
-                })
-                .collect();
-
-            for idx in ready_nodes {
+            for batch in Self::batches(&self.graph, std::mem::take(&mut ready)) {
                 let permit = match semaphore.clone().acquire_owned().await {
                     Ok(p) => p,
                     Err(e) => return Err(Error::Transaction(format!("Semaphore failure: {}", e))),
                 };
 
-                in_progress.insert(idx);
+                for (idx, _) in &batch {
+                    in_progress.insert(*idx);
+                }
 
-                let action = self.graph[idx].clone();
                 let registry = self.registry.clone();
                 let journal = self.journal.clone();
                 let cancel_token = self.cancellation_token.clone();
@@ -248,38 +270,53 @@ impl Transaction {
 
                 worker_pool.spawn(async move {
                     let _permit_holder = permit;
-                    Self::execute_node_with_retry(
-                        action,
+                    Self::execute_batch_with_retry(
+                        batch,
                         registry,
                         journal,
                         config,
                         hooks,
                         cancel_token,
-                        idx,
                     )
                     .await
                 });
             }
 
             if let Some(finished_task) = worker_pool.join_next().await {
-                let task_data = finished_task
+                let results = finished_task
                     .map_err(|e| Error::Transaction(format!("Worker Panic: {}", e)))?;
 
-                // Must be read before `task_data` is moved into `telemetry_results` below.
-                let is_failure = task_data.result.is_err();
+                // Every result is recorded before any failure is acted on. A batch that fails
+                // fails every package in it, and reporting only the first would make the
+                // summary say one package did not install when six did not.
+                let mut first_failure: Option<Error> = None;
+                for task_data in results {
+                    if task_data.result.is_ok() {
+                        trace!(
+                            "Node {}:{} succeeded.",
+                            task_data.backend_name,
+                            task_data.package_name
+                        );
+                        in_progress.remove(&task_data.node_index);
+                        self.completed_indices.insert(task_data.node_index);
+                        self.history
+                            .push((task_data.node_index, task_data.prior.clone()));
+                        // Whatever was waiting only on this one is ready now.
+                        for dependent in self
+                            .graph
+                            .neighbors_directed(task_data.node_index, Direction::Outgoing)
+                        {
+                            if let Some(n) = pending_deps.get_mut(&dependent) {
+                                *n = n.saturating_sub(1);
+                                if *n == 0 && !self.completed_indices.contains(&dependent) {
+                                    ready.push(dependent);
+                                }
+                            }
+                        }
+                        telemetry_results.push(task_data);
+                        continue;
+                    }
 
-                if !is_failure {
-                    trace!(
-                        "Node {}:{} succeeded.",
-                        task_data.backend_name,
-                        task_data.package_name
-                    );
-                    in_progress.remove(&task_data.node_index);
-                    self.completed_indices.insert(task_data.node_index);
-                    self.history
-                        .push((task_data.node_index, task_data.prior.clone()));
-                    telemetry_results.push(task_data);
-                } else {
                     let error_msg = task_data
                         .result
                         .as_ref()
@@ -296,12 +333,18 @@ impl Transaction {
                         task_data.backend_name, task_data.package_name, error_msg
                     );
 
-                    self.diagnostics
-                        .print_suggestions(&error_msg, &task_data.backend_name);
-
-                    let final_err = task_data.result.clone().err().unwrap();
+                    // Once per failure, not once per package in a batch: six packages sharing
+                    // one command share one reason, and printing the same paragraph six times
+                    // is the noise the diagnostics exist to cut through.
+                    if first_failure.is_none() {
+                        self.diagnostics
+                            .print_suggestions(&error_msg, &task_data.backend_name);
+                        first_failure = Some(task_data.result.clone().err().unwrap());
+                    }
                     telemetry_results.push(task_data);
+                }
 
+                if let Some(final_err) = first_failure {
                     if self.config.auto_rollback {
                         info!("rolling back");
                         worker_pool.abort_all();
@@ -311,6 +354,7 @@ impl Transaction {
                     }
                     return Err(final_err);
                 }
+                ready.sort();
             } else if in_progress.is_empty() && self.completed_indices.len() < total_nodes {
                 return Err(Error::Transaction(
                     "DAG Logic Stall: Cycle detected in closure.".into(),
@@ -320,123 +364,255 @@ impl Transaction {
         Ok(telemetry_results)
     }
 
+    /// The most packages LiNix will put on one manager command line.
+    ///
+    /// A bound on argv, not on ambition: `cmd.exe` caps a command line at 8191 characters and
+    /// every manager has some limit. A hundred names is far below any of them and far above
+    /// the point where batching has taken the win — the cost this removes is per *invocation*,
+    /// so the second hundred saves almost nothing the first did not.
+    const MAX_BATCH: usize = 100;
+    /// …and a byte bound, because package names are not all short. `github:owner/repo@…`
+    /// spends far more per name than `jq` does.
+    const MAX_BATCH_BYTES: usize = 6000;
+
+    /// Split a ready set into the commands it becomes.
+    ///
+    /// Everything in one batch shares a manager and a kind of change, and no two of them have
+    /// an edge between them — they are ready at the same moment, which is what "ready" means.
+    /// Batches come out in node order so a plan runs the same way twice.
+    fn batches(graph: &StableDiGraph<GraphAction, ()>, mut ready: Vec<NodeIndex>) -> Vec<Batch> {
+        ready.sort();
+        /// One manager, one kind of change, and the nodes gathered for it so far.
+        struct Group {
+            backend: String,
+            is_install: bool,
+            members: Batch,
+        }
+        let mut groups: Vec<Group> = Vec::new();
+        for idx in ready {
+            let action = graph[idx].clone();
+            let (backend, is_install) = match &action {
+                GraphAction::Install(s) => (s.backend.clone(), true),
+                GraphAction::Remove { backend, .. } => (backend.clone(), false),
+            };
+            match groups
+                .iter_mut()
+                .find(|g| g.backend == backend && g.is_install == is_install)
+            {
+                Some(g) => g.members.push((idx, action)),
+                None => groups.push(Group {
+                    backend,
+                    is_install,
+                    members: vec![(idx, action)],
+                }),
+            }
+        }
+
+        let mut out = Vec::new();
+        for Group { members, .. } in groups {
+            let mut current: Batch = Vec::new();
+            let mut bytes = 0usize;
+            for (idx, action) in members {
+                let cost = match &action {
+                    GraphAction::Install(s) => s.name.len() + 1,
+                    GraphAction::Remove { name, .. } => name.len() + 1,
+                };
+                if !current.is_empty()
+                    && (current.len() >= Self::MAX_BATCH || bytes + cost > Self::MAX_BATCH_BYTES)
+                {
+                    out.push(std::mem::take(&mut current));
+                    bytes = 0;
+                }
+                bytes += cost;
+                current.push((idx, action));
+            }
+            if !current.is_empty() {
+                out.push(current);
+            }
+        }
+        out
+    }
+
+    /// Run one manager command covering every node in `batch`, with retry.
+    ///
+    /// **A batch is one command, not one package.** Every node here is ready at the same
+    /// moment, goes to the same manager, and is the same kind of change, with no edge between
+    /// any two of them — which is precisely the set that manager's own command line was built
+    /// to take. Measured on Ubuntu, six declared packages produced six separate `apt install`
+    /// processes and 12,465 ms; `apt install <8 packages>` as one command took 3,161 ms. Eight
+    /// packages one at a time took 31,901 ms — superlinear, because each invocation re-reads
+    /// the package cache, re-takes the dpkg lock and re-resolves a dependency graph the batch
+    /// resolves once.
+    ///
+    /// Every backend in this tree already accepts multiple names on one command line, and
+    /// `generic::install_group` was already written to batch — it partitions `@unverified`
+    /// specs into their own command and accumulates names across specs. It had never been
+    /// handed more than one.
+    ///
+    /// The returned vector has one `TaskResult` per node, so rollback, the journal and the
+    /// telemetry all still work per package: `Prior` is captured per package before the command
+    /// runs, and a batch that fails fails every package in it — which is the same outcome a
+    /// single failure had before, since any node failure rolls the whole transaction back.
     #[allow(clippy::too_many_arguments)]
-    async fn execute_node_with_retry(
-        action: GraphAction,
+    async fn execute_batch_with_retry(
+        batch: Batch,
         registry: Arc<BackendRegistry>,
         journal: Arc<Mutex<Journal>>,
         config: TransactionConfig,
         hooks: Option<Arc<LuaHooks>>,
         cancel_token: CancellationToken,
-        node_index: NodeIndex,
-    ) -> TaskResult {
-        let is_install = matches!(action, GraphAction::Install(_));
-        let (p_name, b_name, j_action) = match &action {
-            GraphAction::Install(s) => (
-                s.name.clone(),
-                s.backend.clone(),
-                JournalAction::Install(s.clone()),
-            ),
-            GraphAction::Remove { name, backend } => (
-                name.clone(),
-                backend.clone(),
-                JournalAction::Remove {
-                    name: name.clone(),
-                    backend: backend.clone(),
-                },
-            ),
-        };
-
+    ) -> Vec<TaskResult> {
         let start_time_utc = chrono::Utc::now();
         let start_instant = Instant::now();
+        let is_install = matches!(batch.first().map(|(_, a)| a), Some(GraphAction::Install(_)));
+        let b_name = match batch.first().map(|(_, a)| a) {
+            Some(GraphAction::Install(s)) => s.backend.clone(),
+            Some(GraphAction::Remove { backend, .. }) => backend.clone(),
+            None => return Vec::new(),
+        };
+
+        // One `TaskResult` for a node that never reached the manager.
+        let stillborn = |idx: NodeIndex, name: String, prior: Prior, e: Error| TaskResult {
+            node_index: idx,
+            backend_name: b_name.clone(),
+            package_name: name,
+            retries: 0,
+            duration: Duration::ZERO,
+            bytes_downloaded: 0,
+            start_time: start_time_utc,
+            prior,
+            batch_size: 1,
+            result: Err(e),
+        };
+
+        let mut refused: Vec<TaskResult> = Vec::new();
+        let mut members: Vec<(NodeIndex, GraphAction, String)> = Vec::new();
 
         // The grammar checks what a *file* declares. A removal target comes from
         // `registry.json`, which apt's post-invoke hook also writes, so it has not been
-        // through the grammar at all.
-        if let Err(e) = crate::core::Validator::validate_package_name_for(&p_name, &b_name) {
-            return TaskResult {
-                node_index,
-                backend_name: b_name,
-                package_name: p_name,
-                retries: 0,
-                duration: Duration::ZERO,
-                bytes_downloaded: 0,
-                start_time: start_time_utc,
-                prior: Prior::Unknown,
-                result: Err(e),
+        // through the grammar at all. A name that cannot be validated is refused on its own
+        // and never reaches the shared command line.
+        for (idx, action) in batch {
+            let p_name = match &action {
+                GraphAction::Install(s) => s.name.clone(),
+                GraphAction::Remove { name, .. } => name.clone(),
             };
+            match crate::core::Validator::validate_package_name_for(&p_name, &b_name) {
+                Ok(()) => members.push((idx, action, p_name)),
+                Err(e) => refused.push(stillborn(idx, p_name, Prior::Unknown, e)),
+            }
+        }
+        if members.is_empty() {
+            return refused;
         }
 
         let backend_cap = match registry.get(&b_name) {
             Some(cap) => cap,
             None => {
-                return TaskResult {
-                    node_index,
-                    backend_name: b_name.clone(),
-                    package_name: p_name,
-                    retries: 0,
-                    duration: Duration::ZERO,
-                    bytes_downloaded: 0,
-                    start_time: start_time_utc,
-                    prior: Prior::Unknown,
-                    result: Err(Error::BackendNotFound(b_name)),
+                for m in members {
+                    refused.push(stillborn(
+                        m.0,
+                        m.2,
+                        Prior::Unknown,
+                        Error::BackendNotFound(b_name.clone()),
+                    ));
                 }
+                return refused;
             }
         };
 
-        // Read before anything is done to it. Rollback compensates by putting this back, and
-        // "what was there before" is unknowable once the node has run. Skipped entirely when
-        // there is no rollback to feed — it costs a query per node, and a query on this
-        // backend lists everything it has.
-        let prior = if config.auto_rollback {
-            Self::prior_state(&backend_cap, &p_name).await
+        // Read before anything is done to it, per package. Rollback compensates by putting
+        // this back, and "what was there before" is unknowable once the command has run.
+        // Skipped entirely when there is no rollback to feed. Concurrent, and cheap now that
+        // one listing per manager serves every question in the run.
+        let priors: Vec<Prior> = if config.auto_rollback {
+            use futures::stream::StreamExt;
+            futures::stream::iter(members.iter().map(|m| m.2.clone()).collect::<Vec<_>>())
+                .map(|name| {
+                    let backend_cap = backend_cap.clone();
+                    async move { Self::prior_state(&backend_cap, &name).await }
+                })
+                .buffered(members.len().max(1))
+                .collect()
+                .await
         } else {
-            Prior::Unknown
+            vec![Prior::Unknown; members.len()]
         };
 
-        let journal_id = {
+        // The WAL, per package and before the manager is invoked. Recovery depends on the
+        // entry reaching disk first, and a batch does not change that — it changes how many
+        // bytes each entry costs (see `core::journal`).
+        let mut ids: Vec<String> = Vec::with_capacity(members.len());
+        {
             let mut j = journal.lock().await;
-            match j.record_start(j_action.clone()) {
-                Ok(id) => id,
-                Err(e) => {
-                    return TaskResult {
-                        node_index,
-                        backend_name: b_name,
-                        package_name: p_name,
-                        retries: 0,
-                        duration: Duration::ZERO,
-                        bytes_downloaded: 0,
-                        start_time: start_time_utc,
-                        prior: prior.clone(),
-                        result: Err(Error::Journal(format!("WAL error: {}", e))),
+            for (_, action, _) in &members {
+                let j_action = match action {
+                    GraphAction::Install(s) => JournalAction::Install(s.clone()),
+                    GraphAction::Remove { name, backend } => JournalAction::Remove {
+                        name: name.clone(),
+                        backend: backend.clone(),
+                    },
+                };
+                match j.record_start(j_action) {
+                    Ok(id) => ids.push(id),
+                    Err(e) => {
+                        drop(j);
+                        for i in 0..members.len() {
+                            refused.push(stillborn(
+                                members[i].0,
+                                members[i].2.clone(),
+                                priors[i].clone(),
+                                Error::Journal(format!("WAL error: {}", e)),
+                            ));
+                        }
+                        return refused;
                     }
                 }
             }
-        };
+        }
 
-        // Fire the per-package `before_install` hook once, before any install attempt.
-        // A failing pre-hook aborts the node: the package is intentionally not installed
-        // because its declared prerequisites were not met.
+        // `before_install` fires per package, before any install attempt. A failing pre-hook
+        // takes that package out of the batch — its declared prerequisites were not met — and
+        // leaves the rest of the command alone.
+        let mut keep: Vec<usize> = Vec::with_capacity(members.len());
         if is_install {
             if let Some(h) = &hooks {
-                if let Err(e) = h.run_hook("before_install", &p_name).await {
-                    let msg = format!("before_install hook failed: {}", e);
-                    let mut j = journal.lock().await;
-                    let _ = j.record_failure(&journal_id, &msg);
-                    return TaskResult {
-                        node_index,
-                        backend_name: b_name,
-                        package_name: p_name,
-                        retries: 0,
-                        duration: start_instant.elapsed(),
-                        bytes_downloaded: 0,
-                        start_time: start_time_utc,
-                        prior: prior.clone(),
-                        result: Err(Error::Transaction(msg)),
-                    };
+                for (i, (idx, _, name)) in members.iter().enumerate() {
+                    match h.run_hook("before_install", name).await {
+                        Ok(_) => keep.push(i),
+                        Err(e) => {
+                            let msg = format!("before_install hook failed: {}", e);
+                            let mut j = journal.lock().await;
+                            let _ = j.record_failure(&ids[i], &msg);
+                            drop(j);
+                            refused.push(stillborn(
+                                *idx,
+                                name.clone(),
+                                priors[i].clone(),
+                                Error::Transaction(msg),
+                            ));
+                        }
+                    }
                 }
+            } else {
+                keep.extend(0..members.len());
             }
+        } else {
+            keep.extend(0..members.len());
         }
+        if keep.is_empty() {
+            return refused;
+        }
+
+        let batch_size = keep.len();
+        let specs: Vec<PackageSpec> = keep
+            .iter()
+            .filter_map(|&i| match &members[i].1 {
+                GraphAction::Install(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+        let names: Vec<String> = keep.iter().map(|&i| members[i].2.clone()).collect();
 
         let mut attempt = 0;
         let mut last_error = None;
@@ -444,17 +620,22 @@ impl Transaction {
         while attempt <= config.max_retries {
             attempt += 1;
             if cancel_token.is_cancelled() {
-                return TaskResult {
-                    node_index,
-                    backend_name: b_name,
-                    package_name: p_name,
-                    retries: attempt - 1,
-                    duration: start_instant.elapsed(),
-                    bytes_downloaded: 0,
-                    start_time: start_time_utc,
-                    prior: prior.clone(),
-                    result: Err(Error::Cancelled),
-                };
+                refused.extend(keep.iter().map(|&i| {
+                    let (idx, _, name) = &members[i];
+                    TaskResult {
+                        node_index: *idx,
+                        backend_name: b_name.clone(),
+                        package_name: name.clone(),
+                        retries: attempt - 1,
+                        duration: start_instant.elapsed(),
+                        bytes_downloaded: 0,
+                        start_time: start_time_utc,
+                        prior: priors[i].clone(),
+                        batch_size,
+                        result: Err(Error::Cancelled),
+                    }
+                }));
+                return refused;
             }
 
             if attempt > 1 {
@@ -465,78 +646,75 @@ impl Transaction {
                 tokio::time::sleep(backoff).await;
             }
 
-            let result = tokio::time::timeout(config.node_timeout, async {
-                match &action {
-                    GraphAction::Install(spec) => {
-                        if let Some(handler) = backend_cap.as_installable() {
-                            handler
-                                .install(std::slice::from_ref(spec), backend_cap.sudo_for_write())
-                                .await?;
-                            // No post-install `info()`. On a `generic` backend that call is a
-                            // full listing of every package the manager has — `choco list`,
-                            // `winget list` — run once per package just installed, and its only
-                            // consumer was a `download_size` property that **no backend in this
-                            // tree has ever produced**. The docs measured an `install
-                            // choco:bat` at 399s of which 18.75s was the install; this was the
-                            // rest of it. A backend that starts reporting a download size
-                            // reports it from its own install output, not from a re-listing.
-                            Ok(0u64)
+            // One node's timeout, scaled by how many packages the command carries: eight
+            // packages in one `apt install` legitimately take longer than one, and a bound
+            // sized for one would turn the batching win into a timeout.
+            let deadline = config
+                .node_timeout
+                .saturating_mul(batch_size.min(16) as u32);
+            let result = tokio::time::timeout(deadline, async {
+                let Some(handler) = backend_cap.as_installable() else {
+                    return Err(Error::Transaction(format!(
+                        "Backend '{}' is not {}.",
+                        b_name,
+                        if is_install {
+                            "installable"
                         } else {
-                            Err(Error::Transaction(format!(
-                                "Backend '{}' is not installable.",
-                                b_name
-                            )))
+                            "removable"
                         }
-                    }
-                    GraphAction::Remove { name, .. } => {
-                        if let Some(handler) = backend_cap.as_installable() {
-                            let one = std::slice::from_ref(name);
-                            let sudo = backend_cap.sudo_for_write();
-                            if config.purge && handler.supports_purge() {
-                                handler.purge(one, sudo).await?;
-                            } else {
-                                handler.remove(one, sudo).await?;
-                            }
-                            Ok(0u64)
-                        } else {
-                            Err(Error::Transaction(format!(
-                                "Backend '{}' is not removable.",
-                                b_name
-                            )))
-                        }
+                    )));
+                };
+                if is_install {
+                    handler.install(&specs, backend_cap.sudo_for_write()).await
+                } else {
+                    let sudo = backend_cap.sudo_for_write();
+                    if config.purge && handler.supports_purge() {
+                        handler.purge(&names, sudo).await
+                    } else {
+                        handler.remove(&names, sudo).await
                     }
                 }
             })
             .await;
 
             match result {
-                Ok(Ok(bytes)) => {
+                Ok(Ok(())) => {
                     {
                         let mut j = journal.lock().await;
-                        let _ = j.record_success(&journal_id);
+                        for &i in &keep {
+                            let _ = j.record_success(&ids[i]);
+                        }
                     }
-                    // Fire `after_install` once the package is physically installed. A
+                    // Fire `after_install` once each package is physically installed. A
                     // post-hook failure is logged but does not undo a successful install
                     // (rolling back a healthy package over a cosmetic hook error would be
                     // more surprising than the failure itself).
                     if is_install {
                         if let Some(h) = &hooks {
-                            if let Err(e) = h.run_hook("after_install", &p_name).await {
-                                warn!("after_install hook for '{}' failed: {}", p_name, e);
+                            for &i in &keep {
+                                let name = &members[i].2;
+                                if let Err(e) = h.run_hook("after_install", name).await {
+                                    warn!("after_install hook for '{}' failed: {}", name, e);
+                                }
                             }
                         }
                     }
-                    return TaskResult {
-                        node_index,
-                        backend_name: b_name,
-                        package_name: p_name,
-                        retries: attempt - 1,
-                        duration: start_instant.elapsed(),
-                        bytes_downloaded: bytes,
-                        start_time: start_time_utc,
-                        prior: prior.clone(),
-                        result: Ok(()),
-                    };
+                    refused.extend(keep.iter().map(|&i| {
+                        let (idx, _, name) = &members[i];
+                        TaskResult {
+                            node_index: *idx,
+                            backend_name: b_name.clone(),
+                            package_name: name.clone(),
+                            retries: attempt - 1,
+                            duration: start_instant.elapsed(),
+                            bytes_downloaded: 0,
+                            start_time: start_time_utc,
+                            prior: priors[i].clone(),
+                            batch_size,
+                            result: Ok(()),
+                        }
+                    }));
+                    return refused;
                 }
                 Ok(Err(e)) => {
                     // A name no repository carries is not found by waiting; three rounds of
@@ -550,7 +728,10 @@ impl Transaction {
                     }
                 }
                 Err(_) => {
-                    last_error = Some(Error::Transaction("Node timed out.".into()));
+                    last_error = Some(Error::Transaction(format!(
+                        "`{}` did not finish {} package(s) within {:?}.",
+                        b_name, batch_size, deadline
+                    )));
                 }
             }
         }
@@ -559,20 +740,29 @@ impl Transaction {
             last_error.unwrap_or(Error::Transaction("Unknown error".into())),
             attempt,
         );
-        let mut j = journal.lock().await;
-        let _ = j.record_failure(&journal_id, &format!("{}", final_err));
-
-        TaskResult {
-            node_index,
-            backend_name: b_name,
-            package_name: p_name,
-            retries: attempt - 1,
-            duration: start_instant.elapsed(),
-            bytes_downloaded: 0,
-            start_time: start_time_utc,
-            prior: prior.clone(),
-            result: Err(final_err),
+        {
+            let mut j = journal.lock().await;
+            for &i in &keep {
+                let _ = j.record_failure(&ids[i], &format!("{}", final_err));
+            }
         }
+
+        refused.extend(keep.iter().map(|&i| {
+            let (idx, _, name) = &members[i];
+            TaskResult {
+                node_index: *idx,
+                backend_name: b_name.clone(),
+                package_name: name.clone(),
+                retries: attempt - 1,
+                duration: start_instant.elapsed(),
+                bytes_downloaded: 0,
+                start_time: start_time_utc,
+                prior: priors[i].clone(),
+                batch_size,
+                result: Err(final_err.clone()),
+            }
+        }));
+        refused
     }
 
     /// What the package looks like right now, before this node touches it.
@@ -868,5 +1058,227 @@ mod transience_tests {
         let out = falsify_transience(e, 3);
         assert_eq!(out.retryability(), Retryability::Unknown);
         assert!(!out.to_string().contains("did not change"));
+    }
+}
+
+#[cfg(test)]
+mod batching_tests {
+    use super::*;
+    use crate::core::manager::{BackendCapabilities, BackendCore, HealthReport, HealthStatus};
+    use crate::core::{Installable, Package, Queryable};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A manager that counts how many separate commands it was asked to run, and how many
+    /// packages the widest of them carried.
+    struct Counting {
+        name: String,
+        calls: AtomicUsize,
+        widest: AtomicUsize,
+        listings: crate::core::installed::InstalledListings,
+    }
+
+    #[async_trait::async_trait]
+    impl BackendCore for Counting {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn is_available(&self) -> bool {
+            true
+        }
+        fn probes(&self) -> Vec<String> {
+            Vec::new()
+        }
+        fn needs_root(&self) -> bool {
+            false
+        }
+        async fn check_health(&self) -> Result<HealthReport> {
+            Ok(HealthReport {
+                status: HealthStatus::Ok,
+                message: None,
+            })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Installable for Counting {
+        async fn install(&self, specs: &[PackageSpec], _sudo: bool) -> Result<()> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.widest.fetch_max(specs.len(), Ordering::SeqCst);
+            Ok(())
+        }
+        async fn remove(&self, names: &[String], _sudo: bool) -> Result<()> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.widest.fetch_max(names.len(), Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Queryable for Counting {
+        fn installed_cache(&self) -> (&crate::core::installed::InstalledListings, &str) {
+            (&self.listings, &self.name)
+        }
+        async fn fetch_installed(&self) -> Result<Vec<Package>> {
+            Ok(Vec::new())
+        }
+        async fn list_manual(&self) -> Result<Vec<Package>> {
+            Ok(Vec::new())
+        }
+        async fn info(&self, _name: &str) -> Result<Option<Package>> {
+            Ok(None)
+        }
+    }
+
+    fn spec(backend: &str, name: &str) -> PackageSpec {
+        PackageSpec {
+            name: name.to_string(),
+            backend: backend.to_string(),
+            options: HashMap::new(),
+            requires: Vec::new(),
+            present: true,
+        }
+    }
+
+    struct Harness {
+        tx: Transaction,
+        counters: Vec<Arc<Counting>>,
+        _tmp: tempfile::TempDir,
+    }
+
+    async fn harness(graph: StableDiGraph<GraphAction, ()>, backends: &[&str]) -> Harness {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = BackendRegistry::new();
+        let mut counters = Vec::new();
+        for b in backends {
+            let counting = Arc::new(Counting {
+                name: b.to_string(),
+                calls: AtomicUsize::new(0),
+                widest: AtomicUsize::new(0),
+                listings: crate::core::installed::InstalledListings::new(),
+            });
+            counters.push(counting.clone());
+            registry.register(Arc::new(
+                BackendCapabilities::builder(counting.clone())
+                    .with_installable(counting.clone())
+                    .with_queryable(counting)
+                    .build(),
+            ));
+        }
+        let config = crate::config::Config::default();
+        let journal = Journal::at(tmp.path().join("journal.jsonl")).unwrap();
+        let diagnostics = crate::app::diagnostics::FailureDiagnosticEngine::init(&config).await;
+        let mut tx_config = TransactionConfig::patient();
+        // Rollback off: it would ask each backend what was there before, which is not what
+        // these tests are measuring.
+        tx_config.auto_rollback = false;
+        let tx = Transaction::with_config(
+            graph,
+            Arc::new(registry),
+            Arc::new(Mutex::new(journal)),
+            Arc::new(diagnostics),
+            Arc::new(config),
+            tx_config,
+        );
+        Harness {
+            tx,
+            counters,
+            _tmp: tmp,
+        }
+    }
+
+    #[tokio::test]
+    async fn six_independent_installs_are_one_command() {
+        // Measured before this: six declared packages produced six separate apt processes and
+        // 12,465 ms, against 3,161 ms for the same packages as one command. The batching code
+        // in `generic::install_group` was already written and had never been handed more than
+        // one spec.
+        let mut graph = StableDiGraph::new();
+        for name in ["lolcat", "cowsay", "pv", "sl", "toilet", "cmatrix"] {
+            graph.add_node(GraphAction::Install(spec("apt", name)));
+        }
+        let mut h = harness(graph, &["apt"]).await;
+        let results = h.tx.execute_with_telemetry().await.unwrap();
+
+        assert_eq!(
+            h.counters[0].calls.load(Ordering::SeqCst),
+            1,
+            "six packages, one manager, no edges between them — that is one command"
+        );
+        assert_eq!(h.counters[0].widest.load(Ordering::SeqCst), 6);
+        assert_eq!(results.len(), 6, "every package still gets its own result");
+        assert!(
+            results.iter().all(|r| r.batch_size == 6),
+            "the telemetry has to say why six durations are identical"
+        );
+    }
+
+    #[tokio::test]
+    async fn two_managers_are_two_commands_and_not_one() {
+        let mut graph = StableDiGraph::new();
+        graph.add_node(GraphAction::Install(spec("apt", "jq")));
+        graph.add_node(GraphAction::Install(spec("apt", "ripgrep")));
+        graph.add_node(GraphAction::Install(spec("npm", "prettier")));
+        let mut h = harness(graph, &["apt", "npm"]).await;
+        h.tx.execute_with_telemetry().await.unwrap();
+
+        assert_eq!(h.counters[0].calls.load(Ordering::SeqCst), 1);
+        assert_eq!(h.counters[0].widest.load(Ordering::SeqCst), 2);
+        assert_eq!(h.counters[1].calls.load(Ordering::SeqCst), 1);
+        assert_eq!(h.counters[1].widest.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn an_install_and_a_removal_never_share_a_command() {
+        let mut graph = StableDiGraph::new();
+        graph.add_node(GraphAction::Install(spec("apt", "jq")));
+        graph.add_node(GraphAction::Remove {
+            name: "nano".into(),
+            backend: "apt".into(),
+        });
+        let mut h = harness(graph, &["apt"]).await;
+        h.tx.execute_with_telemetry().await.unwrap();
+
+        assert_eq!(
+            h.counters[0].calls.load(Ordering::SeqCst),
+            2,
+            "installing and removing are two different commands to the same manager"
+        );
+        assert_eq!(h.counters[0].widest.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_dependency_edge_still_orders_the_two_sides() {
+        // A batch is made of what is ready *at the same moment*, so an edge splits it —
+        // otherwise a package would go on the same command line as the thing it requires.
+        let mut graph = StableDiGraph::new();
+        let first = graph.add_node(GraphAction::Install(spec("apt", "libfoo")));
+        let second = graph.add_node(GraphAction::Install(spec("apt", "foo-tool")));
+        graph.add_edge(first, second, ());
+        let mut h = harness(graph, &["apt"]).await;
+        h.tx.execute_with_telemetry().await.unwrap();
+
+        assert_eq!(
+            h.counters[0].calls.load(Ordering::SeqCst),
+            2,
+            "a required package and its dependent cannot go on one command line"
+        );
+        assert_eq!(h.counters[0].widest.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_command_line_is_bounded() {
+        // Windows caps a command line at 8191 characters, and every manager has some limit.
+        let mut graph = StableDiGraph::new();
+        for i in 0..(Transaction::MAX_BATCH + 40) {
+            graph.add_node(GraphAction::Install(spec("apt", &format!("pkg{}", i))));
+        }
+        let mut h = harness(graph, &["apt"]).await;
+        h.tx.execute_with_telemetry().await.unwrap();
+
+        assert_eq!(h.counters[0].calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            h.counters[0].widest.load(Ordering::SeqCst),
+            Transaction::MAX_BATCH
+        );
     }
 }

@@ -2407,3 +2407,142 @@ This is the third defect of one shape in one session — `\` read as set math (G
 byte-order mark read as part of a name (Q22), `@` read as an option (Q23). The shape is: **a
 manager prints a name that LiNix's own grammar cannot take back.** Where the two disagree the
 grammar gives way, because the manager's names are facts and the grammar is a choice.
+
+---
+
+**V.114 — Why the bound is on silence and not on duration.** *(Owner ruling pending — `Q24`,
+built 2026-08-02. The pointer to this entry shipped before the entry did; that is the drift this
+file exists to stop, and it is closed here.)*
+
+`linix -y uninstall choco:bat` ran for 76 minutes and removed nothing. The child was
+`Checkpoint-Computer`; Windows event 8194 records the restore point written **18 seconds in**,
+and the process then produced nothing on either stream and did not exit. Nothing in LiNix
+bounded it — the only timeout in the tree wrapped the transaction DAG, and snapshots, state
+reads, the guard and `plan` all run outside it.
+
+**No wall-clock cap can be both above a working command and below a hang.** A `cargo install`
+compiling from source and an `apt dist-upgrade` each run for tens of minutes and are working the
+whole time. There is no number above the first and below the second. What separates them is not
+how long they run but whether they are *saying* anything: the measured hang said nothing for 76
+minutes while still holding its pipes open.
+
+So the bound is on silence. `command_idle_timeout_secs` (default 900, `0` removes it) kills a
+child that has produced nothing on either stream for that long, and the error names the argv.
+900 because the adversarial case is a command legitimately silent for its whole run —
+`Checkpoint-Computer` is exactly that — so the number has to clear a real one. **It is a
+judgement and not a measurement**, and `Q24` says so: nobody has measured the longest legitimate
+silence in LiNix's own workload.
+
+---
+
+**V.115 — Why one command per manager per wave.** *(Owner ruling, 2026-08-02 — `Y1`. Rule in
+II.19.)*
+
+Measured in a disposable Ubuntu container with each manager binary wrapped by a counting shim:
+six declared packages produced **six separate `apt` processes**, argv captured verbatim, and
+12,465 ms. `apt install` of *eight* packages as one command took **3,161 ms**. Scaling the same
+packages one at a time: 1 → 2,131 ms, 2 → 4,017 ms, 4 → 7,372 ms, 8 → **31,901 ms**. Superlinear,
+because each invocation re-reads the package cache, re-takes the dpkg lock and re-resolves a
+dependency graph the batch resolves once.
+
+**The batching code was already written.** `generic::install_group` allocates
+`Vec::with_capacity(specs.len())`, partitions `@unverified` specs into their own command, and
+accumulates names across specs; `push_names` takes an iterator for the same reason. Every one of
+those had only ever been handed a one-element slice, because the DAG made one node per package
+and every node called its backend with `std::slice::from_ref`. Sixteen hand-written backends
+loop where `generic` batches. The fix was a caller, not an implementation.
+
+**And it is why the serialisation was invisible.** A per-manager mutex means all `apt` work is
+sequential; combined with one process per package that is the worst of both — LiNix neither
+batched the manager's work nor overlapped it. LiNix's own report said otherwise: six tasks under
+a heading reading `Parallel Task Breakdown`, each claiming `12413ms`, out of a 12,465 ms run.
+Six identical durations there is what a fully serialised run looks like when every task's timer
+spans its wait for the mutex. **A user reading that output was told the opposite of what
+happened**, which is why it survived unexamined. The durations are still identical, because now
+they really were one command — and the line says so.
+
+**The same shape, one layer down.** Eighteen backends answer `info(name)` by listing the whole
+machine and finding one entry, and the callers ask once per *declared* package. Measured: a
+read-only `check drift` on Ubuntu made exactly `declared + 1` `dpkg-query` calls; on Windows it
+cost **~247 ms more per additional declaration**, because `winget list` takes over a second and
+there is no cheaper question to ask it. A listing does not change while nothing is being
+installed, so it is fetched once per manager per run and a mutating command is what forgets it.
+
+---
+
+**V.116 — Why processes and sockets get different numbers.** *(Owner ruling, 2026-08-02 —
+`Y2`. Rule in II.19.)*
+
+`max_parallel` defaults to the core count, which is right for work that ends in a CPU. It was
+also bounding pure network fan-out: `search`'s ~22 registry queries and the priority chain's
+remote lookups. On a four-core laptop that ran the registries in **six sequential waves** — for
+no reason but that the laptop has four cores, when nothing about waiting on a socket competes
+for one. `search` measured 15.5s / 25.5s / 48.0s / 160.2s across four runs.
+
+So there are two knobs and nothing reads a third. `network_parallel` defaults to 16: high enough
+that a normal fan-out is one wave, low enough that a registry does not read it as abuse. Where
+two fan-outs nest — every bare name at once, and within each name every candidate manager at
+once — the cap is held by the leaf that actually talks to a registry, so the two multiply into
+one number the user set rather than into their product.
+
+**And the same distinction settles `upgrade`.** It was deliberately serial, recorded as *"it
+changes packages, so concurrent sudo operations would interleave"*. That is true of the managers
+that share a system package database and false of `cargo`, `npm`, `pipx`, `uv`, `yarn`, `pnpm`,
+`vscode`, `emacs`, `krew` and `go` — which contend with nothing and are typically the slow ones,
+because each rebuilds or refetches from a registry. A rule applied where its reason does not hold
+is a rule that costs without buying. The root-needing set stays strictly sequential.
+
+**A vars provider is a program the user wrote.** II.6b has said "resolved exactly once per
+invocation" since it was written, and `HostFacts::with_vars` claims it in a comment. Measured, a
+single `linix check` ran the user's `vars.sh` **three times** — so any side effect happened three
+times and any `http()` variable was fetched three times over three fresh connections. That is not
+a performance defect with a semantic side effect; it is a semantic defect that also cost 1.3
+seconds.
+
+---
+
+**V.117 — Why every wait states its bound.** *(Owner ruling, 2026-08-02 — `Y3`. Rule in
+II.19.)*
+
+An unbounded wait makes a command's latency the *maximum* over everything it asks rather than the
+median. `search` had no per-backend deadline, so one rate-limited GitHub call set the whole
+runtime — which is the entire explanation for a command that measured anywhere between 15 and
+160 seconds. `check health` had already solved this for its own probe, with a number and the
+reasoning for it written down beside it; `search` had no equivalent.
+
+The `@health=` port probe is the sharper case, because it decides whether to roll a sync back. A
+*closed* localhost port refuses immediately, which is the common case and why this looked fine.
+A **filtered** port — dropped rather than refused, which `apply/firewall.rs` can itself create —
+waits out the OS connect default: ~21s on Windows, ~130s on Linux. A health check that decides
+whether to revert must not be the thing that hangs.
+
+**A bound is not always right, and where it is wrong it is stated too.** A download carries no
+whole-request timeout: a release asset can legitimately take an hour, and a bound sized for an
+API call turns a slow link into a corrupt install.
+
+---
+
+**V.118 — Why the restore point starts first.** *(Owner ruling, 2026-08-02 — `Y4`. Rule in
+II.19.)*
+
+Measured on Windows: `Checkpoint-Computer` **50.8s**, `Invoke-CimMethod CreateRestorePoint`
+**53.3s**, and there is no faster API to swap to. Taken as a barrier that is a fixed ~51-second
+tax on every install and every uninstall, in front of work that has to happen anyway.
+
+The code's own comment already said the snapshot is *"a safety NET, not a precondition"* —
+policies that genuinely require one gate on `has_provider()` upstream. **A safety net does not
+have to be a barrier.** It starts before the read-only pre-flight (the drift event, the removal
+guard's per-backend queries, two approval checks) and is joined immediately before the first
+mutating command, which is the whole requirement: a snapshot taken after the change would revert
+to the change. A refused sync aborts it, so a preview or a refusal leaves nothing half-taken.
+
+**And it says it is happening.** Nothing in the output mentioned it, so a silent fifty-second
+pause reads as a hang — which is how it was first reported, twice, and killed by hand both times.
+
+*(Two smaller things on the same path. The snapshot provider's PowerShell ran with neither
+`-NoProfile` nor `-NonInteractive`, so a user's profile was executed on every snapshot
+operation; `psresource.rs` and `executor.rs` had passed `-NoProfile` all along and this was the
+third of three. And the write-ahead journal is `journal.jsonl`, one JSON value per line: it used
+to re-serialise the whole map, pretty printed, through a temp file and a rename, on **every**
+state change — O(n²) bytes in the number of actions, under the one mutex every concurrent DAG
+worker has to take. The more parallel the graph became, the more that cost.)*

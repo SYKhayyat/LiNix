@@ -2052,8 +2052,12 @@ transaction engine exists; `core/transaction.rs` is the only one.
   waits with `buffer_unordered` now; the per-spec decision is extracted unchanged into
   `spec_is_missing`. Plan OUTPUT is sorted now, so the same change set prints identically each
   run (it was HashMap-ordered, i.e. non-deterministic, before).
-- **`update`.** Metadata refresh fans out too. `upgrade` is deliberately left serial: it changes
+- **`update`.** Metadata refresh fans out too. `upgrade` was deliberately left serial: it changes
   packages, so concurrent sudo operations would interleave, and it is dominated by real work.
+  *(Narrowed 2026-08-02 — `Y2`, V.116. The reason holds for the managers that share a system
+  package database and not for `cargo`, `npm`, `pipx`, `uv`, `yarn`, `pnpm`, `vscode`, `emacs`,
+  `krew` and `go`, which contend with nothing and are the slow ones. The `needs_root()` set is
+  still strictly sequential; the rest overlap.)*
 
 `buffer_unordered` borrows `&self`, so the fan-out stays on one task — no spawn, no `'static` —
 which is all that is needed because the time is spent waiting on child processes. Covered by
@@ -5500,3 +5504,58 @@ and the harness truthfully reported "this kernel has no btrfs" about a kernel th
 `sh` reads a script incrementally — editing a bind-mounted harness while a container is running
 it shifts every byte offset after the read head, and any run overlapping such an edit has to be
 thrown away. Both were mine.
+
+---
+
+# The efficiency pass — 2026-08-02
+
+`docs/INEFFICIENCIES.md` audited every place in the tree slower than it has to be, from the code,
+with the container measurements to back the four that matter. The owner ruled the whole document
+in one sentence: *as parallel as possible, as efficient as possible, as fast as possible;
+restructure if it takes that.* The rulings are `Y1`–`Y4`, the rules II.19, the reasons
+V.115–V.118. The disposition of all 47 findings — including the eleven **not** done and why —
+is the table at the top of that document.
+
+**The finding that explains the rest.** Every install and every removal was its own DAG node,
+and every node called its backend with `std::slice::from_ref` — a one-element slice, always. So
+installing 50 apt packages was 50 `apt-get install <one>` invocations, and `generic::install_group`
+— which allocates `Vec::with_capacity(specs.len())`, partitions `@unverified` specs into their
+own command, and accumulates names across specs — had never in its life been handed more than
+one. Sixteen hand-written backends loop where it batches. **The batching code was correct and
+had no caller.**
+
+Measured, six packages: six `apt` processes, 12,465 ms, against 3,161 ms for eight packages as
+one command. And the shape recurs: `info(name)` is `list_installed()` plus a `find` in eighteen
+backends, asked once per declared package, which on Windows cost ~247 ms per extra declaration
+because `winget list` takes a second and there is no cheaper question to ask it.
+
+**Four things this pass got wrong first, all worth recording.**
+
+*A future that is only held does nothing.* The first version of the restore-point overlap
+constructed the snapshot future, kept it, and awaited it later — which overlaps exactly zero
+milliseconds, because Rust futures are lazy. It has to be `tokio::spawn`ed. It looked right and
+was a no-op, which is the worst kind of performance change: one that ships as a win and is not.
+
+*A memo needs to know what "once" means.* Variables resolve once per invocation (IX.6), so the
+memo was keyed by repo and provider — and `watch`, which runs reconcile passes in a loop inside
+one process, would have frozen a `when $hour` at whatever hour the daemon started. A clock-reading
+provider is *supposed* to answer differently on the next tick. The key carries a resolution
+counter now, bumped at the top of every reconcile pass. **The test suite caught this**, which is
+the argument for a suite that runs two resolutions in one process.
+
+*An invalidation on one of two doors is an invalidation on neither.* The run-scoped memos —
+what is on `PATH`, what each manager has installed — are cleared when a mutating command
+finishes, and the clear went into `CommandExecutor::run`. But `run_exclusive` is the path most
+installs and removals actually take, and it reaches `run_raw` directly rather than through
+`run`. So the listings would have gone on answering from before the install — and `Prior`, which
+decides what a rollback puts back, reads exactly those listings. **The same shape as the guard
+that covers nine removal paths out of ten**, found by re-reading rather than by a test, which is
+the honest way to say that nothing would have caught it.
+
+*A test that reads a global is a test of whatever else is running.* The connection pool's four
+tests measured `POOL.len()` before and after, in a concurrent suite where other tests populate
+the same pool. They failed intermittently and were about nothing. They count their own policies
+now.
+
+**And one behaviour change found on the way out.** Moving a corrupt WAL aside is a filesystem
+write, and `--dry-run heal` was making one. The preview says what a real run would do instead.

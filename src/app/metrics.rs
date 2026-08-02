@@ -13,6 +13,14 @@ pub struct OperationMetrics {
     pub error: Option<String>,
     pub retry_count: u32,
     pub bytes_downloaded: u64,
+    /// How many packages the one manager command that covered this one carried. `1` unless it
+    /// was batched.
+    #[serde(default = "one")]
+    pub batch_size: usize,
+}
+
+fn one() -> usize {
+    1
 }
 
 /// What the run is doing, in the summary's words.
@@ -73,6 +81,7 @@ impl MetricsCollector {
         error: Option<String>,
         retry_count: u32,
         bytes_downloaded: u64,
+        batch_size: usize,
     ) {
         let mut inner = self.inner.lock().expect("Metrics lock poisoned");
         let duration = Utc::now()
@@ -90,6 +99,7 @@ impl MetricsCollector {
             error,
             retry_count,
             bytes_downloaded,
+            batch_size,
         });
     }
 
@@ -175,9 +185,19 @@ impl MetricsCollector {
                     "".to_string()
                 };
 
+                // Says *why* several packages share a duration to the millisecond. Six
+                // identical numbers under a heading reading "Parallel Task Breakdown" is how
+                // a fully serialised run passed for a parallel one; now they are identical
+                // because they were one command, and the line says so.
+                let batch_text = if op.batch_size > 1 {
+                    format!(" (1 of {} in one `{}` command)", op.batch_size, op.backend)
+                } else {
+                    String::new()
+                };
+
                 println!(
-                    "  {} [{:<8}] {:<20} ({}ms){}",
-                    status_icon, op.backend, op.name, op.duration_ms, retry_text
+                    "  {} [{:<8}] {:<20} ({}ms){}{}",
+                    status_icon, op.backend, op.name, op.duration_ms, retry_text, batch_text
                 );
             }
 
@@ -244,6 +264,7 @@ mod tests {
             error: None,
             retry_count: 0,
             bytes_downloaded: 0,
+            batch_size: 1,
         }
     }
 

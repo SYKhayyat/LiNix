@@ -85,7 +85,7 @@ impl FirewallAdapter {
     /// carries headers, chains and comments, and inventing a rule out of one would put a
     /// phantom in the plan — the S22/S23 class, one domain over.
     pub fn parse_rules(&self, output: &str) -> Vec<Rule> {
-        let Ok(re) = regex::Regex::new(&self.list_pattern) else {
+        let Ok(re) = crate::utils::regex_cache::compiled(&self.list_pattern) else {
             return Vec::new();
         };
         // Every match on every line, not the first per line: `ufw status` puts one rule on a

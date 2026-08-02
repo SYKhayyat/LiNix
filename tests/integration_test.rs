@@ -112,6 +112,7 @@ async fn test_telemetry_metrics_reporting_accuracy() {
         None, // No error
         1,    // 1 attempt
         1024, // 1KB downloaded
+        1,    // not batched
     );
 
     // 2. Record aggregate stats

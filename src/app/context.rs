@@ -51,10 +51,6 @@ impl App {
 
         let hooks = Arc::new(LuaHooks::new(&config)?);
 
-        let registry =
-            Arc::new(create_default_registry(executor.duplicate(), &config, hooks.clone()).await);
-        let progress = create_progress_reporter(config.show_progress);
-
         // The journal lives beside the registry: both are LiNix's record of what it did,
         // so isolating one and not the other left the WAL pointing at real user data.
         let journal_path = state_path
@@ -63,23 +59,46 @@ impl App {
             .map(|d| d.join(Journal::FILE_NAME))
             .unwrap_or_else(|| crate::utils::safe_data_dir().join(Journal::FILE_NAME));
 
-        let state_registry = if let Some(path) = state_path {
-            tokio::task::spawn_blocking(move || StateRegistry::load_from(&path))
-                .await
-                .map_err(|e| {
-                    Error::Other(format!("Kernel Thread Panic during state load: {}", e))
-                })?
-        } else {
-            tokio::task::spawn_blocking(StateRegistry::load_default)
-                .await
-                .map_err(|e| {
-                    Error::Other(format!("Kernel Thread Panic during state load: {}", e))
-                })?
-        }?;
-        let state = Arc::new(Mutex::new(state_registry));
+        // Overlapped, because none of these four needs any of the others. Startup was a
+        // straight line of independent I/O — the backend registrations, a state-file read, the
+        // snapshot provider probe, the WAL open — run for `linix list` as much as for `linix
+        // sync`. The state load and the WAL open are file reads; the snapshot probe asks the
+        // machine what it can snapshot with; the registry builds ~61 backends. `try_join!`
+        // costs nothing and takes the longest instead of the sum.
+        let load_state = async {
+            match state_path {
+                Some(path) => tokio::task::spawn_blocking(move || StateRegistry::load_from(&path)),
+                None => tokio::task::spawn_blocking(StateRegistry::load_default),
+            }
+            .await
+            .map_err(|e| Error::Other(format!("Kernel Thread Panic during state load: {}", e)))?
+        };
+        let open_journal = {
+            let path = journal_path.clone();
+            async move {
+                tokio::task::spawn_blocking(move || Journal::at(path))
+                    .await
+                    .map_err(|e| {
+                        Error::Other(format!("Kernel Thread Panic opening the WAL: {}", e))
+                    })?
+            }
+        };
+        let build_registry = async {
+            Ok::<_, Error>(
+                create_default_registry(executor.duplicate(), &config, hooks.clone()).await,
+            )
+        };
+        let probe_snapshots =
+            async { Ok::<_, Error>(SnapshotManager::new(executor.duplicate(), &config).await) };
 
-        let snapshot_manager = Arc::new(SnapshotManager::new(executor.duplicate(), &config).await);
-        let journal = Arc::new(Mutex::new(Journal::at(journal_path)?));
+        let (state_registry, journal, registry, snapshot_manager) =
+            tokio::try_join!(load_state, open_journal, build_registry, probe_snapshots)?;
+
+        let registry = Arc::new(registry);
+        let progress = create_progress_reporter(config.show_progress);
+        let state = Arc::new(Mutex::new(state_registry));
+        let snapshot_manager = Arc::new(snapshot_manager);
+        let journal = Arc::new(Mutex::new(journal));
 
         let scheduler = Arc::new(SchedulerManager::new()?);
         let config_arc = Arc::new(config);

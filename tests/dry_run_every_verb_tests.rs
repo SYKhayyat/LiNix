@@ -129,16 +129,9 @@ const CASES: &[Case] = &[
     Case {
         argv: &["heal", "-y"],
         setup: &[(
+            // One JSON value per line — the WAL is a log, not a document.
             "data/journal.jsonl",
-            r#"{"github:linix-probe-zzz:wal": {
-                "id": "github:linix-probe-zzz:wal",
-                "action": {"Remove": {"name": "linix-probe-zzz", "backend": "github"}},
-                "status": "InProgress",
-                "started_at_unix": 1000000,
-                "finished_at_unix": null,
-                "error": null,
-                "staged_properties": {}
-            }}"#,
+            r#"{"id":"github:linix-probe-zzz:wal","action":{"Remove":{"name":"linix-probe-zzz","backend":"github"}},"status":"InProgress","started_at_unix":1000000,"finished_at_unix":null,"error":null}"#,
         )],
         pre: &[],
         nothing_to_do: None,
