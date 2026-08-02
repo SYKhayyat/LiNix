@@ -119,10 +119,12 @@ uninstall a non-existent package.`
 **The dependency reading was the report's own diagnostic hiding the evidence.** Chocolatey
 prints six lines of generic troubleshooting advice after *any* uninstall failure, and one
 paragraph of it happens to discuss dependencies. `detail_for_user` picks lines by the manager's
-declared vocabulary and falls back to the **tail** when a policy declares none — and choco
-declared none. So every choco failure ever reported was those six lines, with the sentence that
-said what actually went wrong inside the `(13 more line(s))`. Reproduced verbatim on this box,
-unelevated, by uninstalling a package that was not installed.
+declared vocabulary and falls back to the **tail** when nothing matches. choco's one marker was
+`the package was not found with the source`, which a *failed uninstall* never prints — so
+nothing matched, the tail won, and the tail is always that footer. Every choco failure ever
+reported was those six lines, with the sentence that said what actually went wrong inside the
+`(13 more line(s))`. Reproduced verbatim on this box, unelevated, by uninstalling a package that
+was not installed.
 
 **The family is exactly two.** `choco` and `winget` are the only policies that forgive a
 non-zero exit, and they were the only two with no way to say "and it still failed". winget
@@ -134,6 +136,45 @@ wording separates them — `No installed package found` against `No package foun
 Both now carry the failure vocabulary their exit codes cannot express. **The canary stays
 `bat`**: a dependency-free package would pass this row without ever exercising the path that
 broke, which is the green board `Q4` forbids.
+
+**The shape is a bound now, not a reading of the table.** "Exactly two" was found by eye, which
+is the same way `absent_markers` came to be missing on 36 backends with nothing counting them.
+`tests/benign_exit_contradiction_tests.rs` derives the set from the registry — every backend
+with a `benign_exits` entry and no `failure_markers` or `failure_line_prefixes` to contradict
+it. Run against the pre-fix policy it printed `0 of 2 … choco winget`, which is where the
+"exactly two" claim now comes from; run against HEAD it is empty. A policy that forgives a code
+it cannot argue with turns it red instead of waiting for a runner to notice.
+
+**And the probe for the transient wording found a worse bug than the one it was for.** Measuring
+what choco says when it cannot reach a feed —
+`choco install -y bat --source="https://127.0.0.1:9/api/v2/"`, a port nothing is listening on —
+returned `bat not installed. The package was not found with the source(s) listed.` That is
+choco's `absent_markers` entry word for word, and **an absent marker withdraws the declaration
+from the user's config files.** A dropped VPN, a proxy, a feed having a bad morning: the line
+for a package that exists is deleted, and the two runs differ only by three connection lines
+that nothing was reading. Both captures are fixtures now
+(`install-source-unreachable.txt`, `install-absent-name.txt`) and they end with the same
+sentence.
+
+apt is the same bug and far more common — a `sources.list` it could not fetch answers `Unable to
+locate package` for everything on the machine. `luarocks` is the one backend where this was
+*known*: it is excluded from absent classification entirely, with the reason written down, and
+nobody asked whether the other twelve had it too.
+
+So `transient_markers` now outranks `absent_markers` — in `retryability` and in
+`names_an_absent_package` alike — and choco carries measured connection vocabulary for the first
+time. `permanent_markers` still outranks both. Nothing here is a new permission: `target-state`
+already said *"Kept: everything else. A dropped network, a held lock, a failed hook — you did
+mean it."* The code could not obey it, because absence was consulted first and the network
+vocabulary was never reached. The old test that pinned the wrong order, `permanent_wins_over_transient`,
+was asserting it with apt's *absent* marker rather than a permanent one — so the rule it read as
+"permanent beats transient" was really "absent beats transient", and the two halves have separate
+tests now.
+
+**Still unmeasured, and stated rather than assumed:** whether `winget` has the same shape. Its
+absent marker is `No package found matching input criteria`, and nobody has measured what winget
+prints when its source is unreachable — the probe is a REST source pointed at a dead port, which
+needs the elevation `winget source add` requires.
 
 [cps]: https://github.com/chocolatey/choco/blob/develop/src/chocolatey/infrastructure.app/services/ChocolateyPackageService.cs
 

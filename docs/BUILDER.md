@@ -1527,11 +1527,15 @@ on 2026-08-01. **The three lines were one defect and it was LiNix's.** Full acco
   already**, so a dependency asking for a reboot leaves `3010` over an install of nothing —
   and `3010` was on LiNix's `benign_exits`. LiNix reported success. The rest followed.
 - The "refused over dependencies" reading was choco's *generic* troubleshooting footer, printed
-  after any uninstall failure. `detail_for_user` falls back to the tail when a policy declares
-  no vocabulary, and choco declared none — so every choco failure ever reported was that footer,
-  with the real reason inside the `(13 more line(s))`.
+  after any uninstall failure. `detail_for_user` falls back to the tail when **nothing matches**,
+  and choco's one marker was an *install*-time phrasing a failed uninstall never prints — so
+  every choco failure ever reported was that footer, with the real reason inside the
+  `(13 more line(s))`.
 - **The family is two.** `choco` and `winget` were the only policies that forgive a non-zero
   exit and the only two with no way to contradict it. `winget install <typo>` reported success.
+  That pair is no longer read off the table by hand: `tests/benign_exit_contradiction_tests.rs`
+  derives it from the registry, printed the two names when run against the old policy, and goes
+  red on the next policy that forgives a code it cannot argue with.
 
 **The method is the transferable part.** "Cannot reproduce, this shell is not elevated" was a
 statement about a shell. The account was an Administrator with a filtered token; one
@@ -1544,9 +1548,23 @@ blind to everything it installs) and winget's own identifiers. **The pattern is 
 every exemption removed so far has paid for itself in defects within minutes, which is the
 argument for removing the rest.
 
-**Still open:** why the eleven-package install failed *on the runner specifically* — this box
-installs all eleven clean. LiNix will now print choco's own reason instead of swallowing it, so
-the next `Integration (Windows native)` run answers it rather than needing another round.
+**The probe found a worse bug than the one it was for.** Measuring what choco says to an
+unreachable feed returned `The package was not found with the source(s) listed` — choco's
+*absent* marker, word for word — and an absent marker **deletes the declaration from the user's
+config files**. A dropped VPN silently removed lines for packages that exist. apt is the same
+bug and more common (`Unable to locate package` when it could not fetch the lists); `luarocks`
+is the one backend where it was known and written down, and nobody asked whether the others had
+it. `transient_markers` now outranks `absent_markers`. The lesson is the one this round keeps
+teaching: **the measurement you run for one question answers a question you did not ask** — and
+the reason it was reachable at all is that a marker was believed without asking whether the
+manager was in a position to say it.
+
+**Still open:**
+- Why the eleven-package install failed *on the runner specifically* — this box installs all
+  eleven clean. LiNix will now print choco's own reason instead of swallowing it, so the next
+  `Integration (Windows native)` run answers it rather than needing another round.
+- Whether `winget` has the absent-on-network-failure shape too. Unmeasured, not assumed: the
+  probe is a REST source pointed at a dead port, and `winget source add` needs elevation.
 
 ## What a future round should attack, in this order
 
