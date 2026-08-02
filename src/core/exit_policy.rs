@@ -11,7 +11,8 @@ use crate::core::error::Retryability;
 ///
 /// Marker strings are matched case-insensitively against the command's stdout and stderr
 /// together. `permanent` is consulted before `transient`, so a manager that prints both
-/// fails fast rather than looping.
+/// fails fast rather than looping — and `transient` before `absent`, because "not found" is a
+/// claim about an index the manager has just said it could not read.
 #[derive(Debug, Clone, Default)]
 pub struct ExitPolicy {
     /// Non-zero codes this manager uses for outcomes that are not failures.
@@ -122,6 +123,14 @@ impl ExitPolicy {
             return false;
         }
         let hay = Self::haystack(stdout, stderr);
+        // A manager that could not reach its index has not looked the name up, and every one
+        // of them words that the same way as a name that truly is not there: choco says `The
+        // package was not found with the source(s) listed` to an unreachable feed, apt says
+        // `Unable to locate package` when it could not fetch the lists. Withdrawing on that
+        // deletes a declaration whose package exists, on nothing worse than a dropped VPN.
+        if self.transient_markers.iter().any(|m| hay.contains(m)) {
+            return false;
+        }
         self.absent_markers.iter().any(|m| hay.contains(m))
     }
 
@@ -134,16 +143,20 @@ impl ExitPolicy {
             return Retryability::Unknown;
         }
         let hay = Self::haystack(stdout, stderr);
+        if self.permanent_markers.iter().any(|m| hay.contains(m)) {
+            return Retryability::Permanent;
+        }
+        // Above the absent check, and only above that one: an absent verdict is a claim about
+        // the index, so a manager that says in the same breath that it could not read the
+        // index has not earned it. `permanent` still outranks both — a request that is wrong
+        // stays wrong however the network behaved.
+        if self.transient_markers.iter().any(|m| hay.contains(m)) {
+            return Retryability::Transient;
+        }
         // A name that is not there now will not be there on the next attempt, so an absent
         // marker settles retryability too and does not need repeating in `permanent_markers`.
         if self.absent_markers.iter().any(|m| hay.contains(m)) {
             return Retryability::Permanent;
-        }
-        if self.permanent_markers.iter().any(|m| hay.contains(m)) {
-            return Retryability::Permanent;
-        }
-        if self.transient_markers.iter().any(|m| hay.contains(m)) {
-            return Retryability::Transient;
         }
         Retryability::Unknown
     }
@@ -256,6 +269,14 @@ pub fn choco() -> ExitPolicy {
             // Not an absent marker: the name exists on the source, it is simply not installed
             // here, and an absent name takes the declaration out of the user's files.
             "cannot uninstall a non-existent package",
+        ],
+        // Measured 2026-08-02 against a port nothing is listening on. Without these, the
+        // absent marker below fires on an unreachable feed — choco words a source it could not
+        // reach exactly as it words a name that does not exist.
+        transient_markers: vec![
+            "unable to load the service index for source",
+            "unable to connect to source",
+            "no connection could be made",
         ],
         absent_markers: vec!["the package was not found with the source"],
         ..ExitPolicy::default()
@@ -641,9 +662,23 @@ mod tests {
     /// A manager that prints both must not loop on the half that cannot succeed.
     #[test]
     fn permanent_wins_over_transient() {
+        // A genuinely *permanent* marker, which is what this test is named for. It used to
+        // assert the same thing with apt's `Unable to locate package` — an ABSENT marker — and
+        // so quietly also pinned absent-over-transient, which is the pairing that made a
+        // dropped connection delete declarations. That half now has its own test below.
+        let p = cargo();
+        let both = b"spurious network error\nerror: there are no binaries" as &[u8];
+        assert_eq!(p.retryability(b"", both), Retryability::Permanent);
+    }
+
+    /// The pairing the test above used to hide: an unreachable index outranks the "not found"
+    /// the manager prints *because* it was unreachable.
+    #[test]
+    fn transient_wins_over_absent() {
         let p = apt();
         let both = b"E: Could not get lock; E: Unable to locate package nope" as &[u8];
-        assert_eq!(p.retryability(b"", both), Retryability::Permanent);
+        assert_eq!(p.retryability(b"", both), Retryability::Transient);
+        assert!(!p.names_an_absent_package(b"", both));
     }
 
     /// Captured from nimble v0.22.2 on this machine. Every one of these exits **0**.
@@ -767,5 +802,93 @@ mod tests {
         let p = nimble();
         assert!(!p.signals_failure(b"jsony - a library with no error: handling at all", b""));
         assert!(p.signals_failure(b"building...\n    Error:  Package not found\n", b""));
+    }
+
+    const CHOCO_SOURCE_UNREACHABLE: &str =
+        include_str!("../../tests/fixtures/choco/install-source-unreachable.txt");
+    const CHOCO_ABSENT_NAME: &str =
+        include_str!("../../tests/fixtures/choco/install-absent-name.txt");
+
+    /// A manager that could not reach its index has not looked the name up.
+    ///
+    /// Both fixtures are real `choco install` runs measured on 2026-08-02, and they end with
+    /// the same sentence — `The package was not found with the source(s) listed.` One of them
+    /// was pointed at a port nothing is listening on. Only the connection lines above it say
+    /// which is which, so believing the sentence on its own deletes a declaration whose
+    /// package exists, on nothing worse than a dropped VPN.
+    #[test]
+    fn an_unreachable_source_is_not_a_missing_package() {
+        let p = choco();
+        assert!(
+            !p.names_an_absent_package(CHOCO_SOURCE_UNREACHABLE.as_bytes(), b""),
+            "an unreachable feed read as `no such package`, which withdraws the line from the \
+             user's config files"
+        );
+        assert_eq!(
+            p.retryability(CHOCO_SOURCE_UNREACHABLE.as_bytes(), b""),
+            Retryability::Transient,
+            "an unreachable feed is worth another attempt"
+        );
+        // The failure itself is still a failure — this must not become a silent success.
+        assert!(p.signals_failure(CHOCO_SOURCE_UNREACHABLE.as_bytes(), b""));
+    }
+
+    /// The other half: the fix must not cost the typo its withdrawal.
+    #[test]
+    fn a_name_the_source_does_not_carry_is_still_absent() {
+        let p = choco();
+        assert!(
+            p.names_an_absent_package(CHOCO_ABSENT_NAME.as_bytes(), b""),
+            "a name the feed answered about is absent, and the line should come back out"
+        );
+        assert_eq!(
+            p.retryability(CHOCO_ABSENT_NAME.as_bytes(), b""),
+            Retryability::Permanent
+        );
+    }
+
+    /// The rule is the engine's, not chocolatey's, so it is asserted on every policy that can
+    /// reach the state — an absent phrasing printed while the index was unreachable.
+    ///
+    /// apt is the one that bites in the field: a sources.list it could not fetch makes
+    /// `Unable to locate package` the answer for packages that plainly exist.
+    ///
+    /// Each string here is that policy's *own* two markers put in one output. They assert the
+    /// precedence rule, not that any manager phrases a run exactly this way — the wording of
+    /// each half was measured when the marker was added, and choco's pair is a captured run
+    /// (`install-source-unreachable.txt`) rather than a composition.
+    #[test]
+    fn no_manager_calls_a_name_absent_while_it_is_also_reporting_a_transient_failure() {
+        let cases = [
+            (apt(), "E: Failed to fetch http://deb.debian.org/\nE: Unable to locate package jq"),
+            (dnf(), "Cannot download repomd.xml\nNo match for argument: jq"),
+            (pacman(), "error: failed retrieving file\nerror: target not found: jq"),
+            (apk(), "ERROR: temporary error (try again later)\nERROR: unable to select packages:"),
+            (brew(), "curl: (28) Operation timed out\nNo available formula with the name \"jq\""),
+            (cargo(), "spurious network error\ncould not find `jq` in registry"),
+            (pixi(), "failed to fetch\nNo candidates were found for jq"),
+        ];
+        for (policy, output) in cases {
+            assert!(
+                !policy.names_an_absent_package(output.as_bytes(), b""),
+                "a name was called absent although the same output says the fetch failed: {output:?}"
+            );
+            assert_eq!(
+                policy.retryability(output.as_bytes(), b""),
+                Retryability::Transient,
+                "{output:?}"
+            );
+        }
+    }
+
+    /// The documented precedence that must survive the change above: a manager printing both a
+    /// permanent and a transient marker fails fast rather than looping.
+    #[test]
+    fn a_permanent_marker_still_outranks_a_transient_one() {
+        let p = cargo();
+        assert_eq!(
+            p.retryability(b"spurious network error\nerror: there are no binaries", b""),
+            Retryability::Permanent
+        );
     }
 }

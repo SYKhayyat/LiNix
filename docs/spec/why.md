@@ -1465,6 +1465,30 @@ nothing has to be recovered from prose; `pixi` wraps its output through the midd
 name, which is what a prose-parsing reader looks like when it finally meets a manager that
 formats.
 
+**And then absence turned out to be a claim about an index (2026-08-02).** Separating the two
+questions was right and still left one road open, because it never asked whether the manager was
+in a position to answer. Measured: `choco install -y bat --source=https://127.0.0.1:9/api/v2/`
+— a port nothing is listening on — prints `bat not installed. The package was not found with the
+source(s) listed.` That is choco's `absent_markers` entry, word for word, and the only thing
+separating it from a genuine typo is three connection lines above it. **A dropped VPN therefore
+deleted declarations for packages that exist.** apt is worse and more common: a `sources.list` it
+could not fetch makes `Unable to locate package` the answer for every package on the machine.
+
+This was never a permitted behaviour — `target-state` already said *"Kept: everything else. A
+dropped network, a held lock, a failed hook — you did mean it, and retrying is right."* The code
+simply could not obey it, because absence was consulted before transience and no amount of
+network vocabulary would have been reached. So `transient_markers` now outranks
+`absent_markers`, in `retryability` and in `names_an_absent_package` alike, and a manager that
+says in the same breath that it could not read the index does not get to say what is in it.
+`permanent_markers` still outranks both: a request that is wrong stays wrong however the network
+behaved.
+
+The shape of the miss is the familiar one. The pair `choco`/`winget` was found by reading the
+policy table by hand, exactly as the 36 policyless backends were, so the property is derived and
+ratcheted now rather than re-read: `tests/benign_exit_contradiction_tests.rs` fails on any policy
+that forgives an exit code it has no vocabulary to contradict, which is the defect underneath CI
+30684191791.
+
 **The message keeps exactly one job.** Not "does the name exist" — a property answers that — but
 "which of the lines this command just wrote was the manager talking about", which no property
 can answer for a batch. A wrong answer there keeps a declaration that could have been withdrawn,

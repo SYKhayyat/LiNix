@@ -1121,6 +1121,16 @@ line behind — and every later command parses the model, so one impossible line
   behind `npm:` and did not behind `scoop:`. `ExitPolicy` therefore answers two questions
   separately: `permanent_markers` for *would another attempt differ?* and `absent_markers` for
   *does the name exist?* Matching an absent marker implies permanence; the reverse never holds.
+- **A transient marker outranks an absent one** (2026-08-02). Managers word "I could not reach
+  the index" and "the index does not have it" identically — choco answers an unreachable feed
+  with `The package was not found with the source(s) listed`, apt answers un-fetched lists with
+  `Unable to locate package` — so an absent verdict is only worth reading when the same output
+  does not also report a transient failure. Applies to `retryability` and to the withdrawal
+  question alike. `permanent_markers` still outranks both.
+- **A policy that forgives a non-zero exit must be able to contradict it.** `benign_exits`
+  without `failure_markers` or `failure_line_prefixes` reports every run ending on a forgiven
+  code as a success, including the ones that did nothing. Derived from the registry and
+  ratcheted, because the pair that had it was found by reading the table by hand.
 - **Never off `Error::retryability()`**, which also calls a refusal, a cancelled prompt and a
   bad config file `Permanent`. Deleting a declaration because someone answered "no" to a prompt
   is worse than the wedge.

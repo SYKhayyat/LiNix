@@ -58,6 +58,12 @@ const CANNOT_REPORT_A_MISSING_NAME: &[&str] = &[
     // Deliberate, and documented at `exit_policy::luarocks`: luarocks reports an unreachable
     // index as "no results for Lua 5.5", so believing it would withdraw declarations for rocks
     // that exist. This entry is a decision, not a gap.
+    //
+    // Worth re-opening, but not on a guess: since 2026-08-02 a transient marker outranks an
+    // absent one, and luarocks already declares `failed searching manifest`. If an unreachable
+    // index prints that line *alongside* the "no results" one, the reason for this entry is
+    // gone. Nobody has measured it — the rock to run is `luarocks install <name>` against a
+    // dead `--server`, the same probe that settled choco.
     "luarocks",
     "lvm",
     "mise",
