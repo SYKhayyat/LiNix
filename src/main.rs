@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
     if matches!(cli.command, Commands::Watch { .. }) {
         config.unattended = true;
     }
-    linix::backends::node_registry::set_http_timeout(config.network_timeout_secs);
+    apply_process_wide_config(&config);
 
     // 4. A reconcile fired by a manager that LiNix itself is driving has nothing to add —
     //    the run that spawned it is already recording what it installed, and it holds the
@@ -770,11 +770,20 @@ pub(crate) fn plan_user_verb(
 /// Run a user verb: build the config and app once from the shared leading flags, then dispatch
 /// each step against them in order, stopping at the first failure. One data lock covers the
 /// whole verb — the verb name is unknown to `acquire_data_lock`, so it locks as a writer, the
+/// Seed the settings that live in process-wide cells rather than in `App`.
+///
+/// One function because there are two entry points that load a config, and a setting wired
+/// into one of them is a setting that does nothing under `run_user_verb`.
+fn apply_process_wide_config(config: &linix::config::Config) {
+    linix::backends::node_registry::set_http_timeout(config.network_timeout_secs);
+    linix::core::executor::set_command_idle_timeout(config.command_idle_timeout_secs);
+}
+
 /// safe default for a sequence that may install or remove.
 pub(crate) async fn run_user_verb(steps: Vec<Vec<String>>) -> Result<()> {
     let first = Cli::parse_from(&steps[0]);
     let config = load_and_merge_config(&first).await?;
-    linix::backends::node_registry::set_http_timeout(config.network_timeout_secs);
+    apply_process_wide_config(&config);
     let _data_lock = acquire_data_lock()?;
     let app = App::new(config).await?;
     for step in &steps {

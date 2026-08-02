@@ -1563,8 +1563,46 @@ manager was in a position to say it.
 - Why the eleven-package install failed *on the runner specifically* — this box installs all
   eleven clean. LiNix will now print choco's own reason instead of swallowing it, so the next
   `Integration (Windows native)` run answers it rather than needing another round.
-- Whether `winget` has the absent-on-network-failure shape too. Unmeasured, not assumed: the
-  probe is a REST source pointed at a dead port, and `winget source add` needs elevation.
+- Whether `winget` has the absent-on-network-failure shape too. Unmeasured, not assumed. **The
+  first probe design was wrong and the run said so:** `winget source add` validates the source
+  at add time and refused a REST source on a dead port (`Failed to open the added source`, exit
+  -1978335163), so it measured a missing source *name*, not a network failure. The design that
+  reaches the right state is `--proxy http://127.0.0.1:9` behind `winget settings --enable
+  ProxyCommandLineOptions`, against an id that really exists. Still unrun.
+
+## The lifecycle run that was meant to close that found two bigger things (2026-08-02)
+
+**LiNix bounded no child process at all, and it cost 76 minutes.** `linix -y uninstall
+choco:bat` wedged on the pre-sync `Checkpoint-Computer`; Windows event 8194 records the restore
+point **created 18 seconds in**, and the process then emitted nothing on either pipe for 76
+minutes without exiting. The only timeout in the tree wraps the transaction DAG, and
+`auto_snapshot` is called from five places, every one before the DAG starts. The spawn already
+sets `kill_on_drop(true)` with a comment naming *"the global timeout"* — the cancel machinery
+was built, and nothing outside the DAG ever fired it. **Third occurrence:** the 2026-07-22
+section records two more, both killed by hand, both written up as undiagnosed, and what got
+fixed then was the *harness*, not the product.
+
+Fixed: a bound on **silence, not duration** (`command_idle_timeout_secs`, default 900, `0`
+disables), plus ten spawns outside the executor that captured both streams while leaving stdin
+inherited — `git` among them. Registered **Q24, BUILT NEVER RULED**: the bound is settled by
+II.12, the number is a judgement nobody has measured.
+
+**Measured and cleared, so nobody re-runs it:** the tidy theory was that `Checkpoint-Computer`'s
+poll loop is the defect and `Invoke-CimMethod CreateRestorePoint` would return where it does
+not. Elevated, each probe bounded by a job timeout: **50.8s vs 53.3s**, both returning, throttle
+off so both did real work. There is no API swap to make; the wedge is intermittent and has no
+known cause. A Windows restore point costs **~51s**, taken before every mutating sync.
+
+**And the thing to attack next: `plan` takes 439.6s and it is an algorithm, not a missing
+`buffer_unordered`.** `GenericQueryable::info` answers "is this one package installed?" by
+running a full `list_installed()` and doing a linear find; the planner calls it once per
+declared package, so 302 declarations run ~302 full machine listings. `installed_sets()` twenty
+lines above it already does the right thing for the removal side — one listing per backend, then
+set membership. Two mechanisms for one question. Separately and **unexplained**: sampled
+concurrency during a live plan is **1**, against `buffer_unordered(20)`. See `spec/history.md`
+for the hypothesis and the one-number experiment that settles it. **Not fixed** — it touches the
+change-detection core, which D13's ruling already flagged as risky ground, and the obvious
+fix (cache `list_installed` per run) has a real staleness trap after an install during `sync`.
 
 ## What a future round should attack, in this order
 

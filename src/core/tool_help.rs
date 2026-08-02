@@ -43,6 +43,7 @@ fn help_text(program: &str, chain: &[String]) -> Option<String> {
     let (prog, argv) = crate::core::executor::effective_command(program, &args);
     let answer = std::process::Command::new(prog)
         .args(&argv)
+        .stdin(std::process::Stdio::null())
         .output()
         .ok()
         .map(|o| {

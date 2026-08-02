@@ -2,6 +2,30 @@
 
 All notable changes to LiNix are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- **A command that stops talking no longer stops LiNix forever.** An uninstall sat 76 minutes on
+  a Windows restore point that had already been written; nothing in LiNix bounded a child
+  process, because the only timeout in the tree covers the transaction DAG and snapshots, state
+  reads, the guard and `plan` all run outside it. Two earlier hangs had been killed by hand and
+  never diagnosed. A child that produces nothing on either stream and does not exit is now
+  killed, and the error names the argv.
+- **Ten spawns outside the executor were leaving stdin inherited while capturing both output
+  streams** — `git` on every invocation, the `--version` and `--help` probes, `generate:`
+  scripts, vars providers, the `sh()` builtin, download commands, the Windows sandbox probe. A
+  child that prompted there asked into a pipe nobody displays and then waited on a terminal it
+  was never handed. All ten close stdin now; the deliberately interactive ones (`linix run`, the
+  shell, `$EDITOR`, the history TUI, the bisect oracle) are unchanged.
+
+### Added
+
+- **`command_idle_timeout_secs`** (default `900`, `0` disables). Bounds **silence, not
+  duration** — a build that prints for an hour is never touched, a manager that has stopped
+  talking and stopped exiting is. Raise it if you drive something legitimately silent for
+  longer.
+
 ## [0.7.0] — 2026-07-31 — v7, the declarative rewrite
 
 > **The version is `0.7.0` and the design is "v7"**, which are two different numbers and were

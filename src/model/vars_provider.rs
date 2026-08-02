@@ -131,6 +131,7 @@ pub fn run_external_with_origins(path: &Path, facts: &HostFacts) -> Result<(Vars
 
     let mut cmd = std::process::Command::new(&argv[0]);
     cmd.args(&argv[1..])
+        .stdin(std::process::Stdio::null())
         .env("LINIX_OS", &facts.os)
         .env("LINIX_ARCH", &facts.arch)
         .env("LINIX_HOST", &facts.host)

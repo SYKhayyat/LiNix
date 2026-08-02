@@ -215,6 +215,9 @@ fn shell_command(cmd: &str) -> std::process::Command {
         std::process::Command::new("sh")
     };
     c.arg(if cfg!(windows) { "/c" } else { "-c" }).arg(cmd);
+    // Both callers capture the output, so a command that stops to ask something would block on
+    // a prompt the user never sees.
+    c.stdin(std::process::Stdio::null());
     c
 }
 

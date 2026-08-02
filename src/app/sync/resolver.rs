@@ -473,6 +473,7 @@ impl<'a> StateResolver<'a> {
 
             let output = tokio::process::Command::new(&path)
                 .current_dir(self.config.config_root())
+                .stdin(std::process::Stdio::null())
                 .output()
                 .await
                 .map_err(|e| {

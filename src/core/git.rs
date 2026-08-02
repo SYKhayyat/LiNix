@@ -99,6 +99,7 @@ impl GitManager {
     pub fn git_available() -> bool {
         std::process::Command::new("git")
             .arg("--version")
+            .stdin(std::process::Stdio::null())
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -135,6 +136,10 @@ impl GitManager {
         let mut cmd = std::process::Command::new("git");
         cmd.arg("-C").arg(&self.root);
         cmd.args(args);
+        // git prompts — for a credential, for a passphrase — and this captures both its
+        // streams, so the question would be asked where nobody can read it. Closed stdin turns
+        // that into git's own error instead of a wait with no end and nothing on screen.
+        cmd.stdin(std::process::Stdio::null());
         cmd.output()
             .map_err(|e| Error::command_failed(format!("git {:?} failed to spawn: {}", args, e)))
     }

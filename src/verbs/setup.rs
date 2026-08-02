@@ -272,6 +272,11 @@ pub(crate) const CONFIG_TEMPLATE: &str = r#"# LiNix refusals and behaviour (pref
 # Timeout (seconds) for outbound HTTP search requests (npm/PyPI/marketplace).
 network_timeout_secs = 15
 
+# How long a command may print NOTHING before LiNix kills it and says which one.
+# Not a cap on how long a command may run: a build that prints for an hour is untouched.
+# Raise it if you drive something legitimately silent for longer; 0 removes the bound.
+command_idle_timeout_secs = 900
+
 # How long to wait out a remote rate limit (GitHub) before giving up and naming it.
 # The wait happens while the data directory is locked, so a long one looks like a hang.
 # Raise it for an unattended CI job that would rather wait than fail.

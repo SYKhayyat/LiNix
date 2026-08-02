@@ -562,6 +562,7 @@ const BUILTIN_SNAPSHOT_DEFS: &str = include_str!("snapshot_builtins.toml");
 fn detect_zfs_root() -> String {
     StdCommand::new("zfs")
         .args(["list", "-H", "-o", "name", "-r", "/"])
+        .stdin(std::process::Stdio::null())
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())

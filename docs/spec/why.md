@@ -1489,6 +1489,53 @@ ratcheted now rather than re-read: `tests/benign_exit_contradiction_tests.rs` fa
 that forgives an exit code it has no vocabulary to contradict, which is the defect underneath CI
 30684191791.
 
+**And nothing was watching the clock at all (2026-08-02).** `linix -y uninstall choco:bat` ran
+76 minutes and removed nothing. The child was `Checkpoint-Computer`, the pre-sync restore point,
+and the Windows event log settles what it was doing: **8194, "Successfully created restore point
+(Description = LiNix: pre_sync)", eighteen seconds after the process started.** It did the work
+and then never returned — parked on its own progress bar at 99%, four threads blocked in a COM
+call and two in a sleep loop, not one byte on either pipe for the remaining 76 minutes. The
+identical call had returned in seconds eleven minutes earlier in the same run, so it is a race,
+not a configuration.
+
+The root is one line that isn't there. Every command LiNix runs funnels through
+`RawExecutor::execute`, and it awaited the child with no bound of any kind. The only timeout in
+the tree wraps `execute_internal()` — the transaction DAG — so it covers task commands and
+nothing else: not the snapshot, not the state reads, not the guard, not `plan`. And the omission
+is provably an omission rather than a decision, because the spawn already sets
+`kill_on_drop(true)` with a comment naming *"a worker whose task is aborted — a failed node, the
+global timeout"*. The machinery to cancel was built and correct. Outside the DAG nothing ever
+pulled the trigger.
+
+**Not the first time, and the first two were never diagnosed.** `history.md` records
+`uninstall gem:colorize` at eight minutes and `install github:sharkdp/fd` at fifteen, both on
+Windows, both killed by hand, both written up as *"the shape: on Windows a sync-path command can
+stop returning"*. What got fixed then was the **harness** — the sweep learned to wrap its calls
+in a timeout. The product kept the bug, which is why the third one cost 76 minutes instead of
+being a named failure. The note also reaches for `network_timeout_secs`, an HTTP timeout, to
+explain a wedged subprocess; that reflex is itself the evidence that no command-level bound
+existed to reach for.
+
+**The bound is on silence, not duration, and that is the whole design.** A `cargo install`
+compiling from source and an `apt dist-upgrade` both run for tens of minutes and are working
+throughout. No wall-clock cap separates them from a wedged one — there is no number above the
+first and below the second — and a cap that killed real builds would be a worse bug with a nicer
+name. What does separate them is that working commands *talk*. So the bound is on a child that
+has produced nothing on either stream and has not exited. The honest cost: a legitimately silent
+command (`Checkpoint-Computer` is exactly that) is only bounded by a number above its real
+duration, so the default is 900s — a hang ends in fifteen minutes with a sentence naming the
+argv, rather than never. `latency.rs` cannot help here and it is worth saying why: it reports
+**after** a command returns, so the one failure it can never see is the one where nothing
+returns.
+
+**The sibling was a second way to wait forever.** Auditing the tree for the family turned up
+eleven spawns outside the executor, and ten of them captured both output streams while leaving
+stdin **inherited** — `git` (every invocation), `--version` and `--help` probes, `generate:`
+scripts, vars providers, the `sh()` builtin, download commands. A child that prompts there asks
+into a pipe nobody displays and then blocks on a terminal it was never handed: invisible, and
+permanent. The executor has closed stdin on reads since it was written, with a comment saying
+why; the bypasses simply predate it. That rule now binds every spawn in the tree.
+
 **The message keeps exactly one job.** Not "does the name exist" — a property answers that — but
 "which of the lines this command just wrote was the manager talking about", which no property
 can answer for a batch. A wrong answer there keeps a declaration that could have been withdrawn,

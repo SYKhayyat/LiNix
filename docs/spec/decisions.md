@@ -1,5 +1,5 @@
-# The decision register — all 132, and none of them open
-**One file, six features, nothing waiting on a ruling.** Every decision this design forces lives here, with its
+# The decision register — all 133, and none of them open
+**One file, six features, one entry waiting to be confirmed or reversed.** Every decision this design forces lives here, with its
 status. The registers used to sit at the tail of six proposal parts and **none of them recorded
 whether they had been answered**, so the same question could be argued twice and a question
 already settled in code could be re-opened by anyone reading the register instead of the tree.
@@ -16,7 +16,7 @@ not in this paragraph.
 |---|---|---|---|
 | **OPEN — blocking** | Unanswered, and the feature cannot be built without it. | A ruling. | **0** |
 | **OPEN** | Unanswered, and something can still be built around it. | A ruling, eventually. | **0** |
-| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **0** |
+| **BUILT, NEVER RULED** | Nobody ruled — but code shipped that implements the recommendation. | Confirm or reverse. Reversing costs a change now and more later. | **1** |
 | **ANSWERED** | The owner ruled, or another decision closed it. | Nothing. Kept because later work cites it. | **130** |
 | **PARKED** | Deliberately not asked yet, and its `Status:` line says **`waits on <what>`**. | Nothing *until that arrives*. | **2** |
 
@@ -73,7 +73,7 @@ status loses that, so it is kept here:
 
 ## Index
 
-**None is open.** All 132 are accounted for: **130 ANSWERED, 2 PARKED, 0 OPEN** — and this line
+**None is open.** All 133 are accounted for: **130 ANSWERED, 2 PARKED, 1 BUILT NEVER RULED, 0 OPEN** — and this line
 is no longer typed by hand. `scripts/decision-count.sh --check` counts the entries and fails if
 any number written in this file or in `SPEC.md` disagrees with the count; it runs in CI on every
 push. Three figures inside this one file used to contradict each other and a fourth in `SPEC.md`
@@ -268,6 +268,7 @@ and that collision is exactly what this namespace exists to avoid.*
 | **Q21** | Is converging-on-change a property of *every* option, or of the five that happen to have it — RULED 2026-07-31: every option, proved per option. | 2026-07-31 |
 | **Q22** | A config file saved by a Windows editor starts with a byte-order mark, which became part of the first name — refuse it, or read the file? — RULED 2026-07-31: **read it.** The mark is stripped where text enters a parser. | 2026-07-31 |
 | **Q23** | A package name that begins with `@` — every scoped npm package — was read as an option list and could not be written at all. — RULED 2026-07-31: **the leading `@` is part of the name.** | 2026-07-31 |
+| **Q24** | An uninstall sat 76 minutes on a child that had finished its work and never returned; nothing outside the DAG bounded a command at all. BUILT 2026-08-02: a bound on **silence**, `command_idle_timeout_secs = 900`. The number is unruled. | — |
 
 *Q7–Q13 were absent from this table while their entries below said ANSWERED — the index drift
 this file exists to prevent, found on 2026-07-30 by adding a row to it.*
@@ -4333,3 +4334,40 @@ can have them quote it."* Quoting was rejected once as **V.10** — a quote need
 needs a backslash rule, which needs a newline rule — so it stays a decision to be re-argued
 rather than a convenience to be assumed. Nothing today is ambiguous enough to need it: the rule
 is positional, and there is exactly one special position.
+
+## Q24
+
+**Status: BUILT, NEVER RULED — built 2026-08-02.** The owner said *"find the linix bug (not just
+symptom but root) and fix"*, which rules that a bound must exist. It does not rule the number, and
+the number is the whole cost of being wrong in either direction.
+
+**Q24 — How long may a command say nothing before LiNix stops waiting for it?**
+
+`linix -y uninstall choco:bat` ran 76 minutes and removed nothing. The child was
+`Checkpoint-Computer`; Windows event 8194 records the restore point created **18 seconds in**, and
+the process then emitted nothing at all for the remaining 76 minutes without exiting. Nothing in
+LiNix bounded it: the only timeout in the tree wraps the transaction DAG, and snapshots, state
+reads, guards and `plan` all run outside it. Two earlier hangs (`gem:colorize` at eight minutes,
+`github:sharkdp/fd` at fifteen) were killed by hand and recorded as undiagnosed; the fix then went
+into the *harness*, not the product.
+
+**The shape is settled and is not what needs a ruling.** The bound is on **silence, not
+duration** — a working `cargo install` prints for an hour and must never be touched, and no
+wall-clock cap can be set above that and below a hang. Rule in II.12, reason in **V.114**.
+
+**What is built, pending confirmation:**
+
+- `command_idle_timeout_secs`, default **900**, `0` removes the bound.
+- 900 because the adversarial case is a command that is legitimately silent for its whole run —
+  `Checkpoint-Computer` is exactly that — so the number has to clear a real one. It is a
+  judgement, not a measurement: **nobody has measured the longest legitimate silence in LiNix's
+  own workload.** The observed hang was 76 minutes and the observed real snapshot was 18 seconds,
+  which brackets it loosely and no better than that.
+- Killing is `Retryability::Permanent`. Retrying spends another full bound per attempt on a
+  command that has already proved it does not finish, and three silences teach the user nothing
+  the first did not.
+
+**What could reverse it:** a lower default (a hang costs less, a slow silent command breaks), or
+per-class bounds keyed to `latency.rs`'s `Class` (a read bounded in seconds, a mutation in the
+quarter hour) — which is better and is not built, because the classes describe LiNix's own verbs
+and the bound is per *child process*.

@@ -160,6 +160,8 @@ async fn run_in_dir(prog: &str, args: &[&str], dir: &Path) -> bool {
     Command::new(prog)
         .args(args)
         .current_dir(dir)
+        // curl and wget both ask for credentials on a 401, into output this captures.
+        .stdin(std::process::Stdio::null())
         .output()
         .await
         .map(|o| o.status.success())

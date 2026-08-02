@@ -173,8 +173,137 @@ tests now.
 
 **Still unmeasured, and stated rather than assumed:** whether `winget` has the same shape. Its
 absent marker is `No package found matching input criteria`, and nobody has measured what winget
-prints when its source is unreachable — the probe is a REST source pointed at a dead port, which
-needs the elevation `winget source add` requires.
+prints when its source is unreachable. The first probe design was wrong and said so: **`winget
+source add` validates the source at add time** and refused a REST source on a dead port
+(`Failed to open the added source`, exit -1978335163), so it measured a missing source *name*,
+not a network failure. The design that reaches the right state is `--proxy http://127.0.0.1:9`
+behind `winget settings --enable ProxyCommandLineOptions`, against an id that really exists —
+still unrun.
+
+**And then the lifecycle run that was meant to close this hung, and the hang was the better
+bug.** `linix -y uninstall choco:bat` ran 76 minutes and removed nothing. Diagnosed rather than
+killed this time: the child was `Checkpoint-Computer`, the pre-sync restore point, and Windows
+event **8194 records it succeeding eighteen seconds in** — *"Successfully created restore point
+(Description = LiNix: pre_sync)"*. It then produced no byte on either pipe for the remaining 76
+minutes without exiting, four threads blocked in a COM call and two in a sleep loop, parked on
+its own progress bar at 99%. The same call had returned in seconds eleven minutes earlier in the
+same run, so it is a race and not a configuration.
+
+**The root was that nothing bounded a child at all.** Every command funnels through
+`RawExecutor::execute`, which awaited the child with no wall clock. The only timeout in the tree
+wraps `execute_internal()` — the DAG — so snapshots, state reads, the guard and `plan` all run
+outside it, and `auto_snapshot` is called from five places, every one of them before the DAG
+starts. That it is an omission and not a decision is provable from the spawn itself: it already
+sets `kill_on_drop(true)` with a comment naming *"a worker whose task is aborted — a failed
+node, the global timeout"*. The cancel machinery was built. Nothing outside the DAG fired it.
+
+**This was the third one, and the first two were written up here as undiagnosed.** The
+2026-07-22 section records `uninstall gem:colorize` at eight minutes and `install
+github:sharkdp/fd` at fifteen, both killed by hand, both concluded as *"the shape: on Windows a
+sync-path command can stop returning"*. What was fixed then was the **harness** — the sweep
+learned to wrap its calls. The product kept the bug. That note also reaches for
+`network_timeout_secs`, an HTTP timeout, to explain a wedged subprocess, which is itself the
+evidence that no command-level bound existed to reach for. One further reading, offered as a
+lead rather than a finding: this run spent **7m59s** between starting the uninstall and its
+first `choco` call, all of it pre-flight state reads — which is suspiciously close to the eight
+minutes the `gem:colorize` "hang" was killed at, and that note says it had *no child process*.
+
+**The bound is on silence, not duration** (`command_idle_timeout_secs`, default 900, `0`
+disables). A `cargo install` compiling from source runs for tens of minutes and is working the
+whole time; no wall-clock cap sits above that and below a hang. What separates them is that
+working commands talk. `latency.rs` cannot cover this and it is worth writing down why: it
+reports **after** a command returns, so the one failure it can never see is the one where
+nothing returns. Registered as **Q24, BUILT NEVER RULED** — the bound is settled by II.12, the
+number 900 is a judgement nobody has measured against LiNix's longest legitimate silence.
+
+**The sibling was a second way to wait forever.** Auditing the tree for the family turned up
+eleven spawns outside the executor; **ten captured both output streams and left stdin
+inherited** — `git` on every invocation, the `--version` and `--help` probes, `generate:`
+scripts, vars providers, the `sh()` builtin, download commands, the Windows sandbox probe. A
+child that prompts there asks into a pipe nobody displays, then blocks on a terminal it was
+never handed: invisible and permanent. The executor has closed stdin on reads since it was
+written, with a comment saying why; these predate it. All ten closed. The ones left open are
+open on purpose and named: `linix run`, the interactive shell, `$EDITOR`, the history TUI's
+shell-out, and the bisect oracle, which are the user's own programs with a user in front of them.
+
+**The obvious next suspect was measured and cleared.** That snapshot row uses the wrapper cmdlet
+to *create* and the WMI method directly to *delete* (`SystemRestore.DeleteStatus`), so the
+reading was that `Checkpoint-Computer`'s poll loop — the 99% progress bar — was the defect, and
+that `Invoke-CimMethod CreateRestorePoint` would return where the cmdlet did not. **Measured
+2026-08-02 elevated, each probe bounded by a job timeout so the instrument could not hang the
+way its subject does:** `Checkpoint-Computer` **50.8s**, `Invoke-CimMethod CreateRestorePoint`
+**53.3s**, both returning, both logging event 8194.
+`SystemRestorePointCreationFrequency = 0` on this host, so neither was the throttle answering
+instantly with nothing done. The listing halves are equally close (1.7s vs 2.2s). **There is no
+API swap to make.** The 76-minute run was intermittent, which is exactly what the timeline said
+before the hypothesis got in front of it — the same call had returned in seconds eleven minutes
+earlier in the same run.
+
+That is the argument for the bound rather than against it: an intermittent wedge in another
+vendor's cmdlet is not something LiNix can fix, and refusing to wait forever on it is the whole
+of the available remedy. What it does mean is that **no root cause for the wedge itself is
+known**, and this section should not pretend one is.
+
+**A real cost the probe did surface:** a Windows restore point takes **~51 seconds**, and LiNix
+takes one before every mutating sync. That is a fixed minute on every install and every
+uninstall on Windows, and nothing in the output says it is happening.
+
+One thing that row should still do: it runs `powershell -Command` with neither `-NoProfile` nor
+`-NonInteractive`, which `psresource.rs` has passed all along.
+
+## `plan` takes seven minutes, and the reason is an algorithm, not a missing `buffer_unordered`
+
+**Separate from the hang, found by pulling on the same thread, and not yet fixed.** Measured on
+this host (301 managed, 302 declared, 20 cores, so `max_parallel = 20`):
+
+| measured | LiNix's own accounting |
+|---|---|
+| `linix plan` | **439.6s** — and it warns on itself: *"budgeted 5s ... the shape of the 98-second `info`"* |
+| `install choco:bat`, whole transaction | **399.48s**, of which the `[choco] bat` task was **18.75s** |
+| `uninstall choco:bat`, start to first child | **7m59s** |
+| a Windows restore point | **~51s**, taken before every mutating sync |
+
+**The root is in `GenericQueryable::info`.** It answers "is this one package installed?" by
+running `list_installed()` — a full `winget list` / `choco list` of the whole machine — and then
+doing a linear find. The planner's `identify_needed_actions` calls it **once per declared
+package**. So a plan over 302 declarations runs ~302 full machine listings to answer 302
+one-name questions, and `installed_sets()` twenty lines above it in the same file already does
+the right thing for the removal side: **one** `list_installed()` per backend, then set
+membership. Two mechanisms for one question, and the O(n) one is on the install side.
+`list_installed` caches nothing, so every call is a fresh process spawn.
+
+**And a second finding, measured but NOT explained.** Sampling the live `plan`'s descendants
+every 700ms for 20s, children and grandchildren both: **max concurrent = 1.** Two `winget.exe`
+in twenty seconds, strictly one after another, at roughly twelve seconds each.
+`buffer_unordered(cap)` with `cap = 20` is right there in `identify_needed_actions`, and the
+observed width is one. `run_exclusive`'s per-manager mutex is on the mutating path only, and the
+runtime is the default multi-threaded `#[tokio::main]` — eliminations, not a diagnosis. ~326
+listings one at a time is the arithmetic that reaches 439.6s, so the width and the algorithm are
+multiplying.
+
+**The hypothesis, labelled as one.** `identify_needed_actions` says of itself: *"the futures
+borrow `&self` so this stays on one task (no spawn), which is all that is needed since the time
+is spent waiting on child processes."* That holds **only while every wait is genuinely async**.
+All 302 futures live on one task, so a single *synchronous* blocking call anywhere in
+`info -> list_installed -> run_output` blocks the task and the other 19 buffered futures cannot
+be polled — the fan-out becomes decorative and the observed width is exactly 1. The spawn path
+itself is `tokio::process` and awaits properly, so if this is right the blocking call is
+upstream of it; `windows_effective_command`'s synchronous PATH resolution runs on every spawn
+and is the first place to look, though milliseconds of filesystem work does not obviously
+account for twelve seconds.
+
+**The experiment that settles it:** an `AtomicUsize` incremented on entry to the
+`spec_is_missing` future and decremented on exit, with the max logged at the end of the plan. If
+it reports 1, the futures are serialising and the cause is inside the task; if it reports 20,
+the fan-out is fine and the serialisation is below it, in the executor or the OS. One number,
+and it decides which half of the stack to open. Not yet run.
+
+Also unaudited: `installed_sets` caps at a hardcoded `8` where the two fan-outs either side of
+it use `config.max_parallel`.
+
+**Also seen, unfixed, and separate:** the uninstall's pre-flight took eight minutes before the
+first child ran. Same shape as E14 — the instrument existed, printed the right sentence, and
+nobody read it.
 
 [cps]: https://github.com/chocolatey/choco/blob/develop/src/chocolatey/infrastructure.app/services/ChocolateyPackageService.cs
 

@@ -23,6 +23,13 @@ max_parallel = 8
 # (npm/pnpm/yarn registry, PyPI for pip, the VS Code marketplace).
 network_timeout_secs = 15
 
+# How long a spawned command may produce NO output at all before LiNix kills it and names
+# it. This bounds silence, not duration — a compile that prints for an hour is never
+# touched, while a manager that has stopped talking and stopped exiting is. 0 removes the
+# bound, which is what LiNix did before: an uninstall once sat 76 minutes on a Windows
+# restore point that had already been written.
+command_idle_timeout_secs = 900
+
 # How long to wait out a remote rate limit (GitHub) before giving up and naming the host
 # and its reset time. The wait is taken while the data directory is locked, so a long one
 # is indistinguishable from a hang; raise it for an unattended job that would rather wait.

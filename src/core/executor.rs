@@ -104,8 +104,39 @@ pub enum ChildStdin {
     Interactive,
 }
 
+/// How long a child may produce **nothing at all** before LiNix stops waiting for it.
+///
+/// Silence, not duration. A `cargo install` compiling from source and an `apt dist-upgrade`
+/// both run for tens of minutes and are working the whole time; no wall-clock cap can tell
+/// them from a wedged one, because there is no number that is both above the first and below
+/// the second. What separates them is that working commands *say* something — and the one
+/// measured hang said nothing for 76 minutes while still holding its pipes open.
+///
+/// Seeded from `Config::command_idle_timeout_secs` at startup, where `0` means no bound.
+static COMMAND_IDLE_TIMEOUT_SECS: once_cell::sync::OnceCell<u64> = once_cell::sync::OnceCell::new();
+
+/// Above the longest legitimate silence anyone has measured, and far below the hang.
+/// `Checkpoint-Computer` is the adversarial case: a real one is silent for its whole run.
+pub const DEFAULT_COMMAND_IDLE_TIMEOUT_SECS: u64 = 900;
+
+/// Set the process-wide command idle bound (called once during startup). Later calls no-op.
+pub fn set_command_idle_timeout(secs: u64) {
+    let _ = COMMAND_IDLE_TIMEOUT_SECS.set(secs);
+}
+
+fn command_idle_timeout() -> Option<std::time::Duration> {
+    match *COMMAND_IDLE_TIMEOUT_SECS
+        .get()
+        .unwrap_or(&DEFAULT_COMMAND_IDLE_TIMEOUT_SECS)
+    {
+        0 => None,
+        secs => Some(std::time::Duration::from_secs(secs)),
+    }
+}
+
 pub struct RawExecutor {
     stdin: ChildStdin,
+    idle: Option<std::time::Duration>,
 }
 
 impl RawExecutor {
@@ -113,6 +144,7 @@ impl RawExecutor {
     pub fn reader() -> Self {
         Self {
             stdin: ChildStdin::Closed,
+            idle: command_idle_timeout(),
         }
     }
 
@@ -120,48 +152,104 @@ impl RawExecutor {
     pub fn mutator() -> Self {
         Self {
             stdin: ChildStdin::Interactive,
+            idle: command_idle_timeout(),
         }
     }
 
-    /// Collect the child's output while echoing it to the terminal as it arrives.
+    #[cfg(test)]
+    fn with_idle(stdin: ChildStdin, idle: Option<std::time::Duration>) -> Self {
+        Self { stdin, idle }
+    }
+
+    /// Collect the child's output, optionally echoing it to the terminal as it arrives, and
+    /// give up on a child that has gone silent.
     ///
     /// Both streams must be drained concurrently with the wait: a pipe buffer that fills while
     /// nothing reads it blocks the child forever, and a package manager writing more than the
     /// buffer holds is not an edge case.
-    async fn wait_mirroring(mut child: tokio::process::Child) -> Result<StdOutput> {
+    ///
+    /// The wait is sliced rather than awaited whole so the child stays reachable between
+    /// slices — killing it needs the same `&mut` the wait future holds.
+    async fn wait_watched(
+        mut child: tokio::process::Child,
+        cmd: &str,
+        mirror: bool,
+        idle: Option<std::time::Duration>,
+    ) -> Result<StdOutput> {
+        use std::sync::Mutex as SyncMutex;
+        use std::time::Instant;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-        async fn pump<R: tokio::io::AsyncRead + Unpin>(mut src: R) -> std::io::Result<Vec<u8>> {
+        async fn pump<R: tokio::io::AsyncRead + Unpin>(
+            mut src: R,
+            mirror: bool,
+            last: Arc<SyncMutex<Instant>>,
+        ) -> std::io::Result<Vec<u8>> {
             let mut collected = Vec::new();
             let mut buf = [0u8; 8192];
             let mut sink = tokio::io::stderr();
             loop {
                 let n = src.read(&mut buf).await?;
+                *last.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
                 if n == 0 {
                     return Ok(collected);
                 }
                 collected.extend_from_slice(&buf[..n]);
-                sink.write_all(&buf[..n]).await?;
-                sink.flush().await?;
+                if mirror {
+                    sink.write_all(&buf[..n]).await?;
+                    sink.flush().await?;
+                }
             }
         }
 
+        let last = Arc::new(SyncMutex::new(Instant::now()));
         let out_pipe = child.stdout.take();
         let err_pipe = child.stderr.take();
-        let out_task = tokio::spawn(async move {
-            match out_pipe {
-                Some(p) => pump(p).await,
-                None => Ok(Vec::new()),
+        let out_task = tokio::spawn({
+            let last = last.clone();
+            async move {
+                match out_pipe {
+                    Some(p) => pump(p, mirror, last).await,
+                    None => Ok(Vec::new()),
+                }
             }
         });
-        let err_task = tokio::spawn(async move {
-            match err_pipe {
-                Some(p) => pump(p).await,
-                None => Ok(Vec::new()),
+        let err_task = tokio::spawn({
+            let last = last.clone();
+            async move {
+                match err_pipe {
+                    Some(p) => pump(p, mirror, last).await,
+                    None => Ok(Vec::new()),
+                }
             }
         });
 
-        let status = child.wait().await?;
+        let status = match idle {
+            None => child.wait().await?,
+            Some(idle) => loop {
+                let quiet = last.lock().unwrap_or_else(|e| e.into_inner()).elapsed();
+                let remaining = idle.saturating_sub(quiet);
+                if remaining.is_zero() {
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    out_task.abort();
+                    err_task.abort();
+                    // Permanent: the retry loop would spend another `idle` per attempt on a
+                    // command that has already proved it does not finish, and a user watching
+                    // three silences instead of one learns nothing new from the second two.
+                    return Err(Error::command_failed_permanently(format!(
+                        "`{}` produced no output for {}s and had not exited; LiNix stopped \
+                         waiting and killed it. If this command is legitimately silent for \
+                         longer, raise `command_idle_timeout_secs` (0 disables the bound).",
+                        cmd,
+                        idle.as_secs(),
+                    )));
+                }
+                if let Ok(status) = tokio::time::timeout(remaining, child.wait()).await {
+                    break status?;
+                }
+            },
+        };
         let joined = |r: std::result::Result<std::io::Result<Vec<u8>>, tokio::task::JoinError>| {
             r.map_err(|e| Error::Other(format!("output reader failed: {}", e)))?
                 .map_err(Error::from)
@@ -290,6 +378,27 @@ pub fn effective_command(cmd: &str, args: &[String]) -> (String, Vec<String>) {
     }
 }
 
+/// Name a spawned command well enough to find it again, in one line.
+///
+/// `powershell` alone does not identify a hang on a host running six of them; the argv is what
+/// says which. Truncated from the right because the discriminating part is the front — the
+/// cmdlet, the subcommand, the package name.
+fn describe(cmd: &str, args: &[String]) -> String {
+    const CAP: usize = 160;
+    let mut s = String::from(cmd);
+    for a in args {
+        s.push(' ');
+        s.push_str(a);
+        if s.len() >= CAP {
+            break;
+        }
+    }
+    if s.chars().count() > CAP {
+        s = s.chars().take(CAP).collect::<String>() + "…";
+    }
+    s
+}
+
 #[async_trait]
 impl ExecutionLayer for RawExecutor {
     async fn execute(
@@ -339,11 +448,8 @@ impl ExecutionLayer for RawExecutor {
         // every parser. Capture it and mirror it instead, so the bytes go both places.
         // The mirror is stderr, never stdout: stdout carries LiNix's own answer, and a child's
         // chatter interleaved with it is not parseable by whoever piped us.
-        if interactive && std::io::stderr().is_terminal() {
-            return Self::wait_mirroring(child).await;
-        }
-        let output = child.wait_with_output().await?;
-        Ok(output)
+        let mirror = interactive && std::io::stderr().is_terminal();
+        Self::wait_watched(child, &describe(cmd, args), mirror, self.idle).await
     }
 
     fn shares_stdin(&self) -> bool {
@@ -1110,7 +1216,7 @@ mod windows_shim_tests {
 
 #[cfg(test)]
 mod child_process_tests {
-    use super::{ChildStdin, CommandExecutor, MockExecutor, RawExecutor};
+    use super::{ChildStdin, CommandExecutor, ExecutionLayer, MockExecutor, RawExecutor};
     use dashmap::DashMap;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -1152,6 +1258,157 @@ mod child_process_tests {
         let env = mock.last_env.lock().await.clone();
         assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
         assert!(env.contains_key(super::INSIDE_LINIX));
+    }
+
+    /// A child that prints nothing and never exits. `Checkpoint-Computer` past its restore
+    /// point is the measured one; `sleep` is the same shape with a shorter fuse.
+    fn silent_forever() -> (&'static str, Vec<String>) {
+        #[cfg(unix)]
+        {
+            ("sleep", vec!["600".to_string()])
+        }
+        #[cfg(windows)]
+        {
+            (
+                "powershell",
+                vec![
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    "Start-Sleep -Seconds 600".to_string(),
+                ],
+            )
+        }
+    }
+
+    /// Runs far longer than the bound, but is never quiet for it. A build, a big download.
+    fn chatty_for_a_while() -> (&'static str, Vec<String>) {
+        #[cfg(unix)]
+        {
+            (
+                "sh",
+                vec![
+                    "-c".to_string(),
+                    "i=0; while [ $i -lt 12 ]; do echo tick; i=$((i+1)); sleep 0.5; done"
+                        .to_string(),
+                ],
+            )
+        }
+        #[cfg(windows)]
+        {
+            (
+                "powershell",
+                vec![
+                    "-NoProfile".to_string(),
+                    "-Command".to_string(),
+                    "1..12 | ForEach-Object { Write-Output 'tick'; Start-Sleep -Milliseconds 500 }"
+                        .to_string(),
+                ],
+            )
+        }
+    }
+
+    /// The bug: `linix uninstall choco:bat` sat 76 minutes on a `Checkpoint-Computer` that had
+    /// already written its restore point, because nothing outside the DAG bounded a child at
+    /// all. Two earlier hangs were killed by hand and recorded as undiagnosed.
+    #[tokio::test]
+    async fn a_child_that_goes_silent_is_killed_and_named() {
+        let layer = RawExecutor::with_idle(
+            ChildStdin::Closed,
+            Some(std::time::Duration::from_secs(2)),
+        );
+        let (cmd, args) = silent_forever();
+        let started = std::time::Instant::now();
+        let err = layer
+            .execute(cmd, &args, &HashMap::new())
+            .await
+            .expect_err("a child silent past the bound must not be waited on forever");
+        let waited = started.elapsed();
+
+        assert!(
+            waited < std::time::Duration::from_secs(45),
+            "waited {:?}, so the bound did not fire",
+            waited
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("produced no output"),
+            "the error must say what happened: {}",
+            message
+        );
+        // Naming the program alone does not identify a hang on a host running six of them.
+        assert!(
+            message.contains(cmd) && args.iter().all(|a| message.contains(a.as_str())),
+            "the error must name the command that hung: {}",
+            message
+        );
+        assert!(
+            message.contains("command_idle_timeout_secs"),
+            "the error must name the dial that changes it: {}",
+            message
+        );
+    }
+
+    /// The bound is on silence, not on duration — the distinction the whole fix rests on. A
+    /// wall-clock cap set low enough to catch the hang would kill every real build.
+    #[tokio::test]
+    async fn a_child_that_keeps_talking_outlives_the_bound() {
+        let layer = RawExecutor::with_idle(
+            ChildStdin::Closed,
+            Some(std::time::Duration::from_secs(3)),
+        );
+        let (cmd, args) = chatty_for_a_while();
+        let started = std::time::Instant::now();
+        let out = layer
+            .execute(cmd, &args, &HashMap::new())
+            .await
+            .expect("a command that is still printing has not hung");
+        assert!(
+            started.elapsed() > std::time::Duration::from_secs(3),
+            "the fixture must outlive the bound or it proves nothing"
+        );
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout).matches("tick").count(), 12);
+    }
+
+    /// `0` in the config means the old behaviour, for whoever has a legitimately silent
+    /// half-hour command and would rather wait than tune a number.
+    #[tokio::test]
+    async fn no_bound_means_no_bound() {
+        let layer = RawExecutor::with_idle(ChildStdin::Closed, None);
+        let (cmd, args) = silent_forever();
+        let ran = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            layer.execute(cmd, &args, &HashMap::new()),
+        )
+        .await;
+        assert!(ran.is_err(), "an unbounded layer must still be waiting");
+    }
+
+    /// A bound that reports the hang but leaves the process running has moved the leak, not
+    /// closed it — the wedged `Checkpoint-Computer` held its restore point for 76 minutes.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_killed_child_is_actually_dead() {
+        let layer = RawExecutor::with_idle(
+            ChildStdin::Closed,
+            Some(std::time::Duration::from_secs(2)),
+        );
+        // `pgrep -f` on a marker only this test uses; a survivor is visible to the whole host.
+        let marker = format!("linix-idle-probe-{}", std::process::id());
+        let args = vec![
+            "-c".to_string(),
+            format!("# {}\nsleep 600", marker),
+        ];
+        let _ = layer.execute("sh", &args, &HashMap::new()).await;
+        let found = std::process::Command::new("pgrep")
+            .args(["-f", &marker])
+            .output();
+        if let Ok(found) = found {
+            assert!(
+                String::from_utf8_lossy(&found.stdout).trim().is_empty(),
+                "the child outlived the bound that killed it"
+            );
+        }
     }
 
     /// Reads must never take the terminal: a read is answered by parsing its output, and a

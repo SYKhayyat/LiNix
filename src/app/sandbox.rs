@@ -69,7 +69,8 @@ impl Sandbox {
         #[cfg(target_os = "windows")]
         {
             let output = tokio::process::Command::new("powershell")
-                .args(["-Command", "Get-WindowsOptionalFeature -Online -FeatureName 'Containers-DisposableClient' | Select-Object -ExpandProperty State"])
+                .args(["-NoProfile", "-NonInteractive", "-Command", "Get-WindowsOptionalFeature -Online -FeatureName 'Containers-DisposableClient' | Select-Object -ExpandProperty State"])
+                .stdin(std::process::Stdio::null())
                 .output()
                 .await;
 

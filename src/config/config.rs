@@ -292,6 +292,12 @@ pub struct Config {
     #[serde(default = "default_network_timeout_secs")]
     pub network_timeout_secs: u64,
 
+    /// How long a spawned command may produce **no output at all** before LiNix kills it and
+    /// says so. `0` removes the bound. This is not a cap on how long a command may run — a
+    /// build that prints for an hour is never touched — it is a cap on silence.
+    #[serde(default = "default_command_idle_timeout_secs")]
+    pub command_idle_timeout_secs: u64,
+
     /// How long to wait out a remote rate limit before giving up and naming it (S26). A CI
     /// job and a laptop want different answers, which is why it is a key; the default is
     /// short because the wait happens while the data lock is held, and a command that looks
@@ -466,6 +472,9 @@ fn default_rate_limit_max_wait_secs() -> u64 {
 fn default_network_timeout_secs() -> u64 {
     15
 }
+fn default_command_idle_timeout_secs() -> u64 {
+    crate::core::executor::DEFAULT_COMMAND_IDLE_TIMEOUT_SECS
+}
 fn default_nix_gc_age() -> String {
     "30d".to_string()
 }
@@ -572,6 +581,7 @@ impl Default for Config {
             quiet: false,
             max_parallel: default_max_parallel(),
             network_timeout_secs: default_network_timeout_secs(),
+            command_idle_timeout_secs: default_command_idle_timeout_secs(),
             rate_limit_max_wait_secs: default_rate_limit_max_wait_secs(),
             nix_gc_age: default_nix_gc_age(),
             clean_cache_on_remove: false,

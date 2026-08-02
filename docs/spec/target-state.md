@@ -1591,7 +1591,10 @@ gets reported.
 
 **stdin is the one stream a child may share, and only a mutating command may share it.** `sudo`
 asks for a password on the terminal it was started from. A read has nothing to ask and nobody to
-answer it, so a read never takes the terminal.
+answer it, so a read never takes the terminal. **This binds every spawn in the tree, not only the
+executor's** (2026-08-02): a probe that captures both output streams and leaves stdin inherited
+asks its question where nobody can see it and then waits for an answer that cannot come. Ten
+sites outside the executor did exactly that, `git` among them.
 
 **Captured is not hidden.** While a mutation runs with a terminal attached, its output is
 mirrored as it arrives — to stderr, never stdout, because stdout carries LiNix's own answer.
@@ -1603,6 +1606,16 @@ the text a parser is about to read.
 
 **There is no switch for any of this** — no config key, no environment variable, no flag. One
 path. A switch here is a switch that turns the bug back on.
+
+**A command that has gone silent is killed, and LiNix names it** (2026-08-02). The bound is on
+**silence, not duration**: a child that has printed nothing on either stream and has not exited
+for `command_idle_timeout_secs` is killed, and the error names the argv and the dial. A build
+that prints for an hour is never touched. That distinction is the rule — no wall-clock cap can
+separate a working `cargo install` from a wedged one, because there is no number above the first
+and below the second, and what does separate them is that working commands say something. The
+bound applies to **every** command, not only those inside the transaction DAG; the DAG's
+`total_timeout` covers the DAG, and every hang on record happened outside it. The number is a
+dial and `0` removes the bound; **that a bound exists is not.**
 
 ## II.13 History
 
