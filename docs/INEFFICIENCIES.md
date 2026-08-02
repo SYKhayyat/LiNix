@@ -116,16 +116,50 @@ Stated because an audit that quietly drops entries is worse than one that never 
   in particular is a public field on a type thirty backends construct; changing its shape is a
   refactor, not a sweep.
 
-## What is still unmeasured
+## What was measured afterwards, and what was not
 
-The audit's own numbers came from a container and from a Windows host. **None of the fixes above
-has been re-measured on either.** What exists is: the mechanisms are verified by reading and by
-tests (`core::transaction::batching_tests` asserts six packages become one command;
-`core::installed::tests` asserts twenty-five listings become one), the whole suite is green, and
-the argv-drift gate still passes. The four numbers the audit asks to re-run — `linix plan`
-(439.6s), `install choco:bat` (399.48s), `uninstall choco:bat` pre-flight (7m59s), the `check`
-rollup (10.4s) — **have not been re-run**, and the `AtomicUsize` experiment on `spec_is_missing`
-has not been run either. Unverified is not done, and this paragraph is the honest state of it.
+**One number was re-run on the same host: `check drift`'s marginal cost per declared package.**
+It is the number I-3 is about, it is the one the audit measured most carefully, and it is flat
+now.
+
+Release build of this tree (`cargo build --release`, 2026-08-02 13:15), config isolated in
+`%TEMP%`, `priority` naming `winget` only, N qualified `winget:` declarations, one warm-up run
+discarded:
+
+| declared | before (audit) | after |
+|---|---|---|
+| 1 | 4,862 ms | 3,792 / 3,821 / 4,497 / 4,060 / 4,010 ms |
+| 4 | 5,427 ms | 3,905 / 4,117 / 3,930 / 5,748 / 3,890 ms |
+| 8 | 6,665 ms | 4,051 / 4,014 / 3,992 / 3,910 / 3,853 ms |
+| 12 | 7,574 ms | 4,718 / 4,070 / 4,174 / 3,840 / 3,911 ms |
+
+**~247 ms per additional declaration, to within noise of zero.** The fixed cost also fell, from
+~4.86 s to ~4.0 s, which is I-43 and I-22 rather than I-3.
+
+**And the first attempt at this measurement was wrong, in the way the audit's own appendix warns
+about.** Run with N increasing — 1, 2, 4, 8, 12, in that order, once each — it produced 3,683 /
+3,676 / 5,693 / 8,026 / 8,440 ms and looked like a *worse* slope than before the fix. Measuring N
+in increasing order conflates N with elapsed wall-clock time, and on this host something else is
+drifting under it: a fresh binary being scanned, winget's own cache warming and cooling. Running
+the same points interleaved (1, 4, 8, 12 × 3 rounds) and then in decreasing order (12, 8, 4, 1 ×
+2 rounds) makes the trend disappear entirely and leaves a ±700 ms spread with no direction.
+**A monotonic result from a monotonic sweep is not a result**, which is the same lesson the
+appendix records about a suspiciously flat curve.
+
+**What has still not been re-run**, stated because unverified is not done:
+
+- `linix plan` at 302 declarations (was 439.6 s). The measurement above covers the same
+  mechanism at N ≤ 12 and the slope is what it tests, but the big number is not re-taken.
+- `install choco:bat` end to end (was 399.48 s, of which 18.75 s was the install) and
+  `uninstall choco:bat`'s pre-flight (was 7m59s). Both mutate the machine.
+- The `check` rollup (was 10.4 s).
+- **Nothing at all has been re-measured in the Ubuntu container**, which is where I-1's six
+  processes and 12,465 ms were measured. The batching is covered by
+  `core::transaction::batching_tests`, which asserts the process *count* — six packages become
+  one command — and the count is the thing the container measured. The wall-clock is not
+  re-taken.
+- The `AtomicUsize` experiment on `spec_is_missing` that the audit proposes as *confirmation*
+  that the four blocking calls were the cause of the observed width-of-1 fan-out.
 
 ---
 

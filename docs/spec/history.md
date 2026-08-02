@@ -5557,5 +5557,18 @@ tests measured `POOL.len()` before and after, in a concurrent suite where other 
 the same pool. They failed intermittently and were about nothing. They count their own policies
 now.
 
+**Measured afterwards, on the same Windows host.** `check drift`'s marginal cost per declared
+package — the number I-3 is about — went from **~247 ms** to flat: ~4.0 s whether one package is
+declared or twelve, against 4,862 ms → 7,574 ms before. The fixed cost fell too, from ~4.86 s to
+~4.0 s, which is I-43 and I-22 rather than I-3.
+
+*And the first attempt at that measurement was wrong, in exactly the way the audit's own appendix
+warns about.* Sweeping N upward — 1, 2, 4, 8, 12, once each — produced a curve that looked
+**worse** than before the fix. Measuring N in increasing order conflates N with elapsed time, and
+something else on this host drifts under it. Interleaved, and then swept downward, the trend
+disappears completely. **A monotonic result from a monotonic sweep is not a result**, which is
+the twin of the appendix's "a suspiciously flat curve is an instrument failure until proven
+otherwise". Nearly reported a regression that was the stopwatch.
+
 **And one behaviour change found on the way out.** Moving a corrupt WAL aside is a filesystem
 write, and `--dry-run heal` was making one. The preview says what a real run would do instead.
